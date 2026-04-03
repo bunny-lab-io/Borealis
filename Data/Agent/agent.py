@@ -65,6 +65,11 @@ def _iter_exception_chain(exc: BaseException):
         else:
             break
 
+
+_TRANSIENT_REFRESH_STATUS_CODES = frozenset({500, 502, 503, 504})
+_REFRESH_RETRY_DELAYS_SECONDS = (1.0, 2.0, 5.0)
+_REFRESH_FALLBACK_MINIMUM_TTL_SECONDS = 15
+
 # Centralized logging helpers (Agent)
 def _agent_logs_root() -> str:
     try:
@@ -1484,53 +1489,129 @@ class AgentHttpClient:
             self._perform_enrollment_locked()
             return
         payload = {"guid": self.guid, "refresh_token": self.refresh_token}
-        resp = self.session.post(
-            f"{self.base_url}/api/agent/token/refresh",
-            json=payload,
-            headers=self.auth_headers(),
-            timeout=20,
-        )
-        if resp.status_code in (401, 403):
-            error_code, snippet = self._error_details(resp)
-            if resp.status_code == 403 and error_code == 'guid_mismatch':
-                try:
+        total_attempts = len(_REFRESH_RETRY_DELAYS_SECONDS) + 1
+        last_error: Optional[BaseException] = None
+        last_failure_transient = False
+
+        for attempt in range(1, total_attempts + 1):
+            resp: Optional[requests.Response] = None
+            try:
+                resp = self.session.post(
+                    f"{self.base_url}/api/agent/token/refresh",
+                    json=payload,
+                    headers=self.auth_headers(),
+                    timeout=20,
+                )
+                if resp.status_code in (401, 403):
+                    error_code, snippet = self._error_details(resp)
+                    if resp.status_code == 403 and error_code == 'guid_mismatch':
+                        try:
+                            _log_agent(
+                                "Refresh token request saw guid mismatch; reloading credentials from disk",
+                                fname="agent.log",
+                            )
+                        except Exception:
+                            pass
+                        self._reload_tokens_from_disk()
+                        if self.access_token:
+                            self.session.headers.update({"Authorization": f"Bearer {self.access_token}"})
+                            return
+                    if resp.status_code == 401 and self._should_retry_auth(resp.status_code, error_code):
+                        _log_agent(
+                            "Refresh token rejected; attempting re-enrollment"
+                            f" error={error_code or '<unknown>'}",
+                            fname="agent.error.log",
+                        )
+                        self._clear_tokens_locked()
+                        self._perform_enrollment_locked()
+                        return
                     _log_agent(
-                        "Refresh token request saw guid mismatch; reloading credentials from disk",
+                        "Refresh token request forbidden "
+                        f"status={resp.status_code} error={error_code or '<unknown>'}"
+                        f" body_snippet={snippet}",
+                        fname="agent.error.log",
+                    )
+
+                if resp.status_code in _TRANSIENT_REFRESH_STATUS_CODES and attempt < total_attempts:
+                    error_code, snippet = self._error_details(resp)
+                    delay = _REFRESH_RETRY_DELAYS_SECONDS[attempt - 1]
+                    _log_agent(
+                        "Refresh token transient failure; retrying "
+                        f"attempt={attempt}/{total_attempts} status={resp.status_code} "
+                        f"error={error_code or '<unknown>'} next_delay={delay}s "
+                        f"body_snippet={snippet}",
+                        fname="agent.error.log",
+                    )
+                    last_failure_transient = True
+                    time.sleep(delay)
+                    continue
+
+                resp.raise_for_status()
+                data = resp.json()
+                access_token = data.get("access_token")
+                expires_in = int(data.get("expires_in") or 900)
+                if not access_token:
+                    raise RuntimeError("Token refresh response missing access_token")
+                self.access_token = access_token.strip()
+                expiry = int(time.time()) + max(expires_in - 5, 0)
+                self.access_expires_at = expiry
+                self.key_store.save_access_token(self.access_token, expires_at=expiry)
+                self.key_store.set_access_binding(SSL_KEY_FINGERPRINT)
+                self.session.headers.update({"Authorization": f"Bearer {self.access_token}"})
+                if attempt > 1:
+                    _log_agent(
+                        "Refresh token request recovered "
+                        f"attempt={attempt}/{total_attempts} status={resp.status_code}",
                         fname="agent.log",
                     )
-                except Exception:
-                    pass
-                self._reload_tokens_from_disk()
-                if self.access_token:
-                    self.session.headers.update({"Authorization": f"Bearer {self.access_token}"})
-                    return
-            if resp.status_code == 401 and self._should_retry_auth(resp.status_code, error_code):
-                _log_agent(
-                    "Refresh token rejected; attempting re-enrollment"
-                    f" error={error_code or '<unknown>'}",
-                    fname="agent.error.log",
-                )
-                self._clear_tokens_locked()
-                self._perform_enrollment_locked()
                 return
+            except requests.HTTPError as exc:
+                last_error = exc
+                status_code = None
+                error_code = None
+                snippet = "<unavailable>"
+                if resp is not None:
+                    status_code = resp.status_code
+                    error_code, snippet = self._error_details(resp)
+                transient = status_code in _TRANSIENT_REFRESH_STATUS_CODES
+                last_failure_transient = transient
+                if transient and attempt < total_attempts:
+                    delay = _REFRESH_RETRY_DELAYS_SECONDS[attempt - 1]
+                    _log_agent(
+                        "Refresh token HTTP error; retrying "
+                        f"attempt={attempt}/{total_attempts} status={status_code} "
+                        f"error={error_code or '<unknown>'} next_delay={delay}s "
+                        f"body_snippet={snippet}",
+                        fname="agent.error.log",
+                    )
+                    time.sleep(delay)
+                    continue
+                break
+            except requests.RequestException as exc:
+                last_error = exc
+                last_failure_transient = True
+                if attempt < total_attempts:
+                    delay = _REFRESH_RETRY_DELAYS_SECONDS[attempt - 1]
+                    _log_agent(
+                        "Refresh token transport error; retrying "
+                        f"attempt={attempt}/{total_attempts} next_delay={delay}s error={exc}",
+                        fname="agent.error.log",
+                    )
+                    time.sleep(delay)
+                    continue
+                break
+
+        if last_failure_transient and self._access_token_still_usable():
+            remaining = max(0, int((self.access_expires_at or 0) - time.time()))
             _log_agent(
-                "Refresh token request forbidden "
-                f"status={resp.status_code} error={error_code or '<unknown>'}"
-                f" body_snippet={snippet}",
-                fname="agent.error.log",
+                "Refresh token temporarily unavailable; continuing with current access token "
+                f"remaining_seconds={remaining}",
+                fname="agent.log",
             )
-        resp.raise_for_status()
-        data = resp.json()
-        access_token = data.get("access_token")
-        expires_in = int(data.get("expires_in") or 900)
-        if not access_token:
-            raise RuntimeError("Token refresh response missing access_token")
-        self.access_token = access_token.strip()
-        expiry = int(time.time()) + max(expires_in - 5, 0)
-        self.access_expires_at = expiry
-        self.key_store.save_access_token(self.access_token, expires_at=expiry)
-        self.key_store.set_access_binding(SSL_KEY_FINGERPRINT)
-        self.session.headers.update({"Authorization": f"Bearer {self.access_token}"})
+            return
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Token refresh failed without a recoverable response")
 
     def clear_tokens(self) -> None:
         with self._auth_lock:
@@ -1562,6 +1643,15 @@ class AgentHttpClient:
                     error_code = value.strip()
                     break
         return error_code, snippet
+
+    def _access_token_still_usable(
+        self,
+        *,
+        minimum_ttl: int = _REFRESH_FALLBACK_MINIMUM_TTL_SECONDS,
+    ) -> bool:
+        if not self.access_token or not self.access_expires_at:
+            return False
+        return (self.access_expires_at - time.time()) > max(0, int(minimum_ttl))
 
     def _should_retry_auth(self, status_code: int, error_code: Optional[str]) -> bool:
         if status_code == 401:

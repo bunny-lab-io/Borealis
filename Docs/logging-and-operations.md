@@ -8,6 +8,8 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - Engine primary log: `Engine/Logs/engine.log` (daily rotation).
 - Engine error log: `Engine/Logs/error.log`.
 - Engine API access log: `Engine/Logs/api.log`.
+- Engine Traefik log: `Engine/Logs/traefik.log`.
+- Engine Traefik access log: `Engine/Logs/traefik-access.log`.
 - Service logs: `Engine/Logs/<service>.log` (per-domain).
 - VPN logs: `Engine/Logs/VPN_Tunnel/tunnel.log` and `Engine/Logs/VPN_Tunnel/remote_shell.log`.
 - Agent logs: `Agent/Logs/agent.log` and `Agent/Logs/agent.error.log` (daily rotation).
@@ -48,6 +50,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 ### Operational checks
 - Startup warnings appear in `Engine/Logs/engine.log`.
 - API access metrics appear in `Engine/Logs/api.log` (method, path, duration, status).
+- Embedded edge request outcomes appear in `Engine/Logs/traefik-access.log` (frontend path, upstream target, status, latency).
 - VPN-specific logs are under `Engine/Logs/VPN_Tunnel/`.
 
 ### Agent logging notes
@@ -59,6 +62,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 ### Debug workflow
 - Start with the log file closest to the symptom.
 - Use API log lines to confirm the request reached the Engine.
+- Use `traefik-access.log` to confirm whether the embedded edge returned a `502` before the Engine loopback runtime was ready.
 - Use service logs to diagnose domain-specific behavior.
 - If troubleshooting WireGuard, inspect both Engine and Agent VPN logs.
 

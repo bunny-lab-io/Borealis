@@ -15,6 +15,10 @@ from security import AgentKeyStore
 from update_state import get_busy_snapshot, installed_build_id_path, read_installed_build_id, read_repo_build_id, sync_installed_build_id
 
 
+_TRANSIENT_REFRESH_STATUS_CODES = frozenset({500, 502, 503, 504})
+_REFRESH_RETRY_DELAYS_SECONDS = (1.0, 2.0, 5.0)
+
+
 def _settings_dir() -> Path:
     return installed_build_id_path().parent
 
@@ -110,28 +114,34 @@ def _refresh_access_token(
     own_session = session is None
     request_session = session or _build_session(server_url)
     try:
-        response = _perform_request(
-            request_session,
-            "post",
-            f"{server_url.rstrip('/')}/api/agent/token/refresh",
-            verify=verify,
-            json={"guid": guid, "refresh_token": refresh_token},
-            headers={"User-Agent": "borealis-agent-updater"},
-            timeout=60,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        access_token = str(payload.get("access_token") or "").strip()
-        if not access_token:
-            raise RuntimeError("refresh response missing access_token")
-        expires_in = 900
-        try:
-            expires_in = int(payload.get("expires_in") or 900)
-        except Exception:
+        total_attempts = len(_REFRESH_RETRY_DELAYS_SECONDS) + 1
+        for attempt in range(1, total_attempts + 1):
+            response = _perform_request(
+                request_session,
+                "post",
+                f"{server_url.rstrip('/')}/api/agent/token/refresh",
+                verify=verify,
+                json={"guid": guid, "refresh_token": refresh_token},
+                headers={"User-Agent": "borealis-agent-updater"},
+                timeout=60,
+            )
+            if response.status_code in _TRANSIENT_REFRESH_STATUS_CODES and attempt < total_attempts:
+                time.sleep(_REFRESH_RETRY_DELAYS_SECONDS[attempt - 1])
+                continue
+            response.raise_for_status()
+            payload = response.json()
+            access_token = str(payload.get("access_token") or "").strip()
+            if not access_token:
+                raise RuntimeError("refresh response missing access_token")
             expires_in = 900
-        expires_at = int(time.time()) + max(0, expires_in - 5)
-        store.save_access_token(access_token, expires_at=expires_at)
-        return {"access_token": access_token, "expires_at": expires_at}
+            try:
+                expires_in = int(payload.get("expires_in") or 900)
+            except Exception:
+                expires_in = 900
+            expires_at = int(time.time()) + max(0, expires_in - 5)
+            store.save_access_token(access_token, expires_at=expires_at)
+            return {"access_token": access_token, "expires_at": expires_at}
+        raise RuntimeError("refresh response unavailable after retry")
     finally:
         if own_session:
             request_session.close()
