@@ -1155,6 +1155,22 @@ def test_vpn_service_reuses_persisted_virtual_ip_leases_across_restarts(
     assert second["virtual_ip"] == first["virtual_ip"]
 
 
+def test_vpn_service_reuses_persisted_client_keys_across_restarts(
+    engine_harness: EngineTestHarness,
+) -> None:
+    db_factory = lambda: sqlite3.connect(str(engine_harness.db_path))
+    service, _wg, _socketio, _service_events = _build_vpn_service(db_conn_factory=db_factory)
+
+    first = service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+    service.disconnect("agent-1", reason="operator_stop", force=True)
+
+    restarted_service, _wg2, _socketio2, _service_events2 = _build_vpn_service(db_conn_factory=db_factory)
+    second = restarted_service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+
+    assert second["client_public_key"] == first["client_public_key"]
+    assert second["client_private_key"] == first["client_private_key"]
+
+
 def test_vpn_service_does_not_reassign_listener_ip_from_evicted_session() -> None:
     service, _wg, _socketio, _service_events = _build_vpn_service()
 

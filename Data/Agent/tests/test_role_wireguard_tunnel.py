@@ -159,7 +159,6 @@ def _build_windows_client() -> WireGuardClient:
 def test_windows_client_repairs_stale_service_binding() -> None:
     client = _build_windows_client()
     calls: list[str] = []
-    states = iter(["RUNNING"])
 
     client._validate_token = lambda token, signing_client=None: None
     client._write_config = lambda text: calls.append("write_config") or True
@@ -168,7 +167,7 @@ def test_windows_client_repairs_stale_service_binding() -> None:
     client._service_config_path = lambda: Path("D:/Github/Borealis/Agent/Borealis/Settings/WireGuard/Borealis.conf")
     client._reinstall_service = lambda: calls.append("reinstall") or True
     client._restart_service = lambda: calls.append("restart") or True
-    client._service_state = lambda: next(states)
+    client._wait_for_service_state = lambda **kwargs: "RUNNING"
     client._ensure_adapter_name = lambda: calls.append("adapter")
     client._ensure_service_display_name = lambda: calls.append("display")
     client._ensure_shell_firewall = lambda allowed_ips, allowed_ports: calls.append("firewall")
@@ -196,7 +195,7 @@ def test_windows_client_does_not_mirror_config_to_stale_service_path() -> None:
     client._service_config_path = lambda: next(paths)
     client._reinstall_service = lambda: True
     client._restart_service = lambda: True
-    client._service_state = lambda: "RUNNING"
+    client._wait_for_service_state = lambda **kwargs: "RUNNING"
     client._ensure_adapter_name = lambda: None
     client._ensure_service_display_name = lambda: None
     client._ensure_shell_firewall = lambda allowed_ips, allowed_ports: None
@@ -219,7 +218,6 @@ def test_windows_client_runtime_config_path_is_deterministic(tmp_path) -> None:
 def test_windows_client_requires_healthy_service_before_marking_session_started() -> None:
     client = _build_windows_client()
     calls: list[str] = []
-    states = iter(["STOPPED", "STOPPED"])
 
     client._validate_token = lambda token, signing_client=None: None
     client._write_config = lambda text: calls.append("write_config") or True
@@ -227,7 +225,7 @@ def test_windows_client_requires_healthy_service_before_marking_session_started(
     client._service_config_path = lambda: client.conf_path
     client._restart_service = lambda: calls.append("restart") or True
     client._reinstall_service = lambda: calls.append("reinstall") or True
-    client._service_state = lambda: next(states)
+    client._wait_for_service_state = lambda **kwargs: "STOPPED"
     client._ensure_adapter_name = lambda: calls.append("adapter")
     client._ensure_service_display_name = lambda: calls.append("display")
     client._ensure_shell_firewall = lambda allowed_ips, allowed_ports: calls.append("firewall")
@@ -237,6 +235,35 @@ def test_windows_client_requires_healthy_service_before_marking_session_started(
 
     assert calls == ["write_config", "restart", "reinstall", "restart"]
     assert client.session is None
+
+
+def test_windows_client_replacement_uses_single_restart_before_marking_session_started() -> None:
+    client = _build_windows_client()
+    client.session = _build_session()
+    calls: list[str] = []
+
+    client._validate_token = lambda token, signing_client=None: calls.append("validate")
+    client._write_config = lambda text: calls.append("write_config") or True
+    client._service_exists = lambda: True
+    client._service_config_path = lambda: client.conf_path
+    client._restart_service = lambda: calls.append("restart") or True
+    client._reinstall_service = lambda: calls.append("reinstall") or True
+    client._wait_for_service_state = lambda **kwargs: calls.append("wait") or "RUNNING"
+    client._ensure_adapter_name = lambda: calls.append("adapter")
+    client._ensure_service_display_name = lambda: calls.append("display")
+    client._ensure_shell_firewall = lambda allowed_ips, allowed_ports: calls.append("firewall")
+    client._log_recovery_event = lambda *args, **kwargs: None
+
+    replacement = _build_session()
+    replacement.tunnel_id = "tunnel-2"
+    replacement.token = dict(replacement.token)
+    replacement.token["tunnel_id"] = "tunnel-2"
+    replacement.server_public_key = "server-public-key-2"
+
+    client.start_session(replacement, signing_client=None)
+
+    assert calls == ["validate", "write_config", "restart", "wait", "adapter", "display", "firewall"]
+    assert client.session is replacement
 
 
 def test_windows_client_refreshes_session_metadata_without_restart_for_tunnel_rotation() -> None:
@@ -251,6 +278,7 @@ def test_windows_client_refreshes_session_metadata_without_restart_for_tunnel_ro
     client._service_config_path = lambda: client.conf_path
     client._restart_service = lambda: calls.append("restart") or True
     client._reinstall_service = lambda: calls.append("reinstall") or True
+    client._wait_for_service_state = lambda **kwargs: calls.append("wait") or "RUNNING"
     client._ensure_adapter_name = lambda: calls.append("adapter")
     client._ensure_service_display_name = lambda: calls.append("display")
     client._ensure_shell_firewall = lambda allowed_ips, allowed_ports: calls.append("firewall")
@@ -265,6 +293,16 @@ def test_windows_client_refreshes_session_metadata_without_restart_for_tunnel_ro
 
     assert calls == ["validate"]
     assert client.session is refreshed
+
+
+def test_windows_client_wait_for_service_state_accepts_delayed_start_pending(monkeypatch) -> None:
+    client = _build_windows_client()
+    states = iter(["STOPPED", "STOPPED", "START_PENDING"])
+
+    client._service_state = lambda: next(states, "START_PENDING")
+    monkeypatch.setattr(wireguard_role.time, "sleep", lambda _: None)
+
+    assert client._wait_for_service_state(timeout_seconds=1.0, poll_interval=0.01) == "START_PENDING"
 
 
 def test_role_run_ensure_cycle_uses_requested_reason() -> None:

@@ -766,3 +766,1587 @@
 + [Update.sh:55] [[ 1 == \1 ]]
 + [Update.sh:56] set +x
 [2026-04-03T12:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-03T13:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T13:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-03T13:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T13:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-03T13:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-03T13:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-03T13:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-03T13:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-03T14:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T14:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-03T14:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T14:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-03T14:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-03T14:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-03T14:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-03T14:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
++ [Update.sh:343] main
+[2026-04-03T15:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T15:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-03T15:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T15:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-03T15:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-03T15:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-03T15:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-03T15:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
+[2026-04-03T16:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T16:00:00 STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:231] local python_bin=
+[2026-04-03T16:00:00] [STEP] Starting Borealis agent auto-update check.
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T16:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-03T16:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-03T16:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-03T16:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-03T16:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-03T17:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T17:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-03T17:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T17:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-03T17:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-03T17:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-03T17:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-03T17:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-03T18:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T18:00:00 STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:231] local python_bin=
+[2026-04-03T18:00:00] [STEP] Starting Borealis agent auto-update check.
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T18:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-03T18:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-03T18:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-03T18:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-03T18:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-03T19:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T19:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-03T19:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T19:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-03T19:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-03T19:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-03T19:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-03T19:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-03T20:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T20:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-03T20:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T20:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-03T20:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-03T20:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-03T20:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-03T20:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-03T21:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T21:00:00 STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:231] local python_bin=
+[2026-04-03T21:00:00] [STEP] Starting Borealis agent auto-update check.
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T21:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-03T21:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-03T21:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-03T21:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-03T21:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-03T22:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T22:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-03T22:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T22:00:00 ERROR 'Agent runtime Python was not found.'
+[2026-04-03T22:00:00] [ERROR] Agent runtime Python was not found.
++ [Update.sh:234] return 1
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-03T22:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-03T22:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-03T22:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-03T23:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T23:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-03T23:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-03T23:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-03T23:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-03T23:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-03T23:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-03T23:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T00:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T00:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-04T00:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T00:00:00 ERROR 'Agent runtime Python was not found.'
+[2026-04-04T00:00:00] [ERROR] Agent runtime Python was not found.
++ [Update.sh:234] return 1
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T00:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T00:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T00:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T01:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T01:00:00 STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:231] local python_bin=
+[2026-04-04T01:00:00] [STEP] Starting Borealis agent auto-update check.
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T01:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-04T01:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T01:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T01:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T01:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T02:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T02:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-04T02:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T02:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-04T02:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T02:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T02:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T02:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T03:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T03:00:00 STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:231] local python_bin=
+[2026-04-04T03:00:00] [STEP] Starting Borealis agent auto-update check.
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T03:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-04T03:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T03:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T03:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T03:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T04:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T04:00:00 STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:231] local python_bin=
+[2026-04-04T04:00:00] [STEP] Starting Borealis agent auto-update check.
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T04:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-04T04:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T04:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T04:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T04:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T05:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T05:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-04T05:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T05:00:00 ERROR 'Agent runtime Python was not found.'
+[2026-04-04T05:00:00] [ERROR] Agent runtime Python was not found.
++ [Update.sh:234] return 1
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T05:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T05:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T05:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T06:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T06:00:00 STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:231] local python_bin=
+[2026-04-04T06:00:00] [STEP] Starting Borealis agent auto-update check.
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T06:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-04T06:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T06:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T06:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T06:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T07:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T07:00:00 STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:231] local python_bin=
+[2026-04-04T07:00:00] [STEP] Starting Borealis agent auto-update check.
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T07:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-04T07:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T07:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T07:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T07:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T08:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T08:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-04T08:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T08:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-04T08:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T08:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T08:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T08:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T09:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T09:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-04T09:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T09:00:00 ERROR 'Agent runtime Python was not found.'
+[2026-04-04T09:00:00] [ERROR] Agent runtime Python was not found.
++ [Update.sh:234] return 1
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T09:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T09:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T09:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T10:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T10:00:00 STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:231] local python_bin=
+[2026-04-04T10:00:00] [STEP] Starting Borealis agent auto-update check.
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T10:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-04T10:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T10:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T10:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T10:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T11:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T11:00:00 STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:231] local python_bin=
+[2026-04-04T11:00:00] [STEP] Starting Borealis agent auto-update check.
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T11:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-04T11:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T11:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T11:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T11:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T12:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T12:00:00 STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:231] local python_bin=
+[2026-04-04T12:00:00] [STEP] Starting Borealis agent auto-update check.
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T12:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-04T12:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T12:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T12:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T12:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T13:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T13:00:00 STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:231] local python_bin=
+[2026-04-04T13:00:00] [STEP] Starting Borealis agent auto-update check.
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T13:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-04T13:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T13:00:00 343 'return 1'
+[2026-04-04T13:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
+++ [Update.sh:49] return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T13:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T14:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T14:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-04T14:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T14:00:00 ERROR 'Agent runtime Python was not found.'
+[2026-04-04T14:00:00] [ERROR] Agent runtime Python was not found.
++ [Update.sh:234] return 1
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T14:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T14:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T14:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T15:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T15:00:00 STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:231] local python_bin=
+[2026-04-04T15:00:00] [STEP] Starting Borealis agent auto-update check.
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T15:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-04T15:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T15:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T15:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T15:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T16:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T16:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-04T16:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T16:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-04T16:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T16:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T16:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T16:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T17:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T17:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-04T17:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T17:00:00 ERROR 'Agent runtime Python was not found.'
+[2026-04-04T17:00:00] [ERROR] Agent runtime Python was not found.
++ [Update.sh:234] return 1
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T17:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T17:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T17:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T18:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T18:00:00 STEP 'Starting Borealis agent auto-update check.'
+[2026-04-04T18:00:00] [STEP] Starting Borealis agent auto-update check.
++ [Update.sh:231] local python_bin=
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T18:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-04T18:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T18:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T18:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T18:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T19:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T19:00:00 STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:231] local python_bin=
+[2026-04-04T19:00:00] [STEP] Starting Borealis agent auto-update check.
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T19:00:00 ERROR 'Agent runtime Python was not found.'
+[2026-04-04T19:00:00] [ERROR] Agent runtime Python was not found.
++ [Update.sh:234] return 1
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T19:00:00 343 'return 1'
+++ [Update.sh:49] return 1
++ [Update.sh:1] finish_logging 1
+[2026-04-04T19:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T19:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T20:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T20:00:00 STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:231] local python_bin=
+[2026-04-04T20:00:00] [STEP] Starting Borealis agent auto-update check.
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T20:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-04T20:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T20:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T20:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T20:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====
++ [Update.sh:71] trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
++ [Update.sh:72] trap 'finish_logging "$?"' EXIT
+[2026-04-04T21:00:00] [STEP] ===== Starting Update.sh session =====
++ [Update.sh:343] main
++ [Update.sh:229] log_line STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:75] local level=STEP
++ [Update.sh:76] local 'message=Starting Borealis agent auto-update check.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T21:00:00 STEP 'Starting Borealis agent auto-update check.'
++ [Update.sh:231] local python_bin=
+[2026-04-04T21:00:00] [STEP] Starting Borealis agent auto-update check.
+++ [Update.sh:232] resolve_agent_python
+++ [Update.sh:85] candidates=()
+++ [Update.sh:85] local candidates
+++ [Update.sh:86] [[ -n '' ]]
+++ [Update.sh:94] candidates+=("/opt/Borealis/Agent/bin/python3" "/opt/Borealis/Agent/bin/python" "${SCRIPT_DIR}/Agent/bin/python3" "${SCRIPT_DIR}/Agent/bin/python")
+++ [Update.sh:96] local candidate=
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python3 ]]
+++ [Update.sh:97] for candidate in "${candidates[@]}"
+++ [Update.sh:98] [[ -x /opt/Borealis/Agent/bin/python ]]
+++ [Update.sh:103] return 1
++ [Update.sh:232] python_bin=
++ [Update.sh:233] log_line ERROR 'Agent runtime Python was not found.'
++ [Update.sh:75] local level=ERROR
++ [Update.sh:76] local 'message=Agent runtime Python was not found.'
+++ [Update.sh:77] date +%FT%T
++ [Update.sh:77] printf '[%s] [%s] %s\n' 2026-04-04T21:00:00 ERROR 'Agent runtime Python was not found.'
++ [Update.sh:234] return 1
+[2026-04-04T21:00:00] [ERROR] Agent runtime Python was not found.
+++ [Update.sh:343] log_unhandled_error 343 'return 1'
+++ [Update.sh:44] local exit_code=1
+++ [Update.sh:45] local line_no=343
+++ [Update.sh:46] local 'command=return 1'
+++ [Update.sh:47] command='return 1'
++++ [Update.sh:48] date +%FT%T
+++ [Update.sh:48] printf '[%s] [ERROR] Update.sh failed near line %s while running: %s\n' 2026-04-04T21:00:00 343 'return 1'
+++ [Update.sh:49] return 1
+[2026-04-04T21:00:00] [ERROR] Update.sh failed near line 343 while running: return 1
++ [Update.sh:1] finish_logging 1
++ [Update.sh:53] local exit_code=1
++ [Update.sh:55] [[ 1 == \1 ]]
++ [Update.sh:56] set +x
+[2026-04-04T21:00:00] [ERROR] ===== Update.sh session failed with exit code 1 =====

@@ -86,6 +86,7 @@ SHELL_KEEPALIVE_LOG_INTERVAL_SECONDS = _env_int(
     minimum=1,
 )
 VPN_IP_LEASE_TABLE = "device_vpn_ip_leases"
+VPN_KEY_LEASE_TABLE = "device_vpn_key_leases"
 
 
 def _effective_confirmed_transport_window_seconds() -> float:
@@ -152,6 +153,7 @@ class VpnTunnelService:
         self._sessions_by_agent: Dict[str, VpnSession] = {}
         self._sessions_by_tunnel: Dict[str, VpnSession] = {}
         self._virtual_ip_leases: Dict[str, str] = {}
+        self._client_key_leases: Dict[str, Tuple[str, str]] = {}
         self._engine_ip = ipaddress.ip_interface(context.wireguard_engine_virtual_ip)
         self._peer_network = ipaddress.ip_network(context.wireguard_peer_network, strict=False)
         self._listener_healthy = False
@@ -162,6 +164,7 @@ class VpnTunnelService:
         self._last_throttle_log_at: Optional[float] = None
         self._watchdog_thread: Optional[Any] = None
         self._load_virtual_ip_leases()
+        self._load_client_key_leases()
         self._cleanup_listener()
         self._idle_thread: Optional[threading.Thread] = None
         if self.persistent:
@@ -322,6 +325,103 @@ class VpnTunnelService:
         with self._lock:
             self._virtual_ip_leases[normalized_agent_id] = normalized_virtual_ip
 
+    def _ensure_client_key_lease_table(self, conn: Any) -> None:
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {VPN_KEY_LEASE_TABLE} (
+                agent_id TEXT PRIMARY KEY,
+                client_private_key TEXT NOT NULL,
+                client_public_key TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+    def _load_client_key_leases(self) -> None:
+        if not callable(self.db_conn_factory):
+            return
+        conn = None
+        leases: Dict[str, Tuple[str, str]] = {}
+        try:
+            conn = self.db_conn_factory()
+            self._ensure_client_key_lease_table(conn)
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT agent_id, client_private_key, client_public_key FROM {VPN_KEY_LEASE_TABLE}"
+            )
+            for row in cur.fetchall():
+                try:
+                    agent_id = str((row or [None, None, None])[0] or "").strip()
+                    client_private_key = str((row or [None, None, None])[1] or "").strip()
+                    client_public_key = str((row or [None, None, None])[2] or "").strip()
+                except Exception:
+                    continue
+                if not agent_id or not client_private_key or not client_public_key:
+                    continue
+                leases[agent_id] = (client_private_key, client_public_key)
+            conn.commit()
+        except Exception:
+            self.logger.debug("Failed to load persisted VPN client key leases.", exc_info=True)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        self._client_key_leases = leases
+
+    def _persist_client_key_lease(self, agent_id: str, client_private_key: str, client_public_key: str) -> None:
+        normalized_agent_id = str(agent_id or "").strip()
+        normalized_private_key = str(client_private_key or "").strip()
+        normalized_public_key = str(client_public_key or "").strip()
+        if not normalized_agent_id or not normalized_private_key or not normalized_public_key:
+            return
+        if callable(self.db_conn_factory):
+            conn = None
+            try:
+                conn = self.db_conn_factory()
+                self._ensure_client_key_lease_table(conn)
+                cur = conn.cursor()
+                cur.execute(
+                    f"""
+                    INSERT INTO {VPN_KEY_LEASE_TABLE} (
+                        agent_id,
+                        client_private_key,
+                        client_public_key,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(agent_id) DO UPDATE SET
+                        client_private_key=excluded.client_private_key,
+                        client_public_key=excluded.client_public_key,
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        normalized_agent_id,
+                        normalized_private_key,
+                        normalized_public_key,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+                conn.commit()
+            except Exception:
+                self.logger.debug(
+                    "Failed to persist VPN client key lease for agent_id=%s",
+                    normalized_agent_id,
+                    exc_info=True,
+                )
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+        self._client_key_leases[normalized_agent_id] = (
+            normalized_private_key,
+            normalized_public_key,
+        )
+
     def _normalize_virtual_ip(self, value: Any) -> Optional[str]:
         text = str(value or "").strip()
         if not text:
@@ -417,6 +517,18 @@ class VpnTunnelService:
             )
         ).decode("ascii").strip()
         return priv, pub
+
+    def _load_or_create_client_keys(self, agent_id: str) -> Tuple[str, str]:
+        normalized_agent_id = str(agent_id or "").strip()
+        existing = self._sessions_by_agent.get(normalized_agent_id)
+        if existing and existing.client_private_key and existing.client_public_key:
+            return existing.client_private_key, existing.client_public_key
+        leased = self._client_key_leases.get(normalized_agent_id)
+        if leased and leased[0] and leased[1]:
+            return leased
+        client_private, client_public = self._generate_client_keys()
+        self._persist_client_key_lease(normalized_agent_id, client_private, client_public)
+        return client_private, client_public
 
     def _issue_token(self, agent_id: str, tunnel_id: str, expires_at: float) -> Dict[str, Any]:
         payload = {
@@ -1078,7 +1190,7 @@ class VpnTunnelService:
             tunnel_id = uuid.uuid4().hex
             virtual_ip = self._allocate_virtual_ip(agent_id)
             allowed_ports = self._load_allowed_ports(agent_id)
-            client_private, client_public = self._generate_client_keys()
+            client_private, client_public = self._load_or_create_client_keys(agent_id)
             token = self._issue_token(agent_id, tunnel_id, now + 300)
             self.wg.require_orchestration_token(token)
             token_signed = "signature" in token
@@ -1101,6 +1213,7 @@ class VpnTunnelService:
                 session.operator_ids.add(operator_id)
             self._sessions_by_agent[agent_id] = session
             self._sessions_by_tunnel[tunnel_id] = session
+            self._persist_client_key_lease(agent_id, client_private, client_public)
 
         try:
             self._service_log_event(

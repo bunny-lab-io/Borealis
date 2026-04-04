@@ -342,6 +342,20 @@ class WireGuardClient:
     def _service_is_healthy(self) -> bool:
         return self._service_state() in ("RUNNING", "START_PENDING")
 
+    def _wait_for_service_state(
+        self,
+        *,
+        healthy_states: tuple[str, ...] = ("RUNNING", "START_PENDING"),
+        timeout_seconds: float = 8.0,
+        poll_interval: float = 0.5,
+    ) -> Optional[str]:
+        state = self._service_state()
+        deadline = time.time() + max(timeout_seconds, 0.0)
+        while state not in healthy_states and time.time() < deadline:
+            time.sleep(max(poll_interval, 0.0))
+            state = self._service_state()
+        return state
+
     def _log_recovery_event(
         self,
         outcome: str,
@@ -802,7 +816,8 @@ class WireGuardClient:
                         session.tunnel_id,
                     )
                 )
-                self._stop_session_locked(reason="session_replace", ignore_missing=True)
+                self.session = None
+                self.idle_deadline = None
 
             rendered = self._render_config(session)
             if not self._write_config(rendered):
@@ -862,9 +877,9 @@ class WireGuardClient:
                         )
                     return
 
-            restart_ok = self._restart_service()
-            current_state = self._service_state()
-            if (not restart_ok) or current_state not in ("RUNNING", "START_PENDING"):
+            self._restart_service()
+            current_state = self._wait_for_service_state()
+            if current_state not in ("RUNNING", "START_PENDING"):
                 _write_log("WireGuard tunnel service unhealthy after restart; attempting service repair.")
                 if not self._reinstall_service():
                     if recovery_reason:
@@ -876,9 +891,9 @@ class WireGuardClient:
                             detail="service_reinstall_failed",
                         )
                     return
-                restart_ok = self._restart_service()
-                current_state = self._service_state()
-                if (not restart_ok) or current_state not in ("RUNNING", "START_PENDING"):
+                self._restart_service()
+                current_state = self._wait_for_service_state()
+                if current_state not in ("RUNNING", "START_PENDING"):
                     _write_log("WireGuard tunnel service failed to reach RUNNING after repair attempt.")
                     if recovery_reason:
                         self._log_recovery_event(
