@@ -48,6 +48,8 @@ DEFAULT_ENGINE_UPSTREAM_HOST = "127.0.0.1"
 DEFAULT_ENGINE_UPSTREAM_PORT = 5000
 DEFAULT_VNC_UPSTREAM_HOST = "127.0.0.1"
 DEFAULT_VNC_UPSTREAM_PORT = 4823
+DEFAULT_VITE_UPSTREAM_HOST = "127.0.0.1"
+DEFAULT_VITE_UPSTREAM_PORT = 5173
 DEFAULT_VNC_PUBLIC_PATH = "/remote-desktop/vnc"
 DEFAULT_ACME_CHALLENGE_PATH = "/.well-known/acme-challenge/"
 DEFAULT_HTTP_PORT = 80
@@ -307,53 +309,96 @@ def _render_static_config(settings: LetsEncryptSettings) -> str:
     )
 
 
+def _dev_ui_proxy_enabled() -> bool:
+    return _parse_bool(os.environ.get("BOREALIS_DEV_UI_PROXY_ENABLED"), default=False)
+
+
 def _render_dynamic_config(settings: LetsEncryptSettings) -> str:
     engine_url = f"http://{settings.engine_upstream_host}:{settings.engine_upstream_port}"
     vnc_url = f"http://{settings.vnc_upstream_host}:{settings.vnc_upstream_port}"
+    vite_url = f"http://{DEFAULT_VITE_UPSTREAM_HOST}:{DEFAULT_VITE_UPSTREAM_PORT}"
     challenge_path = DEFAULT_ACME_CHALLENGE_PATH
+    dev_ui_proxy_enabled = _dev_ui_proxy_enabled()
+    router_lines = [
+        "http:",
+        "  middlewares:",
+        "    redirect-to-https:",
+        "      redirectScheme:",
+        "        scheme: https",
+        "        permanent: true",
+        "  routers:",
+        "    borealis-http:",
+        "      entryPoints:",
+        "        - web",
+        f'      rule: "Host(`{settings.public_hostname}`) && !PathPrefix(`{challenge_path}`)"',
+        "      middlewares:",
+        "        - redirect-to-https",
+        "      service: noop@internal",
+        "    borealis-vnc:",
+        "      entryPoints:",
+        "        - websecure",
+        f'      rule: "Host(`{settings.public_hostname}`) && PathPrefix(`{settings.public_vnc_path}`)"',
+        "      service: borealis-vnc",
+        "      priority: 100",
+        "      tls:",
+        "        certResolver: letsencrypt",
+    ]
+    if dev_ui_proxy_enabled:
+        router_lines.extend(
+            [
+                "    borealis-engine-api:",
+                "      entryPoints:",
+                "        - websecure",
+                f'      rule: "Host(`{settings.public_hostname}`) && (PathPrefix(`/api`) || PathPrefix(`/socket.io`))"',
+                "      service: borealis-engine",
+                "      priority: 90",
+                "      tls:",
+                "        certResolver: letsencrypt",
+                "    borealis-ui-dev:",
+                "      entryPoints:",
+                "        - websecure",
+                f'      rule: "Host(`{settings.public_hostname}`)"',
+                "      service: borealis-vite",
+                "      priority: 10",
+                "      tls:",
+                "        certResolver: letsencrypt",
+            ]
+        )
+    else:
+        router_lines.extend(
+            [
+                "    borealis-https:",
+                "      entryPoints:",
+                "        - websecure",
+                f'      rule: "Host(`{settings.public_hostname}`) && !PathPrefix(`{settings.public_vnc_path}`)"',
+                "      service: borealis-engine",
+                "      priority: 10",
+                "      tls:",
+                "        certResolver: letsencrypt",
+            ]
+        )
+    service_lines = [
+        "  services:",
+        "    borealis-engine:",
+        "      loadBalancer:",
+        "        servers:",
+        f'          - url: "{engine_url}"',
+        "    borealis-vnc:",
+        "      loadBalancer:",
+        "        servers:",
+        f'          - url: "{vnc_url}"',
+    ]
+    if dev_ui_proxy_enabled:
+        service_lines.extend(
+            [
+                "    borealis-vite:",
+                "      loadBalancer:",
+                "        servers:",
+                f'          - url: "{vite_url}"',
+            ]
+        )
     return "\n".join(
-        [
-            "http:",
-            "  middlewares:",
-            "    redirect-to-https:",
-            "      redirectScheme:",
-            "        scheme: https",
-            "        permanent: true",
-            "  routers:",
-            "    borealis-http:",
-            "      entryPoints:",
-            "        - web",
-            f'      rule: "Host(`{settings.public_hostname}`) && !PathPrefix(`{challenge_path}`)"',
-            "      middlewares:",
-            "        - redirect-to-https",
-            "      service: noop@internal",
-            "    borealis-vnc:",
-            "      entryPoints:",
-            "        - websecure",
-            f'      rule: "Host(`{settings.public_hostname}`) && PathPrefix(`{settings.public_vnc_path}`)"',
-            "      service: borealis-vnc",
-            "      priority: 100",
-            "      tls:",
-            "        certResolver: letsencrypt",
-            "    borealis-https:",
-            "      entryPoints:",
-            "        - websecure",
-            f'      rule: "Host(`{settings.public_hostname}`) && !PathPrefix(`{settings.public_vnc_path}`)"',
-            "      service: borealis-engine",
-            "      priority: 10",
-            "      tls:",
-            "        certResolver: letsencrypt",
-            "  services:",
-            "    borealis-engine:",
-            "      loadBalancer:",
-            "        servers:",
-            f'          - url: "{engine_url}"',
-            "    borealis-vnc:",
-            "      loadBalancer:",
-            "        servers:",
-            f'          - url: "{vnc_url}"',
-            "",
-        ]
+        [*router_lines, *service_lines, ""]
     )
 
 

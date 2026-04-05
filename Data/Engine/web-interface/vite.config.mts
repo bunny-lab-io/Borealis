@@ -2,8 +2,22 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+
 const engineHttpTarget = 'http://127.0.0.1:5000';
 const engineWsTarget = 'ws://127.0.0.1:5000';
+const usePublicEdge = String(process.env.BOREALIS_DEV_UI_PROXY_ENABLED || '').trim() === '1';
+const publicHostname = String(process.env.BOREALIS_PUBLIC_HOSTNAME || '').trim();
+const publicHttpsPort = Number.parseInt(String(process.env.BOREALIS_PUBLIC_HTTPS_PORT || '443'), 10);
+const resolvedHmrClientPort = Number.isFinite(publicHttpsPort) && publicHttpsPort > 0 ? publicHttpsPort : 443;
+const devServerHost = usePublicEdge ? '127.0.0.1' : true;
+const hmrConfig = usePublicEdge && publicHostname
+  ? {
+      protocol: 'wss',
+      host: publicHostname,
+      clientPort: resolvedHmrClientPort,
+      path: '/__vite_hmr',
+    }
+  : undefined;
 
 export default defineConfig({
   plugins: [react()],
@@ -17,11 +31,10 @@ export default defineConfig({
   },
   server: {
     open: true,
-    host: true,
+    host: devServerHost,
     strictPort: true,
-    // Allow LAN/IP access during dev (so other devices can reach Vite)
-    // If you want to restrict, replace `true` with an explicit allowlist.
     allowedHosts: true,
+    hmr: hmrConfig,
     proxy: {
       // Ensure cookies/headers are forwarded correctly to the loopback Engine runtime.
       '/api': {

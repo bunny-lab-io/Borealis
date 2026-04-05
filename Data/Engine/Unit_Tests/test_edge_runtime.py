@@ -12,8 +12,8 @@ from pathlib import Path
 from Data.Engine.edge_runtime import LetsEncryptSettings, write_runtime_artifacts
 
 
-def test_dynamic_config_excludes_acme_challenge_from_http_redirect(tmp_path: Path) -> None:
-    settings = LetsEncryptSettings(
+def _build_settings(tmp_path: Path) -> LetsEncryptSettings:
+    return LetsEncryptSettings(
         enabled=True,
         fqdn="borealis.example.com",
         acme_email="ops@example.com",
@@ -35,7 +35,28 @@ def test_dynamic_config_excludes_acme_challenge_from_http_redirect(tmp_path: Pat
         logs_directory=str(tmp_path / "Engine" / "Logs"),
     )
 
+
+def test_dynamic_config_excludes_acme_challenge_from_http_redirect(tmp_path: Path) -> None:
+    settings = _build_settings(tmp_path)
+
     artifacts = write_runtime_artifacts(settings)
     dynamic_config = Path(artifacts["traefik_dynamic_config_path"]).read_text(encoding="utf-8")
 
     assert 'Host(`borealis.example.com`) && !PathPrefix(`/.well-known/acme-challenge/`)' in dynamic_config
+
+
+def test_dynamic_config_routes_dev_ui_to_vite_and_keeps_api_on_engine(
+    tmp_path: Path, monkeypatch
+) -> None:
+    settings = _build_settings(tmp_path)
+    monkeypatch.setenv("BOREALIS_DEV_UI_PROXY_ENABLED", "1")
+
+    artifacts = write_runtime_artifacts(settings)
+    dynamic_config = Path(artifacts["traefik_dynamic_config_path"]).read_text(encoding="utf-8")
+
+    assert "borealis-engine-api:" in dynamic_config
+    assert 'PathPrefix(`/api`) || PathPrefix(`/socket.io`)' in dynamic_config
+    assert "borealis-ui-dev:" in dynamic_config
+    assert 'service: borealis-vite' in dynamic_config
+    assert 'url: "http://127.0.0.1:5173"' in dynamic_config
+    assert "borealis-https:" not in dynamic_config

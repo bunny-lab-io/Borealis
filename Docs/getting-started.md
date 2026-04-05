@@ -6,7 +6,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 
 ## Quick Start (Engine)
 - Linux production: `./Borealis.sh --EngineProduction` (public UI at `https://<your-public-fqdn>` through the embedded Traefik + Let's Encrypt edge).
-- Linux dev: `./Borealis.sh --EngineDev` (Vite on `http://localhost:5173`, Engine on loopback `http://127.0.0.1:5000`).
+- Linux dev: `./Borealis.sh --EngineDev` (public UI on `https://<your-public-fqdn>` through the embedded Traefik edge, with Vite HMR running on loopback `127.0.0.1:5173` behind Traefik).
 - Production TLS is managed by the embedded Traefik edge; the Python Engine stays on loopback HTTP.
 
 ## Optional: Install the Agent (Windows)
@@ -51,7 +51,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 ### Launch mechanics
 - `Borealis.sh` handles dependency setup, venv activation, and staging for the Linux Engine runtime.
 - `Borealis.ps1` handles dependency setup and staging for the Windows agent runtime.
-- Dev mode (`--EngineDev`) uses Vite for the WebUI and a loopback Engine for APIs.
+- Dev mode (`--EngineDev`) uses Vite for the WebUI behind the embedded Traefik edge, while the Engine API stays on loopback.
 - Production (`--EngineProduction`) runs the Engine on loopback HTTP and publishes the app through the embedded Traefik edge.
 
 ### Configuration precedence

@@ -4,7 +4,7 @@
 # - Installs Linux dependencies for Engine and Agent paths
 # - Mirrors Engine flow: venv + staging + Vite + Flask launch
 # - Mirrors Agent flow: venv + Data/Agent staging + dependency install + settings + supervision
-# - Supports parity flags: --server/--agent, --vite/--flask, --quick, --engine-tests,
+# - Supports parity flags: --server/--agent, --vite/--flask, --quick,
 #   --engine-production/--engine-dev, --enrollmentcode, --serverurl, --newEngine
 
 set -o errexit
@@ -34,7 +34,6 @@ AGENT_FLAG=0
 VITE_FLAG=0
 FLASK_FLAG=0
 QUICK_FLAG=0
-ENGINE_TESTS_FLAG=0
 ENGINE_PROD_FLAG=0
 ENGINE_DEV_FLAG=0
 REFRESH_AGENT_RUNTIME_FLAG=0
@@ -57,7 +56,6 @@ while (( "$#" )); do
     -Vite|--vite) VITE_FLAG=1 ;;
     -Flask|--flask) FLASK_FLAG=1 ;;
     -Quick|--quick) QUICK_FLAG=1 ;;
-    -EngineTests|--EngineTests|--engine-tests) ENGINE_TESTS_FLAG=1 ;;
     -EngineProduction|--engine-production) ENGINE_PROD_FLAG=1 ;;
     -EngineDev|--engine-dev) ENGINE_DEV_FLAG=1 ;;
     --refresh-agent-runtime) REFRESH_AGENT_RUNTIME_FLAG=1 ;;
@@ -1740,6 +1738,7 @@ resolve_engine_acme_email() {
 }
 
 ensure_engine_public_edge_runtime() {
+  local mode="${1:-production}"
   local venv_py
   venv_py="$(engine_python_bin)"
   [[ -n "${venv_py}" ]] || return 1
@@ -1768,7 +1767,9 @@ ensure_engine_public_edge_runtime() {
 
   warn_about_unsupported_cloudflare_proxying "${fqdn}"
 
-  BOREALIS_PROJECT_ROOT="${SCRIPT_DIR}" "${venv_py}" -m Data.Engine.edge_runtime ensure-files \
+  BOREALIS_PROJECT_ROOT="${SCRIPT_DIR}" \
+  BOREALIS_DEV_UI_PROXY_ENABLED="$([[ "${mode}" == "developer" ]] && echo 1 || echo 0)" \
+  "${venv_py}" -m Data.Engine.edge_runtime ensure-files \
     --settings-path "$(engine_letsencrypt_settings_path)" \
     --fqdn "${fqdn}" \
     --email "${email}" >/dev/null
@@ -2124,6 +2125,7 @@ if [[ "\${MODE}" == "developer" ]]; then
     exit 1
   fi
   cd "\${ENGINE_UI_DIR}"
+  export BOREALIS_DEV_UI_PROXY_ENABLED=1
   "\${NPM_CMD}" run dev -- --open false >>"\${ENGINE_LOG_DIR}/vite-dev.stdout.log" 2>>"\${ENGINE_LOG_DIR}/vite-dev.stderr.log" &
   VITE_PID=\$!
   cd "\${ENGINE_DIR}"
@@ -2306,7 +2308,7 @@ vite_web_frontend_start() {
 
   if [[ "$mode" == "developer" ]]; then
     if [[ "${ENGINE_USE_SYSTEMD_SUPERVISION:-0}" -eq 1 ]]; then
-      write_vite_log "Skipping direct Vite dev launch; borealis-engine.service will manage developer-mode processes." "vite-dev"
+      write_vite_log "Skipping direct Vite dev launch; borealis-engine.service will manage same-origin developer-mode processes behind the Borealis edge." "vite-dev"
       return 0
     fi
     local logdir; logdir=$(ensure_engine_log_dir)
@@ -2314,9 +2316,15 @@ vite_web_frontend_start() {
     local stderr_log="${logdir}/vite-dev.stderr.log"
     mv -f "$stdout_log" "${stdout_log}.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
     mv -f "$stderr_log" "${stderr_log}.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
-    write_vite_log "Starting Vite dev server with loopback Engine proxying." "vite-dev"
+    write_vite_log "Starting Vite dev server for same-origin Traefik development mode." "vite-dev"
     (
       cd "$engine_ui_dest"
+      export BOREALIS_ENGINE_MODE="$mode"
+      export BOREALIS_DEV_UI_PROXY_ENABLED=1
+      if [[ -f "$(engine_letsencrypt_runtime_env_path)" ]]; then
+        # shellcheck disable=SC1090
+        . "$(engine_letsencrypt_runtime_env_path)"
+      fi
       PATH="${NODE_DIR}/bin:${PATH}" nohup "$NPM_BIN" run dev >"$stdout_log" 2>"$stderr_log" &
     )
   else
@@ -2363,7 +2371,7 @@ flask_engine_launch() {
   echo "===================================================================================="
   local start_label
   if [[ "$mode" == "developer" ]]; then
-    start_label="(Dev) Engine Started on http://localhost:5173"
+    start_label="(Dev) Borealis Edge + Vite HMR Started on https://$(resolve_engine_public_fqdn)"
   else
     start_label="(Production) Borealis Edge Started on https://$(resolve_engine_public_fqdn)"
   fi
@@ -2377,27 +2385,6 @@ flask_engine_launch() {
   if [[ -n "$prev_root" ]]; then export BOREALIS_PROJECT_ROOT="$prev_root"; else unset BOREALIS_PROJECT_ROOT; fi
   popd >/dev/null
 }
-
-# ---- Tests parity ----
-if (( ENGINE_TESTS_FLAG )); then
-  export BOREALIS_PROJECT_ROOT="${SCRIPT_DIR}"
-  export PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
-  PYTHON_BIN="$(resolve_python_bin)"
-  if [[ -z "${PYTHON_BIN}" ]]; then
-    echo -e "${RED}Python interpreter not found. Install Python 3 to run Engine tests.${RESET}" >&2
-    exit 1
-  fi
-  create_engine_venv_and_stage_data || exit 1
-  install_engine_python_deps || exit 1
-  PYTEST_BIN="${SCRIPT_DIR}/Engine/bin/pytest"
-  if [[ ! -x "${PYTEST_BIN}" ]]; then
-    echo -e "${RED}Engine pytest binary not found at ${PYTEST_BIN}.${RESET}" >&2
-    exit 1
-  fi
-  cd "${SCRIPT_DIR}" || exit 1
-  "${PYTEST_BIN}" 'Data/Engine/Unit_Tests'
-  exit $?
-fi
 
 # ---- Banner ----
 clear || true
@@ -2424,7 +2411,7 @@ server_menu() {
     echo -e "\nConfigure Borealis Engine Mode:"
     echo -e " 1) Build & Launch > Borealis Traefik Edge + Engine"
     echo -e " 2) [Skip Build] & Immediately Launch > Borealis Traefik Edge + Engine"
-    echo -e " 3) Launch > [Hotload-Ready] Vite Dev Server @ http://localhost:5173"
+    echo -e " 3) Launch > [Hotload-Ready] Vite Dev UI via Borealis Edge"
     mode_choice="$(prompt_input "Enter choice [1/2/3]: ")"
   else
     echo -e "${YELLOW}Auto-selecting Borealis Engine mode option ${mode_choice}.${RESET}"
@@ -2458,30 +2445,22 @@ server_menu() {
   if [[ "$engine_immediate_launch" -eq 1 ]]; then
     run_step "Sync Engine runtime code from Data/Engine" sync_engine_runtime
     run_step "Restore Engine database environment" ensure_engine_database_env_file
-    run_step "Render Borealis Let's Encrypt and Traefik runtime files" ensure_engine_public_edge_runtime
+    run_step "Render Borealis Let's Encrypt and Traefik runtime files" ensure_engine_public_edge_runtime "$borealis_operation_mode"
     run_step "Verify Engine Ansible Runtime" verify_engine_ansible_runtime
-    if [[ "${ENGINE_USE_SYSTEMD_SUPERVISION}" -eq 1 ]]; then
-      run_step "Configure Borealis Engine systemd service (${borealis_operation_mode})" configure_engine_supervision "$borealis_operation_mode"
-    else
-      run_step "Borealis Engine: Launch Flask Server" flask_engine_launch "$borealis_operation_mode"
-    fi
+    run_step "Configure Borealis Engine supervision (${borealis_operation_mode})" configure_engine_supervision "$borealis_operation_mode"
     return 0
   fi
 
   run_step "Create Borealis Engine Virtual Python Environment & Stage Data" create_engine_venv_and_stage_data
   run_step "Restore Engine database environment" ensure_engine_database_env_file
   run_step "Install Engine Python Dependencies" install_engine_python_deps
-  run_step "Render Borealis Let's Encrypt and Traefik runtime files" ensure_engine_public_edge_runtime
+  run_step "Render Borealis Let's Encrypt and Traefik runtime files" ensure_engine_public_edge_runtime "$borealis_operation_mode"
   run_step "Install Engine Ansible Collections" install_engine_ansible_collections
   run_step "Verify Engine Ansible Runtime" verify_engine_ansible_runtime
   run_step "Copy Engine WebUI Files" ensure_engine_web_interface "$SCRIPT_DIR"
   run_step "Vite Web Frontend: Install NPM Packages" vite_web_frontend_install
   run_step "Vite Web Frontend: Start (${borealis_operation_mode})" vite_web_frontend_start "$borealis_operation_mode"
-  if [[ "${ENGINE_USE_SYSTEMD_SUPERVISION}" -eq 1 ]]; then
-    run_step "Configure Borealis Engine systemd service (${borealis_operation_mode})" configure_engine_supervision "$borealis_operation_mode"
-  else
-    run_step "Borealis Engine: Launch Flask Server" flask_engine_launch "$borealis_operation_mode"
-  fi
+  run_step "Configure Borealis Engine supervision (${borealis_operation_mode})" configure_engine_supervision "$borealis_operation_mode"
 }
 
 agent_menu() {
