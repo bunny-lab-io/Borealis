@@ -4,22 +4,194 @@
 #
 # API Endpoints (if applicable):
 # - GET /api/server/time (Operator Session) - Returns the server clock in multiple formats.
+# - GET /api/server/timezones (Operator Admin Session) - Returns the current server timezone and the selectable timezone inventory.
+# - POST /api/server/timezone (Operator Admin Session) - Changes the engine host timezone.
+# - GET /api/server/overview (Operator Admin Session) - Returns a Borealis Engine server/admin dashboard snapshot.
+# - POST /api/server/services/<service_key>/restart (Operator Admin Session) - Queues a safe detached service restart via systemd-run.
+# - POST /api/server/wireguard/recover (Operator Admin Session) - Forces a WireGuard listener recovery attempt when active tunnels exist.
 # ======================================================
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict
+import base64
+import json
+import os
+import platform
+import re
+import shlex
+import shutil
+import socket
+import subprocess
+import threading
+import time
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from zoneinfo import available_timezones
 
-from flask import Blueprint, Flask, jsonify
+from cryptography import x509
+from flask import Blueprint, Flask, jsonify, request
 
+from ....edge_runtime import DEFAULT_ACME_STORAGE_PATH, PROJECT_ROOT, load_settings
+from ....public_endpoints import public_hostname as resolve_public_hostname
+from ....public_endpoints import public_vnc_path as resolve_public_vnc_path
+from ....public_endpoints import wireguard_endpoint
+from ....security import signing
+from ...VPN import WireGuardServerConfig, WireGuardServerManager, VpnTunnelService
 from ...auth import RequestAuthContext
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters
 
 
-def _serialize_time(now_local: datetime, now_utc: datetime) -> Dict[str, Any]:
+_SYSTEMD_SHOW_PROPERTIES = (
+    "Id",
+    "LoadState",
+    "ActiveState",
+    "SubState",
+    "UnitFileState",
+    "MainPID",
+    "ExecMainStartTimestampUSec",
+    "ActiveEnterTimestampUSec",
+    "ExecMainStartTimestamp",
+    "ActiveEnterTimestamp",
+    "FragmentPath",
+)
+_POSTGRESQL_INSTANCE_PATTERN = re.compile(r"^postgresql@(.+)\.service$", re.IGNORECASE)
+_PEM_CERT_PATTERN = re.compile(
+    rb"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+    re.DOTALL,
+)
+_SERVICE_ACTION_TTL_SECONDS = 60
+_SERVICE_RESTART_DELAY_SECONDS = 2
+_CERT_WARNING_DAYS = 30
+_CERT_CRITICAL_DAYS = 14
+_SYSTEMD_COMMAND_TIMEOUT_SECONDS = 8
+
+
+@dataclass
+class PendingServerAction:
+    action: str
+    created_at: int
+    expires_at: int
+    unit_name: str
+    instance: str = ""
+
+
+class ServerActionTracker:
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._entries: Dict[Tuple[str, str], PendingServerAction] = {}
+
+    def mark_pending(
+        self,
+        *,
+        service_key: str,
+        unit_name: str,
+        action: str,
+        instance: str = "",
+        ttl_seconds: int = _SERVICE_ACTION_TTL_SECONDS,
+    ) -> None:
+        normalized_key = str(service_key or "").strip().lower()
+        normalized_instance = str(instance or "").strip().lower()
+        if not normalized_key or not unit_name or not action:
+            return
+        now_ts = _now_ts()
+        with self._lock:
+            self._entries[(normalized_key, normalized_instance)] = PendingServerAction(
+                action=str(action).strip().lower(),
+                created_at=now_ts,
+                expires_at=now_ts + max(5, int(ttl_seconds)),
+                unit_name=str(unit_name).strip(),
+                instance=normalized_instance,
+            )
+
+    def get_pending(
+        self,
+        *,
+        service_key: str,
+        instance: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        normalized_key = str(service_key or "").strip().lower()
+        normalized_instance = str(instance or "").strip().lower()
+        if not normalized_key:
+            return None
+        now_ts = _now_ts()
+        with self._lock:
+            record = self._entries.get((normalized_key, normalized_instance))
+            if record is None:
+                return None
+            if record.expires_at <= now_ts:
+                self._entries.pop((normalized_key, normalized_instance), None)
+                return None
+            return {
+                "action": record.action,
+                "created_at": record.created_at,
+                "expires_at": record.expires_at,
+                "unit_name": record.unit_name,
+                "instance": record.instance or None,
+            }
+
+
+def _now_ts() -> int:
+    return int(time.time())
+
+
+def _error_response(error: str, message: str, status: int):
+    return jsonify({"error": error, "message": message}), status
+
+
+def _current_timezone_id() -> str:
+    timedatectl_bin = shutil.which("timedatectl") or ""
+    if timedatectl_bin:
+        code, out, _err = _run_command(
+            [timedatectl_bin, "show", "--property=Timezone", "--value"],
+            timeout=5,
+        )
+        if code == 0:
+            timezone_id = str(out or "").strip()
+            if timezone_id:
+                return timezone_id
+
+    env_timezone = str(os.environ.get("TZ") or "").strip()
+    if env_timezone:
+        return env_timezone
+
+    tzinfo = datetime.now().astimezone().tzinfo
+    zone_key = getattr(tzinfo, "key", None)
+    if zone_key:
+        normalized_key = str(zone_key).strip()
+        if normalized_key:
+            return normalized_key
+
+    timezone_file = Path("/etc/timezone")
+    if timezone_file.is_file():
+        try:
+            value = timezone_file.read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            value = ""
+        if value:
+            return value
+
+    localtime_path = Path("/etc/localtime")
+    try:
+        if localtime_path.is_symlink():
+            resolved = localtime_path.resolve(strict=False)
+            parts = resolved.parts
+            if "zoneinfo" in parts:
+                index = parts.index("zoneinfo")
+                timezone_id = "/".join(parts[index + 1 :]).strip()
+                if timezone_id:
+                    return timezone_id
+    except Exception:
+        pass
+
+    return str(datetime.now().astimezone().tzname() or "").strip()
+
+
+def _serialize_time(now_local: datetime, now_utc: datetime, *, timezone_id: str = "") -> Dict[str, Any]:
     tz_label = now_local.tzname()
     display = now_local.strftime("%Y-%m-%d %H:%M:%S %Z").strip()
     if not display:
@@ -29,8 +201,816 @@ def _serialize_time(now_local: datetime, now_utc: datetime) -> Dict[str, Any]:
         "iso": now_local.isoformat(),
         "utc": now_utc.isoformat(),
         "timezone": tz_label,
+        "timezone_id": str(timezone_id or "").strip(),
         "display": display,
     }
+
+
+def _list_available_timezones() -> List[str]:
+    try:
+        zones = sorted(str(item).strip() for item in available_timezones() if str(item or "").strip())
+    except Exception:
+        zones = []
+    return zones
+
+
+def _timezone_change_supported() -> bool:
+    return bool(shutil.which("timedatectl"))
+
+
+def _set_system_timezone(timezone_id: str) -> Tuple[bool, str]:
+    normalized = str(timezone_id or "").strip()
+    if not normalized:
+        return False, "A timezone identifier is required."
+
+    timedatectl_bin = shutil.which("timedatectl") or ""
+    if not timedatectl_bin:
+        return False, "timedatectl is unavailable on this engine host."
+
+    code, _out, err = _run_command(
+        [timedatectl_bin, "set-timezone", normalized],
+        timeout=_SYSTEMD_COMMAND_TIMEOUT_SECONDS,
+    )
+    if code != 0:
+        return False, str(err or "Unable to set server timezone.").strip()
+
+    try:
+        os.environ.pop("TZ", None)
+        if hasattr(time, "tzset"):
+            time.tzset()
+    except Exception:
+        pass
+    return True, ""
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _bytes_summary(total_bytes: int, free_bytes: int, *, path: str = "") -> Dict[str, Any]:
+    total = max(0, int(total_bytes or 0))
+    free = max(0, int(free_bytes or 0))
+    used = max(0, total - free)
+    used_percent = round((used / total) * 100.0, 2) if total > 0 else 0.0
+    payload = {
+        "total_bytes": total,
+        "used_bytes": used,
+        "free_bytes": free,
+        "used_percent": used_percent,
+    }
+    if path:
+        payload["path"] = path
+    return payload
+
+
+def _meminfo_kib() -> Dict[str, int]:
+    path = Path("/proc/meminfo")
+    values: Dict[str, int] = {}
+    if not path.is_file():
+        return values
+    try:
+        for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if ":" not in raw_line:
+                continue
+            key, raw_value = raw_line.split(":", 1)
+            parts = raw_value.strip().split()
+            if not parts:
+                continue
+            values[str(key).strip()] = _safe_int(parts[0], 0)
+    except Exception:
+        return {}
+    return values
+
+
+def _uptime_seconds() -> int:
+    path = Path("/proc/uptime")
+    if not path.is_file():
+        return 0
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace").split()
+        return max(0, int(float(raw[0]))) if raw else 0
+    except Exception:
+        return 0
+
+
+def _iso_from_usec(value: Any) -> str:
+    usec = _safe_int(value, 0)
+    if usec <= 0:
+        return ""
+    try:
+        return datetime.fromtimestamp(usec / 1_000_000.0, tz=timezone.utc).isoformat()
+    except Exception:
+        return ""
+
+
+def _systemd_timestamp_value(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"n/a", "0"}:
+        return ""
+    return text
+
+
+def _run_command(args: Sequence[str], *, timeout: int = _SYSTEMD_COMMAND_TIMEOUT_SECONDS) -> Tuple[int, str, str]:
+    try:
+        completed = subprocess.run(  # noqa: PLW1510 - explicit check=False
+            list(args),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        return completed.returncode, completed.stdout or "", completed.stderr or ""
+    except Exception as exc:
+        return 1, "", repr(exc)
+
+
+def _systemctl_show(systemctl_bin: str, unit_name: str) -> Dict[str, str]:
+    args = [
+        systemctl_bin,
+        "show",
+        unit_name,
+        "--no-pager",
+        "--property",
+        ",".join(_SYSTEMD_SHOW_PROPERTIES),
+    ]
+    code, out, _err = _run_command(args)
+    if code != 0 and not out.strip():
+        return {}
+    payload: Dict[str, str] = {}
+    for raw_line in out.splitlines():
+        line = raw_line.strip()
+        if not line or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        payload[key] = value
+    return payload
+
+
+def _parse_systemd_list_units(output: str) -> List[str]:
+    units: List[str] = []
+    for raw_line in str(output or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        unit_name = line.split()[0].strip()
+        if unit_name:
+            units.append(unit_name)
+    return units
+
+
+def _discover_postgresql_cluster_units(systemctl_bin: str) -> List[str]:
+    discovered: List[str] = []
+    commands = [
+        [
+            systemctl_bin,
+            "list-unit-files",
+            "postgresql@*.service",
+            "--no-legend",
+            "--no-pager",
+        ],
+        [
+            systemctl_bin,
+            "list-units",
+            "postgresql@*.service",
+            "--all",
+            "--no-legend",
+            "--no-pager",
+        ],
+    ]
+    seen: set[str] = set()
+    for command in commands:
+        _code, out, _err = _run_command(command)
+        for unit_name in _parse_systemd_list_units(out):
+            match = _POSTGRESQL_INSTANCE_PATTERN.match(unit_name)
+            if not match:
+                continue
+            instance = str(match.group(1) or "").strip()
+            if not instance:
+                continue
+            normalized_unit = unit_name.strip()
+            if normalized_unit not in seen:
+                seen.add(normalized_unit)
+                discovered.append(normalized_unit)
+    return sorted(discovered)
+
+
+def _normalize_service_status(show_payload: Mapping[str, Any]) -> str:
+    load_state = str(show_payload.get("LoadState") or "").strip().lower()
+    active_state = str(show_payload.get("ActiveState") or "").strip().lower()
+    if load_state in {"not-found", "error", "bad-setting"}:
+        return "critical"
+    if active_state == "active":
+        return "healthy"
+    if active_state in {"activating", "reloading", "deactivating"}:
+        return "warning"
+    if active_state in {"failed", "inactive"}:
+        return "critical"
+    return "unknown"
+
+
+def _get_action_tracker(context: Any) -> ServerActionTracker:
+    existing = getattr(context, "_server_action_tracker", None)
+    if isinstance(existing, ServerActionTracker):
+        return existing
+    tracker = ServerActionTracker()
+    setattr(context, "_server_action_tracker", tracker)
+    return tracker
+
+
+def _service_restart_supported(*, systemctl_bin: str, systemd_run_bin: str, show_payload: Mapping[str, Any]) -> bool:
+    if not systemctl_bin or not systemd_run_bin:
+        return False
+    load_state = str(show_payload.get("LoadState") or "").strip().lower()
+    return load_state not in {"", "not-found", "error", "bad-setting"}
+
+
+def _service_row(
+    *,
+    service_key: str,
+    label: str,
+    unit_name: str,
+    show_payload: Mapping[str, Any],
+    tracker: ServerActionTracker,
+    restart_supported: bool,
+    instance: str = "",
+) -> Dict[str, Any]:
+    started_at = (
+        _iso_from_usec(show_payload.get("ExecMainStartTimestampUSec"))
+        or _iso_from_usec(show_payload.get("ActiveEnterTimestampUSec"))
+        or _systemd_timestamp_value(show_payload.get("ExecMainStartTimestamp"))
+        or _systemd_timestamp_value(show_payload.get("ActiveEnterTimestamp"))
+    )
+    return {
+        "key": service_key,
+        "label": label,
+        "instance": instance or None,
+        "unit_name": unit_name,
+        "active_state": str(show_payload.get("ActiveState") or "").strip().lower() or "unknown",
+        "sub_state": str(show_payload.get("SubState") or "").strip().lower() or "unknown",
+        "enabled_state": str(show_payload.get("UnitFileState") or "").strip().lower() or "unknown",
+        "main_pid": _safe_int(show_payload.get("MainPID"), 0),
+        "started_at": started_at or None,
+        "fragment_path": str(show_payload.get("FragmentPath") or "").strip() or None,
+        "restart_supported": bool(restart_supported),
+        "pending_action": tracker.get_pending(service_key=service_key, instance=instance),
+        "status": _normalize_service_status(show_payload),
+    }
+
+
+def _collect_service_rows(context: Any) -> List[Dict[str, Any]]:
+    systemctl_bin = shutil.which("systemctl") or ""
+    systemd_run_bin = shutil.which("systemd-run") or ""
+    tracker = _get_action_tracker(context)
+
+    service_specs = [
+        ("borealis_engine", "Borealis Engine", "borealis-engine.service"),
+        ("borealis_traefik", "Traefik", "borealis-traefik.service"),
+    ]
+    rows: List[Dict[str, Any]] = []
+    for service_key, label, unit_name in service_specs:
+        show_payload = _systemctl_show(systemctl_bin, unit_name) if systemctl_bin else {}
+        rows.append(
+            _service_row(
+                service_key=service_key,
+                label=label,
+                unit_name=unit_name,
+                show_payload=show_payload,
+                tracker=tracker,
+                restart_supported=_service_restart_supported(
+                    systemctl_bin=systemctl_bin,
+                    systemd_run_bin=systemd_run_bin,
+                    show_payload=show_payload,
+                ),
+            )
+        )
+
+    postgres_units = _discover_postgresql_cluster_units(systemctl_bin) if systemctl_bin else []
+    for unit_name in postgres_units:
+        instance = ""
+        match = _POSTGRESQL_INSTANCE_PATTERN.match(unit_name)
+        if match:
+            instance = str(match.group(1) or "").strip()
+        show_payload = _systemctl_show(systemctl_bin, unit_name) if systemctl_bin else {}
+        rows.append(
+            _service_row(
+                service_key="postgresql_cluster",
+                label=f"PostgreSQL {instance}" if instance else "PostgreSQL",
+                unit_name=unit_name,
+                show_payload=show_payload,
+                tracker=tracker,
+                restart_supported=_service_restart_supported(
+                    systemctl_bin=systemctl_bin,
+                    systemd_run_bin=systemd_run_bin,
+                    show_payload=show_payload,
+                ),
+                instance=instance,
+            )
+        )
+    return rows
+
+
+def _linux_interface_state(interface_name: str) -> Dict[str, Any]:
+    normalized_name = str(interface_name or "").strip()
+    if not normalized_name:
+        return {
+            "interface_present": False,
+            "interface_up": False,
+        }
+    ip_bin = shutil.which("ip") or ""
+    if not ip_bin:
+        return {
+            "interface_present": False,
+            "interface_up": False,
+        }
+    code, out, _err = _run_command([ip_bin, "-details", "link", "show", "dev", normalized_name], timeout=5)
+    if code != 0:
+        return {
+            "interface_present": False,
+            "interface_up": False,
+        }
+    line = ""
+    for raw_line in out.splitlines():
+        if raw_line.strip():
+            line = raw_line.strip()
+            break
+    upper_line = line.upper()
+    return {
+        "interface_present": True,
+        "interface_up": "UP" in upper_line and "STATE DOWN" not in upper_line,
+    }
+
+
+def _get_tunnel_service_init_lock(context: Any) -> threading.Lock:
+    existing = getattr(context, "_vpn_tunnel_service_init_lock", None)
+    if existing is not None:
+        return existing
+    try:
+        from eventlet import semaphore as eventlet_semaphore  # type: ignore
+
+        lock = eventlet_semaphore.Semaphore(1)
+    except Exception:
+        lock = threading.Lock()
+    current = getattr(context, "_vpn_tunnel_service_init_lock", None)
+    if current is not None:
+        return current
+    setattr(context, "_vpn_tunnel_service_init_lock", lock)
+    return lock
+
+
+def _get_tunnel_service(adapters: "EngineServiceAdapters") -> Optional[VpnTunnelService]:
+    context = adapters.context
+    service = getattr(context, "vpn_tunnel_service", None)
+    if service is not None:
+        return service
+
+    with _get_tunnel_service_init_lock(context):
+        service = getattr(context, "vpn_tunnel_service", None)
+        if service is not None:
+            return service
+
+        manager = getattr(context, "wireguard_server_manager", None)
+        if manager is None:
+            try:
+                manager = WireGuardServerManager(
+                    WireGuardServerConfig(
+                        port=context.wireguard_port,
+                        engine_virtual_ip=context.wireguard_engine_virtual_ip,
+                        peer_network=context.wireguard_peer_network,
+                        private_key_path=Path(context.wireguard_server_private_key_path),
+                        public_key_path=Path(context.wireguard_server_public_key_path),
+                        acl_allowlist_ports=tuple(context.wireguard_port_allowlist),
+                        log_path=Path(context.vpn_tunnel_log_path),
+                    )
+                )
+                setattr(context, "wireguard_server_manager", manager)
+            except Exception:
+                context.logger.error("Failed to initialize WireGuard server manager on demand.", exc_info=True)
+                return None
+
+        try:
+            signer = signing.load_signer()
+        except Exception:
+            signer = None
+
+        try:
+            service = VpnTunnelService(
+                context=context,
+                wireguard_manager=manager,
+                db_conn_factory=adapters.db_conn_factory,
+                socketio=getattr(context, "socketio", None),
+                service_log=adapters.service_log,
+                signer=signer,
+            )
+        except Exception:
+            context.logger.error("Failed to initialize VPN tunnel service on demand.", exc_info=True)
+            return None
+        setattr(context, "vpn_tunnel_service", service)
+        return service
+
+
+def _collect_wireguard_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]:
+    service = _get_tunnel_service(adapters)
+    context = adapters.context
+    endpoint_host, endpoint_port = wireguard_endpoint(context)
+    payload: Dict[str, Any] = {
+        "interface_name": "borealis-wg",
+        "interface_present": False,
+        "interface_up": False,
+        "active_tunnel_count": 0,
+        "listener_healthy": False,
+        "listener_reason": "unavailable",
+        "listener_service_state": None,
+        "recovery_in_progress": False,
+        "last_recovery_attempt_at": None,
+        "last_recovery_attempt_at_iso": "",
+        "shell_port": int(getattr(context, "wireguard_shell_port", 0) or 0),
+        "vnc_port": int(getattr(context, "vnc_port", 0) or 0),
+        "vnc_ws_port": int(getattr(context, "vnc_ws_port", 0) or 0),
+        "wireguard_endpoint": {
+            "host": endpoint_host,
+            "port": endpoint_port,
+            "display": f"{endpoint_host}:{endpoint_port}" if endpoint_host else "",
+        },
+        "recover_supported": False,
+        "active_tunnels": [],
+    }
+    if service is None:
+        return payload
+
+    sessions = service.list_sessions()
+    wg_manager = getattr(service, "wg", None)
+    interface_name = str(
+        getattr(wg_manager, "interface_name", None)
+        or getattr(wg_manager, "_interface_name", None)
+        or "borealis-wg"
+    ).strip() or "borealis-wg"
+    payload["interface_name"] = interface_name
+    payload.update(_linux_interface_state(interface_name))
+    payload["active_tunnels"] = sessions
+    payload["active_tunnel_count"] = len(sessions)
+    payload["recover_supported"] = bool(sessions)
+
+    low_level_health = {}
+    if wg_manager is not None and hasattr(wg_manager, "check_listener_health"):
+        try:
+            low_level_health = dict(wg_manager.check_listener_health())
+        except Exception:
+            low_level_health = {}
+
+    listener_status = {}
+    if hasattr(service, "listener_status"):
+        try:
+            listener_status = dict(service.listener_status(refresh=bool(sessions)))
+        except Exception:
+            listener_status = {}
+
+    payload["listener_healthy"] = bool(listener_status.get("listener_healthy"))
+    payload["recovery_in_progress"] = bool(listener_status.get("recovery_in_progress"))
+    payload["last_recovery_attempt_at"] = listener_status.get("last_recovery_attempt_at")
+    payload["last_recovery_attempt_at_iso"] = str(listener_status.get("last_recovery_attempt_at_iso") or "")
+    payload["listener_service_state"] = low_level_health.get("service_state")
+
+    if not sessions:
+        payload["listener_reason"] = "idle"
+        return payload
+
+    payload["listener_reason"] = str(
+        low_level_health.get("reason")
+        or listener_status.get("reason")
+        or "listener_unhealthy"
+    )
+    return payload
+
+
+def _load_acme_json(path: Path) -> Dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _wildcard_matches_hostname(pattern: str, hostname: str) -> bool:
+    normalized_pattern = str(pattern or "").strip().lower()
+    normalized_host = str(hostname or "").strip().lower()
+    if not normalized_pattern or not normalized_host:
+        return False
+    if normalized_pattern == normalized_host:
+        return True
+    if normalized_pattern.startswith("*."):
+        suffix = normalized_pattern[1:]
+        return normalized_host.endswith(suffix) and normalized_host.count(".") >= normalized_pattern.count(".")
+    return False
+
+
+def _decode_leaf_certificate(value: Any) -> Optional[x509.Certificate]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    candidates: List[bytes] = [text.encode("utf-8", errors="ignore")]
+    try:
+        decoded = base64.b64decode(text)
+    except Exception:
+        decoded = b""
+    if decoded:
+        candidates.insert(0, decoded)
+
+    for blob in candidates:
+        if not blob:
+            continue
+        pem_match = _PEM_CERT_PATTERN.search(blob)
+        if pem_match:
+            try:
+                return x509.load_pem_x509_certificate(pem_match.group(0))
+            except Exception:
+                pass
+        try:
+            return x509.load_der_x509_certificate(blob)
+        except Exception:
+            continue
+    return None
+
+
+def _certificate_not_valid_after(cert: x509.Certificate) -> Optional[datetime]:
+    value = getattr(cert, "not_valid_after_utc", None)
+    if isinstance(value, datetime):
+        return value
+    try:
+        raw = cert.not_valid_after
+    except Exception:
+        return None
+    if raw is None:
+        return None
+    if raw.tzinfo is None:
+        return raw.replace(tzinfo=timezone.utc)
+    return raw.astimezone(timezone.utc)
+
+
+def _certificate_severity(days_remaining: Optional[int]) -> str:
+    if days_remaining is None:
+        return "unknown"
+    if days_remaining < _CERT_CRITICAL_DAYS:
+        return "critical"
+    if days_remaining <= _CERT_WARNING_DAYS:
+        return "warning"
+    return "healthy"
+
+
+def _collect_public_certificates(acme_path: Path, *, fqdn: str) -> List[Dict[str, Any]]:
+    if not acme_path.is_file():
+        return []
+    raw = _load_acme_json(acme_path)
+    if not raw:
+        return []
+
+    normalized_fqdn = str(fqdn or "").strip().lower()
+    now_utc = datetime.now(timezone.utc)
+    results: List[Dict[str, Any]] = []
+    for resolver_name, resolver_payload in raw.items():
+        if not isinstance(resolver_payload, Mapping):
+            continue
+        certificates = resolver_payload.get("Certificates")
+        if not isinstance(certificates, list):
+            continue
+        for entry in certificates:
+            if not isinstance(entry, Mapping):
+                continue
+            domain_block = entry.get("domain")
+            if isinstance(domain_block, Mapping):
+                main_domain = str(domain_block.get("main") or "").strip()
+                sans = [
+                    str(item).strip()
+                    for item in (domain_block.get("sans") or [])
+                    if str(item or "").strip()
+                ]
+            else:
+                main_domain = ""
+                sans = []
+            domains = [domain for domain in [main_domain, *sans] if domain]
+            if normalized_fqdn and not any(_wildcard_matches_hostname(domain, normalized_fqdn) for domain in domains):
+                continue
+
+            certificate = _decode_leaf_certificate(entry.get("certificate"))
+            expires_at: Optional[datetime] = _certificate_not_valid_after(certificate) if certificate else None
+            days_remaining = None
+            if expires_at is not None:
+                days_remaining = int((expires_at - now_utc).total_seconds() // 86400)
+            results.append(
+                {
+                    "resolver": str(resolver_name or "").strip(),
+                    "main_domain": main_domain or (domains[0] if domains else ""),
+                    "domains": domains,
+                    "expires_at": expires_at.isoformat() if expires_at is not None else None,
+                    "days_remaining": days_remaining,
+                    "severity": _certificate_severity(days_remaining),
+                }
+            )
+
+    return sorted(
+        results,
+        key=lambda item: (
+            item.get("days_remaining") is None,
+            int(item.get("days_remaining") or 0),
+            str(item.get("main_domain") or ""),
+        ),
+    )
+
+
+def _collect_public_edge_payload(context: Any) -> Dict[str, Any]:
+    settings = None
+    settings_path_value = str(getattr(context, "letsencrypt_settings_path", "") or "").strip()
+    settings_path = Path(settings_path_value).expanduser() if settings_path_value else None
+    if settings_path is not None and settings_path.is_file():
+        try:
+            settings = load_settings(settings_path)
+        except Exception:
+            settings = None
+
+    fqdn = str(
+        (getattr(settings, "public_hostname", None) if settings is not None else None)
+        or resolve_public_hostname(context)
+        or ""
+    ).strip()
+    endpoint_host, endpoint_port = wireguard_endpoint(context)
+    acme_path = Path(
+        str(getattr(settings, "acme_storage_path", "") or DEFAULT_ACME_STORAGE_PATH)
+    ).expanduser()
+    return {
+        "enabled": bool(getattr(context, "public_edge_enabled", False)),
+        "fqdn": fqdn,
+        "acme_email": str(getattr(settings, "acme_email", "") or "").strip(),
+        "public_base_url": str(getattr(context, "public_base_url", "") or "").strip(),
+        "public_vnc_path": resolve_public_vnc_path(context),
+        "wireguard_endpoint": f"{endpoint_host}:{endpoint_port}" if endpoint_host else "",
+        "certificates": _collect_public_certificates(acme_path, fqdn=fqdn),
+    }
+
+
+def _collect_host_payload(context: Any) -> Dict[str, Any]:
+    now_utc = datetime.now(timezone.utc)
+    now_local = now_utc.astimezone()
+    timezone_id = _current_timezone_id()
+    return {
+        "hostname": socket.gethostname(),
+        "kernel": platform.release(),
+        "architecture": platform.machine(),
+        "engine_mode": str(
+            os.environ.get("BOREALIS_ENGINE_MODE")
+            or context.config.get("ENGINE_MODE")
+            or "unknown"
+        ).strip()
+        or "unknown",
+        "server_time": _serialize_time(now_local, now_utc, timezone_id=timezone_id),
+        "timezone": now_local.tzname() or "",
+        "timezone_id": timezone_id,
+        "timezone_change_supported": _timezone_change_supported(),
+        "uptime_seconds": _uptime_seconds(),
+        "public_base_url": str(getattr(context, "public_base_url", "") or "").strip(),
+        "public_hostname": str(resolve_public_hostname(context) or "").strip(),
+        "public_https_port": int(getattr(context, "public_https_port", 443) or 443),
+    }
+
+
+def _collect_resource_payload() -> Dict[str, Any]:
+    meminfo = _meminfo_kib()
+    memory_total = int(meminfo.get("MemTotal", 0)) * 1024
+    memory_free = int(meminfo.get("MemAvailable", meminfo.get("MemFree", 0))) * 1024
+    swap_total = int(meminfo.get("SwapTotal", 0)) * 1024
+    swap_free = int(meminfo.get("SwapFree", 0)) * 1024
+    try:
+        load_average = [round(value, 2) for value in os.getloadavg()]
+    except Exception:
+        load_average = [0.0, 0.0, 0.0]
+    root_usage = shutil.disk_usage("/")
+    project_usage = shutil.disk_usage(str(PROJECT_ROOT))
+    return {
+        "load_average": load_average,
+        "cpu_count": int(os.cpu_count() or 0),
+        "memory": _bytes_summary(memory_total, memory_free),
+        "swap": _bytes_summary(swap_total, swap_free),
+        "disk_root": _bytes_summary(root_usage.total, root_usage.free, path="/"),
+        "disk_project": _bytes_summary(project_usage.total, project_usage.free, path=str(PROJECT_ROOT)),
+    }
+
+
+def _collect_operator_session_count(adapters: "EngineServiceAdapters") -> int:
+    registry = getattr(adapters.context, "operator_presence_registry", None)
+    if registry is None:
+        return 0
+    try:
+        if hasattr(registry, "count_sessions"):
+            return max(0, _safe_int(registry.count_sessions(), 0))
+        if hasattr(registry, "list_sessions"):
+            return len(registry.list_sessions())
+    except Exception:
+        adapters.context.logger.debug("Failed to read operator presence registry.", exc_info=True)
+        return 0
+    return 0
+
+
+def _collect_security_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]:
+    aegis_service = getattr(adapters, "aegis_cipher_service", None)
+    if aegis_service is None or not hasattr(aegis_service, "status"):
+        return {
+            "aegis": {
+                "configured": False,
+                "locked": False,
+                "unlock_scope": "engine_global",
+                "secret_scope": ["credentials", "github_token"],
+                "updated_at": 0,
+            }
+        }
+    try:
+        aegis_payload = dict(aegis_service.status())
+    except Exception:
+        aegis_payload = {
+            "configured": False,
+            "locked": False,
+            "unlock_scope": "engine_global",
+            "secret_scope": ["credentials", "github_token"],
+            "updated_at": 0,
+        }
+    return {"aegis": aegis_payload}
+
+
+def _build_overview_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]:
+    return {
+        "collected_at": datetime.now(timezone.utc).isoformat(),
+        "host": _collect_host_payload(adapters.context),
+        "resources": _collect_resource_payload(),
+        "services": _collect_service_rows(adapters.context),
+        "wireguard": _collect_wireguard_payload(adapters),
+        "public_edge": _collect_public_edge_payload(adapters.context),
+        "security": _collect_security_payload(adapters),
+        "operator_session_count": _collect_operator_session_count(adapters),
+    }
+
+
+def _resolve_restart_unit(
+    *,
+    service_key: str,
+    body: Mapping[str, Any],
+    service_rows: Sequence[Mapping[str, Any]],
+) -> Tuple[Optional[str], str]:
+    normalized_key = str(service_key or "").strip().lower()
+    if normalized_key == "borealis_engine":
+        return "borealis-engine.service", ""
+    if normalized_key == "borealis_traefik":
+        return "borealis-traefik.service", ""
+    if normalized_key != "postgresql_cluster":
+        return None, ""
+
+    instance = str(body.get("instance") or "").strip()
+    if not instance:
+        return None, ""
+    for row in service_rows:
+        if str(row.get("key") or "").strip().lower() != "postgresql_cluster":
+            continue
+        if str(row.get("instance") or "").strip().lower() == instance.lower():
+            return str(row.get("unit_name") or "").strip(), instance
+    return None, instance
+
+
+def _queue_detached_restart(
+    *,
+    service_key: str,
+    unit_name: str,
+) -> Tuple[bool, str, str]:
+    systemd_run_bin = shutil.which("systemd-run") or ""
+    systemctl_bin = shutil.which("systemctl") or ""
+    if not systemd_run_bin or not systemctl_bin:
+        return False, "", "systemd-run or systemctl is unavailable on this engine host."
+
+    job_unit = f"borealis-admin-restart-{service_key}-{uuid.uuid4().hex[:8]}"
+    shell_command = f"sleep {_SERVICE_RESTART_DELAY_SECONDS}; {shlex.quote(systemctl_bin)} restart {shlex.quote(unit_name)}"
+    args = [
+        systemd_run_bin,
+        f"--unit={job_unit}",
+        "--collect",
+        "--service-type=oneshot",
+        "/bin/bash",
+        "-lc",
+        shell_command,
+    ]
+    code, out, err = _run_command(args, timeout=_SYSTEMD_COMMAND_TIMEOUT_SECONDS)
+    if code != 0:
+        message = str(err or out or "systemd-run failed").strip()
+        return False, "", message
+    return True, f"{job_unit}.service", ""
+
 
 def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
     """Expose server telemetry endpoints used by the admin interface."""
@@ -50,7 +1030,162 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
             return jsonify(error[0]), error[1]
         now_utc = datetime.now(timezone.utc)
         now_local = now_utc.astimezone()
-        payload = _serialize_time(now_local, now_utc)
+        payload = _serialize_time(now_local, now_utc, timezone_id=_current_timezone_id())
         return jsonify(payload)
+
+    @blueprint.route("/api/server/timezones", methods=["GET"])
+    def server_timezones() -> Any:
+        admin_error = auth.require_admin()
+        if admin_error:
+            return jsonify(admin_error[0]), admin_error[1]
+        current_timezone = _current_timezone_id()
+        return jsonify(
+            {
+                "current_timezone": current_timezone,
+                "change_supported": _timezone_change_supported(),
+                "timezones": _list_available_timezones(),
+            }
+        )
+
+    @blueprint.route("/api/server/timezone", methods=["POST"])
+    def set_server_timezone() -> Any:
+        admin_error = auth.require_admin()
+        if admin_error:
+            return jsonify(admin_error[0]), admin_error[1]
+
+        body = request.get_json(silent=True) or {}
+        timezone_id = str(body.get("timezone") or "").strip()
+        if not timezone_id:
+            return _error_response("timezone_required", "A timezone identifier is required.", 400)
+
+        available = _list_available_timezones()
+        if timezone_id not in available:
+            return _error_response("invalid_timezone", "Unsupported timezone identifier.", 400)
+
+        if not _timezone_change_supported():
+            return _error_response(
+                "timezone_change_unsupported",
+                "Timezone changes are unavailable on this engine host.",
+                409,
+            )
+
+        changed, error_message = _set_system_timezone(timezone_id)
+        if not changed:
+            return _error_response("timezone_change_failed", error_message or "Unable to change server timezone.", 500)
+
+        host_payload = _collect_host_payload(adapters.context)
+        return jsonify(
+            {
+                "status": "ok",
+                "timezone": timezone_id,
+                "host": host_payload,
+            }
+        )
+
+    @blueprint.route("/api/server/overview", methods=["GET"])
+    def server_overview() -> Any:
+        admin_error = auth.require_admin()
+        if admin_error:
+            return jsonify(admin_error[0]), admin_error[1]
+        return jsonify(_build_overview_payload(adapters))
+
+    @blueprint.route("/api/server/services/<service_key>/restart", methods=["POST"])
+    def restart_service(service_key: str) -> Any:
+        admin_error = auth.require_admin()
+        if admin_error:
+            return jsonify(admin_error[0]), admin_error[1]
+
+        normalized_key = str(service_key or "").strip().lower()
+        if normalized_key not in {"borealis_engine", "borealis_traefik", "postgresql_cluster"}:
+            return _error_response("invalid_service_key", "Unsupported service key.", 404)
+
+        body = request.get_json(silent=True) or {}
+        service_rows = _collect_service_rows(adapters.context)
+        unit_name, instance = _resolve_restart_unit(
+            service_key=normalized_key,
+            body=body,
+            service_rows=service_rows,
+        )
+        if not unit_name:
+            if normalized_key == "postgresql_cluster":
+                return _error_response(
+                    "invalid_postgresql_instance",
+                    "A valid PostgreSQL cluster instance is required.",
+                    400,
+                )
+            return _error_response("service_unavailable", "The requested service unit could not be resolved.", 404)
+
+        matching_row = next(
+            (
+                row
+                for row in service_rows
+                if str(row.get("key") or "").strip().lower() == normalized_key
+                and str(row.get("unit_name") or "").strip() == unit_name
+            ),
+            None,
+        )
+        if not matching_row or not bool(matching_row.get("restart_supported")):
+            return _error_response(
+                "restart_unsupported",
+                "This service cannot be restarted safely on the current engine host.",
+                409,
+            )
+
+        queued, job_unit, error_message = _queue_detached_restart(
+            service_key=normalized_key,
+            unit_name=unit_name,
+        )
+        if not queued:
+            return _error_response("restart_failed", error_message or "Unable to queue restart.", 500)
+
+        tracker = _get_action_tracker(adapters.context)
+        tracker.mark_pending(
+            service_key=normalized_key,
+            unit_name=unit_name,
+            action="restart",
+            instance=instance,
+        )
+        scheduled_for = (datetime.now(timezone.utc) + timedelta(seconds=_SERVICE_RESTART_DELAY_SECONDS)).isoformat()
+        return (
+            jsonify(
+                {
+                    "queued": True,
+                    "service_key": normalized_key,
+                    "unit_name": unit_name,
+                    "job_unit": job_unit,
+                    "scheduled_for": scheduled_for,
+                }
+            ),
+            202,
+        )
+
+    @blueprint.route("/api/server/wireguard/recover", methods=["POST"])
+    def recover_wireguard_listener() -> Any:
+        admin_error = auth.require_admin()
+        if admin_error:
+            return jsonify(admin_error[0]), admin_error[1]
+
+        service = _get_tunnel_service(adapters)
+        if service is None:
+            return _error_response(
+                "wireguard_unavailable",
+                "The Borealis WireGuard tunnel service is unavailable on this engine host.",
+                503,
+            )
+
+        sessions = service.list_sessions()
+        if not sessions:
+            return _error_response(
+                "no_active_sessions",
+                "Recover Listener is only available while Borealis has active VPN sessions.",
+                409,
+            )
+
+        payload = service.recover_listener(
+            trigger="admin_dashboard",
+            reason="manual_admin_recovery",
+            force=True,
+        )
+        return jsonify({"status": "ok", "wireguard": payload})
 
     app.register_blueprint(blueprint)

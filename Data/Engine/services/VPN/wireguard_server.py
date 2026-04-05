@@ -93,6 +93,14 @@ class WireGuardServerManager:
         self._listener_lock = threading.RLock()
         self._log_startup_context()
 
+    @property
+    def interface_name(self) -> str:
+        return self._interface_name
+
+    @property
+    def service_name(self) -> str:
+        return self._service_name
+
     def _resolve_config_dir(self) -> Path:
         config_dir = engine_config.PROJECT_ROOT / "Engine" / "WireGuard"
         try:

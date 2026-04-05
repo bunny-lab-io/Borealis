@@ -532,7 +532,7 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
         "API_LOG_FILE": str(api_log_path),
         "VPN_TUNNEL_LOG_FILE": str(vpn_tunnel_log_path),
         "STATIC_FOLDER": str(static_dir),
-        "API_GROUPS": ("core", "auth", "tokens", "enrollment", "devices", "assemblies"),
+        "API_GROUPS": ("core", "auth", "tokens", "enrollment", "devices", "assemblies", "server"),
     }
 
     app, _socketio, context = create_app(config)

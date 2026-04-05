@@ -140,6 +140,11 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 
 ### Server Info and Logs
 - `GET /api/server/time` (Operator Session) - server clock.
+- `GET /api/server/timezones` (Admin) - list the current engine host timezone and the selectable timezone inventory for WebUI timezone management.
+- `POST /api/server/timezone` (Admin) - change the timezone used by the entire engine host.
+- `GET /api/server/overview` (Admin) - consolidated Engine host overview used by the Server Info dashboard, including service state, public cert status, live operator sessions, WireGuard runtime state, Aegis state, and host resource basics.
+- `POST /api/server/services/<service_key>/restart` (Admin) - queue a detached `systemd-run` restart for `borealis_engine`, `borealis_traefik`, or a `postgresql_cluster` instance.
+- `POST /api/server/wireguard/recover` (Admin) - force a Borealis WireGuard listener recovery attempt when active VPN sessions exist.
 - `GET /api/server/logs` (Admin) - list logs and retention.
 - `GET /api/server/logs/<log_name>/entries` (Admin) - tail log lines.
 - `PUT /api/server/logs/retention` (Admin) - update retention policies.

@@ -1295,6 +1295,16 @@ class VpnTunnelService:
             for session in sessions
         ]
 
+    def listener_status(self, *, refresh: bool = False) -> Mapping[str, Any]:
+        active_sessions = self._active_sessions()
+        payload = dict(self._listener_health_payload(refresh=refresh and bool(active_sessions)))
+        payload["active_tunnel_count"] = len(active_sessions)
+        payload["active_session_ids"] = [session.agent_id for session in active_sessions]
+        payload["reason"] = "no_active_sessions" if not active_sessions else (
+            "listener_healthy" if payload.get("listener_healthy") else "listener_unhealthy"
+        )
+        return payload
+
     def session_payload(self, agent_id: str, *, include_token: bool = True) -> Optional[Mapping[str, Any]]:
         with self._lock:
             session = self._sessions_by_agent.get(agent_id)
@@ -1418,6 +1428,31 @@ class VpnTunnelService:
             level="WARNING",
         )
         return self._recover_listener(trigger=trigger, reason=str(reason or trigger), force=True)
+
+    def recover_listener(
+        self,
+        *,
+        trigger: str,
+        reason: Optional[str] = None,
+        force: bool = True,
+    ) -> Mapping[str, Any]:
+        active_sessions = self._active_sessions()
+        if not active_sessions:
+            self._service_log_event(
+                "vpn_listener_recovery_skipped trigger={0} reason={1} active_sessions=0".format(
+                    trigger or "-",
+                    str(reason or "").strip() or "-",
+                ),
+                level="WARNING",
+            )
+            payload = dict(self._listener_health_payload(refresh=False))
+            payload["reason"] = "no_active_sessions"
+            payload["active_tunnel_count"] = 0
+            return payload
+        payload = dict(self._recover_listener(trigger=trigger, reason=str(reason or trigger), force=force))
+        payload["reason"] = "listener_healthy" if payload.get("listener_healthy") else "listener_unhealthy"
+        payload["active_tunnel_count"] = len(active_sessions)
+        return payload
 
     def bump_activity(self, agent_id: str) -> None:
         with self._lock:

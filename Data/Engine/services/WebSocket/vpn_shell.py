@@ -771,13 +771,13 @@ class VpnShellBridge:
                 )
             service.bump_activity(session.agent_id)
 
-    def close(self, sid: str) -> None:
+    def close(self, sid: str) -> bool:
         with self._lock:
             session = self._sessions.get(sid)
             if session is not None:
                 self._remove_session_locked(session)
         if not session:
-            return
+            return False
         self._service_log_event(
             "vpn_shell_close_request agent_id={0} sid={1}".format(
                 session.agent_id,
@@ -785,3 +785,4 @@ class VpnShellBridge:
             )
         )
         session.close_with_reason("close_request")
+        return True

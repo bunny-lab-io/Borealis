@@ -7,6 +7,7 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 ## WebUI Architecture (High Level)
 - Entry point: `Data/Engine/web-interface/src/App.jsx`.
 - Global socket: `window.BorealisSocket` (Socket.IO client).
+- Shared operator presence: authenticated browsers emit `operator_presence_sync` and `operator_presence_clear` on the shared socket; the Engine emits `server_operator_presence_changed` so informational admin pages can refresh live operator session data without waiting for their poll interval.
 - Navigation: `Data/Engine/web-interface/src/Navigation_Sidebar.jsx`.
 - Page template reference: `Data/Engine/web-interface/src/Admin/Page_Template.jsx` (layout only).
 
@@ -21,10 +22,16 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - Backend: `POST /api/notifications/notify`.
 - Transport: Socket.IO event `borealis_notification`.
 - Frontend: `Data/Engine/web-interface/src/Notifications.jsx`.
+- Scope: include `username` in the payload to target a specific signed-in operator; the frontend filters user-scoped notifications to that operator while unscoped notifications still broadcast to all connected operators.
 
 ## API Endpoints
 - `POST /api/notifications/notify` (Token Authenticated) - broadcast a toast to all connected operators.
 - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - shared header device search, scoped to the current operator's visible sites unless the operator is an admin.
+- `GET /api/server/timezones` (Operator Admin Session) - returns the current engine host timezone and the selectable timezone inventory for the Server Info timezone picker.
+- `POST /api/server/timezone` (Operator Admin Session) - changes the timezone used by the engine host from the WebUI.
+- `GET /api/server/overview` (Operator Admin Session) - returns the Server Info dashboard snapshot including service state, host runtime details, WireGuard runtime status, public-edge certificate health, and live operator presence.
+- `POST /api/server/services/<service_key>/restart` (Operator Admin Session) - queues a safe detached restart for `borealis_engine`, `borealis_traefik`, or a specific `postgresql_cluster` instance.
+- `POST /api/server/wireguard/recover` (Operator Admin Session) - triggers Borealis WireGuard listener recovery when active tunnels exist.
 
 ## Related Documentation
 - [Engine Runtime](engine-runtime.md)
@@ -58,6 +65,7 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - Primary pages rendered beneath the shared App header use `Data/Engine/web-interface/src/PageBodyFrame.jsx`.
 - `App.jsx` owns the title, subtitle, icon, and header action rail. `PageBodyFrame` owns the body inset, rounded outer shell, shell chrome, and variant-specific structure.
 - Supported variants: `grid`, `grid_with_stack`, `split_tool`, `content_panel`.
+- Informational admin dashboards such as Server Info should prefer `content_panel`, start with a hero strip of high-signal stat cards, and then stack glass sections beneath it rather than recreating toolbar chrome inside the body.
 - Default body inset is `px: 2`, `pt: 2.5`, and `pb: 2`. The `pt: 2.5` token adds 20px of shared spacing between the page subtitle and the body frame.
 - The body shell keeps that outer inset, but the main page content should bleed to the inside edge of the shell rather than sitting inside a second shared padding layer.
 - Do not add manual `mt: "10px"` drops or top-level `p: 3` wrappers to compensate for the header or to recreate internal shell padding.
@@ -236,6 +244,7 @@ const NAV_TAB_COLORS = {
 - `Delete | Rename | Create Site`
 - `Columns | Refresh | Quick Job | Add Device`
 - `Refresh | New Filter`
+- `Refresh | GitHub Project | About Borealis`
 - `GitHub Project | About Borealis`
 - `Cancel | Save Filter`
 - Canonical examples:
@@ -309,6 +318,7 @@ const NAV_TAB_COLORS = {
 - Selected row highlight baseline: use `backgroundColor: "rgba(125,211,252,0.2) !important"` with `boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)"` so checkbox selection state reads in Borealis blue.
 - Inline grid text inputs: when a page embeds a MUI `TextField` inside AG Grid (for example, Device Description), use `MAGIC_UI.accentA` (`#7dd3fc`) for hover/focus border color.
 - Example: follow the scaffolding in `Engine/web-interface/src/Scheduling/Scheduled_Jobs_List.jsx` and the structure in `Data/Engine/web-interface/src/Admin/Page_Template.jsx`.
+- Server Info layout pattern: use Quartz AG Grid sections for service state, public-edge certificates, and live operator sessions, with concise glass summary cards above the grids for the most important runtime signals.
 
 ### Toast Notifications (Full)
 Use this guide to add, configure, and test transient toast notifications across Borealis. It documents the backend endpoint, frontend listener, payload contract, and quick Firefox console commands you can hand to operators for validation.
@@ -332,11 +342,13 @@ Send JSON body (session-authenticated):
 - `message` (string, required): body copy.
 - `icon` (string, optional): Material icon name hint (for example, `info`, `filter`, `schedule`, `warning`, `error`). Falls back to `NotificationsActive`.
 - `variant` (string, optional): visual theme. Accepted: `info` | `warning` | `error` (case-insensitive). Aliases: `type` or `severity`. Defaults to `info`.
+- `username` (string, optional): when present, scope the toast to a single signed-in operator. This is the preferred pattern for admin actions that should only notify the initiator.
 - `ttl_ms` (number, optional): client-side lifetime in milliseconds; defaults to about 5200ms before fade-out.
 
 Notes:
 - Payload is fanned out verbatim to the WebUI (plus server-added fields: `id`, `username`, `role`, `created_at`).
 - The client caps the visible stack to the 5 most recent items (newest on top).
+- If `username` is present, the WebUI only renders that toast for the matching signed-in operator. Leave it unset for broadcast informational toasts.
 - Non-empty `message` is mandatory; otherwise HTTP 400.
 
 #### Frontend rendering rules

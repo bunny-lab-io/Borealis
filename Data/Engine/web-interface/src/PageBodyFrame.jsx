@@ -99,11 +99,18 @@ export default function PageBodyFrame({
   sidebar,
   main,
   fillHeight = true,
+  outerSx: outerSxOverride,
+  shellSx: shellSxOverride,
+  contentSx,
 }) {
   const content = main ?? children;
   const fillStyles = fillHeight ? PAGE_BODY_FRAME_FILL_SX : null;
-  const shellSx = fillStyles ? [PAGE_BODY_FRAME_SHELL_SX, fillStyles] : PAGE_BODY_FRAME_SHELL_SX;
-  const outerSx = fillStyles ? [PAGE_BODY_FRAME_OUTER_SX, fillStyles] : PAGE_BODY_FRAME_OUTER_SX;
+  const shellSx = fillStyles
+    ? [PAGE_BODY_FRAME_SHELL_SX, fillStyles, shellSxOverride]
+    : [PAGE_BODY_FRAME_SHELL_SX, shellSxOverride];
+  const outerSx = fillStyles
+    ? [PAGE_BODY_FRAME_OUTER_SX, fillStyles, outerSxOverride]
+    : [PAGE_BODY_FRAME_OUTER_SX, outerSxOverride];
 
   if (variant === "split_tool") {
     return (
@@ -122,7 +129,7 @@ export default function PageBodyFrame({
     return (
       <Box sx={outerSx}>
         <Box sx={shellSx}>
-          <Box sx={PAGE_BODY_FRAME_CONTENT_PANEL_SX}>{content}</Box>
+          <Box sx={[PAGE_BODY_FRAME_CONTENT_PANEL_SX, contentSx]}>{content}</Box>
         </Box>
       </Box>
     );

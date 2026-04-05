@@ -22,10 +22,16 @@ Describe Borealis operational logging, retention, and core runtime checks.
 ## Operational Health
 - `GET /health` returns liveness status.
 - `GET /api/server/time` returns server clock information after login.
+- `GET /api/server/overview` returns the Borealis Server Info dashboard snapshot used by administrators for Engine host health, systemd service state, public certificate expiry, live operator presence, WireGuard runtime health, and Aegis lock state.
+- `POST /api/server/services/<service_key>/restart` queues safe detached service restarts through `systemd-run` so the request can return before an Engine self-restart interrupts the caller.
+- `POST /api/server/wireguard/recover` triggers a Borealis-managed WireGuard listener recovery attempt when live tunnels exist.
 
 ## API Endpoints
 - `GET /health` (No Authentication) - liveness probe.
 - `GET /api/server/time` (Operator Session) - server time.
+- `GET /api/server/overview` (Admin) - aggregated server/admin dashboard snapshot.
+- `POST /api/server/services/<service_key>/restart` (Admin) - queue safe detached service restart.
+- `POST /api/server/wireguard/recover` (Admin) - recover Borealis WireGuard listener when active sessions exist.
 - `GET /api/server/logs` (Admin) - list logs and retention metadata.
 - `GET /api/server/logs/<log_name>/entries` (Admin) - tail log entries.
 - `PUT /api/server/logs/retention` (Admin) - update retention policies.
@@ -52,6 +58,8 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - API access metrics appear in `Engine/Logs/api.log` (method, path, duration, status).
 - Embedded edge request outcomes appear in `Engine/Logs/traefik-access.log` (frontend path, upstream target, status, latency).
 - VPN-specific logs are under `Engine/Logs/VPN_Tunnel/`.
+- The Server Info admin page is informational first: it surfaces service health, public cert expiry, live operator sessions, and WireGuard listener state. It intentionally does not embed journal tails or recent log snippets.
+- Service restarts initiated from Server Info are queued through transient `systemd-run` units with a short delay instead of direct in-process `systemctl restart`, reducing the risk of cutting off the initiating request during Engine self-restarts.
 
 ### Agent logging notes
 - Logs are scoped by context (SYSTEM vs CURRENTUSER) in prefixes.

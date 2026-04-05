@@ -312,9 +312,44 @@ const EMPTY_AEGIS_STATUS = {
   secret_scope: ["credentials", "github_token"],
   updated_at: 0,
 };
+const OPERATOR_PRESENCE_PAGE_LABELS = Object.freeze({
+  login: "Login",
+  sites: "Sites",
+  devices: "Devices",
+  agent_devices: "Agent Devices",
+  ssh_devices: "SSH Devices",
+  winrm_devices: "WinRM Devices",
+  device_details: "Device Details",
+  filters: "Filters",
+  filter_editor: "Filter Editor",
+  jobs: "Scheduled Jobs",
+  create_job: "Create Job",
+  workflows: "Workflows",
+  "workflow-editor": "Flow Editor",
+  assemblies: "Assemblies",
+  scripts: "Scripts",
+  ansible_editor: "Ansible Editor",
+  access_credentials: "Credentials",
+  access_users: "Users",
+  site_assignment: "Site Assignment",
+  server_info: "Server Info",
+  log_management: "Log Management",
+  admin_device_approvals: "Device Approvals",
+  page_template: "Page Template",
+});
 
 function createDefaultFlowTab(id = "flow_1") {
   return { id, tab_name: "Flow 1", nodes: [], edges: [] };
+}
+
+function formatOperatorPresencePage(pageKey, pageTitle) {
+  const title = String(pageTitle || "").trim();
+  if (title) return title;
+  const mapped = OPERATOR_PRESENCE_PAGE_LABELS[String(pageKey || "").trim()];
+  if (mapped) return mapped;
+  const raw = String(pageKey || "").trim();
+  if (!raw) return "";
+  return raw.replace(/[_-]+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
 }
 
 function normalizeAegisStatus(payload) {
@@ -437,6 +472,14 @@ async function sha512(text) {
       });
     } catch {
       /* notifications are best-effort */
+    }
+  }, []);
+
+  const clearOperatorPresence = useCallback(() => {
+    try {
+      window.BorealisSocket?.emit?.("operator_presence_clear");
+    } catch {
+      /* operator presence is best-effort */
     }
   }, []);
 
@@ -1269,6 +1312,41 @@ async function sha512(text) {
     };
   }, [clearClientSession, fetchAegisStatus, sessionResolved, user]);
 
+  const syncOperatorPresence = useCallback(() => {
+    if (!sessionResolved || !user) return;
+    try {
+      window.BorealisSocket?.emit?.("operator_presence_sync", {
+        current_page: formatOperatorPresencePage(currentPage, pageHeader.title),
+        page_key: currentPage,
+      });
+    } catch {
+      /* operator presence is best-effort */
+    }
+  }, [currentPage, pageHeader.title, sessionResolved, user]);
+
+  useEffect(() => {
+    const socket = window.BorealisSocket;
+    if (!socket || typeof socket.on !== "function") return undefined;
+    if (!sessionResolved) return undefined;
+
+    if (!user) {
+      clearOperatorPresence();
+      return undefined;
+    }
+
+    syncOperatorPresence();
+    const intervalId = window.setInterval(syncOperatorPresence, 30 * 1000);
+    socket.on("connect", syncOperatorPresence);
+    return () => {
+      window.clearInterval(intervalId);
+      try {
+        socket.off("connect", syncOperatorPresence);
+      } catch {
+        /* noop */
+      }
+    };
+  }, [clearOperatorPresence, sessionResolved, syncOperatorPresence, user]);
+
   useEffect(() => {
     if (!sessionResolved) return;
 
@@ -1561,6 +1639,7 @@ async function sha512(text) {
     }
   };
   const handleLogout = async () => {
+    clearOperatorPresence();
     try {
       await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
     } catch {}

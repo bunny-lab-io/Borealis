@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from flask import request
+from flask import request, session
 from flask_socketio import SocketIO
 
 from ...db import dbapi as sqlite3
@@ -216,15 +216,99 @@ class AgentSocketRegistry:
             return False
 
 
+class OperatorPresenceRegistry:
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._records_by_sid: Dict[str, Dict[str, Any]] = {}
+
+    def register_or_update(
+        self,
+        sid: str,
+        *,
+        username: str,
+        role: str,
+        current_page: str = "",
+    ) -> bool:
+        normalized_sid = str(sid or "").strip()
+        normalized_username = str(username or "").strip()
+        if not normalized_sid or not normalized_username:
+            return False
+
+        normalized_role = str(role or "User").strip() or "User"
+        normalized_page = self._normalize_page(current_page)
+        now_ts = _now_ts()
+        changed = False
+
+        with self._lock:
+            existing = self._records_by_sid.get(normalized_sid)
+            if existing is None:
+                self._records_by_sid[normalized_sid] = {
+                    "sid": normalized_sid,
+                    "username": normalized_username,
+                    "role": normalized_role,
+                    "current_page": normalized_page,
+                    "connected_at": now_ts,
+                    "last_seen_at": now_ts,
+                }
+                changed = True
+            else:
+                if (
+                    str(existing.get("username") or "") != normalized_username
+                    or str(existing.get("role") or "") != normalized_role
+                    or str(existing.get("current_page") or "") != normalized_page
+                ):
+                    changed = True
+                existing["username"] = normalized_username
+                existing["role"] = normalized_role
+                existing["current_page"] = normalized_page
+                existing["last_seen_at"] = now_ts
+        return changed
+
+    def remove(self, sid: str) -> Optional[Dict[str, Any]]:
+        normalized_sid = str(sid or "").strip()
+        if not normalized_sid:
+            return None
+        with self._lock:
+            record = self._records_by_sid.pop(normalized_sid, None)
+        return dict(record) if isinstance(record, dict) else None
+
+    def list_sessions(self) -> list[Dict[str, Any]]:
+        with self._lock:
+            records = [dict(record) for record in self._records_by_sid.values()]
+        return sorted(
+            records,
+            key=lambda item: (
+                -int(item.get("last_seen_at") or 0),
+                -int(item.get("connected_at") or 0),
+                str(item.get("username") or "").lower(),
+                str(item.get("sid") or ""),
+            ),
+        )
+
+    def count_sessions(self) -> int:
+        with self._lock:
+            return len(self._records_by_sid)
+
+    @staticmethod
+    def _normalize_page(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        return text[:160]
+
+
 def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
     """Register Socket.IO event handlers for the Engine runtime."""
 
     adapters = EngineRealtimeAdapters(context)
     logger = context.logger.getChild("realtime.quick_jobs")
     agent_logger = context.logger.getChild("realtime.agents")
+    operator_logger = context.logger.getChild("realtime.operators")
     shell_bridge = VpnShellBridge(socket_server, context, adapters.service_log)
     agent_registry = AgentSocketRegistry(socket_server, agent_logger)
+    operator_registry = OperatorPresenceRegistry()
     setattr(context, "agent_socket_registry", agent_registry)
+    setattr(context, "operator_presence_registry", operator_registry)
 
     def _emit_agent_event(agent_id: str, event: str, payload: Any) -> bool:
         return agent_registry.emit(agent_id, event, payload)
@@ -232,6 +316,19 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
     setattr(context, "emit_agent_event", _emit_agent_event)
     setattr(context, "emit_host_service_event", agent_registry.emit_to_host)
     setattr(context, "has_host_service_socket", agent_registry.is_host_mode_registered)
+
+    def _emit_operator_presence_changed() -> None:
+        try:
+            socket_server.emit("server_operator_presence_changed", {"changed_at": _now_ts()})
+        except Exception:
+            operator_logger.debug("Failed to emit operator presence change event.", exc_info=True)
+
+    def _current_operator_identity() -> Optional[Dict[str, str]]:
+        username = str(session.get("username") or "").strip()
+        if not username:
+            return None
+        role = str(session.get("role") or "User").strip() or "User"
+        return {"username": username, "role": role}
 
     def _get_tunnel_service() -> Optional[VpnTunnelService]:
         service = getattr(context, "vpn_tunnel_service", None)
@@ -591,6 +688,45 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
 
         return {"status": "ok"}
 
+    @socket_server.on("operator_presence_sync")
+    def _operator_presence_sync(data: Any) -> Dict[str, Any]:
+        identity = _current_operator_identity()
+        if identity is None:
+            return {"error": "unauthorized"}
+
+        current_page = ""
+        if isinstance(data, dict):
+            current_page = str(data.get("current_page") or "").strip()
+        changed = operator_registry.register_or_update(
+            request.sid,
+            username=identity["username"],
+            role=identity["role"],
+            current_page=current_page,
+        )
+        operator_logger.debug(
+            "Operator presence synced sid=%s username=%s role=%s page=%s changed=%s",
+            request.sid,
+            identity["username"],
+            identity["role"],
+            current_page or "-",
+            changed,
+        )
+        if changed:
+            _emit_operator_presence_changed()
+        return {"status": "ok"}
+
+    @socket_server.on("operator_presence_clear")
+    def _operator_presence_clear(_data: Any = None) -> Dict[str, Any]:
+        removed = operator_registry.remove(request.sid)
+        if removed:
+            operator_logger.debug(
+                "Operator presence cleared sid=%s username=%s",
+                request.sid,
+                removed.get("username") or "-",
+            )
+            _emit_operator_presence_changed()
+        return {"status": "ok"}
+
     @socket_server.on("vpn_shell_send")
     def _vpn_shell_send(data: Any) -> Dict[str, Any]:
         payload = None
@@ -628,6 +764,15 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
     @socket_server.on("disconnect")
     def _ws_disconnect() -> None:
         agent_id = agent_registry.unregister(request.sid)
+        removed_operator = operator_registry.remove(request.sid)
+        if removed_operator:
+            operator_logger.debug(
+                "Operator socket disconnected sid=%s username=%s",
+                request.sid,
+                removed_operator.get("username") or "-",
+            )
+            _emit_operator_presence_changed()
+        had_shell_session = shell_bridge.close(request.sid)
         if agent_id:
             agent_logger.info("Agent socket disconnected agent_id=%s sid=%s", agent_id, request.sid)
             _tunnel_log(
@@ -636,7 +781,7 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
                     request.sid,
                 )
             )
-        else:
+        elif had_shell_session:
             _shell_log(
                 "vpn_shell_client_disconnect sid={0} remote={1}".format(
                     request.sid,
@@ -644,4 +789,3 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
                 ),
                 level="WARNING",
             )
-        shell_bridge.close(request.sid)
