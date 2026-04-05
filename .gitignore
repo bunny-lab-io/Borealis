@@ -1,18 +1,8 @@
-# Pyinstaller Packaging Files
-/Data/Agent/Packaging_Data/
-/Data/Server/Packaging_Server/
-Borealis-Agent.exe
-Borealis-Server.exe
-
 # Production Deployment Folders
 /Agent/
-/Server/
 /Engine/
-/Certificates/
-/ElectronApp/
-/Logs/
 /Temp/
-database.db
+/Update_Staging/
 
 # On-the-Fly Downloaded Dependencies
 /Dependencies/NodeJS/
@@ -26,4 +16,4 @@ database.db
 # Misc Files/Folders
 .vs/s
 __pycache__
-/Update_Staging/
+Updater.log
