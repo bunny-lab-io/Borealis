@@ -329,23 +329,45 @@ function formatLoadAverageValue(values) {
 }
 
 function formatServerClockDisplay(serverTime, timezoneId) {
+  const formatForTimezone = (dateValue) => {
+    const dateText = new Intl.DateTimeFormat("en-GB", {
+      timeZone: timezoneId || undefined,
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }).format(dateValue);
+    const timeText = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezoneId || undefined,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    }).format(dateValue);
+    return `${dateText} @ ${timeText}`;
+  };
+
   const raw = String(serverTime?.iso || serverTime?.utc || "").trim();
-  if (!raw) return formatServerClockValue(serverTime, timezoneId);
+  if (!raw) {
+    if (timezoneId) {
+      try {
+        return formatForTimezone(new Date());
+      } catch {
+        /* fallback below */
+      }
+    }
+    return formatServerClockValue(serverTime, timezoneId);
+  }
   const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) return formatServerClockValue(serverTime, timezoneId);
-  const dateValue = new Intl.DateTimeFormat("en-GB", {
-    timeZone: timezoneId || undefined,
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  }).format(parsed);
-  const timeValue = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezoneId || undefined,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-  }).format(parsed);
-  return `${dateValue} @ ${timeValue}`;
+  if (Number.isNaN(parsed.getTime())) {
+    if (timezoneId) {
+      try {
+        return formatForTimezone(new Date());
+      } catch {
+        /* fallback below */
+      }
+    }
+    return formatServerClockValue(serverTime, timezoneId);
+  }
+  return formatForTimezone(parsed);
 }
 
 function severityTone(value) {
@@ -586,6 +608,8 @@ function MasterTextCell(props) {
 export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [overview, setOverview] = useState(null);
+  const [serverTimeSnapshot, setServerTimeSnapshot] = useState(null);
+  const [serverTimeLoading, setServerTimeLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -600,6 +624,10 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
   const [timezoneSaving, setTimezoneSaving] = useState(false);
   const [timezoneError, setTimezoneError] = useState("");
   const [selectedTimezone, setSelectedTimezone] = useState("");
+  const [timezoneMeta, setTimezoneMeta] = useState({
+    currentTimezone: "",
+    changeSupported: null,
+  });
   const hasOverviewRef = useRef(false);
 
   const sendScopedNotification = useCallback(async ({ title, message, icon = "notification", variant = "info" }) => {
@@ -661,8 +689,15 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
       }
       setTimezoneOptions(Array.isArray(payload?.timezones) ? payload.timezones : []);
       setTimezoneOptionsLoaded(true);
-      if (payload?.current_timezone) {
-        setSelectedTimezone(String(payload.current_timezone));
+      const currentTimezone = String(payload?.current_timezone || "").trim();
+      const changeSupported =
+        typeof payload?.change_supported === "boolean" ? payload.change_supported : null;
+      setTimezoneMeta({
+        currentTimezone,
+        changeSupported,
+      });
+      if (currentTimezone) {
+        setSelectedTimezone(currentTimezone);
       }
     } catch (requestError) {
       setTimezoneError(
@@ -672,6 +707,33 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
       );
     } finally {
       setTimezoneLoading(false);
+    }
+  }, []);
+
+  const fetchServerTimeSnapshot = useCallback(async () => {
+    setServerTimeLoading(true);
+    try {
+      const response = await fetch("/api/server/time", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
+      }
+      setServerTimeSnapshot(payload);
+      const snapshotTimezoneId = String(payload?.timezone_id || "").trim();
+      const snapshotTimezone = String(payload?.timezone || "").trim();
+      if (snapshotTimezoneId || snapshotTimezone) {
+        setTimezoneMeta((current) => ({
+          currentTimezone: current?.currentTimezone || snapshotTimezoneId || snapshotTimezone,
+          changeSupported: current?.changeSupported ?? null,
+        }));
+      }
+    } catch {
+      /* server time fallback is best-effort */
+    } finally {
+      setServerTimeLoading(false);
     }
   }, []);
 
@@ -721,11 +783,34 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
   }, [fetchOverview]);
 
   useEffect(() => {
+    if (!isAdmin) return;
+    fetchTimezoneOptions();
+    fetchServerTimeSnapshot();
+  }, [fetchServerTimeSnapshot, fetchTimezoneOptions, isAdmin]);
+
+  useEffect(() => {
     if (!timezoneDialogOpen) return;
     if (!timezoneOptionsLoaded) {
       fetchTimezoneOptions();
     }
   }, [fetchTimezoneOptions, timezoneDialogOpen, timezoneOptionsLoaded]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const hostPayload = overview?.host || {};
+    const missingClock =
+      !String(hostPayload?.server_time?.iso || "").trim() &&
+      !String(hostPayload?.server_time?.utc || "").trim() &&
+      !String(hostPayload?.server_time?.display || "").trim();
+    const missingTimezoneId = !String(hostPayload?.timezone_id || "").trim();
+    const missingChangeSupport = typeof hostPayload?.timezone_change_supported !== "boolean";
+    if (missingClock || missingTimezoneId) {
+      fetchServerTimeSnapshot();
+    }
+    if (missingTimezoneId || missingChangeSupport) {
+      fetchTimezoneOptions();
+    }
+  }, [fetchOverview, fetchServerTimeSnapshot, fetchTimezoneOptions, isAdmin, overview]);
 
   useEffect(() => {
     if (!boostPollingUntil || boostPollingUntil <= Date.now()) return undefined;
@@ -782,12 +867,6 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
         "Recover the Borealis WireGuard listener now? This is intended for live tunnel transport issues while operator sessions are active.",
     });
   }, []);
-
-  const openTimezoneDialog = useCallback(() => {
-    setTimezoneError("");
-    setSelectedTimezone(String(overview?.host?.timezone_id || ""));
-    setTimezoneDialogOpen(true);
-  }, [overview?.host?.timezone_id]);
 
   const closeTimezoneDialog = useCallback(() => {
     if (timezoneSaving) return;
@@ -916,9 +995,32 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
   const certificates = Array.isArray(publicEdge?.certificates) ? publicEdge.certificates : [];
   const worstCert = getWorstCertificate(certificates);
   const aegis = overview?.security?.aegis || {};
-  const clockValue = formatServerClockDisplay(host?.server_time, host?.timezone_id);
+  const effectiveTimezoneId = String(
+    host?.timezone_id || timezoneMeta.currentTimezone || serverTimeSnapshot?.timezone_id || ""
+  ).trim();
+  const effectiveTimezoneLabel = String(
+    effectiveTimezoneId || host?.timezone || serverTimeSnapshot?.timezone || ""
+  ).trim();
+  const effectiveServerTime = host?.server_time || serverTimeSnapshot || {};
+  const timezoneChangeSupported =
+    typeof host?.timezone_change_supported === "boolean"
+      ? host.timezone_change_supported
+      : typeof timezoneMeta.changeSupported === "boolean"
+      ? timezoneMeta.changeSupported
+      : true;
+  const rawClockValue = formatServerClockDisplay(effectiveServerTime, effectiveTimezoneId);
+  const clockValue =
+    rawClockValue === "Unavailable" && (loading || serverTimeLoading) ? "Loading..." : rawClockValue;
+  const timezoneDisplayValue =
+    effectiveTimezoneLabel || (loading || serverTimeLoading ? "Loading..." : "Unavailable");
   const loadAverageValue = formatLoadAverageValue(resources?.load_average);
   const loadAverageCaption = `1, 5, and 15 minute averages · CPU Count ${resources?.cpu_count || 0}`;
+
+  const openTimezoneDialog = useCallback(() => {
+    setTimezoneError("");
+    setSelectedTimezone(effectiveTimezoneId);
+    setTimezoneDialogOpen(true);
+  }, [effectiveTimezoneId]);
 
   const gridDefaultColDef = useMemo(
     () => ({
@@ -936,7 +1038,7 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
         field: "domain",
         minWidth: 130,
         maxWidth: 150,
-        filter: "agSetColumnFilter",
+        filter: "agTextColumnFilter",
         cellRenderer: MasterTextCell,
       },
       {
@@ -960,7 +1062,7 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
         field: "health",
         minWidth: 130,
         maxWidth: 140,
-        filter: "agSetColumnFilter",
+        filter: "agTextColumnFilter",
         cellClass: "health-pill-cell",
         cellRenderer: MasterHealthCell,
       },
@@ -968,14 +1070,14 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
         headerName: "State",
         field: "state",
         minWidth: 130,
-        filter: "agSetColumnFilter",
+        filter: "agTextColumnFilter",
         cellRenderer: MasterTextCell,
       },
       {
         headerName: "Enabled",
         field: "enabled",
         minWidth: 130,
-        filter: "agSetColumnFilter",
+        filter: "agTextColumnFilter",
         cellRenderer: MasterTextCell,
       },
       {
@@ -1021,12 +1123,12 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
         id: "system_time",
         name: "System Time",
         value: clockValue,
-        details: host?.timezone_id || "Unavailable",
+        details: timezoneDisplayValue,
         actions: [
           {
             id: "change_timezone",
             label: timezoneSaving ? "Applying..." : "Change Timezone",
-            disabled: !host?.timezone_change_supported || timezoneSaving,
+            disabled: !timezoneChangeSupported || timezoneSaving,
             onClick: openTimezoneDialog,
           },
         ],
@@ -1046,7 +1148,7 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
         actions: [],
       },
     ],
-    [clockValue, host, loadAverageCaption, loadAverageValue, openTimezoneDialog, timezoneSaving]
+    [clockValue, timezoneDisplayValue, loadAverageCaption, loadAverageValue, openTimezoneDialog, timezoneChangeSupported, timezoneSaving, host]
   );
 
   const resourceRows = useMemo(
@@ -1056,13 +1158,6 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
         name: "Memory Usage",
         value: formatPercent(resources?.memory?.used_percent),
         details: `${formatBytes(resources?.memory?.used_bytes)} used of ${formatBytes(resources?.memory?.total_bytes)} · ${formatBytes(resources?.memory?.free_bytes)} free`,
-        actions: [],
-      },
-      {
-        id: "swap_usage",
-        name: "Swap Usage",
-        value: formatPercent(resources?.swap?.used_percent),
-        details: `${formatBytes(resources?.swap?.used_bytes)} used of ${formatBytes(resources?.swap?.total_bytes)} · ${formatBytes(resources?.swap?.free_bytes)} free`,
         actions: [],
       },
       {
@@ -1142,20 +1237,6 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
         name: "Aegis Cipher",
         value: !aegis?.configured ? "Not Configured" : aegis?.locked ? "Locked" : "Unlocked",
         details: aegis?.configured ? `Unlock scope ${formatTitleCase(aegis?.unlock_scope)}` : "Protected secret storage is not configured",
-        actions: [],
-      },
-      {
-        id: "secret_scope",
-        name: "Secret Scope",
-        value: Array.isArray(aegis?.secret_scope) && aegis.secret_scope.length ? aegis.secret_scope.join(", ") : "Unavailable",
-        details: "Credential and GitHub token material protected by Aegis",
-        actions: [],
-      },
-      {
-        id: "security_updated",
-        name: "Updated",
-        value: aegis?.updated_at ? formatUnixDateTime(aegis.updated_at) : "Unavailable",
-        details: "Most recent Aegis configuration mutation",
         actions: [],
       },
     ],
