@@ -11,6 +11,7 @@ import {
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 
 /**
  * ============================================================================
@@ -27,7 +28,7 @@ import PageBodyFrame from "../PageBodyFrame.jsx";
  *       - Material icon to the LEFT of the title (small, ~22px).
  *       - Title styled to match platform typography.
  *       - Subtitle directly beneath the title (muted color, smaller size).
- *       - App-owned header action rail driven by `onPageMetaChange`.
+ *       - App-owned header action rail driven by `useRoutePageChrome()`.
  *    3) AG Grid using the Quartz theme with rounded corners, sorting, filtering,
  *       pagination, and example data/columns.
  *    4) Gradient-filled primary buttons consistent with MagicUI accents.
@@ -192,7 +193,7 @@ const iconFontFamily = "'Quartz Regular'";
 // -----------------------------------------------------------------------------
 //  Page Template Component
 // -----------------------------------------------------------------------------
-export default function PageTemplate({ onPageMetaChange }) {
+export default function PageTemplate() {
   const gridRef = useRef(null);
   const columnDefs = useMemo(() => sampleColumnDefs, []);
   const getRowId = useCallback((params) => params.data?.id || String(params.rowIndex ?? ""), []);
@@ -226,15 +227,12 @@ export default function PageTemplate({ onPageMetaChange }) {
     [handleRefresh]
   );
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: "Page Template",
-      page_subtitle: "Page Styling Guide and Template — use as a baseline when designing new pages.",
-      page_icon: TemplateIcon,
-      page_header_actions: pageHeaderActions,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange, pageHeaderActions]);
+  useRoutePageChrome({
+    title: "Page Template",
+    subtitle: "Page Styling Guide and Template — use as a baseline when designing new pages.",
+    Icon: TemplateIcon,
+    actions: pageHeaderActions,
+  });
 
   return (
     <PageBodyFrame variant="grid">

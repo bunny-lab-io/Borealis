@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Typography } from "@mui/material";
 import { ReactFlowProvider } from "reactflow";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import FlowEditorCanvas from "./Flow_Editor_Canvas.jsx";
 import FlowEditorSidebar from "./Flow_Editor_Sidebar.jsx";
@@ -25,6 +26,7 @@ import {
   DIALOG_TITLE_SX,
   DialogHeaderBlock,
 } from "../DialogStyles.jsx";
+import { APP_PATHS } from "../app/routes/paths.js";
 
 const WORKFLOW_CHILD_STATUS_BADGE_ORDER = [
   "Success",
@@ -229,11 +231,10 @@ function normalizeSavedWorkflowDraft(rawValue) {
   });
 }
 
-export default function FlowEditor({
-  routeState = null,
-  navigateTo,
-  onPageMetaChange,
-}) {
+export default function FlowEditor() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { workflowGuid, runId } = useParams();
   const [workflowDoc, setWorkflowDoc] = useState(() => createDefaultWorkflowDocument());
   const [workflowMode, setWorkflowMode] = useState("editor");
   const [workflowRun, setWorkflowRun] = useState(null);
@@ -248,29 +249,29 @@ export default function FlowEditor({
   const lastRouteSignatureRef = useRef(null);
 
   const routeRunId = useMemo(() => {
-    const parsed = Number(routeState?.runId);
+    const parsed = Number(runId);
     return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-  }, [routeState?.runId]);
+  }, [runId]);
 
   const routeAssemblyGuid = useMemo(() => {
-    const value = typeof routeState?.assemblyGuid === "string" ? routeState.assemblyGuid.trim() : "";
+    const value = typeof workflowGuid === "string" ? workflowGuid.trim() : "";
     return value || null;
-  }, [routeState?.assemblyGuid]);
+  }, [workflowGuid]);
+
+  const routeInitialName = useMemo(() => {
+    const value = typeof location.state?.workflowSeed?.name === "string" ? location.state.workflowSeed.name.trim() : "";
+    return value || null;
+  }, [location.state]);
 
   const routeSignature = routeRunId
     ? `run:${routeRunId}`
     : routeAssemblyGuid
     ? `assembly:${routeAssemblyGuid.toLowerCase()}`
+    : routeInitialName
+    ? `editor:new:${routeInitialName.toLowerCase()}`
     : "editor:new";
 
   const readOnly = Boolean(workflowDoc?.readOnly || workflowMode === "run");
-
-  useEffect(() => {
-    onPageMetaChange?.(null);
-    return () => {
-      onPageMetaChange?.(null);
-    };
-  }, [onPageMetaChange]);
 
   useEffect(() => {
     if (workflowMode !== "editor") {
@@ -459,22 +460,37 @@ export default function FlowEditor({
     setWorkflowRun(null);
     setNodeRunDetails({});
     setWorkflowMode("editor");
-    try {
-      const saved = localStorage.getItem(WORKFLOW_DRAFT_STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        setWorkflowDoc(normalizeSavedWorkflowDraft(parsed));
-      } else {
+    if (routeInitialName) {
+      setWorkflowDoc(
+        createDefaultWorkflowDocument({
+          tab_name: routeInitialName,
+        })
+      );
+    } else {
+      try {
+        const saved = localStorage.getItem(WORKFLOW_DRAFT_STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          setWorkflowDoc(normalizeSavedWorkflowDraft(parsed));
+        } else {
+          setWorkflowDoc(createDefaultWorkflowDocument());
+        }
+      } catch {
         setWorkflowDoc(createDefaultWorkflowDocument());
       }
-    } catch {
-      setWorkflowDoc(createDefaultWorkflowDocument());
     }
 
     return () => {
       cancelledRef.current = true;
     };
-  }, [loadWorkflowEditorResource, loadWorkflowRunSnapshot, routeAssemblyGuid, routeRunId, routeSignature]);
+  }, [
+    loadWorkflowEditorResource,
+    loadWorkflowRunSnapshot,
+    routeAssemblyGuid,
+    routeInitialName,
+    routeRunId,
+    routeSignature,
+  ]);
 
   const workflowDiagnostics = useMemo(() => {
     if (workflowMode === "run") {
@@ -584,7 +600,7 @@ export default function FlowEditor({
           setNodeRunDetails({});
           setWorkflowMode("editor");
           lastRouteSignatureRef.current = "editor:new";
-          navigateTo?.("workflow-editor", { assemblyGuid: null, runId: null, replace: true });
+          navigate(APP_PATHS.assemblyNewWorkflow, { replace: true });
         } catch (error) {
           console.error("Failed to import workflow:", error);
         }
@@ -592,7 +608,7 @@ export default function FlowEditor({
       reader.readAsText(file);
       event.target.value = "";
     },
-    [navigateTo]
+    [navigate]
   );
 
   const handleSaveFlow = useCallback(
@@ -634,11 +650,7 @@ export default function FlowEditor({
         }));
 
         if (savedAssemblyGuid && !routeRunId) {
-          navigateTo?.("workflow-editor", {
-            assemblyGuid: savedAssemblyGuid,
-            runId: null,
-            replace: true,
-          });
+          navigate(APP_PATHS.assemblyWorkflow(savedAssemblyGuid), { replace: true });
         }
 
         return {
@@ -650,7 +662,7 @@ export default function FlowEditor({
         return null;
       }
     },
-    [navigateTo, routeRunId, workflowDoc]
+    [navigate, routeRunId, workflowDoc]
   );
 
   const handleRenameFlow = useCallback(
@@ -687,11 +699,11 @@ export default function FlowEditor({
       setNodeRunDetails({});
       setWorkflowMode("editor");
       lastRouteSignatureRef.current = "editor:new";
-      navigateTo?.("workflow-editor", { assemblyGuid: null, runId: null, replace: true });
+      navigate(APP_PATHS.assemblyNewWorkflow, { replace: true });
     } catch (error) {
       console.error("Failed to delete workflow:", error);
     }
-  }, [navigateTo, workflowDoc]);
+  }, [navigate, workflowDoc]);
 
   const handleTriggerWorkflow = useCallback(async () => {
     const validationErrors = validateWorkflowRuntimeDocument({
@@ -725,12 +737,12 @@ export default function FlowEditor({
       if (!runId) {
         throw new Error("Workflow runtime did not return a run id.");
       }
-      navigateTo?.("workflow-editor", { runId });
+      navigate(APP_PATHS.assemblyWorkflowRun(runId));
     } catch (error) {
       console.error("Failed to trigger workflow:", error);
       alert(String(error?.message || error || "Failed to trigger workflow"));
     }
-  }, [handleSaveFlow, navigateTo, workflowDoc]);
+  }, [handleSaveFlow, navigate, workflowDoc]);
 
   const handleCloseAccessWarning = useCallback(() => {
     setWorkflowAccessWarning({
@@ -739,8 +751,8 @@ export default function FlowEditor({
       hiddenDevices: [],
       hiddenFilters: [],
     });
-    navigateTo?.("assemblies", { replace: true });
-  }, [navigateTo]);
+    navigate(APP_PATHS.assemblies, { replace: true });
+  }, [navigate]);
 
   return (
     <>

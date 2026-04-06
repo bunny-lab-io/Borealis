@@ -44,14 +44,16 @@ None on this page. See [API Reference](api-reference.md).
 - [Scheduled Jobs](scheduled-jobs.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
 - [UI and Notifications](ui-and-notifications.md)
+- [Migrating Pages to React Router](migrating-pages-to-react-router.md)
 
 ## Codex Agent (Detailed)
 ### Service map by folder
 - Engine APIs: `Data/Engine/services/API/` (grouped by domain, registered in `Data/Engine/services/API/__init__.py`).
 - Engine realtime: `Data/Engine/services/WebSocket/` (Socket.IO events: quick jobs, VPN shell, agent socket registry).
 - WebUI hosting: `Data/Engine/services/WebUI/` (SPA static assets and 404 fallback).
+- WebUI app shell and router: `Data/Engine/web-interface/src/app/` (providers, route tree, guarded layouts, route adapters, runtime bootstrap).
 - Workflow authoring UI: `Data/Engine/web-interface/src/Flow_Editor/` plus `Data/Engine/web-interface/src/nodes/`.
-  `App.jsx` routes into `Flow_Editor/Flow_Editor.jsx`, and the Flow Editor folder owns workflow load/save/run lifecycle, access checks, run snapshot hydration, shared node registration, and the React Flow canvas/sidebar surfaces.
+  The React Router app layer routes into `Flow_Editor/Flow_Editor.jsx`, and the Flow Editor folder owns workflow load/save/run lifecycle, access checks, run snapshot hydration, shared node registration, and the React Flow canvas/sidebar surfaces.
 - VPN orchestration: `Data/Engine/services/VPN/` (WireGuard server and tunnel lifecycle).
 - Remote desktop proxy: `Data/Engine/services/RemoteDesktop/` (VNC WebSocket proxy).
 - Filters and targeting: `Data/Engine/services/filters/matcher.py` (used by scheduled jobs and filter counts).

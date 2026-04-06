@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Paper,
   Box,
@@ -23,7 +24,6 @@ import PersonAddAlt1Icon from "@mui/icons-material/PersonAddAlt1";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { ConfirmDeleteDialog } from "../Dialogs.jsx";
-import { PageHeaderActionRail } from "../Page_Header_Actions.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import {
   DIALOG_ACTIONS_SX,
@@ -37,6 +37,10 @@ import {
   DIALOG_TITLE_SX,
   DialogHeaderBlock,
 } from "../DialogStyles.jsx";
+import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
+import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import { useAuth } from "../app/providers/AuthContext.jsx";
+import { buildSiteAssignmentPath } from "../app/routes/paths.js";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -74,11 +78,9 @@ async function sha512(text) {
   return arr.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export default function UserManagement({
-  isAdmin = false,
-  onPageMetaChange,
-  onOpenSiteAssignment,
-}) {
+export default function UserManagement() {
+  const navigate = useNavigate();
+  const { isAdmin } = useAuth();
   const [rows, setRows] = useState([]);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuUser, setMenuUser] = useState(null);
@@ -104,26 +106,11 @@ export default function UserManagement({
   const [selectedUsernames, setSelectedUsernames] = useState(() => new Set());
   const gridRef = useRef(null);
   const gridApiRef = useRef(null);
-  const useGlobalHeader = Boolean(onPageMetaChange);
-
-  const sendNotification = useCallback(async (message) => {
-    if (!message) return;
-    try {
-      await fetch("/api/notifications/notify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          title: PAGE_TITLE,
-          message,
-          icon: "group",
-          variant: "info",
-        }),
-      });
-    } catch {
-      /* notification transport errors are non-critical */
-    }
-  }, []);
+  const sendNotification = useAppNotifications({
+    title: PAGE_TITLE,
+    icon: "group",
+    variant: "info",
+  });
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -470,8 +457,11 @@ export default function UserManagement({
       setWarnOpen(true);
       return;
     }
-    onOpenSiteAssignment?.(selectedUsers);
-  }, [onOpenSiteAssignment, selectedUsers]);
+    const usernames = selectedUsers
+      .map((user) => String(user?.username || "").trim())
+      .filter(Boolean);
+    navigate(buildSiteAssignmentPath(usernames));
+  }, [navigate, selectedUsers]);
 
   const pageHeaderActions = useMemo(
     () => [
@@ -494,16 +484,12 @@ export default function UserManagement({
     [handleOpenSiteAssignment, openCreate, selectedUsers.length]
   );
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: PAGE_TITLE,
-      page_subtitle: PAGE_SUBTITLE,
-      page_icon: GroupIcon,
-      page_header_actions: pageHeaderActions,
-    });
-  }, [onPageMetaChange, pageHeaderActions]);
-
-  useEffect(() => () => onPageMetaChange?.(null), [onPageMetaChange]);
+  useRoutePageChrome({
+    title: PAGE_TITLE,
+    subtitle: PAGE_SUBTITLE,
+    Icon: GroupIcon,
+    actions: pageHeaderActions,
+  });
 
   const rowSelection = useMemo(
     () => ({
@@ -693,33 +679,6 @@ export default function UserManagement({
         }}
         elevation={0}
       >
-        {!useGlobalHeader ? (
-          <Box sx={{ px: 3, pt: 3, pb: 1.5 }}>
-            <Box
-              sx={{
-                display: "flex",
-                flexDirection: { xs: "column", xl: "row" },
-                alignItems: { xs: "stretch", xl: "flex-start" },
-                justifyContent: "space-between",
-                gap: 2,
-              }}
-            >
-              <Box sx={{ minWidth: 0 }}>
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <GroupIcon sx={{ color: "#7dd3fc" }} />
-                  <Typography variant="h6" sx={{ color: "#e2e8f0", fontWeight: 700 }}>
-                    {PAGE_TITLE}
-                  </Typography>
-                </Stack>
-                <Typography variant="body2" sx={{ color: "#94a3b8", mt: 0.5 }}>
-                  {PAGE_SUBTITLE}
-                </Typography>
-              </Box>
-              <PageHeaderActionRail actions={pageHeaderActions} />
-            </Box>
-          </Box>
-        ) : null}
-
         <PageBodyFrame variant="grid">
           <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0 }}>
             {selectedUsers.length ? (

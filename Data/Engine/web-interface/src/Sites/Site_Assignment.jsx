@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -15,6 +16,9 @@ import {
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
+import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import { APP_PATHS } from "../app/routes/paths.js";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -34,11 +38,9 @@ const themeClassName = gridTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 
-export default function SiteAssignment({
-  onPageMetaChange,
-  selectedUsernames = [],
-  onBack,
-}) {
+export default function SiteAssignment() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [users, setUsers] = useState([]);
   const [sites, setSites] = useState([]);
   const [existingAssignments, setExistingAssignments] = useState({});
@@ -51,11 +53,8 @@ export default function SiteAssignment({
   const gridApiRef = useRef(null);
 
   const normalizedUsernames = useMemo(
-    () =>
-      Array.isArray(selectedUsernames)
-        ? selectedUsernames.map((value) => String(value || "").trim()).filter(Boolean)
-        : [],
-    [selectedUsernames]
+    () => searchParams.getAll("user").map((value) => String(value || "").trim()).filter(Boolean),
+    [searchParams]
   );
 
   const autoSizeColumns = useCallback(() => {
@@ -135,24 +134,11 @@ export default function SiteAssignment({
     });
   }, [sites, selectedSiteIds]);
 
-  const sendNotification = useCallback(async (message) => {
-    if (!message) return;
-    try {
-      await fetch("/api/notifications/notify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          title: PAGE_TITLE,
-          message,
-          icon: "locationcity",
-          variant: "info",
-        }),
-      });
-    } catch {
-      /* notification transport errors are non-critical */
-    }
-  }, []);
+  const sendNotification = useAppNotifications({
+    title: PAGE_TITLE,
+    icon: "locationcity",
+    variant: "info",
+  });
 
   const handleAssign = useCallback(async () => {
     if (!users.length) return;
@@ -177,13 +163,13 @@ export default function SiteAssignment({
           ? `Site assignments updated for ${users[0].username}`
           : `Site assignments updated for ${users.length} users`;
       sendNotification(label);
-      onBack?.();
+      navigate(APP_PATHS.users);
     } catch (err) {
       setError(err?.message || "Unable to assign sites.");
     } finally {
       setAssigning(false);
     }
-  }, [onBack, selectedSiteIds, sendNotification, users]);
+  }, [navigate, selectedSiteIds, sendNotification, users]);
 
   const pageHeaderActions = useMemo(
     () => [
@@ -192,7 +178,7 @@ export default function SiteAssignment({
         label: "Back to Users",
         icon: <ArrowBackIcon />,
         tone: "secondary",
-        onClick: onBack,
+        onClick: () => navigate(APP_PATHS.users),
       },
       {
         id: "site-assignment-assign",
@@ -204,19 +190,15 @@ export default function SiteAssignment({
         onClick: handleAssign,
       },
     ],
-    [assigning, handleAssign, loading, onBack, users.length]
+    [assigning, handleAssign, loading, navigate, users.length]
   );
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: PAGE_TITLE,
-      page_subtitle: PAGE_SUBTITLE,
-      page_icon: LocationCityIcon,
-      page_header_actions: pageHeaderActions,
-    });
-  }, [onPageMetaChange, pageHeaderActions]);
-
-  useEffect(() => () => onPageMetaChange?.(null), [onPageMetaChange]);
+  useRoutePageChrome({
+    title: PAGE_TITLE,
+    subtitle: PAGE_SUBTITLE,
+    Icon: LocationCityIcon,
+    actions: pageHeaderActions,
+  });
 
   const rowSelection = useMemo(
     () => ({

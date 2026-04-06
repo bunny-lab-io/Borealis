@@ -5,7 +5,10 @@
 Describe the Borealis WebUI architecture, styling conventions, and the toast notification system.
 
 ## WebUI Architecture (High Level)
-- Entry point: `Data/Engine/web-interface/src/App.jsx`.
+- Entry point: `Data/Engine/web-interface/src/App.jsx` bootstraps the app shell and router in `Data/Engine/web-interface/src/app/`.
+- Router: `Data/Engine/web-interface/src/app/routes/router.jsx`.
+- Shared shell: `Data/Engine/web-interface/src/app/shell/AppShell.jsx`.
+- Providers: `Data/Engine/web-interface/src/app/providers/` for auth/session state and page chrome metadata.
 - Global socket: `window.BorealisSocket` (Socket.IO client).
 - Shared operator presence: authenticated browsers emit `operator_presence_sync` and `operator_presence_clear` on the shared socket; the Engine emits `server_operator_presence_changed` so informational admin pages can refresh live operator session data without waiting for their poll interval.
 - Navigation: `Data/Engine/web-interface/src/Navigation_Sidebar.jsx`.
@@ -40,6 +43,7 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - [Logging and Operations](logging-and-operations.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
 - [Flow Editor and Nodes](flow-editor-and-nodes.md)
+- [Migrating Pages to React Router](migrating-pages-to-react-router.md)
 
 ## Codex Agent (Detailed)
 ### Shared Conventions (Full)
@@ -63,7 +67,7 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 
 #### Standardized Page Bodies
 - Primary pages rendered beneath the shared App header use `Data/Engine/web-interface/src/PageBodyFrame.jsx`.
-- `App.jsx` owns the title, subtitle, icon, and header action rail. `PageBodyFrame` owns the body inset, rounded outer shell, shell chrome, and variant-specific structure.
+- `AppShell.jsx` plus `PageChromeProvider` own the title, subtitle, icon, and header action rail. `PageBodyFrame` owns the body inset, rounded outer shell, shell chrome, and variant-specific structure.
 - Supported variants: `grid`, `grid_with_stack`, `split_tool`, `content_panel`.
 - Informational admin dashboards such as Server Info should prefer `content_panel`, start with a hero strip of high-signal stat cards, and then stack glass sections beneath it rather than recreating toolbar chrome inside the body.
 - Default body inset is `px: 2`, `pt: 2.5`, and `pb: 2`. The `pt: 2.5` token adds 20px of shared spacing between the page subtitle and the body frame.
@@ -75,22 +79,22 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 #### Navigation Sidebar Active Page Mapping
 - File: `Data/Engine/web-interface/src/Navigation_Sidebar.jsx`.
 - Goal: keep the parent nav item highlighted when operators navigate to nested detail or editor pages.
-- Source of truth: update the `NAV_ITEM_ALIASES` mapping so nested `currentPage` values resolve to the parent nav item.
-- Add new nested pages explicitly; do not rely on URL prefixes or path parsing in the sidebar.
-- Examples (keep these in the mapping unless the UI changes):
-- `device_details` -> `devices`
-- `filter_editor` -> `filters`
-- `create_job` -> `jobs`
-- `scripts`, `ansible_editor`, `workflow-editor` -> `assemblies`
+- Source of truth: route `handle.navKey` values in `Data/Engine/web-interface/src/app/routes/router.jsx`.
+- The sidebar now owns static nav targets from `APP_PATHS`; it does not maintain a page-key alias table.
+- Examples:
+- device details use `pageKey: "device"` and `navKey: "devices"`
+- filters use `pageKey: "filter"` and `navKey: "filters"`
+- jobs use `pageKey: "job"` and `navKey: "jobs"`
+- assemblies use `pageKey: "script-assembly"`, `pageKey: "ansible-playbook"`, or `pageKey: "workflow"` with `navKey: "assemblies"`
 
 #### Global Device Search
-- Shared header ownership: `Data/Engine/web-interface/src/App.jsx` places the global device search in the top app bar; the search UI itself lives in `Data/Engine/web-interface/src/GlobalDeviceSearch.jsx`.
+- Shared header ownership: `Data/Engine/web-interface/src/app/shell/AppShell.jsx` places the global device search in the top app bar; the search UI itself lives in `Data/Engine/web-interface/src/GlobalDeviceSearch.jsx`.
 - Scope: search is hostname-only and should use `GET /api/devices/search?hostname=<query>` so operators only see devices inside their assigned sites while admins can see any device, including unassigned inventory.
 - Minimum activation: do not open the search overlay or call the API until the operator has entered at least 3 characters.
 - Presentation: style the field as a compact dark glass control with cyan hover/focus treatment so it feels like part of the shared header band rather than a legacy toolbar widget.
 - Results overlay: use a compact AG Grid rendered as a dropdown surface with `Hostname` and `Site` columns, Quartz styling, muted matte headers, and rounded overlay chrome.
 - Cell treatment: hostnames use the Borealis blue accent; site names use the shared muted gray copy used elsewhere in Borealis. Unassigned devices may display `Not Configured`.
-- Interaction: clicking a row should navigate directly to the target device's `device_details` page.
+- Interaction: clicking a row should navigate directly to the target device's canonical `/devices/:deviceId` route.
 
 #### MagicUI Styling Language (Visual System)
 - Full-bleed canvas: hero shells run edge-to-edge; inset padding lives inside cards so gradients feel immersive.
@@ -122,15 +126,15 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - Confirmation dialogs should be simplified to the minimum information needed to make a safe decision. Prefer a short subtitle plus the selected-object preview instead of repeating multiple warning paragraphs.
 
 #### Page-Level Tabs
-- Header ownership: `Data/Engine/web-interface/src/App.jsx` owns the page title, subtitle, icon, and the page action rail. Pages publish header metadata through `onPageMetaChange`; they do not position their own page-header buttons.
+- Header ownership: `Data/Engine/web-interface/src/app/shell/AppShell.jsx` owns the page title, subtitle, icon, and the page action rail. Routed pages should publish header metadata through `useRoutePageChrome()` or `usePageChrome()`.
 - Header action contract:
 ```jsx
-onPageMetaChange?.({
-  page_title,
-  page_subtitle,
-  page_icon,
-  page_header_controls: [statusSelectControl],
-  page_header_actions: [
+useRoutePageChrome({
+  title: pageTitle,
+  subtitle: pageSubtitle,
+  Icon: PageIcon,
+  controls: [statusSelectControl],
+  actions: [
     { id: "refresh", label: "Refresh", icon: <RefreshIcon />, tone: "secondary", onClick: loadData },
     { id: "new-item", label: "New Item", icon: <AddIcon />, tone: "primary", onClick: handleCreate },
   ],
@@ -249,19 +253,19 @@ const NAV_TAB_COLORS = {
 - `Cancel | Save Filter`
 - Canonical examples:
 - Visual reference page: `Data/Engine/web-interface/src/Admin/Page_Template.jsx`
-- Shared header owner: `Data/Engine/web-interface/src/App.jsx`
+- Shared header owner: `Data/Engine/web-interface/src/app/shell/AppShell.jsx`
 - Shared button rail/tokens: `Data/Engine/web-interface/src/Page_Header_Actions.jsx`
 
 #### URL-Synced Tabs and Deep Links
 - Use URL paths for resource identity and `?tab=` for active tab state.
-- Keep create and edit routes distinct when an entity has an identifier:
-- Create route example: `/scheduling/create_job`
-- Edit route example: `/scheduling/job/<job_id>`
-- Parse and serialize routes in `Data/Engine/web-interface/src/App.jsx` (`interpretPath` and `pageToPath`) so SPA login restore and refresh keep deep links intact.
-- For detail/editor pages, preserve `tab` in route parsing options; otherwise the app bootstrap can strip query parameters during `navigateByPath`.
+- Route ownership lives in `Data/Engine/web-interface/src/app/routes/router.jsx` and `Data/Engine/web-interface/src/app/routes/paths.js`.
+- Use canonical ID-backed routes without `/edit` suffixes. If a route contains the resource identifier, that route is the edit/view surface for that resource.
+- Create route examples: `/jobs/new`, `/filters/new`, `/assemblies/new/script`
+- Existing-resource route examples: `/jobs/<job_id>`, `/filters/<filter_id>`, `/assemblies/workflows/<workflow_guid>`
+- Prefer `useUrlTabState(...)` for tab synchronization. Use `useSearchParams()` directly only when the page needs more custom query behavior.
 - In each tabbed page component:
-- Read `tab` from `window.location.search` on initial mount and map it to the internal tab key/index.
-- Write `tab` back to the URL on tab changes using `window.history.replaceState` (not push) so browser history does not spam each tab click.
+- Read the active tab from `useUrlTabState(...)` or `useSearchParams()`.
+- Write the active tab back through the same helper with `replace: true` so browser history does not spam each tab click.
 - Keep stable URL keys and map them to internal keys; internal keys can stay implementation-specific.
 - Maintain backward compatibility with alias mapping (old tab keys -> new tab keys) when renaming tab params.
 - Recommended URL tab key style: lowercase snake_case (for example, `execution_context`, `remote_desktop`).
@@ -325,7 +329,7 @@ Use this guide to add, configure, and test transient toast notifications across 
 
 #### Components and paths
 - Backend endpoint: `Data/Engine/services/API/notifications/management.py` (registered as `/api/notifications/notify`).
-- Frontend listener and renderer: `Data/Engine/web-interface/src/Notifications.jsx` (mounted in `App.jsx`).
+- Frontend listener and renderer: `Data/Engine/web-interface/src/Notifications.jsx` (mounted in `src/app/shell/AppShell.jsx`).
 - Transport: Socket.IO event `borealis_notification` broadcast to connected WebUI clients.
 
 #### Backend behavior
@@ -364,7 +368,7 @@ Notes:
 #### Implementation steps (recap)
 1) Backend: ensure `/api/notifications/notify` is registered (already in repo). New services should import `register_notifications` if API groups are customized.
 2) Emit: from any authenticated server flow, POST to `/api/notifications/notify` with the payload above.
-3) Frontend: `App.jsx` mounts `Notifications` globally; page-local actions can either post to `/api/notifications/notify` directly or reuse the shared `sendNotification` helper passed down from `App.jsx`.
+3) Frontend: `AppShell.jsx` mounts `Notifications` globally; page-local actions can either post to `/api/notifications/notify` directly or reuse the shared `postAppNotification()` helper in `src/app/utils/notifications.js`.
 4) Test: use the Firefox console examples below while logged in to confirm toast rendering.
 
 #### Firefox console examples (run while signed in)

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Box,
   Typography,
@@ -78,6 +79,11 @@ import {
   extractWorkflowCanvasDocument,
   inspectWorkflowRuntimeDocument,
 } from "../Flow_Editor/workflowDocuments";
+import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
+import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import { useUrlTabState } from "../app/hooks/useUrlTabState.js";
+import { useAuth } from "../app/providers/AuthContext.jsx";
+import { APP_PATHS } from "../app/routes/paths.js";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -119,6 +125,21 @@ const CREATE_JOB_TAB_KEY_BY_URL = Object.freeze({
   job_history: "history",
   history: "history",
 });
+
+function hasHydratedJobPayload(job) {
+  if (!job || typeof job !== "object") {
+    return false;
+  }
+
+  return (
+    typeof job.name === "string" ||
+    Array.isArray(job.components) ||
+    Array.isArray(job.targets) ||
+    typeof job.execution_context === "string" ||
+    typeof job.schedule_type === "string" ||
+    Boolean(job.schedule)
+  );
+}
 
 const gridTheme = themeQuartz.withParams({
   accentColor: "#8b5cf6",
@@ -1026,16 +1047,22 @@ function ComponentCard({ comp, onRemove, onVariableChange, errors = {} }) {
   );
 }
 
-export default function CreateJob({
-  onCancel,
-  onCreated,
-  initialJob = null,
-  quickJobDraft = null,
-  onConsumeQuickJobDraft,
-  onPageMetaChange,
-  aegisStatus,
-}) {
-  const [tab, setTab] = useState(0);
+export default function CreateJob() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { jobId } = useParams();
+  const { aegisStatus } = useAuth();
+  const initialJob = useMemo(() => {
+    if (location.state?.initialJob && Number(location.state.initialJob?.id) > 0) {
+      return location.state.initialJob;
+    }
+    const parsedId = Number(jobId);
+    return Number.isInteger(parsedId) && parsedId > 0 ? { id: parsedId } : null;
+  }, [jobId, location.state]);
+  const [hydratedInitialJob, setHydratedInitialJob] = useState(() =>
+    hasHydratedJobPayload(initialJob) ? initialJob : null
+  );
+  const [quickJobDraft, setQuickJobDraft] = useState(() => location.state?.quickJobDraft || null);
   const [jobName, setJobName] = useState("");
   const [pageTitleJobName, setPageTitleJobName] = useState("");
   // Components the job will run: {type:'script'|'workflow', path, name, description}
@@ -1100,42 +1127,79 @@ export default function CreateJob({
     }
     return PAGE_SUBTITLE;
   }, [isWorkflowJob, scheduleType]);
-  const sendNotification = useCallback(
-    async (message) => {
-      if (!message) return;
-      try {
-        await fetch("/api/notifications/notify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({
-            title: resolvedPageTitle,
-            message,
-            icon: "pendingactions",
-            variant: "info",
-          }),
-        });
-      } catch {
-        /* notification failures are non-blocking */
-      }
-    },
-    [resolvedPageTitle]
-  );
+  const sendNotification = useAppNotifications({
+    title: resolvedPageTitle,
+    icon: "pendingactions",
+    variant: "info",
+  });
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: resolvedPageTitle,
-      page_subtitle: resolvedPageSubtitle,
-      page_icon: PAGE_ICON,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange, resolvedPageSubtitle, resolvedPageTitle]);
+  useRoutePageChrome({
+    title: resolvedPageTitle,
+    subtitle: resolvedPageSubtitle,
+    Icon: PAGE_ICON,
+  });
   const [useSvcAccount, setUseSvcAccount] = useState(true);
   const [assembliesPayload, setAssembliesPayload] = useState({ items: [], queue: [] });
   const [assembliesLoading, setAssembliesLoading] = useState(false);
   const [assembliesError, setAssembliesError] = useState("");
   const assemblyExportCacheRef = useRef(new Map());
   const quickDraftAppliedRef = useRef(null);
+
+  useEffect(() => {
+    setQuickJobDraft(location.state?.quickJobDraft || null);
+  }, [location.key, location.state]);
+
+  useEffect(() => {
+    if (!(initialJob && initialJob.id)) {
+      setHydratedInitialJob(null);
+      return;
+    }
+
+    if (hasHydratedJobPayload(initialJob)) {
+      setHydratedInitialJob(initialJob);
+      return;
+    }
+
+    let canceled = false;
+
+    const hydrateScheduledJob = async () => {
+      try {
+        const resp = await fetch(`/api/scheduled_jobs/${initialJob.id}`);
+        const data = await resp.json();
+        if (!resp.ok) {
+          throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
+        }
+
+        if (!canceled && data?.job && typeof data.job === "object") {
+          setHydratedInitialJob(data.job);
+        }
+      } catch (error) {
+        console.error("Failed to hydrate scheduled job for editing:", error);
+        if (!canceled) {
+          setHydratedInitialJob(null);
+        }
+      }
+    };
+
+    void hydrateScheduledJob();
+
+    return () => {
+      canceled = true;
+    };
+  }, [initialJob]);
+
+  const resolvedInitialJob = useMemo(() => {
+    if (hasHydratedJobPayload(initialJob)) {
+      return initialJob;
+    }
+    if (
+      hydratedInitialJob &&
+      Number(hydratedInitialJob.id || 0) === Number(initialJob?.id || 0)
+    ) {
+      return hydratedInitialJob;
+    }
+    return initialJob;
+  }, [hydratedInitialJob, initialJob]);
 
   const loadCredentials = useCallback(async () => {
     setCredentialLoading(true);
@@ -3008,21 +3072,39 @@ export default function CreateJob({
     let canceled = false;
     const hydrate = async () => {
       if (initialJob && initialJob.id) {
-        setJobName(initialJob.name || "");
-        setPageTitleJobName(typeof initialJob.name === "string" ? initialJob.name.trim() : "");
-        setTargets(normalizeTargetList(initialJob.targets || []));
-        setScheduleType(initialJob.schedule_type || initialJob.schedule?.type || "immediately");
-        setStartDateTime(initialJob.start_ts ? dayjs(Number(initialJob.start_ts) * 1000).second(0) : (initialJob.schedule?.start ? dayjs(initialJob.schedule.start).second(0) : dayjs().add(5, "minute").second(0)));
-        setStopAfterEnabled(Boolean(initialJob.duration_stop_enabled));
-        setExpiration(initialJob.expiration || "no_expire");
-        setExecContext(initialJob.execution_context || "system");
-        setSelectedCredentialId(initialJob.credential_id ? String(initialJob.credential_id) : "");
-        if ((initialJob.execution_context || "").toLowerCase() === "winrm") {
-          setUseSvcAccount(initialJob.use_service_account !== false);
+        if (!hasHydratedJobPayload(resolvedInitialJob)) {
+          return;
+        }
+
+        setJobName(resolvedInitialJob.name || "");
+        setPageTitleJobName(
+          typeof resolvedInitialJob.name === "string" ? resolvedInitialJob.name.trim() : ""
+        );
+        setTargets(normalizeTargetList(resolvedInitialJob.targets || []));
+        setScheduleType(
+          resolvedInitialJob.schedule_type || resolvedInitialJob.schedule?.type || "immediately"
+        );
+        setStartDateTime(
+          resolvedInitialJob.start_ts
+            ? dayjs(Number(resolvedInitialJob.start_ts) * 1000).second(0)
+            : resolvedInitialJob.schedule?.start
+              ? dayjs(resolvedInitialJob.schedule.start).second(0)
+              : dayjs().add(5, "minute").second(0)
+        );
+        setStopAfterEnabled(Boolean(resolvedInitialJob.duration_stop_enabled));
+        setExpiration(resolvedInitialJob.expiration || "no_expire");
+        setExecContext(resolvedInitialJob.execution_context || "system");
+        setSelectedCredentialId(
+          resolvedInitialJob.credential_id ? String(resolvedInitialJob.credential_id) : ""
+        );
+        if ((resolvedInitialJob.execution_context || "").toLowerCase() === "winrm") {
+          setUseSvcAccount(resolvedInitialJob.use_service_account !== false);
         } else {
           setUseSvcAccount(false);
         }
-        const comps = Array.isArray(initialJob.components) ? initialJob.components : [];
+        const comps = Array.isArray(resolvedInitialJob.components)
+          ? resolvedInitialJob.components
+          : [];
         const hydrated = await hydrateExistingComponents(comps);
         if (!canceled) {
           setComponents(hydrated);
@@ -3040,7 +3122,7 @@ export default function CreateJob({
     return () => {
       canceled = true;
     };
-  }, [initialJob, hydrateExistingComponents, normalizeTargetList]);
+  }, [hydrateExistingComponents, initialJob, normalizeTargetList, resolvedInitialJob]);
 
   const openAddComponent = async () => {
     setAddCompOpen(true);
@@ -3240,7 +3322,7 @@ export default function CreateJob({
     });
     if (Object.keys(requiredErrors).length) {
       setComponentVarErrors(requiredErrors);
-      setTab(1);
+      selectTabKey("components");
       alert("Please fill in all required variable values.");
       return;
     }
@@ -3269,8 +3351,7 @@ export default function CreateJob({
         const createdName = savedJob?.name || jobName || "Job";
         sendNotification(`Job ${createdName} Created Successfully`);
       }
-      onCreated && onCreated(savedJob);
-      onCancel && onCancel();
+      navigate(APP_PATHS.jobs);
     } catch (err) {
       alert(String(err.message || err));
     }
@@ -3292,56 +3373,37 @@ export default function CreateJob({
     return base;
   }, [editing, isWorkflowJob]);
   const historyTabIndex = useMemo(() => tabDefs.findIndex((t) => t.key === "history"), [tabDefs]);
-  const activeTabKey = tabDefs[tab]?.key || tabDefs[0]?.key || "name";
-  const tabFromUrlAppliedRef = useRef(false);
-
-  useEffect(() => {
-    if (tabFromUrlAppliedRef.current) return;
-    if (!Array.isArray(tabDefs) || tabDefs.length === 0) return;
-    let rawTab = "";
-    try {
-      rawTab = (new URLSearchParams(window.location.search || "").get("tab") || "").trim().toLowerCase();
-    } catch {
-      rawTab = "";
-    }
-    if (!rawTab) {
-      tabFromUrlAppliedRef.current = true;
-      return;
-    }
-    const internalTabKey = CREATE_JOB_TAB_KEY_BY_URL[rawTab] || null;
-    if (internalTabKey) {
-      const index = tabDefs.findIndex((tabDef) => tabDef.key === internalTabKey);
-      if (index < 0) return;
-      setTab(index);
-    }
-    tabFromUrlAppliedRef.current = true;
-  }, [tabDefs]);
-
-  useEffect(() => {
-    const activeTabKey = tabDefs[tab]?.key || "";
-    if (!activeTabKey) return;
-    const urlTabKey = CREATE_JOB_TAB_URL_BY_KEY[activeTabKey] || activeTabKey;
-    try {
-      const params = new URLSearchParams(window.location.search || "");
-      if ((params.get("tab") || "").trim().toLowerCase() === urlTabKey) {
+  const { activeKey: activeTabUrlKey, setActiveKey: setActiveTabUrlKey } = useUrlTabState({
+    param: "tab",
+    defaultKey: tabDefs[0]?.key || "name",
+    allowedKeys: tabDefs.map((tabDef) => tabDef.key),
+    keyByUrl: CREATE_JOB_TAB_KEY_BY_URL,
+    urlByKey: CREATE_JOB_TAB_URL_BY_KEY,
+  });
+  const activeTabKey = useMemo(() => {
+    const fallbackKey = tabDefs[0]?.key || "name";
+    return tabDefs.some((tabDef) => tabDef.key === activeTabUrlKey) ? activeTabUrlKey : fallbackKey;
+  }, [activeTabUrlKey, tabDefs]);
+  const tab = useMemo(() => {
+    const index = tabDefs.findIndex((tabDef) => tabDef.key === activeTabKey);
+    return index >= 0 ? index : 0;
+  }, [activeTabKey, tabDefs]);
+  const selectTabKey = useCallback(
+    (nextTabKey) => {
+      const normalizedKey = String(nextTabKey || "").trim();
+      if (!normalizedKey) {
         return;
       }
-      params.set("tab", urlTabKey);
-      const query = params.toString();
-      const nextLocation = query ? `${window.location.pathname}?${query}` : window.location.pathname;
-      const currentLocation = window.location.pathname + window.location.search;
-      if (nextLocation !== currentLocation) {
-        window.history.replaceState({}, "", nextLocation);
+      if (!tabDefs.some((tabDef) => tabDef.key === normalizedKey)) {
+        return;
       }
-    } catch {
-      /* URL update failures are non-blocking */
-    }
-  }, [tab, tabDefs]);
-
-  useEffect(() => {
-    if (tab < tabDefs.length) return;
-    setTab(0);
-  }, [tab, tabDefs.length]);
+      if (normalizedKey === activeTabKey) {
+        return;
+      }
+      setActiveTabUrlKey(normalizedKey);
+    },
+    [activeTabKey, setActiveTabUrlKey, tabDefs]
+  );
 
   const scheduleSummary = useMemo(() => {
     const base = SCHEDULE_LABELS[scheduleType] || "Scheduled run";
@@ -3425,13 +3487,16 @@ const heroTiles = useMemo(() => {
       currentAutoName: initialName
     });
     const targetTabKey = quickJobDraft.initialTabKey || "components";
-    const tabIndex = tabDefs.findIndex((t) => t.key === targetTabKey);
-    if (tabIndex >= 0) setTab(tabIndex);
-    else if (tabDefs.length > 1) setTab(1);
-    if (typeof onConsumeQuickJobDraft === "function") {
-      onConsumeQuickJobDraft(quickJobDraft.id);
+    if (tabDefs.some((tabDef) => tabDef.key === targetTabKey)) {
+      selectTabKey(targetTabKey);
+    } else if (tabDefs.length > 1) {
+      selectTabKey(tabDefs[1]?.key || tabDefs[0]?.key || "name");
     }
-  }, [editing, quickJobDraft, tabDefs, onConsumeQuickJobDraft, normalizeTargetList]);
+    setQuickJobDraft((previous) => {
+      if (!previous) return previous;
+      return previous.id === quickJobDraft.id ? null : previous;
+    });
+  }, [editing, normalizeTargetList, quickJobDraft, selectTabKey, tabDefs]);
 
   useEffect(() => {
     if (!quickJobMeta?.allowAutoRename) return;
@@ -3475,7 +3540,7 @@ const heroTiles = useMemo(() => {
         }}
       >
         <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
-          <Button onClick={onCancel} sx={OUTLINE_BUTTON_SX}>
+          <Button onClick={() => navigate(APP_PATHS.jobs)} sx={OUTLINE_BUTTON_SX}>
             Cancel
           </Button>
           <Button
@@ -3539,7 +3604,7 @@ const heroTiles = useMemo(() => {
 
       <Tabs
         value={tab}
-        onChange={(_, v) => setTab(v)}
+        onChange={(_, v) => selectTabKey(tabDefs[v]?.key || tabDefs[0]?.key || "name")}
         variant="scrollable"
         scrollButtons="auto"
         TabIndicatorProps={{

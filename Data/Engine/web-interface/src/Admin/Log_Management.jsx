@@ -35,8 +35,10 @@ import Prism from "prismjs";
 import "prismjs/components/prism-bash";
 import "prismjs/themes/prism-okaidia.css";
 import Editor from "react-simple-code-editor";
-import { PageHeaderActionRail } from "../Page_Header_Actions.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
+import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import { useAuth } from "../app/providers/AuthContext.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -115,7 +117,8 @@ function formatTimestamp(ts) {
   return ts;
 }
 
-export default function LogManagement({ isAdmin = false, onPageMetaChange }) {
+export default function LogManagement() {
+  const { isAdmin } = useAuth();
   const [logs, setLogs] = useState([]);
   const [defaultRetention, setDefaultRetention] = useState(30);
   const [selectedDomain, setSelectedDomain] = useState(null);
@@ -130,25 +133,11 @@ export default function LogManagement({ isAdmin = false, onPageMetaChange }) {
   const [actionMessage, setActionMessage] = useState(null);
   const [quickFilter, setQuickFilter] = useState("");
   const gridRef = useRef(null);
-  const useGlobalHeader = Boolean(onPageMetaChange);
-  const sendNotification = useCallback(async (message) => {
-    if (!message) return;
-    try {
-      await fetch("/api/notifications/notify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          title: "Log Management",
-          message,
-          icon: "logs",
-          variant: "info",
-        }),
-      });
-    } catch {
-      /* notifications are best-effort */
-    }
-  }, []);
+  const sendNotification = useAppNotifications({
+    title: PAGE_TITLE,
+    icon: "logs",
+    variant: "info",
+  });
 
   const logMap = useMemo(() => {
     const map = new Map();
@@ -351,15 +340,12 @@ const defaultColDef = useMemo(
     [fetchEntries, fetchLogs, listLoading, selectedFile]
   );
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: PAGE_TITLE,
-      page_subtitle: PAGE_SUBTITLE,
-      page_icon: LogsIcon,
-      page_header_actions: pageHeaderActions,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange, pageHeaderActions]);
+  useRoutePageChrome({
+    title: PAGE_TITLE,
+    subtitle: PAGE_SUBTITLE,
+    Icon: LogsIcon,
+    actions: pageHeaderActions,
+  });
 
   const sidebarContent = (
     <>
@@ -774,40 +760,6 @@ const defaultColDef = useMemo(
         flexDirection: "column",
       }}
     >
-      {!useGlobalHeader && (
-        <Box sx={{ px: 3, pt: 3, pb: 1.5 }}>
-          <Box
-            sx={{
-              display: "flex",
-              flexDirection: { xs: "column", xl: "row" },
-              alignItems: { xs: "stretch", xl: "flex-start" },
-              justifyContent: "space-between",
-              gap: 2,
-            }}
-          >
-            <Box sx={{ minWidth: 0 }}>
-              <Stack direction="row" spacing={1.25} alignItems="center">
-                <LogsIcon sx={{ fontSize: 22, color: AURORA_SHELL.accent, mt: 0.25 }} />
-                <Typography
-                  variant="h6"
-                  sx={{
-                    fontWeight: 700,
-                    letterSpacing: 0.5,
-                    color: AURORA_SHELL.text,
-                  }}
-                >
-                  {PAGE_TITLE}
-                </Typography>
-              </Stack>
-              <Typography variant="body2" sx={{ color: AURORA_SHELL.muted, mt: 0.75 }}>
-                {PAGE_SUBTITLE}
-              </Typography>
-            </Box>
-            <PageHeaderActionRail actions={pageHeaderActions} />
-          </Box>
-        </Box>
-      )}
-
       <PageBodyFrame variant="split_tool" sidebar={sidebarContent} main={mainContent} />
     </Paper>
   );

@@ -18,16 +18,16 @@ import {
   Devices as DevicesIcon,
   FilterAlt as FilterIcon,
   Schedule as ScheduleIcon,
-  PeopleOutline as CommunityIcon,
   Apps as AssembliesIcon,
   LocationCity as SitesIcon,
   Dns as ServerInfoIcon,
   VpnKey as CredentialIcon,
   PersonOutline as UserIcon,
-  Dashboard as PageTemplateIcon,
   AdminPanelSettings as AdminPanelSettingsIcon,
   ReceiptLong as LogsIcon,
 } from "@mui/icons-material";
+import { useNavigate } from "react-router-dom";
+import { APP_PATHS } from "./app/routes/paths.js";
 
 const COLORS = {
   cyan: "#7db7ff",
@@ -41,15 +41,109 @@ const COLORS = {
     "linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
 };
 
-const NAV_ITEM_ALIASES = {
-  devices: ["device_details"],
-  assemblies: ["scripts", "ansible_editor", "workflow-editor", "workflows"],
-  jobs: ["create_job"],
-  filters: ["filter_editor"],
-  access_users: ["site_assignment"],
-};
+const NAV_SECTIONS = Object.freeze([
+  {
+    id: "sites",
+    title: "Sites",
+    items: [
+      {
+        icon: SitesIcon,
+        label: "Sites",
+        navKey: "sites",
+        to: APP_PATHS.sites,
+      },
+    ],
+  },
+  {
+    id: "devices",
+    title: "Inventory",
+    items: [
+      {
+        icon: AdminPanelSettingsIcon,
+        label: "Device Approvals",
+        navKey: "device-approvals",
+        to: APP_PATHS.deviceApprovals,
+      },
+      {
+        icon: DevicesIcon,
+        label: "Devices",
+        navKey: "devices",
+        to: APP_PATHS.devices,
+      },
+    ],
+  },
+  {
+    id: "automation",
+    title: "Automation",
+    items: [
+      {
+        icon: AssembliesIcon,
+        label: "Assemblies",
+        navKey: "assemblies",
+        to: APP_PATHS.assemblies,
+      },
+      {
+        icon: ScheduleIcon,
+        label: "Scheduled Jobs",
+        navKey: "jobs",
+        to: APP_PATHS.jobs,
+      },
+    ],
+  },
+  {
+    id: "filters",
+    title: "Filters & Groups",
+    items: [
+      {
+        icon: FilterIcon,
+        label: "Filters",
+        navKey: "filters",
+        to: APP_PATHS.filters,
+      },
+    ],
+  },
+  {
+    id: "access",
+    title: "Access Management",
+    adminOnly: true,
+    items: [
+      {
+        icon: CredentialIcon,
+        label: "Credentials",
+        navKey: "credentials",
+        to: APP_PATHS.credentials,
+      },
+      {
+        icon: UserIcon,
+        label: "Users",
+        navKey: "users",
+        to: APP_PATHS.users,
+      },
+    ],
+  },
+  {
+    id: "admin",
+    title: "Admin Settings",
+    adminOnly: true,
+    items: [
+      {
+        icon: ServerInfoIcon,
+        label: "Server Info",
+        navKey: "server",
+        to: APP_PATHS.server,
+      },
+      {
+        icon: LogsIcon,
+        label: "Log Management",
+        navKey: "logs",
+        to: APP_PATHS.logs,
+      },
+    ],
+  },
+]);
 
-function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
+function NavigationSidebar({ activeNavKey, isAdmin = false }) {
+  const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(false);
   const [expandedNav, setExpandedNav] = useState({
     sites: true,
@@ -61,36 +155,9 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
     developer: true,
   });
 
-  const effectivePage = useMemo(() => {
-    for (const [rootKey, aliases] of Object.entries(NAV_ITEM_ALIASES)) {
-      if (aliases.includes(currentPage)) {
-        return rootKey;
-      }
-    }
-    return currentPage;
-  }, [currentPage]);
-
-  const groupActive = useMemo(
-    () => ({
-      sites: currentPage === "sites",
-      devices: [
-        "devices",
-        "ssh_devices",
-        "winrm_devices",
-        "agent_devices",
-        "admin_device_approvals",
-      ].includes(currentPage),
-      automation: ["jobs", "assemblies", "community"].includes(currentPage),
-      filters: ["filters", "filter_editor"].includes(currentPage),
-      access: [
-        "access_credentials",
-        "access_users",
-        "site_assignment",
-      ].includes(currentPage),
-      admin: ["server_info", "log_management"].includes(currentPage),
-      developer: ["page_template"].includes(currentPage),
-    }),
-    [currentPage]
+  const visibleSections = useMemo(
+    () => NAV_SECTIONS.filter((section) => !section.adminOnly || isAdmin),
+    [isAdmin]
   );
 
   const Section = ({ title, k, children }) => (
@@ -143,11 +210,11 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
     </Accordion>
   );
 
-  const NavItem = ({ icon, label, pageKey, indent = 0 }) => {
-    const active = effectivePage === pageKey;
+  const NavItem = ({ icon, label, navKey, to, indent = 0 }) => {
+    const active = activeNavKey === navKey;
     return (
       <ListItemButton
-        onClick={() => onNavigate(pageKey)}
+        onClick={() => navigate(to)}
         sx={{
           pl: collapsed ? 1.5 : indent ? 4 : 2,
           pr: collapsed ? 1.5 : 2,
@@ -214,121 +281,22 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
       <Divider sx={{ borderColor: COLORS.line }} />
 
       <Box sx={{ flex: 1, overflowY: "auto", p: 0.25 }}>
-        {/* Sites */}
-        <Section title="Sites" k="sites">
-          <NavItem
-            icon={<SitesIcon fontSize="small" />}
-            label="All Sites"
-            pageKey="sites"
-          />
-        </Section>
-
-        {/* Inventory */}
-        <Section title="Inventory" k="devices">
-          <NavItem
-            icon={<AdminPanelSettingsIcon fontSize="small" />}
-            label="Device Approvals"
-            pageKey="admin_device_approvals"
-          />
-          <NavItem
-            icon={<DevicesIcon fontSize="small" />}
-            label="All Devices"
-            pageKey="devices"
-          />
-          {/* <NavItem
-            icon={<DevicesIcon fontSize="small" />}
-            label="Agent Devices"
-            pageKey="agent_devices"
-            indent
-          />
-          <NavItem
-            icon={<DevicesIcon fontSize="small" />}
-            label="SSH Devices"
-            pageKey="ssh_devices"
-            indent
-          />
-          <NavItem
-            icon={<DevicesIcon fontSize="small" />}
-            label="WinRM Devices"
-            pageKey="winrm_devices"
-            indent
-          />
-          */}
-        </Section>
-
-        {/* Automation */}
-        <Section title="Task Automation" k="automation">
-          <NavItem
-            icon={<AssembliesIcon fontSize="small" />}
-            label="Assemblies"
-            pageKey="assemblies"
-          />
-          <NavItem
-            icon={<ScheduleIcon fontSize="small" />}
-            label="Scheduled Jobs"
-            pageKey="jobs"
-          />
-          {/* Community Content 
-            <NavItem
-            icon={<CommunityIcon fontSize="small" />}
-            label="Community Content"
-            pageKey="community"
-          />
-          */}
-
-        </Section>
-
-        {/* Filters & Groups */}
-        <Section title="Filters & Groups" k="filters">
-          <NavItem
-            icon={<FilterIcon fontSize="small" />}
-            label="Filters"
-            pageKey="filters"
-          />
-        </Section>
-
-        {/* Access Management */}
-        {isAdmin && (
-          <Section title="Access Management" k="access">
-            <NavItem
-              icon={<CredentialIcon fontSize="small" />}
-              label="Credentials"
-              pageKey="access_credentials"
-            />
-            <NavItem
-              icon={<UserIcon fontSize="small" />}
-              label="Users"
-              pageKey="access_users"
-            />
+        {visibleSections.map((section) => (
+          <Section key={section.id} title={section.title} k={section.id}>
+            {section.items.map((item) => {
+              const IconComponent = item.icon;
+              return (
+                <NavItem
+                  key={item.navKey}
+                  icon={<IconComponent fontSize="small" />}
+                  label={item.label}
+                  navKey={item.navKey}
+                  to={item.to}
+                />
+              );
+            })}
           </Section>
-        )}
-
-        {/* Admin Settings */}
-        {isAdmin && (
-          <Section title="Admin Settings" k="admin">
-            <NavItem
-              icon={<ServerInfoIcon fontSize="small" />}
-              label="Server Info"
-              pageKey="server_info"
-            />
-            <NavItem
-              icon={<LogsIcon fontSize="small" />}
-              label="Log Management"
-              pageKey="log_management"
-            />
-          </Section>
-        )}
-
-        {/* Developer Tools (navigation hidden) */}
-        {/* {isAdmin && (
-          <Section title="Developer Tools" k="developer">
-            <NavItem
-              icon={<PageTemplateIcon fontSize="small" />}
-              label="Page Template"
-              pageKey="page_template"
-            />
-          </Section>
-        )} */}
+        ))}
       </Box>
 
       <Box sx={{ px: 1, pb: 1 }}>

@@ -28,7 +28,7 @@ import {
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
-import { PAGE_HEADER_CONTROL_SX, PageHeaderActionRail } from "../Page_Header_Actions.jsx";
+import { PAGE_HEADER_CONTROL_SX } from "../Page_Header_Actions.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import {
   DIALOG_ACTIONS_SX,
@@ -40,6 +40,7 @@ import {
   DIALOG_TITLE_SX,
   DialogHeaderBlock,
 } from "../DialogStyles.jsx";
+import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 // NOTE: Do NOT import global AG Grid CSS to avoid affecting other pages.
 // We rely on the Quartz theme class name + scoped CSS vars like the rest of MagicUI.
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -105,7 +106,7 @@ const formatStatusLabel = (status) => {
 const PAGE_TITLE = "Device Approval Queue";
 const PAGE_SUBTITLE = "Review pending device enrollments and resolve conflicts with existing records.";
 
-export default function DeviceApprovals({ onPageMetaChange }) {
+export default function DeviceApprovals() {
   const [approvals, setApprovals] = useState([]);
   const [statusFilter, setStatusFilter] = useState("pending");
   const [loading, setLoading] = useState(false);
@@ -115,7 +116,6 @@ export default function DeviceApprovals({ onPageMetaChange }) {
   const [actioningId, setActioningId] = useState(null);
   const [conflictPrompt, setConflictPrompt] = useState(null);
   const gridRef = useRef(null);
-  const useGlobalHeader = Boolean(onPageMetaChange);
 
   const loadApprovals = useCallback(async () => {
     setLoading(true);
@@ -312,16 +312,13 @@ export default function DeviceApprovals({ onPageMetaChange }) {
     [loadApprovals, loading]
   );
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: PAGE_TITLE,
-      page_subtitle: PAGE_SUBTITLE,
-      page_icon: SecurityIcon,
-      page_header_actions: pageHeaderActions,
-      page_header_controls: pageHeaderControls,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange, pageHeaderActions, pageHeaderControls]);
+  useRoutePageChrome({
+    title: PAGE_TITLE,
+    subtitle: PAGE_SUBTITLE,
+    Icon: SecurityIcon,
+    actions: pageHeaderActions,
+    controls: pageHeaderControls,
+  });
 
   const columns = useMemo(() => [
     {
@@ -484,37 +481,10 @@ export default function DeviceApprovals({ onPageMetaChange }) {
         border: "none",
         background: "transparent",
         boxShadow: "none",
-      overflow: "hidden",
-    }}
-    elevation={0}
-  >
-      {!useGlobalHeader && (
-        <Box sx={{ px: 3, pt: 3, pb: 1.5 }}>
-          <Box
-            sx={{
-              display: "flex",
-              flexDirection: { xs: "column", xl: "row" },
-              alignItems: { xs: "stretch", xl: "flex-start" },
-              justifyContent: "space-between",
-              gap: 2,
-            }}
-          >
-            <Box sx={{ minWidth: 0 }}>
-              <Stack direction="row" spacing={1} alignItems="center">
-                <SecurityIcon sx={{ color: MAGIC_UI.accentA }} />
-                <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
-                  {PAGE_TITLE}
-                </Typography>
-              </Stack>
-              <Typography variant="body2" sx={{ color: "#aaa", mt: 0.5 }}>
-                {PAGE_SUBTITLE}
-              </Typography>
-            </Box>
-            <PageHeaderActionRail actions={pageHeaderActions} controls={pageHeaderControls} />
-          </Box>
-        </Box>
-      )}
-
+        overflow: "hidden",
+      }}
+      elevation={0}
+    >
       {/* Feedback */}
       <PageBodyFrame variant="grid">
         <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0 }}>

@@ -1,6 +1,7 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Box,
   Stack,
@@ -44,6 +45,11 @@ import RemoteShellTab from "./RemoteShell.jsx";
 import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
 import ServiceList from "../Services/Service_List.jsx";
 import VncTab from "./VNC.jsx";
+import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
+import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
+import { useUrlTabState } from "../../app/hooks/useUrlTabState.js";
+import { APP_PATHS } from "../../app/routes/paths.js";
+import { createQuickJobDraft, normalizeQuickJobTargets } from "../../app/utils/quickJob.js";
 
 const TUNNEL_STATUS_POLL_INTERVAL_MS = 15000;
 const DEVICE_DETAILS_POLL_INTERVAL_MS = 60000;
@@ -120,6 +126,14 @@ const DEVICE_DETAILS_TAB_KEY_BY_URL = Object.freeze({
   remote_desktop: "vnc",
   vnc: "vnc",
 });
+
+const resolveDeviceId = (device) =>
+  device?.agent_guid ||
+  device?.guid ||
+  device?.summary?.agent_guid ||
+  device?.hostname ||
+  device?.id ||
+  null;
 
 const SUMMARY_SECTIONS = [
   { key: "top-level", label: "Top-Level", icon: InfoOutlinedIcon },
@@ -712,21 +726,32 @@ const SummarySectionsNav = React.memo(function SummarySectionsNav({ onSelectSect
   );
 });
 
-export default function DeviceSummary({ device, onQuickJobLaunch, onPageMetaChange, onNotify }) {
-  const initialTabIndex = useMemo(() => {
-    try {
-      const params = new URLSearchParams(window.location.search || "");
-      const tabRaw = (params.get("tab") || "").trim().toLowerCase();
-      if (!tabRaw) return 0;
-      const internalTabKey = DEVICE_DETAILS_TAB_KEY_BY_URL[tabRaw] || null;
-      if (!internalTabKey) return 0;
-      const matchIndex = TOP_TABS.findIndex((tabDef) => tabDef.key === internalTabKey);
-      return matchIndex >= 0 ? matchIndex : 0;
-    } catch {
-      return 0;
-    }
-  }, []);
-  const [tab, setTab] = useState(initialTabIndex);
+export default function DeviceSummary() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { deviceId } = useParams();
+  const initialDevice = location.state?.initialDevice;
+  const device = useMemo(
+    () =>
+      initialDevice &&
+      resolveDeviceId(initialDevice) &&
+      String(resolveDeviceId(initialDevice)) === String(deviceId || "")
+        ? initialDevice
+        : { agent_guid: deviceId || null, hostname: deviceId || null },
+    [deviceId, initialDevice]
+  );
+  const notifyOperator = useAppNotifications();
+  const { activeKey: activeTabKey, setActiveKey: setActiveTabKey } = useUrlTabState({
+    param: "tab",
+    defaultKey: TOP_TABS[0]?.key || "summary",
+    allowedKeys: TOP_TABS.map((tabDef) => tabDef.key),
+    keyByUrl: DEVICE_DETAILS_TAB_KEY_BY_URL,
+    urlByKey: DEVICE_DETAILS_TAB_URL_BY_KEY,
+  });
+  const tab = useMemo(() => {
+    const matchIndex = TOP_TABS.findIndex((tabDef) => tabDef.key === activeTabKey);
+    return matchIndex >= 0 ? matchIndex : 0;
+  }, [activeTabKey]);
   const [agent, setAgent] = useState(device || {});
   const [details, setDetails] = useState({});
   const [meta, setMeta] = useState({});
@@ -773,27 +798,6 @@ export default function DeviceSummary({ device, onQuickJobLaunch, onPageMetaChan
   }, [connectionDraft]);
 
   useEffect(() => {
-    const nextActiveTabKey = TOP_TABS[tab]?.key || "";
-    if (!nextActiveTabKey) return;
-    const urlTabKey = DEVICE_DETAILS_TAB_URL_BY_KEY[nextActiveTabKey] || nextActiveTabKey;
-    try {
-      const params = new URLSearchParams(window.location.search || "");
-      if ((params.get("tab") || "").trim().toLowerCase() === urlTabKey) {
-        return;
-      }
-      params.set("tab", urlTabKey);
-      const query = params.toString();
-      const nextLocation = query ? `${window.location.pathname}?${query}` : window.location.pathname;
-      const currentLocation = window.location.pathname + window.location.search;
-      if (nextLocation !== currentLocation) {
-        window.history.replaceState({}, "", nextLocation);
-      }
-    } catch {
-      /* URL update failures are non-blocking */
-    }
-  }, [tab]);
-
-  useEffect(() => {
     if (!isSummaryGridDebugEnabled()) return;
     summaryGridDebugLog("debugEnabled", {
       queryParam: "debugSummaryGrid=1",
@@ -820,18 +824,11 @@ export default function DeviceSummary({ device, onQuickJobLaunch, onPageMetaChan
     }
   }, [tunnelDevice]);
   const quickJobTargets = useMemo(() => {
-    const values = [];
-    const push = (value) => {
-      const normalized = typeof value === "string" ? value.trim() : "";
-      if (!normalized) return;
-      if (!values.includes(normalized)) values.push(normalized);
-    };
-    push(agent?.hostname);
-    push(device?.hostname);
-    return values;
-  }, [agent, device]);
-  const canLaunchQuickJob = quickJobTargets.length > 0 && typeof onQuickJobLaunch === "function";
-  const activeTabKey = TOP_TABS[tab]?.key || TOP_TABS[0]?.key || "summary";
+    return normalizeQuickJobTargets([agent?.hostname, device?.hostname], {
+      excludeValues: [deviceId, resolveDeviceId(agent), resolveDeviceId(device)],
+    });
+  }, [agent, device, deviceId]);
+  const canLaunchQuickJob = quickJobTargets.length > 0;
   const shouldPollTunnelStatus = activeTabKey === "shell" || activeTabKey === "vnc";
   const openAgentHealthDialog = useCallback((entry) => {
     if (!entry) return;
@@ -1254,35 +1251,6 @@ export default function DeviceSummary({ device, onQuickJobLaunch, onPageMetaChan
   const activityHostname = useMemo(() => {
     return (meta?.hostname || summary.hostname || agent?.hostname || device?.hostname || "").trim();
   }, [meta?.hostname, summary.hostname, agent?.hostname, device?.hostname]);
-
-  const notifyOperator = useCallback(
-    async ({ title, message, icon = "notification", variant = "info" }) => {
-      if (typeof onNotify === "function") {
-        try {
-          await onNotify({ title, message, icon, variant });
-          return;
-        } catch {
-          /* fall through to local best-effort notification */
-        }
-      }
-      try {
-        await fetch("/api/notifications/notify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({
-            title,
-            message,
-            icon,
-            variant,
-          }),
-        });
-      } catch {
-        /* notifications are best-effort */
-      }
-    },
-    [onNotify]
-  );
 
   const saveConnectionEndpoint = useCallback(async () => {
     if (connectionType !== "ssh") return;
@@ -2773,15 +2741,12 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     [activityHostname]
   );
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: displayHostname,
-      page_subtitle: pageSubtitle,
-      page_icon: PAGE_ICON,
-      page_header_actions: pageHeaderActions,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [displayHostname, onPageMetaChange, pageHeaderActions, pageSubtitle]);
+  useRoutePageChrome({
+    title: displayHostname,
+    subtitle: pageSubtitle,
+    Icon: PAGE_ICON,
+    actions: pageHeaderActions,
+  });
 
   const topTabRenderers = [
     renderDeviceSummaryTab,
@@ -2828,7 +2793,9 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           onClick={() => {
             setMenuAnchor(null);
             if (!canLaunchQuickJob) return;
-            onQuickJobLaunch && onQuickJobLaunch(quickJobTargets);
+            const quickJobDraft = createQuickJobDraft(quickJobTargets);
+            if (!quickJobDraft) return;
+            navigate(APP_PATHS.jobNew, { state: { quickJobDraft } });
           }}
         >
           Quick Job
@@ -2853,7 +2820,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       </Menu>
       <Tabs
         value={tab}
-        onChange={(e, v) => setTab(v)}
+        onChange={(e, v) => setActiveTabKey(TOP_TABS[v]?.key || TOP_TABS[0]?.key || "summary")}
         variant="scrollable"
         scrollButtons="auto"
         TabIndicatorProps={{

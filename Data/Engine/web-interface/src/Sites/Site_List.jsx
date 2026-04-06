@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Box,
   Button,
@@ -21,6 +22,9 @@ import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { CreateSiteDialog, RenameSiteDialog } from "../Dialogs.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
+import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import { APP_PATHS } from "../app/routes/paths.js";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -206,7 +210,8 @@ const PAGE_TITLE = "Sites";
 const PAGE_SUBTITLE = "Manage site enrollment codes and open device inventories by site.";
 const PAGE_ICON = LocationCityIcon;
 
-export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
+export default function SiteList() {
+  const navigate = useNavigate();
   const [rows, setRows] = useState([]);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [createOpen, setCreateOpen] = useState(false);
@@ -216,24 +221,29 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
   const gridRef = useRef(null);
   const gridApiRef = useRef(null);
   const autoSizeHandleRef = useRef(null);
-  const sendNotification = useCallback(async (message) => {
-    if (!message) return;
-    try {
-      await fetch("/api/notifications/notify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          title: PAGE_TITLE,
-          message,
-          icon: "locationcity",
-          variant: "info",
-        }),
-      });
-    } catch {
-      /* notification transport errors are non-blocking */
-    }
-  }, []);
+  const notify = useAppNotifications({
+    title: PAGE_TITLE,
+    icon: "locationcity",
+    variant: "info",
+  });
+  const sendNotification = useCallback(
+    async (message) => {
+      await notify(message);
+    },
+    [notify]
+  );
+
+  const handleOpenDevicesForSite = useCallback(
+    (siteName) => {
+      try {
+        localStorage.setItem("device_list_initial_site_filter", String(siteName || ""));
+      } catch {
+        /* noop */
+      }
+      navigate(APP_PATHS.devices);
+    },
+    [navigate]
+  );
 
   const fetchSites = useCallback(async () => {
     try {
@@ -350,7 +360,7 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
       cellRenderer: (params) => (
         <span
           style={{ color: "#7dd3fc", cursor: "pointer", fontWeight: 500 }}
-          onClick={() => onOpenDevicesForSite && onOpenDevicesForSite(params.value)}
+          onClick={() => handleOpenDevicesForSite(params.value)}
         >
           {params.value}
         </span>
@@ -397,7 +407,7 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
         );
       },
     },
-  ], [onOpenDevicesForSite, handleCopy]);
+  ], [handleCopy, handleOpenDevicesForSite]);
 
   const defaultColDef = useMemo(() => ({
     sortable: true,
@@ -442,15 +452,12 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
     [openRenameDialog, selectedIds.size]
   );
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: PAGE_TITLE,
-      page_subtitle: PAGE_SUBTITLE,
-      page_icon: PAGE_ICON,
-      page_header_actions: pageHeaderActions,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange, pageHeaderActions]);
+  useRoutePageChrome({
+    title: PAGE_TITLE,
+    subtitle: PAGE_SUBTITLE,
+    Icon: PAGE_ICON,
+    actions: pageHeaderActions,
+  });
 
   return (
     <Paper

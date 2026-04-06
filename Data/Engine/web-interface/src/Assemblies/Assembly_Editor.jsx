@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Box,
   Typography,
@@ -52,6 +53,11 @@ import {
   DIALOG_TITLE_SX,
   DialogHeaderBlock,
 } from "../DialogStyles.jsx";
+import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
+import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import { useUrlTabState } from "../app/hooks/useUrlTabState.js";
+import { useAuth } from "../app/providers/AuthContext.jsx";
+import { APP_PATHS } from "../app/routes/paths.js";
 
 const TYPE_OPTIONS_ALL = [
   { key: "ansible", label: "Ansible Playbook", prism: "yaml" },
@@ -438,24 +444,25 @@ function buildNavTabsSx(minHeight = NAV_TAB_HEIGHT) {
   };
 }
 
-function readAssemblyEditorTabFromUrl() {
-  if (typeof window === "undefined") {
-    return "summary";
+function deriveInitialAssembly(locationState, assemblyGuid, mode) {
+  const incomingState = locationState?.initialAssembly;
+  if (incomingState && typeof incomingState === "object") {
+    return {
+      ...incomingState,
+      mode: incomingState.mode || mode,
+      assemblyGuid:
+        incomingState.assemblyGuid || incomingState.row?.assemblyGuid || assemblyGuid || null,
+      nonce: incomingState.nonce || Date.now(),
+    };
   }
-  const params = new URLSearchParams(window.location.search || "");
-  const rawTab = String(params.get("tab") || "").toLowerCase();
-  return ASSEMBLY_EDITOR_TAB_KEY_BY_URL[rawTab] || "summary";
-}
-
-function writeAssemblyEditorTabToUrl(tabKey) {
-  if (typeof window === "undefined") {
-    return;
+  if (assemblyGuid) {
+    return {
+      mode,
+      assemblyGuid,
+      nonce: Date.now(),
+    };
   }
-  const params = new URLSearchParams(window.location.search || "");
-  params.set("tab", ASSEMBLY_EDITOR_TAB_URL_BY_KEY[tabKey] || ASSEMBLY_EDITOR_TAB_URL_BY_KEY.summary);
-  const search = params.toString();
-  const nextLocation = `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash || ""}`;
-  window.history.replaceState(window.history.state, "", nextLocation);
+  return null;
 }
 
 function GlassPanel({ children, sx }) {
@@ -690,17 +697,25 @@ function RenameFileDialog({ open, value, onChange, onCancel, onSave }) {
   );
 }
 
-export default function AssemblyEditor({
-  mode = "script",
-  initialAssembly = null,
-  onConsumeInitialData,
-  onSaved,
-  userRole = "User",
-  onPageMetaChange,
-}) {
+export default function AssemblyEditor() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { assemblyGuid: routeAssemblyGuid } = useParams();
+  const { role } = useAuth();
+  const mode = useMemo(
+    () =>
+      location.pathname.includes("/ansible_playbooks/") ||
+      location.pathname.endsWith("/new/ansible_playbook")
+        ? "ansible"
+        : "script",
+    [location.pathname]
+  );
   const normalizedMode = mode === "ansible" ? "ansible" : "script";
   const isAnsible = normalizedMode === "ansible";
   const defaultType = isAnsible ? "ansible" : "powershell";
+  const [initialAssembly, setInitialAssembly] = useState(() =>
+    deriveInitialAssembly(location.state, routeAssemblyGuid || null, normalizedMode)
+  );
   const initialRow = initialAssembly?.row || null;
   const initialAssemblyGuid = initialRow?.assemblyGuid || initialAssembly?.assemblyGuid || null;
   const initialDomain = (initialRow?.domain || initialAssembly?.domain || "user").toLowerCase();
@@ -723,13 +738,14 @@ export default function AssemblyEditor({
   const [errorMessage, setErrorMessage] = useState("");
   const [jsonPreviewOpen, setJsonPreviewOpen] = useState(false);
   const [jsonPreviewText, setJsonPreviewText] = useState("");
-  const [activeTab, setActiveTab] = useState(() => readAssemblyEditorTabFromUrl());
-  const isAdmin = (userRole || "").toLowerCase() === "admin";
-  const consumeInitialDataRef = useRef(onConsumeInitialData);
-
-  useEffect(() => {
-    consumeInitialDataRef.current = onConsumeInitialData;
-  }, [onConsumeInitialData]);
+  const { activeKey: activeTab, setActiveKey: setActiveTab } = useUrlTabState({
+    param: "tab",
+    defaultKey: "summary",
+    allowedKeys: Object.keys(ASSEMBLY_EDITOR_TAB_URL_BY_KEY),
+    keyByUrl: ASSEMBLY_EDITOR_TAB_KEY_BY_URL,
+    urlByKey: ASSEMBLY_EDITOR_TAB_URL_BY_KEY,
+  });
+  const isAdmin = (role || "User").toLowerCase() === "admin";
 
   const pageTitle = useMemo(
     () => (isAnsible ? PAGE_TITLE_ANSIBLE : PAGE_TITLE_SCRIPT),
@@ -741,27 +757,11 @@ export default function AssemblyEditor({
     [isAnsible]
   );
 
-  const sendNotification = useCallback(
-    async ({ message, variant = "info" }) => {
-      if (!message) return;
-      try {
-        await fetch("/api/notifications/notify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({
-            title: pageTitle,
-            message,
-            icon: "code",
-            variant,
-          }),
-        });
-      } catch {
-        // notifications are best-effort
-      }
-    },
-    [pageTitle]
-  );
+  const sendNotification = useAppNotifications({
+    title: pageTitle,
+    icon: "code",
+    variant: "info",
+  });
 
   const TYPE_OPTIONS = useMemo(
     () => (
@@ -771,6 +771,10 @@ export default function AssemblyEditor({
     ),
     [isAnsible]
   );
+
+  useEffect(() => {
+    setInitialAssembly(deriveInitialAssembly(location.state, routeAssemblyGuid || null, normalizedMode));
+  }, [location.key, location.state, normalizedMode, routeAssemblyGuid]);
 
   useEffect(() => {
     let canceled = false;
@@ -943,7 +947,10 @@ export default function AssemblyEditor({
       } finally {
         if (!canceled) {
           setLoading(false);
-          consumeInitialDataRef.current?.();
+          setInitialAssembly((previous) => {
+            if (!previous) return previous;
+            return previous.mode === normalizedMode ? null : previous;
+          });
         }
       }
     };
@@ -973,7 +980,10 @@ export default function AssemblyEditor({
           console.error("Failed to resolve assembly by path:", err);
           if (!canceled) {
             setErrorMessage(err?.message || "Failed to resolve assembly path.");
-            consumeInitialDataRef.current?.();
+            setInitialAssembly((previous) => {
+              if (!previous) return previous;
+              return previous.mode === normalizedMode ? null : previous;
+            });
           }
         }
       })();
@@ -984,7 +994,10 @@ export default function AssemblyEditor({
 
     if (context) {
       hydrateNewContext(context);
-      consumeInitialDataRef.current?.();
+      setInitialAssembly((previous) => {
+        if (!previous) return previous;
+        return previous.mode === normalizedMode ? null : previous;
+      });
       return () => {
         canceled = true;
       };
@@ -993,11 +1006,7 @@ export default function AssemblyEditor({
     return () => {
       canceled = true;
     };
-  }, [initialAssembly, defaultType]);
-
-  useEffect(() => {
-    writeAssemblyEditorTabToUrl(activeTab);
-  }, [activeTab]);
+  }, [defaultType, initialAssembly, normalizedMode]);
 
   const prismLanguage = TYPE_MAP[assembly.type]?.prism || "powershell";
 
@@ -1125,7 +1134,7 @@ export default function AssemblyEditor({
         setFileName((prev) => prev || sanitizeFileName(assembly.name));
       }
 
-      onSaved?.();
+      navigate(APP_PATHS.assemblies);
     } catch (err) {
       console.error("Failed to save assembly:", err);
       const message = err?.message || "Failed to save assembly.";
@@ -1134,7 +1143,7 @@ export default function AssemblyEditor({
     } finally {
       setSaving(false);
     }
-  }, [assembly, assemblyGuid, domain, onSaved]);
+  }, [assembly, assemblyGuid, domain, navigate]);
 
   const handleRenameConfirm = useCallback(() => {
     const trimmed = (renameValue || assembly.name || "").trim();
@@ -1164,7 +1173,7 @@ export default function AssemblyEditor({
         throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
       }
       setDeleteOpen(false);
-      onSaved?.();
+      navigate(APP_PATHS.assemblies);
     } catch (err) {
       console.error("Failed to delete assembly:", err);
       const message = err?.message || "Failed to delete assembly.";
@@ -1173,7 +1182,7 @@ export default function AssemblyEditor({
     } finally {
       setSaving(false);
     }
-  }, [assemblyGuid, onSaved]);
+  }, [assemblyGuid, navigate]);
 
   const handleDevModeToggle = useCallback(async (enabled) => {
     setDevModeBusy(true);
@@ -1436,16 +1445,12 @@ export default function AssemblyEditor({
     triggerFlushQueue,
   ]);
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: pageTitle,
-      page_subtitle: pageSubtitle,
-      page_icon: PAGE_ICON,
-      page_header_actions: pageHeaderActions,
-    });
-  }, [onPageMetaChange, pageHeaderActions, pageSubtitle, pageTitle]);
-
-  useEffect(() => () => onPageMetaChange?.(null), [onPageMetaChange]);
+  useRoutePageChrome({
+    title: pageTitle,
+    subtitle: pageSubtitle,
+    Icon: PAGE_ICON,
+    actions: pageHeaderActions,
+  });
 
   return (
     <>

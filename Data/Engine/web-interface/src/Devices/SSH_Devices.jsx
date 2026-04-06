@@ -38,6 +38,7 @@ import {
   DialogHeaderBlock,
 } from "../DialogStyles.jsx";
 import AddDevice from "./Add_Device.jsx";
+import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 
 const MAGIC_UI = {
   panelBg: "linear-gradient(160deg, rgba(7,11,24,0.92), rgba(5,9,20,0.94))",
@@ -113,7 +114,7 @@ const defaultForm = {
   operating_system: ""
 };
 
-export default function SSHDevices({ type = "ssh", onPageMetaChange, onQuickJobLaunch }) {
+export default function SSHDevices({ type = "ssh" }) {
   const typeLabel = type === "winrm" ? "WinRM" : "SSH";
   const meta = TYPE_META[type] || TYPE_META.ssh;
   const apiBase = type === "winrm" ? "/api/winrm_devices" : "/api/ssh_devices";
@@ -165,15 +166,11 @@ export default function SSHDevices({ type = "ssh", onPageMetaChange, onQuickJobL
     loadDevices();
   }, [loadDevices]);
 
-  useEffect(() => {
-    const IconComponent = meta.icon || LanIcon;
-    onPageMetaChange?.({
-      page_title: pageTitle,
-      page_subtitle: pageSubtitle,
-      page_icon: IconComponent,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [meta.icon, onPageMetaChange, pageSubtitle, pageTitle]);
+  useRoutePageChrome({
+    title: pageTitle,
+    subtitle: pageSubtitle,
+    Icon: meta.icon || LanIcon,
+  });
 
   const sortedRows = useMemo(() => {
     const list = [...rows];

@@ -1,6 +1,7 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/web-interface/src/Devices/Device_List.jsx
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Alert,
   Paper,
@@ -24,6 +25,9 @@ import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-communi
 import { DeleteDeviceDialog, CreateCustomViewDialog, RenameCustomViewDialog } from "../Dialogs.jsx";
 import AddDevice from "./Add_Device.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import { APP_PATHS } from "../app/routes/paths.js";
+import { createQuickJobDraft } from "../app/utils/quickJob.js";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -103,6 +107,14 @@ const formatHostnameForDisplay = (value) => {
   const dotIndex = text.indexOf(".");
   return dotIndex > 0 ? text.slice(0, dotIndex) : text;
 };
+
+const resolveDeviceId = (device) =>
+  device?.agent_guid ||
+  device?.guid ||
+  device?.summary?.agent_guid ||
+  device?.hostname ||
+  device?.id ||
+  null;
 
 const alphaSortCollator = new Intl.Collator(undefined, {
   numeric: true,
@@ -339,15 +351,13 @@ function formatUptime(seconds) {
 }
 
 export default function DeviceList({
-  onSelectDevice,
-  onQuickJobLaunch,
   filterMode = "all",
   title,
   showAddButton,
   addButtonLabel,
   defaultAddType,
-  onPageMetaChange,
 }) {
+  const navigate = useNavigate();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState(null);
@@ -355,9 +365,27 @@ export default function DeviceList({
   const [confirmOpen, setConfirmOpen] = useState(false);
   // Track selection by agent id to avoid duplicate hostname collisions
   const [selectedIds, setSelectedIds] = useState(() => new Set());
-  const canLaunchQuickJob = selectedIds.size > 0 && typeof onQuickJobLaunch === "function";
+  const canLaunchQuickJob = selectedIds.size > 0;
   const [addDeviceOpen, setAddDeviceOpen] = useState(false);
   const [addDeviceType, setAddDeviceType] = useState(null);
+  const handleSelectDevice = useCallback(
+    (device) => {
+      const deviceId = resolveDeviceId(device);
+      if (!deviceId) return;
+      navigate(APP_PATHS.device(deviceId), {
+        state: device ? { initialDevice: device } : undefined,
+      });
+    },
+    [navigate]
+  );
+  const handleQuickJobLaunch = useCallback(
+    (hostnames) => {
+      const quickJobDraft = createQuickJobDraft(hostnames);
+      if (!quickJobDraft) return;
+      navigate(APP_PATHS.jobNew, { state: { quickJobDraft } });
+    },
+    [navigate]
+  );
   const computedTitle = useMemo(() => {
     if (title) return title;
     switch (filterMode) {
@@ -1107,7 +1135,7 @@ export default function DeviceList({
             .map((row) => row.hostname)
             .filter((hostname) => Boolean(hostname));
           if (!hostnames.length) return;
-          onQuickJobLaunch(hostnames);
+          handleQuickJobLaunch(hostnames);
         },
       },
       ...(derivedShowAddButton
@@ -1132,21 +1160,18 @@ export default function DeviceList({
       derivedShowAddButton,
       fetchDevices,
       loading,
-      onQuickJobLaunch,
+      handleQuickJobLaunch,
       rows,
       selectedIds,
     ]
   );
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: computedTitle,
-      page_subtitle: heroSubtitle,
-      page_icon: PAGE_ICON,
-      page_header_actions: pageHeaderActions,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [computedTitle, heroSubtitle, onPageMetaChange, pageHeaderActions]);
+  useRoutePageChrome({
+    title: computedTitle,
+    subtitle: heroSubtitle,
+    Icon: PAGE_ICON,
+    actions: pageHeaderActions,
+  });
 
   const handleSelectionChanged = useCallback(() => {
     const api = gridRef.current?.api;
@@ -1198,7 +1223,7 @@ export default function DeviceList({
       const handleClick = (event) => {
         event.preventDefault();
         event.stopPropagation();
-        if (onSelectDevice) onSelectDevice(row);
+        handleSelectDevice(row);
       };
       const label = row.connectionLabel || "";
       let badgeBg = "#2d3042";
@@ -1242,7 +1267,7 @@ export default function DeviceList({
         </Box>
       );
     },
-    [onSelectDevice]
+    [handleSelectDevice]
   );
 
   const statusCellRenderer = useCallback(

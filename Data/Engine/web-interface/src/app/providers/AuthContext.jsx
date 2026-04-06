@@ -1,0 +1,456 @@
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { EMPTY_AEGIS_STATUS, normalizeAegisStatus } from "../utils/aegis.js";
+import { sha512 } from "../utils/crypto.js";
+import { postAppNotification } from "../utils/notifications.js";
+import { getBorealisSocket } from "../runtime/bootstrapClientRuntime.js";
+
+const SESSION_CACHE_KEY = "borealis_session";
+const SESSION_CACHE_TTL_MS = 3600 * 1000;
+
+function clearPersistedSession() {
+  try {
+    localStorage.removeItem(SESSION_CACHE_KEY);
+  } catch {
+    /* noop */
+  }
+}
+
+function persistSession(payload) {
+  if (!payload?.username) return;
+  try {
+    localStorage.setItem(
+      SESSION_CACHE_KEY,
+      JSON.stringify({
+        username: payload.username,
+        display_name: payload.display_name || payload.username,
+        role: payload.role || null,
+        timestamp: Date.now(),
+      })
+    );
+  } catch {
+    /* noop */
+  }
+}
+
+function readPersistedSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_CACHE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (Date.now() - Number(data?.timestamp || 0) >= SESSION_CACHE_TTL_MS) {
+      clearPersistedSession();
+      return null;
+    }
+    return data;
+  } catch {
+    clearPersistedSession();
+    return null;
+  }
+}
+
+export const AuthContext = createContext(null);
+
+export function AuthProvider({ children }) {
+  const [user, setUser] = useState(null);
+  const [role, setRole] = useState(null);
+  const [displayName, setDisplayName] = useState(null);
+  const [mfaEnabled, setMfaEnabled] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [aegisStatus, setAegisStatus] = useState(EMPTY_AEGIS_STATUS);
+  const [aegisDialog, setAegisDialog] = useState(null);
+  const [aegisPromptDismissed, setAegisPromptDismissed] = useState(false);
+
+  const clearClientSession = useCallback(() => {
+    clearPersistedSession();
+    setUser(null);
+    setRole(null);
+    setDisplayName(null);
+    setMfaEnabled(false);
+    setAegisStatus(EMPTY_AEGIS_STATUS);
+    setAegisDialog(null);
+    setAegisPromptDismissed(false);
+  }, []);
+
+  const clearOperatorPresence = useCallback(() => {
+    try {
+      getBorealisSocket()?.emit?.("operator_presence_clear");
+    } catch {
+      /* operator presence is best-effort */
+    }
+  }, []);
+
+  const fetchAegisStatus = useCallback(async () => {
+    try {
+      const response = await fetch("/api/aegis/status", { credentials: "include" });
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          setAegisStatus(EMPTY_AEGIS_STATUS);
+        }
+        return EMPTY_AEGIS_STATUS;
+      }
+      const payload = await response.json();
+      const normalized = normalizeAegisStatus(payload);
+      setAegisStatus(normalized);
+      return normalized;
+    } catch {
+      return EMPTY_AEGIS_STATUS;
+    }
+  }, []);
+
+  const refreshSession = useCallback(async () => {
+    try {
+      const response = await fetch("/api/auth/me", { credentials: "include" });
+      if (response.ok) {
+        const me = await response.json();
+        setUser(me.username);
+        setRole(me.role || null);
+        setDisplayName(me.display_name || me.username);
+        setMfaEnabled(Boolean(me.mfa_enabled));
+        persistSession(me);
+        return me;
+      }
+      if (response.status === 401 || response.status === 403) {
+        clearClientSession();
+      }
+    } catch {
+      /* noop */
+    }
+    return null;
+  }, [clearClientSession]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrateSession = async () => {
+      const cached = readPersistedSession();
+      if (cached && !cancelled) {
+        setUser(cached.username);
+        setRole(cached.role || null);
+        setDisplayName(cached.display_name || cached.username);
+      }
+
+      try {
+        const response = await fetch("/api/auth/me", { credentials: "include" });
+        if (response.ok) {
+          const me = await response.json();
+          if (!cancelled) {
+            setUser(me.username);
+            setRole(me.role || null);
+            setDisplayName(me.display_name || me.username);
+            setMfaEnabled(Boolean(me.mfa_enabled));
+          }
+          persistSession(me);
+        } else if ((response.status === 401 || response.status === 403) && !cancelled) {
+          clearClientSession();
+        }
+      } catch {
+        /* noop */
+      }
+
+      if (!cancelled) {
+        setReady(true);
+      }
+    };
+
+    hydrateSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [clearClientSession]);
+
+  useEffect(() => {
+    if (!ready || !user) {
+      setAegisStatus(EMPTY_AEGIS_STATUS);
+      return;
+    }
+    fetchAegisStatus();
+  }, [fetchAegisStatus, ready, user]);
+
+  useEffect(() => {
+    if (!ready || !user) return undefined;
+
+    let cancelled = false;
+    const validateSession = async () => {
+      try {
+        const response = await fetch("/api/auth/me", { credentials: "include" });
+        if ((response.status === 401 || response.status === 403) && !cancelled) {
+          clearClientSession();
+          setAegisStatus(EMPTY_AEGIS_STATUS);
+          return;
+        }
+        if (response.ok && !cancelled) {
+          const me = await response.json();
+          setUser(me.username);
+          setRole(me.role || null);
+          setDisplayName(me.display_name || me.username);
+          setMfaEnabled(Boolean(me.mfa_enabled));
+          persistSession(me);
+          fetchAegisStatus();
+        }
+      } catch {
+        /* noop */
+      }
+    };
+
+    const intervalId = window.setInterval(validateSession, 30 * 1000);
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        validateSession();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [clearClientSession, fetchAegisStatus, ready, user]);
+
+  useEffect(() => {
+    if (!ready || !user || String(role || "").toLowerCase() !== "admin") {
+      return;
+    }
+    if (!aegisStatus.configured || !aegisStatus.locked || aegisPromptDismissed) {
+      return;
+    }
+    setAegisDialog((previous) => previous || { mode: "unlock", source: "login" });
+  }, [aegisPromptDismissed, aegisStatus, ready, role, user]);
+
+  const login = useCallback(
+    async ({ username, role: nextRole }) => {
+      setUser(username);
+      setRole(nextRole || null);
+      setDisplayName(username);
+      setMfaEnabled(false);
+      persistSession({
+        username,
+        display_name: username,
+        role: nextRole || null,
+      });
+
+      (async () => {
+        try {
+          const response = await fetch("/api/auth/me", { credentials: "include" });
+          if (response.ok) {
+            const me = await response.json();
+            setUser(me.username);
+            setRole(me.role || null);
+            setDisplayName(me.display_name || me.username);
+            setMfaEnabled(Boolean(me.mfa_enabled));
+            persistSession(me);
+          }
+        } catch {
+          /* noop */
+        }
+        try {
+          await fetchAegisStatus();
+        } catch {
+          /* noop */
+        }
+      })();
+    },
+    [fetchAegisStatus]
+  );
+
+  const logout = useCallback(async () => {
+    clearOperatorPresence();
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      /* noop */
+    }
+    clearClientSession();
+  }, [clearClientSession, clearOperatorPresence]);
+
+  const openAegisDialog = useCallback((mode, source = "credentials") => {
+    setAegisDialog({ mode, source });
+  }, []);
+
+  const closeAegisDialog = useCallback(
+    async (reason) => {
+      const shouldWarn = reason === "cancel" && aegisDialog?.source === "login";
+      setAegisDialog(null);
+      if (shouldWarn) {
+        setAegisPromptDismissed(true);
+        await postAppNotification({
+          title: "Aegis Cipher",
+          message:
+            "Aegis Cipher not entered. Credential-backed jobs and other protected-secret workflows remain disabled until it is entered.",
+          icon: "pendingactions",
+          variant: "warning",
+        });
+      }
+    },
+    [aegisDialog]
+  );
+
+  const completeAegisDialog = useCallback((payload) => {
+    setAegisDialog(null);
+    setAegisPromptDismissed(false);
+    setAegisStatus(normalizeAegisStatus(payload));
+  }, []);
+
+  const resetPassword = useCallback(
+    async ({ currentPassword, nextPassword, confirmPassword }) => {
+      const current = String(currentPassword || "");
+      const next = String(nextPassword || "");
+      const confirm = String(confirmPassword || "");
+
+      if (!current || !next) {
+        throw new Error("Enter your current password and a new password.");
+      }
+      if (next !== confirm) {
+        throw new Error("The new password and confirmation do not match.");
+      }
+      if (current === next) {
+        throw new Error("Choose a new password that differs from your current password.");
+      }
+
+      const currentPasswordHash = await sha512(current);
+      const nextPasswordHash = await sha512(next);
+      const payload =
+        currentPasswordHash && nextPasswordHash
+          ? {
+              current_password_sha512: currentPasswordHash,
+              new_password_sha512: nextPasswordHash,
+            }
+          : {
+              current_password: current,
+              new_password: next,
+            };
+
+      const response = await fetch("/api/auth/password/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+      });
+
+      if (response.status === 401 || response.status === 403) {
+        const unauthorizedPayload = await response.json().catch(() => ({}));
+        if ((unauthorizedPayload?.error || "") === "invalid current password") {
+          throw new Error("Your current password is incorrect.");
+        }
+        clearClientSession();
+        throw new Error("Your session expired. Please sign in again.");
+      }
+
+      const responsePayload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const errorMessageMap = {
+          "invalid current password": "Your current password is incorrect.",
+          "new password must differ from the current password":
+            "Choose a new password that differs from your current password.",
+          "invalid current password hash": "Enter your current password.",
+          "invalid new password hash": "Enter a valid new password.",
+        };
+        throw new Error(
+          errorMessageMap[responsePayload?.error] ||
+            responsePayload?.error ||
+            "Failed to reset password."
+        );
+      }
+
+      await postAppNotification({
+        title: "Reset Password",
+        message: "Your Borealis password was updated.",
+        icon: "user",
+        variant: "info",
+      });
+      return responsePayload;
+    },
+    [clearClientSession]
+  );
+
+  const resetMfa = useCallback(async () => {
+    const response = await fetch("/api/auth/mfa/reset", {
+      method: "POST",
+      credentials: "include",
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      clearClientSession();
+      throw new Error("Your session expired. Please sign in again.");
+    }
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = payload?.error || "Failed to reset MFA.";
+      await postAppNotification({
+        title: "Reset MFA",
+        message,
+        icon: "warning",
+        variant: "error",
+      });
+      throw new Error(message);
+    }
+
+    setMfaEnabled(Boolean(payload.mfa_enabled));
+    await postAppNotification({
+      title: "Reset MFA",
+      message: payload.setup_required_on_next_login
+        ? "Your MFA setup was reset. The next time you sign in, Borealis will prompt you to set up MFA again."
+        : "No active MFA setup was found for your account.",
+      icon: "user",
+      variant: "info",
+    });
+    return payload;
+  }, [clearClientSession]);
+
+  const value = useMemo(
+    () => ({
+      ready,
+      user,
+      role,
+      displayName,
+      mfaEnabled,
+      aegisStatus,
+      aegisDialog,
+      isAuthenticated: Boolean(user),
+      isAdmin: String(role || "").toLowerCase() === "admin",
+      login,
+      logout,
+      refreshSession,
+      resetPassword,
+      resetMfa,
+      fetchAegisStatus,
+      openAegisDialog,
+      closeAegisDialog,
+      completeAegisDialog,
+      clearOperatorPresence,
+    }),
+    [
+      aegisDialog,
+      aegisStatus,
+      clearOperatorPresence,
+      closeAegisDialog,
+      completeAegisDialog,
+      displayName,
+      fetchAegisStatus,
+      login,
+      logout,
+      mfaEnabled,
+      openAegisDialog,
+      ready,
+      refreshSession,
+      resetMfa,
+      resetPassword,
+      role,
+      user,
+    ]
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth() {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error("useAuth must be used inside AuthProvider.");
+  }
+  return context;
+}

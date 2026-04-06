@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Alert,
   Autocomplete,
@@ -30,6 +31,8 @@ import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 
 import PageBodyFrame from "../../PageBodyFrame.jsx";
+import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
+import { APP_PATHS } from "../../app/routes/paths.js";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -530,10 +533,18 @@ function FilterCriterionRow({
   );
 }
 
-export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, onPageMetaChange }) {
+export default function DeviceFilterEditor() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { filterId: routeFilterId } = useParams();
+  const initialFilter = useMemo(() => {
+    if (location.state?.initialFilter && Number(location.state.initialFilter?.id) > 0) {
+      return location.state.initialFilter;
+    }
+    const parsedId = Number(routeFilterId);
+    return Number.isInteger(parsedId) && parsedId > 0 ? { id: parsedId } : null;
+  }, [location.state, routeFilterId]);
   const filterId = initialFilter?.id ? Number(initialFilter.id) : null;
-  const cancelRef = useRef(onCancel);
-  const savedRef = useRef(onSaved);
   const [activeTab, setActiveTab] = useState("name");
   const [metadata, setMetadata] = useState(null);
   const [sites, setSites] = useState([]);
@@ -620,14 +631,6 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
   }, [loadInitialData]);
 
   useEffect(() => {
-    cancelRef.current = onCancel;
-  }, [onCancel]);
-
-  useEffect(() => {
-    savedRef.current = onSaved;
-  }, [onSaved]);
-
-  useEffect(() => {
     formStateRef.current = formState;
   }, [formState]);
 
@@ -708,13 +711,13 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
         }
         throw new Error(data?.message || data?.error || "Unable to save filter.");
       }
-      savedRef.current?.(data?.filter || null);
+      navigate(APP_PATHS.filters);
     } catch (err) {
       setError(err?.message || "Unable to save filter.");
     } finally {
       setSaving(false);
     }
-  }, [buildPayload, formState.id]);
+  }, [buildPayload, formState.id, navigate]);
 
   const pageHeaderActions = useMemo(
     () => [
@@ -723,7 +726,7 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
         label: "Cancel",
         icon: <CancelIcon />,
         tone: "secondary",
-        onClick: () => cancelRef.current?.(),
+        onClick: () => navigate(APP_PATHS.filters),
       },
       {
         id: "filter-editor-preview",
@@ -744,19 +747,17 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
         onClick: saveFilter,
       },
     ],
-    [loading, previewing, runPreview, saveFilter, saving]
+    [loading, navigate, previewing, runPreview, saveFilter, saving]
   );
 
-  useEffect(() => {
-    const pageTitle = formState?.id ? `Edit Filter: ${formState.name || "Unnamed Filter"}` : "Create Device Filter";
-    onPageMetaChange?.({
-      page_title: pageTitle,
-      page_subtitle:
-        "Define site scope, build grouped criteria, and preview matching devices.",
-      page_icon: PAGE_ICON,
-      page_header_actions: pageHeaderActions,
-    });
-  }, [formState?.id, formState?.name, onPageMetaChange, pageHeaderActions]);
+  const pageTitle = formState?.id ? `Edit Filter: ${formState.name || "Unnamed Filter"}` : "Create Device Filter";
+
+  useRoutePageChrome({
+    title: pageTitle,
+    subtitle: "Define site scope, build grouped criteria, and preview matching devices.",
+    Icon: PAGE_ICON,
+    actions: pageHeaderActions,
+  });
 
   const updateAdvancedGroup = useCallback((groupId, updater) => {
     setFormState((prev) => ({

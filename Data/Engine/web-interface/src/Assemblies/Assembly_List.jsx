@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Paper,
   Box,
@@ -37,6 +38,10 @@ import {
 } from "../DialogStyles.jsx";
 import { DomainBadge, DirtyStatePill, resolveDomainMeta, DOMAIN_OPTIONS } from "./Assembly_Badges";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
+import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import { useAuth } from "../app/providers/AuthContext.jsx";
+import { APP_PATHS } from "../app/routes/paths.js";
 
 import { Apps as AppsIcon } from "@mui/icons-material";
 
@@ -78,6 +83,33 @@ const ASSEMBLY_OS_FILTER_OPTIONS = [
   { key: "linux", label: "Linux", match: "linux" },
   { key: "macos", label: "MacOS", match: "macos" },
 ];
+
+function normalizeAssemblyRow(row) {
+  return {
+    ...(row || {}),
+    domain: (row?.domain || "user").toLowerCase(),
+  };
+}
+
+function resolveAssemblyMode(row, fallbackMode = "script") {
+  const rowKind = String(
+    row?.assemblyKind || row?.assembly_type || row?.assemblyType || row?.typeKey || fallbackMode
+  ).toLowerCase();
+  return rowKind === "ansible" ? "ansible" : "script";
+}
+
+function buildAssemblyEditorState(row, fallbackMode = "script") {
+  const normalizedRow = normalizeAssemblyRow(row);
+  const mode = resolveAssemblyMode(normalizedRow, fallbackMode);
+  return {
+    mode,
+    assemblyGuid: normalizedRow.assemblyGuid || null,
+    path: normalizedRow.sourcePath || normalizedRow.relPath || normalizedRow.path || "",
+    row: normalizedRow,
+    createContext: normalizedRow.createContext || null,
+    nonce: Date.now(),
+  };
+}
 
 function CountSliderGroup({ options, activeKey, counts, onChange }) {
   return (
@@ -477,7 +509,9 @@ const formatOfficialUpdateAllMessage = (payload) => {
   return sentences.join(" ");
 };
 
-export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = "User", onPageMetaChange }) {
+export default function AssemblyList() {
+  const navigate = useNavigate();
+  const { role } = useAuth();
   const gridRef = useRef(null);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -515,25 +549,12 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
   const [checkingForAuroraUpdates, setCheckingForAuroraUpdates] = useState(false);
   const [assemblyTypeFilterMode, setAssemblyTypeFilterMode] = useState("");
   const [assemblyOsFilterMode, setAssemblyOsFilterMode] = useState("");
-  const isAdmin = (userRole || "").toLowerCase() === "admin";
-  const sendNotification = useCallback(async (message) => {
-    if (!message) return;
-    try {
-      await fetch("/api/notifications/notify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          title: "Assemblies",
-          message,
-          icon: "apps",
-          variant: "info",
-        }),
-      });
-    } catch {
-      /* notification transport is best-effort */
-    }
-  }, []);
+  const isAdmin = (role || "User").toLowerCase() === "admin";
+  const sendNotification = useAppNotifications({
+    title: "Assemblies",
+    icon: "apps",
+    variant: "info",
+  });
 
   const fetchAssemblies = useCallback(async ({ forceCatalogRefresh = false } = {}) => {
     setLoading(true);
@@ -628,12 +649,38 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
     (row) => {
       if (!row) return;
       if (row.typeKey === "workflow") {
-        onOpenWorkflow?.(row);
+        const workflowGuid = row?.assemblyGuid || null;
+        if (workflowGuid) {
+          navigate(APP_PATHS.assemblyWorkflow(workflowGuid));
+          return;
+        }
+        const initialName = String(row?.name || "").trim();
+        navigate(APP_PATHS.assemblyNewWorkflow, {
+          state: initialName ? { workflowSeed: { name: initialName } } : undefined,
+        });
         return;
       }
-      onOpenScript?.(row);
+      const assemblyState = buildAssemblyEditorState(row);
+      const assemblyGuid = assemblyState.assemblyGuid;
+      if (assemblyState.mode === "ansible") {
+        if (assemblyGuid) {
+          navigate(APP_PATHS.assemblyAnsible(assemblyGuid), {
+            state: { initialAssembly: assemblyState },
+          });
+          return;
+        }
+        navigate(APP_PATHS.assemblyNewAnsible, { state: { initialAssembly: assemblyState } });
+        return;
+      }
+      if (assemblyGuid) {
+        navigate(APP_PATHS.assemblyScript(assemblyGuid), {
+          state: { initialAssembly: assemblyState },
+        });
+        return;
+      }
+      navigate(APP_PATHS.assemblyNewScript, { state: { initialAssembly: assemblyState } });
     },
-    [onOpenWorkflow, onOpenScript],
+    [navigate],
   );
 
   const handleRowDoubleClicked = useCallback(
@@ -1087,15 +1134,12 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
     ],
   );
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: "Assemblies",
-      page_subtitle: "Collections of scripts, workflows, and playbooks used to automate tasks across devices.",
-      page_icon: AppsIcon,
-      page_header_actions: pageHeaderActions,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange, pageHeaderActions]);
+  useRoutePageChrome({
+    title: "Assemblies",
+    subtitle: "Collections of scripts, workflows, and playbooks used to automate tasks across devices.",
+    Icon: AppsIcon,
+    actions: pageHeaderActions,
+  });
 
   const handleNewAssemblyOption = (typeKey) => {
     setNewMenuAnchor(null);
@@ -1131,7 +1175,12 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       isNew: true,
       createContext: context,
     };
-    onOpenScript?.(newRow);
+    const assemblyState = buildAssemblyEditorState(newRow);
+    if (scriptDialog.typeKey === "ansible") {
+      navigate(APP_PATHS.assemblyNewAnsible, { state: { initialAssembly: assemblyState } });
+    } else {
+      navigate(APP_PATHS.assemblyNewScript, { state: { initialAssembly: assemblyState } });
+    }
     setScriptDialog({ open: false, typeKey: null });
     setScriptName("");
   };
@@ -1149,7 +1198,9 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       domain: "user",
       isNew: true,
     };
-    onOpenWorkflow?.(newWorkflow);
+    navigate(APP_PATHS.assemblyNewWorkflow, {
+      state: { workflowSeed: { name: trimmed } },
+    });
     setWorkflowName("");
   };
 

@@ -24,6 +24,8 @@ import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-communi
 import CredentialEditor from "./Credential_Editor.jsx";
 import { ConfirmDeleteDialog } from "../Dialogs.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import { useAuth } from "../app/providers/AuthContext.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -178,12 +180,8 @@ function githubTokenRowFromStatus(githubTokenState, aegisStatus) {
   };
 }
 
-export default function CredentialList({
-  isAdmin = false,
-  onPageMetaChange,
-  aegisStatus,
-  onAegisAction,
-}) {
+export default function CredentialList() {
+  const { aegisStatus, isAdmin, openAegisDialog } = useAuth();
   const [rows, setRows] = useState([]);
   const [githubTokenState, setGithubTokenState] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -478,8 +476,8 @@ export default function CredentialList({
 
   const handleAegisMenuAction = useCallback((mode) => {
     closeMenu();
-    onAegisAction && onAegisAction(mode);
-  }, [closeMenu, onAegisAction]);
+    openAegisDialog(mode);
+  }, [closeMenu, openAegisDialog]);
 
   const doDelete = async () => {
     if (!deleteTarget?.id) return;
@@ -594,7 +592,7 @@ export default function CredentialList({
         label: "Setup Aegis Cipher",
         icon: <VpnKeyIcon />,
         tone: "primary",
-        onClick: () => onAegisAction && onAegisAction("setup"),
+        onClick: () => openAegisDialog("setup"),
       });
       return actions;
     }
@@ -605,7 +603,7 @@ export default function CredentialList({
         label: "Enter Aegis Cipher",
         icon: <VpnKeyIcon />,
         tone: "secondary",
-        onClick: () => onAegisAction && onAegisAction("unlock"),
+        onClick: () => openAegisDialog("unlock"),
       });
       actions.push(newCredentialAction);
       return actions;
@@ -613,7 +611,7 @@ export default function CredentialList({
 
     actions.push(newCredentialAction);
     return actions;
-  }, [aegisStatus, canMutateCredentials, fetchCredentials, handleCreate, loading, onAegisAction]);
+  }, [aegisStatus, canMutateCredentials, fetchCredentials, handleCreate, loading, openAegisDialog]);
 
   const menuItems = useMemo(() => {
     if (menuRow?.row_kind === "aegis") {
@@ -683,15 +681,13 @@ export default function CredentialList({
     menuRow,
   ]);
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: "Credentials",
-      page_subtitle: "Stored machine & domain credentials and API service tokens for remote automation tasks, Ansible playbook runs, and Borealis GitHub access.",
-      page_icon: LockIcon,
-      page_header_actions: pageHeaderActions,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange, pageHeaderActions]);
+  useRoutePageChrome({
+    title: "Credentials",
+    subtitle:
+      "Stored machine & domain credentials and API service tokens for remote automation tasks, Ansible playbook runs, and Borealis GitHub access.",
+    Icon: LockIcon,
+    actions: pageHeaderActions,
+  });
 
   if (!isAdmin) {
     return (

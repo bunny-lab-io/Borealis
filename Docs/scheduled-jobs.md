@@ -119,10 +119,10 @@ Supported schedule types (from the scheduler core):
 - Scheduled job UI lives under `Data/Engine/web-interface/src/Scheduling/`.
 - The list page expects pagination and run history endpoints to respond quickly.
 - WebUI deep links:
-- Create route: `/scheduling/create_job`
-- Edit route: `/scheduling/job/<job_id>`
+- Create route: `/jobs/new`
+- Edit route: `/jobs/<job_id>`
 - Tab query keys: `job_name`, `assemblies`, `targets`, `schedule`, `execution_context`, `job_history` (edit mode only).
-- Route parsing and URL preservation are implemented in `Data/Engine/web-interface/src/App.jsx`; component-level tab URL sync is implemented in `Data/Engine/web-interface/src/Scheduling/Create_Job.jsx`.
+- Route registration and URL preservation are implemented in `Data/Engine/web-interface/src/app/routes/router.jsx` plus `Data/Engine/web-interface/src/app/routes/paths.js`; component-level tab URL sync is implemented in `Data/Engine/web-interface/src/Scheduling/Create_Job.jsx`.
 
 ### Debug checklist
 - Jobs not running: check `Engine/Logs/engine.log` and `Engine/Logs/scheduled_jobs.log`.

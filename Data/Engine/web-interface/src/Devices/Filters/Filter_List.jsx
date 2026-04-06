@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -37,6 +38,8 @@ import {
   DIALOG_TITLE_SX,
   DialogHeaderBlock,
 } from "../../DialogStyles.jsx";
+import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
+import { APP_PATHS } from "../../app/routes/paths.js";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -307,16 +310,9 @@ function JobsDialog({ open, onClose, jobs, onOpenJob, title }) {
   );
 }
 
-export default function DeviceFilterList({
-  onCreateFilter,
-  onEditFilter,
-  onViewDevices,
-  onOpenJob,
-  refreshToken,
-  onPageMetaChange,
-}) {
+export default function DeviceFilterList({ refreshToken }) {
+  const navigate = useNavigate();
   const gridRef = useRef(null);
-  const createFilterRef = useRef(onCreateFilter);
   const [tab, setTab] = useState("active");
   const [filters, setFilters] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -347,9 +343,46 @@ export default function DeviceFilterList({
     loadFilters();
   }, [loadFilters, refreshToken]);
 
-  useEffect(() => {
-    createFilterRef.current = onCreateFilter;
-  }, [onCreateFilter]);
+  const handleViewDevices = useCallback(
+    (filter) => {
+      try {
+        localStorage.setItem(
+          "device_list_saved_filter_preview",
+          JSON.stringify({ filter_id: filter?.id, name: filter?.name || "Saved Filter" })
+        );
+      } catch {
+        /* noop */
+      }
+      navigate(APP_PATHS.devices);
+    },
+    [navigate]
+  );
+
+  const handleOpenJob = useCallback(
+    (job) => {
+      const jobId = Number(job?.id);
+      if (!Number.isInteger(jobId) || jobId <= 0) return;
+      navigate(APP_PATHS.job(jobId), {
+        state: job ? { initialJob: job } : undefined,
+      });
+    },
+    [navigate]
+  );
+
+  const handleCreateFilter = useCallback(() => {
+    navigate(APP_PATHS.filterNew);
+  }, [navigate]);
+
+  const handleEditFilter = useCallback(
+    (filter) => {
+      const filterId = Number(filter?.id);
+      if (!Number.isInteger(filterId) || filterId <= 0) return;
+      navigate(APP_PATHS.filter(filterId), {
+        state: filter ? { initialFilter: filter } : undefined,
+      });
+    },
+    [navigate]
+  );
 
   const pageHeaderActions = useMemo(
     () => [
@@ -366,20 +399,18 @@ export default function DeviceFilterList({
         label: "Create Filter",
         icon: <AddIcon />,
         tone: "primary",
-        onClick: () => createFilterRef.current?.(),
+        onClick: handleCreateFilter,
       },
     ],
-    [loadFilters, loading]
+    [handleCreateFilter, loadFilters, loading]
   );
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: PAGE_TITLE,
-      page_subtitle: PAGE_SUBTITLE,
-      page_icon: PAGE_ICON,
-      page_header_actions: pageHeaderActions,
-    });
-  }, [onPageMetaChange, pageHeaderActions]);
+  useRoutePageChrome({
+    title: PAGE_TITLE,
+    subtitle: PAGE_SUBTITLE,
+    Icon: PAGE_ICON,
+    actions: pageHeaderActions,
+  });
 
   const autoSize = useCallback(() => {
     const api = gridRef.current;
@@ -477,7 +508,7 @@ export default function DeviceFilterList({
             href="#"
             onClick={(event) => {
               event.preventDefault();
-              onEditFilter?.(params.data);
+              handleEditFilter(params.data);
             }}
             sx={{
               display: "inline-flex",
@@ -582,7 +613,7 @@ export default function DeviceFilterList({
           return (
             <Stack direction="row" spacing={0.5} sx={{ width: "100%", justifyContent: "flex-end" }}>
               <Tooltip title="View Devices">
-                <IconButton size="small" onClick={() => onViewDevices?.(record)}>
+                <IconButton size="small" onClick={() => handleViewDevices(record)}>
                   <LaunchIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
@@ -606,7 +637,7 @@ export default function DeviceFilterList({
         },
       },
     ],
-    [handleArchiveToggle, handleClone, handleDelete, onEditFilter, onViewDevices, openJobs]
+    [handleArchiveToggle, handleClone, handleDelete, handleEditFilter, handleViewDevices, openJobs]
   );
 
   const defaultColDef = useMemo(
@@ -682,7 +713,7 @@ export default function DeviceFilterList({
         jobs={jobsDialog.jobs}
         title={jobsDialog.title}
         onClose={() => setJobsDialog({ open: false, jobs: [], title: "" })}
-        onOpenJob={onOpenJob}
+        onOpenJob={handleOpenJob}
       />
     </>
   );

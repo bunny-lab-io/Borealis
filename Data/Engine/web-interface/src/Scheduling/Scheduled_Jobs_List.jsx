@@ -5,6 +5,7 @@ import React, {
   useRef,
   useState
 } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Paper,
   Box,
@@ -43,6 +44,9 @@ import {
   DIALOG_TITLE_SX,
   DialogHeaderBlock,
 } from "../DialogStyles.jsx";
+import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
+import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import { APP_PATHS } from "../app/routes/paths.js";
 
 // -----------------------------------------------------------------------------
 //  Register AG Grid community modules
@@ -164,7 +168,8 @@ function ResultsBar({ counts }) {
   );
 }
 
-export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken, onPageMetaChange }) {
+export default function ScheduledJobsList({ refreshToken }) {
+  const navigate = useNavigate();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -175,24 +180,11 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
   const [assembliesLoading, setAssembliesLoading] = useState(false);
   const [assembliesError, setAssembliesError] = useState("");
   const gridApiRef = useRef(null);
-  const sendNotification = useCallback(async (message) => {
-    if (!message) return;
-    try {
-      await fetch("/api/notifications/notify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          title: PAGE_TITLE,
-          message,
-          icon: "schedule",
-          variant: "info",
-        }),
-      });
-    } catch {
-      /* best-effort notification */
-    }
-  }, []);
+  const sendNotification = useAppNotifications({
+    title: PAGE_TITLE,
+    icon: "schedule",
+    variant: "info",
+  });
 
   const autoSizeTrackedColumns = useCallback(() => {
     const api = gridApiRef.current;
@@ -603,15 +595,15 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
       const resolvedJobId = Number(row?.raw?.id ?? row?.id);
       const editorHref =
         Number.isInteger(resolvedJobId) && resolvedJobId > 0
-          ? `/scheduling/job/${encodeURIComponent(String(resolvedJobId))}?tab=job_name`
-          : "/scheduling/create_job?tab=job_name";
+          ? `${APP_PATHS.job(resolvedJobId)}?tab=job_name`
+          : `${APP_PATHS.jobNew}?tab=job_name`;
       let pointerNavigationHandled = false;
       const dispatchEdit = (event) => {
         event.preventDefault();
         event.stopPropagation();
-        if (typeof onEditJob === "function") {
-          onEditJob(row.raw);
-        }
+        navigate(APP_PATHS.job(resolvedJobId), {
+          state: row.raw ? { initialJob: row.raw } : undefined,
+        });
       };
       const handlePointerDown = (event) => {
         const isPrimaryPointer = event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
@@ -653,7 +645,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         </Box>
       );
     },
-    [onEditJob]
+    [navigate]
   );
 
   const resultsCellRenderer = useCallback((params) => {
@@ -826,23 +818,18 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         label: "Create Job",
         icon: <AddIcon />,
         tone: "primary",
-        disabled: typeof onCreateJob !== "function",
-        onClick: onCreateJob,
+        onClick: () => navigate(APP_PATHS.jobNew),
       },
     ],
-    [handleRefreshClick, loading, onCreateJob]
+    [handleRefreshClick, loading, navigate]
   );
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: PAGE_TITLE,
-      page_subtitle: PAGE_SUBTITLE,
-      page_icon: PAGE_ICON,
-      page_header_actions: pageHeaderActions,
-    });
-  }, [onPageMetaChange, pageHeaderActions]);
-
-  useEffect(() => () => onPageMetaChange?.(null), [onPageMetaChange]);
+  useRoutePageChrome({
+    title: PAGE_TITLE,
+    subtitle: PAGE_SUBTITLE,
+    Icon: PAGE_ICON,
+    actions: pageHeaderActions,
+  });
 
   return (
     <Paper

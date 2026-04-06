@@ -83,13 +83,18 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - react - MIT - https://spdx.org/licenses/MIT.html
 - react-color - MIT - https://spdx.org/licenses/MIT.html
 - react-dom - MIT - https://spdx.org/licenses/MIT.html
+- react-router-dom - MIT - https://spdx.org/licenses/MIT.html
 - react-resizable - MIT - https://spdx.org/licenses/MIT.html
 - react-markdown - MIT - https://spdx.org/licenses/MIT.html
 - reactflow - MIT - https://spdx.org/licenses/MIT.html
 - react-simple-keyboard - MIT - https://spdx.org/licenses/MIT.html
 - socket.io-client - MIT - https://spdx.org/licenses/MIT.html
+- @testing-library/jest-dom - MIT - https://spdx.org/licenses/MIT.html
+- @testing-library/react - MIT - https://spdx.org/licenses/MIT.html
 - @vitejs/plugin-react - MIT - https://spdx.org/licenses/MIT.html
+- jsdom - MIT - https://github.com/jsdom/jsdom/blob/main/LICENSE.txt
 - vite - MIT - https://spdx.org/licenses/MIT.html
+- vitest - MIT - https://github.com/vitest-dev/vitest/blob/main/LICENSE
 
 ## Maintenance Notes
 

@@ -24,7 +24,7 @@ Document the Borealis visual flow editor (React Flow) and how nodes are defined,
   - `workflowNodeTypes` (type -> component)
   - `workflowCategorizedNodes` (category -> list of descriptors)
 - `Flow_Editor.jsx` and `Flow_Editor_Sidebar.jsx` import the shared registry directly so the Flow Editor domain owns node discovery and the React Flow `nodeTypes` object keeps a stable identity across renders.
-- `App.jsx` no longer builds or owns the workflow node registry. It routes to `Flow_Editor.jsx` and stays focused on app composition.
+- `Data/Engine/web-interface/src/App.jsx` no longer builds or owns the workflow node registry. It only bootstraps the React Router app layer in `Data/Engine/web-interface/src/app/`, and `Data/Engine/web-interface/src/app/route-modules/assemblyRoutes.jsx` routes workflow pages into `Flow_Editor.jsx`.
 
 ## Node Categories (Current Folder Layout)
 - `Agent`
@@ -93,7 +93,7 @@ Document the Borealis visual flow editor (React Flow) and how nodes are defined,
 
 ### Controller boundaries
 - `Flow_Editor.jsx` is the workflow editor controller and compositor.
-- `App.jsx` should only pass route state and navigation into the editor, not workflow save/load/run logic.
+- `Data/Engine/web-interface/src/app/route-modules/assemblyRoutes.jsx` should only pass route state and navigation into the editor, not workflow save/load/run logic.
 - Keep workflow-specific persistence, access warnings, run snapshot hydration, and webhook affordances inside the `Flow_Editor/` folder.
 
 ### Job flow editor

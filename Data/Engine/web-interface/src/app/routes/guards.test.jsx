@@ -1,0 +1,67 @@
+import React from "react";
+import { render, screen, waitFor } from "@testing-library/react";
+import { RouterProvider, createMemoryRouter } from "react-router-dom";
+import { describe, expect, it } from "vitest";
+import { AuthContext } from "../providers/AuthContext.jsx";
+import { RequireAdmin, RequireAuth } from "./guards.jsx";
+
+function renderGuardedRouter({ authValue, guardElement, initialEntries, protectedPath }) {
+  const router = createMemoryRouter(
+    [
+      {
+        path: "/",
+        element: <AuthContext.Provider value={authValue}>{guardElement}</AuthContext.Provider>,
+        children: [
+          { path: "protected", element: <div>Protected</div> },
+          { path: "admin", element: <div>Admin</div> },
+          { path: "login", element: <div>Login Page</div> },
+          { path: "sites", element: <div>Sites Page</div> },
+        ],
+      },
+    ],
+    {
+      initialEntries,
+      initialIndex: 0,
+    }
+  );
+
+  render(<RouterProvider router={router} />);
+  return router;
+}
+
+describe("route guards", () => {
+  it("redirects unauthenticated users to login", async () => {
+    renderGuardedRouter({
+      authValue: {
+        ready: true,
+        isAuthenticated: false,
+        isAdmin: false,
+      },
+      guardElement: <RequireAuth />,
+      initialEntries: ["/protected"],
+      protectedPath: "/protected",
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Login Page")).toBeInTheDocument();
+    });
+  });
+
+  it("redirects non-admin users to sites and sets the not-authorized state flag", async () => {
+    const router = renderGuardedRouter({
+      authValue: {
+        ready: true,
+        isAuthenticated: true,
+        isAdmin: false,
+      },
+      guardElement: <RequireAdmin />,
+      initialEntries: ["/admin"],
+      protectedPath: "/admin",
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Sites Page")).toBeInTheDocument();
+    });
+    expect(router.state.location.state?.showNotAuthorizedDialog).toBe(true);
+  });
+});

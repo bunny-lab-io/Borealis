@@ -31,6 +31,7 @@ This page is the navigation hub for the Borealis documentation set. The knowledg
 
 ### UI and API
 - [UI and Notifications](ui-and-notifications.md)
+- [Migrating Pages to React Router](migrating-pages-to-react-router.md)
 - [API Reference](api-reference.md)
 - [Technical Debt](technical-debt.md)
 
@@ -61,6 +62,7 @@ None. This index only links to other pages.
 - Use `engine-runtime.md` and `agent-runtime.md` for implementation-level details.
 - Use `db-reference.md` for PostgreSQL table ownership, relationships, and legacy migration notes.
 - Use `ui-and-notifications.md` for MagicUI, AG Grid, and toast notification rules.
+- Use `migrating-pages-to-react-router.md` when moving legacy WebUI pages onto the shared router and app shell.
 - Use `vpn-and-remote-access.md` for WireGuard and remote shell/VNC details.
 - Use `security-and-trust.md` for enrollment, tokens, and code-signing behavior.
 

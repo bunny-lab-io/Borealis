@@ -35,6 +35,9 @@ import {
   DialogHeaderBlock,
 } from "../DialogStyles.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
+import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import { useAuth } from "../app/providers/AuthContext.jsx";
 import {
   DEFAULT_GRID_COL_DEF,
   DEVICE_GRID_STYLE,
@@ -599,7 +602,8 @@ function MasterTextCell(props) {
   );
 }
 
-export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
+export default function ServerInfo() {
+  const { isAdmin } = useAuth();
   const [aboutOpen, setAboutOpen] = useState(false);
   const [overview, setOverview] = useState(null);
   const [serverTimeSnapshot, setServerTimeSnapshot] = useState(null);
@@ -624,18 +628,7 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
   });
   const hasOverviewRef = useRef(false);
 
-  const sendScopedNotification = useCallback(async ({ title, message, icon = "notification", variant = "info" }) => {
-    try {
-      await fetch("/api/notifications/notify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ title, message, icon, variant }),
-      });
-    } catch {
-      /* notifications are best-effort */
-    }
-  }, []);
+  const sendScopedNotification = useAppNotifications();
 
   const fetchOverview = useCallback(async ({ background = false } = {}) => {
     if (!background) {
@@ -762,15 +755,12 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
     [handleRefresh]
   );
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: "Server Overview",
-      page_subtitle: "Unified administrative view across Runtime, Services, Resources, Access, and Security.",
-      page_icon: PAGE_ICON,
-      page_header_actions: pageHeaderActions,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange, pageHeaderActions]);
+  useRoutePageChrome({
+    title: "Server Overview",
+    subtitle: "Unified administrative view across Runtime, Services, Resources, Access, and Security.",
+    Icon: PAGE_ICON,
+    actions: pageHeaderActions,
+  });
 
   useEffect(() => {
     fetchOverview({ background: false });
