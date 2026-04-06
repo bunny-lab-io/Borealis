@@ -7,8 +7,26 @@ import tempfile
 import uuid
 import base64
 import shutil
-from typing import Dict, List, Optional
-from PyQt5 import QtWidgets, QtGui
+import subprocess
+from typing import Any, Dict, List, Optional
+
+try:
+    from PyQt5 import QtCore, QtGui, QtWidgets
+except Exception:  # pragma: no cover - import guard for headless tests
+    QtCore = None
+    QtGui = None
+    QtWidgets = None
+
+try:
+    import tray_state
+except Exception:  # pragma: no cover - fallback for runtime path issues
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    base_dir = _Path(__file__).resolve().parents[1]
+    if str(base_dir) not in _sys.path:
+        _sys.path.insert(0, str(base_dir))
+    import tray_state
 
 from signature_utils import decode_script_bytes, verify_and_store_script_signature
 try:
@@ -391,6 +409,13 @@ class Role:
         self.ctx = ctx
         self.role_health_label = "Script Execution - CURRENTUSER"
         self._listener_registered = False
+        self.tray = None
+        self._tray_menu = None
+        self._tray_timer = None
+        self._tray_icon_cache: Dict[str, Any] = {}
+        self._base_tray_icon = None
+        self._restart_pending = False
+        self._last_tray_view: Dict[str, Any] = {}
         # Setup tray icon in interactive session
         try:
             self._setup_tray()
@@ -556,48 +581,255 @@ class Role:
                     pass
 
     def _setup_tray(self):
+        if QtWidgets is None or QtGui is None or QtCore is None:
+            return
         app = QtWidgets.QApplication.instance()
         if app is None:
             return
-        icon = None
-        try:
-            icon_path = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, 'Borealis.ico'))
-            if os.path.isfile(icon_path):
-                icon = QtGui.QIcon(icon_path)
-        except Exception:
-            pass
-        if icon is None:
-            icon = app.style().standardIcon(QtWidgets.QStyle.SP_ComputerIcon)
-        self.tray = QtWidgets.QSystemTrayIcon(icon)
-        self.tray.setToolTip('Borealis Agent')
-        menu = QtWidgets.QMenu()
-        act_restart = menu.addAction('Restart Agent')
-        act_quit = menu.addAction('Quit Agent')
-        act_restart.triggered.connect(self._restart_agent)
-        act_quit.triggered.connect(self._quit_agent)
-        self.tray.setContextMenu(menu)
+        self._base_tray_icon = self._load_base_tray_icon(app)
+        self.tray = QtWidgets.QSystemTrayIcon(self._base_tray_icon)
+        self._tray_menu = QtWidgets.QMenu()
+        self._tray_menu.aboutToShow.connect(self._refresh_tray_view)
+        self.tray.setContextMenu(self._tray_menu)
+        self._tray_timer = QtCore.QTimer(self.tray)
+        self._tray_timer.setInterval(15000)
+        self._tray_timer.timeout.connect(self._refresh_tray_view)
+        self._tray_timer.start()
+        self._refresh_tray_view()
         self.tray.show()
 
     def _restart_agent(self):
+        if QtWidgets is None:
+            return
+        confirm = QtWidgets.QMessageBox.question(
+            None,
+            "Restart Borealis Agent",
+            "Restart the Borealis Agent now?\n\nRemote support activity may pause briefly while the agent reconnects.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if confirm != QtWidgets.QMessageBox.Yes:
+            return
         try:
-            # __file__ => Agent/Borealis/Roles/...
-            borealis_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-            venv_root = os.path.abspath(os.path.join(borealis_dir, os.pardir))
-            venv_scripts = os.path.join(venv_root, 'Scripts')
-            pyw = os.path.join(venv_scripts, 'pythonw.exe')
-            exe = pyw if os.path.isfile(pyw) else sys.executable
-            agent_script = os.path.join(borealis_dir, 'agent.py')
-            import subprocess
-            subprocess.Popen([exe, '-W', 'ignore::SyntaxWarning', agent_script], cwd=borealis_dir)
+            tray_state.request_restart(
+                ("currentuser", "system"),
+                requested_by="tray",
+                requested_by_pid=os.getpid(),
+            )
+        except Exception:
+            return
+        self._restart_pending = True
+        self._refresh_tray_view()
+        hooks = getattr(self.ctx, "hooks", {}) or {}
+        processor = hooks.get("process_restart_request_now")
+        if callable(processor):
+            try:
+                if bool(processor()):
+                    return
+            except Exception:
+                pass
+        try:
+            tray_state.clear_restart_request("currentuser")
+        except Exception:
+            pass
+        if self._spawn_currentuser_agent():
+            self._exit_app()
+
+    def stop_all(self):
+        try:
+            if self._tray_timer is not None:
+                self._tray_timer.stop()
         except Exception:
             pass
         try:
-            QtWidgets.QApplication.instance().quit()
+            if self.tray is not None:
+                self.tray.hide()
         except Exception:
-            os._exit(0)
+            pass
 
-    def _quit_agent(self):
+    def _load_base_tray_icon(self, app):
+        icon = None
         try:
-            QtWidgets.QApplication.instance().quit()
+            icon_path = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, "Borealis.ico"))
+            if os.path.isfile(icon_path):
+                icon = QtGui.QIcon(icon_path)
         except Exception:
-            os._exit(0)
+            icon = None
+        if icon is None:
+            icon = app.style().standardIcon(QtWidgets.QStyle.SP_ComputerIcon)
+        return icon
+
+    def _load_tray_view(self) -> Dict[str, Any]:
+        view = tray_state.build_tray_view()
+        if self._restart_pending and view.get("overall_status") != "Restarting":
+            view = dict(view)
+            view["overall_status"] = "Restarting"
+            view["security_status"] = "Checking connection"
+            view["tooltip"] = "\n".join(
+                [
+                    "Borealis Agent",
+                    "Status: Restarting",
+                    f"Security: {view.get('security_status') or 'Checking connection'}",
+                    f"Activity: {view.get('activity_status') or 'Idle'}",
+                    f"Connected to: {view.get('connected_host') or 'Not configured'}",
+                    f"Last check-in: {view.get('last_check_in') or 'Never'}",
+                ]
+            )
+            view["menu_entries"] = tray_state.build_menu_entries(view)
+            view["support_details"] = tray_state.build_support_details(view)
+            view["support_text"] = tray_state.format_support_details(view)
+        return view
+
+    def _refresh_tray_view(self):
+        if self.tray is None or self._tray_menu is None:
+            return
+        view = self._load_tray_view()
+        self._last_tray_view = view
+        self._apply_tray_icon(view)
+        self.tray.setToolTip(str(view.get("tooltip") or "Borealis Agent"))
+        self._tray_menu.clear()
+        for entry in view.get("menu_entries") or []:
+            entry_type = str(entry.get("type") or "").strip().lower()
+            if entry_type == "separator":
+                self._tray_menu.addSeparator()
+                continue
+            action = self._tray_menu.addAction(str(entry.get("label") or ""))
+            action.setEnabled(bool(entry.get("enabled")))
+            if not bool(entry.get("enabled")):
+                continue
+            key = str(entry.get("key") or "").strip()
+            if key == "view_status_details":
+                action.triggered.connect(self._show_status_details)
+            elif key == "restart_agent":
+                action.triggered.connect(self._restart_agent)
+
+    def _apply_tray_icon(self, view: Dict[str, Any]) -> None:
+        if self.tray is None or self._base_tray_icon is None or QtGui is None:
+            return
+        tone = str(view.get("icon_tone") or "healthy").strip().lower() or "healthy"
+        if tone == "healthy":
+            self.tray.setIcon(self._base_tray_icon)
+            return
+        cached = self._tray_icon_cache.get(tone)
+        if cached is not None:
+            self.tray.setIcon(cached)
+            return
+        pixmap = self._base_tray_icon.pixmap(32, 32)
+        if pixmap.isNull():
+            self.tray.setIcon(self._base_tray_icon)
+            return
+        color_map = {
+            "neutral": "#8ea4b8",
+            "warning": "#d8a53f",
+            "error": "#d9544f",
+        }
+        badge_color = color_map.get(tone)
+        if not badge_color:
+            self.tray.setIcon(self._base_tray_icon)
+            return
+        canvas = QtGui.QPixmap(pixmap)
+        painter = QtGui.QPainter(canvas)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#0f172a"), 2))
+        painter.setBrush(QtGui.QBrush(QtGui.QColor(badge_color)))
+        painter.drawEllipse(canvas.width() - 14, canvas.height() - 14, 12, 12)
+        painter.end()
+        icon = QtGui.QIcon(canvas)
+        self._tray_icon_cache[tone] = icon
+        self.tray.setIcon(icon)
+
+    def _show_status_details(self):
+        if QtWidgets is None:
+            return
+        view = self._last_tray_view or self._load_tray_view()
+        dialog = QtWidgets.QDialog()
+        dialog.setWindowTitle("Borealis Agent Status")
+        dialog.setMinimumWidth(460)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        details_box = QtWidgets.QPlainTextEdit(dialog)
+        details_box.setReadOnly(True)
+        details_box.setPlainText(self._build_status_details_text(view))
+        layout.addWidget(details_box)
+        button_row = QtWidgets.QHBoxLayout()
+        copy_button = QtWidgets.QPushButton("Copy Support Details", dialog)
+        copy_button.clicked.connect(lambda: self._copy_support_details(view))
+        open_logs_button = QtWidgets.QPushButton("Open Logs Folder", dialog)
+        open_logs_button.clicked.connect(lambda: self._open_logs_folder(view))
+        close_button = QtWidgets.QPushButton("Close", dialog)
+        close_button.clicked.connect(dialog.accept)
+        button_row.addWidget(copy_button)
+        button_row.addWidget(open_logs_button)
+        button_row.addStretch(1)
+        button_row.addWidget(close_button)
+        layout.addLayout(button_row)
+        dialog.exec_()
+
+    def _build_status_details_text(self, view: Dict[str, Any]) -> str:
+        lines = [str(view.get("support_text") or "").strip()]
+        wireguard_detail = str(view.get("wireguard_detail") or "").strip()
+        if wireguard_detail:
+            lines.append("")
+            lines.append(f"WireGuard Detail: {wireguard_detail}")
+        logs_dir = str(view.get("logs_dir") or "").strip()
+        if logs_dir:
+            lines.append(f"Logs Folder: {logs_dir}")
+        return "\n".join(line for line in lines if line is not None)
+
+    def _copy_support_details(self, view: Dict[str, Any]) -> None:
+        if QtWidgets is None:
+            return
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        clipboard = app.clipboard()
+        if clipboard is None:
+            return
+        clipboard.setText(str(view.get("support_text") or ""))
+
+    def _open_logs_folder(self, view: Dict[str, Any]) -> None:
+        logs_dir = str(view.get("logs_dir") or "").strip()
+        if not logs_dir:
+            return
+        try:
+            if os.name == "nt" and hasattr(os, "startfile"):
+                os.startfile(logs_dir)
+                return
+            subprocess.Popen(["xdg-open", logs_dir])
+        except Exception:
+            return
+
+    def _spawn_currentuser_agent(self) -> bool:
+        try:
+            borealis_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+            venv_root = os.path.abspath(os.path.join(borealis_dir, os.pardir))
+            venv_scripts = os.path.join(venv_root, "Scripts")
+            preferred = [
+                os.path.join(venv_scripts, "pythonw.exe"),
+                os.path.join(venv_scripts, "python.exe"),
+                sys.executable,
+            ]
+            exe = ""
+            for candidate in preferred:
+                if candidate and os.path.isfile(candidate):
+                    exe = candidate
+                    break
+            if not exe:
+                exe = sys.executable
+            agent_script = os.path.join(borealis_dir, "agent.py")
+            popen_kwargs: Dict[str, Any] = {"cwd": borealis_dir}
+            if os.name == "nt":
+                popen_kwargs["creationflags"] = 0x08000000
+            subprocess.Popen([exe, "-W", "ignore::SyntaxWarning", agent_script], **popen_kwargs)
+            return True
+        except Exception:
+            return False
+
+    def _exit_app(self) -> None:
+        try:
+            app = QtWidgets.QApplication.instance() if QtWidgets is not None else None
+            if app is not None:
+                app.quit()
+                return
+        except Exception:
+            pass
+        os._exit(0)

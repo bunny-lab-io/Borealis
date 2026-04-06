@@ -48,6 +48,10 @@ except Exception:
     _read_installed_build_id = None
     _read_repo_build_id = None
     _sync_installed_build_id = None
+try:
+    import tray_state as _tray_state
+except Exception:
+    _tray_state = None
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -213,6 +217,10 @@ def _log_exception_trace(prefix: str) -> None:
 SYSTEM_SERVICE_MODE = ('--system-service' in sys.argv) or (os.environ.get('BOREALIS_AGENT_MODE') == 'system')
 SERVICE_MODE = 'system' if SYSTEM_SERVICE_MODE else 'currentuser'
 SERVICE_MODE_CANONICAL = SERVICE_MODE.upper()
+_AGENT_STARTED_AT = int(time.time())
+_TRAY_STATUS_LOCK = threading.RLock()
+_TRAY_STATUS_STATE: Dict[str, Any] = {}
+_PLANNED_SHUTDOWN_REASON: Optional[str] = None
 _bootstrap_log(f'agent.py loaded; SYSTEM_SERVICE_MODE={SYSTEM_SERVICE_MODE}; argv={sys.argv!r}')
 def _argv_get(flag: str, default: str = None):
     try:
@@ -619,6 +627,250 @@ def _current_agent_build_id(*, sync: bool = False) -> str:
     except Exception:
         pass
     return ""
+
+
+def _tray_server_url() -> str:
+    try:
+        return str(get_server_url() or "").strip()
+    except Exception:
+        return ""
+
+
+def _default_role_health_snapshot() -> Dict[str, Any]:
+    return {"roles": [], "reported_at": int(time.time())}
+
+
+def _tray_snapshot_updates(*, client=None) -> Dict[str, Any]:
+    resolved_client = client
+    if resolved_client is None:
+        try:
+            resolved_client = HTTP_CLIENT
+        except Exception:
+            resolved_client = None
+
+    server_url = ""
+    guid_present = False
+    verify_enabled = True
+    if resolved_client is not None:
+        try:
+            server_url = str(getattr(resolved_client, "base_url", "") or "").strip()
+        except Exception:
+            server_url = ""
+        try:
+            guid_present = bool(getattr(resolved_client, "guid", None))
+        except Exception:
+            guid_present = False
+        try:
+            verify_enabled = bool(getattr(getattr(resolved_client, "session", None), "verify", True))
+        except Exception:
+            verify_enabled = True
+    if not server_url:
+        server_url = _tray_server_url()
+    if not guid_present:
+        try:
+            guid_present = bool(_read_agent_guid_from_disk())
+        except Exception:
+            guid_present = False
+    try:
+        socket_connected = bool(getattr(sio, "connected", False))
+    except Exception:
+        socket_connected = False
+    try:
+        role_health = _collect_agent_role_health()
+    except Exception:
+        role_health = _default_role_health_snapshot()
+    return {
+        "server_url": server_url,
+        "guid_present": guid_present,
+        "verify_enabled": verify_enabled,
+        "socket_connected": socket_connected,
+        "role_health": role_health,
+    }
+
+
+def _sync_tray_status(updates: Optional[Dict[str, Any]] = None, *, client=None) -> Dict[str, Any]:
+    if _tray_state is None:
+        return {}
+    timestamp = int(time.time())
+    with _TRAY_STATUS_LOCK:
+        state = dict(_TRAY_STATUS_STATE)
+        if not state:
+            state = _tray_state.build_default_snapshot(
+                SERVICE_MODE,
+                now=timestamp,
+                started_at=_AGENT_STARTED_AT,
+                pid=os.getpid(),
+                server_url=_tray_server_url(),
+            )
+        state.update(_tray_snapshot_updates(client=client))
+        if updates:
+            state.update(dict(updates))
+        state["schema_version"] = getattr(_tray_state, "SCHEMA_VERSION", 1)
+        state["service_mode"] = SERVICE_MODE
+        state["pid"] = int(state.get("pid") or os.getpid())
+        state["started_at"] = int(state.get("started_at") or _AGENT_STARTED_AT)
+        _TRAY_STATUS_STATE.clear()
+        _TRAY_STATUS_STATE.update(state)
+        try:
+            persisted = _tray_state.write_status_snapshot(SERVICE_MODE, state, now=timestamp)
+        except Exception as exc:
+            _log_agent(f"Failed to persist tray status snapshot: {exc}", fname="agent.error.log")
+            return state
+        _TRAY_STATUS_STATE.clear()
+        _TRAY_STATUS_STATE.update(persisted)
+        return dict(persisted)
+
+
+def _clear_tray_error_if_matches(*kinds: str, client=None) -> Dict[str, Any]:
+    normalized = {str(kind or "").strip().lower() for kind in kinds if str(kind or "").strip()}
+    current_kind = str(_TRAY_STATUS_STATE.get("last_error_kind") or "").strip().lower()
+    updates: Dict[str, Any] = {}
+    if current_kind in normalized:
+        updates["last_error_kind"] = ""
+        updates["last_error_message"] = ""
+    return _sync_tray_status(updates, client=client)
+
+
+def _record_tray_auth_success(*, client=None) -> Dict[str, Any]:
+    return _sync_tray_status(
+        {
+            "last_auth_success_at": int(time.time()),
+            "last_error_kind": "",
+            "last_error_message": "",
+        },
+        client=client,
+    )
+
+
+def _record_tray_heartbeat_success(*, client=None) -> Dict[str, Any]:
+    return _sync_tray_status(
+        {
+            "last_heartbeat_success_at": int(time.time()),
+            "last_error_kind": "",
+            "last_error_message": "",
+        },
+        client=client,
+    )
+
+
+def _record_tray_error(kind: str, message: str, *, client=None, socket_connected: Optional[bool] = None) -> Dict[str, Any]:
+    updates: Dict[str, Any] = {
+        "last_error_kind": str(kind or "").strip().lower(),
+        "last_error_message": str(message or "").strip(),
+    }
+    if socket_connected is not None:
+        updates["socket_connected"] = bool(socket_connected)
+    return _sync_tray_status(updates, client=client)
+
+
+def _mark_planned_shutdown(reason: str) -> None:
+    global _PLANNED_SHUTDOWN_REASON
+    _PLANNED_SHUTDOWN_REASON = str(reason or "").strip()
+
+
+def _launch_replacement_agent_process(service_mode: Optional[str] = None) -> bool:
+    normalized_mode = str(service_mode or SERVICE_MODE).strip().lower() or SERVICE_MODE
+    try:
+        borealis_dir = os.path.abspath(os.path.dirname(__file__))
+        venv_root = os.path.abspath(os.path.join(borealis_dir, os.pardir))
+        venv_scripts = os.path.join(venv_root, "Scripts")
+        preferred = []
+        if normalized_mode == "currentuser":
+            preferred.extend(
+                [
+                    os.path.join(venv_scripts, "pythonw.exe"),
+                    os.path.join(venv_scripts, "python.exe"),
+                ]
+            )
+        else:
+            preferred.extend(
+                [
+                    os.path.join(venv_scripts, "python.exe"),
+                    os.path.join(venv_scripts, "pythonw.exe"),
+                ]
+            )
+        preferred.append(sys.executable)
+        exe = ""
+        for candidate in preferred:
+            if candidate and os.path.isfile(candidate):
+                exe = candidate
+                break
+        if not exe:
+            exe = sys.executable
+        agent_script = os.path.join(borealis_dir, "agent.py")
+        args = [exe, "-W", "ignore::SyntaxWarning", agent_script]
+        if normalized_mode == "system":
+            args.append("--system-service")
+        popen_kwargs: Dict[str, Any] = {"cwd": borealis_dir}
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = 0x08000000
+        subprocess.Popen(args, **popen_kwargs)
+        return True
+    except Exception as exc:
+        _log_agent(f"Failed to launch replacement {normalized_mode} agent: {exc}", fname="agent.error.log")
+        return False
+
+
+def _shutdown_for_tray_restart() -> None:
+    _mark_planned_shutdown("tray_restart")
+    if SYSTEM_SERVICE_MODE:
+        try:
+            if ROLE_MANAGER is not None:
+                ROLE_MANAGER.stop_all()
+        except Exception:
+            pass
+        try:
+            if ROLE_MANAGER_SYS is not None:
+                ROLE_MANAGER_SYS.stop_all()
+        except Exception:
+            pass
+        try:
+            if AGENT_LOOP is not None:
+                AGENT_LOOP.call_soon_threadsafe(AGENT_LOOP.stop)
+        except Exception:
+            pass
+        threading.Thread(
+            target=lambda: (time.sleep(0.5), os._exit(0)),
+            name="borealis-tray-restart-exit",
+            daemon=True,
+        ).start()
+        return
+
+    try:
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.quit()
+            return
+    except Exception:
+        pass
+    os._exit(0)
+
+
+def _process_tray_restart_request_now() -> bool:
+    if _tray_state is None:
+        return False
+    try:
+        payload = _tray_state.load_restart_request(SERVICE_MODE)
+    except Exception:
+        payload = {}
+    if not payload:
+        return False
+    requested_at = int(payload.get("requested_at") or 0)
+    ttl_seconds = int(getattr(_tray_state, "RESTART_REQUEST_TTL_SECONDS", 120) or 120)
+    if requested_at > 0 and (int(time.time()) - requested_at) > ttl_seconds:
+        _tray_state.clear_restart_request(SERVICE_MODE)
+        return False
+    request_id = str(payload.get("request_id") or "").strip() or "unknown"
+    if not _launch_replacement_agent_process(SERVICE_MODE):
+        _record_tray_error("transport", f"Restart request {request_id} could not launch a replacement process.")
+        return False
+    try:
+        _tray_state.clear_restart_request(SERVICE_MODE)
+    except Exception:
+        pass
+    _log_agent(f"Processing tray restart request request_id={request_id} scope={SERVICE_MODE}", fname="agent.log")
+    _shutdown_for_tray_restart()
+    return True
 
 
 _MANUAL_UPDATE_PROCESS_LOCK = threading.Lock()
@@ -1233,8 +1485,13 @@ class AgentHttpClient:
     # Enrollment & token management
     # ------------------------------------------------------------------
     def ensure_authenticated(self) -> None:
-        with self._auth_lock:
-            self._ensure_authenticated_locked()
+        try:
+            with self._auth_lock:
+                self._ensure_authenticated_locked()
+        except Exception as exc:
+            _record_tray_error("auth", _describe_exception(exc), client=self, socket_connected=False)
+            raise
+        _record_tray_auth_success(client=self)
 
     def _ensure_authenticated_locked(self) -> None:
         self._reload_tokens_from_disk()
@@ -1252,8 +1509,13 @@ class AgentHttpClient:
         return (self.access_expires_at - time.time()) < 60
 
     def perform_enrollment(self) -> None:
-        with self._auth_lock:
-            self._perform_enrollment_locked()
+        try:
+            with self._auth_lock:
+                self._perform_enrollment_locked()
+        except Exception as exc:
+            _record_tray_error("auth", _describe_exception(exc), client=self, socket_connected=False)
+            raise
+        _record_tray_auth_success(client=self)
 
     def _perform_enrollment_locked(self) -> None:
         self._reload_tokens_from_disk()
@@ -1480,8 +1742,13 @@ class AgentHttpClient:
         _log_agent(f"Enrollment finalized for guid={self.guid}", fname="agent.log")
 
     def refresh_access_token(self) -> None:
-        with self._auth_lock:
-            self._refresh_access_token_locked()
+        try:
+            with self._auth_lock:
+                self._refresh_access_token_locked()
+        except Exception as exc:
+            _record_tray_error("auth", _describe_exception(exc), client=self, socket_connected=False)
+            raise
+        _record_tray_auth_success(client=self)
 
     def _refresh_access_token_locked(self) -> None:
         if not self.refresh_token or not self.guid:
@@ -1760,6 +2027,12 @@ class AgentHttpClient:
                     f"path={path} status={response.status_code} error={error_code or '<unknown>'}"
                     f" body_snippet={snippet}",
                     fname="agent.error.log",
+                )
+                _record_tray_error(
+                    "auth",
+                    f"Authenticated request rejected for {path}: {error_code or response.status_code}",
+                    client=self,
+                    socket_connected=False,
                 )
             response.raise_for_status()
             if response.headers.get("Content-Type", "").lower().startswith("application/json"):
@@ -2506,8 +2779,10 @@ async def send_heartbeat():
                 "service_mode": SERVICE_MODE,
             }
             await client.async_post_json("/api/agent/heartbeat", payload, require_auth=True)
+            _record_tray_heartbeat_success(client=client)
         except Exception as exc:
             _log_agent(f'Heartbeat post failed: {exc}', fname='agent.error.log')
+            _record_tray_error("transport", _describe_exception(exc), client=client, socket_connected=False)
         await asyncio.sleep(60)
 
 
@@ -2891,6 +3166,8 @@ def _request_system_wireguard_ensure(reason: str) -> None:
 async def connect():
     print(f"[INFO] Successfully Connected to Borealis Server!")
     _log_agent('Connected to server.')
+    _clear_tray_error_if_matches("tls", "transport", client=http_client())
+    _sync_tray_status({"socket_connected": True}, client=http_client())
     try:
         sid = getattr(sio, 'sid', None)
         transport = getattr(sio, 'transport', None)
@@ -2917,8 +3194,10 @@ async def connect():
             "service_mode": SERVICE_MODE,
         }
         await client.async_post_json("/api/agent/heartbeat", payload, require_auth=True)
+        _record_tray_heartbeat_success(client=client)
     except Exception as exc:
         _log_agent(f'Initial REST heartbeat failed: {exc}', fname='agent.error.log')
+        _record_tray_error("transport", _describe_exception(exc), client=client, socket_connected=True)
 
     await sio.emit('request_config', {"agent_id": AGENT_ID})
     # Inventory details posting is managed by the DeviceAudit role (SYSTEM). No one-shot post here.
@@ -2950,14 +3229,27 @@ async def connect_error(data):
         _log_agent(f'Socket connect_error event: {data!r}', fname='agent.error.log')
     except Exception:
         pass
+    _sync_tray_status({"socket_connected": False}, client=http_client())
 
 @sio.event
 async def disconnect():
     print("[WebSocket] Disconnected from Borealis server.")
     # Do not tear down roles/tunnels on control-plane drop; idle/grace timers inside roles handle cleanup.
     _log_agent('SocketIO disconnect observed; leaving roles/tunnels running to survive transient drops.', fname='agent.log')
+    _sync_tray_status({"socket_connected": False}, client=http_client())
     CONFIG.data['regions'].clear()
     CONFIG._write()
+
+
+async def watch_tray_restart_requests():
+    await asyncio.sleep(2)
+    while True:
+        try:
+            if _process_tray_restart_request_now():
+                return
+        except Exception as exc:
+            _log_agent(f"Tray restart watcher failed: {exc}", fname="agent.error.log")
+        await asyncio.sleep(2)
 
 # //////////////////////////////////////////////////////////////////////////
 # CORE SECTION: AGENT CONFIG MANAGEMENT / WINDOW MANAGEMENT
@@ -3253,6 +3545,7 @@ async def connect_loop():
                 f'connect_loop attempt={attempt} starting authentication phase',
                 fname='agent.log',
             )
+            _sync_tray_status({}, client=client)
             client.ensure_authenticated()
             auth_snapshot = {
                 'guid_present': bool(client.guid),
@@ -3344,6 +3637,11 @@ async def connect_loop():
                     fname="agent.error.log",
                 )
                 _log_exception_trace(f"connect_loop attempt={attempt} TLS failure")
+                _record_tray_error("tls", detail, client=client, socket_connected=False)
+            else:
+                current_error_kind = str(_TRAY_STATUS_STATE.get("last_error_kind") or "").strip().lower()
+                if current_error_kind != "auth":
+                    _record_tray_error("transport", detail, client=client, socket_connected=False)
 
             message = (
                 f"connect_loop attempt={attempt} server unavailable: {detail}. "
@@ -3359,6 +3657,13 @@ if __name__=='__main__':
         _bootstrap_log('enter __main__')
     except Exception:
         pass
+    _sync_tray_status(
+        {
+            "last_error_kind": "",
+            "last_error_message": "",
+            "socket_connected": False,
+        }
+    )
     # Ansible logs are rotated daily on write; no explicit clearing on startup
     if SYSTEM_SERVICE_MODE:
         loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
@@ -3381,6 +3686,7 @@ if __name__=='__main__':
     except Exception as exc:
         _log_agent(f'Authentication bootstrap failed: {exc}', fname='agent.error.log')
         print(f"[WARN] Authentication bootstrap failed: {exc}")
+        _record_tray_error("auth", _describe_exception(exc), client=client, socket_connected=False)
     try:
         build_id = _current_agent_build_id(sync=True)
         if build_id:
@@ -3396,6 +3702,7 @@ if __name__=='__main__':
             'get_agent_build_id': lambda: _current_agent_build_id(sync=True),
             'log_agent': lambda message, **kwargs: _log_agent(message, **kwargs),
             'role_health_registry': ROLE_HEALTH_REGISTRY,
+            'process_restart_request_now': _process_tray_restart_request_now,
         }
         if not SYSTEM_SERVICE_MODE:
             # Load interactive-context roles (tray/UI, current-user execution, screenshot, etc.)
@@ -3429,12 +3736,14 @@ if __name__=='__main__':
             _bootstrap_log(f'role load init failed: {e}')
         except Exception:
             pass
+    _sync_tray_status({}, client=client)
     try:
         background_tasks.append(loop.create_task(config_watcher()))
         background_tasks.append(loop.create_task(connect_loop()))
         background_tasks.append(loop.create_task(idle_task()))
         # Start periodic heartbeats
         background_tasks.append(loop.create_task(send_heartbeat()))
+        background_tasks.append(loop.create_task(watch_tray_restart_requests()))
         background_tasks.append(loop.create_task(poll_script_requests()))
         # Inventory upload is handled by the DeviceAudit role running in SYSTEM context.
         # Do not schedule the legacy agent-level details poster to avoid duplicates.
@@ -3450,7 +3759,13 @@ if __name__=='__main__':
         traceback.print_exc()
     finally:
         try:
-            _bootstrap_log('Agent exited unexpectedly.')
+            if _PLANNED_SHUTDOWN_REASON == "tray_restart":
+                _bootstrap_log('Agent restarting per tray request.')
+            else:
+                _bootstrap_log('Agent exited unexpectedly.')
         except Exception:
             pass
-        print("[FATAL] Agent exited unexpectedly.")
+        if _PLANNED_SHUTDOWN_REASON == "tray_restart":
+            print("[INFO] Agent restarting per tray request.")
+        else:
+            print("[FATAL] Agent exited unexpectedly.")
