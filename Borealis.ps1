@@ -2003,6 +2003,7 @@ function InstallOrUpdate-BorealisAgent {
                 (Join-Path $agentSourceRoot 'signature_utils.py'),
                 (Join-Path $agentSourceRoot 'sitecustomize.py'),
                 (Join-Path $agentSourceRoot 'termios_stub.py'),
+                (Join-Path $agentSourceRoot 'tray_state.py'),
                 (Join-Path $agentSourceRoot 'update_helper.py'),
                 (Join-Path $agentSourceRoot 'update_state.py')
             )
