@@ -37,7 +37,7 @@ const themeClassName = myTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 
-const AUTO_SIZE_COLUMNS = ["__select__", "device_count", "enrollment_code"];
+const AUTO_SIZE_COLUMNS = ["device_count", "enrollment_code"];
 
 const MAGIC_UI = {
   shellBg:
@@ -215,6 +215,7 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
   const [renameValue, setRenameValue] = useState("");
   const gridRef = useRef(null);
   const gridApiRef = useRef(null);
+  const autoSizeHandleRef = useRef(null);
   const sendNotification = useCallback(async (message) => {
     if (!message) return;
     try {
@@ -250,20 +251,46 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
     const api = gridApiRef.current || gridRef.current?.api;
     if (!api || !rows.length) return;
     const doSize = () => {
+      autoSizeHandleRef.current = null;
+      const liveApi = gridApiRef.current || gridRef.current?.api || api;
+      if (!liveApi) return;
+      if (typeof liveApi.isDestroyed === "function" && liveApi.isDestroyed()) return;
       try {
-        api.autoSizeColumns(AUTO_SIZE_COLUMNS, true);
+        liveApi.autoSizeColumns(AUTO_SIZE_COLUMNS, true);
       } catch {}
     };
+    if (autoSizeHandleRef.current != null) {
+      if (typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(autoSizeHandleRef.current);
+      } else {
+        clearTimeout(autoSizeHandleRef.current);
+      }
+      autoSizeHandleRef.current = null;
+    }
     if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(doSize);
+      autoSizeHandleRef.current = requestAnimationFrame(doSize);
     } else {
-      setTimeout(doSize, 0);
+      autoSizeHandleRef.current = setTimeout(doSize, 0);
     }
   }, [rows.length]);
 
   useEffect(() => {
     autoSizeColumns();
   }, [rows, autoSizeColumns]);
+
+  useEffect(() => {
+    return () => {
+      if (autoSizeHandleRef.current != null) {
+        if (typeof cancelAnimationFrame === "function") {
+          cancelAnimationFrame(autoSizeHandleRef.current);
+        } else {
+          clearTimeout(autoSizeHandleRef.current);
+        }
+        autoSizeHandleRef.current = null;
+      }
+      gridApiRef.current = null;
+    };
+  }, []);
 
   const handleCopy = useCallback(async (code) => {
     const value = (code || "").trim();
@@ -283,20 +310,38 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
     setRenameOpen(true);
   }, [rows, selectedIds]);
 
-  const columnDefs = useMemo(() => [
-    {
+  const getRowId = useCallback((params) => String(params.data?.id ?? ""), []);
+
+  const rowSelection = useMemo(
+    () => ({
+      mode: "multiRow",
+      checkboxes: true,
+      headerCheckbox: true,
+      enableClickSelection: true,
+      enableSelectionWithoutKeys: true,
+    }),
+    []
+  );
+
+  const selectionColumnDef = useMemo(
+    () => ({
       headerName: "",
-      field: "__select__",
-      checkboxSelection: true,
-      headerCheckboxSelection: true,
       minWidth: 52,
       width: 52,
       maxWidth: 52,
       pinned: "left",
-      filter: false,
       sortable: false,
-      suppressMenu: true,
-    },
+      resizable: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      suppressMovable: true,
+      lockPinned: true,
+      lockPosition: true,
+    }),
+    []
+  );
+
+  const columnDefs = useMemo(() => [
     {
       headerName: "Name",
       field: "name",
@@ -327,7 +372,8 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
       field: "enrollment_code",
       minWidth: 260,
       filter: false,
-      suppressMenu: true,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
       cellRenderer: (params) => {
         const code = params.value || "—";
         return (
@@ -476,21 +522,33 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
               rowData={rows}
               columnDefs={columnDefs}
               defaultColDef={defaultColDef}
-              rowSelection="multiple"
-              rowMultiSelectWithClick
+              rowSelection={rowSelection}
+              selectionColumnDef={selectionColumnDef}
               suppressCellFocus
               pagination
               paginationPageSize={20}
               paginationPageSizeSelector={[20, 50, 100]}
               animateRows
+              getRowId={getRowId}
               onGridReady={(params) => {
                 gridApiRef.current = params.api;
                 autoSizeColumns();
               }}
+              onGridPreDestroyed={() => {
+                gridApiRef.current = null;
+                if (autoSizeHandleRef.current != null) {
+                  if (typeof cancelAnimationFrame === "function") {
+                    cancelAnimationFrame(autoSizeHandleRef.current);
+                  } else {
+                    clearTimeout(autoSizeHandleRef.current);
+                  }
+                  autoSizeHandleRef.current = null;
+                }
+              }}
               onSelectionChanged={() => {
                 const api = gridApiRef.current || gridRef.current?.api;
                 if (!api) return;
-                const selected = api.getSelectedNodes().map((n) => n.data?.id).filter(Boolean);
+                const selected = api.getSelectedNodes().map((n) => n.data?.id).filter((id) => id != null);
                 setSelectedIds(new Set(selected));
               }}
               theme={myTheme}

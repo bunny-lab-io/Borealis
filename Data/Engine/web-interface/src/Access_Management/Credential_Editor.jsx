@@ -7,7 +7,6 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
-  InputLabel,
   Link,
   MenuItem,
   Select,
@@ -61,6 +60,86 @@ const INPUT_SX = {
     "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
     "&.Mui-focused fieldset": { borderColor: MAGIC_UI.accentA },
   },
+};
+
+const STACKED_FIELD_SX = {
+  ...INPUT_SX,
+  "& .MuiInputLabel-root": {
+    display: "none",
+  },
+};
+
+const STACKED_SELECT_SX = {
+  ...STACKED_FIELD_SX,
+  "& .MuiSelect-select": {
+    display: "flex",
+    alignItems: "center",
+    minHeight: 42,
+    padding: "0 13px !important",
+    boxSizing: "border-box",
+  },
+};
+
+const SECTION_CARD_SX = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 1.8,
+  borderRadius: 3,
+  border: "1px solid rgba(148,163,184,0.16)",
+  background:
+    "linear-gradient(180deg, rgba(10,16,32,0.72) 0%, rgba(5,10,24,0.48) 100%)",
+  px: 2.25,
+  py: 2.1,
+};
+
+const SECTION_HEADER_SX = {
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: 1.5,
+  flexWrap: "wrap",
+};
+
+const SECTION_TITLE_SX = {
+  fontSize: "0.78rem",
+  fontWeight: 700,
+  letterSpacing: 0.9,
+  textTransform: "uppercase",
+  color: MAGIC_UI.textBright,
+};
+
+const SECTION_SUBTITLE_SX = {
+  mt: 0.45,
+  fontSize: "0.8rem",
+  lineHeight: 1.45,
+  color: MAGIC_UI.textMuted,
+  maxWidth: "72ch",
+};
+
+const SECTION_GRID_SX = {
+  display: "grid",
+  gridTemplateColumns: {
+    xs: "1fr",
+    md: "repeat(12, minmax(0, 1fr))",
+  },
+  gap: 2,
+  alignItems: "start",
+};
+
+const FIELD_STACK_SX = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 0.7,
+  minWidth: 0,
+};
+
+const FIELD_LABEL_SX = {
+  fontSize: "0.76rem",
+  lineHeight: 1,
+  fontWeight: 600,
+  letterSpacing: 0.36,
+  textTransform: "uppercase",
+  color: "rgba(226,232,240,0.9)",
 };
 
 const RESET_FIELD_SX = {
@@ -149,6 +228,30 @@ function joinNaturalLanguage(parts) {
   if (parts.length === 1) return parts[0];
   if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
   return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
+}
+
+function EditorSection({ title, subtitle, action = null, children }) {
+  return (
+    <Box sx={SECTION_CARD_SX}>
+      <Box sx={SECTION_HEADER_SX}>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography sx={SECTION_TITLE_SX}>{title}</Typography>
+          {subtitle ? <Typography sx={SECTION_SUBTITLE_SX}>{subtitle}</Typography> : null}
+        </Box>
+        {action ? <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>{action}</Box> : null}
+      </Box>
+      {children}
+    </Box>
+  );
+}
+
+function EditorField({ label, sx, children }) {
+  return (
+    <Box sx={[FIELD_STACK_SX, sx]}>
+      <Typography sx={FIELD_LABEL_SX}>{label}</Typography>
+      {children}
+    </Box>
+  );
 }
 
 export default function CredentialEditor({
@@ -321,6 +424,11 @@ export default function CredentialEditor({
   const disableSave = loading || fetchingDetail;
   const fieldLostInReset = (fieldName) => lostSecretFields.includes(fieldName);
   const inputSxForField = (fieldName, extra = {}) => [INPUT_SX, extra, fieldLostInReset(fieldName) ? RESET_FIELD_SX : null];
+  const stackedInputSxForField = (fieldName, extra = {}) => [
+    STACKED_FIELD_SX,
+    extra,
+    fieldLostInReset(fieldName) ? RESET_FIELD_SX : null,
+  ];
   const resetFieldHelper = "Lost during Aegis Cipher force reset. Re-enter or clear intentionally to resolve this warning.";
 
   const updateField = (key) => (event) => {
@@ -571,218 +679,254 @@ export default function CredentialEditor({
           </>
         ) : (
           <>
-            <TextField
-              label="Name"
-              value={form.name}
-              onChange={updateField("name")}
-              required
-              disabled={disableSave}
-              sx={INPUT_SX}
-            />
-            <TextField
-              label="Description"
-              value={form.description}
-              onChange={updateField("description")}
-              disabled={disableSave}
-              multiline
-              minRows={2}
-              sx={INPUT_SX}
-            />
-            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
-              <FormControl sx={{ minWidth: 220, ...DIALOG_SELECT_SX }} size="small" disabled={disableSave}>
-                <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Site</InputLabel>
-                <Select
-                  value={form.site_id}
-                  label="Site"
-                  onChange={updateField("site_id")}
-                  sx={INPUT_SX}
-                >
-                  <MenuItem value="">Global</MenuItem>
-                  {sites.map((site) => (
-                    <MenuItem key={site.id} value={String(site.id)}>
-                      {site.name}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              <FormControl sx={{ minWidth: 180, ...DIALOG_SELECT_SX }} size="small" disabled={disableSave}>
-                <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Credential Type</InputLabel>
-                <Select
-                  value={form.credential_type}
-                  label="Credential Type"
-                  onChange={updateField("credential_type")}
-                  sx={INPUT_SX}
-                >
-                  {CREDENTIAL_TYPES.map((opt) => (
-                    <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              <FormControl sx={{ minWidth: 180, ...DIALOG_SELECT_SX }} size="small" disabled={disableSave}>
-                <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Connection</InputLabel>
-                <Select
-                  value={form.connection_type}
-                  label="Connection"
-                  onChange={updateField("connection_type")}
-                  sx={INPUT_SX}
-                >
-                  {CONNECTION_TYPES.map((opt) => (
-                    <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Box>
-            <TextField
-              label="Username"
-              value={form.username}
-              onChange={updateField("username")}
-              disabled={disableSave}
-              sx={INPUT_SX}
-            />
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-              <TextField
-                label={tokenFieldLabel}
-                type="password"
-                value={form.password}
-                onChange={updateField("password")}
-                disabled={disableSave}
-                sx={inputSxForField("password", { flex: 1 })}
-              />
-              {isEdit && currentCredentialFlags.hasPassword && !passwordDirty && !clearPassword && (
-                <Tooltip title="Clear stored password">
-                  <IconButton size="small" onClick={() => setClearPassword(true)} sx={{ color: MAGIC_UI.danger }}>
-                    <ClearIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-              )}
-            </Box>
-            {isEdit && currentCredentialFlags.hasPassword && !passwordDirty && !clearPassword && (
-              <Typography sx={helperStyle}>Stored password will remain unless you change or clear it.</Typography>
-            )}
-            {fieldLostInReset("password") && !clearPassword && (
-              <Typography sx={resetHelperStyle}>{resetFieldHelper}</Typography>
-            )}
-            {clearPassword && (
-              <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Password will be removed when saving.</Typography>
-            )}
+            <EditorSection
+              title="Identity"
+              subtitle="Name the credential and choose where it can be reused across Borealis."
+            >
+              <Box sx={SECTION_GRID_SX}>
+                <EditorField sx={{ gridColumn: { xs: "1 / -1", md: "span 8" } }} label="Credential Name *">
+                  <TextField
+                    value={form.name}
+                    onChange={updateField("name")}
+                    required
+                    disabled={disableSave}
+                    sx={STACKED_FIELD_SX}
+                  />
+                </EditorField>
+                <EditorField sx={{ gridColumn: { xs: "1 / -1", md: "span 4" } }} label="Site">
+                  <FormControl sx={[DIALOG_SELECT_SX, { minWidth: 0 }]} size="small" disabled={disableSave}>
+                    <Select
+                      value={form.site_id}
+                      onChange={updateField("site_id")}
+                      displayEmpty
+                      sx={STACKED_SELECT_SX}
+                    >
+                      <MenuItem value="">Global</MenuItem>
+                      {sites.map((site) => (
+                        <MenuItem key={site.id} value={String(site.id)}>
+                          {site.name}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </EditorField>
+                <EditorField sx={{ gridColumn: "1 / -1" }} label="Description">
+                  <TextField
+                    value={form.description}
+                    onChange={updateField("description")}
+                    disabled={disableSave}
+                    multiline
+                    minRows={2}
+                    sx={STACKED_FIELD_SX}
+                  />
+                </EditorField>
+              </Box>
+            </EditorSection>
 
-            <Box sx={{ display: "flex", gap: 1, alignItems: "flex-start" }}>
-              <TextField
-                label="SSH Private Key"
-                value={form.private_key}
-                onChange={updateField("private_key")}
-                disabled={disableSave}
-                multiline
-                minRows={4}
-                maxRows={12}
-                sx={inputSxForField("private_key", {
-                  flex: 1,
-                  "& .MuiOutlinedInput-input": { fontFamily: "monospace" },
-                })}
-              />
-              <Button
-                variant="outlined"
-                component="label"
-                startIcon={<UploadIcon />}
-                disabled={disableSave}
-                sx={{ alignSelf: "center", ...OUTLINE_BUTTON_SX }}
-              >
-                Upload
-                <input type="file" hidden accept=".pem,.key,.txt" onChange={handlePrivateKeyUpload} />
-              </Button>
-              {isEdit && currentCredentialFlags.hasPrivateKey && !privateKeyDirty && !clearPrivateKey && (
-                <Tooltip title="Clear stored private key">
-                  <IconButton size="small" onClick={() => setClearPrivateKey(true)} sx={{ color: MAGIC_UI.danger }}>
-                    <ClearIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-              )}
-            </Box>
-            {isEdit && currentCredentialFlags.hasPrivateKey && !privateKeyDirty && !clearPrivateKey ? (
-              <Typography sx={helperStyle}>Private key is stored. Upload or paste a new one to replace, or clear it.</Typography>
-            ) : null}
-            {fieldLostInReset("private_key") && !clearPrivateKey ? (
-              <Typography sx={resetHelperStyle}>{resetFieldHelper}</Typography>
-            ) : null}
-            {clearPrivateKey && (
-              <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Private key will be removed when saving.</Typography>
-            )}
+            <EditorSection
+              title="Connection"
+              subtitle="Set the transport and primary account Borealis will use to open the session."
+            >
+              <Box sx={SECTION_GRID_SX}>
+                <EditorField sx={{ gridColumn: { xs: "1 / -1", sm: "span 3" } }} label="Credential Type">
+                  <FormControl sx={[DIALOG_SELECT_SX, { minWidth: 0 }]} size="small" disabled={disableSave}>
+                    <Select
+                      value={form.credential_type}
+                      onChange={updateField("credential_type")}
+                      sx={STACKED_SELECT_SX}
+                    >
+                      {CREDENTIAL_TYPES.map((opt) => (
+                        <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </EditorField>
+                <EditorField sx={{ gridColumn: { xs: "1 / -1", sm: "span 3" } }} label="Connection">
+                  <FormControl sx={[DIALOG_SELECT_SX, { minWidth: 0 }]} size="small" disabled={disableSave}>
+                    <Select
+                      value={form.connection_type}
+                      onChange={updateField("connection_type")}
+                      sx={STACKED_SELECT_SX}
+                    >
+                      {CONNECTION_TYPES.map((opt) => (
+                        <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </EditorField>
+                <EditorField sx={{ gridColumn: { xs: "1 / -1", md: "span 6" } }} label="Username">
+                  <TextField
+                    value={form.username}
+                    onChange={updateField("username")}
+                    disabled={disableSave}
+                    sx={STACKED_FIELD_SX}
+                  />
+                </EditorField>
+                <EditorField sx={{ gridColumn: "1 / -1" }} label={tokenFieldLabel}>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <TextField
+                      type="password"
+                      value={form.password}
+                      onChange={updateField("password")}
+                      disabled={disableSave}
+                      sx={stackedInputSxForField("password", { flex: 1 })}
+                    />
+                    {isEdit && currentCredentialFlags.hasPassword && !passwordDirty && !clearPassword && (
+                      <Tooltip title="Clear stored password">
+                        <IconButton size="small" onClick={() => setClearPassword(true)} sx={{ color: MAGIC_UI.danger }}>
+                          <ClearIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                  </Box>
+                  {isEdit && currentCredentialFlags.hasPassword && !passwordDirty && !clearPassword && (
+                    <Typography sx={helperStyle}>Stored password will remain unless you change or clear it.</Typography>
+                  )}
+                  {fieldLostInReset("password") && !clearPassword && (
+                    <Typography sx={resetHelperStyle}>{resetFieldHelper}</Typography>
+                  )}
+                  {clearPassword && (
+                    <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Password will be removed when saving.</Typography>
+                  )}
+                </EditorField>
+              </Box>
+            </EditorSection>
 
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-              <TextField
-                label="Private Key Passphrase"
-                type="password"
-                value={form.private_key_passphrase}
-                onChange={updateField("private_key_passphrase")}
-                disabled={disableSave}
-                sx={inputSxForField("private_key_passphrase", { flex: 1 })}
-              />
-              {isEdit && currentCredentialFlags.hasPrivateKeyPassphrase && !passphraseDirty && !clearPassphrase && (
-                <Tooltip title="Clear stored passphrase">
-                  <IconButton size="small" onClick={() => setClearPassphrase(true)} sx={{ color: MAGIC_UI.danger }}>
-                    <ClearIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-              )}
-            </Box>
-            {isEdit && currentCredentialFlags.hasPrivateKeyPassphrase && !passphraseDirty && !clearPassphrase ? (
-              <Typography sx={helperStyle}>A passphrase is stored for this key.</Typography>
-            ) : null}
-            {fieldLostInReset("private_key_passphrase") && !clearPassphrase ? (
-              <Typography sx={resetHelperStyle}>{resetFieldHelper}</Typography>
-            ) : null}
-            {clearPassphrase && (
-              <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Key passphrase will be removed when saving.</Typography>
-            )}
+            <EditorSection
+              title="SSH Key Material"
+              subtitle="Optional key-based authentication details for SSH credentials."
+              action={
+                <>
+                  <Button
+                    variant="outlined"
+                    component="label"
+                    startIcon={<UploadIcon />}
+                    disabled={disableSave}
+                    sx={OUTLINE_BUTTON_SX}
+                  >
+                    Upload Key
+                    <input type="file" hidden accept=".pem,.key,.txt" onChange={handlePrivateKeyUpload} />
+                  </Button>
+                  {isEdit && currentCredentialFlags.hasPrivateKey && !privateKeyDirty && !clearPrivateKey ? (
+                    <Tooltip title="Clear stored private key">
+                      <IconButton size="small" onClick={() => setClearPrivateKey(true)} sx={{ color: MAGIC_UI.danger }}>
+                        <ClearIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  ) : null}
+                </>
+              }
+            >
+              <Box sx={SECTION_GRID_SX}>
+                <EditorField sx={{ gridColumn: "1 / -1" }} label="SSH Private Key">
+                  <TextField
+                    value={form.private_key}
+                    onChange={updateField("private_key")}
+                    disabled={disableSave}
+                    multiline
+                    minRows={4}
+                    maxRows={12}
+                    sx={stackedInputSxForField("private_key", {
+                      "& .MuiOutlinedInput-input": { fontFamily: "monospace" },
+                    })}
+                  />
+                  {isEdit && currentCredentialFlags.hasPrivateKey && !privateKeyDirty && !clearPrivateKey ? (
+                    <Typography sx={helperStyle}>Private key is stored. Upload or paste a new one to replace, or clear it.</Typography>
+                  ) : null}
+                  {fieldLostInReset("private_key") && !clearPrivateKey ? (
+                    <Typography sx={resetHelperStyle}>{resetFieldHelper}</Typography>
+                  ) : null}
+                  {clearPrivateKey && (
+                    <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Private key will be removed when saving.</Typography>
+                  )}
+                </EditorField>
+                <EditorField sx={{ gridColumn: "1 / -1" }} label="Private Key Passphrase">
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <TextField
+                      type="password"
+                      value={form.private_key_passphrase}
+                      onChange={updateField("private_key_passphrase")}
+                      disabled={disableSave}
+                      sx={stackedInputSxForField("private_key_passphrase", { flex: 1 })}
+                    />
+                    {isEdit && currentCredentialFlags.hasPrivateKeyPassphrase && !passphraseDirty && !clearPassphrase && (
+                      <Tooltip title="Clear stored passphrase">
+                        <IconButton size="small" onClick={() => setClearPassphrase(true)} sx={{ color: MAGIC_UI.danger }}>
+                          <ClearIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                  </Box>
+                  {isEdit && currentCredentialFlags.hasPrivateKeyPassphrase && !passphraseDirty && !clearPassphrase ? (
+                    <Typography sx={helperStyle}>A passphrase is stored for this key.</Typography>
+                  ) : null}
+                  {fieldLostInReset("private_key_passphrase") && !clearPassphrase ? (
+                    <Typography sx={resetHelperStyle}>{resetFieldHelper}</Typography>
+                  ) : null}
+                  {clearPassphrase && (
+                    <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Key passphrase will be removed when saving.</Typography>
+                  )}
+                </EditorField>
+              </Box>
+            </EditorSection>
 
-            <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-              <FormControl sx={{ minWidth: 180, ...DIALOG_SELECT_SX }} size="small" disabled={disableSave}>
-                <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Privilege Escalation</InputLabel>
-                <Select
-                  value={form.become_method}
-                  label="Privilege Escalation"
-                  onChange={updateField("become_method")}
-                  sx={INPUT_SX}
-                >
-                  {BECOME_METHODS.map((opt) => (
-                    <MenuItem key={opt.value || "none"} value={opt.value}>{opt.label}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              <TextField
-                label="Escalation Username"
-                value={form.become_username}
-                onChange={updateField("become_username")}
-                disabled={disableSave}
-                sx={{ flex: 1, minWidth: 200, ...INPUT_SX }}
-              />
-            </Box>
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-              <TextField
-                label="Escalation Password"
-                type="password"
-                value={form.become_password}
-                onChange={updateField("become_password")}
-                disabled={disableSave}
-                sx={inputSxForField("become_password", { flex: 1 })}
-              />
-              {isEdit && currentCredentialFlags.hasBecomePassword && !becomePasswordDirty && !clearBecomePassword && (
-                <Tooltip title="Clear stored escalation password">
-                  <IconButton size="small" onClick={() => setClearBecomePassword(true)} sx={{ color: MAGIC_UI.danger }}>
-                    <ClearIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-              )}
-            </Box>
-            {isEdit && currentCredentialFlags.hasBecomePassword && !becomePasswordDirty && !clearBecomePassword ? (
-              <Typography sx={helperStyle}>Escalation password is stored.</Typography>
-            ) : null}
-            {fieldLostInReset("become_password") && !clearBecomePassword ? (
-              <Typography sx={resetHelperStyle}>{resetFieldHelper}</Typography>
-            ) : null}
-            {clearBecomePassword && (
-              <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Escalation password will be removed when saving.</Typography>
-            )}
+            <EditorSection
+              title="Privilege Escalation"
+              subtitle="Optional secondary identity used after the initial connection is established."
+            >
+              <Box sx={SECTION_GRID_SX}>
+                <EditorField sx={{ gridColumn: { xs: "1 / -1", md: "span 4" } }} label="Privilege Escalation Method">
+                  <FormControl sx={[DIALOG_SELECT_SX, { minWidth: 0 }]} size="small" disabled={disableSave}>
+                    <Select
+                      value={form.become_method}
+                      onChange={updateField("become_method")}
+                      displayEmpty
+                      sx={STACKED_SELECT_SX}
+                    >
+                      {BECOME_METHODS.map((opt) => (
+                        <MenuItem key={opt.value || "none"} value={opt.value}>{opt.label}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </EditorField>
+                <EditorField sx={{ gridColumn: { xs: "1 / -1", md: "span 8" } }} label="Escalation Username">
+                  <TextField
+                    value={form.become_username}
+                    onChange={updateField("become_username")}
+                    placeholder="Optional"
+                    disabled={disableSave}
+                    sx={STACKED_FIELD_SX}
+                  />
+                </EditorField>
+                <EditorField sx={{ gridColumn: "1 / -1" }} label="Escalation Password">
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <TextField
+                      type="password"
+                      value={form.become_password}
+                      onChange={updateField("become_password")}
+                      disabled={disableSave}
+                      sx={stackedInputSxForField("become_password", { flex: 1 })}
+                    />
+                    {isEdit && currentCredentialFlags.hasBecomePassword && !becomePasswordDirty && !clearBecomePassword && (
+                      <Tooltip title="Clear stored escalation password">
+                        <IconButton size="small" onClick={() => setClearBecomePassword(true)} sx={{ color: MAGIC_UI.danger }}>
+                          <ClearIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                  </Box>
+                  {isEdit && currentCredentialFlags.hasBecomePassword && !becomePasswordDirty && !clearBecomePassword ? (
+                    <Typography sx={helperStyle}>Escalation password is stored.</Typography>
+                  ) : null}
+                  {fieldLostInReset("become_password") && !clearBecomePassword ? (
+                    <Typography sx={resetHelperStyle}>{resetFieldHelper}</Typography>
+                  ) : null}
+                  {clearBecomePassword && (
+                    <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Escalation password will be removed when saving.</Typography>
+                  )}
+                </EditorField>
+              </Box>
+            </EditorSection>
           </>
         )}
       </DialogContent>

@@ -28,6 +28,7 @@ Explain how Borealis is structured and how the core components interact end to e
 - `Engine/` - Engine runtime copy (regenerated each launch).
 - `Agent/` - Agent runtime copy (regenerated each launch).
 - `Data/Engine/web-interface/src/` - WebUI source.
+- `Data/Engine/web-interface/src/Flow_Editor/` - Flow Editor domain folder. Owns the workflow editor controller/compositor, canvas, sidebars, edge/node configuration panels, runtime wiring helpers, and the shared workflow node registry.
 - `Engine/Logs/` and `Agent/Logs/` - runtime logs.
 - `Data/Engine/Official_Assemblies/` - bundled official assembly seed snapshot.
 
@@ -49,6 +50,8 @@ None on this page. See [API Reference](api-reference.md).
 - Engine APIs: `Data/Engine/services/API/` (grouped by domain, registered in `Data/Engine/services/API/__init__.py`).
 - Engine realtime: `Data/Engine/services/WebSocket/` (Socket.IO events: quick jobs, VPN shell, agent socket registry).
 - WebUI hosting: `Data/Engine/services/WebUI/` (SPA static assets and 404 fallback).
+- Workflow authoring UI: `Data/Engine/web-interface/src/Flow_Editor/` plus `Data/Engine/web-interface/src/nodes/`.
+  `App.jsx` routes into `Flow_Editor/Flow_Editor.jsx`, and the Flow Editor folder owns workflow load/save/run lifecycle, access checks, run snapshot hydration, shared node registration, and the React Flow canvas/sidebar surfaces.
 - VPN orchestration: `Data/Engine/services/VPN/` (WireGuard server and tunnel lifecycle).
 - Remote desktop proxy: `Data/Engine/services/RemoteDesktop/` (VNC WebSocket proxy).
 - Filters and targeting: `Data/Engine/services/filters/matcher.py` (used by scheduled jobs and filter counts).

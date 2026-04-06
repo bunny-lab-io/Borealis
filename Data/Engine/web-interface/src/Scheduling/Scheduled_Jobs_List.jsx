@@ -512,15 +512,13 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
 
   useEffect(() => {
     const api = gridApiRef.current;
-    if (!api) return;
-    if (loading) {
-      api.showLoadingOverlay();
-    } else if (!filteredRows.length) {
+    if (!api || loading || api.isDestroyed?.()) return;
+    if (!filteredRows.length) {
       api.showNoRowsOverlay();
     } else {
       api.hideOverlay();
     }
-  }, [loading, filteredRows]);
+  }, [loading, filteredRows.length]);
 
   useEffect(() => {
     const api = gridApiRef.current;
@@ -562,6 +560,41 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
     (params) => deriveRowKey(params?.data, params?.rowIndex),
     [deriveRowKey]
   );
+
+  const formatComponentsMetaValue = useCallback((value) => {
+    const list = Array.isArray(value) ? value : [];
+    const labels = list
+      .map((item) => String(item?.label || "").trim())
+      .filter(Boolean);
+    return labels.length ? labels.join(", ") : "No assemblies";
+  }, []);
+
+  const formatResultsCountsValue = useCallback((value) => {
+    const counts = value && typeof value === "object" ? value : {};
+    const labels = [
+      ["success", "Success"],
+      ["warning", "Warning"],
+      ["running", "Running"],
+      ["failed", "Failed"],
+      ["timed_out", "Timed Out"],
+      ["expired", "Expired"],
+      ["pending", "Scheduled"],
+    ];
+    const parts = labels
+      .map(([key, label]) => {
+        const count = Number(counts?.[key] || 0);
+        return count > 0 ? `${label}: ${count}` : "";
+      })
+      .filter(Boolean);
+    if (parts.length) {
+      return parts.join(" | ");
+    }
+    const totalTargets = Number(counts?.total_targets || 0);
+    if (totalTargets > 0) {
+      return `${totalTargets} target${totalTargets === 1 ? "" : "s"}`;
+    }
+    return "No targets";
+  }, []);
 
   const nameCellRenderer = useCallback(
     (params) => {
@@ -669,25 +702,36 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
     []
   );
 
-  // Selection column parity (square, centered, pinned left)
-  const selectionCol = {
-    headerName: "",
-    field: "__select__",
-    width: 52,
-    maxWidth: 52,
-    checkboxSelection: true,
-    headerCheckboxSelection: true,
-    resizable: false,
-    sortable: false,
-    suppressMenu: true,
-    filter: false,
-    pinned: "left",
-    lockPosition: true,
-  };
+  const rowSelection = useMemo(
+    () => ({
+      mode: "multiRow",
+      checkboxes: true,
+      headerCheckbox: true,
+      enableSelectionWithoutKeys: true,
+      enableClickSelection: false,
+    }),
+    []
+  );
+
+  const selectionColumnDef = useMemo(
+    () => ({
+      width: 52,
+      minWidth: 52,
+      maxWidth: 52,
+      resizable: false,
+      sortable: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      filter: false,
+      pinned: "left",
+      lockPosition: true,
+      suppressMovable: true,
+    }),
+    []
+  );
 
   const columnDefs = useMemo(
     () => [
-      selectionCol,
       {
         headerName: "Name",
         field: "name",
@@ -698,7 +742,8 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
       },
       {
         headerName: "Assembly(s)",
-        field: "componentsMeta",
+        colId: "componentsMeta",
+        valueGetter: (params) => formatComponentsMetaValue(params?.data?.componentsMeta),
         minWidth: 180,
         cellRenderer: assembliesCellRenderer,
         cellClass: "auto-col-tight",
@@ -709,7 +754,8 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
       { headerName: "Next Run", field: "nextRun", minWidth: 150, cellClass: "auto-col-tight" },
       {
         headerName: "Results",
-        field: "resultsCounts",
+        colId: "resultsCounts",
+        valueGetter: (params) => formatResultsCountsValue(params?.data?.resultsCounts),
         minWidth: 280,
         cellRenderer: resultsCellRenderer,
         cellClass: "auto-col-tight",
@@ -726,10 +772,18 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         sortable: false,
         filter: false,
         resizable: false,
-        suppressMenu: true
+        suppressHeaderMenuButton: true,
+        suppressHeaderContextMenu: true
       }
     ],
-    [enabledCellRenderer, nameCellRenderer, resultsCellRenderer, assembliesCellRenderer]
+    [
+      assembliesCellRenderer,
+      enabledCellRenderer,
+      formatComponentsMetaValue,
+      formatResultsCountsValue,
+      nameCellRenderer,
+      resultsCellRenderer,
+    ]
   );
 
   const defaultColDef = useMemo(
@@ -772,7 +826,8 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         label: "Create Job",
         icon: <AddIcon />,
         tone: "primary",
-        onClick: () => onCreateJob && onCreateJob(),
+        disabled: typeof onCreateJob !== "function",
+        onClick: onCreateJob,
       },
     ],
     [handleRefreshClick, loading, onCreateJob]
@@ -785,8 +840,9 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
       page_icon: PAGE_ICON,
       page_header_actions: pageHeaderActions,
     });
-    return () => onPageMetaChange?.(null);
   }, [onPageMetaChange, pageHeaderActions]);
+
+  useEffect(() => () => onPageMetaChange?.(null), [onPageMetaChange]);
 
   return (
     <Paper
@@ -875,7 +931,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
               </Box>
               <Typography variant="body2" sx={{ color: AURORA_SHELL.subtext }}>
                 {jobFilterMode === "all"
-                  ? `Showing ${filterCounts.all || 0} jobs`
+                  ? `Showing ${filterCounts.all || 0} Jobs`
                   : `Showing ${filterCounts[jobFilterMode] || 0} ${activeFilterLabel} job${(filterCounts[jobFilterMode] || 0) === 1 ? "" : "s"}`}
               </Typography>
             </Box>
@@ -965,34 +1021,6 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
               textAlign: "left",
             },
 
-            /* Center the selection column (header + body) */
-            "& .ag-header .ag-header-select-all, & .ag-header .ag-checkbox-input-wrapper": {
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            },
-            "& .ag-cell.ag-selection-centered": {
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              paddingLeft: 0,
-              paddingRight: 0,
-            },
-            "& .ag-cell.ag-selection-centered .ag-cell-wrapper": {
-              gap: "0 !important",
-              width: "100%",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              paddingTop: 0,
-              paddingBottom: 0,
-            },
-            "& .ag-cell.ag-selection-centered .ag-selection-checkbox, & .ag-cell.ag-selection-centered .ag-checkbox-input-wrapper": {
-              margin: "0 auto",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            },
             "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
               paddingLeft: "12px",
               paddingRight: "9px",
@@ -1022,10 +1050,6 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             "--ag-border-color": "rgba(125,183,255,0.18)",
             "--ag-row-border-color": "rgba(125,183,255,0.14)",
             "--ag-border-radius": "8px",
-            "--ag-checkbox-border-radius": "3px",
-            "--ag-checkbox-background-color": "rgba(255,255,255,0.06)",
-            "--ag-checkbox-border-color": "rgba(180,200,220,0.6)",
-            "--ag-checkbox-checked-color": "#7dd3fc",
             "--ag-cell-horizontal-padding": "18px",
           }}
         >
@@ -1037,15 +1061,14 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             rowHeight={46}
             headerHeight={44}
             suppressCellFocus
-            rowSelection="multiple"
-            rowMultiSelectWithClick
-            suppressRowClickSelection
+            rowSelection={rowSelection}
+            selectionColumnDef={selectionColumnDef}
             getRowId={getRowId}
+            loading={loading}
             overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No scheduled jobs found.</span>"
             onGridReady={handleGridReady}
             onSelectionChanged={handleSelectionChanged}
             theme={gridTheme}
-            style={{ width: "100%", height: "100%", fontFamily: gridFontFamily, "--ag-icon-font-family": iconFontFamily }}
           />
         </Box>
       </PageBodyFrame>

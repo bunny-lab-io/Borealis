@@ -96,6 +96,12 @@ const normalizeStatus = (status) => {
   return status.toLowerCase();
 };
 
+const formatStatusLabel = (status) => {
+  const normalized = normalizeStatus(status);
+  if (normalized === "completed") return "Approved";
+  return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : "Pending";
+};
+
 const PAGE_TITLE = "Device Approval Queue";
 const PAGE_SUBTITLE = "Review pending device enrollments and resolve conflicts with existing records.";
 
@@ -329,23 +335,25 @@ export default function DeviceApprovals({ onPageMetaChange }) {
           : status === "approved" ? "#60a5fa"
           : status === "denied" || status === "expired" ? "#9aa0a6"
           : "#fbbf24";
-        return <span style={{ color, fontWeight: 600 }}>{status}</span>;
+        return <span style={{ color, fontWeight: 600 }}>{formatStatusLabel(status)}</span>;
       },
-      minWidth: 110,
-      width: 110,
+      minWidth: 120,
+      width: 120,
     },
-    { headerName: "Hostname", field: "hostname_claimed", minWidth: 180 },
     {
       headerName: "Site",
       field: "site_name",
       valueGetter: (p) => p.data?.site_name || (p.data?.site_id ? `Site ${p.data.site_id}` : "—"),
-      minWidth: 160,
+      minWidth: 180,
+      width: 180,
     },
+    { headerName: "Hostname", field: "hostname_claimed", minWidth: 200, width: 200 },
     {
       headerName: "Date of Enrollment Request",
       field: "created_at",
       valueFormatter: (p) => formatDateTime(p.value),
-      minWidth: 200,
+      minWidth: 240,
+      width: 240,
     },
     {
       headerName: "Date of Approval",
@@ -356,8 +364,8 @@ export default function DeviceApprovals({ onPageMetaChange }) {
     {
       headerName: "Approved By",
       valueGetter: (p) => p.data?.approved_by_username || p.data?.approved_by_user_id || "—",
-      minWidth: 100,
-      Width: 100,
+      minWidth: 150,
+      width: 150,
     },
     {
       headerName: "Actions",

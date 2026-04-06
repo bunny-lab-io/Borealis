@@ -1443,8 +1443,9 @@ export default function AssemblyEditor({
       page_icon: PAGE_ICON,
       page_header_actions: pageHeaderActions,
     });
-    return () => onPageMetaChange?.(null);
   }, [onPageMetaChange, pageHeaderActions, pageSubtitle, pageTitle]);
+
+  useEffect(() => () => onPageMetaChange?.(null), [onPageMetaChange]);
 
   return (
     <>

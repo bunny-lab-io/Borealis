@@ -58,7 +58,7 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - Header: small Material icon left of the title, subtitle beneath, utility buttons on the top-right.
 - Body: primary pages should render their main content through `Data/Engine/web-interface/src/PageBodyFrame.jsx` so the shared body shell, outer inset, subtitle-to-body spacing, and edge-bleed behavior stay consistent.
 - Shell: avoid gutters on the Paper.
-- Selection column (for bulk actions): pinned left, square checkboxes, header checkbox enabled, about 52px fixed width, no menu/sort/resize; rely on AG Grid built-ins.
+- Selection column (for bulk actions): pinned left, header checkbox enabled, about 52px fixed width, no menu/sort/resize; rely on AG Grid and Quartz built-ins for checkbox visuals.
 - Typography/buttons: IBM Plex Sans, gradient primary buttons, rounded corners (about 8px), themed Quartz grid wrapper.
 
 #### Standardized Page Bodies
@@ -313,7 +313,7 @@ const NAV_TAB_COLORS = {
 - Pagination baseline: every Quartz grid ships with `pagination`, `paginationPageSize={20}`, and `paginationPageSizeSelector={[20, 50, 100]}`. This matches Device List behavior and prevents infinitely tall tables (Targets, assembly pickers, job histories, etc.).
 - Focus highlight baseline: set `suppressCellFocus` on AG Grid tables that do not rely on keyboard cell navigation so click/focus does not draw the magenta single-cell outline. Keep row hover/row selected styling for context.
 - Clickable name cells baseline: when a grid cell is just a row navigation trigger (for example Device hostname or Scheduled Job name), render plain text links (`<a>` with `textDecoration: "none"`) instead of MUI `Button`/`IconButton` so hover only shows a pointer cursor with no button box/highlight.
-- Borealis blue accent baseline: use `themeQuartz.withParams({ accentColor: "#7dd3fc" })` and keep `--ag-checkbox-checked-color: "#7dd3fc"` where checkbox columns are present.
+- Borealis blue accent baseline: use `themeQuartz.withParams({ accentColor: "#7dd3fc" })`. Do not add custom checkbox styling overrides; let Quartz render checkbox visuals by default.
 - Row hover baseline: use a darker Borealis blue hover state (`--ag-row-hover-color: "rgba(73,156,196,0.2)"`) so hover stays in the same color family as selected rows without matching the selected intensity.
 - Selected row highlight baseline: use `backgroundColor: "rgba(125,211,252,0.2) !important"` with `boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)"` so checkbox selection state reads in Borealis blue.
 - Inline grid text inputs: when a page embeds a MUI `TextField` inside AG Grid (for example, Device Description), use `MAGIC_UI.accentA` (`#7dd3fc`) for hover/focus border color.

@@ -27,7 +27,7 @@ function clone(obj) {
   return JSON.parse(JSON.stringify(obj));
 }
 
-export default function Context_Menu_Sidebar({
+export default function FlowEditorNodeConfig({
   open,
   onClose,
   edge,

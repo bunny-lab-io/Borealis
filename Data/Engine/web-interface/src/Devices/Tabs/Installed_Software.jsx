@@ -90,7 +90,6 @@ export default function InstalledSoftwareTab({ softwareRows = [] }) {
           quickFilterText={softwareSearch}
           getRowId={getSoftwareRowId}
           theme={DEVICE_DETAILS_GRID_THEME}
-          style={DEVICE_GRID_STYLE}
         />
       </GridShell>
     </Box>

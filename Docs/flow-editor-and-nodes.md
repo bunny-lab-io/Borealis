@@ -5,21 +5,26 @@
 Document the Borealis visual flow editor (React Flow) and how nodes are defined, grouped, and rendered.
 
 ## Core UI Components
-- `Data/Engine/web-interface/src/Flow_Editor/Flow_Editor.jsx` - canvas, drag/drop, edge editing, context menus.
-- `Data/Engine/web-interface/src/Flow_Editor/Node_Sidebar.jsx` - node catalog and drag source.
-- `Data/Engine/web-interface/src/Flow_Editor/Node_Configuration_Sidebar.jsx` - per-node configuration UI.
-- `Data/Engine/web-interface/src/Flow_Editor/Context_Menu_Sidebar.jsx` - right-click actions.
+- `Data/Engine/web-interface/src/Flow_Editor/Flow_Editor.jsx` - workflow editor page controller/compositor. Owns route-driven workflow load/save/run behavior, access checks, run snapshot hydration, and the access-warning dialog.
+- `Data/Engine/web-interface/src/Flow_Editor/Flow_Editor_Canvas.jsx` - React Flow canvas, drag/drop, node/edge selection, snap guides, and canvas interaction wiring.
+- `Data/Engine/web-interface/src/Flow_Editor/Flow_Editor_Sidebar.jsx` - workflow actions, node catalog, import/export actions, webhook entry point, and drag sources.
+- `Data/Engine/web-interface/src/Flow_Editor/Node_Configuration_Sidebar.jsx` - per-node configuration UI for the selected workflow node.
+- `Data/Engine/web-interface/src/Flow_Editor/Flow_Editor_Node_Config.jsx` - edge and route configuration sidebar for the selected workflow edge.
+- `Data/Engine/web-interface/src/Flow_Editor/Flow_Editor_Status_Bar.jsx` - footer status bar for authoring mode and immutable run snapshots.
+- `Data/Engine/web-interface/src/Flow_Editor/nodeRegistry.js` - shared node registry that auto-loads workflow node descriptors and exports the stable `workflowNodeTypes` and `workflowCategorizedNodes` objects used by the editor and sidebar.
 
 ## Node Registration Pipeline
-- Node modules are auto-loaded in `Data/Engine/web-interface/src/App.jsx` via:
-  `import.meta.glob('./nodes/**/*.jsx', { eager: true })`.
+- Node modules are auto-loaded in `Data/Engine/web-interface/src/Flow_Editor/nodeRegistry.js` via:
+  `import.meta.glob('../nodes/**/*.jsx', { eager: true })`.
 - Each module default-exports a descriptor object that includes:
   - `type` (unique node type string)
   - `component` (React component)
   - metadata like `name`, `category`, `description`, `config`, `usage_documentation`
-- `App.jsx` builds:
-  - `nodeTypes` (type -> component)
-  - `categorizedNodes` (category -> list of descriptors)
+- `nodeRegistry.js` builds:
+  - `workflowNodeTypes` (type -> component)
+  - `workflowCategorizedNodes` (category -> list of descriptors)
+- `Flow_Editor.jsx` and `Flow_Editor_Sidebar.jsx` import the shared registry directly so the Flow Editor domain owns node discovery and the React Flow `nodeTypes` object keeps a stable identity across renders.
+- `App.jsx` no longer builds or owns the workflow node registry. It routes to `Flow_Editor.jsx` and stays focused on app composition.
 
 ## Node Categories (Current Folder Layout)
 - `Agent`
@@ -37,7 +42,17 @@ Document the Borealis visual flow editor (React Flow) and how nodes are defined,
 - `Data/Engine/web-interface/src/Scheduling/Create_Job.jsx` uses React Flow for job status and dependency visualization.
 
 ## API Endpoints
-None. This is a UI-only domain.
+- `GET /api/assemblies/<assembly_guid>/export` - load a saved workflow assembly into the editor.
+- `POST /api/assemblies/import` - save the current workflow document.
+- `DELETE /api/assemblies/<assembly_guid>` - delete a saved User-domain workflow.
+- `GET /api/workflows/<workflow_guid>/editor-access` - verify site-scope access before opening a saved workflow.
+- `POST /api/workflows/run` - trigger a saved workflow run.
+- `GET /api/workflows/runs/<run_id>` - load an immutable workflow run snapshot.
+- `GET /api/workflows/runs/<run_id>/nodes/<node_id>` - hydrate selected node run details in run mode.
+- `GET /api/workflows/<workflow_guid>/webhooks` - list workflow webhooks.
+- `POST /api/workflows/<workflow_guid>/webhooks` - create a workflow webhook.
+- `DELETE /api/workflows/<workflow_guid>/webhooks/<webhook_id>` - delete a workflow webhook.
+- `GET /api/device_filters/<filter_id>` - enrich Device Filter nodes with matching-device counts when the count is not already embedded in the saved workflow document.
 
 ## Related Documentation
 - [Assemblies and Quick Jobs](assemblies.md)
@@ -61,23 +76,32 @@ None. This is a UI-only domain.
 5) Validate drag/drop in the Node Sidebar and ensure the node renders correctly.
 
 ### Sidebar behavior
-- `Node_Sidebar.jsx` renders `categorizedNodes` and sets `dataTransfer` payloads with `application/reactflow`.
-- `Flow_Editor.jsx` listens for drop events and creates nodes from the descriptor catalog.
+- `Flow_Editor_Sidebar.jsx` renders `workflowCategorizedNodes` and sets `dataTransfer` payloads with `application/reactflow`.
+- `Flow_Editor_Canvas.jsx` listens for drop events and creates nodes from the shared descriptor catalog exported by `nodeRegistry.js`.
 
 ### Node configuration sidebar
 - `Node_Configuration_Sidebar.jsx` uses `useReactFlow().setNodes` to update node data.
 - `config` metadata drives form rendering; data is stored in `node.data`.
 
+### Edge configuration sidebar
+- `Flow_Editor_Node_Config.jsx` is the renamed edge-configuration sidebar that used to live under `Context_Menu_Sidebar.jsx`.
+- It owns edge label, stroke, route selection, copy/paste, and reset behavior for the selected workflow edge.
+
 ### Canvas interactions
 - Right-click context menus allow node delete, edge unlink, and property edit.
-- Snap guides are computed in `Flow_Editor.jsx` for alignment.
+- Snap guides are computed in `Flow_Editor_Canvas.jsx` for alignment.
+
+### Controller boundaries
+- `Flow_Editor.jsx` is the workflow editor controller and compositor.
+- `App.jsx` should only pass route state and navigation into the editor, not workflow save/load/run logic.
+- Keep workflow-specific persistence, access warnings, run snapshot hydration, and webhook affordances inside the `Flow_Editor/` folder.
 
 ### Job flow editor
 - `Scheduling/Create_Job.jsx` uses a custom React Flow setup for status and dependency visualization.
 - Keep job flow nodes separate from the general node catalog to avoid accidental crossover.
 
 ### Common gotchas
-- Folder path casing matters. The source tree is `src/nodes/`, and `App.jsx` must import `./nodes/**/*.jsx` to work on Linux as well as Windows.
+- Folder path casing matters. The source tree is `src/nodes/`, and `Flow_Editor/nodeRegistry.js` must import `../nodes/**/*.jsx` to work on Linux as well as Windows.
 - Ensure each node descriptor has a unique `type` or React Flow will mis-render.
 - If the sidebar does not show the new node, verify the export default object has `type` and `component`.
 

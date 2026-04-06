@@ -389,6 +389,7 @@ export default function DeviceList({
 
   // Saved custom views (from server)
   const [views, setViews] = useState([]); // [{id, name, columns:[id], filters:{}}]
+  const [viewsLoaded, setViewsLoaded] = useState(false);
   const [selectedViewId, setSelectedViewId] = useState("default");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newViewName, setNewViewName] = useState("");
@@ -862,24 +863,29 @@ export default function DeviceList({
   }, [hasWireguardColumn, hasWireguardVpnStatusColumn, fetchTunnelTelemetry, applyTunnelTelemetry]);
 
   const fetchViews = useCallback(async () => {
+    if (viewsLoaded) return;
     try {
       const res = await fetch("/api/device_list_views");
+      if (!res.ok) {
+        setViews([]);
+        return;
+      }
       const data = await res.json();
-      if (data && Array.isArray(data.views)) setViews(data.views);
-      else setViews([]);
+      if (data && Array.isArray(data.views)) {
+        setViews(data.views);
+        setViewsLoaded(true);
+      } else {
+        setViews([]);
+      }
     } catch {
       setViews([]);
     }
-  }, []);
+  }, [viewsLoaded]);
 
   useEffect(() => {
     // Initial load only; removed auto-refresh interval
     fetchDevices();
   }, [fetchDevices]);
-
-  useEffect(() => {
-    fetchViews();
-  }, [fetchViews]);
 
   // Sites helper fetch
   const fetchSites = useCallback(async () => {
@@ -1389,6 +1395,33 @@ export default function DeviceList({
     [setRows, setSelected]
   );
 
+  const rowSelection = useMemo(
+    () => ({
+      mode: "multiRow",
+      checkboxes: true,
+      headerCheckbox: true,
+    }),
+    []
+  );
+
+  const selectionColumnDef = useMemo(
+    () => ({
+      headerName: "",
+      width: 52,
+      maxWidth: 52,
+      minWidth: 52,
+      pinned: "left",
+      resizable: false,
+      sortable: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      suppressMovable: true,
+      lockPinned: true,
+      lockPosition: true,
+    }),
+    []
+  );
+
   const columnDefs = useMemo(() => {
     const defs = columns.map((col) => {
       switch (col.id) {
@@ -1585,20 +1618,6 @@ export default function DeviceList({
       }
     });
     return [
-      {
-        headerName: "",
-        field: "__select__",
-        width: 52,
-        maxWidth: 52,
-        checkboxSelection: true,
-        headerCheckboxSelection: true,
-        resizable: false,
-        sortable: false,
-        suppressMenu: true,
-        filter: false,
-        pinned: "left",
-        lockPosition: true,
-      },
       ...defs,
       {
         headerName: "",
@@ -1607,7 +1626,8 @@ export default function DeviceList({
         maxWidth: 64,
         resizable: false,
         sortable: false,
-        suppressMenu: true,
+        suppressHeaderMenuButton: true,
+        suppressHeaderContextMenu: true,
         filter: false,
         cellRenderer: actionCellRenderer,
         pinned: "right",
@@ -1748,6 +1768,9 @@ export default function DeviceList({
                     },
                   }}
                   SelectProps={{
+                    onOpen: () => {
+                      fetchViews();
+                    },
                     MenuProps: {
                       PaperProps: { sx: { bgcolor: "rgba(8,12,24,0.98)", color: "#fff" } },
                     },
@@ -1889,8 +1912,8 @@ export default function DeviceList({
             rowData={displayedRows}
             columnDefs={columnDefs}
             defaultColDef={defaultColDef}
-            rowSelection="multiple"
-            suppressRowClickSelection
+            rowSelection={rowSelection}
+            selectionColumnDef={selectionColumnDef}
             suppressCellFocus
             pagination
             paginationPageSize={100}
@@ -1901,12 +1924,6 @@ export default function DeviceList({
             onGridReady={handleGridReady}
             getRowId={getRowId}
             theme={myTheme}
-            style={{
-              width: "100%",
-              height: "100%",
-              fontFamily: gridFontFamily,
-              "--ag-icon-font-family": iconFontFamily,
-            }}
           />
         </Box>
       </PageBodyFrame>
@@ -1969,6 +1986,7 @@ export default function DeviceList({
             if (res.ok) {
               const created = await res.json();
               setViews((prev) => [...prev, created].sort((a, b) => String(a.name).localeCompare(String(b.name))));
+              setViewsLoaded(true);
               setSelectedViewId(String(created.id));
               // Already applied in UI; we keep current state
               setCreateDialogOpen(false);
@@ -1997,6 +2015,7 @@ export default function DeviceList({
             if (res.ok) {
               const updated = await res.json();
               setViews((prev) => prev.map((x) => String(x.id) === String(v.id) ? updated : x));
+              setViewsLoaded(true);
               setRenameDialogOpen(false);
               setRenameViewName('');
               setRenameTarget(null);

@@ -214,7 +214,12 @@ export default function WorkflowWebhookDialog({
             ref={gridRef}
             rowData={rows}
             columnDefs={columnDefs}
-            rowSelection="single"
+            rowSelection={{
+              mode: "singleRow",
+              checkboxes: false,
+              headerCheckbox: false,
+              enableClickSelection: true,
+            }}
             suppressCellFocus
             animateRows
             loading={loading}

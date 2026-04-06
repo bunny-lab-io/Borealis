@@ -27,6 +27,7 @@ import {
 } from "@mui/icons-material";
 import { ConfirmDeleteDialog, RenameWorkflowDialog, SaveWorkflowDialog } from "../Dialogs";
 import WorkflowWebhookDialog from "./Workflow_Webhook_Dialog.jsx";
+import { workflowCategorizedNodes } from "./nodeRegistry.js";
 
 const COLORS = {
   cyan: "#7db7ff",
@@ -276,8 +277,7 @@ function NodeCategory({
   );
 }
 
-export default function NodeSidebar({
-  categorizedNodes,
+export default function FlowEditorSidebar({
   handleExportFlow,
   handleImportFlow,
   handleSaveFlow,
@@ -480,8 +480,8 @@ export default function NodeSidebar({
             onChange={setNodeSectionExpanded}
             collapsed={collapsed}
           >
-            {Object.keys(categorizedNodes).length ? (
-              Object.entries(categorizedNodes).map(([category, items]) => (
+            {Object.keys(workflowCategorizedNodes).length ? (
+              Object.entries(workflowCategorizedNodes).map(([category, items]) => (
                 <NodeCategory
                   key={category}
                   category={category}
@@ -494,7 +494,7 @@ export default function NodeSidebar({
             ) : (
               <Box sx={{ px: 2, py: 1.5 }}>
                 <Typography sx={{ color: "#8a94a6", fontSize: "0.78rem", lineHeight: 1.45 }}>
-                  No nodes were loaded into the workflow editor. Check the node registry in <code>src/App.jsx</code>.
+                  No nodes were loaded into the workflow editor. Check <code>Flow_Editor/nodeRegistry.js</code>.
                 </Typography>
               </Box>
             )}

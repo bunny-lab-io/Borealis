@@ -1346,8 +1346,8 @@ verify_engine_ansible_runtime() {
     version_cmd=("${venv_py}" -m ansible.cli.playbook --version)
   fi
 
-  "${venv_py}" - <<'PY'
-import importlib
+  "${venv_py}" - <<'PY' || return 1
+import importlib.util
 required = ("ansible", "ansible_runner", "winrm", "pypsrp")
 missing = [name for name in required if importlib.util.find_spec(name) is None]
 if missing:
@@ -2126,7 +2126,7 @@ if [[ "\${MODE}" == "developer" ]]; then
   fi
   cd "\${ENGINE_UI_DIR}"
   export BOREALIS_DEV_UI_PROXY_ENABLED=1
-  "\${NPM_CMD}" run dev -- --open false >>"\${ENGINE_LOG_DIR}/vite-dev.stdout.log" 2>>"\${ENGINE_LOG_DIR}/vite-dev.stderr.log" &
+  PATH="\${NODE_BIN_DIR}:\${PATH}" "\${NPM_CMD}" run dev -- --open false >>"\${ENGINE_LOG_DIR}/vite-dev.stdout.log" 2>>"\${ENGINE_LOG_DIR}/vite-dev.stderr.log" &
   VITE_PID=\$!
   cd "\${ENGINE_DIR}"
 fi
@@ -2298,7 +2298,10 @@ install_engine_python_deps() {
 vite_web_frontend_install() {
   local engine_ui_dest="${SCRIPT_DIR}/Engine/web-interface"
   ensure_node_bins
-  ( cd "$engine_ui_dest" && "$NPM_BIN" install --silent --no-fund --audit=false >/dev/null )
+  (
+    cd "$engine_ui_dest" &&
+    PATH="${NODE_DIR}/bin:${PATH}" "$NPM_BIN" install --silent --no-fund --audit=false >/dev/null
+  )
 }
 
 vite_web_frontend_start() {
@@ -2332,7 +2335,10 @@ vite_web_frontend_start() {
     local logdir; logdir=$(ensure_engine_log_dir)
     local stdout_log="${logdir}/vite-build.stdout.log"
     local stderr_log="${logdir}/vite-build.stderr.log"
-    if ! ( cd "$engine_ui_dest" && "$NPM_BIN" run build >>"$stdout_log" 2>>"$stderr_log" ); then
+    if ! (
+      cd "$engine_ui_dest" &&
+      PATH="${NODE_DIR}/bin:${PATH}" "$NPM_BIN" run build >>"$stdout_log" 2>>"$stderr_log"
+    ); then
       write_vite_log "npm run build failed. stderr log: ${stderr_log}" "vite-build"
       return 1
     fi

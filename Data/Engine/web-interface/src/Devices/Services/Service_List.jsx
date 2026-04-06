@@ -132,6 +132,10 @@ function normalizeText(value) {
   }
 }
 
+function isGuidLike(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalizeText(value));
+}
+
 function formatStatusMeta(statusCode) {
   const normalized = normalizeText(statusCode).toLowerCase();
   return STATUS_META[normalized] || STATUS_META.unknown;
@@ -248,16 +252,25 @@ export default function ServiceList({ device }) {
   const fastPollUntilRef = useRef(0);
 
   const hostname = useMemo(() => {
-    return (
-      normalizeText(device?.hostname) ||
-      normalizeText(device?.summary?.hostname) ||
-      normalizeText(device?.device_hostname)
-    );
+    const candidates = [device?.summary?.hostname, device?.device_hostname, device?.hostname]
+      .map((value) => normalizeText(value))
+      .filter(Boolean);
+    return candidates.find((value) => !isGuidLike(value)) || "";
   }, [device]);
 
   const selectedService = useMemo(
     () => rows.find((row) => row.service_id === selectedServiceId) || null,
     [rows, selectedServiceId]
+  );
+
+  const rowSelection = useMemo(
+    () => ({
+      mode: "singleRow",
+      checkboxes: false,
+      headerCheckbox: false,
+      enableClickSelection: true,
+    }),
+    []
   );
 
   useEffect(() => {
@@ -645,7 +658,7 @@ export default function ServiceList({ device }) {
           rowData={rows}
           columnDefs={columnDefs}
           defaultColDef={defaultColDef}
-          rowSelection="single"
+          rowSelection={rowSelection}
           suppressCellFocus
           animateRows
           pagination
@@ -665,12 +678,6 @@ export default function ServiceList({ device }) {
           onSelectionChanged={(event) => {
             const selected = event.api.getSelectedRows?.()?.[0] || null;
             setSelectedServiceId(selected?.service_id || "");
-          }}
-          style={{
-            width: "100%",
-            height: "100%",
-            fontFamily: gridFontFamily,
-            "--ag-icon-font-family": iconFontFamily,
           }}
         />
       </Box>

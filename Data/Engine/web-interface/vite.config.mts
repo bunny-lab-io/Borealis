@@ -27,6 +27,10 @@ export default defineConfig({
   optimizeDeps: {
     esbuildOptions: {
       target: "es2022",
+      // Firefox surfaces noisy "No sources are declared in this source map" errors
+      // for Vite's prebundled dependency maps; keep app debugging intact and
+      // suppress vendor-map generation for dev/HMR sessions.
+      sourcemap: false,
     },
   },
   server: {

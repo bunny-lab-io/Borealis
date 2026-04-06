@@ -56,7 +56,7 @@ const gridTheme = themeQuartz.withParams({
 const themeClassName = gridTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
-const AUTO_SIZE_COLUMNS = ["__select__", "display_name", "username", "last_login", "role", "mfa_enabled"];
+const AUTO_SIZE_COLUMNS = ["display_name", "username", "last_login", "role", "mfa_enabled"];
 
 function formatTs(tsSec) {
   if (!tsSec) return "-";
@@ -501,8 +501,39 @@ export default function UserManagement({
       page_icon: GroupIcon,
       page_header_actions: pageHeaderActions,
     });
-    return () => onPageMetaChange?.(null);
   }, [onPageMetaChange, pageHeaderActions]);
+
+  useEffect(() => () => onPageMetaChange?.(null), [onPageMetaChange]);
+
+  const rowSelection = useMemo(
+    () => ({
+      mode: "multiRow",
+      checkboxes: true,
+      headerCheckbox: true,
+      enableSelectionWithoutKeys: true,
+      enableClickSelection: false,
+    }),
+    []
+  );
+
+  const selectionColumnDef = useMemo(
+    () => ({
+      headerName: "",
+      minWidth: 52,
+      width: 52,
+      maxWidth: 52,
+      pinned: "left",
+      filter: false,
+      sortable: false,
+      resizable: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      suppressMovable: true,
+      lockPinned: true,
+      lockPosition: true,
+    }),
+    []
+  );
 
   const doCreate = async () => {
     const u = (createForm.username || "").trim();
@@ -536,20 +567,6 @@ export default function UserManagement({
 
   const columnDefs = useMemo(
     () => [
-      {
-        headerName: "",
-        field: "__select__",
-        checkboxSelection: true,
-        headerCheckboxSelection: true,
-        minWidth: 52,
-        width: 52,
-        maxWidth: 52,
-        pinned: "left",
-        filter: false,
-        sortable: false,
-        suppressMenu: true,
-        lockPosition: true,
-      },
       {
         headerName: "Display Name",
         field: "display_name",
@@ -621,7 +638,8 @@ export default function UserManagement({
         maxWidth: 110,
         sortable: false,
         filter: false,
-        suppressMenu: true,
+        suppressHeaderMenuButton: true,
+        suppressHeaderContextMenu: true,
         cellRenderer: (params) => {
           const user = params.data || {};
           return (
@@ -773,9 +791,8 @@ export default function UserManagement({
                 rowData={rows}
                 columnDefs={columnDefs}
                 defaultColDef={defaultColDef}
-                rowSelection="multiple"
-                rowMultiSelectWithClick
-                suppressRowClickSelection
+                rowSelection={rowSelection}
+                selectionColumnDef={selectionColumnDef}
                 suppressCellFocus
                 pagination
                 paginationPageSize={20}

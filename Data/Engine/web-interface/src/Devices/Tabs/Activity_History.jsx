@@ -391,7 +391,6 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
           getRowId={getHistoryRowId}
           suppressCellFocus
           theme={DEVICE_DETAILS_GRID_THEME}
-          style={DEVICE_GRID_STYLE}
         />
       </GridShell>
 

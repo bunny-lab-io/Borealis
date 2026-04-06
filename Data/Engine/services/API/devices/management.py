@@ -1309,7 +1309,7 @@ class DeviceManagementService:
                 """
                 SELECT id, name, columns_json, filters_json, created_at, updated_at
                   FROM device_list_views
-              ORDER BY name COLLATE NOCASE ASC
+              ORDER BY LOWER(name) ASC, id ASC
                 """
             )
             rows = cur.fetchall()

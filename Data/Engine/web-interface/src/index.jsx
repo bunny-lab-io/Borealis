@@ -14,8 +14,6 @@ import './Borealis.css'; // Global Theming for All of Borealis
 import App from './App.jsx';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+const appElement = <App />;
+
+root.render(import.meta.env.DEV ? appElement : <React.StrictMode>{appElement}</React.StrictMode>);

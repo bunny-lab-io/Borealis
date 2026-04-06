@@ -686,6 +686,16 @@ def test_device_list_views_lifecycle(engine_harness: EngineTestHarness) -> None:
     fetch_resp = client.get("/api/device_list_views")
     assert any(view["id"] == view_id for view in fetch_resp.get_json()["views"])
 
+    create_second_resp = client.post(
+        "/api/device_list_views",
+        json={"name": "alpha", "columns": ["hostname"], "filters": {}},
+    )
+    assert create_second_resp.status_code == 201
+
+    fetch_resp = client.get("/api/device_list_views")
+    view_names = [view["name"] for view in fetch_resp.get_json()["views"]]
+    assert view_names == ["alpha", "Custom"]
+
     update_resp = client.put(
         f"/api/device_list_views/{view_id}",
         json={"name": "Custom-2"},

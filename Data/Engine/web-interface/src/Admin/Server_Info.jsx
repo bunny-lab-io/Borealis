@@ -463,12 +463,6 @@ function SummaryTable({ rows, columnDefs, defaultColDef, loading = false, emptyM
         columnDefs={columnDefs}
         defaultColDef={defaultColDef}
         theme={SERVER_GRID_THEME}
-        style={{
-          width: "100%",
-          height: "100%",
-          fontFamily: gridFontFamily,
-          "--ag-icon-font-family": iconFontFamily,
-        }}
         rowHeight={50}
         headerHeight={46}
         floatingFiltersHeight={0}

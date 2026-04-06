@@ -1311,10 +1311,16 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
               columnDefs={columnDefs}
               defaultColDef={defaultColDef}
               context={gridContext}
-              rowSelection="single"
+              rowSelection={{
+                mode: "singleRow",
+                checkboxes: false,
+                headerCheckbox: false,
+                enableClickSelection: true,
+              }}
               suppressCellFocus
               pagination
               paginationPageSize={PAGE_SIZE}
+              paginationPageSizeSelector={[25, 50, 100]}
               animateRows
               onRowDoubleClicked={handleRowDoubleClicked}
               onCellContextMenu={handleCellContextMenu}
@@ -1327,12 +1333,6 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
               }
               theme={myTheme}
               rowHeight={44}
-              style={{
-                width: "100%",
-                height: "100%",
-                fontFamily: gridFontFamily,
-                "--ag-icon-font-family": iconFontFamily,
-              }}
             />
             {loading ? (
               <Box

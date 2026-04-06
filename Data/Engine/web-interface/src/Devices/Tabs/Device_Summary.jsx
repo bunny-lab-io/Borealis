@@ -2206,7 +2206,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   const memoryRows = useMemo(
     () =>
       (details.memory || []).map((m, idx) => ({
-        id: `${m.slot || idx}`,
+        id: `${m.slot || `BANK ${idx}`}::${m.serial || "unknown"}::${idx}`,
         slot: m.slot || `BANK ${idx}`,
         speed: m.speed || "unknown",
         serial: m.serial || "unknown",

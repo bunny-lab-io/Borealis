@@ -20,7 +20,7 @@ function formatTs(value) {
   }
 }
 
-export default function StatusBar({
+export default function FlowEditorStatusBar({
   nodeCount = 0,
   mode = "editor",
   workflowRun = null,

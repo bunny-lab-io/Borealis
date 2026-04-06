@@ -276,6 +276,40 @@ const GRID_WRAPPER_SX = {
   },
 };
 
+const GRID_PANEL_SX = {
+  ...GRID_WRAPPER_SX,
+  ...GRID_STYLE_BASE,
+};
+
+const SINGLE_ROW_SELECTION = {
+  mode: "singleRow",
+  checkboxes: false,
+  headerCheckbox: false,
+  enableClickSelection: true,
+};
+
+const MULTI_ROW_SELECTION = {
+  mode: "multiRow",
+  checkboxes: true,
+  headerCheckbox: true,
+  enableSelectionWithoutKeys: true,
+  enableClickSelection: true,
+};
+
+const PICKER_SELECTION_COLUMN_DEF = {
+  width: 52,
+  minWidth: 52,
+  maxWidth: 52,
+  resizable: false,
+  sortable: false,
+  suppressHeaderMenuButton: true,
+  suppressHeaderContextMenu: true,
+  filter: false,
+  pinned: "left",
+  lockPosition: true,
+  suppressMovable: true,
+};
+
 const DEVICE_STATUS_THEME = {
   online: {
     label: "Online",
@@ -1228,7 +1262,6 @@ export default function CreateJob({
       sortable: true,
       resizable: false,
       flex: 1,
-      suppressMenu: false,
       filter: true,
       floatingFilter: false,
       cellClass: "auto-col-tight",
@@ -1717,7 +1750,7 @@ export default function CreateJob({
         flex: 1.5,
         cellRenderer: "TargetActionsRenderer",
         sortable: false,
-        suppressMenu: true,
+        suppressHeaderMenuButton: true,
         filter: false,
       },
     ],
@@ -1750,7 +1783,6 @@ export default function CreateJob({
       sortable: true,
       resizable: false,
       flex: 1,
-      suppressMenu: false,
       filter: true,
       floatingFilter: false,
       cellClass: "auto-col-tight",
@@ -1777,23 +1809,8 @@ export default function CreateJob({
     });
   }, [targetGridRows]);
 
-  const devicePickerSelectionCol = {
-    headerName: "",
-    field: "__select__",
-    width: 52,
-    maxWidth: 52,
-    checkboxSelection: true,
-    headerCheckboxSelection: true,
-    resizable: false,
-    sortable: false,
-    suppressMenu: true,
-    filter: false,
-    pinned: "left",
-    lockPosition: true,
-  };
   const devicePickerColumnDefs = useMemo(
     () => [
-      devicePickerSelectionCol,
       { field: "site", headerName: "Site", minWidth: 160, flex: 1, cellClass: "auto-col-tight" },
       { field: "name", headerName: "Name", minWidth: 200, flex: 1.2, cellClass: "auto-col-tight" },
       { field: "status", headerName: "Status", minWidth: 140, flex: 0.9, cellClass: "auto-col-tight" },
@@ -1840,10 +1857,8 @@ export default function CreateJob({
     setSelectedDeviceTargets(next);
   }, []);
 
-  const filterPickerSelectionCol = { ...devicePickerSelectionCol };
   const filterPickerColumnDefs = useMemo(
     () => [
-      filterPickerSelectionCol,
       { field: "name", headerName: "Filter", minWidth: 220, flex: 1.4, cellClass: "auto-col-tight" },
       {
         field: "deviceCount",
@@ -2519,7 +2534,7 @@ export default function CreateJob({
         cellRenderer: "HistoryStatusRenderer",
         cellClass: "status-pill-cell",
         sortable: false,
-        suppressMenu: true,
+        suppressHeaderMenuButton: true,
       },
     ],
     [fmtTs]
@@ -2931,7 +2946,7 @@ export default function CreateJob({
         cellRenderer: "DeviceStatusRenderer",
         cellClass: "status-pill-cell",
         sortable: false,
-        suppressMenu: true,
+        suppressHeaderMenuButton: true,
       },
       { field: "site", headerName: "Site", minWidth: 160 },
       {
@@ -2948,7 +2963,7 @@ export default function CreateJob({
         cellRenderer: "JobStatusRenderer",
         cellClass: "status-pill-cell",
         sortable: false,
-        suppressMenu: true,
+        suppressHeaderMenuButton: true,
       },
       {
         field: "output",
@@ -2956,7 +2971,7 @@ export default function CreateJob({
         minWidth: 210,
         cellRenderer: "OutputActionsRenderer",
         sortable: false,
-        suppressMenu: true,
+        suppressHeaderMenuButton: true,
       },
     ],
     [fmtTs]
@@ -3627,7 +3642,7 @@ const heroTiles = useMemo(() => {
             <Box
               className={gridThemeClass}
               sx={{
-                ...GRID_WRAPPER_SX,
+                ...GRID_PANEL_SX,
                 flexGrow: 1,
                 minHeight: 420,
                 height: "100%",
@@ -3650,7 +3665,6 @@ const heroTiles = useMemo(() => {
                 getRowId={(params) => params.data?.id || params.rowIndex}
                 onGridReady={handleTargetGridReady}
                 theme={gridTheme}
-                style={GRID_STYLE_BASE}
               />
             </Box>
             {targets.length === 0 && (
@@ -3899,7 +3913,7 @@ const heroTiles = useMemo(() => {
                   </Button>
                 ))}
               </Box>
-              <Box className={gridThemeClass} sx={{ ...GRID_WRAPPER_SX, height: 360 }}>
+              <Box className={gridThemeClass} sx={{ ...GRID_PANEL_SX, height: 360 }}>
                 <AgGridReact
                   rowData={jobHistoryGridRows}
                   columnDefs={jobHistoryGridColumnDefs}
@@ -3916,7 +3930,6 @@ const heroTiles = useMemo(() => {
                   getRowId={(params) => params.data?.id || params.rowIndex}
                   onGridReady={handleJobHistoryGridReady}
                   theme={gridTheme}
-                  style={GRID_STYLE_BASE}
                 />
               </Box>
               <Menu
@@ -3954,7 +3967,7 @@ const heroTiles = useMemo(() => {
               <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
                 Historical job history summaries. Detailed job history is not recorded.
               </Typography>
-              <Box className={gridThemeClass} sx={{ ...GRID_WRAPPER_SX, mt: 1, height: 300 }}>
+              <Box className={gridThemeClass} sx={{ ...GRID_PANEL_SX, mt: 1, height: 300 }}>
                 <AgGridReact
                   rowData={sortedHistory}
                   columnDefs={historySummaryColumnDefs}
@@ -3970,7 +3983,6 @@ const heroTiles = useMemo(() => {
                   getRowId={(params) => params.data?.key || params.rowIndex}
                   onGridReady={handleHistorySummaryGridReady}
                   theme={gridTheme}
-                  style={GRID_STYLE_BASE}
                 />
               </Box>
             </GlassPanel>
@@ -4157,7 +4169,7 @@ const heroTiles = useMemo(() => {
           <Box
             className={gridThemeClass}
             sx={{
-              ...GRID_WRAPPER_SX,
+              ...GRID_PANEL_SX,
               flexGrow: 1,
               minHeight: 520,
               maxHeight: "calc(95vh - 210px)",
@@ -4177,8 +4189,7 @@ const heroTiles = useMemo(() => {
               paginationPageSize={20}
               paginationPageSizeSelector={[20, 50, 100]}
               theme={gridTheme}
-              style={GRID_STYLE_BASE}
-              rowSelection="single"
+              rowSelection={SINGLE_ROW_SELECTION}
               animateRows
               getRowId={(params) => params.data?.id || params.rowIndex}
               onGridReady={handleAssemblyGridReady}
@@ -4247,9 +4258,9 @@ const heroTiles = useMemo(() => {
             />
           </Tabs>
 
-              {targetPickerTab === "devices" ? (
-                <>
-                  <Box sx={{ mb: 1.25, display: "flex", gap: 2 }}>
+          {targetPickerTab === "devices" ? (
+            <>
+              <Box sx={{ mb: 1.25, display: "flex", gap: 2 }}>
                 <TextField
                   size="small"
                   placeholder="Search devices..."
@@ -4263,7 +4274,7 @@ const heroTiles = useMemo(() => {
               <Box
                 className={gridThemeClass}
                 sx={{
-                  ...GRID_WRAPPER_SX,
+                  ...GRID_PANEL_SX,
                   height: 420,
                 }}
               >
@@ -4275,22 +4286,21 @@ const heroTiles = useMemo(() => {
                   rowHeight={46}
                   headerHeight={44}
                   suppressCellFocus
-        rowSelection="multiple"
-        rowMultiSelectWithClick
-        overlayNoRowsTemplate={`<span class='ag-overlay-no-rows-center'>${devicePickerOverlay}</span>`}
-        getRowId={(params) => params.data?.id || params.rowIndex}
-        onGridReady={handleDevicePickerReady}
-        onSelectionChanged={handleDevicePickerSelectionChanged}
-        pagination
-        paginationPageSize={20}
-        paginationPageSizeSelector={[20, 50, 100]}
-        theme={gridTheme}
-        style={{ width: "100%", height: "100%", fontFamily: gridFontFamily, "--ag-icon-font-family": iconFontFamily }}
-      />
+                  rowSelection={MULTI_ROW_SELECTION}
+                  selectionColumnDef={PICKER_SELECTION_COLUMN_DEF}
+                  overlayNoRowsTemplate={`<span class='ag-overlay-no-rows-center'>${devicePickerOverlay}</span>`}
+                  getRowId={(params) => params.data?.id || params.rowIndex}
+                  onGridReady={handleDevicePickerReady}
+                  onSelectionChanged={handleDevicePickerSelectionChanged}
+                  pagination
+                  paginationPageSize={20}
+                  paginationPageSizeSelector={[20, 50, 100]}
+                  theme={gridTheme}
+                />
               </Box>
             </>
-              ) : (
-                <>
+          ) : (
+            <>
               <Box sx={{ mb: 1.25, display: "flex", gap: 2 }}>
                 <TextField
                   size="small"
@@ -4305,7 +4315,7 @@ const heroTiles = useMemo(() => {
               <Box
                 className={gridThemeClass}
                 sx={{
-                  ...GRID_WRAPPER_SX,
+                  ...GRID_PANEL_SX,
                   height: 420,
                 }}
               >
@@ -4317,8 +4327,8 @@ const heroTiles = useMemo(() => {
                   rowHeight={46}
                   headerHeight={44}
                   suppressCellFocus
-                  rowSelection="multiple"
-                  rowMultiSelectWithClick
+                  rowSelection={MULTI_ROW_SELECTION}
+                  selectionColumnDef={PICKER_SELECTION_COLUMN_DEF}
                   overlayNoRowsTemplate={`<span class='ag-overlay-no-rows-center'>${filterPickerOverlay}</span>`}
                   getRowId={(params) => params.data?.id || params.rowIndex}
                   onGridReady={handleFilterPickerReady}
@@ -4327,19 +4337,18 @@ const heroTiles = useMemo(() => {
                   paginationPageSize={20}
                   paginationPageSizeSelector={[20, 50, 100]}
                   theme={gridTheme}
-                  style={{ width: "100%", height: "100%", fontFamily: gridFontFamily, "--ag-icon-font-family": iconFontFamily }}
                 />
               </Box>
             </>
           )}
         </DialogContent>
-              <DialogActions sx={DIALOG_ACTIONS_SX}>
-                <Button onClick={() => setAddTargetOpen(false)} sx={DIALOG_BUTTON_SX}>
-                  Cancel
-                </Button>
-                <Button
-                  onClick={() => {
-                    if (targetPickerTab === "filters") {
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={() => setAddTargetOpen(false)} sx={DIALOG_BUTTON_SX}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => {
+              if (targetPickerTab === "filters") {
                 const gridNodes =
                   (filterPickerGridApiRef.current &&
                     filterPickerGridApiRef.current.getSelectedNodes()) ||

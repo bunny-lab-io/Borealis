@@ -20,7 +20,7 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 
 const PAGE_TITLE = "Site Assignment";
 const PAGE_SUBTITLE = "Manage the sites that operators can access and manage.";
-const AUTO_SIZE_COLUMNS = ["__select__", "name", "device_count", "enrollment_code"];
+const AUTO_SIZE_COLUMNS = ["name", "device_count", "enrollment_code"];
 
 const gridTheme = themeQuartz.withParams({
   accentColor: "#7dd3fc",
@@ -214,25 +214,42 @@ export default function SiteAssignment({
       page_icon: LocationCityIcon,
       page_header_actions: pageHeaderActions,
     });
-    return () => onPageMetaChange?.(null);
   }, [onPageMetaChange, pageHeaderActions]);
+
+  useEffect(() => () => onPageMetaChange?.(null), [onPageMetaChange]);
+
+  const rowSelection = useMemo(
+    () => ({
+      mode: "multiRow",
+      checkboxes: true,
+      headerCheckbox: true,
+      enableSelectionWithoutKeys: true,
+      enableClickSelection: false,
+    }),
+    []
+  );
+
+  const selectionColumnDef = useMemo(
+    () => ({
+      headerName: "",
+      minWidth: 52,
+      width: 52,
+      maxWidth: 52,
+      pinned: "left",
+      filter: false,
+      sortable: false,
+      resizable: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      suppressMovable: true,
+      lockPinned: true,
+      lockPosition: true,
+    }),
+    []
+  );
 
   const columnDefs = useMemo(
     () => [
-      {
-        headerName: "",
-        field: "__select__",
-        checkboxSelection: true,
-        headerCheckboxSelection: true,
-        minWidth: 52,
-        width: 52,
-        maxWidth: 52,
-        pinned: "left",
-        filter: false,
-        sortable: false,
-        suppressMenu: true,
-        lockPosition: true,
-      },
       {
         headerName: "Name",
         field: "name",
@@ -435,9 +452,8 @@ export default function SiteAssignment({
               rowData={sites}
               columnDefs={columnDefs}
               defaultColDef={defaultColDef}
-              rowSelection="multiple"
-              rowMultiSelectWithClick
-              suppressRowClickSelection
+              rowSelection={rowSelection}
+              selectionColumnDef={selectionColumnDef}
               suppressCellFocus
               pagination
               paginationPageSize={20}

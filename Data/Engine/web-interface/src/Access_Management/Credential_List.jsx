@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -195,8 +195,6 @@ export default function CredentialList({
   const [editingCredential, setEditingCredential] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
-  const gridApiRef = useRef(null);
-
   const canMutateCredentials = Boolean(aegisStatus?.configured) && !Boolean(aegisStatus?.locked);
   const aegisRow = useMemo(() => aegisRowFromStatus(aegisStatus), [aegisStatus]);
   const githubTokenRow = useMemo(
@@ -376,7 +374,7 @@ export default function CredentialList({
         sortable: false,
         filter: false,
         resizable: false,
-        suppressMenu: true,
+        suppressHeaderMenuButton: true,
         cellRenderer: actionCellRenderer,
         pinned: "right"
       }
@@ -405,10 +403,13 @@ export default function CredentialList({
 
   const getRowId = useCallback(
     (params) =>
-      params.data?.id ||
-      params.data?.name ||
-      params.data?.username ||
-      String(params.rowIndex ?? ""),
+      String(
+        params.data?.id ??
+        params.data?.name ??
+        params.data?.username ??
+        params.rowIndex ??
+        ""
+      ),
     []
   );
 
@@ -515,10 +516,6 @@ export default function CredentialList({
     await fetchCredentials();
   };
 
-  const handleGridReady = useCallback((params) => {
-    gridApiRef.current = params.api;
-  }, []);
-
   const banners = useMemo(() => {
     const next = [];
     const resetCredentialCount = rows.filter((row) => rowRequiresSecretReset(row)).length;
@@ -563,18 +560,6 @@ export default function CredentialList({
     });
     return next;
   }, [aegisStatus, error, githubTokenRow, rows]);
-
-  useEffect(() => {
-    const api = gridApiRef.current;
-    if (!api) return;
-    if (loading) {
-      api.showLoadingOverlay();
-    } else if (!gridRows.length) {
-      api.showNoRowsOverlay();
-    } else {
-      api.hideOverlay();
-    }
-  }, [gridRows, loading]);
 
   const pageHeaderActions = useMemo(() => {
     const actions = [
@@ -630,6 +615,74 @@ export default function CredentialList({
     return actions;
   }, [aegisStatus, canMutateCredentials, fetchCredentials, handleCreate, loading, onAegisAction]);
 
+  const menuItems = useMemo(() => {
+    if (menuRow?.row_kind === "aegis") {
+      const items = [];
+      if (!aegisStatus?.configured) {
+        items.push(
+          <MenuItem key="aegis-setup" onClick={() => handleAegisMenuAction("setup")}>
+            Setup Aegis Cipher
+          </MenuItem>
+        );
+      }
+      if (aegisStatus?.configured && aegisStatus?.locked) {
+        items.push(
+          <MenuItem key="aegis-unlock" onClick={() => handleAegisMenuAction("unlock")}>
+            Enter Aegis Cipher
+          </MenuItem>
+        );
+      }
+      if (aegisStatus?.configured) {
+        items.push(
+          <MenuItem key="aegis-rotate" onClick={() => handleAegisMenuAction("rotate")}>
+            Rotate Aegis Cipher
+          </MenuItem>
+        );
+        items.push(
+          <MenuItem
+            key="aegis-force-reset"
+            onClick={() => handleAegisMenuAction("force_reset")}
+            sx={{ color: "#ff9aa5" }}
+          >
+            Force Reset Aegis Cipher
+          </MenuItem>
+        );
+      }
+      return items;
+    }
+    if (menuRow?.row_kind === "github_token") {
+      return [
+        <MenuItem key="github-token-edit" disabled={!canMutateCredentials} onClick={() => handleEdit(menuRow)}>
+          Edit Token
+        </MenuItem>,
+      ];
+    }
+    if (!menuRow) {
+      return [];
+    }
+    return [
+      <MenuItem key="credential-edit" disabled={!canMutateCredentials} onClick={() => handleEdit(menuRow)}>
+        Edit
+      </MenuItem>,
+      <MenuItem
+        key="credential-delete"
+        disabled={!canMutateCredentials}
+        onClick={() => handleDelete(menuRow)}
+        sx={{ color: canMutateCredentials ? "#ff8080" : "inherit" }}
+      >
+        Delete
+      </MenuItem>,
+    ];
+  }, [
+    aegisStatus?.configured,
+    aegisStatus?.locked,
+    canMutateCredentials,
+    handleAegisMenuAction,
+    handleDelete,
+    handleEdit,
+    menuRow,
+  ]);
+
   useEffect(() => {
     onPageMetaChange?.({
       page_title: "Credentials",
@@ -676,6 +729,11 @@ export default function CredentialList({
             minHeight: 0,
             width: "100%",
             fontFamily: gridFontFamily,
+            "--ag-background-color": "transparent",
+            "--ag-foreground-color": "#f5f7fa",
+            "--ag-row-hover-color": "rgba(73,156,196,0.2)",
+            "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
+            "--ag-checkbox-checked-color": "#7dd3fc",
             "--ag-font-family": gridFontFamily,
             "--ag-icon-font-family": iconFontFamily,
             "& .ag-root-wrapper": {
@@ -719,16 +777,10 @@ export default function CredentialList({
               backgroundColor: "rgba(3,7,18,0.8)",
             },
           }}
-          style={{
-            "--ag-background-color": "transparent",
-            "--ag-foreground-color": "#f5f7fa",
-            "--ag-row-hover-color": "rgba(73,156,196,0.2)",
-            "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
-            "--ag-checkbox-checked-color": "#7dd3fc",
-          }}
         >
           <AgGridReact
             rowData={gridRows}
+            loading={loading}
             columnDefs={columnDefs}
             defaultColDef={defaultColDef}
             animateRows
@@ -740,15 +792,8 @@ export default function CredentialList({
                 ? "Protected credentials will appear here once Aegis Cipher setup is complete."
                 : "No credentials have been created yet."
             }</span>`}
-            onGridReady={handleGridReady}
             suppressCellFocus
             theme={myTheme}
-            style={{
-              width: "100%",
-              height: "100%",
-              fontFamily: gridFontFamily,
-              "--ag-icon-font-family": iconFontFamily,
-            }}
           />
         </Box>
       </PageBodyFrame>
@@ -760,39 +805,7 @@ export default function CredentialList({
         elevation={2}
         PaperProps={{ sx: { bgcolor: "#1f1f1f", color: "#f5f5f5" } }}
       >
-        {menuRow?.row_kind === "aegis" ? (
-          <>
-            {!aegisStatus?.configured ? (
-              <MenuItem onClick={() => handleAegisMenuAction("setup")}>Setup Aegis Cipher</MenuItem>
-            ) : null}
-            {aegisStatus?.configured && aegisStatus?.locked ? (
-              <MenuItem onClick={() => handleAegisMenuAction("unlock")}>Enter Aegis Cipher</MenuItem>
-            ) : null}
-            {aegisStatus?.configured ? (
-              <MenuItem onClick={() => handleAegisMenuAction("rotate")}>Rotate Aegis Cipher</MenuItem>
-            ) : null}
-            {aegisStatus?.configured ? (
-              <MenuItem onClick={() => handleAegisMenuAction("force_reset")} sx={{ color: "#ff9aa5" }}>
-                Force Reset Aegis Cipher
-              </MenuItem>
-            ) : null}
-          </>
-        ) : menuRow?.row_kind === "github_token" ? (
-          <MenuItem disabled={!canMutateCredentials} onClick={() => handleEdit(menuRow)}>
-            Edit Token
-          </MenuItem>
-        ) : (
-          <>
-            <MenuItem disabled={!canMutateCredentials} onClick={() => handleEdit(menuRow)}>Edit</MenuItem>
-            <MenuItem
-              disabled={!canMutateCredentials}
-              onClick={() => handleDelete(menuRow)}
-              sx={{ color: canMutateCredentials ? "#ff8080" : "inherit" }}
-            >
-              Delete
-            </MenuItem>
-          </>
-        )}
+        {menuItems}
       </Menu>
 
       <CredentialEditor

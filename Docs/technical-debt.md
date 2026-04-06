@@ -35,6 +35,34 @@ GitHub Issue: <link or "not yet">
 ```
 
 ## Issues
+ID: TD-20260405-02
+Status: active
+Owner: WebUI
+Date Added: 2026-04-05
+Summary: Vite dev/HMR now disables optimized-dependency sourcemaps to suppress Firefox console spam from vendor bundles.
+Impact: Borealis app code still debugs normally in Vite dev, but stepping into prebundled `node_modules/.vite/deps/*` vendor code loses source-map support while the mitigation is active.
+Root Cause: Firefox reports repeated `No sources are declared in this source map` errors for Vite/esbuild-generated dependency maps, which floods the browser console on pages that load many shared WebUI dependencies even when Borealis app code is healthy.
+Current Mitigation: `Data/Engine/web-interface/vite.config.mts` sets `optimizeDeps.esbuildOptions.sourcemap = false` so Vite dev prebundles no longer emit dependency `.map` files that trigger the Firefox console noise.
+Removal Criteria: Vite/esbuild/Firefox no longer emit invalid dependency sourcemaps for Borealis dev sessions, or Borealis adopts a narrower upstream-supported ignore mechanism that keeps clean consoles without dropping vendor sourcemaps.
+Files: `Data/Engine/web-interface/vite.config.mts`
+Evidence: Fresh 2026-04-05 Vite dev/HMR refreshes on `Filter_Editor.jsx` produced dozens of Firefox source-map errors for `/node_modules/.vite/deps/*.js.map` resources such as `react.js.map`, `ag-grid-community.js.map`, and multiple MUI icon bundles, while Borealis page code itself showed no corresponding runtime error.
+Next Step: Re-test Firefox against a fresh Vite dev restart and revisit once a newer Vite/esbuild/Firefox combination stops generating the invalid dependency-map warnings.
+GitHub Issue: not yet
+
+ID: TD-20260405-01
+Status: active
+Owner: WebUI
+Date Added: 2026-04-05
+Summary: Vite dev/HMR now disables `React.StrictMode` to suppress React Flow type-object false positives in the workflow editor.
+Impact: Flow Editor browser-console noise is reduced during dev/HMR, but Borealis no longer gets Strict Mode's extra development-only lifecycle checks while the Vite dev shell is active.
+Root Cause: React Flow's development warning `error#002` is emitted under the current Strict Mode render pattern even after the workflow node registry and edge defaults are stabilized, so Vite dev sessions still show misleading `nodeTypes or edgeTypes object` warnings.
+Current Mitigation: `Data/Engine/web-interface/src/index.jsx` renders `<App />` directly when `import.meta.env.DEV` is true and keeps the existing `React.StrictMode` wrapper outside Vite dev.
+Removal Criteria: React Flow no longer emits the false-positive type-object warning under Strict Mode for Borealis's workflow editor, or Borealis adopts a narrower editor-local workaround that preserves global Strict Mode in dev.
+Files: `Data/Engine/web-interface/src/index.jsx`, `Data/Engine/web-interface/src/Flow_Editor/Flow_Editor.jsx`, `Data/Engine/web-interface/src/Flow_Editor/nodeRegistry.js`
+Evidence: Fresh 2026-04-05 Vite dev/HMR browser console output still showed duplicate React Flow `error#002` warnings from `Flow_Editor.jsx` after the shared node registry refactor, stable default edge options, and stable type refs were already in place.
+Next Step: Re-test the Flow Editor in Vite dev/HMR after the conditional Strict Mode removal and revisit once a newer React Flow version or a narrower editor-scoped workaround is available.
+GitHub Issue: not yet
+
 ID: TD-20260331-01
 Status: active
 Owner: Engine + Agent
