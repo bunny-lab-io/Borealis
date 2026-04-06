@@ -128,6 +128,7 @@ def test_build_tray_view_connected_state(tmp_path: Path) -> None:
     assert view["security_status"] == "Secure connection"
     assert view["activity_status"] == "Idle"
     assert view["wireguard_status"] == "Ready"
+    assert view["tooltip"] == "Borealis Agent"
     assert labels == [
         "Borealis Agent",
         "Status: Connected",

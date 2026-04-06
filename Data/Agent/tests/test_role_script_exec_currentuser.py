@@ -32,6 +32,7 @@ def _setup_start_path(tmp_path: Path) -> Path:
 
 def test_restart_agent_writes_both_restart_requests(monkeypatch, tmp_path: Path) -> None:
     start = _setup_start_path(tmp_path)
+    prompts: list[str] = []
 
     class _FakeMessageBox:
         Yes = 1
@@ -39,6 +40,8 @@ def test_restart_agent_writes_both_restart_requests(monkeypatch, tmp_path: Path)
 
         @staticmethod
         def question(*args, **kwargs) -> int:
+            if len(args) >= 3:
+                prompts.append(str(args[2]))
             return _FakeMessageBox.Yes
 
     monkeypatch.setattr(
@@ -69,6 +72,9 @@ def test_restart_agent_writes_both_restart_requests(monkeypatch, tmp_path: Path)
     assert role._restart_pending is True
     assert tray_state.load_restart_request("currentuser", start=start)["service_mode"] == "currentuser"
     assert tray_state.load_restart_request("system", start=start)["service_mode"] == "system"
+    assert prompts == [
+        "Restart the Borealis Agent now?\n\nRemote support activity may pause briefly while the agent reconnects.\n\nPlease wait up to 1 minute for the agent restart request to trigger."
+    ]
 
 
 def test_copy_support_details_uses_clipboard(monkeypatch) -> None:
@@ -115,3 +121,43 @@ def test_open_logs_folder_uses_subprocess_on_non_windows(monkeypatch) -> None:
     role._open_logs_folder({"logs_dir": "/tmp/Agent/Logs"})
 
     assert popen_calls == [["xdg-open", "/tmp/Agent/Logs"]]
+
+
+def test_spawn_currentuser_agent_uses_currentuser_config(monkeypatch) -> None:
+    popen_calls: list[tuple[list[str], dict]] = []
+    monkeypatch.setattr(
+        role_module,
+        "__file__",
+        "/runtime/Borealis/Roles/role_ScriptExec_CURRENTUSER.py",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        role_module.os.path,
+        "isfile",
+        lambda path: path in {
+            "/runtime/Scripts/pythonw.exe",
+            "/runtime/Borealis/agent.py",
+        },
+    )
+    monkeypatch.setattr(
+        role_module.subprocess,
+        "Popen",
+        lambda args, **kwargs: popen_calls.append((list(args), dict(kwargs))),
+    )
+
+    role = role_module.Role.__new__(role_module.Role)
+
+    assert role._spawn_currentuser_agent() is True
+    assert popen_calls == [
+        (
+            [
+                "/runtime/Scripts/pythonw.exe",
+                "-W",
+                "ignore::SyntaxWarning",
+                "/runtime/Borealis/agent.py",
+                "--config",
+                "CURRENTUSER",
+            ],
+            {"cwd": "/runtime/Borealis"},
+        )
+    ]

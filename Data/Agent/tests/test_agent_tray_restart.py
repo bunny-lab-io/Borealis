@@ -42,3 +42,58 @@ def test_process_tray_restart_request_consumes_own_scope(monkeypatch) -> None:
     assert processed is True
     assert fake_tray_state.cleared == ["system"]
     assert calls == ["system", "shutdown"]
+
+
+def test_replacement_launch_spec_uses_currentuser_config(monkeypatch) -> None:
+    monkeypatch.setattr(agent_module, "__file__", "/runtime/Borealis/agent.py", raising=False)
+    monkeypatch.setattr(
+        agent_module.os.path,
+        "isfile",
+        lambda path: path in {
+            "/runtime/Scripts/pythonw.exe",
+            "/runtime/Borealis/agent.py",
+        },
+    )
+
+    args, popen_kwargs = agent_module._replacement_launch_spec("currentuser", windows=True)
+
+    assert args == [
+        "/runtime/Scripts/pythonw.exe",
+        "-W",
+        "ignore::SyntaxWarning",
+        "/runtime/Borealis/agent.py",
+        "--config",
+        "CURRENTUSER",
+    ]
+    assert popen_kwargs == {"cwd": "/runtime/Borealis", "creationflags": 0x08000000}
+
+
+def test_replacement_launch_spec_uses_service_wrapper_for_system_on_windows(monkeypatch) -> None:
+    monkeypatch.setattr(agent_module, "__file__", "/runtime/Borealis/agent.py", raising=False)
+    monkeypatch.setattr(
+        agent_module.os.path,
+        "expandvars",
+        lambda value: "/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+    )
+    monkeypatch.setattr(
+        agent_module.os.path,
+        "isfile",
+        lambda path: path in {
+            "/runtime/Borealis/launch_service.ps1",
+            "/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+        },
+    )
+
+    args, popen_kwargs = agent_module._replacement_launch_spec("system", windows=True)
+
+    assert args == [
+        "/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-WindowStyle",
+        "Hidden",
+        "-File",
+        "/runtime/Borealis/launch_service.ps1",
+    ]
+    assert popen_kwargs == {"cwd": "/runtime/Borealis", "creationflags": 0x08000000}

@@ -213,6 +213,50 @@ function Ensure-AgentLogDir {
     return $agentLogDir
 }
 
+function Ensure-AgentTrayFolderPermissions {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TrayDir,
+
+        [Parameter()]
+        [string]$LogName = 'Install.log'
+    )
+
+    if (-not $TrayDir) { return }
+    if (-not (Test-Path $TrayDir -PathType Container)) {
+        New-Item -Path $TrayDir -ItemType Directory -Force | Out-Null
+    }
+
+    $resolvedTrayDir = $TrayDir
+    try {
+        $resolvedTrayDir = (Resolve-Path -Path $TrayDir -ErrorAction Stop).ProviderPath
+    } catch {
+        try { $resolvedTrayDir = [System.IO.Path]::GetFullPath($TrayDir) } catch {}
+    }
+
+    Write-AgentLog -FileName $LogName -Message ("[TRAY-ACL] Hardening tray folder permissions at '{0}'." -f $resolvedTrayDir)
+
+    $aclArgs = @(
+        $resolvedTrayDir,
+        '/inheritance:r',
+        '/grant:r', '*S-1-5-32-544:(OI)(CI)(F)',
+        '/grant:r', '*S-1-5-18:(OI)(CI)(F)',
+        '/grant:r', '*S-1-5-11:(OI)(CI)(M)',
+        '/grant:r', '*S-1-5-32-545:(OI)(CI)(RX)',
+        '/t',
+        '/c',
+        '/q'
+    )
+
+    $aclOutput = & icacls.exe @aclArgs 2>&1
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        $detail = (($aclOutput | ForEach-Object { $_.ToString().Trim() }) | Where-Object { $_ } | Select-Object -First 5) -join '; '
+        if (-not $detail) { $detail = 'icacls returned an error without diagnostic output.' }
+        throw ("Failed to harden tray folder permissions at '{0}' (exit code {1}): {2}" -f $resolvedTrayDir, $exitCode, $detail)
+    }
+}
+
 function Write-AgentLog {
     param(
         [string]$FileName,
@@ -2122,6 +2166,8 @@ function InstallOrUpdate-BorealisAgent {
         $settingsDir = Join-Path $scriptDir 'Agent\Borealis\Settings'
         $oldSettingsDir = Join-Path $scriptDir 'Agent\Settings'
         if (-not (Test-Path $settingsDir)) { New-Item -Path $settingsDir -ItemType Directory -Force | Out-Null }
+        $traySettingsDir = Join-Path $settingsDir 'Tray'
+        Ensure-AgentTrayFolderPermissions -TrayDir $traySettingsDir -LogName 'Install.log'
         $serverUrlPath = Join-Path $settingsDir 'server_url.txt'
         $configPath = Join-Path $settingsDir 'agent_settings.json'
         $defaultUrl = ''

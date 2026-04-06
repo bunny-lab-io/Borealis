@@ -642,16 +642,7 @@ def build_tray_view(
     view["menu_entries"] = build_menu_entries(view)
     view["support_details"] = build_support_details(view)
     view["support_text"] = format_support_details(view)
-    view["tooltip"] = "\n".join(
-        [
-            "Borealis Agent",
-            f"Status: {view['overall_status']}",
-            f"Security: {view['security_status']}",
-            f"Activity: {view['activity_status']}",
-            f"Connected to: {view['connected_host']}",
-            f"Last check-in: {view['last_check_in']}",
-        ]
-    )
+    view["tooltip"] = "Borealis Agent"
     return view
 
 

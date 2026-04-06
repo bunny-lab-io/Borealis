@@ -604,7 +604,7 @@ class Role:
         confirm = QtWidgets.QMessageBox.question(
             None,
             "Restart Borealis Agent",
-            "Restart the Borealis Agent now?\n\nRemote support activity may pause briefly while the agent reconnects.",
+            "Restart the Borealis Agent now?\n\nRemote support activity may pause briefly while the agent reconnects.\n\nPlease wait up to 1 minute for the agent restart request to trigger.",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No,
         )
@@ -673,16 +673,7 @@ class Role:
             view = dict(view)
             view["overall_status"] = "Restarting"
             view["security_status"] = "Checking connection"
-            view["tooltip"] = "\n".join(
-                [
-                    "Borealis Agent",
-                    "Status: Restarting",
-                    f"Security: {view.get('security_status') or 'Checking connection'}",
-                    f"Activity: {view.get('activity_status') or 'Idle'}",
-                    f"Connected to: {view.get('connected_host') or 'Not configured'}",
-                    f"Last check-in: {view.get('last_check_in') or 'Never'}",
-                ]
-            )
+            view["tooltip"] = "Borealis Agent"
             view["menu_entries"] = tray_state.build_menu_entries(view)
             view["support_details"] = tray_state.build_support_details(view)
             view["support_text"] = tray_state.format_support_details(view)
@@ -827,7 +818,10 @@ class Role:
             popen_kwargs: Dict[str, Any] = {"cwd": borealis_dir}
             if os.name == "nt":
                 popen_kwargs["creationflags"] = 0x08000000
-            subprocess.Popen([exe, "-W", "ignore::SyntaxWarning", agent_script], **popen_kwargs)
+            subprocess.Popen(
+                [exe, "-W", "ignore::SyntaxWarning", agent_script, "--config", "CURRENTUSER"],
+                **popen_kwargs,
+            )
             return True
         except Exception:
             return False

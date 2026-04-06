@@ -771,10 +771,49 @@ def _mark_planned_shutdown(reason: str) -> None:
 def _launch_replacement_agent_process(service_mode: Optional[str] = None) -> bool:
     normalized_mode = str(service_mode or SERVICE_MODE).strip().lower() or SERVICE_MODE
     try:
+        args, popen_kwargs = _replacement_launch_spec(normalized_mode)
+        subprocess.Popen(args, **popen_kwargs)
+        return True
+    except Exception as exc:
+        _log_agent(f"Failed to launch replacement {normalized_mode} agent: {exc}", fname="agent.error.log")
+        return False
+
+
+def _replacement_launch_spec(
+    service_mode: Optional[str] = None,
+    *,
+    windows: Optional[bool] = None,
+) -> Tuple[List[str], Dict[str, Any]]:
+    normalized_mode = str(service_mode or SERVICE_MODE).strip().lower() or SERVICE_MODE
+    is_windows = (os.name == "nt") if windows is None else bool(windows)
+    try:
         borealis_dir = os.path.abspath(os.path.dirname(__file__))
         venv_root = os.path.abspath(os.path.join(borealis_dir, os.pardir))
         venv_scripts = os.path.join(venv_root, "Scripts")
-        preferred = []
+        popen_kwargs: Dict[str, Any] = {"cwd": borealis_dir}
+        if is_windows:
+            popen_kwargs["creationflags"] = 0x08000000
+        if normalized_mode == "system" and is_windows:
+            service_wrapper = os.path.join(borealis_dir, "launch_service.ps1")
+            if os.path.isfile(service_wrapper):
+                powershell = os.path.expandvars(r"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe")
+                if not os.path.isfile(powershell):
+                    powershell = "powershell.exe"
+                return (
+                    [
+                        powershell,
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-WindowStyle",
+                        "Hidden",
+                        "-File",
+                        service_wrapper,
+                    ],
+                    popen_kwargs,
+                )
+
+        preferred: List[str] = []
         if normalized_mode == "currentuser":
             preferred.extend(
                 [
@@ -800,15 +839,12 @@ def _launch_replacement_agent_process(service_mode: Optional[str] = None) -> boo
         agent_script = os.path.join(borealis_dir, "agent.py")
         args = [exe, "-W", "ignore::SyntaxWarning", agent_script]
         if normalized_mode == "system":
-            args.append("--system-service")
-        popen_kwargs: Dict[str, Any] = {"cwd": borealis_dir}
-        if os.name == "nt":
-            popen_kwargs["creationflags"] = 0x08000000
-        subprocess.Popen(args, **popen_kwargs)
-        return True
+            args.extend(["--system-service", "--config", "SYSTEM"])
+        else:
+            args.extend(["--config", "CURRENTUSER"])
+        return args, popen_kwargs
     except Exception as exc:
-        _log_agent(f"Failed to launch replacement {normalized_mode} agent: {exc}", fname="agent.error.log")
-        return False
+        raise RuntimeError(f"could not build replacement launch spec for {normalized_mode}: {exc}") from exc
 
 
 def _shutdown_for_tray_restart() -> None:
