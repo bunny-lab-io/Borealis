@@ -236,6 +236,39 @@ def test_build_tray_view_reports_auth_attention(tmp_path: Path) -> None:
     assert "Refresh token rejected" in view["warnings"]
 
 
+def test_build_tray_view_uses_configured_server_host_when_snapshots_are_missing(tmp_path: Path) -> None:
+    start = _setup_start_path(tmp_path)
+    settings_dir = tmp_path / "Agent" / "Borealis" / "Settings"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    (settings_dir / "server_url.txt").write_text("borealis.example.com\n", encoding="utf-8")
+
+    view = tray_state.build_tray_view(
+        current_snapshot={},
+        system_snapshot={},
+        busy_snapshot={"busy": False, "reasons": [], "entries": []},
+        now=305,
+        start=start,
+    )
+
+    assert view["connected_host"] == "borealis.example.com"
+
+
+def test_build_tray_view_with_one_missing_snapshot_stays_starting(tmp_path: Path) -> None:
+    start = _setup_start_path(tmp_path)
+    current = _snapshot("currentuser", now=200, started_at=60, auth_at=180, heartbeat_at=190)
+
+    view = tray_state.build_tray_view(
+        current_snapshot=current,
+        system_snapshot={},
+        busy_snapshot={"busy": False, "reasons": [], "entries": []},
+        now=220,
+        start=start,
+    )
+
+    assert view["overall_status"] == "Starting up"
+    assert view["security_status"] == "Checking connection"
+
+
 def test_support_detail_order_is_fixed(tmp_path: Path) -> None:
     start = _setup_start_path(tmp_path)
     current = _snapshot("currentuser", now=200, started_at=60, auth_at=180, heartbeat_at=190)

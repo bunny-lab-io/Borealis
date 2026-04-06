@@ -3703,6 +3703,7 @@ if __name__=='__main__':
             'log_agent': lambda message, **kwargs: _log_agent(message, **kwargs),
             'role_health_registry': ROLE_HEALTH_REGISTRY,
             'process_restart_request_now': _process_tray_restart_request_now,
+            'sync_tray_status': _sync_tray_status,
         }
         if not SYSTEM_SERVICE_MODE:
             # Load interactive-context roles (tray/UI, current-user execution, screenshot, etc.)

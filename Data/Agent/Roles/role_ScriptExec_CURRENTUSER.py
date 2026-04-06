@@ -660,7 +660,15 @@ class Role:
         return icon
 
     def _load_tray_view(self) -> Dict[str, Any]:
-        view = tray_state.build_tray_view()
+        current_snapshot = None
+        hooks = getattr(self.ctx, "hooks", {}) or {}
+        sync_hook = hooks.get("sync_tray_status")
+        if callable(sync_hook):
+            try:
+                current_snapshot = sync_hook({})
+            except Exception:
+                current_snapshot = None
+        view = tray_state.build_tray_view(current_snapshot=current_snapshot)
         if self._restart_pending and view.get("overall_status") != "Restarting":
             view = dict(view)
             view["overall_status"] = "Restarting"

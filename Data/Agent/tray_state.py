@@ -125,6 +125,31 @@ def extract_server_host(server_url: Any) -> str:
     return (parsed.hostname or "").strip()
 
 
+def read_configured_server_url(start: Optional[Path] = None) -> str:
+    path = _resolve_project_root(start) / "Settings" / "server_url.txt"
+    if not path.is_file():
+        return ""
+    try:
+        raw = path.read_text(encoding="utf-8-sig", errors="ignore").strip()
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = "https://" + raw
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return ""
+    hostname = str(parsed.hostname or "").strip()
+    if not hostname:
+        return ""
+    netloc = hostname
+    if parsed.port:
+        netloc = f"{hostname}:{parsed.port}"
+    return parsed._replace(scheme="https", netloc=netloc, params="", fragment="").geturl().rstrip("/")
+
+
 def _read_json(path: Path) -> Dict[str, Any]:
     if not path.is_file():
         return {}
@@ -501,6 +526,8 @@ def build_tray_view(
     device_name = str(hostname or socket.gethostname() or "Unknown Device").strip() or "Unknown Device"
     resolved_guid = str(agent_guid or read_agent_guid(start)).strip()
     resolved_build_id = str(build_id or read_build_id() or "").strip()
+    configured_server_url = read_configured_server_url(start)
+    configured_server_host = extract_server_host(configured_server_url)
     current_fresh = bool(current) and snapshot_is_fresh(current, now=timestamp)
     system_fresh = bool(system) and snapshot_is_fresh(system, now=timestamp)
     current_booting = bool(current) and snapshot_in_boot_grace(current, now=timestamp)
@@ -509,15 +536,17 @@ def build_tray_view(
     system_has_initial_contact = bool(int(system.get("last_auth_success_at") or 0) and int(system.get("last_heartbeat_success_at") or 0))
     wireguard = wireguard_summary(system)
     flags = _status_problem_flags(current, system)
+    current_issue = (not current and not current_booting) or (current and not current_fresh and not current_booting)
+    system_issue = (not system and not system_booting) or (system and not system_fresh and not system_booting)
     if restarting:
         overall_status = "Restarting"
     else:
-        missing_after_grace = ((not current and not system_booting) or (not system and not current_booting))
-        stale_after_grace = ((current and not current_fresh and not current_booting) or (system and not system_fresh and not system_booting))
-        if flags["tls_failure"] or flags["auth_failure"] or wireguard["status_code"] == "unhealthy" or missing_after_grace or stale_after_grace:
+        if flags["tls_failure"] or flags["auth_failure"] or wireguard["status_code"] == "unhealthy" or (current_issue and system_issue):
             overall_status = "Needs attention"
         elif (
-            current_booting
+            current_issue
+            or system_issue
+            or current_booting
             or system_booting
             or not current
             or not system
@@ -545,6 +574,7 @@ def build_tray_view(
         or str(system.get("server_host") or "").strip()
         or extract_server_host(current.get("server_url"))
         or extract_server_host(system.get("server_url"))
+        or configured_server_host
         or "Not configured"
     )
     last_check_in_at = max(
