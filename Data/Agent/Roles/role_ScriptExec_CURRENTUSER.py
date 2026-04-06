@@ -668,7 +668,10 @@ class Role:
                 current_snapshot = sync_hook({})
             except Exception:
                 current_snapshot = None
-        view = tray_state.build_tray_view(current_snapshot=current_snapshot)
+        view = tray_state.build_tray_view(
+            current_snapshot=current_snapshot,
+            current_session_active=True,
+        )
         if self._restart_pending and view.get("overall_status") != "Restarting":
             view = dict(view)
             view["overall_status"] = "Restarting"

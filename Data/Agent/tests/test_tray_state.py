@@ -270,6 +270,32 @@ def test_build_tray_view_with_one_missing_snapshot_stays_starting(tmp_path: Path
     assert view["security_status"] == "Checking connection"
 
 
+def test_build_tray_view_with_live_current_session_ignores_stale_current_snapshot(tmp_path: Path) -> None:
+    start = _setup_start_path(tmp_path)
+    current = _snapshot("currentuser", now=200, started_at=60, auth_at=180, heartbeat_at=190)
+    current["updated_at"] = 120
+    system = _snapshot(
+        "system",
+        now=220,
+        started_at=60,
+        auth_at=181,
+        heartbeat_at=191,
+        role_health=_wireguard_role("healthy", "Persistent tunnel active."),
+    )
+
+    view = tray_state.build_tray_view(
+        current_snapshot=current,
+        system_snapshot=system,
+        current_session_active=True,
+        busy_snapshot={"busy": False, "reasons": [], "entries": []},
+        now=220,
+        start=start,
+    )
+
+    assert view["overall_status"] == "Connected"
+    assert view["security_status"] == "Secure connection"
+
+
 def test_support_detail_order_is_fixed(tmp_path: Path) -> None:
     start = _setup_start_path(tmp_path)
     current = _snapshot("currentuser", now=200, started_at=60, auth_at=180, heartbeat_at=190)

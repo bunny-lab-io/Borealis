@@ -510,6 +510,7 @@ def build_tray_view(
     *,
     current_snapshot: Optional[Mapping[str, Any]] = None,
     system_snapshot: Optional[Mapping[str, Any]] = None,
+    current_session_active: bool = False,
     busy_snapshot: Optional[Mapping[str, Any]] = None,
     restart_requests: Optional[Mapping[str, Mapping[str, Any]]] = None,
     now: Optional[int] = None,
@@ -530,13 +531,14 @@ def build_tray_view(
     configured_server_host = extract_server_host(configured_server_url)
     current_fresh = bool(current) and snapshot_is_fresh(current, now=timestamp)
     system_fresh = bool(system) and snapshot_is_fresh(system, now=timestamp)
+    current_live = current_fresh or (bool(current_session_active) and bool(current))
     current_booting = bool(current) and snapshot_in_boot_grace(current, now=timestamp)
     system_booting = bool(system) and snapshot_in_boot_grace(system, now=timestamp)
     current_has_initial_contact = bool(int(current.get("last_auth_success_at") or 0) and int(current.get("last_heartbeat_success_at") or 0))
     system_has_initial_contact = bool(int(system.get("last_auth_success_at") or 0) and int(system.get("last_heartbeat_success_at") or 0))
     wireguard = wireguard_summary(system)
     flags = _status_problem_flags(current, system)
-    current_issue = (not current and not current_booting) or (current and not current_fresh and not current_booting)
+    current_issue = (not current and not current_booting) or (current and not current_live and not current_booting)
     system_issue = (not system and not system_booting) or (system and not system_fresh and not system_booting)
     if restarting:
         overall_status = "Restarting"
@@ -555,7 +557,7 @@ def build_tray_view(
             or wireguard["status_code"] in {"recovering", "pending"}
         ):
             overall_status = "Starting up"
-        elif current_fresh and system_fresh:
+        elif current_live and system_fresh:
             overall_status = "Connected"
         else:
             overall_status = "Needs attention"
@@ -589,7 +591,7 @@ def build_tray_view(
         warnings.append("User session helper status is unavailable.")
     if not system and not system_booting:
         warnings.append("System service status is unavailable.")
-    if current and not current_fresh and not current_booting:
+    if current and not current_live and not current_booting:
         warnings.append("User session helper status is stale.")
     if system and not system_fresh and not system_booting:
         warnings.append("System service status is stale.")
