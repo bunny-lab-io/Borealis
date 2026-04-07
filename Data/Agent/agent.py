@@ -789,6 +789,35 @@ def _background_process_popen_kwargs(cwd: str, *, windows: Optional[bool] = None
     return popen_kwargs
 
 
+def _launch_windows_restart_task_helper() -> bool:
+    try:
+        borealis_dir = os.path.abspath(os.path.dirname(__file__))
+        helper_script = os.path.join(borealis_dir, "restart_agent_tasks.ps1")
+        if not os.path.isfile(helper_script):
+            raise FileNotFoundError(f"restart helper missing: {helper_script}")
+        powershell = os.path.expandvars(r"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe")
+        if not os.path.isfile(powershell):
+            powershell = "powershell.exe"
+        popen_kwargs = _background_process_popen_kwargs(borealis_dir, windows=True)
+        subprocess.Popen(
+            [
+                powershell,
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-WindowStyle",
+                "Hidden",
+                "-File",
+                helper_script,
+            ],
+            **popen_kwargs,
+        )
+        return True
+    except Exception as exc:
+        _log_agent(f"Failed to launch Windows restart task helper: {exc}", fname="agent.error.log")
+        return False
+
+
 def _launch_replacement_agent_process(service_mode: Optional[str] = None) -> bool:
     normalized_mode = str(service_mode or SERVICE_MODE).strip().lower() or SERVICE_MODE
     try:
@@ -916,13 +945,21 @@ def _process_tray_restart_request_now() -> bool:
         _tray_state.clear_restart_request(SERVICE_MODE)
         return False
     request_id = str(payload.get("request_id") or "").strip() or "unknown"
-    if not _launch_replacement_agent_process(SERVICE_MODE):
+    launcher = _launch_replacement_agent_process
+    if os.name == "nt" and str(SERVICE_MODE or "").strip().lower() == "system":
+        launcher = lambda mode: _launch_windows_restart_task_helper()
+    if not launcher(SERVICE_MODE):
         _record_tray_error("transport", f"Restart request {request_id} could not launch a replacement process.")
         return False
     try:
         _tray_state.clear_restart_request(SERVICE_MODE)
     except Exception:
         pass
+    if os.name == "nt" and str(SERVICE_MODE or "").strip().lower() == "system":
+        try:
+            _tray_state.clear_restart_request("currentuser")
+        except Exception:
+            pass
     _log_agent(f"Processing tray restart request request_id={request_id} scope={SERVICE_MODE}", fname="agent.log")
     _shutdown_for_tray_restart()
     return True

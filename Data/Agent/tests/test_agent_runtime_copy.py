@@ -8,6 +8,7 @@ def test_borealis_ps1_stages_runtime_paths_into_agent_runtime() -> None:
     content = script_path.read_text(encoding="utf-8")
 
     assert "launch_service.ps1" in content
+    assert "restart_agent_tasks.ps1" in content
     assert "runtime_paths.py" in content
     assert "tray_state.py" in content
 

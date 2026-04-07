@@ -167,3 +167,46 @@ def test_spawn_currentuser_agent_uses_currentuser_config(monkeypatch) -> None:
             },
         )
     ]
+
+
+def test_restart_agent_on_windows_exits_after_requesting_restart(monkeypatch, tmp_path: Path) -> None:
+    start = _setup_start_path(tmp_path)
+
+    class _FakeMessageBox:
+        Yes = 1
+        No = 0
+
+        @staticmethod
+        def question(*args, **kwargs) -> int:
+            return _FakeMessageBox.Yes
+
+    monkeypatch.setattr(role_module, "IS_WINDOWS", True)
+    monkeypatch.setattr(
+        role_module,
+        "QtWidgets",
+        types.SimpleNamespace(QMessageBox=_FakeMessageBox),
+    )
+    monkeypatch.setattr(
+        role_module.tray_state,
+        "request_restart",
+        lambda service_modes, requested_by, requested_by_pid: tray_state.request_restart(
+            service_modes,
+            start=start,
+            requested_by=requested_by,
+            requested_by_pid=requested_by_pid,
+        ),
+    )
+
+    calls: list[str] = []
+    role = role_module.Role.__new__(role_module.Role)
+    role.ctx = type("Ctx", (), {"hooks": {"process_restart_request_now": lambda: calls.append("processor") or True}})()
+    role._restart_pending = False
+    role._refresh_tray_view = lambda: calls.append("refresh")
+    role._spawn_currentuser_agent = lambda: calls.append("spawn") or True
+    role._exit_app = lambda: calls.append("exit")
+
+    role._restart_agent()
+
+    assert tray_state.load_restart_request("currentuser", start=start)["service_mode"] == "currentuser"
+    assert tray_state.load_restart_request("system", start=start)["service_mode"] == "system"
+    assert calls == ["refresh", "exit"]

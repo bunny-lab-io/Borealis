@@ -640,6 +640,9 @@ class Role:
             return
         self._restart_pending = True
         self._refresh_tray_view()
+        if IS_WINDOWS:
+            self._exit_app()
+            return
         hooks = getattr(self.ctx, "hooks", {}) or {}
         processor = hooks.get("process_restart_request_now")
         if callable(processor):

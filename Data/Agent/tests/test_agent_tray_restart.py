@@ -44,6 +44,25 @@ def test_process_tray_restart_request_consumes_own_scope(monkeypatch) -> None:
     assert calls == ["system", "shutdown"]
 
 
+def test_process_tray_restart_request_uses_task_helper_on_windows(monkeypatch) -> None:
+    fake_tray_state = _FakeTrayState()
+    calls: list[str] = []
+
+    monkeypatch.setattr(agent_module, "_tray_state", fake_tray_state)
+    monkeypatch.setattr(agent_module, "SERVICE_MODE", "system")
+    monkeypatch.setattr(agent_module.os, "name", "nt", raising=False)
+    monkeypatch.setattr(agent_module, "_launch_windows_restart_task_helper", lambda: calls.append("task-helper") or True)
+    monkeypatch.setattr(agent_module, "_launch_replacement_agent_process", lambda mode: calls.append("replacement") or True)
+    monkeypatch.setattr(agent_module, "_shutdown_for_tray_restart", lambda: calls.append("shutdown"))
+    monkeypatch.setattr(agent_module.time, "time", lambda: 1005)
+
+    processed = agent_module._process_tray_restart_request_now()
+
+    assert processed is True
+    assert fake_tray_state.cleared == ["system", "currentuser"]
+    assert calls == ["task-helper", "shutdown"]
+
+
 def test_replacement_launch_spec_uses_currentuser_config(monkeypatch) -> None:
     monkeypatch.setattr(agent_module, "__file__", "/runtime/Borealis/agent.py", raising=False)
     monkeypatch.setattr(
@@ -109,3 +128,50 @@ def test_replacement_launch_spec_uses_service_wrapper_for_system_on_windows(monk
         "stderr": agent_module.subprocess.DEVNULL,
         "creationflags": 0x08000208,
     }
+
+
+def test_launch_windows_restart_task_helper_uses_powershell_script(monkeypatch) -> None:
+    popen_calls: list[tuple[list[str], dict]] = []
+    monkeypatch.setattr(agent_module, "__file__", "/runtime/Borealis/agent.py", raising=False)
+    monkeypatch.setattr(agent_module.os, "name", "nt", raising=False)
+    monkeypatch.setattr(
+        agent_module.os.path,
+        "expandvars",
+        lambda value: "/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+    )
+    monkeypatch.setattr(
+        agent_module.os.path,
+        "isfile",
+        lambda path: path in {
+            "/runtime/Borealis/restart_agent_tasks.ps1",
+            "/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+        },
+    )
+    monkeypatch.setattr(
+        agent_module.subprocess,
+        "Popen",
+        lambda args, **kwargs: popen_calls.append((list(args), dict(kwargs))),
+    )
+
+    assert agent_module._launch_windows_restart_task_helper() is True
+    assert popen_calls == [
+        (
+            [
+                "/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-WindowStyle",
+                "Hidden",
+                "-File",
+                "/runtime/Borealis/restart_agent_tasks.ps1",
+            ],
+            {
+                "cwd": "/runtime/Borealis",
+                "stdin": agent_module.subprocess.DEVNULL,
+                "stdout": agent_module.subprocess.DEVNULL,
+                "stderr": agent_module.subprocess.DEVNULL,
+                "creationflags": 0x08000208,
+            },
+        )
+    ]
