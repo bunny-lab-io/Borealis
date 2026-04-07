@@ -768,6 +768,27 @@ def _mark_planned_shutdown(reason: str) -> None:
     _PLANNED_SHUTDOWN_REASON = str(reason or "").strip()
 
 
+def _background_process_popen_kwargs(cwd: str, *, windows: Optional[bool] = None) -> Dict[str, Any]:
+    is_windows = (os.name == "nt") if windows is None else bool(windows)
+    popen_kwargs: Dict[str, Any] = {
+        "cwd": cwd,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if is_windows:
+        creationflags = (
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+            | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+            | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        )
+        if creationflags:
+            popen_kwargs["creationflags"] = creationflags
+    else:
+        popen_kwargs["start_new_session"] = True
+    return popen_kwargs
+
+
 def _launch_replacement_agent_process(service_mode: Optional[str] = None) -> bool:
     normalized_mode = str(service_mode or SERVICE_MODE).strip().lower() or SERVICE_MODE
     try:
@@ -790,9 +811,7 @@ def _replacement_launch_spec(
         borealis_dir = os.path.abspath(os.path.dirname(__file__))
         venv_root = os.path.abspath(os.path.join(borealis_dir, os.pardir))
         venv_scripts = os.path.join(venv_root, "Scripts")
-        popen_kwargs: Dict[str, Any] = {"cwd": borealis_dir}
-        if is_windows:
-            popen_kwargs["creationflags"] = 0x08000000
+        popen_kwargs = _background_process_popen_kwargs(borealis_dir, windows=is_windows)
         if normalized_mode == "system" and is_windows:
             service_wrapper = os.path.join(borealis_dir, "launch_service.ps1")
             if os.path.isfile(service_wrapper):

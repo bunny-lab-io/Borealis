@@ -65,7 +65,13 @@ def test_replacement_launch_spec_uses_currentuser_config(monkeypatch) -> None:
         "--config",
         "CURRENTUSER",
     ]
-    assert popen_kwargs == {"cwd": "/runtime/Borealis", "creationflags": 0x08000000}
+    assert popen_kwargs == {
+        "cwd": "/runtime/Borealis",
+        "stdin": agent_module.subprocess.DEVNULL,
+        "stdout": agent_module.subprocess.DEVNULL,
+        "stderr": agent_module.subprocess.DEVNULL,
+        "creationflags": 0x08000208,
+    }
 
 
 def test_replacement_launch_spec_uses_service_wrapper_for_system_on_windows(monkeypatch) -> None:
@@ -96,4 +102,10 @@ def test_replacement_launch_spec_uses_service_wrapper_for_system_on_windows(monk
         "-File",
         "/runtime/Borealis/launch_service.ps1",
     ]
-    assert popen_kwargs == {"cwd": "/runtime/Borealis", "creationflags": 0x08000000}
+    assert popen_kwargs == {
+        "cwd": "/runtime/Borealis",
+        "stdin": agent_module.subprocess.DEVNULL,
+        "stdout": agent_module.subprocess.DEVNULL,
+        "stderr": agent_module.subprocess.DEVNULL,
+        "creationflags": 0x08000208,
+    }

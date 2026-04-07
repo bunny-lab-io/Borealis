@@ -158,6 +158,12 @@ def test_spawn_currentuser_agent_uses_currentuser_config(monkeypatch) -> None:
                 "--config",
                 "CURRENTUSER",
             ],
-            {"cwd": "/runtime/Borealis"},
+            {
+                "cwd": "/runtime/Borealis",
+                "stdin": role_module.subprocess.DEVNULL,
+                "stdout": role_module.subprocess.DEVNULL,
+                "stderr": role_module.subprocess.DEVNULL,
+                "start_new_session": True,
+            },
         )
     ]

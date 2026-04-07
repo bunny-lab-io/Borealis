@@ -41,6 +41,26 @@ ROLE_CONTEXTS = ['interactive']
 IS_WINDOWS = os.name == 'nt'
 
 
+def _background_process_popen_kwargs(cwd: str) -> Dict[str, Any]:
+    popen_kwargs: Dict[str, Any] = {
+        "cwd": cwd,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        creationflags = (
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+            | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+            | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        )
+        if creationflags:
+            popen_kwargs["creationflags"] = creationflags
+    else:
+        popen_kwargs["start_new_session"] = True
+    return popen_kwargs
+
+
 def _canonical_env_key(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_]", "_", (name or "").strip())
     return cleaned.upper()
@@ -818,9 +838,7 @@ class Role:
             if not exe:
                 exe = sys.executable
             agent_script = os.path.join(borealis_dir, "agent.py")
-            popen_kwargs: Dict[str, Any] = {"cwd": borealis_dir}
-            if os.name == "nt":
-                popen_kwargs["creationflags"] = 0x08000000
+            popen_kwargs = _background_process_popen_kwargs(borealis_dir)
             subprocess.Popen(
                 [exe, "-W", "ignore::SyntaxWarning", agent_script, "--config", "CURRENTUSER"],
                 **popen_kwargs,
