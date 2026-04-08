@@ -1137,7 +1137,8 @@ export default function AssemblyList() {
 
   useRoutePageChrome({
     title: "Assemblies",
-    subtitle: "Collections of scripts, workflows, and playbooks used to automate tasks across devices.",
+    subtitle:
+      "Collections of scripts, workflows, and ansible playbooks used to automate tasks across devices. Officially-published assemblies can be found at the [Aurora Assembly Repository](https://github.com/bunny-lab-io/Aurora).",
     Icon: AppsIcon,
     actions: pageHeaderActions,
   });
@@ -1401,34 +1402,6 @@ export default function AssemblyList() {
                 <CircularProgress size={32} sx={{ color: BOREALIS_BLUE }} />
               </Box>
             ) : null}
-          </Box>
-          <Box
-            sx={{
-              px: 2,
-              py: 1.5,
-              borderTop: "1px solid rgba(148, 163, 184, 0.16)",
-              background: "rgba(2, 6, 23, 0.32)",
-            }}
-          >
-            <Typography variant="caption" sx={{ color: DARKER_GRAY, lineHeight: 1.6 }}>
-              Note: Official published assemblies live in the{" "}
-              <MuiLink
-                href={AURORA_REPOSITORY_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                sx={{
-                  color: BOREALIS_BLUE,
-                  fontWeight: 500,
-                  textDecorationColor: "rgba(88,166,255,0.5)",
-                  "&:hover": {
-                    textDecorationColor: BOREALIS_BLUE,
-                  },
-                }}
-              >
-                Aurora Assembly Repository
-              </MuiLink>
-              .
-            </Typography>
           </Box>
         </Box>
       </PageBodyFrame>

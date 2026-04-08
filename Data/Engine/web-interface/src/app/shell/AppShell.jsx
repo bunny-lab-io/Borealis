@@ -53,6 +53,7 @@ import { APP_PATHS } from "../routes/paths.js";
 import { getBorealisSocket } from "../runtime/bootstrapClientRuntime.js";
 import { formatOperatorPresencePage } from "../utils/operatorPresence.js";
 import { APP_AURORA_BACKGROUND } from "../utils/theme.js";
+import PageSubtitleMarkdown from "./PageSubtitleMarkdown.jsx";
 
 function resolveDeviceId(device) {
   return (
@@ -665,7 +666,7 @@ export default function AppShell() {
                     </Box>
                     {resolvedChrome.subtitle ? (
                       <Typography variant="body2" sx={{ color: "#aaa", mt: 0.5 }}>
-                        {resolvedChrome.subtitle}
+                        <PageSubtitleMarkdown text={resolvedChrome.subtitle} />
                       </Typography>
                     ) : null}
                   </Box>
