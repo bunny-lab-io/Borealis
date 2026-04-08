@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  APP_DOCUMENT_TITLE,
   buildBreadcrumbItems,
+  formatDocumentTitle,
   resolveActiveNavKey,
   resolveCurrentPageKey,
   resolvePageChromeDefaults,
@@ -56,5 +58,12 @@ describe("breadcrumb and nav helpers", () => {
       actions: [],
       controls: [],
     });
+  });
+
+  it("formats browser tab titles from the resolved page title", () => {
+    expect(formatDocumentTitle("Sites")).toBe("Borealis - Sites");
+    expect(formatDocumentTitle("  Device Inventory  ")).toBe("Borealis - Device Inventory");
+    expect(formatDocumentTitle("")).toBe(APP_DOCUMENT_TITLE);
+    expect(formatDocumentTitle(APP_DOCUMENT_TITLE)).toBe(APP_DOCUMENT_TITLE);
   });
 });

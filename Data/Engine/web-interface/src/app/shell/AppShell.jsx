@@ -44,7 +44,9 @@ import {
 import { useAuth } from "../providers/AuthContext.jsx";
 import { usePageChrome } from "../providers/PageChromeContext.jsx";
 import {
+  APP_DOCUMENT_TITLE,
   buildBreadcrumbItems,
+  formatDocumentTitle,
   resolveActiveNavKey,
   resolveCurrentPageKey,
   resolvePageChromeDefaults,
@@ -170,6 +172,24 @@ export default function AppShell() {
       resolvedChrome.actions?.length ||
       resolvedChrome.controls?.length
   );
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    document.title = formatDocumentTitle(resolvedChrome.title);
+  }, [resolvedChrome.title]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return undefined;
+    }
+
+    return () => {
+      document.title = APP_DOCUMENT_TITLE;
+    };
+  }, []);
 
   const clearResetOwnPasswordState = useCallback(() => {
     setResetOwnPasswordOpen(false);

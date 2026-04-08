@@ -3,6 +3,8 @@ function resolveHandleValue(handle, key, match) {
   return typeof value === "function" ? value(match) : value;
 }
 
+export const APP_DOCUMENT_TITLE = "Borealis";
+
 export function resolveActiveNavKey(matches = []) {
   for (let index = matches.length - 1; index >= 0; index -= 1) {
     const navKey = matches[index]?.handle?.navKey;
@@ -34,6 +36,19 @@ export function resolvePageChromeDefaults(matches = []) {
     actions: Array.isArray(handle?.actions) ? handle.actions.filter(Boolean) : [],
     controls: Array.isArray(handle?.controls) ? handle.controls.filter(Boolean) : [],
   };
+}
+
+export function formatDocumentTitle(pageTitle, appTitle = APP_DOCUMENT_TITLE) {
+  const normalizedAppTitle =
+    typeof appTitle === "string" && appTitle.trim() ? appTitle.trim() : APP_DOCUMENT_TITLE;
+  const normalizedPageTitle =
+    typeof pageTitle === "string" ? pageTitle.trim() : pageTitle == null ? "" : String(pageTitle).trim();
+
+  if (!normalizedPageTitle || normalizedPageTitle === normalizedAppTitle) {
+    return normalizedAppTitle;
+  }
+
+  return `${normalizedAppTitle} - ${normalizedPageTitle}`;
 }
 
 export function buildBreadcrumbItems(matches = [], pageChrome = {}) {
