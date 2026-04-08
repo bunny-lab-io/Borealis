@@ -41,6 +41,7 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - PyJWT - MIT - https://spdx.org/licenses/MIT.html
 - pyotp - MIT - https://spdx.org/licenses/MIT.html
 - qrcode - BSD - https://github.com/lincolnloop/python-qrcode/blob/main/LICENSE
+- webauthn - BSD-3-Clause - https://github.com/duo-labs/py_webauthn/blob/master/LICENSE
 - Pillow - MIT-CMU - https://github.com/python-pillow/Pillow/blob/main/LICENSE
 - requests - Apache-2.0 - https://spdx.org/licenses/Apache-2.0.html
 - aiohttp - Apache-2.0 AND MIT - https://github.com/aio-libs/aiohttp/blob/master/LICENSE.txt
@@ -73,6 +74,7 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - @mui/material - MIT - https://spdx.org/licenses/MIT.html
 - @mui/x-date-pickers - MIT - https://spdx.org/licenses/MIT.html
 - @mui/x-tree-view - MIT - https://spdx.org/licenses/MIT.html
+- @simplewebauthn/browser - MIT - https://github.com/MasterKale/SimpleWebAuthn/blob/master/LICENSE
 - ag-grid-community - MIT - https://spdx.org/licenses/MIT.html
 - ag-grid-react - MIT - https://spdx.org/licenses/MIT.html
 - @novnc/novnc - MPL-2.0 - https://spdx.org/licenses/MPL-2.0.html

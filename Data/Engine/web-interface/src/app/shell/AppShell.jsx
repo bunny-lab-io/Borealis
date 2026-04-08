@@ -15,6 +15,7 @@ import {
   Typography,
 } from "@mui/material";
 import {
+  Fingerprint as FingerprintIcon,
   KeyboardArrowDown as KeyboardArrowDownIcon,
   LockReset as LockResetIcon,
   Logout as LogoutIcon,
@@ -74,6 +75,27 @@ function stripTransientLocationState(state) {
   return Object.keys(nextState).length ? nextState : null;
 }
 
+function formatPasskeyTimestamp(value) {
+  const ts = Number(value || 0);
+  if (!ts) return "Never";
+  try {
+    return new Date(ts * 1000).toLocaleString();
+  } catch {
+    return "Unknown";
+  }
+}
+
+function formatPasskeyTransportLabel(transports) {
+  if (!Array.isArray(transports) || !transports.length) {
+    return "Platform or roaming authenticator";
+  }
+  return transports
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .map((item) => item.charAt(0).toUpperCase() + item.slice(1))
+    .join(", ");
+}
+
 export default function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -82,7 +104,12 @@ export default function AppShell() {
     user,
     displayName,
     mfaEnabled,
+    passkeyCount,
     logout,
+    registerPasskey,
+    listPasskeys,
+    updatePasskeyLabel,
+    deletePasskey,
     resetPassword,
     resetMfa,
     aegisDialog,
@@ -103,6 +130,15 @@ export default function AppShell() {
   const [resetOwnPasswordError, setResetOwnPasswordError] = useState("");
   const [resetOwnMfaOpen, setResetOwnMfaOpen] = useState(false);
   const [resetOwnMfaBusy, setResetOwnMfaBusy] = useState(false);
+  const [addPasskeyBusy, setAddPasskeyBusy] = useState(false);
+  const [managePasskeysOpen, setManagePasskeysOpen] = useState(false);
+  const [managePasskeysLoading, setManagePasskeysLoading] = useState(false);
+  const [managePasskeysError, setManagePasskeysError] = useState("");
+  const [managePasskeyRows, setManagePasskeyRows] = useState([]);
+  const [managePasskeyLabels, setManagePasskeyLabels] = useState({});
+  const [managePasskeyAction, setManagePasskeyAction] = useState({ id: null, type: "" });
+  const [newPasskeyLabel, setNewPasskeyLabel] = useState("");
+  const [removePasskeyTarget, setRemovePasskeyTarget] = useState(null);
 
   const defaultChrome = useMemo(() => resolvePageChromeDefaults(matches), [matches]);
   const activeNavKey = useMemo(() => resolveActiveNavKey(matches), [matches]);
@@ -257,6 +293,145 @@ export default function AppShell() {
     resetPassword,
   ]);
 
+  const syncManagedPasskeys = useCallback((items) => {
+    const nextItems = Array.isArray(items) ? items : [];
+    setManagePasskeyRows(nextItems);
+    setManagePasskeyLabels(
+      nextItems.reduce((acc, item) => {
+        acc[item.id] = item.label || "Passkey";
+        return acc;
+      }, {})
+    );
+  }, []);
+
+  const loadManagedPasskeys = useCallback(async () => {
+    setManagePasskeysLoading(true);
+    setManagePasskeysError("");
+    try {
+      const items = await listPasskeys();
+      syncManagedPasskeys(items);
+    } catch (error) {
+      setManagePasskeysError(
+        error instanceof Error && error.message
+          ? error.message
+          : "Borealis could not load your passkeys."
+      );
+    } finally {
+      setManagePasskeysLoading(false);
+    }
+  }, [listPasskeys, syncManagedPasskeys]);
+
+  const handleOpenManagePasskeysDialog = useCallback(() => {
+    handleUserMenuClose();
+    if (managePasskeysLoading) return;
+    setManagePasskeysOpen(true);
+    void loadManagedPasskeys();
+  }, [handleUserMenuClose, loadManagedPasskeys, managePasskeysLoading]);
+
+  const handleCloseManagePasskeysDialog = useCallback(() => {
+    if (addPasskeyBusy || managePasskeyAction.id) return;
+    setManagePasskeysOpen(false);
+    setManagePasskeysError("");
+    setNewPasskeyLabel("");
+    setRemovePasskeyTarget(null);
+  }, [addPasskeyBusy, managePasskeyAction.id]);
+
+  const handleAddPasskey = useCallback(async () => {
+    if (addPasskeyBusy) return;
+    setAddPasskeyBusy(true);
+    setManagePasskeysError("");
+    try {
+      await registerPasskey({ label: newPasskeyLabel });
+      setNewPasskeyLabel("");
+      if (managePasskeysOpen) {
+        await loadManagedPasskeys();
+      }
+    } catch (error) {
+      setManagePasskeysError(
+        error instanceof Error && error.message
+          ? error.message
+          : "Borealis could not add a passkey right now."
+      );
+    } finally {
+      setAddPasskeyBusy(false);
+    }
+  }, [addPasskeyBusy, loadManagedPasskeys, managePasskeysOpen, newPasskeyLabel, registerPasskey]);
+
+  const handleManagedPasskeyLabelChange = useCallback((passkeyId, value) => {
+    setManagePasskeyLabels((current) => ({
+      ...current,
+      [passkeyId]: value,
+    }));
+  }, []);
+
+  const handleSaveManagedPasskey = useCallback(
+    async (passkeyId) => {
+      if (managePasskeyAction.id) return;
+      setManagePasskeyAction({ id: passkeyId, type: "save" });
+      setManagePasskeysError("");
+      try {
+        const payload = await updatePasskeyLabel({
+          passkeyId,
+          label: managePasskeyLabels[passkeyId] || "",
+        });
+        const updatedPasskey = payload?.passkey || null;
+        if (updatedPasskey?.id) {
+          setManagePasskeyRows((current) =>
+            current.map((item) => (item.id === updatedPasskey.id ? updatedPasskey : item))
+          );
+          setManagePasskeyLabels((current) => ({
+            ...current,
+            [updatedPasskey.id]: updatedPasskey.label || "Passkey",
+          }));
+        }
+      } catch (error) {
+        setManagePasskeysError(
+          error instanceof Error && error.message
+            ? error.message
+            : "Borealis could not update that passkey."
+        );
+      } finally {
+        setManagePasskeyAction({ id: null, type: "" });
+      }
+    },
+    [managePasskeyAction.id, managePasskeyLabels, updatePasskeyLabel]
+  );
+
+  const handleRequestRemoveManagedPasskey = useCallback((passkey) => {
+    setRemovePasskeyTarget(passkey);
+  }, []);
+
+  const handleCancelRemoveManagedPasskey = useCallback(() => {
+    if (managePasskeyAction.id) return;
+    setRemovePasskeyTarget(null);
+  }, [managePasskeyAction.id]);
+
+  const handleConfirmRemoveManagedPasskey = useCallback(async () => {
+    if (!removePasskeyTarget?.id || managePasskeyAction.id) return;
+    setManagePasskeyAction({ id: removePasskeyTarget.id, type: "delete" });
+    setManagePasskeysError("");
+    try {
+      await deletePasskey({ passkeyId: removePasskeyTarget.id });
+      setManagePasskeyRows((current) =>
+        current.filter((item) => item.id !== removePasskeyTarget.id)
+      );
+      setManagePasskeyLabels((current) => {
+        const next = { ...current };
+        delete next[removePasskeyTarget.id];
+        return next;
+      });
+      setRemovePasskeyTarget(null);
+    } catch (error) {
+      setManagePasskeysError(
+        error instanceof Error && error.message
+          ? error.message
+          : "Borealis could not remove that passkey."
+      );
+    } finally {
+      setManagePasskeyAction({ id: null, type: "" });
+    }
+  }, [deletePasskey, managePasskeyAction.id, removePasskeyTarget]);
+
   const handleOpenResetOwnMfaDialog = useCallback(() => {
     handleUserMenuClose();
     if (!mfaEnabled || resetOwnMfaBusy) return;
@@ -395,6 +570,24 @@ export default function AppShell() {
               open={Boolean(userMenuAnchorEl)}
               onClose={handleUserMenuClose}
             >
+              <MenuItem
+                disabled={managePasskeysLoading || addPasskeyBusy}
+                onClick={handleOpenManagePasskeysDialog}
+              >
+                <FingerprintIcon
+                  sx={{
+                    fontSize: 18,
+                    color:
+                      !managePasskeysLoading && !addPasskeyBusy
+                        ? "#8ecbff"
+                        : "rgba(148,163,184,0.62)",
+                    mr: 1,
+                  }}
+                />
+                {managePasskeysLoading
+                  ? "Loading Passkeys..."
+                  : `Manage Passkeys${passkeyCount ? ` (${passkeyCount})` : ""}`}
+              </MenuItem>
               <MenuItem disabled={resetOwnPasswordBusy} onClick={handleOpenResetOwnPasswordDialog}>
                 <VpnKeyIcon
                   sx={{
@@ -504,6 +697,194 @@ export default function AppShell() {
       </Box>
 
       <Dialog
+        open={managePasskeysOpen}
+        onClose={handleCloseManagePasskeysDialog}
+        fullWidth
+        maxWidth="sm"
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
+      >
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="Manage Passkeys"
+            subtitle="Review the passkeys this Borealis account can use to sign in, rename them, or remove the ones you no longer want."
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
+          <Typography sx={DIALOG_BODY_TEXT_SX}>
+            Passkeys are stored per operator account. You can add another passkey for a second
+            device, give each one a friendly name, and remove old passkeys whenever you retire a
+            browser, phone, or laptop.
+          </Typography>
+          <Box
+            sx={{
+              display: "flex",
+              gap: 1.5,
+              mt: 2,
+              flexDirection: { xs: "column", sm: "row" },
+              alignItems: { xs: "stretch", sm: "flex-start" },
+            }}
+          >
+            <TextField
+              fullWidth
+              label="New Passkey Label"
+              variant="outlined"
+              value={newPasskeyLabel}
+              onChange={(event) => setNewPasskeyLabel(event.target.value)}
+              disabled={addPasskeyBusy || managePasskeysLoading || Boolean(managePasskeyAction.id)}
+              placeholder="Work laptop, YubiKey, iPhone, ..."
+              sx={{ ...DIALOG_INPUT_SX, mt: 0 }}
+            />
+            <Button
+              onClick={() => void handleAddPasskey()}
+              sx={{ ...DIALOG_PRIMARY_BUTTON_SX, minWidth: { xs: "100%", sm: 168 } }}
+              disabled={addPasskeyBusy || managePasskeysLoading || Boolean(managePasskeyAction.id)}
+            >
+              {addPasskeyBusy ? "Adding..." : "Add Passkey"}
+            </Button>
+          </Box>
+
+          {managePasskeysError ? (
+            <Typography sx={{ ...DIALOG_BODY_TEXT_SX, mt: 1.5, color: "#ffb4b4" }}>
+              {managePasskeysError}
+            </Typography>
+          ) : null}
+
+          {managePasskeysLoading ? (
+            <Typography sx={{ ...DIALOG_BODY_TEXT_SX, mt: 2.2 }}>
+              Loading your Borealis passkeys...
+            </Typography>
+          ) : managePasskeyRows.length ? (
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, mt: 2.2 }}>
+              {managePasskeyRows.map((passkey) => {
+                const rowBusy = managePasskeyAction.id === passkey.id;
+                const draftLabel = managePasskeyLabels[passkey.id] ?? passkey.label ?? "Passkey";
+                const normalizedDraft = String(draftLabel || "").trim() || "Passkey";
+                const normalizedCurrent = String(passkey.label || "").trim() || "Passkey";
+                return (
+                  <Box
+                    key={passkey.id}
+                    sx={{
+                      borderRadius: 2.5,
+                      border: "1px solid rgba(125,183,255,0.18)",
+                      background:
+                        "linear-gradient(180deg, rgba(15,23,42,0.96), rgba(8,13,24,0.94))",
+                      boxShadow: "0 14px 28px rgba(3,10,24,0.26)",
+                      p: 2,
+                    }}
+                  >
+                    <TextField
+                      fullWidth
+                      label="Passkey Name"
+                      variant="outlined"
+                      value={draftLabel}
+                      onChange={(event) =>
+                        handleManagedPasskeyLabelChange(passkey.id, event.target.value)
+                      }
+                      disabled={rowBusy || addPasskeyBusy}
+                      sx={{ ...DIALOG_INPUT_SX, mt: 0 }}
+                    />
+                    <Typography sx={{ ...DIALOG_BODY_TEXT_SX, mt: 1.2 }}>
+                      Created: {formatPasskeyTimestamp(passkey.created_at)}
+                    </Typography>
+                    <Typography sx={{ ...DIALOG_BODY_TEXT_SX, mt: 0.8 }}>
+                      Last used: {formatPasskeyTimestamp(passkey.last_used_at)}
+                    </Typography>
+                    <Typography sx={{ ...DIALOG_BODY_TEXT_SX, mt: 0.8 }}>
+                      Device type: {formatPasskeyTransportLabel(passkey.transports)}
+                    </Typography>
+                    <Box
+                      sx={{
+                        display: "flex",
+                        gap: 1.25,
+                        mt: 1.9,
+                        flexDirection: { xs: "column", sm: "row" },
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <Button
+                        onClick={() => void handleSaveManagedPasskey(passkey.id)}
+                        sx={DIALOG_PRIMARY_BUTTON_SX}
+                        disabled={
+                          rowBusy ||
+                          addPasskeyBusy ||
+                          normalizedDraft === normalizedCurrent ||
+                          normalizedDraft.length > 80
+                        }
+                      >
+                        {rowBusy && managePasskeyAction.type === "save" ? "Saving..." : "Save Name"}
+                      </Button>
+                      <Button
+                        onClick={() => handleRequestRemoveManagedPasskey(passkey)}
+                        sx={DIALOG_DANGER_BUTTON_SX}
+                        disabled={rowBusy || addPasskeyBusy}
+                      >
+                        Remove Passkey
+                      </Button>
+                    </Box>
+                  </Box>
+                );
+              })}
+            </Box>
+          ) : (
+            <Typography sx={{ ...DIALOG_BODY_TEXT_SX, mt: 2.2 }}>
+              No passkeys are enrolled for this account yet. Add one above to start using passkeys
+              for Borealis MFA.
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button
+            onClick={handleCloseManagePasskeysDialog}
+            sx={DIALOG_BUTTON_SX}
+            disabled={addPasskeyBusy || Boolean(managePasskeyAction.id)}
+          >
+            Done
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(removePasskeyTarget)}
+        onClose={handleCancelRemoveManagedPasskey}
+        fullWidth
+        maxWidth="xs"
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
+      >
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="Remove Passkey"
+            subtitle="Revoke a passkey from this Borealis account."
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
+          <Typography sx={DIALOG_BODY_TEXT_SX}>
+            Remove{" "}
+            <Box component="span" sx={{ color: "#f8fafc", fontWeight: 700 }}>
+              {removePasskeyTarget?.label || "this passkey"}
+            </Box>
+            {" "}from your account? You can still sign in with your password and any remaining MFA
+            methods, and Borealis will prompt you to set MFA up again later if no methods remain.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button
+            onClick={handleCancelRemoveManagedPasskey}
+            sx={DIALOG_BUTTON_SX}
+            disabled={Boolean(managePasskeyAction.id)}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() => void handleConfirmRemoveManagedPasskey()}
+            sx={DIALOG_DANGER_BUTTON_SX}
+            disabled={Boolean(managePasskeyAction.id)}
+          >
+            {managePasskeyAction.type === "delete" ? "Removing..." : "Remove"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
         open={resetOwnPasswordOpen}
         onClose={handleCloseResetOwnPasswordDialog}
         fullWidth
@@ -579,13 +960,14 @@ export default function AppShell() {
         <DialogTitle sx={DIALOG_TITLE_SX}>
           <DialogHeaderBlock
             title="Reset MFA"
-            subtitle="Clear your current Borealis MFA secret for this account."
+            subtitle="Clear your current Borealis MFA setup for this account."
           />
         </DialogTitle>
         <DialogContent sx={DIALOG_CONTENT_SX}>
           <Typography sx={DIALOG_BODY_TEXT_SX}>
-            Borealis will keep MFA enabled for your account, but the next time you sign in you will
-            be prompted to complete MFA setup again.
+            Borealis will keep MFA enabled for your account, but your current authenticator app
+            secret will be cleared. Your passkeys remain available for direct sign-in, and the next
+            time you use password sign-in Borealis will prompt you to complete MFA setup again.
           </Typography>
         </DialogContent>
         <DialogActions sx={DIALOG_ACTIONS_SX}>

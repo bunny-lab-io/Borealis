@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Box, TextField, Button, Typography } from "@mui/material";
+import { authenticateWithPasskey, isPasskeySupported } from "./app/utils/passkeys.js";
 
 export default function Login({ onLogin }) {
   // ----------------- Original state & logic -----------------
@@ -14,6 +15,7 @@ export default function Login({ onLogin }) {
   const [setupSecret, setSetupSecret] = useState("");
   const [setupQr, setSetupQr] = useState("");
   const [setupUri, setSetupUri] = useState("");
+  const passkeySupported = isPasskeySupported();
 
   const formattedSecret = useMemo(() => {
     if (!setupSecret) return "";
@@ -87,6 +89,29 @@ export default function Login({ onLogin }) {
       const msg = err?.message || "Unable to log in";
       setError(msg);
       resetMfaState();
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handlePrimaryPasskeySignIn = async () => {
+    setIsSubmitting(true);
+    setError("");
+    try {
+      const data = await authenticateWithPasskey();
+      if (data?.token) {
+        try {
+          document.cookie = `borealis_auth=${data.token}; Path=/; SameSite=Lax`;
+        } catch (_) {}
+      }
+      setError("");
+      onLogin({ username: data.username, role: data.role });
+    } catch (err) {
+      setError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Failed to sign in with a passkey."
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -179,7 +204,7 @@ export default function Login({ onLogin }) {
           --accent-2: #a78bfa; /* purple */
           --accent-3: #22d3ee; /* cyan */
           --radius-xl: 20px;
-          --card-w: min(92vw, 420px);
+          --card-w: min(94vw, 500px);
         }
 
         .login-wrap {
@@ -268,7 +293,7 @@ export default function Login({ onLogin }) {
               rgba(88,166,255,.45),
               rgba(167,139,250,.0)) border-box;
           backdrop-filter: blur(10px);
-          padding: 28px 24px;
+          padding: 30px 28px;
         }
 
         .brand {
@@ -315,6 +340,21 @@ export default function Login({ onLogin }) {
           box-shadow: 0 10px 22px rgba(88,166,255,.35);
         }
 
+        .secondary-submit {
+          margin-top: 10px;
+          color: #8ecbff;
+          border-color: rgba(125,183,255,0.24);
+          text-transform: none;
+          font-weight: 700;
+          border-radius: 14px;
+          background: linear-gradient(180deg, rgba(10,18,34,0.92), rgba(9,15,28,0.92));
+          box-shadow: inset 0 0 0 1px rgba(125,183,255,0.06);
+        }
+        .secondary-submit:hover {
+          border-color: rgba(125,183,255,0.34);
+          background: linear-gradient(180deg, rgba(14,24,44,0.98), rgba(10,18,34,0.96));
+        }
+
         .muted-btn {
           color: var(--accent);
           text-transform: none;
@@ -355,7 +395,7 @@ export default function Login({ onLogin }) {
           <div className="shine-inner">
             <Box
               component="form"
-              onSubmit={step === "mfa" ? handleMfaSubmit : handleCredentialsSubmit}
+              onSubmit={step === "credentials" ? handleCredentialsSubmit : handleMfaSubmit}
               sx={{ display: "flex", flexDirection: "column", gap: 1 }}
             >
               <div className="brand">
@@ -400,15 +440,31 @@ export default function Login({ onLogin }) {
                   >
                     {isSubmitting ? "Signing In..." : "Sign In"}
                   </Button>
+
+                  <Button
+                    type="button"
+                    variant="outlined"
+                    className="secondary-submit"
+                    disabled={isSubmitting || !passkeySupported}
+                    onClick={() => void handlePrimaryPasskeySignIn()}
+                  >
+                    Sign In with Passkey
+                  </Button>
+
+                  {!passkeySupported ? (
+                    <Typography variant="body2" className="helper">
+                      This browser does not support passkeys in a secure context.
+                    </Typography>
+                  ) : null}
                 </>
               ) : (
                 <>
                   {mfaStage === "setup" ? (
                     <>
                       <Typography variant="body2" className="helper">
-                        Multi-factor authentication is required for Borealis accounts. Scan the QR code
-                        with your authenticator app, then enter the 6-digit code to finish setup for
-                        <strong> {username}</strong>. You will not be able to continue until setup is complete.
+                        Multi-factor authentication is required for Borealis accounts. Scan the QR
+                        code with your authenticator app, then enter the 6-digit code to finish
+                        setup for <strong>{username}</strong>.
                       </Typography>
                       {setupQr ? (
                         <Box sx={{ display: "flex", justifyContent: "center", mb: 1.5 }}>
@@ -442,11 +498,7 @@ export default function Login({ onLogin }) {
                     variant="outlined"
                     fullWidth
                     value={mfaCode}
-                    onChange={(e) => {
-                      const raw = e.target.value || "";
-                      const digits = raw.replace(/\D/g, "").slice(0, 6);
-                      setMfaCode(digits);
-                    }}
+                    onChange={onCodeChange}
                     disabled={isSubmitting}
                     inputProps={{
                       inputMode: "numeric",

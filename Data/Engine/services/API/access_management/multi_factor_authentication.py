@@ -4,7 +4,7 @@
 #
 # API Endpoints (if applicable):
 # - POST /api/users/<username>/mfa (Token Authenticated (Admin)) - Toggles MFA and optionally resets shared secrets.
-# - POST /api/auth/mfa/reset (Token Authenticated) - Clears the current operator's MFA secret so setup is required on the next login.
+# - POST /api/auth/mfa/reset (Token Authenticated) - Clears the current operator's MFA secret so setup is required on the next password login.
 # ======================================================
 
 """Multifactor management endpoints for the Borealis Engine."""
@@ -22,7 +22,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing helper
     from .. import EngineServiceAdapters
 
 from ...auth.secrets import require_app_secret
-
 def _now_ts() -> int:
     return int(time.time())
 
@@ -129,6 +128,7 @@ class MultiFactorAdministrationService:
             me = self._current_user()
             if me and me.get("username", "").lower() == username_norm.lower() and not enabled:
                 session.pop("mfa_pending", None)
+                session.pop("passkey_pending", None)
 
             return jsonify({"status": "ok"})
         except Exception as exc:
@@ -172,6 +172,7 @@ class MultiFactorAdministrationService:
             conn.commit()
 
             session.pop("mfa_pending", None)
+            session.pop("passkey_pending", None)
             return jsonify(
                 {
                     "status": "ok",

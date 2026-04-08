@@ -75,6 +75,86 @@ def _sha512_hex(value: str) -> str:
     return hashlib.sha512((value or "").encode("utf-8")).hexdigest()
 
 
+def _enable_fake_passkeys(monkeypatch: pytest.MonkeyPatch) -> None:
+    class DummyOptions:
+        challenge = b"dummy-challenge"
+
+    class DummyRegistrationVerification:
+        credential_id = "dummy-credential"
+        credential_public_key = "dummy-public-key"
+        sign_count = 0
+        aaguid = ""
+
+    class DummyAuthenticationVerification:
+        new_sign_count = 0
+
+    class DummyDescriptor:
+        def __init__(self, id=None, **kwargs):
+            self.id = id
+            self.kwargs = kwargs
+
+    class DummyAuthenticatorSelectionCriteria:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class DummyResidentKeyRequirement:
+        PREFERRED = "preferred"
+        REQUIRED = "required"
+
+    class DummyUserVerificationRequirement:
+        REQUIRED = "required"
+
+    monkeypatch.setattr(access_login, "base64url_to_bytes", lambda value: f"bytes:{value}".encode("utf-8"))
+    monkeypatch.setattr(access_login, "PublicKeyCredentialDescriptor", DummyDescriptor)
+    monkeypatch.setattr(access_login, "AuthenticatorSelectionCriteria", DummyAuthenticatorSelectionCriteria)
+    monkeypatch.setattr(access_login, "ResidentKeyRequirement", DummyResidentKeyRequirement)
+    monkeypatch.setattr(access_login, "UserVerificationRequirement", DummyUserVerificationRequirement)
+    def fake_generate_registration_options(
+        *,
+        rp_id,
+        rp_name,
+        user_name,
+        user_id=None,
+        user_display_name=None,
+        challenge=None,
+        timeout=60000,
+        attestation=None,
+        authenticator_selection=None,
+        exclude_credentials=None,
+        supported_pub_key_algs=None,
+        hints=None,
+    ):
+        return DummyOptions()
+
+    def fake_generate_authentication_options(
+        *,
+        rp_id,
+        challenge=None,
+        timeout=60000,
+        allow_credentials=None,
+        user_verification=None,
+    ):
+        return DummyOptions()
+
+    monkeypatch.setattr(access_login, "generate_registration_options", fake_generate_registration_options)
+    monkeypatch.setattr(access_login, "generate_authentication_options", fake_generate_authentication_options)
+    monkeypatch.setattr(
+        access_login,
+        "options_to_json",
+        lambda options: json.dumps({"challenge": "dummy-challenge", "rpId": "localhost"}),
+    )
+    monkeypatch.setattr(
+        access_login,
+        "verify_registration_response",
+        lambda **kwargs: DummyRegistrationVerification(),
+    )
+    monkeypatch.setattr(
+        access_login,
+        "verify_authentication_response",
+        lambda **kwargs: DummyAuthenticationVerification(),
+    )
+
+
 def _setup_aegis(client, cipher: str = "correct horse battery staple"):
     response = client.post("/api/aegis/setup", json={"cipher": cipher})
     assert response.status_code == 200
@@ -1094,6 +1174,718 @@ def test_mfa_setup_verification_marks_user_as_configured(
     assert int(row[0] or 0) == 1
     assert int(row[1] or 0) == 0
     assert (row[2] or "") == expected_secret
+
+
+def test_password_login_with_existing_passkey_still_requires_totp(engine_harness: EngineTestHarness) -> None:
+    password_hash = _sha512_hex("operator-password")
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", password_hash, "User", 0, 0, 0, 1, 0, "EXISTINGSECRET"),
+        )
+        cur.execute(
+            """
+            INSERT INTO user_passkeys (
+                user_id,
+                credential_id,
+                public_key,
+                sign_count,
+                label,
+                transports_json,
+                aaguid,
+                created_at,
+                last_used_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "cred-operator", "public-key-operator", 3, "Desk Passkey", "[]", "", 1_700_000_000, 1_700_000_000),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "operator", "password_sha512": password_hash},
+    )
+    assert response.status_code == 200
+
+    payload = response.get_json()
+    assert payload["status"] == "mfa_required"
+    assert payload["stage"] == "verify"
+    assert payload["available_methods"] == ["totp"]
+    assert payload["preferred_method"] == "totp"
+
+
+def test_password_login_without_totp_setup_still_prompts_for_totp(engine_harness: EngineTestHarness) -> None:
+    password_hash = _sha512_hex("operator-password")
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", password_hash, "User", 0, 0, 0, 1, 0, None),
+        )
+        cur.execute(
+            """
+            INSERT INTO user_passkeys (
+                user_id,
+                credential_id,
+                public_key,
+                sign_count,
+                label,
+                transports_json,
+                aaguid,
+                created_at,
+                last_used_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "cred-operator", "public-key-operator", 3, "Desk Passkey", "[]", "", 1_700_000_000, 1_700_000_000),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "operator", "password_sha512": password_hash},
+    )
+    assert response.status_code == 200
+
+    payload = response.get_json()
+    assert payload["status"] == "mfa_required"
+    assert payload["stage"] == "setup"
+    assert payload["available_methods"] == ["totp"]
+    assert payload["preferred_method"] == "totp"
+    assert payload["secret"]
+
+
+def test_authenticated_user_can_register_passkey(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_fake_passkeys(monkeypatch)
+
+    class DummyRegistrationOptions:
+        challenge = b"register-challenge"
+
+    class DummyRegistrationVerification:
+        credential_id = b"cred-setup"
+        credential_public_key = b"public-key-setup"
+        sign_count = 4
+        aaguid = "aaguid-setup"
+
+    def fake_generate_registration_options(
+        *,
+        rp_id,
+        rp_name,
+        user_name,
+        user_id=None,
+        user_display_name=None,
+        challenge=None,
+        timeout=60000,
+        attestation=None,
+        authenticator_selection=None,
+        exclude_credentials=None,
+        supported_pub_key_algs=None,
+        hints=None,
+    ):
+        return DummyRegistrationOptions()
+
+    monkeypatch.setattr(access_login, "generate_registration_options", fake_generate_registration_options)
+    monkeypatch.setattr(
+        access_login,
+        "options_to_json",
+        lambda options: json.dumps({"challenge": "register-challenge", "rpId": "localhost"}),
+    )
+    monkeypatch.setattr(
+        access_login,
+        "verify_registration_response",
+        lambda **kwargs: DummyRegistrationVerification(),
+    )
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", _sha512_hex("operator-password"), "User", 0, 0, 0, 1, 0, "EXISTINGSECRET"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _user_client(engine_harness)
+    options_response = client.post("/api/auth/passkeys/register/options", json={})
+    assert options_response.status_code == 200
+    options_payload = options_response.get_json()
+
+    verify_response = client.post(
+        "/api/auth/passkeys/register/verify",
+        json={
+            "request_id": options_payload["request_id"],
+            "credential": {
+                "id": access_login._bytes_to_base64url(DummyRegistrationVerification.credential_id),
+                "response": {"transports": ["internal"]},
+            },
+            "label": "Laptop Passkey",
+        },
+    )
+    assert verify_response.status_code == 200
+    verify_payload = verify_response.get_json()
+    assert verify_payload["status"] == "ok"
+    assert verify_payload["username"] == "operator"
+    assert verify_payload["passkey_count"] == 1
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT credential_id, public_key, sign_count, label FROM user_passkeys WHERE user_id=?",
+            (2,),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row == (
+        access_login._bytes_to_base64url(DummyRegistrationVerification.credential_id),
+        access_login._bytes_to_base64url(DummyRegistrationVerification.credential_public_key),
+        4,
+        "Laptop Passkey",
+    )
+
+
+def test_passkey_authentication_completes_primary_login(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_fake_passkeys(monkeypatch)
+
+    class DummyAuthenticationOptions:
+        challenge = b"authenticate-challenge"
+
+    class DummyAuthenticationVerification:
+        new_sign_count = 9
+
+    def fake_generate_authentication_options(
+        *,
+        rp_id,
+        challenge=None,
+        timeout=60000,
+        allow_credentials=None,
+        user_verification=None,
+    ):
+        return DummyAuthenticationOptions()
+
+    monkeypatch.setattr(access_login, "generate_authentication_options", fake_generate_authentication_options)
+    monkeypatch.setattr(
+        access_login,
+        "options_to_json",
+        lambda options: json.dumps({"challenge": "authenticate-challenge", "rpId": "localhost"}),
+    )
+    monkeypatch.setattr(
+        access_login,
+        "verify_authentication_response",
+        lambda **kwargs: DummyAuthenticationVerification(),
+    )
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", _sha512_hex("operator-password"), "User", 0, 0, 0, 1, 0, None),
+        )
+        cur.execute(
+            """
+            INSERT INTO user_passkeys (
+                user_id,
+                credential_id,
+                public_key,
+                sign_count,
+                label,
+                transports_json,
+                aaguid,
+                created_at,
+                last_used_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "cred-login", "public-key-login", 5, "Desk Passkey", "[]", "", 1_700_000_000, 1_700_000_000),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = engine_harness.app.test_client()
+    options_response = client.post("/api/auth/passkeys/authenticate/options", json={})
+    assert options_response.status_code == 200
+    options_payload = options_response.get_json()
+
+    verify_response = client.post(
+        "/api/auth/passkeys/authenticate/verify",
+        json={
+            "request_id": options_payload["request_id"],
+            "credential": {"id": "cred-login"},
+        },
+    )
+    assert verify_response.status_code == 200
+    verify_payload = verify_response.get_json()
+    assert verify_payload["status"] == "ok"
+    assert verify_payload["username"] == "operator"
+    assert verify_payload["token"]
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT sign_count FROM user_passkeys WHERE credential_id=?", ("cred-login",))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row == (9,)
+
+
+def test_passkey_authentication_recovers_legacy_stored_credential_format(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_fake_passkeys(monkeypatch)
+    monkeypatch.setattr(
+        access_login,
+        "base64url_to_bytes",
+        lambda value: access_login.base64.urlsafe_b64decode(
+            f"{value}{'=' * (-len(value) % 4)}".encode("ascii")
+        ),
+    )
+
+    class DummyAuthenticationOptions:
+        challenge = b"authenticate-challenge"
+
+    class DummyAuthenticationVerification:
+        new_sign_count = 11
+
+    def fake_generate_authentication_options(
+        *,
+        rp_id,
+        challenge=None,
+        timeout=60000,
+        allow_credentials=None,
+        user_verification=None,
+    ):
+        return DummyAuthenticationOptions()
+
+    monkeypatch.setattr(access_login, "generate_authentication_options", fake_generate_authentication_options)
+    monkeypatch.setattr(
+        access_login,
+        "options_to_json",
+        lambda options: json.dumps({"challenge": "authenticate-challenge", "rpId": "localhost"}),
+    )
+    monkeypatch.setattr(
+        access_login,
+        "verify_authentication_response",
+        lambda **kwargs: DummyAuthenticationVerification(),
+    )
+
+    raw_credential_id = b"cred-login"
+    raw_public_key = b"public-key-login"
+    canonical_credential_id = access_login._bytes_to_base64url(raw_credential_id)
+    canonical_public_key = access_login._bytes_to_base64url(raw_public_key)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", _sha512_hex("operator-password"), "User", 0, 0, 0, 1, 0, None),
+        )
+        cur.execute(
+            """
+            INSERT INTO user_passkeys (
+                user_id,
+                credential_id,
+                public_key,
+                sign_count,
+                label,
+                transports_json,
+                aaguid,
+                created_at,
+                last_used_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, str(raw_credential_id), str(raw_public_key), 5, "Desk Passkey", "[]", "", 1_700_000_000, 1_700_000_000),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = engine_harness.app.test_client()
+    options_response = client.post("/api/auth/passkeys/authenticate/options", json={})
+    assert options_response.status_code == 200
+    options_payload = options_response.get_json()
+
+    verify_response = client.post(
+        "/api/auth/passkeys/authenticate/verify",
+        json={
+            "request_id": options_payload["request_id"],
+            "credential": {"id": canonical_credential_id},
+        },
+    )
+    assert verify_response.status_code == 200
+    verify_payload = verify_response.get_json()
+    assert verify_payload["status"] == "ok"
+    assert verify_payload["username"] == "operator"
+    assert verify_payload["token"]
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT credential_id, public_key, sign_count FROM user_passkeys WHERE user_id=?",
+            (2,),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row == (canonical_credential_id, canonical_public_key, 11)
+
+
+def test_current_user_can_list_enrolled_passkeys(engine_harness: EngineTestHarness) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", _sha512_hex("operator-password"), "User", 0, 0, 0, 1, 0, None),
+        )
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (3, "other", "Other User", _sha512_hex("other-password"), "User", 0, 0, 0, 1, 0, None),
+        )
+        cur.executemany(
+            """
+            INSERT INTO user_passkeys (
+                user_id,
+                credential_id,
+                public_key,
+                sign_count,
+                label,
+                transports_json,
+                aaguid,
+                created_at,
+                last_used_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (2, "cred-alpha", "public-alpha", 3, "Laptop", '["internal"]', "", 1_700_000_100, 1_700_000_200),
+                (2, "cred-beta", "public-beta", 4, "Phone", '["hybrid"]', "", 1_700_000_300, 0),
+                (3, "cred-other", "public-other", 1, "Other User Key", "[]", "", 1_700_000_400, 0),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _user_client(engine_harness)
+    response = client.get("/api/auth/passkeys")
+    assert response.status_code == 200
+
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["passkey_count"] == 2
+    assert [item["label"] for item in payload["passkeys"]] == ["Laptop", "Phone"]
+    assert payload["passkeys"][0]["transports"] == ["internal"]
+    assert payload["passkeys"][1]["transports"] == ["hybrid"]
+
+
+def test_current_user_can_rename_enrolled_passkey(engine_harness: EngineTestHarness) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", _sha512_hex("operator-password"), "User", 0, 0, 0, 1, 0, None),
+        )
+        cur.execute(
+            """
+            INSERT INTO user_passkeys (
+                id,
+                user_id,
+                credential_id,
+                public_key,
+                sign_count,
+                label,
+                transports_json,
+                aaguid,
+                created_at,
+                last_used_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (11, 2, "cred-rename", "public-rename", 2, "Old Label", "[]", "", 1_700_000_500, 0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _user_client(engine_harness)
+    response = client.patch("/api/auth/passkeys/11", json={"label": "Desk YubiKey"})
+    assert response.status_code == 200
+
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["passkey"]["label"] == "Desk YubiKey"
+    assert payload["passkey_count"] == 1
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT label FROM user_passkeys WHERE id=11")
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row == ("Desk YubiKey",)
+
+
+def test_current_user_can_remove_enrolled_passkey(engine_harness: EngineTestHarness) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", _sha512_hex("operator-password"), "User", 0, 0, 0, 1, 0, None),
+        )
+        cur.executemany(
+            """
+            INSERT INTO user_passkeys (
+                id,
+                user_id,
+                credential_id,
+                public_key,
+                sign_count,
+                label,
+                transports_json,
+                aaguid,
+                created_at,
+                last_used_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (21, 2, "cred-remove", "public-remove", 2, "Old Laptop", "[]", "", 1_700_000_600, 0),
+                (22, 2, "cred-keep", "public-keep", 2, "Phone", "[]", "", 1_700_000_700, 0),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _user_client(engine_harness)
+    response = client.delete("/api/auth/passkeys/21")
+    assert response.status_code == 200
+
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["removed"] is True
+    assert payload["passkey_count"] == 1
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, label FROM user_passkeys ORDER BY id ASC")
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    assert rows == [(22, "Phone")]
+
+
+def test_reset_own_mfa_preserves_passkeys(engine_harness: EngineTestHarness) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", _sha512_hex("operator-password"), "User", 0, 0, 0, 1, 0, "EXISTINGSECRET"),
+        )
+        cur.execute(
+            """
+            INSERT INTO user_passkeys (
+                user_id,
+                credential_id,
+                public_key,
+                sign_count,
+                label,
+                transports_json,
+                aaguid,
+                created_at,
+                last_used_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "cred-reset", "public-key-reset", 2, "Desk Passkey", "[]", "", 1_700_000_000, 1_700_000_000),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _user_client(engine_harness)
+    response = client.post("/api/auth/mfa/reset")
+    assert response.status_code == 200
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM user_passkeys WHERE user_id=?", (2,))
+        remaining = cur.fetchone()[0]
+    finally:
+        conn.close()
+
+    assert remaining == 1
 
 
 def test_user_can_reset_own_password_with_current_password(engine_harness: EngineTestHarness) -> None:

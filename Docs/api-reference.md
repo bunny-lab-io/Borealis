@@ -14,8 +14,15 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/auth/logout` (Token Authenticated) - operator logout.
 - `POST /api/auth/password/reset` (Token Authenticated) - verify the current operator password and replace it with a new password hash.
 - `POST /api/auth/mfa/verify` (Token Authenticated, MFA pending) - verify MFA.
-- `POST /api/auth/mfa/reset` (Token Authenticated) - clear the current operator's MFA secret so Borealis prompts for MFA setup on the next login.
-- `GET /api/auth/me` (Token Authenticated) - current operator profile, including MFA-enabled state for account menu actions.
+- `POST /api/auth/mfa/reset` (Token Authenticated) - clear the current operator's authenticator-app secret so Borealis prompts for MFA setup on the next password login. Passkeys are managed separately.
+- `POST /api/auth/passkeys/register/options` (Token Authenticated) - start a WebAuthn passkey registration ceremony for the current operator.
+- `POST /api/auth/passkeys/register/verify` (Token Authenticated) - verify and store a new WebAuthn passkey credential.
+- `POST /api/auth/passkeys/authenticate/options` (No Authentication) - start a WebAuthn passkey sign-in ceremony for passwordless operator login.
+- `POST /api/auth/passkeys/authenticate/verify` (No Authentication) - verify a WebAuthn passkey sign-in response and complete operator login.
+- `GET /api/auth/passkeys` (Token Authenticated) - list the current operator's enrolled passkeys.
+- `PATCH /api/auth/passkeys/<int:passkey_id>` (Token Authenticated) - rename one of the current operator's passkeys.
+- `DELETE /api/auth/passkeys/<int:passkey_id>` (Token Authenticated) - remove one of the current operator's passkeys.
+- `GET /api/auth/me` (Token Authenticated) - current operator profile, including MFA-enabled state and passkey count for account menu actions.
 - `GET /api/credentials` (Token Authenticated) - list stored remote-execution credentials.
 - `GET /api/credentials/<int:credential_id>` (Token Authenticated) - get one stored credential without secret material.
 - `POST /api/credentials` (Admin) - create a stored credential.

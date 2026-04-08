@@ -10,6 +10,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Short-lived access tokens: JWTs signed with Ed25519, default lifetime about 15 minutes.
 - Long-lived refresh tokens: 90-day sliding window, hashed in the Engine database.
 - Operator session signing secret: generated once and persisted at `Engine/engine_secret.txt`.
+- Operator sign-in methods: Borealis supports password plus TOTP MFA, and WebAuthn passkeys for direct browser sign-in.
 - Code signing: scripts are signed by the Engine; agents reject payloads with invalid signatures.
 
 ## Security Breakdown (Full)
@@ -22,6 +23,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Replay and credential theft defenses layer in DPoP proof validation (thumbprint binding) on the server side and short-lived access tokens (about 15 minutes) with 90-day refresh tokens hashed via SHA-256.
 - Centralized logging under `Engine/Logs` and `Agent/Logs` captures enrollment approvals, rate-limit hits, signature failures, and auth anomalies for post-incident review.
 - Operator-facing API endpoints (device inventory, assemblies, job history, etc.) require an authenticated operator session or bearer token; unauthenticated requests are rejected with 401/403 responses before any inventory or script metadata is returned and the requesting user is logged with each quick-run dispatch.
+- Borealis operator accounts still start with username/password, but Borealis also supports direct passkey sign-in. Password sign-in still requires TOTP setup and verification by default unless an administrator has explicitly disabled MFA for that operator.
 
 ### Server Security
 - Manages the public HTTPS edge: Borealis renders Traefik and Let's Encrypt runtime state under `Engine/LetsEncrypt/` and `Engine/Traefik/`, while internal engine-only material such as WireGuard and code-signing keys stays under `Engine/Certificates/`.
@@ -193,8 +195,15 @@ sequenceDiagram
 - `POST /api/auth/logout` (Token Authenticated) - operator logout.
 - `POST /api/auth/password/reset` (Token Authenticated) - verify the current operator password and replace it with a new password hash.
 - `POST /api/auth/mfa/verify` (Token Authenticated, MFA pending) - verify MFA.
-- `POST /api/auth/mfa/reset` (Token Authenticated) - clear the current operator's MFA secret so MFA setup is required on the next login.
-- `GET /api/auth/me` (Token Authenticated) - current operator profile, including MFA-enabled state.
+- `POST /api/auth/mfa/reset` (Token Authenticated) - clear the current operator's authenticator-app secret so MFA setup is required on the next password login. Passkeys remain available for direct sign-in.
+- `POST /api/auth/passkeys/register/options` (Token Authenticated) - start a passkey registration ceremony.
+- `POST /api/auth/passkeys/register/verify` (Token Authenticated) - verify a passkey registration response and store the credential.
+- `POST /api/auth/passkeys/authenticate/options` (No Authentication) - start a passkey sign-in ceremony.
+- `POST /api/auth/passkeys/authenticate/verify` (No Authentication) - verify a passkey sign-in response and complete login.
+- `GET /api/auth/passkeys` (Token Authenticated) - list the current operator's passkeys.
+- `PATCH /api/auth/passkeys/<int:passkey_id>` (Token Authenticated) - rename one of the current operator's passkeys.
+- `DELETE /api/auth/passkeys/<int:passkey_id>` (Token Authenticated) - remove one of the current operator's passkeys.
+- `GET /api/auth/me` (Token Authenticated) - current operator profile, including MFA-enabled state and passkey count.
 - MFA policy note: Borealis requires MFA by default. Only an administrator can explicitly disable MFA for an operator account.
 - `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
 - `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).
