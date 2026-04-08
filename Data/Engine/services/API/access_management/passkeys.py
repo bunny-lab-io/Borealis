@@ -130,6 +130,39 @@ def get_user_passkey_by_credential_id(
     return _row_to_passkey(row)
 
 
+def get_passkey_by_credential_id(
+    conn: sqlite3.Connection,
+    credential_id: str,
+) -> Optional[StoredPasskey]:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                up.id,
+                up.user_id,
+                COALESCE(up.credential_id, ''),
+                COALESCE(up.public_key, ''),
+                COALESCE(up.sign_count, 0),
+                COALESCE(up.label, ''),
+                COALESCE(up.transports_json, '[]'),
+                COALESCE(up.aaguid, ''),
+                COALESCE(up.created_at, 0),
+                COALESCE(up.last_used_at, 0)
+            FROM user_passkeys up
+            WHERE up.credential_id=?
+            LIMIT 1
+            """,
+            (credential_id,),
+        )
+        row = cur.fetchone()
+    finally:
+        cur.close()
+    if not row:
+        return None
+    return _row_to_passkey(row)
+
+
 def get_user_passkey_by_id(
     conn: sqlite3.Connection,
     username: str,

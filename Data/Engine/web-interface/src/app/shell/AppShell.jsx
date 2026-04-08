@@ -706,7 +706,7 @@ export default function AppShell() {
         <DialogTitle sx={DIALOG_TITLE_SX}>
           <DialogHeaderBlock
             title="Manage Passkeys"
-            subtitle="Review the passkeys this Borealis account can use for MFA, rename them, or remove the ones you no longer want."
+            subtitle="Review the passkeys this Borealis account can use to sign in, rename them, or remove the ones you no longer want."
           />
         </DialogTitle>
         <DialogContent sx={DIALOG_CONTENT_SX}>
@@ -966,8 +966,8 @@ export default function AppShell() {
         <DialogContent sx={DIALOG_CONTENT_SX}>
           <Typography sx={DIALOG_BODY_TEXT_SX}>
             Borealis will keep MFA enabled for your account, but your current authenticator app
-            secret and passkeys will be cleared. The next time you sign in you will be prompted to
-            complete MFA setup again.
+            secret will be cleared. Your passkeys remain available for direct sign-in, and the next
+            time you use password sign-in Borealis will prompt you to complete MFA setup again.
           </Typography>
         </DialogContent>
         <DialogActions sx={DIALOG_ACTIONS_SX}>

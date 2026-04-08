@@ -82,7 +82,7 @@ export async function registerPasskey({ pendingToken = "", label = "" } = {}) {
   return verifyPayload;
 }
 
-export async function authenticateWithPasskey({ pendingToken }) {
+export async function authenticateWithPasskey() {
   if (!isPasskeySupported()) {
     throw new Error("Passkeys are not available in this browser.");
   }
@@ -91,7 +91,7 @@ export async function authenticateWithPasskey({ pendingToken }) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ pending_token: pendingToken || undefined }),
+    body: JSON.stringify({}),
   });
   const beginPayload = await readJson(beginResponse);
   if (!beginResponse.ok) {
@@ -110,7 +110,6 @@ export async function authenticateWithPasskey({ pendingToken }) {
     headers: { "Content-Type": "application/json" },
     credentials: "include",
     body: JSON.stringify({
-      pending_token: pendingToken || undefined,
       request_id: beginPayload.request_id,
       credential,
     }),

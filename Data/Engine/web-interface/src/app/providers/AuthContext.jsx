@@ -403,11 +403,10 @@ export function AuthProvider({ children }) {
     }
 
     setMfaEnabled(Boolean(payload.mfa_enabled));
-    setPasskeyCount(0);
     await postAppNotification({
       title: "Reset MFA",
       message: payload.setup_required_on_next_login
-        ? "Your MFA setup was reset. Borealis cleared your authenticator app secret and passkeys, and the next time you sign in it will prompt you to set up MFA again."
+        ? "Your MFA setup was reset. Borealis cleared your authenticator app secret, and the next time you use password sign-in it will prompt you to set up MFA again."
         : "No active MFA setup was found for your account.",
       icon: "user",
       variant: "info",
@@ -424,8 +423,8 @@ export function AuthProvider({ children }) {
           title: "Passkey Added",
           message:
             Number(refreshed?.passkey_count || payload?.passkey_count || 0) > 1
-              ? "Your new passkey is ready to use with Borealis."
-              : "Your first Borealis passkey is ready to use.",
+              ? "Your new passkey is ready to use for Borealis sign-in."
+              : "Your first Borealis passkey is ready to use for sign-in.",
           icon: "key",
           variant: "info",
         });

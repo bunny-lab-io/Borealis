@@ -6,10 +6,10 @@
 # - POST /api/auth/login (No Authentication) - Authenticates operator credentials and starts a session token or MFA setup/verification challenge.
 # - POST /api/auth/logout (Token Authenticated) - Clears the active operator session and authentication cookie.
 # - POST /api/auth/mfa/verify (Token Authenticated (MFA pending)) - Verifies TOTP codes during multifactor setup or login.
-# - POST /api/auth/passkeys/register/options (Authenticated or MFA pending) - Starts a passkey registration ceremony for the current operator or active MFA login challenge.
-# - POST /api/auth/passkeys/register/verify (Authenticated or MFA pending) - Verifies a passkey registration response and stores the credential.
-# - POST /api/auth/passkeys/authenticate/options (Token Authenticated (MFA pending)) - Starts a passkey authentication ceremony for an active MFA login challenge.
-# - POST /api/auth/passkeys/authenticate/verify (Token Authenticated (MFA pending)) - Verifies a passkey authentication response and completes the operator login.
+# - POST /api/auth/passkeys/register/options (Token Authenticated) - Starts a passkey registration ceremony for the current operator.
+# - POST /api/auth/passkeys/register/verify (Token Authenticated) - Verifies a passkey registration response and stores the credential.
+# - POST /api/auth/passkeys/authenticate/options (No Authentication) - Starts a passkey sign-in ceremony for passwordless operator login.
+# - POST /api/auth/passkeys/authenticate/verify (No Authentication) - Verifies a passkey sign-in response and completes operator login.
 # - GET /api/auth/passkeys (Token Authenticated) - Lists the current operator's enrolled passkeys.
 # - PATCH /api/auth/passkeys/<passkey_id> (Token Authenticated) - Updates the display label for one of the current operator's passkeys.
 # - DELETE /api/auth/passkeys/<passkey_id> (Token Authenticated) - Removes one of the current operator's passkeys.
@@ -84,8 +84,8 @@ from .passkeys import (
     build_webauthn_user_id,
     count_user_passkeys,
     delete_user_passkey,
+    get_passkey_by_credential_id,
     get_user_passkey_by_id,
-    get_user_passkey_by_credential_id,
     list_user_passkeys,
     serialize_transports,
     update_user_passkey_label,
@@ -316,6 +316,41 @@ class _AuthService:
             "role": str(row[3] or "User"),
         }
 
+    def _load_user_identity_by_id(self, user_id: Any) -> Optional[Mapping[str, Any]]:
+        try:
+            normalized_user_id = int(user_id or 0)
+        except Exception:
+            return None
+        if normalized_user_id <= 0:
+            return None
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    username,
+                    COALESCE(display_name, username),
+                    COALESCE(role, 'User')
+                FROM users
+                WHERE id=?
+                LIMIT 1
+                """,
+                (normalized_user_id,),
+            )
+            row = cur.fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return None
+        return {
+            "id": int(row[0] or 0),
+            "username": str(row[1] or ""),
+            "display_name": str(row[2] or row[1] or ""),
+            "role": str(row[3] or "User"),
+        }
+
     def _current_user(self) -> Optional[Mapping[str, Any]]:
         username = session.get("username")
         role = session.get("role") or "User"
@@ -405,8 +440,6 @@ class _AuthService:
                 (username,),
             )
             row = cur.fetchone()
-            if row:
-                passkey_count = count_user_passkeys(conn, row[1])
         finally:
             conn.close()
 
@@ -421,16 +454,8 @@ class _AuthService:
         role = row[4] or "User"
         existing_secret = (row[9] or "").strip()
         mfa_disabled = bool(row[10] or 0)
-        available_methods = []
-        if passkey_count > 0:
-            available_methods.append("passkey")
-        if existing_secret:
-            available_methods.append("totp")
-        setup_methods = list(available_methods)
-        if not setup_methods:
-            if self._passkeys_available():
-                setup_methods.append("passkey")
-            setup_methods.append("totp")
+        available_methods = ["totp"] if existing_secret else []
+        setup_methods = ["totp"]
 
         session.pop("username", None)
         session.pop("role", None)
@@ -476,9 +501,7 @@ class _AuthService:
             "username": row[1],
             "role": role,
             "available_methods": available_methods if stage == "verify" else setup_methods,
-            "preferred_method": "passkey"
-            if "passkey" in (available_methods if stage == "verify" else setup_methods)
-            else "totp",
+            "preferred_method": "totp",
         }
         if stage == "setup":
             response_payload.update(
@@ -565,24 +588,13 @@ class _AuthService:
 
         payload = request.get_json(silent=True) or {}
         label = str(payload.get("label") or "").strip()
-        pending_token = str(payload.get("pending_token") or "").strip()
 
         current_user = self._current_user()
-        mode = "authenticated"
-        username = ""
-        role = "User"
+        if not current_user:
+            return jsonify({"error": "unauthorized"}), 401
 
-        if current_user:
-            username = str(current_user.get("username") or "").strip()
-            role = str(current_user.get("role") or "User").strip() or "User"
-        else:
-            pending, error = self._load_pending_mfa(pending_token)
-            if error:
-                error_payload, status = error
-                return jsonify(error_payload), status
-            username = str(pending.get("username") or "").strip()
-            role = str(pending.get("role") or "User").strip() or "User"
-            mode = "login"
+        username = str(current_user.get("username") or "").strip()
+        role = str(current_user.get("role") or "User").strip() or "User"
 
         identity = self._load_user_identity(username)
         if not identity:
@@ -608,7 +620,7 @@ class _AuthService:
                 user_display_name=identity["display_name"],
                 exclude_credentials=exclude_credentials,
                 authenticator_selection=AuthenticatorSelectionCriteria(
-                    resident_key=ResidentKeyRequirement.PREFERRED,
+                    resident_key=ResidentKeyRequirement.REQUIRED,
                     user_verification=UserVerificationRequirement.REQUIRED,
                 ),
             )
@@ -619,11 +631,9 @@ class _AuthService:
         request_id = uuid.uuid4().hex
         session["passkey_pending"] = {
             "flow": "register",
-            "mode": mode,
             "request_id": request_id,
             "username": identity["username"],
             "role": role,
-            "pending_token": pending_token,
             "challenge": _bytes_to_base64url(options.challenge),
             "label": label,
             "expires": _now_ts() + 300,
@@ -634,7 +644,6 @@ class _AuthService:
             {
                 "status": "ok",
                 "request_id": request_id,
-                "mode": mode,
                 "options": json.loads(options_to_json(options)),
             }
         )
@@ -657,18 +666,15 @@ class _AuthService:
             session.pop("passkey_pending", None)
             return jsonify({"error": "expired"}), 401
 
-        mode = str(ceremony.get("mode") or "login")
         username = str(ceremony.get("username") or "").strip()
         role = str(ceremony.get("role") or "User").strip() or "User"
-        pending_token = str(ceremony.get("pending_token") or "").strip()
-
-        if mode == "login":
-            pending, error = self._load_pending_mfa(pending_token)
-            if error:
-                error_payload, status = error
-                return jsonify(error_payload), status
-            username = str(pending.get("username") or username).strip()
-            role = str(pending.get("role") or role).strip() or "User"
+        current_user = self._current_user()
+        if not current_user:
+            session.pop("passkey_pending", None)
+            return jsonify({"error": "unauthorized"}), 401
+        if str(current_user.get("username") or "").strip().lower() != username.lower():
+            session.pop("passkey_pending", None)
+            return jsonify({"error": "invalid_session"}), 401
 
         identity = self._load_user_identity(username)
         if not identity:
@@ -729,10 +735,6 @@ class _AuthService:
                     now_ts,
                 ),
             )
-            cur.execute(
-                "UPDATE users SET mfa_enabled=1, mfa_disabled=0, updated_at=? WHERE id=?",
-                (now_ts, identity["id"]),
-            )
             total_passkeys = count_user_passkeys(conn, identity["username"])
             conn.commit()
         except sqlite3.IntegrityError:
@@ -740,9 +742,6 @@ class _AuthService:
             return jsonify({"error": "passkey_already_registered"}), 409
         finally:
             conn.close()
-
-        if mode == "login":
-            return self._finalize_login(identity["username"], role)
 
         session.pop("passkey_pending", None)
         session.modified = True
@@ -758,47 +757,19 @@ class _AuthService:
         if not self._passkeys_available():
             return jsonify({"error": "passkeys_unavailable"}), 503
 
-        payload = request.get_json(silent=True) or {}
-        pending_token = str(payload.get("pending_token") or "").strip()
-        pending, error = self._load_pending_mfa(pending_token)
-        if error:
-            error_payload, status = error
-            return jsonify(error_payload), status
-
-        username = str(pending.get("username") or "").strip()
-        role = str(pending.get("role") or "User").strip() or "User"
-
-        conn = self._db_conn()
-        try:
-            stored_passkeys = list_user_passkeys(conn, username)
-        finally:
-            conn.close()
-
-        if not stored_passkeys:
-            return jsonify({"error": "passkey_not_configured"}), 404
-
-        allow_credentials = [
-            PublicKeyCredentialDescriptor(id=base64url_to_bytes(item.credential_id))
-            for item in stored_passkeys
-        ]
-
         try:
             options = generate_authentication_options(
                 rp_id=self._passkey_rp_id(),
-                allow_credentials=allow_credentials,
                 user_verification=UserVerificationRequirement.REQUIRED,
             )
         except Exception as exc:
-            self.logger.debug("Failed to generate passkey authentication options for %s", username, exc_info=True)
+            self.logger.debug("Failed to generate passkey authentication options", exc_info=True)
             return jsonify({"error": str(exc) or "passkey_auth_unavailable"}), 500
 
         request_id = uuid.uuid4().hex
         session["passkey_pending"] = {
-            "flow": "authenticate",
+            "flow": "authenticate_primary",
             "request_id": request_id,
-            "username": username,
-            "role": role,
-            "pending_token": pending_token,
             "challenge": _bytes_to_base64url(options.challenge),
             "expires": _now_ts() + 300,
         }
@@ -817,7 +788,7 @@ class _AuthService:
             return jsonify({"error": "passkeys_unavailable"}), 503
 
         ceremony = session.get("passkey_pending") or {}
-        if not ceremony or not isinstance(ceremony, dict) or ceremony.get("flow") != "authenticate":
+        if not ceremony or not isinstance(ceremony, dict) or ceremony.get("flow") != "authenticate_primary":
             return jsonify({"error": "passkey_pending"}), 401
 
         payload = request.get_json(silent=True) or {}
@@ -833,21 +804,17 @@ class _AuthService:
         if not credential_id:
             return jsonify({"error": "invalid_passkey"}), 400
 
-        pending_token = str(ceremony.get("pending_token") or "").strip()
-        pending, error = self._load_pending_mfa(pending_token)
-        if error:
-            error_payload, status = error
-            return jsonify(error_payload), status
-
-        username = str(pending.get("username") or ceremony.get("username") or "").strip()
-        role = str(pending.get("role") or ceremony.get("role") or "User").strip() or "User"
         now_ts = _now_ts()
 
         conn = self._db_conn()
         try:
-            stored_passkey = get_user_passkey_by_credential_id(conn, username, credential_id)
+            stored_passkey = get_passkey_by_credential_id(conn, credential_id)
             if not stored_passkey:
                 return jsonify({"error": "passkey_not_configured"}), 404
+
+            identity = self._load_user_identity_by_id(stored_passkey.user_id)
+            if not identity:
+                return jsonify({"error": "user_not_found"}), 404
 
             verification = verify_authentication_response(
                 credential=credential,
@@ -864,10 +831,6 @@ class _AuthService:
                 "UPDATE user_passkeys SET sign_count=?, last_used_at=? WHERE id=?",
                 (int(getattr(verification, "new_sign_count", stored_passkey.sign_count) or 0), now_ts, stored_passkey.id),
             )
-            cur.execute(
-                "UPDATE users SET mfa_enabled=1, mfa_disabled=0, updated_at=? WHERE LOWER(username)=LOWER(?)",
-                (now_ts, username),
-            )
             conn.commit()
         except Exception as exc:
             conn.rollback()
@@ -875,7 +838,7 @@ class _AuthService:
         finally:
             conn.close()
 
-        return self._finalize_login(username, role)
+        return self._finalize_login(identity["username"], identity["role"])
 
     def list_passkeys(self):
         user = self._current_user()

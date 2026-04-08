@@ -4,7 +4,7 @@
 #
 # API Endpoints (if applicable):
 # - POST /api/users/<username>/mfa (Token Authenticated (Admin)) - Toggles MFA and optionally resets shared secrets.
-# - POST /api/auth/mfa/reset (Token Authenticated) - Clears the current operator's MFA secret so setup is required on the next login.
+# - POST /api/auth/mfa/reset (Token Authenticated) - Clears the current operator's MFA secret so setup is required on the next password login.
 # ======================================================
 
 """Multifactor management endpoints for the Borealis Engine."""
@@ -22,8 +22,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing helper
     from .. import EngineServiceAdapters
 
 from ...auth.secrets import require_app_secret
-from .passkeys import delete_user_passkeys
-
 def _now_ts() -> int:
     return int(time.time())
 
@@ -101,7 +99,6 @@ class MultiFactorAdministrationService:
 
             if enabled:
                 if reset_secret:
-                    delete_user_passkeys(conn, username_norm)
                     cur.execute(
                         "UPDATE users SET mfa_enabled=0, mfa_disabled=0, mfa_secret=NULL, updated_at=? WHERE LOWER(username)=LOWER(?)",
                         (now_ts, username_norm),
@@ -113,7 +110,6 @@ class MultiFactorAdministrationService:
                     )
             else:
                 if reset_secret:
-                    delete_user_passkeys(conn, username_norm)
                     cur.execute(
                         "UPDATE users SET mfa_enabled=0, mfa_disabled=1, mfa_secret=NULL, updated_at=? WHERE LOWER(username)=LOWER(?)",
                         (now_ts, username_norm),
@@ -169,7 +165,6 @@ class MultiFactorAdministrationService:
 
             mfa_enabled = bool(row[0] or 0)
             now_ts = _now_ts()
-            delete_user_passkeys(conn, username_norm)
             cur.execute(
                 "UPDATE users SET mfa_enabled=0, mfa_secret=NULL, updated_at=? WHERE LOWER(username)=LOWER(?)",
                 (now_ts, username_norm),
