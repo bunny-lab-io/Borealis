@@ -75,6 +75,48 @@ def _sha512_hex(value: str) -> str:
     return hashlib.sha512((value or "").encode("utf-8")).hexdigest()
 
 
+def _bootstrap_state(client):
+    response = client.get("/api/bootstrap/state")
+    assert response.status_code == 200
+    return response.get_json()
+
+
+def _setup_aegis(client, cipher: str = "correct horse battery staple"):
+    response = client.post("/api/bootstrap/aegis/setup", json={"cipher": cipher})
+    assert response.status_code == 200
+    return response.get_json()
+
+
+def _unlock_aegis(client, cipher: str):
+    response = client.post("/api/bootstrap/aegis/unlock", json={"cipher": cipher})
+    return response
+
+
+def _migrate_operator_auth(harness: EngineTestHarness) -> None:
+    if not harness.aegis_cipher:
+        return
+    service = harness.context.aegis_cipher_service
+    conn = sqlite3.connect(str(harness.db_path))
+    try:
+        cur = conn.cursor()
+        service._migrate_legacy_operator_auth(
+            cur,
+            service._require_active_key(required_configured=True),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _decrypt_auth_secret(harness: EngineTestHarness, value: Any) -> str:
+    text = _decode_db_text(value)
+    if not text:
+        return ""
+    if not harness.aegis_cipher:
+        return text
+    return harness.context.aegis_cipher_service.decrypt_secret_text(text)
+
+
 def _enable_fake_passkeys(monkeypatch: pytest.MonkeyPatch) -> None:
     class DummyOptions:
         challenge = b"dummy-challenge"
@@ -155,12 +197,6 @@ def _enable_fake_passkeys(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _setup_aegis(client, cipher: str = "correct horse battery staple"):
-    response = client.post("/api/aegis/setup", json={"cipher": cipher})
-    assert response.status_code == 200
-    return response.get_json()
-
-
 def _mock_github_verify_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     class DummyResponse:
         def __init__(self, status_code: int, payload: Dict[str, Any]):
@@ -186,24 +222,27 @@ def test_github_token_get_without_value(engine_harness: EngineTestHarness) -> No
     assert payload["has_token"] is False
     assert payload["status"] == "missing"
     assert payload["token"] == ""
-    assert payload["configured"] is False
+    assert payload["configured"] is True
     assert payload["locked"] is False
 
 
-def test_github_token_update_requires_aegis_setup(engine_harness: EngineTestHarness) -> None:
-    client = _admin_client(engine_harness)
+def test_github_token_update_requires_aegis_setup(
+    unconfigured_engine_harness: EngineTestHarness,
+) -> None:
+    client = _admin_client(unconfigured_engine_harness)
     response = client.post("/api/github/token", json={"token": "ghp_test"})
-    assert response.status_code == 409
+    assert response.status_code == 401
     payload = response.get_json()
-    assert payload["error"] == "aegis_not_configured"
+    assert payload["error"] == "unauthorized"
+    assert _bootstrap_state(client)["phase"] == "aegis_setup_required"
 
 
 def test_github_token_update_encrypts_after_aegis_setup(
-    engine_harness: EngineTestHarness,
+    unconfigured_engine_harness: EngineTestHarness,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _mock_github_verify_ok(monkeypatch)
-    client = _admin_client(engine_harness)
+    client = _admin_client(unconfigured_engine_harness)
     _setup_aegis(client)
 
     response = client.post("/api/github/token", json={"token": "ghp_test"})
@@ -216,7 +255,7 @@ def test_github_token_update_encrypts_after_aegis_setup(
     assert payload["configured"] is True
     assert payload["locked"] is False
 
-    conn = sqlite3.connect(str(engine_harness.db_path))
+    conn = sqlite3.connect(str(unconfigured_engine_harness.db_path))
     try:
         cur = conn.cursor()
         cur.execute("SELECT token FROM github_token LIMIT 1")
@@ -235,9 +274,9 @@ def test_github_token_update_encrypts_after_aegis_setup(
 
 
 def test_aegis_setup_encrypts_legacy_plaintext_and_restart_relocks(
-    engine_harness: EngineTestHarness,
+    unconfigured_engine_harness: EngineTestHarness,
 ) -> None:
-    conn = sqlite3.connect(str(engine_harness.db_path))
+    conn = sqlite3.connect(str(unconfigured_engine_harness.db_path))
     try:
         cur = conn.cursor()
         cur.execute(
@@ -283,19 +322,17 @@ def test_aegis_setup_encrypts_legacy_plaintext_and_restart_relocks(
     finally:
         conn.close()
 
-    client = _admin_client(engine_harness)
+    client = _admin_client(unconfigured_engine_harness)
 
-    status_before = client.get("/api/aegis/status")
-    assert status_before.status_code == 200
-    assert status_before.get_json()["configured"] is False
+    status_before = _bootstrap_state(client)
+    assert status_before["configured"] is False
+    assert status_before["phase"] == "aegis_setup_required"
 
-    response = client.post("/api/aegis/setup", json={"cipher": "cipher-one"})
-    assert response.status_code == 200
-    payload = response.get_json()
+    payload = _setup_aegis(client, cipher="cipher-one")
     assert payload["configured"] is True
     assert payload["locked"] is False
 
-    conn = sqlite3.connect(str(engine_harness.db_path))
+    conn = sqlite3.connect(str(unconfigured_engine_harness.db_path))
     try:
         cur = conn.cursor()
         cur.execute(
@@ -335,34 +372,91 @@ def test_aegis_setup_encrypts_legacy_plaintext_and_restart_relocks(
         assert _decode_db_text(value).startswith(ENVELOPE_PREFIX)
     assert _decode_db_text(token_row[0]).startswith(ENVELOPE_PREFIX)
 
-    service = engine_harness.context.aegis_cipher_service
+    service = unconfigured_engine_harness.context.aegis_cipher_service
     assert service.decrypt_secret_blob(credential_row[0]) == "legacy-password"
     assert service.decrypt_secret_blob(credential_row[1]).startswith("-----BEGIN OPENSSH PRIVATE KEY-----")
     assert service.decrypt_secret_blob(credential_row[2]) == "legacy-key-passphrase"
     assert service.decrypt_secret_blob(credential_row[3]) == "legacy-become-password"
     assert service.decrypt_secret_text(token_row[0]) == "ghp_legacy"
 
-    fresh_client, fresh_context = _fresh_admin_client(engine_harness)
-    fresh_status = fresh_client.get("/api/aegis/status")
-    assert fresh_status.status_code == 200
-    fresh_payload = fresh_status.get_json()
+    fresh_client, fresh_context = _fresh_admin_client(unconfigured_engine_harness)
+    fresh_payload = _bootstrap_state(fresh_client)
     assert fresh_payload["configured"] is True
     assert fresh_payload["locked"] is True
+    assert fresh_payload["phase"] == "aegis_unlock_required"
     assert fresh_context.aegis_cipher_service.is_locked() is True
 
-    wrong_unlock = fresh_client.post("/api/aegis/unlock", json={"cipher": "wrong-cipher"})
+    wrong_unlock = _unlock_aegis(fresh_client, "wrong-cipher")
     assert wrong_unlock.status_code == 401
     assert wrong_unlock.get_json()["error"] == "invalid_cipher"
 
-    correct_unlock = fresh_client.post("/api/aegis/unlock", json={"cipher": "cipher-one"})
+    correct_unlock = _unlock_aegis(fresh_client, "cipher-one")
     assert correct_unlock.status_code == 200
     assert correct_unlock.get_json()["locked"] is False
     assert fresh_context.aegis_cipher_service.decrypt_secret_text(token_row[0]) == "ghp_legacy"
 
 
+def test_unlock_migrates_legacy_operator_auth_for_existing_aegis_install(
+    unconfigured_engine_harness: EngineTestHarness,
+) -> None:
+    client = _admin_client(unconfigured_engine_harness)
+    _setup_aegis(client, cipher="cipher-upgrade")
+
+    password_hash = _sha512_hex("admin-password")
+    conn = sqlite3.connect(str(unconfigured_engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE users
+               SET password_sha512=?,
+                   mfa_secret=?,
+                   mfa_enabled=1,
+                   mfa_disabled=0
+             WHERE LOWER(username)=LOWER(?)
+            """,
+            (password_hash, "LEGACY-MFA-SECRET", "admin"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    fresh_client, fresh_context = _fresh_admin_client(unconfigured_engine_harness)
+    locked_state = _bootstrap_state(fresh_client)
+    assert locked_state["phase"] == "aegis_unlock_required"
+
+    unlock_response = _unlock_aegis(fresh_client, "cipher-upgrade")
+    assert unlock_response.status_code == 200
+
+    conn = sqlite3.connect(str(unconfigured_engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT password_sha512, COALESCE(mfa_secret, '') FROM users WHERE LOWER(username)=LOWER(?)",
+            ("admin",),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert _decode_db_text(row[0]).startswith(ENVELOPE_PREFIX)
+    assert _decode_db_text(row[1]).startswith(ENVELOPE_PREFIX)
+    assert fresh_context.aegis_cipher_service.decrypt_secret_text(row[0]) == password_hash
+    assert fresh_context.aegis_cipher_service.decrypt_secret_text(row[1]) == "LEGACY-MFA-SECRET"
+
+    login_response = fresh_client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password_sha512": password_hash},
+    )
+    assert login_response.status_code == 200
+    payload = login_response.get_json()
+    assert payload["status"] == "mfa_required"
+    assert payload["stage"] == "verify"
+
+
 def test_credentials_admin_crud_round_trip_with_aegis(engine_harness: EngineTestHarness) -> None:
     client = _admin_client(engine_harness)
-    _setup_aegis(client)
 
     create_response = client.post(
         "/api/credentials",
@@ -454,9 +548,9 @@ def test_credentials_admin_crud_round_trip_with_aegis(engine_harness: EngineTest
 
 
 def test_credentials_and_github_mutations_block_while_unconfigured_or_locked(
-    engine_harness: EngineTestHarness,
+    unconfigured_engine_harness: EngineTestHarness,
 ) -> None:
-    client = _admin_client(engine_harness)
+    client = _admin_client(unconfigured_engine_harness)
 
     unconfigured_create = client.post(
         "/api/credentials",
@@ -468,12 +562,12 @@ def test_credentials_and_github_mutations_block_while_unconfigured_or_locked(
             "password": "secret",
         },
     )
-    assert unconfigured_create.status_code == 409
-    assert unconfigured_create.get_json()["error"] == "aegis_not_configured"
+    assert unconfigured_create.status_code == 401
+    assert unconfigured_create.get_json()["error"] == "unauthorized"
 
     unconfigured_token = client.post("/api/github/token", json={"token": "ghp_blocked"})
-    assert unconfigured_token.status_code == 409
-    assert unconfigured_token.get_json()["error"] == "aegis_not_configured"
+    assert unconfigured_token.status_code == 401
+    assert unconfigured_token.get_json()["error"] == "unauthorized"
 
     _setup_aegis(client, cipher="cipher-two")
 
@@ -492,21 +586,17 @@ def test_credentials_and_github_mutations_block_while_unconfigured_or_locked(
     assert create_response.status_code == 200
     credential_id = create_response.get_json()["credential"]["id"]
 
-    fresh_client, _fresh_context = _fresh_admin_client(engine_harness)
+    fresh_client, _fresh_context = _fresh_admin_client(unconfigured_engine_harness)
 
-    status_response = fresh_client.get("/api/aegis/status")
-    assert status_response.status_code == 200
-    assert status_response.get_json()["locked"] is True
+    status_response = _bootstrap_state(fresh_client)
+    assert status_response["locked"] is True
+    assert status_response["phase"] == "aegis_unlock_required"
 
     list_response = fresh_client.get("/api/credentials")
-    assert list_response.status_code == 200
-    listed = list_response.get_json()["credentials"]
-    assert len(listed) == 1
-    assert listed[0]["name"] == "Locked Metadata Credential"
+    assert list_response.status_code == 401
 
     detail_response = fresh_client.get(f"/api/credentials/{credential_id}")
-    assert detail_response.status_code == 200
-    assert detail_response.get_json()["credential"]["name"] == "Locked Metadata Credential"
+    assert detail_response.status_code == 401
 
     locked_create = fresh_client.post(
         "/api/credentials",
@@ -518,37 +608,34 @@ def test_credentials_and_github_mutations_block_while_unconfigured_or_locked(
             "password": "secret",
         },
     )
-    assert locked_create.status_code == 423
-    assert locked_create.get_json()["error"] == "aegis_locked"
+    assert locked_create.status_code == 401
+    assert locked_create.get_json()["error"] == "unauthorized"
 
     locked_update = fresh_client.put(
         f"/api/credentials/{credential_id}",
         json={"description": "Should not apply"},
     )
-    assert locked_update.status_code == 423
-    assert locked_update.get_json()["error"] == "aegis_locked"
+    assert locked_update.status_code == 401
+    assert locked_update.get_json()["error"] == "unauthorized"
 
     locked_delete = fresh_client.delete(f"/api/credentials/{credential_id}")
-    assert locked_delete.status_code == 423
-    assert locked_delete.get_json()["error"] == "aegis_locked"
+    assert locked_delete.status_code == 401
+    assert locked_delete.get_json()["error"] == "unauthorized"
 
     locked_github_get = fresh_client.get("/api/github/token")
-    assert locked_github_get.status_code == 200
-    locked_github_payload = locked_github_get.get_json()
-    assert locked_github_payload["status"] == "locked"
-    assert locked_github_payload["token"] == ""
-    assert locked_github_payload["locked"] is True
+    assert locked_github_get.status_code == 401
+    assert locked_github_get.get_json()["error"] == "unauthorized"
 
     locked_github_post = fresh_client.post("/api/github/token", json={"token": "ghp_locked"})
-    assert locked_github_post.status_code == 423
-    assert locked_github_post.get_json()["error"] == "aegis_locked"
+    assert locked_github_post.status_code == 401
+    assert locked_github_post.get_json()["error"] == "unauthorized"
 
 
 def test_aegis_rotation_invalidates_old_cipher_and_preserves_secret_access(
     engine_harness: EngineTestHarness,
 ) -> None:
     client = _admin_client(engine_harness)
-    _setup_aegis(client, cipher="old-cipher")
+    current_cipher = str(engine_harness.aegis_cipher or "unit-test-aegis-cipher")
 
     create_response = client.post(
         "/api/credentials",
@@ -579,7 +666,7 @@ def test_aegis_rotation_invalidates_old_cipher_and_preserves_secret_access(
 
     rotate_response = client.post(
         "/api/aegis/rotate",
-        json={"current_cipher": "old-cipher", "new_cipher": "new-cipher"},
+        json={"current_cipher": current_cipher, "new_cipher": "new-cipher"},
     )
     assert rotate_response.status_code == 200
     rotate_payload = rotate_response.get_json()
@@ -602,12 +689,15 @@ def test_aegis_rotation_invalidates_old_cipher_and_preserves_secret_access(
     assert service.decrypt_secret_text(token_row[0]) == "ghp_rotated"
 
     fresh_client, fresh_context = _fresh_admin_client(engine_harness)
+    fresh_status = _bootstrap_state(fresh_client)
+    assert fresh_status["phase"] == "aegis_unlock_required"
+    assert fresh_status["locked"] is True
 
-    old_unlock = fresh_client.post("/api/aegis/unlock", json={"cipher": "old-cipher"})
+    old_unlock = _unlock_aegis(fresh_client, current_cipher)
     assert old_unlock.status_code == 401
     assert old_unlock.get_json()["error"] == "invalid_cipher"
 
-    new_unlock = fresh_client.post("/api/aegis/unlock", json={"cipher": "new-cipher"})
+    new_unlock = _unlock_aegis(fresh_client, "new-cipher")
     assert new_unlock.status_code == 200
     assert new_unlock.get_json()["locked"] is False
 
@@ -620,7 +710,7 @@ def test_aegis_rotation_rolls_back_on_reencryption_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = _admin_client(engine_harness)
-    _setup_aegis(client, cipher="rollback-cipher")
+    current_cipher = str(engine_harness.aegis_cipher or "unit-test-aegis-cipher")
 
     create_response = client.post(
         "/api/credentials",
@@ -655,7 +745,7 @@ def test_aegis_rotation_rolls_back_on_reencryption_failure(
     monkeypatch.setattr(service, "_reencrypt_github_token", _boom)
 
     with pytest.raises(RuntimeError, match="forced rotation failure"):
-        service.rotate("rollback-cipher", "new-rollback-cipher")
+        service.rotate(current_cipher, "new-rollback-cipher")
 
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:
@@ -679,7 +769,6 @@ def test_aegis_force_reset_preserves_records_and_requires_secret_reentry(
 ) -> None:
     _mock_github_verify_ok(monkeypatch)
     client = _admin_client(engine_harness)
-    _setup_aegis(client, cipher="force-reset-old")
 
     create_response = client.post(
         "/api/credentials",
@@ -744,6 +833,9 @@ def test_aegis_force_reset_preserves_records_and_requires_secret_reentry(
     assert reset_payload["affected_credentials"] == 1
     assert reset_payload["disabled_jobs"] == 1
     assert reset_payload["github_token_reset"] is True
+    assert int(reset_payload["affected_users"] or 0) >= 1
+    assert int(reset_payload["removed_passkeys"] or 0) == 0
+    assert _bootstrap_state(client)["phase"] == "aegis_setup_required"
 
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:
@@ -790,10 +882,44 @@ def test_aegis_force_reset_preserves_records_and_requires_secret_reentry(
     assert int(job_row[0] or 0) == 0
     assert state_count == 0
 
-    reconfigure_response = client.post("/api/aegis/setup", json={"cipher": "force-reset-new"})
+    reconfigure_response = client.post("/api/bootstrap/aegis/setup", json={"cipher": "force-reset-new"})
     assert reconfigure_response.status_code == 200
     assert reconfigure_response.get_json()["configured"] is True
     assert reconfigure_response.get_json()["locked"] is False
+    assert reconfigure_response.get_json()["phase"] == "admin_recovery_required"
+
+    class _DummyTotp:
+        def verify(self, code: str, valid_window: int = 0) -> bool:
+            return str(code) == "123456"
+
+    monkeypatch.setattr(access_login, "_generate_totp_secret", lambda: "JBSWY3DPEHPK3PXP")
+    monkeypatch.setattr(access_login, "_totp_for_secret", lambda secret: _DummyTotp())
+    monkeypatch.setattr(
+        access_login,
+        "_totp_provisioning_uri",
+        lambda secret, username: f"otpauth://totp/Borealis:{username}?secret={secret}",
+    )
+    monkeypatch.setattr(access_login, "_totp_qr_data_uri", lambda payload: "data:image/png;base64,test")
+
+    recover_start = client.post(
+        "/api/bootstrap/admin/recover",
+        json={
+            "username": "admin",
+            "password_sha512": _sha512_hex("force-reset-recovered-admin"),
+        },
+    )
+    assert recover_start.status_code == 200
+    recover_payload = recover_start.get_json()
+    assert recover_payload["status"] == "mfa_required"
+    assert recover_payload["pending_token"]
+
+    recover_verify = client.post(
+        "/api/bootstrap/admin/mfa/verify",
+        json={"pending_token": recover_payload["pending_token"], "code": "123456"},
+    )
+    assert recover_verify.status_code == 200
+    assert recover_verify.get_json()["status"] == "ok"
+    assert _bootstrap_state(client)["phase"] == "login_required"
 
     github_status = client.get("/api/github/token")
     assert github_status.status_code == 200
@@ -1051,6 +1177,62 @@ def test_login_requires_mfa_setup_by_default(engine_harness: EngineTestHarness, 
     assert payload["stage"] == "setup"
     assert payload["pending_token"]
     assert payload["secret"] == "JBSWY3DPEHPK3PXP"
+
+
+def test_login_self_heals_legacy_operator_auth_on_unlocked_engine(
+    engine_harness: EngineTestHarness,
+) -> None:
+    password_hash = _sha512_hex("operator-password")
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", password_hash, "User", 0, 0, 0, 1, 0, "LEGACYSECRET"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "operator", "password_sha512": password_hash},
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "mfa_required"
+    assert payload["stage"] == "verify"
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT password_sha512, COALESCE(mfa_secret, '') FROM users WHERE LOWER(username)=LOWER(?)",
+            ("operator",),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert _decode_db_text(row[0]).startswith(ENVELOPE_PREFIX)
+    assert _decode_db_text(row[1]).startswith(ENVELOPE_PREFIX)
 
 
 def test_login_skips_mfa_when_admin_has_disabled_it(engine_harness: EngineTestHarness) -> None:

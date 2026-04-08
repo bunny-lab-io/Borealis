@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import ast
+import base64
 import hashlib
+import hmac
 import json
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence
@@ -22,6 +25,8 @@ class StoredPasskey:
     aaguid: str
     created_at: int
     last_used_at: int
+    credential_lookup_hmac: str
+    secret_encrypted: str
 
     @property
     def transports(self) -> list[str]:
@@ -37,6 +42,110 @@ class StoredPasskey:
 def build_webauthn_user_id(user_id: Any, username: str) -> bytes:
     value = f"{int(user_id or 0)}:{str(username or '').strip().lower()}"
     return hashlib.sha256(value.encode("utf-8")).digest()[:32]
+
+
+def _bytes_to_base64url(value: bytes) -> str:
+    encoded = base64.urlsafe_b64encode(value or b"").decode("ascii")
+    return encoded.rstrip("=")
+
+
+def _bytes_literal_to_bytes(value: Any) -> Optional[bytes]:
+    if value is None:
+        return None
+    text = str(value or "").strip()
+    if not text or not text.startswith("b"):
+        return None
+    try:
+        parsed = ast.literal_eval(text)
+    except Exception:
+        return None
+    if isinstance(parsed, bytearray):
+        return bytes(parsed)
+    if isinstance(parsed, bytes):
+        return parsed
+    return None
+
+
+def normalize_webauthn_storage_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, bytearray):
+        value = bytes(value)
+    if isinstance(value, bytes):
+        return _bytes_to_base64url(value)
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    literal_bytes = _bytes_literal_to_bytes(text)
+    if literal_bytes is not None:
+        return _bytes_to_base64url(literal_bytes)
+    return text
+
+
+def credential_lookup_candidates(credential_id: Any) -> list[str]:
+    normalized = normalize_webauthn_storage_value(credential_id)
+    candidates: list[str] = []
+
+    def _add(value: str) -> None:
+        if value and value not in candidates:
+            candidates.append(value)
+
+    _add(normalized)
+    try:
+        padding = "=" * (-len(normalized) % 4)
+        decoded = base64.urlsafe_b64decode(f"{normalized}{padding}")
+    except Exception:
+        decoded = None
+    if decoded is not None:
+        _add(str(decoded))
+    return candidates
+
+
+def build_passkey_lookup_hmac(app_secret: str, credential_id: Any) -> str:
+    normalized = normalize_webauthn_storage_value(credential_id)
+    if not normalized:
+        return ""
+    return hmac.new(
+        str(app_secret or "").encode("utf-8"),
+        normalized.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def serialize_passkey_secret_bundle(
+    *,
+    credential_id: Any,
+    public_key: Any,
+    sign_count: Any,
+    aaguid: Any,
+) -> str:
+    payload = {
+        "credential_id": normalize_webauthn_storage_value(credential_id),
+        "public_key": normalize_webauthn_storage_value(public_key),
+        "sign_count": int(sign_count or 0),
+        "aaguid": str(aaguid or "").strip(),
+    }
+    return json.dumps(payload, sort_keys=True)
+
+
+def deserialize_passkey_secret_bundle(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        payload = dict(value)
+    else:
+        try:
+            payload = json.loads(str(value or "{}"))
+        except Exception:
+            payload = {}
+    return {
+        "credential_id": normalize_webauthn_storage_value(payload.get("credential_id")),
+        "public_key": normalize_webauthn_storage_value(payload.get("public_key")),
+        "sign_count": int(payload.get("sign_count") or 0),
+        "aaguid": str(payload.get("aaguid") or "").strip(),
+    }
 
 
 def serialize_transports(transports: Any) -> str:
@@ -81,7 +190,9 @@ def list_user_passkeys(conn: sqlite3.Connection, username: str) -> list[StoredPa
                 COALESCE(up.transports_json, '[]'),
                 COALESCE(up.aaguid, ''),
                 COALESCE(up.created_at, 0),
-                COALESCE(up.last_used_at, 0)
+                COALESCE(up.last_used_at, 0),
+                COALESCE(up.credential_lookup_hmac, ''),
+                COALESCE(up.secret_encrypted, '')
             FROM user_passkeys up
             JOIN users u ON u.id = up.user_id
             WHERE LOWER(u.username)=LOWER(?)
@@ -114,7 +225,9 @@ def get_user_passkey_by_credential_id(
                 COALESCE(up.transports_json, '[]'),
                 COALESCE(up.aaguid, ''),
                 COALESCE(up.created_at, 0),
-                COALESCE(up.last_used_at, 0)
+                COALESCE(up.last_used_at, 0),
+                COALESCE(up.credential_lookup_hmac, ''),
+                COALESCE(up.secret_encrypted, '')
             FROM user_passkeys up
             JOIN users u ON u.id = up.user_id
             WHERE LOWER(u.username)=LOWER(?) AND up.credential_id=?
@@ -148,12 +261,49 @@ def get_passkey_by_credential_id(
                 COALESCE(up.transports_json, '[]'),
                 COALESCE(up.aaguid, ''),
                 COALESCE(up.created_at, 0),
-                COALESCE(up.last_used_at, 0)
+                COALESCE(up.last_used_at, 0),
+                COALESCE(up.credential_lookup_hmac, ''),
+                COALESCE(up.secret_encrypted, '')
             FROM user_passkeys up
             WHERE up.credential_id=?
             LIMIT 1
             """,
             (credential_id,),
+        )
+        row = cur.fetchone()
+    finally:
+        cur.close()
+    if not row:
+        return None
+    return _row_to_passkey(row)
+
+
+def get_passkey_by_lookup_hmac(
+    conn: sqlite3.Connection,
+    credential_lookup_hmac: str,
+) -> Optional[StoredPasskey]:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                up.id,
+                up.user_id,
+                COALESCE(up.credential_id, ''),
+                COALESCE(up.public_key, ''),
+                COALESCE(up.sign_count, 0),
+                COALESCE(up.label, ''),
+                COALESCE(up.transports_json, '[]'),
+                COALESCE(up.aaguid, ''),
+                COALESCE(up.created_at, 0),
+                COALESCE(up.last_used_at, 0),
+                COALESCE(up.credential_lookup_hmac, ''),
+                COALESCE(up.secret_encrypted, '')
+            FROM user_passkeys up
+            WHERE up.credential_lookup_hmac=?
+            LIMIT 1
+            """,
+            (credential_lookup_hmac,),
         )
         row = cur.fetchone()
     finally:
@@ -182,7 +332,9 @@ def get_user_passkey_by_id(
                 COALESCE(up.transports_json, '[]'),
                 COALESCE(up.aaguid, ''),
                 COALESCE(up.created_at, 0),
-                COALESCE(up.last_used_at, 0)
+                COALESCE(up.last_used_at, 0),
+                COALESCE(up.credential_lookup_hmac, ''),
+                COALESCE(up.secret_encrypted, '')
             FROM user_passkeys up
             JOIN users u ON u.id = up.user_id
             WHERE LOWER(u.username)=LOWER(?) AND up.id=?
@@ -276,4 +428,6 @@ def _row_to_passkey(row: Sequence[Any]) -> StoredPasskey:
         aaguid=str(row[7] or ""),
         created_at=int(row[8] or 0),
         last_used_at=int(row[9] or 0),
+        credential_lookup_hmac=str(row[10] or ""),
+        secret_encrypted=str(row[11] or ""),
     )

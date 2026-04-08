@@ -310,7 +310,8 @@ sites (id) -------------------< user_site_assignments (site_id)
 - Notes:
 - Before Aegis setup, legacy plaintext values may still exist in the `*_encrypted` columns as migration input.
 - After Aegis setup, secret columns store ASCII `aegis:v1:` envelopes even though the schema type remains `BLOB`.
-- The runtime decrypts credential secrets on demand through `Data/Engine/services/aegis_cipher.py`; metadata-only reads stay available while the Engine is locked.
+- The runtime decrypts credential secrets on demand through `Data/Engine/services/aegis_cipher.py`.
+- Operator-facing credential APIs now wait for bootstrap phase `login_required`; stale operator sessions no longer bypass the lock state after restart.
 - If `metadata_json` contains `aegis_secret_state = "reset_required"`, the record survived an Aegis force reset but one or more stored secret fields were intentionally destroyed and must be re-entered.
 
 #### `aegis_cipher_state`
@@ -320,8 +321,8 @@ sites (id) -------------------< user_site_assignments (site_id)
 - Constraints and indexes:
 - `id` primary key, with Borealis using `id = 1`.
 - Used by:
-- `Data/Engine/services/aegis_cipher.py` setup, unlock, and rotation flows.
-- `/api/aegis/status`, `/api/aegis/setup`, `/api/aegis/unlock`, `/api/aegis/rotate`, and `/api/aegis/force_reset`.
+- `Data/Engine/services/aegis_cipher.py` setup, unlock, rotation, migration, and force-reset flows.
+- `/api/bootstrap/state`, `/api/bootstrap/aegis/setup`, `/api/bootstrap/aegis/unlock`, `/api/bootstrap/admin/*`, `/api/aegis/status`, `/api/aegis/rotate`, and `/api/aegis/force_reset`.
 - Notes:
 - `kdf_params_json` stores the per-install `scrypt` parameters and Base64 salt.
 - `verification_token` stores an Aegis-encrypted constant plaintext that validates the entered cipher without persisting the derived key.
@@ -353,19 +354,38 @@ sites (id) -------------------< user_site_assignments (site_id)
 ### Access Management
 #### `users`
 - Status: Active.
-- Purpose: Operator login accounts and MFA state.
-- Columns: `id`, `username`, `display_name`, `password_sha512`, `role`, `last_login`, `created_at`, `updated_at`, `mfa_enabled`, `mfa_disabled`, `mfa_secret`.
+- Purpose: Operator identity, login state, and recovery state.
+- Columns: `id`, `username`, `display_name`, `password_sha512`, `role`, `last_login`, `created_at`, `updated_at`, `mfa_enabled`, `mfa_disabled`, `mfa_secret`, `auth_reset_required`, `auth_reset_at`.
 - Constraints and indexes:
 - `id` autoincrement primary key.
 - `username` unique.
 - Used by:
 - Login and MFA flows.
+- Bootstrap setup and admin recovery flows.
 - User administration APIs.
 - Device approval auditing (`approved_by_user_id` lookup by id or username).
 - Notes:
-- Startup bootstrap ensures at least one Admin account exists.
+- Usernames, display names, and roles remain plaintext so bootstrap recovery can identify existing administrators before operator login is available.
+- After Aegis setup, `password_sha512` stores an Aegis envelope containing the SHA-512 password hash, and `mfa_secret` stores an Aegis envelope containing the operator's TOTP seed.
+- `auth_reset_required=1` means a force reset destroyed that operator's auth secrets; Borealis blocks normal login until an admin recovery or admin password reset clears the flag.
+- Initial deployment no longer seeds a default admin automatically; bootstrap creates the first administrator after Aegis is configured.
 - `mfa_disabled=0` means MFA is required by default, even before the operator has completed first-time setup.
 - `mfa_secret` remaining empty with `mfa_disabled=0` causes the next successful password login to enter MFA setup immediately.
+
+#### `user_passkeys`
+- Status: Active.
+- Purpose: Stored WebAuthn passkeys for operator sign-in.
+- Columns: `id`, `user_id`, `credential_id`, `public_key`, `sign_count`, `label`, `transports_json`, `aaguid`, `created_at`, `last_used_at`, `credential_lookup_hmac`, `secret_encrypted`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- Unique index on `credential_lookup_hmac`.
+- Used by:
+- Passkey registration, authentication, listing, rename, and delete endpoints.
+- Notes:
+- `label`, `transports_json`, `created_at`, and `last_used_at` stay plaintext so the UI can render passkey inventory quickly after operator login.
+- `credential_lookup_hmac` stores `HMAC-SHA256(app_secret, normalized_credential_id)` so Borealis can locate a passkey without keeping the raw credential id in a unique plaintext index.
+- `secret_encrypted` stores an Aegis envelope containing JSON for `credential_id`, `public_key`, `sign_count`, and `aaguid`.
+- Legacy `credential_id`, `public_key`, `sign_count`, and `aaguid` columns remain for migration compatibility and may be blanked after the passkey has been migrated into `secret_encrypted`.
 
 #### `github_token`
 - Status: Active.

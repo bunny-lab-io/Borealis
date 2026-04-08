@@ -8,11 +8,37 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - Entry point: `Data/Engine/web-interface/src/App.jsx` bootstraps the app shell and router in `Data/Engine/web-interface/src/app/`.
 - Router: `Data/Engine/web-interface/src/app/routes/router.jsx`.
 - Shared shell: `Data/Engine/web-interface/src/app/shell/AppShell.jsx`.
-- Providers: `Data/Engine/web-interface/src/app/providers/` for auth/session state and page chrome metadata.
+- Login/bootstrap gate: `Data/Engine/web-interface/src/app/routes/LoginRoute.jsx` and `Data/Engine/web-interface/src/app/routes/BootstrapEntry.jsx`.
+- Providers: `Data/Engine/web-interface/src/app/providers/` for bootstrap/auth session state and page chrome metadata.
 - Global socket: `window.BorealisSocket` (Socket.IO client).
 - Shared operator presence: authenticated browsers emit `operator_presence_sync` and `operator_presence_clear` on the shared socket; the Engine emits `server_operator_presence_changed` so informational admin pages can refresh live operator session data without waiting for their poll interval.
 - Navigation: `Data/Engine/web-interface/src/Navigation_Sidebar.jsx`.
 - Page template reference: `Data/Engine/web-interface/src/Admin/Page_Template.jsx` (layout only).
+
+## Operator Bootstrap Gate
+- Borealis now resolves `/api/bootstrap/state` before it attempts `/api/auth/me` or renders the normal login form.
+- Bootstrap phases are:
+- `aegis_setup_required`
+- `aegis_unlock_required`
+- `admin_setup_required`
+- `admin_recovery_required`
+- `login_required`
+- `BootstrapEntry.jsx` owns the public pre-auth journey:
+- fresh deployment: set Aegis, create the first administrator, complete MFA
+- restart: unlock Aegis, then proceed to the normal login or passkey view
+- post-force-reset: set a new Aegis cipher, recover an existing administrator, complete MFA, then resume normal operation
+- `AuthContext.jsx` now hydrates `bootstrapState` first. If bootstrap is not yet `login_required`, it clears any cached operator session and suppresses Aegis status polling until the Engine is ready for normal auth.
+- The normal login surface in `Data/Engine/web-interface/src/Login.jsx` now stays hidden until bootstrap reaches `login_required`.
+
+## Access Management UX
+- Credentials:
+- The Aegis Cipher row still lives on `Access_Management/Credential_List.jsx`, but normal runtime actions are now `Rotate Aegis Cipher` and `Force Reset Aegis Cipher`.
+- `Setup Aegis Cipher` and `Enter Aegis Cipher` moved out of the authenticated Credentials page and into the public bootstrap gate.
+- The Aegis row now advertises that it protects operator auth, reusable credentials, and the GitHub API token.
+- User Management:
+- `Access_Management/Users.jsx` now surfaces an `Recovery` state column driven by `auth_reset_required`.
+- Operators flagged by Aegis force reset show `Recovery Required`, and the row action relabels the password-reset flow to `Recover Account`.
+- Recovering or resetting a flagged account also clears stale MFA/passkey auth material so the operator re-enrolls cleanly.
 
 ## Styling and Layout
 - Borealis uses a MagicUI styling language with glass panels, gradients, and Quartz-themed AG Grid tables.

@@ -19,7 +19,6 @@
 """Authentication endpoints for the Borealis Engine API."""
 from __future__ import annotations
 
-import ast
 import base64
 import hashlib
 import io
@@ -76,18 +75,41 @@ if TYPE_CHECKING:  # pragma: no cover - typing helper
     from Data.Engine.services.API import EngineServiceAdapters
 
 from ....public_endpoints import public_base_url
+from ...aegis_cipher import (
+    AegisCipherServiceError,
+    AegisDataCorruptionError,
+    AegisInvalidCipherError,
+    AegisLockedError,
+    AegisNotConfiguredError,
+)
+from ...auth.bootstrap_state import (
+    BOOTSTRAP_PHASE_ADMIN_RECOVERY_REQUIRED,
+    BOOTSTRAP_PHASE_ADMIN_SETUP_REQUIRED,
+    BOOTSTRAP_PHASE_AEGIS_SETUP_REQUIRED,
+    BOOTSTRAP_PHASE_AEGIS_UNLOCK_REQUIRED,
+    BOOTSTRAP_PHASE_LOGIN_REQUIRED,
+    determine_bootstrap_state,
+    operator_auth_allowed,
+)
 from ...auth.secrets import require_app_secret
 from .aegis import register_aegis_cipher_management
 from .credentials import register_credential_management
 from .github import register_github_token_management
 from .multi_factor_authentication import register_mfa_management
 from .passkeys import (
+    build_passkey_lookup_hmac,
     build_webauthn_user_id,
     count_user_passkeys,
+    credential_lookup_candidates,
+    deserialize_passkey_secret_bundle,
     delete_user_passkey,
+    delete_user_passkeys,
+    get_passkey_by_lookup_hmac,
     get_passkey_by_credential_id,
     get_user_passkey_by_id,
     list_user_passkeys,
+    normalize_webauthn_storage_value,
+    serialize_passkey_secret_bundle,
     serialize_transports,
     update_user_passkey_label,
 )
@@ -157,60 +179,6 @@ def _bytes_to_base64url(value: bytes) -> str:
     return encoded.rstrip("=")
 
 
-def _bytes_literal_to_bytes(value: Any) -> Optional[bytes]:
-    if value is None:
-        return None
-    text = str(value or "").strip()
-    if not text or not text.startswith("b"):
-        return None
-    try:
-        parsed = ast.literal_eval(text)
-    except Exception:
-        return None
-    if isinstance(parsed, bytearray):
-        return bytes(parsed)
-    if isinstance(parsed, bytes):
-        return parsed
-    return None
-
-
-def _normalize_webauthn_storage_value(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, memoryview):
-        value = value.tobytes()
-    if isinstance(value, bytearray):
-        value = bytes(value)
-    if isinstance(value, bytes):
-        return _bytes_to_base64url(value)
-
-    text = str(value or "").strip()
-    if not text:
-        return ""
-
-    literal_bytes = _bytes_literal_to_bytes(text)
-    if literal_bytes is not None:
-        return _bytes_to_base64url(literal_bytes)
-    return text
-
-
-def _credential_lookup_candidates(credential_id: Any) -> list[str]:
-    normalized = _normalize_webauthn_storage_value(credential_id)
-    candidates: list[str] = []
-
-    def _add(value: str) -> None:
-        if value and value not in candidates:
-            candidates.append(value)
-
-    _add(normalized)
-    if normalized and base64url_to_bytes:
-        try:
-            _add(str(base64url_to_bytes(normalized)))
-        except Exception:
-            pass
-    return candidates
-
-
 def _user_row_to_dict(row: Sequence[Any]) -> Mapping[str, Any]:
     mfa_enabled = 0
     if len(row) > 7:
@@ -252,6 +220,7 @@ class _AuthService:
         self.db_conn_factory = adapters.db_conn_factory
         self.service_log = adapters.service_log
         self.logger = adapters.context.logger
+        self.aegis_cipher_service = adapters.aegis_cipher_service
 
     def _db_conn(self) -> sqlite3.Connection:
         return self.db_conn_factory()
@@ -273,6 +242,94 @@ class _AuthService:
             return {"username": data.get("u"), "role": data.get("r") or "User"}
         except (BadSignature, SignatureExpired, Exception):
             return None
+
+    def _bootstrap_state(self) -> Dict[str, Any]:
+        return determine_bootstrap_state(
+            db_conn_factory=self.db_conn_factory,
+            aegis_cipher_service=self.aegis_cipher_service,
+        )
+
+    def _public_bootstrap_state(self) -> Dict[str, Any]:
+        state = self._bootstrap_state()
+        return {
+            "phase": state["phase"],
+            "configured": bool(state["configured"]),
+            "locked": bool(state["locked"]),
+        }
+
+    def _operator_auth_allowed(self) -> bool:
+        return operator_auth_allowed(
+            db_conn_factory=self.db_conn_factory,
+            aegis_cipher_service=self.aegis_cipher_service,
+        )
+
+    def _bootstrap_error_response(self, *, status_code: int = 423):
+        payload = self._public_bootstrap_state()
+        return jsonify({"error": "bootstrap_required", **payload}), status_code
+
+    def _encrypt_auth_secret(self, value: str) -> str:
+        try:
+            return self.aegis_cipher_service.encrypt_secret_for_text(value) or ""
+        except AegisNotConfiguredError as exc:
+            raise AegisCipherServiceError(str(exc)) from exc
+        except AegisLockedError as exc:
+            raise AegisCipherServiceError(str(exc)) from exc
+
+    def _decrypt_auth_secret(self, value: Any) -> str:
+        text = str(value or "")
+        if text == "":
+            return ""
+        return self.aegis_cipher_service.decrypt_secret_text(text)
+
+    def _create_bootstrap_pending(
+        self,
+        *,
+        flow: str,
+        username: str,
+        role: str,
+        password_sha512: str,
+        display_name: str = "",
+    ) -> Dict[str, Any]:
+        secret = _generate_totp_secret()
+        pending_token = uuid.uuid4().hex
+        pending = {
+            "flow": flow,
+            "username": username,
+            "display_name": display_name or username,
+            "role": role,
+            "password_sha512": password_sha512,
+            "secret": secret,
+            "token": pending_token,
+            "expires": _now_ts() + 300,
+        }
+        session["bootstrap_admin_pending"] = pending
+        session.pop("mfa_pending", None)
+        session.pop("passkey_pending", None)
+        session.modified = True
+        return {
+            "status": "mfa_required",
+            "pending_token": pending_token,
+            "stage": "setup",
+            "username": username,
+            "role": role,
+            "preferred_method": "totp",
+            "available_methods": ["totp"],
+            "secret": secret,
+            "otpauth_url": _totp_provisioning_uri(secret, username),
+            "qr_image": _totp_qr_data_uri(_totp_provisioning_uri(secret, username) or ""),
+        }
+
+    def _clear_operator_session(self) -> None:
+        session.pop("username", None)
+        session.pop("role", None)
+        session.pop("mfa_pending", None)
+        session.pop("passkey_pending", None)
+
+    def _clear_all_auth_sessions(self):
+        session.clear()
+        response = jsonify({"status": "ok"})
+        response.set_cookie("borealis_auth", "", expires=0, path="/")
+        return response
 
     def _passkeys_available(self) -> bool:
         return all(
@@ -406,7 +463,37 @@ class _AuthService:
             "role": str(row[3] or "User"),
         }
 
+    def _load_login_row(self, username: str):
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    username,
+                    display_name,
+                    password_sha512,
+                    role,
+                    last_login,
+                    created_at,
+                    updated_at,
+                    COALESCE(mfa_enabled, 0) AS mfa_enabled,
+                    COALESCE(mfa_secret, '') AS mfa_secret,
+                    COALESCE(mfa_disabled, 0) AS mfa_disabled,
+                    COALESCE(auth_reset_required, 0) AS auth_reset_required
+                FROM users WHERE LOWER(username)=LOWER(?)
+                """,
+                (username,),
+            )
+            return cur.fetchone()
+        finally:
+            conn.close()
+
     def _current_user(self) -> Optional[Mapping[str, Any]]:
+        if not self._operator_auth_allowed():
+            return None
+
         username = session.get("username")
         role = session.get("role") or "User"
         if username:
@@ -443,6 +530,7 @@ class _AuthService:
     def _finalize_login(self, username: str, role: str):
         session.pop("mfa_pending", None)
         session.pop("passkey_pending", None)
+        session.pop("bootstrap_admin_pending", None)
         session["username"] = username
         session["role"] = role
         self._update_last_login(username)
@@ -464,7 +552,220 @@ class _AuthService:
         )
         return response
 
+    def bootstrap_state(self):
+        return jsonify(self._public_bootstrap_state())
+
+    def bootstrap_aegis_setup(self):
+        state = self._bootstrap_state()
+        if state["phase"] != BOOTSTRAP_PHASE_AEGIS_SETUP_REQUIRED:
+            return jsonify({"error": "invalid_phase", **self._public_bootstrap_state()}), 409
+        data = request.get_json(silent=True) or {}
+        cipher = str(data.get("cipher") or "")
+        self._clear_operator_session()
+        try:
+            self.aegis_cipher_service.setup(cipher)
+        except AegisCipherServiceError as exc:
+            return jsonify({"error": "invalid_request", "message": str(exc), **self._public_bootstrap_state()}), 400
+        return jsonify({"status": "ok", **self._public_bootstrap_state()})
+
+    def bootstrap_aegis_unlock(self):
+        state = self._bootstrap_state()
+        if state["phase"] != BOOTSTRAP_PHASE_AEGIS_UNLOCK_REQUIRED:
+            return jsonify({"error": "invalid_phase", **self._public_bootstrap_state()}), 409
+        data = request.get_json(silent=True) or {}
+        cipher = str(data.get("cipher") or "")
+        self._clear_operator_session()
+        try:
+            self.aegis_cipher_service.unlock(cipher)
+        except AegisInvalidCipherError as exc:
+            return jsonify({"error": "invalid_cipher", "message": str(exc), **self._public_bootstrap_state()}), 401
+        except AegisCipherServiceError as exc:
+            return jsonify({"error": "invalid_request", "message": str(exc), **self._public_bootstrap_state()}), 400
+        return jsonify({"status": "ok", **self._public_bootstrap_state()})
+
+    def bootstrap_admin_setup(self):
+        state = self._bootstrap_state()
+        if state["phase"] != BOOTSTRAP_PHASE_ADMIN_SETUP_REQUIRED:
+            return jsonify({"error": "invalid_phase", **self._public_bootstrap_state()}), 409
+
+        payload = request.get_json(silent=True) or {}
+        username = str(payload.get("username") or "").strip()
+        display_name = str(payload.get("display_name") or username).strip()
+        password_sha512 = str(payload.get("password_sha512") or "").strip().lower()
+        if not username or len(password_sha512) != 128:
+            return jsonify({"error": "username and password_sha512 are required"}), 400
+
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM users")
+            if int((cur.fetchone() or [0])[0] or 0) > 0:
+                return jsonify({"error": "bootstrap_already_initialized", **self._public_bootstrap_state()}), 409
+        finally:
+            conn.close()
+
+        return jsonify(
+            self._create_bootstrap_pending(
+                flow="setup",
+                username=username,
+                display_name=display_name or username,
+                role="Admin",
+                password_sha512=password_sha512,
+            )
+        )
+
+    def bootstrap_admin_recover(self):
+        state = self._bootstrap_state()
+        if state["phase"] != BOOTSTRAP_PHASE_ADMIN_RECOVERY_REQUIRED:
+            return jsonify({"error": "invalid_phase", **self._public_bootstrap_state()}), 409
+
+        payload = request.get_json(silent=True) or {}
+        username = str(payload.get("username") or "").strip()
+        password_sha512 = str(payload.get("password_sha512") or "").strip().lower()
+        if not username or len(password_sha512) != 128:
+            return jsonify({"error": "username and password_sha512 are required"}), 400
+
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT COALESCE(display_name, username), COALESCE(auth_reset_required, 0)
+                  FROM users
+                 WHERE LOWER(username)=LOWER(?)
+                   AND LOWER(role)='admin'
+                 LIMIT 1
+                """,
+                (username,),
+            )
+            row = cur.fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return jsonify({"error": "admin_not_found"}), 404
+        if not bool(row[1] or 0):
+            return jsonify({"error": "admin_recovery_not_required"}), 409
+
+        return jsonify(
+            self._create_bootstrap_pending(
+                flow="recover",
+                username=username,
+                display_name=str(row[0] or username),
+                role="Admin",
+                password_sha512=password_sha512,
+            )
+        )
+
+    def bootstrap_admin_mfa_verify(self):
+        pending = session.get("bootstrap_admin_pending") or {}
+        if not pending or not isinstance(pending, dict):
+            return jsonify({"error": "bootstrap_pending"}), 401
+
+        payload = request.get_json(silent=True) or {}
+        token = str(payload.get("pending_token") or "").strip()
+        code = "".join(ch for ch in str(payload.get("code") or "").strip() if ch.isdigit())
+        if not token or token != pending.get("token"):
+            return jsonify({"error": "invalid_session"}), 401
+        if pending.get("expires", 0) < _now_ts():
+            session.pop("bootstrap_admin_pending", None)
+            return jsonify({"error": "expired"}), 401
+        if len(code) < 6:
+            return jsonify({"error": "invalid_code"}), 400
+
+        secret = str(pending.get("secret") or "")
+        try:
+            if not _totp_for_secret(secret).verify(code, valid_window=1):
+                return jsonify({"error": "invalid_code"}), 401
+        except Exception as exc:
+            return jsonify({"error": str(exc) or "mfa_unavailable"}), 500
+
+        username = str(pending.get("username") or "").strip()
+        display_name = str(pending.get("display_name") or username).strip() or username
+        role = str(pending.get("role") or "Admin").strip() or "Admin"
+        password_sha512 = str(pending.get("password_sha512") or "").strip().lower()
+        if not username or len(password_sha512) != 128:
+            return jsonify({"error": "invalid_session"}), 401
+
+        try:
+            encrypted_password = self._encrypt_auth_secret(password_sha512)
+            encrypted_mfa_secret = self._encrypt_auth_secret(secret)
+        except AegisCipherServiceError:
+            return self._bootstrap_error_response()
+
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            now_ts = _now_ts()
+            if str(pending.get("flow") or "") == "setup":
+                cur.execute("SELECT COUNT(*) FROM users")
+                if int((cur.fetchone() or [0])[0] or 0) > 0:
+                    conn.rollback()
+                    return jsonify({"error": "bootstrap_already_initialized", **self._public_bootstrap_state()}), 409
+                cur.execute(
+                    """
+                    INSERT INTO users(
+                        username,
+                        display_name,
+                        password_sha512,
+                        role,
+                        created_at,
+                        updated_at,
+                        mfa_enabled,
+                        mfa_disabled,
+                        mfa_secret,
+                        auth_reset_required,
+                        auth_reset_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        username,
+                        display_name,
+                        encrypted_password,
+                        role,
+                        now_ts,
+                        now_ts,
+                        1,
+                        0,
+                        encrypted_mfa_secret,
+                        0,
+                        None,
+                    ),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE users
+                       SET password_sha512=?,
+                           mfa_secret=?,
+                           mfa_enabled=1,
+                           mfa_disabled=0,
+                           auth_reset_required=0,
+                           auth_reset_at=NULL,
+                           updated_at=?
+                     WHERE LOWER(username)=LOWER(?)
+                       AND LOWER(role)='admin'
+                    """,
+                    (encrypted_password, encrypted_mfa_secret, now_ts, username),
+                )
+                if int(cur.rowcount or 0) <= 0:
+                    conn.rollback()
+                    return jsonify({"error": "admin_not_found"}), 404
+                delete_user_passkeys(conn, username)
+            conn.commit()
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            return jsonify({"error": "username already exists"}), 409
+        finally:
+            conn.close()
+
+        session.pop("bootstrap_admin_pending", None)
+        session.modified = True
+        return self._finalize_login(username, role)
+
     def login(self):
+        if not self._operator_auth_allowed():
+            return self._bootstrap_error_response()
+
         payload = request.get_json(silent=True) or {}
         username = (payload.get("username") or "").strip()
         password = payload.get("password")
@@ -473,41 +774,31 @@ class _AuthService:
         if not username or (not password and not password_sha512):
             return jsonify({"error": "missing credentials"}), 400
 
-        conn = self._db_conn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT
-                    id,
-                    username,
-                    display_name,
-                    password_sha512,
-                    role,
-                    last_login,
-                    created_at,
-                    updated_at,
-                    COALESCE(mfa_enabled, 0) AS mfa_enabled,
-                    COALESCE(mfa_secret, '') AS mfa_secret,
-                    COALESCE(mfa_disabled, 0) AS mfa_disabled
-                FROM users WHERE LOWER(username)=LOWER(?)
-                """,
-                (username,),
-            )
-            row = cur.fetchone()
-        finally:
-            conn.close()
+        row = self._load_login_row(username)
 
         if not row:
             return jsonify({"error": "invalid username or password"}), 401
 
-        stored_hash = (row[3] or "").lower()
+        if bool(row[11] or 0):
+            return jsonify({"error": "auth_reset_required"}), 423
+
+        try:
+            stored_hash = self._decrypt_auth_secret(row[3]).lower()
+            existing_secret = self._decrypt_auth_secret(row[9]).strip()
+        except AegisDataCorruptionError:
+            self.aegis_cipher_service.migrate_operator_auth_if_needed()
+            row = self._load_login_row(username)
+            if not row:
+                return jsonify({"error": "invalid username or password"}), 401
+            stored_hash = self._decrypt_auth_secret(row[3]).lower()
+            existing_secret = self._decrypt_auth_secret(row[9]).strip()
+        except Exception as exc:
+            return jsonify({"error": str(exc) or "auth_secret_unavailable"}), 500
         check_hash = password_sha512 or _sha512_hex(password or "")
         if stored_hash != (check_hash or "").lower():
             return jsonify({"error": "invalid username or password"}), 401
 
         role = row[4] or "User"
-        existing_secret = (row[9] or "").strip()
         mfa_disabled = bool(row[10] or 0)
         available_methods = ["totp"] if existing_secret else []
         setup_methods = ["totp"]
@@ -569,12 +860,12 @@ class _AuthService:
         return jsonify(response_payload)
 
     def logout(self):
-        session.clear()
-        response = jsonify({"status": "ok"})
-        response.set_cookie("borealis_auth", "", expires=0, path="/")
-        return response
+        return self._clear_all_auth_sessions()
 
     def mfa_verify(self):
+        if not self._operator_auth_allowed():
+            return self._bootstrap_error_response()
+
         pending = session.get("mfa_pending") or {}
         if not pending or not isinstance(pending, dict):
             return jsonify({"error": "mfa_pending"}), 401
@@ -609,7 +900,7 @@ class _AuthService:
                     cur = conn.cursor()
                     cur.execute(
                         "UPDATE users SET mfa_enabled=1, mfa_disabled=0, mfa_secret=?, updated_at=? WHERE LOWER(username)=LOWER(?)",
-                        (secret, now_ts, username),
+                        (self._encrypt_auth_secret(secret), now_ts, username),
                     )
                     conn.commit()
                 finally:
@@ -626,7 +917,7 @@ class _AuthService:
                 finally:
                     conn.close()
 
-                secret = (row[0] or "").strip() if row else ""
+                secret = self._decrypt_auth_secret(row[0]) if row else ""
                 if not secret:
                     return jsonify({"error": "mfa_not_configured"}), 403
                 totp = _totp_for_secret(secret)
@@ -638,6 +929,8 @@ class _AuthService:
         return self._finalize_login(username, role)
 
     def passkey_register_options(self):
+        if not self._operator_auth_allowed():
+            return self._bootstrap_error_response()
         if not self._passkeys_available():
             return jsonify({"error": "passkeys_unavailable"}), 503
 
@@ -663,7 +956,17 @@ class _AuthService:
 
         exclude_credentials = []
         for item in stored_passkeys:
-            normalized_credential_id = _normalize_webauthn_storage_value(item.credential_id)
+            normalized_credential_id = ""
+            if item.secret_encrypted:
+                try:
+                    bundle = deserialize_passkey_secret_bundle(
+                        self._decrypt_auth_secret(item.secret_encrypted)
+                    )
+                    normalized_credential_id = str(bundle.get("credential_id") or "")
+                except Exception:
+                    normalized_credential_id = ""
+            if not normalized_credential_id:
+                normalized_credential_id = normalize_webauthn_storage_value(item.credential_id)
             if not normalized_credential_id:
                 continue
             try:
@@ -716,6 +1019,8 @@ class _AuthService:
         )
 
     def passkey_register_verify(self):
+        if not self._operator_auth_allowed():
+            return self._bootstrap_error_response()
         if not self._passkeys_available():
             return jsonify({"error": "passkeys_unavailable"}), 503
 
@@ -759,10 +1064,10 @@ class _AuthService:
         except Exception as exc:
             return jsonify({"error": str(exc)}), 400
 
-        credential_id = _normalize_webauthn_storage_value(
+        credential_id = normalize_webauthn_storage_value(
             getattr(verification, "credential_id", None) or credential.get("id") or ""
         )
-        public_key = _normalize_webauthn_storage_value(getattr(verification, "credential_public_key", None) or "")
+        public_key = normalize_webauthn_storage_value(getattr(verification, "credential_public_key", None) or "")
         sign_count = int(getattr(verification, "sign_count", 0) or 0)
         aaguid = str(getattr(verification, "aaguid", "") or "").strip()
         transports = []
@@ -778,6 +1083,14 @@ class _AuthService:
         conn = self._db_conn()
         try:
             cur = conn.cursor()
+            secret_encrypted = self._encrypt_auth_secret(
+                serialize_passkey_secret_bundle(
+                    credential_id=credential_id,
+                    public_key=public_key,
+                    sign_count=sign_count,
+                    aaguid=aaguid,
+                )
+            )
             cur.execute(
                 """
                 INSERT INTO user_passkeys(
@@ -789,19 +1102,23 @@ class _AuthService:
                     transports_json,
                     aaguid,
                     created_at,
-                    last_used_at
-                ) VALUES (?,?,?,?,?,?,?,?,?)
+                    last_used_at,
+                    credential_lookup_hmac,
+                    secret_encrypted
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     identity["id"],
-                    credential_id,
-                    public_key,
-                    sign_count,
+                    "",
+                    "",
+                    0,
                     label or "Passkey",
                     serialize_transports(transports),
-                    aaguid,
+                    "",
                     now_ts,
                     now_ts,
+                    build_passkey_lookup_hmac(require_app_secret(self.app), credential_id),
+                    secret_encrypted,
                 ),
             )
             total_passkeys = count_user_passkeys(conn, identity["username"])
@@ -823,6 +1140,8 @@ class _AuthService:
         )
 
     def passkey_authenticate_options(self):
+        if not self._operator_auth_allowed():
+            return self._bootstrap_error_response()
         if not self._passkeys_available():
             return jsonify({"error": "passkeys_unavailable"}), 503
 
@@ -853,6 +1172,8 @@ class _AuthService:
         )
 
     def passkey_authenticate_verify(self):
+        if not self._operator_auth_allowed():
+            return self._bootstrap_error_response()
         if not self._passkeys_available():
             return jsonify({"error": "passkeys_unavailable"}), 503
 
@@ -863,7 +1184,7 @@ class _AuthService:
         payload = request.get_json(silent=True) or {}
         request_id = str(payload.get("request_id") or "").strip()
         credential = payload.get("credential") or {}
-        credential_id = _normalize_webauthn_storage_value(credential.get("id") or "")
+        credential_id = normalize_webauthn_storage_value(credential.get("id") or "")
 
         if not request_id or request_id != ceremony.get("request_id"):
             return jsonify({"error": "invalid_session"}), 401
@@ -878,8 +1199,11 @@ class _AuthService:
         conn = self._db_conn()
         try:
             stored_passkey = None
-            for candidate in _credential_lookup_candidates(credential_id):
-                stored_passkey = get_passkey_by_credential_id(conn, candidate)
+            for candidate in credential_lookup_candidates(credential_id):
+                lookup_hmac = build_passkey_lookup_hmac(require_app_secret(self.app), candidate)
+                stored_passkey = get_passkey_by_lookup_hmac(conn, lookup_hmac)
+                if not stored_passkey:
+                    stored_passkey = get_passkey_by_credential_id(conn, candidate)
                 if stored_passkey:
                     break
             if not stored_passkey:
@@ -889,8 +1213,18 @@ class _AuthService:
             if not identity:
                 return jsonify({"error": "user_not_found"}), 404
 
-            normalized_stored_credential_id = _normalize_webauthn_storage_value(stored_passkey.credential_id)
-            normalized_public_key = _normalize_webauthn_storage_value(stored_passkey.public_key)
+            bundle = deserialize_passkey_secret_bundle(
+                self._decrypt_auth_secret(stored_passkey.secret_encrypted)
+                if stored_passkey.secret_encrypted
+                else serialize_passkey_secret_bundle(
+                    credential_id=stored_passkey.credential_id,
+                    public_key=stored_passkey.public_key,
+                    sign_count=stored_passkey.sign_count,
+                    aaguid=stored_passkey.aaguid,
+                )
+            )
+            normalized_stored_credential_id = normalize_webauthn_storage_value(bundle.get("credential_id"))
+            normalized_public_key = normalize_webauthn_storage_value(bundle.get("public_key"))
             if not normalized_stored_credential_id or not normalized_public_key:
                 return jsonify({"error": "invalid_passkey"}), 400
 
@@ -900,17 +1234,33 @@ class _AuthService:
                 expected_rp_id=self._passkey_rp_id(),
                 expected_origin=self._passkey_origin(),
                 credential_public_key=base64url_to_bytes(normalized_public_key),
-                credential_current_sign_count=int(stored_passkey.sign_count or 0),
+                credential_current_sign_count=int(bundle.get("sign_count") or 0),
                 require_user_verification=True,
             )
 
             cur = conn.cursor()
             cur.execute(
-                "UPDATE user_passkeys SET credential_id=?, public_key=?, sign_count=?, last_used_at=? WHERE id=?",
+                """
+                UPDATE user_passkeys
+                   SET credential_id='',
+                       public_key='',
+                       sign_count=0,
+                       aaguid='',
+                       credential_lookup_hmac=?,
+                       secret_encrypted=?,
+                       last_used_at=?
+                 WHERE id=?
+                """,
                 (
-                    normalized_stored_credential_id,
-                    normalized_public_key,
-                    int(getattr(verification, "new_sign_count", stored_passkey.sign_count) or 0),
+                    build_passkey_lookup_hmac(require_app_secret(self.app), normalized_stored_credential_id),
+                    self._encrypt_auth_secret(
+                        serialize_passkey_secret_bundle(
+                            credential_id=normalized_stored_credential_id,
+                            public_key=normalized_public_key,
+                            sign_count=int(getattr(verification, "new_sign_count", bundle.get("sign_count", 0)) or 0),
+                            aaguid=bundle.get("aaguid") or "",
+                        )
+                    ),
                     now_ts,
                     stored_passkey.id,
                 ),
@@ -1077,6 +1427,30 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
 
     service = _AuthService(app, adapters)
     blueprint = Blueprint("auth", __name__)
+
+    @blueprint.route("/api/bootstrap/state", methods=["GET"])
+    def _bootstrap_state():
+        return service.bootstrap_state()
+
+    @blueprint.route("/api/bootstrap/aegis/setup", methods=["POST"])
+    def _bootstrap_aegis_setup():
+        return service.bootstrap_aegis_setup()
+
+    @blueprint.route("/api/bootstrap/aegis/unlock", methods=["POST"])
+    def _bootstrap_aegis_unlock():
+        return service.bootstrap_aegis_unlock()
+
+    @blueprint.route("/api/bootstrap/admin/setup", methods=["POST"])
+    def _bootstrap_admin_setup():
+        return service.bootstrap_admin_setup()
+
+    @blueprint.route("/api/bootstrap/admin/recover", methods=["POST"])
+    def _bootstrap_admin_recover():
+        return service.bootstrap_admin_recover()
+
+    @blueprint.route("/api/bootstrap/admin/mfa/verify", methods=["POST"])
+    def _bootstrap_admin_mfa_verify():
+        return service.bootstrap_admin_mfa_verify()
 
     @blueprint.route("/api/auth/login", methods=["POST"])
     def _login():

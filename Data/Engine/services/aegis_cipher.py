@@ -31,6 +31,12 @@ from ..crypto.aegis import (
     is_aegis_envelope,
     random_salt,
 )
+from .API.access_management.passkeys import (
+    build_passkey_lookup_hmac,
+    deserialize_passkey_secret_bundle,
+    normalize_webauthn_storage_value,
+    serialize_passkey_secret_bundle,
+)
 
 _STATE_ROW_ID = 1
 _VERIFICATION_PLAINTEXT = "7f5c2a1d-6e8b-4f3b-a0d1-9c3f77b34d52"
@@ -141,7 +147,7 @@ def clear_credential_secret_reset_metadata(
 class AegisCipherService:
     """Manage Aegis Cipher setup, unlock state, and secret serialization."""
 
-    secret_scope = ("credentials", "github_token")
+    secret_scope = ("credentials", "github_token", "operator_auth")
     unlock_scope = "engine_global"
 
     def __init__(
@@ -150,10 +156,12 @@ class AegisCipherService:
         db_conn_factory: Callable[[], sqlite3.Connection],
         logger: Optional[logging.Logger] = None,
         service_log: Optional[Callable[[str, str, Optional[str]], None]] = None,
+        hmac_secret: str = "",
     ) -> None:
         self._db_conn_factory = db_conn_factory
         self._logger = logger or logging.getLogger(__name__)
         self._service_log = service_log
+        self._hmac_secret = str(hmac_secret or "")
         self._lock = threading.RLock()
         self._active_key: Optional[bytes] = None
 
@@ -217,6 +225,7 @@ class AegisCipherService:
 
             self._migrate_legacy_credentials(cur, key)
             self._migrate_legacy_github_token(cur, key)
+            self._migrate_legacy_operator_auth(cur, key)
 
             now_ts = _now_ts()
             cur.execute(
@@ -258,6 +267,7 @@ class AegisCipherService:
     def unlock(self, cipher: str) -> Dict[str, Any]:
         self._validate_cipher(cipher)
         state = self._state(required=True)
+        conn: Optional[sqlite3.Connection] = None
         try:
             key = self._derive_key_from_state(cipher, state)
             verification_plaintext = decrypt_text(str(state["verification_token"] or ""), key=key)
@@ -265,6 +275,21 @@ class AegisCipherService:
             raise AegisInvalidCipherError("Incorrect Aegis Cipher.") from exc
         if verification_plaintext != _VERIFICATION_PLAINTEXT:
             raise AegisInvalidCipherError("Incorrect Aegis Cipher.")
+        try:
+            conn = self._db_conn_factory()
+            cur = conn.cursor()
+            self._migrate_legacy_operator_auth(cur, key)
+            conn.commit()
+        except Exception:
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            raise
+        finally:
+            if conn is not None:
+                conn.close()
         with self._lock:
             self._active_key = key
         self._log("Aegis Cipher accepted; Engine secrets unlocked in memory.")
@@ -300,6 +325,7 @@ class AegisCipherService:
             )
             self._reencrypt_credentials(cur, old_key=old_key, new_key=new_key)
             self._reencrypt_github_token(cur, old_key=old_key, new_key=new_key)
+            self._reencrypt_operator_auth(cur, old_key=old_key, new_key=new_key)
 
             now_ts = _now_ts()
             cur.execute(
@@ -342,6 +368,8 @@ class AegisCipherService:
         affected_credentials = 0
         disabled_jobs = 0
         github_token_reset = False
+        affected_users = 0
+        removed_passkeys = 0
         now_ts = _now_ts()
         try:
             conn = self._db_conn_factory()
@@ -418,6 +446,25 @@ class AegisCipherService:
                     (None, 1, now_ts),
                 )
 
+            cur.execute("SELECT COUNT(*) FROM users")
+            affected_users = int((cur.fetchone() or [0])[0] or 0)
+            cur.execute(
+                """
+                UPDATE users
+                   SET password_sha512='',
+                       mfa_secret=NULL,
+                       mfa_enabled=0,
+                       mfa_disabled=0,
+                       auth_reset_required=1,
+                       auth_reset_at=?,
+                       updated_at=?
+                """,
+                (now_ts, now_ts),
+            )
+            cur.execute("SELECT COUNT(*) FROM user_passkeys")
+            removed_passkeys = int((cur.fetchone() or [0])[0] or 0)
+            cur.execute("DELETE FROM user_passkeys")
+
             if affected_credential_ids:
                 placeholders = ",".join("?" for _ in affected_credential_ids)
                 cur.execute(
@@ -457,7 +504,30 @@ class AegisCipherService:
             "affected_credentials": affected_credentials,
             "disabled_jobs": disabled_jobs,
             "github_token_reset": github_token_reset,
+            "affected_users": affected_users,
+            "removed_passkeys": removed_passkeys,
         }
+
+    def migrate_operator_auth_if_needed(self) -> Dict[str, int]:
+        self._state(required=True)
+        key = self._require_active_key(required_configured=True)
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            conn = self._db_conn_factory()
+            cur = conn.cursor()
+            migrated = self._migrate_legacy_operator_auth(cur, key)
+            conn.commit()
+            return migrated
+        except Exception:
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            raise
+        finally:
+            if conn is not None:
+                conn.close()
 
     # ------------------------------------------------------------------
     # Secret serialization helpers
@@ -784,6 +854,182 @@ class AegisCipherService:
                 (None, 1, reset_at),
             )
 
+    def _migrate_legacy_operator_auth(self, cur, key: bytes) -> Dict[str, int]:
+        migrated_users = 0
+        migrated_passkeys = 0
+        cur.execute(
+            """
+            SELECT id, password_sha512, mfa_secret
+              FROM users
+             ORDER BY id ASC
+            """
+        )
+        user_rows = cur.fetchall() or []
+        for row in user_rows:
+            user_id = int(row[0] or 0)
+            password_hash_raw = self._decode_db_text(row[1])
+            mfa_secret_raw = self._decode_db_text(row[2])
+            encrypted_password_hash = password_hash_raw
+            encrypted_mfa_secret = mfa_secret_raw if row[2] is not None else None
+            changed = False
+
+            if password_hash_raw and not is_aegis_envelope(password_hash_raw):
+                encrypted_password_hash = self._encrypt_text_with_key(password_hash_raw, key) or ""
+                changed = True
+
+            if row[2] is not None and mfa_secret_raw and not is_aegis_envelope(mfa_secret_raw):
+                encrypted_mfa_secret = self._encrypt_text_with_key(mfa_secret_raw, key)
+                changed = True
+
+            if not changed:
+                continue
+
+            cur.execute(
+                """
+                UPDATE users
+                   SET password_sha512=?,
+                       mfa_secret=?
+                 WHERE id=?
+                """,
+                (
+                    encrypted_password_hash,
+                    encrypted_mfa_secret,
+                    user_id,
+                ),
+            )
+            migrated_users += 1
+
+        cur.execute(
+            """
+            SELECT
+                id,
+                credential_id,
+                public_key,
+                sign_count,
+                aaguid,
+                credential_lookup_hmac,
+                secret_encrypted
+              FROM user_passkeys
+             ORDER BY id ASC
+            """
+        )
+        passkey_rows = cur.fetchall() or []
+        for row in passkey_rows:
+            passkey_id = int(row[0] or 0)
+            existing_secret = self._decode_db_text(row[6])
+            if existing_secret:
+                self._validate_encrypted_or_empty(existing_secret)
+                continue
+            credential_id = normalize_webauthn_storage_value(row[1])
+            public_key = normalize_webauthn_storage_value(row[2])
+            if not credential_id or not public_key:
+                raise AegisDataCorruptionError("Stored passkey record is incomplete.")
+            secret_payload = serialize_passkey_secret_bundle(
+                credential_id=credential_id,
+                public_key=public_key,
+                sign_count=int(row[3] or 0),
+                aaguid=row[4],
+            )
+            cur.execute(
+                """
+                UPDATE user_passkeys
+                   SET credential_id='',
+                       public_key='',
+                       sign_count=0,
+                       aaguid='',
+                       credential_lookup_hmac=?,
+                       secret_encrypted=?
+                 WHERE id=?
+                """,
+                (
+                    self._passkey_lookup_hmac(credential_id),
+                    self._encrypt_text_with_key(secret_payload, key) or "",
+                    passkey_id,
+                ),
+            )
+            migrated_passkeys += 1
+        return {
+            "users": migrated_users,
+            "passkeys": migrated_passkeys,
+        }
+
+    def _reencrypt_operator_auth(self, cur, *, old_key: bytes, new_key: bytes) -> None:
+        cur.execute(
+            """
+            SELECT id, password_sha512, mfa_secret
+              FROM users
+             ORDER BY id ASC
+            """
+        )
+        user_rows = cur.fetchall() or []
+        for row in user_rows:
+            user_id = int(row[0] or 0)
+            password_hash = self._decrypt_encrypted_or_raise(row[1], old_key)
+            mfa_secret = self._decrypt_encrypted_or_raise(row[2], old_key)
+            cur.execute(
+                """
+                UPDATE users
+                   SET password_sha512=?,
+                       mfa_secret=?
+                 WHERE id=?
+                """,
+                (
+                    self._encrypt_text_with_key(password_hash, new_key) or "",
+                    self._encrypt_text_with_key(mfa_secret, new_key),
+                    user_id,
+                ),
+            )
+
+        cur.execute(
+            """
+            SELECT
+                id,
+                credential_id,
+                public_key,
+                sign_count,
+                aaguid,
+                credential_lookup_hmac,
+                secret_encrypted
+              FROM user_passkeys
+             ORDER BY id ASC
+            """
+        )
+        passkey_rows = cur.fetchall() or []
+        for row in passkey_rows:
+            passkey_id = int(row[0] or 0)
+            encrypted_secret = self._decode_db_text(row[6])
+            if encrypted_secret:
+                secret_payload = self._decrypt_encrypted_or_raise(encrypted_secret, old_key)
+            else:
+                credential_id = normalize_webauthn_storage_value(row[1])
+                public_key = normalize_webauthn_storage_value(row[2])
+                if not credential_id or not public_key:
+                    raise AegisDataCorruptionError("Stored passkey record is incomplete.")
+                secret_payload = serialize_passkey_secret_bundle(
+                    credential_id=credential_id,
+                    public_key=public_key,
+                    sign_count=int(row[3] or 0),
+                    aaguid=row[4],
+                )
+            parsed_payload = deserialize_passkey_secret_bundle(secret_payload)
+            cur.execute(
+                """
+                UPDATE user_passkeys
+                   SET credential_id='',
+                       public_key='',
+                       sign_count=0,
+                       aaguid='',
+                       credential_lookup_hmac=?,
+                       secret_encrypted=?
+                 WHERE id=?
+                """,
+                (
+                    self._passkey_lookup_hmac(parsed_payload["credential_id"]),
+                    self._encrypt_text_with_key(secret_payload, new_key) or "",
+                    passkey_id,
+                ),
+            )
+
     def _legacy_secret_or_raise(self, value: Any) -> Optional[str]:
         text = self._decode_db_text(value)
         if text == "":
@@ -811,6 +1057,16 @@ class AegisCipherService:
         if value is None:
             return None
         return encrypt_text(value, key=key).encode("utf-8")
+
+    def _encrypt_text_with_key(self, value: Optional[str], key: bytes) -> Optional[str]:
+        if value is None:
+            return None
+        return encrypt_text(value, key=key)
+
+    def _passkey_lookup_hmac(self, credential_id: Any) -> str:
+        if not self._hmac_secret:
+            raise AegisCipherServiceError("Aegis passkey lookup secret is not configured.")
+        return build_passkey_lookup_hmac(self._hmac_secret, credential_id)
 
     def _log(self, message: str, *, level: str = "INFO") -> None:
         if callable(self._service_log):

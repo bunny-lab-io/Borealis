@@ -25,6 +25,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 if TYPE_CHECKING:  # pragma: no cover - typing helper
     from .. import EngineServiceAdapters
 
+from ...auth.bootstrap_state import operator_auth_allowed
 from ...auth.secrets import require_app_secret
 from ...aegis_cipher import (
     AegisCipherServiceError,
@@ -143,6 +144,12 @@ class CredentialManagementService:
         return URLSafeTimedSerializer(secret, salt="borealis-auth")
 
     def _current_user(self) -> Optional[Dict[str, Any]]:
+        if not operator_auth_allowed(
+            db_conn_factory=self.db_conn_factory,
+            aegis_cipher_service=self.aegis,
+        ):
+            return None
+
         username = session.get("username")
         role = session.get("role") or "User"
         if username:

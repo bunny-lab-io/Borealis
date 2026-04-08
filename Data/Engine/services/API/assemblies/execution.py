@@ -404,6 +404,8 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
         dev_mode_manager=adapters.dev_mode_manager,
         config=adapters.config,
         logger=adapters.context.logger,
+        db_conn_factory=adapters.db_conn_factory,
+        aegis_cipher_service=adapters.aegis_cipher_service,
     )
     site_access = UserSiteAccessManager(adapters.db_conn_factory, logger=adapters.context.logger)
 

@@ -61,6 +61,7 @@ _ensure_websockets_stub()
 
 from Data.Engine.server import create_app
 
+_DEFAULT_TEST_AEGIS_CIPHER = "unit-test-aegis-cipher"
 
 _SCHEMA_DEFINITION = """CREATE TABLE IF NOT EXISTS devices (
     guid TEXT PRIMARY KEY,
@@ -358,6 +359,7 @@ class EngineTestHarness:
     db_path: Path
     bundle_contents: str
     context: Any
+    aegis_cipher: str | None = None
 
 
 def _initialise_legacy_schema(db_path: Path) -> None:
@@ -370,8 +372,12 @@ def _initialise_legacy_schema(db_path: Path) -> None:
         conn.close()
 
 
-@pytest.fixture()
-def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[EngineTestHarness]:
+def _build_engine_harness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    aegis_cipher: str | None,
+) -> EngineTestHarness:
     project_root = Path(__file__).resolve().parents[3]
     monkeypatch.setenv("BOREALIS_PROJECT_ROOT", str(project_root))
 
@@ -550,4 +556,34 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     app, _socketio, context = create_app(config)
     app.config.update(TESTING=True)
 
-    yield EngineTestHarness(app=app, db_path=db_path, bundle_contents=bundle_contents, context=context)
+    if aegis_cipher:
+        context.aegis_cipher_service.setup(aegis_cipher)
+
+    return EngineTestHarness(
+        app=app,
+        db_path=db_path,
+        bundle_contents=bundle_contents,
+        context=context,
+        aegis_cipher=aegis_cipher,
+    )
+
+
+@pytest.fixture()
+def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[EngineTestHarness]:
+    yield _build_engine_harness(
+        tmp_path,
+        monkeypatch,
+        aegis_cipher=_DEFAULT_TEST_AEGIS_CIPHER,
+    )
+
+
+@pytest.fixture()
+def unconfigured_engine_harness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[EngineTestHarness]:
+    yield _build_engine_harness(
+        tmp_path,
+        monkeypatch,
+        aegis_cipher=None,
+    )

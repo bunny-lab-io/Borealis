@@ -4,6 +4,8 @@ function extractError(payload, fallbackMessage) {
   const key = String(payload?.error || "").trim();
   const map = {
     unauthorized: "Your session expired. Please sign in again.",
+    bootstrap_required:
+      "Borealis must finish Aegis bootstrap before passkey sign-in is available.",
     passkeys_unavailable: "Passkeys are not available on this Borealis server yet.",
     passkey_pending: "Your passkey session expired. Please sign in again.",
     passkey_not_configured: "No passkey is configured for this account yet.",
