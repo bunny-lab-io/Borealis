@@ -5,6 +5,7 @@
 Describe Borealis operational logging, retention, and core runtime checks.
 
 ## Log Locations
+- Engine bootstrap/install log: `Engine/Logs/install.log` (launcher dependency/install output captured by `Borealis.sh`).
 - Engine primary log: `Engine/Logs/engine.log` (daily rotation).
 - Engine error log: `Engine/Logs/error.log`.
 - Engine API access log: `Engine/Logs/api.log`.
@@ -12,6 +13,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - Engine Traefik access log: `Engine/Logs/traefik-access.log`.
 - Service logs: `Engine/Logs/<service>.log` (per-domain).
 - VPN logs: `Engine/Logs/VPN_Tunnel/tunnel.log` and `Engine/Logs/VPN_Tunnel/remote_shell.log`.
+- Agent bootstrap/install log: `Agent/Logs/install.log` (launcher dependency/install output captured by `Borealis.sh`).
 - Agent logs: `Agent/Logs/agent.log` and `Agent/Logs/agent.error.log` (daily rotation).
 - Updater diagnostics: `<ProjectRoot>/Updater.log` (shared append-only log written by `Update.ps1` and `Update.sh`).
 
@@ -47,6 +49,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - Service logs are written via `service_log` in `Data/Engine/services/API/__init__.py`.
 - Format: `[YYYY-MM-DD HH:MM:SS] [LEVEL][CONTEXT-<SCOPE>] message`.
 - Context values are derived from agent context headers or message patterns.
+- `Borealis.sh` keeps the terminal launch view intentionally compact by default and redirects package-manager, pip, ansible-galaxy, and similar bootstrap command output into the runtime `install.log` files unless `--verbose` or `BOREALIS_VERBOSE=1` is used.
 
 ### Log retention implementation
 - `Data/Engine/services/API/server/log_management.py` manages retention.

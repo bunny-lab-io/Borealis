@@ -7,6 +7,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 ## Quick Start (Engine)
 - Linux production: `./Borealis.sh --EngineProduction` (public UI at `https://<your-public-fqdn>` through the embedded Traefik + Let's Encrypt edge).
 - Linux dev: `./Borealis.sh --EngineDev` (public UI on `https://<your-public-fqdn>` through the embedded Traefik edge, with Vite HMR running on loopback `127.0.0.1:5173` behind Traefik).
+- Add `--verbose` (or `BOREALIS_VERBOSE=1`) to stream the underlying package-manager, installer, and service output instead of the default quieter step view.
 - Production TLS is managed by the embedded Traefik edge; the Python Engine stays on loopback HTTP.
 
 ## Optional: Install the Agent (Windows)
@@ -53,6 +54,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - `Borealis.ps1` handles dependency setup and staging for the Windows agent runtime.
 - Dev mode (`--EngineDev`) uses Vite for the WebUI behind the embedded Traefik edge, while the Engine API stays on loopback.
 - Production (`--EngineProduction`) runs the Engine on loopback HTTP and publishes the app through the embedded Traefik edge.
+- `Borealis.sh` now defaults to a compact step-oriented console view. Detailed bootstrap subprocess output is captured in `Engine/Logs/install.log` or `Agent/Logs/install.log` and is surfaced inline only on failures unless `--verbose` is enabled.
 
 ### Configuration precedence
 - Engine config is assembled by `Data/Engine/config.py` in this order:

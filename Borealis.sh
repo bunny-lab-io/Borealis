@@ -19,6 +19,7 @@ YELLOW="\033[1;33m"
 RED="\033[0;31m"
 RESET="\033[0m"
 CHECKMARK="[OK]"; HOURGLASS="[WAIT]"; CROSSMARK="[X]"; INFO="[i]"
+WARNING="[!]"
 DEFAULT_AGENT_RUNTIME_ROOT="/opt/Borealis/Agent"
 
 if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
@@ -38,9 +39,11 @@ ENGINE_PROD_FLAG=0
 ENGINE_DEV_FLAG=0
 REFRESH_AGENT_RUNTIME_FLAG=0
 NEW_ENGINE_FLAG=0
+VERBOSE_FLAG=0
 ENROLLMENT_CODE=""
 SERVER_URL=""
 BOOTSTRAP_NEW_ENGINE_DEFAULT="${BOREALIS_BOOTSTRAP_NEW_ENGINE:-}"
+BOOTSTRAP_VERBOSE_DEFAULT="${BOREALIS_VERBOSE:-}"
 
 CHOICE=""
 ENGINE_MODE_CHOICE=""
@@ -58,6 +61,7 @@ while (( "$#" )); do
     -Quick|--quick) QUICK_FLAG=1 ;;
     -EngineProduction|--engine-production) ENGINE_PROD_FLAG=1 ;;
     -EngineDev|--engine-dev) ENGINE_DEV_FLAG=1 ;;
+    -Verbose|--verbose) VERBOSE_FLAG=1 ;;
     --refresh-agent-runtime) REFRESH_AGENT_RUNTIME_FLAG=1 ;;
     -NewEngine|--newEngine|--newengine|-DeleteServerTrust|--delete-servertrust|--deleteservertrust|-ForceReEnroll|--force-reenroll|--forcereenroll) NEW_ENGINE_FLAG=1 ;;
     -EnrollmentCode|--EnrollmentCode|--enrollmentcode|--enrollment-code)
@@ -74,15 +78,8 @@ while (( "$#" )); do
 done
 
 # ---- Helpers ----
-run_step() {
-  local message="$1"; shift
-  printf "%s %s... " "${HOURGLASS}" "$message"
-  if "$@"; then
-    printf "\r%s %s\n" "${CHECKMARK}" "$message"
-  else
-    printf "\r%s %s - Failed\n" "${CROSSMARK}" "$message" 1>&2
-    exit 1
-  fi
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
 }
 
 env_flag_enabled() {
@@ -93,9 +90,289 @@ env_flag_enabled() {
   esac
 }
 
+if [[ "${VERBOSE_FLAG}" -eq 0 ]] && env_flag_enabled "${BOOTSTRAP_VERBOSE_DEFAULT}"; then
+  VERBOSE_FLAG=1
+fi
+
+is_stdout_tty() {
+  [[ -t 1 ]]
+}
+
+is_interactive_terminal() {
+  [[ -t 0 && -t 1 ]]
+}
+
+terminal_supports_color() {
+  is_stdout_tty || return 1
+  [[ -z "${NO_COLOR:-}" ]] || return 1
+  [[ "${TERM:-}" != "dumb" ]] || return 1
+  return 0
+}
+
+terminal_supports_unicode() {
+  local locale_hint="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
+  if [[ "${locale_hint,,}" == *"utf-8"* || "${locale_hint,,}" == *"utf8"* ]]; then
+    return 0
+  fi
+  if command_exists locale; then
+    local charmap
+    charmap="$(locale charmap 2>/dev/null || true)"
+    [[ "${charmap,,}" == "utf-8" || "${charmap,,}" == "utf8" ]]
+    return $?
+  fi
+  return 1
+}
+
+configure_terminal_appearance() {
+  if ! terminal_supports_color; then
+    BOREALIS_BLUE=""
+    DARK_GRAY=""
+    GREEN=""
+    YELLOW=""
+    RED=""
+    RESET=""
+  fi
+
+  if terminal_supports_unicode; then
+    CHECKMARK=$'☑'
+    HOURGLASS=$'⏳'
+    CROSSMARK=$'☒'
+    INFO=$'ℹ'
+    WARNING=$'⚠'
+  fi
+}
+
+configure_terminal_appearance
+
+STEP_TOTAL=0
+STEP_CURRENT=0
+STEP_LINE_ACTIVE=0
+CURRENT_INSTALL_LOG_FILE=""
+CURRENT_STEP_CAPTURE_FILE=""
+CURRENT_STEP_MESSAGE=""
+CURRENT_STEP_CONTEXT=""
+SUDO_SESSION_READY=0
+
+step_output_break() {
+  if [[ "${STEP_LINE_ACTIVE}" -eq 1 ]]; then
+    printf "\n"
+    STEP_LINE_ACTIVE=0
+  fi
+}
+
+step_line_reset_prefix() {
+  if is_stdout_tty; then
+    printf '\r\033[2K'
+  else
+    printf '\r'
+  fi
+}
+
+log_ui_message() {
+  local level="$1"
+  local message="$2"
+  if [[ -n "${CURRENT_INSTALL_LOG_FILE}" ]]; then
+    printf "[%s] [%s] %s\n" "$(date +%FT%T)" "${level}" "${message}" >> "${CURRENT_INSTALL_LOG_FILE}"
+  fi
+}
+
+ui_plain() {
+  step_output_break
+  printf "%s\n" "$1"
+}
+
+ui_info() {
+  step_output_break
+  printf "%b%s%b %s\n" "${BOREALIS_BLUE}" "${INFO}" "${RESET}" "$1"
+  log_ui_message "INFO" "$1"
+}
+
+ui_verbose() {
+  if [[ "${VERBOSE_FLAG}" -eq 1 ]]; then
+    ui_info "$1"
+  fi
+}
+
+ui_success() {
+  step_output_break
+  printf "%b%s%b %s\n" "${GREEN}" "${CHECKMARK}" "${RESET}" "$1"
+  log_ui_message "SUCCESS" "$1"
+}
+
+ui_warn() {
+  step_output_break
+  printf "%b%s%b %s\n" "${YELLOW}" "${WARNING}" "${RESET}" "$1"
+  log_ui_message "WARN" "$1"
+}
+
+ui_error() {
+  step_output_break
+  printf "%b%s%b %s\n" "${RED}" "${CROSSMARK}" "${RESET}" "$1" >&2
+  log_ui_message "ERROR" "$1"
+}
+
+set_output_context() {
+  local context="${1:-}"
+  CURRENT_STEP_CONTEXT="${context}"
+  case "${context}" in
+    engine) CURRENT_INSTALL_LOG_FILE="$(ensure_engine_log_dir)/install.log" ;;
+    agent) CURRENT_INSTALL_LOG_FILE="$(ensure_agent_log_dir)/install.log" ;;
+    *) CURRENT_INSTALL_LOG_FILE="" ;;
+  esac
+}
+
+set_step_plan() {
+  STEP_TOTAL="${1:-0}"
+  STEP_CURRENT=0
+}
+
+format_step_index() {
+  local current="${1:-0}"
+  local total="${2:-0}"
+  if (( total <= 0 )); then
+    printf ""
+    return 0
+  fi
+  local width=${#total}
+  printf "[%0*d/%d] " "${width}" "${current}" "${total}"
+}
+
+record_command_heading() {
+  local command_line="$1"
+  local heading="[${CURRENT_STEP_MESSAGE:-command}] ${command_line}"
+  if [[ -n "${CURRENT_INSTALL_LOG_FILE}" ]]; then
+    printf "[%s] %s\n" "$(date +%FT%T)" "${heading}" >> "${CURRENT_INSTALL_LOG_FILE}"
+  fi
+  if [[ -n "${CURRENT_STEP_CAPTURE_FILE}" ]]; then
+    printf "%s\n" "${heading}" >> "${CURRENT_STEP_CAPTURE_FILE}"
+  fi
+}
+
+run_logged_command() {
+  local command_line=""
+  printf -v command_line '%q ' "$@"
+  command_line="${command_line% }"
+  record_command_heading "${command_line}"
+
+  local capture_file="${CURRENT_STEP_CAPTURE_FILE:-}"
+  local install_log="${CURRENT_INSTALL_LOG_FILE:-}"
+  local output_file=""
+  output_file="$(mktemp)"
+
+  local had_errexit=0
+  if [[ $- == *e* ]]; then
+    had_errexit=1
+    set +e
+  fi
+
+  local exit_code=0
+  if [[ "${VERBOSE_FLAG}" -eq 1 ]]; then
+    if [[ -n "${install_log}" || -n "${capture_file}" ]]; then
+      local -a tee_targets=()
+      [[ -n "${install_log}" ]] && tee_targets+=("${install_log}")
+      [[ -n "${capture_file}" ]] && tee_targets+=("${capture_file}")
+      "$@" 2>&1 | tee -a "${tee_targets[@]}"
+      exit_code=${PIPESTATUS[0]}
+    else
+      "$@"
+      exit_code=$?
+    fi
+  else
+    "$@" >"${output_file}" 2>&1
+    exit_code=$?
+    if [[ -s "${output_file}" ]]; then
+      [[ -n "${install_log}" ]] && cat "${output_file}" >> "${install_log}"
+      [[ -n "${capture_file}" ]] && cat "${output_file}" >> "${capture_file}"
+    fi
+  fi
+
+  (( had_errexit )) && set -e
+  rm -f "${output_file}"
+  return "${exit_code}"
+}
+
+ensure_visible_sudo_session() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    SUDO_SESSION_READY=1
+    return 0
+  fi
+  if ! command_exists sudo; then
+    ui_error "This action requires root privileges and sudo is not available."
+    return 1
+  fi
+  if [[ "${SUDO_SESSION_READY}" -eq 1 ]] && sudo -n true >/dev/null 2>&1; then
+    return 0
+  fi
+
+  step_output_break
+  ui_info "Elevated access is required. You may be prompted for your sudo password."
+  if [[ -r /dev/tty ]]; then
+    sudo -v < /dev/tty
+  else
+    sudo -v
+  fi
+  SUDO_SESSION_READY=1
+}
+
+run_step() {
+  local message="$1"
+  shift
+
+  local step_number=$((STEP_CURRENT + 1))
+  local step_index=""
+  step_index="$(format_step_index "${step_number}" "${STEP_TOTAL}")"
+  local capture_file=""
+  capture_file="$(mktemp)"
+  CURRENT_STEP_CAPTURE_FILE="${capture_file}"
+  CURRENT_STEP_MESSAGE="${message}"
+
+  printf "%b%s%b %s%s... " "${BOREALIS_BLUE}" "${HOURGLASS}" "${RESET}" "${step_index}" "${message}"
+  STEP_LINE_ACTIVE=1
+
+  local exit_code=0
+  if "$@"; then
+    STEP_CURRENT="${step_number}"
+    if [[ "${STEP_LINE_ACTIVE}" -eq 1 ]]; then
+      step_line_reset_prefix
+      printf "%b%s%b %s%s\n" "${GREEN}" "${CHECKMARK}" "${RESET}" "${step_index}" "${message}"
+    else
+      printf "%b%s%b %s%s\n" "${GREEN}" "${CHECKMARK}" "${RESET}" "${step_index}" "${message}"
+    fi
+  else
+    exit_code=$?
+    STEP_CURRENT="${step_number}"
+    if [[ "${STEP_LINE_ACTIVE}" -eq 1 ]]; then
+      step_line_reset_prefix
+      printf "%b%s%b %s%s\n" "${RED}" "${CROSSMARK}" "${RESET}" "${step_index}" "${message}" >&2
+    else
+      printf "%b%s%b %s%s\n" "${RED}" "${CROSSMARK}" "${RESET}" "${step_index}" "${message}" >&2
+    fi
+    STEP_LINE_ACTIVE=0
+    if [[ -s "${capture_file}" ]]; then
+      ui_warn "Recent output for failed step:"
+      while IFS= read -r line; do
+        printf "  %s\n" "${line}" >&2
+      done < <(tail -n 20 "${capture_file}")
+    fi
+    if [[ -n "${CURRENT_INSTALL_LOG_FILE}" ]]; then
+      ui_info "Full log: ${CURRENT_INSTALL_LOG_FILE}"
+    fi
+    CURRENT_STEP_CAPTURE_FILE=""
+    CURRENT_STEP_MESSAGE=""
+    rm -f "${capture_file}"
+    return "${exit_code}"
+  fi
+
+  STEP_LINE_ACTIVE=0
+  CURRENT_STEP_CAPTURE_FILE=""
+  CURRENT_STEP_MESSAGE=""
+  rm -f "${capture_file}"
+}
+
 prompt_input() {
   local prompt="$1"
   local value=""
+  step_output_break
   if [[ -r /dev/tty ]]; then
     IFS= read -r -p "${prompt}" value < /dev/tty || true
   else
@@ -144,10 +421,6 @@ write_agent_log() {
   local file_name="${2:-install.log}"
   local logdir; logdir=$(ensure_agent_log_dir)
   printf "[%s] %s\n" "$(date +%FT%T)" "$message" >> "${logdir}/${file_name}"
-}
-
-command_exists() {
-  command -v "$1" >/dev/null 2>&1
 }
 
 selinux_enforcing() {
@@ -253,8 +526,13 @@ run_privileged() {
     sudo "$@"
     return $?
   fi
-  echo -e "${RED}This action requires root privileges and sudo is not available.${RESET}" >&2
+  ui_error "This action requires root privileges and sudo is not available."
   return 1
+}
+
+run_privileged_quiet() {
+  ensure_visible_sudo_session || return 1
+  run_logged_command run_privileged "$@"
 }
 
 run_as_postgres() {
@@ -267,8 +545,13 @@ run_as_postgres() {
     sudo -u postgres bash -lc "${command}"
     return $?
   fi
-  echo -e "${RED}PostgreSQL setup requires sudo or root access.${RESET}" >&2
+  ui_error "PostgreSQL setup requires sudo or root access."
   return 1
+}
+
+run_as_postgres_quiet() {
+  ensure_visible_sudo_session || return 1
+  run_logged_command run_as_postgres "$1"
 }
 
 restore_selinux_context_if_needed() {
@@ -314,7 +597,7 @@ PY
     return 0
   fi
 
-  echo -e "${RED}No supported downloader found. Install Python 3, curl, or wget.${RESET}" >&2
+  ui_error "No supported downloader found. Install Python 3, curl, or wget."
   return 1
 }
 
@@ -323,8 +606,8 @@ ensure_project_layout() {
     return 0
   fi
 
-  echo -e "${RED}Missing repository content under ${SCRIPT_DIR}.${RESET}" >&2
-  echo -e "${YELLOW}Run bootstrap.sh first so Borealis is installed to /opt/Borealis, then re-run Borealis.sh.${RESET}" >&2
+  ui_error "Missing repository content under ${SCRIPT_DIR}."
+  ui_warn "Run bootstrap.sh first so Borealis is installed to /opt/Borealis, then re-run Borealis.sh."
   return 1
 }
 
@@ -338,22 +621,22 @@ verify_engine_runtime_staging() {
 
   if [[ -f "${source_marker}" ]]; then
     if [[ ! -f "${runtime_marker}" ]]; then
-      echo -e "${RED}Engine runtime staging mismatch: missing ${runtime_marker}.${RESET}" >&2
+      ui_error "Engine runtime staging mismatch: missing ${runtime_marker}."
       return 1
     fi
     if ! cmp -s "${source_marker}" "${runtime_marker}"; then
-      echo -e "${RED}Engine runtime staging mismatch for security/session_secret.py.${RESET}" >&2
+      ui_error "Engine runtime staging mismatch for security/session_secret.py."
       return 1
     fi
   fi
 
   if [[ -f "${source_config}" ]]; then
     if [[ ! -f "${runtime_config}" ]]; then
-      echo -e "${RED}Engine runtime staging mismatch: missing ${runtime_config}.${RESET}" >&2
+      ui_error "Engine runtime staging mismatch: missing ${runtime_config}."
       return 1
     fi
     if ! cmp -s "${source_config}" "${runtime_config}"; then
-      echo -e "${RED}Engine runtime staging mismatch for config.py.${RESET}" >&2
+      ui_error "Engine runtime staging mismatch for config.py."
       return 1
     fi
   fi
@@ -455,13 +738,12 @@ test_webui_build_fresh() {
 }
 
 ensure_project_layout
-echo -e "${INFO} Borealis source root: ${SCRIPT_DIR}"
+ui_verbose "Borealis source root: ${SCRIPT_DIR}"
 
 # ---- Agent configuration ----
 configure_agent_settings() {
   local preserved_server_url="${1:-}"
   local noninteractive_mode="${2:-0}"
-  echo -e "${GREEN}Configuring Borealis Agent settings...${RESET}"
   local settings_dir="${SCRIPT_DIR}/Agent/Borealis/Settings"
   local legacy_settings_dir="${SCRIPT_DIR}/Agent/Settings"
   local server_url_path="${settings_dir}/server_url.txt"
@@ -584,9 +866,9 @@ EOF
   fi
 
   if [[ -n "${provided_code}" ]]; then
-    echo -e "${GREEN}Enrollment code saved to agent_settings.json.${RESET}"
+    ui_success "Enrollment code saved to agent_settings.json."
   else
-    echo -e "${YELLOW}Enrollment code cleared in agent_settings.json.${RESET}"
+    ui_warn "Enrollment code cleared in agent_settings.json."
   fi
 }
 
@@ -599,21 +881,21 @@ install_shared_dependencies() {
 
   case "$DISTRO_ID" in
     ubuntu|debian|linuxmint|pop)
-      run_privileged apt update -qq
-      run_privileged apt install -y python3 python3-venv python3-pip ca-certificates
+      run_privileged_quiet apt update -qq
+      run_privileged_quiet apt install -y python3 python3-venv python3-pip ca-certificates
       ;;
     rhel|centos|fedora|rocky|almalinux)
       if command_exists dnf; then
-        run_privileged dnf install -y python3 python3-pip ca-certificates
+        run_privileged_quiet dnf install -y python3 python3-pip ca-certificates
       else
-        run_privileged yum install -y python3 python3-pip ca-certificates
+        run_privileged_quiet yum install -y python3 python3-pip ca-certificates
       fi
       ;;
     arch)
-      run_privileged pacman -Sy --noconfirm python python-pip python-virtualenv ca-certificates
+      run_privileged_quiet pacman -Sy --noconfirm python python-pip python-virtualenv ca-certificates
       ;;
     *)
-      echo -e "${YELLOW}Unsupported distro '${DISTRO_ID}'. Install python3, python3-venv, python3-pip manually.${RESET}"
+      ui_warn "Unsupported distro '${DISTRO_ID}'. Install python3, python3-venv, python3-pip manually."
       return 1
       ;;
   esac
@@ -638,10 +920,10 @@ install_postgresql_best_effort() {
   detect_distro
   case "$DISTRO_ID" in
     ubuntu|debian|linuxmint|pop)
-      run_privileged apt update -qq
-      run_privileged apt install -y ca-certificates curl postgresql-common
-      run_privileged install -d -m 0755 /usr/share/postgresql-common/pgdg
-      run_privileged curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+      run_privileged_quiet apt update -qq
+      run_privileged_quiet apt install -y ca-certificates curl postgresql-common
+      run_privileged_quiet install -d -m 0755 /usr/share/postgresql-common/pgdg
+      run_privileged_quiet curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
         https://www.postgresql.org/media/keys/ACCC4CF8.asc
       local codename=""
       if [[ -f /etc/os-release ]]; then
@@ -649,13 +931,13 @@ install_postgresql_best_effort() {
         . /etc/os-release
         codename="${VERSION_CODENAME:-}"
       fi
-      [[ -n "${codename}" ]] || { echo -e "${RED}Unable to determine Debian/Ubuntu codename for PGDG setup.${RESET}" >&2; return 1; }
+      [[ -n "${codename}" ]] || { ui_error "Unable to determine Debian/Ubuntu codename for PGDG setup."; return 1; }
       printf 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt %s-pgdg main\n' "${codename}" | \
-        run_privileged tee /etc/apt/sources.list.d/pgdg.list >/dev/null
-      run_privileged apt update -qq
-      if ! run_privileged apt install -y "postgresql-${POSTGRES_VERSION}" "postgresql-client-${POSTGRES_VERSION}"; then
-        echo -e "${YELLOW}PGDG versioned packages were unavailable; falling back to distro PostgreSQL packages.${RESET}"
-        run_privileged apt install -y postgresql postgresql-client
+        run_privileged_quiet tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+      run_privileged_quiet apt update -qq
+      if ! run_privileged_quiet apt install -y "postgresql-${POSTGRES_VERSION}" "postgresql-client-${POSTGRES_VERSION}"; then
+        ui_warn "PGDG versioned packages were unavailable; falling back to distro PostgreSQL packages."
+        run_privileged_quiet apt install -y postgresql postgresql-client
       fi
       ;;
     rhel|centos|fedora|rocky|almalinux)
@@ -665,22 +947,22 @@ install_postgresql_best_effort() {
         . /etc/os-release
         releasever="${VERSION_ID%%.*}"
       fi
-      [[ -n "${releasever}" ]] || { echo -e "${RED}Unable to determine EL release for PGDG setup.${RESET}" >&2; return 1; }
+      [[ -n "${releasever}" ]] || { ui_error "Unable to determine EL release for PGDG setup."; return 1; }
       local arch
       arch="$(uname -m)"
-      run_privileged rpm -Uvh --force "https://download.postgresql.org/pub/repos/yum/reporpms/EL-${releasever}-${arch}/pgdg-redhat-repo-latest.noarch.rpm"
+      run_privileged_quiet rpm -Uvh --force "https://download.postgresql.org/pub/repos/yum/reporpms/EL-${releasever}-${arch}/pgdg-redhat-repo-latest.noarch.rpm"
       if command_exists dnf; then
-        run_privileged dnf -qy module disable postgresql || true
-        run_privileged dnf install -y "postgresql${POSTGRES_VERSION}-server" "postgresql${POSTGRES_VERSION}" || \
-          run_privileged dnf install -y "postgresql${POSTGRES_VERSION//./}-server" "postgresql${POSTGRES_VERSION//./}"
+        run_privileged_quiet dnf -qy module disable postgresql || true
+        run_privileged_quiet dnf install -y "postgresql${POSTGRES_VERSION}-server" "postgresql${POSTGRES_VERSION}" || \
+          run_privileged_quiet dnf install -y "postgresql${POSTGRES_VERSION//./}-server" "postgresql${POSTGRES_VERSION//./}"
       else
-        run_privileged yum -y module disable postgresql || true
-        run_privileged yum install -y "postgresql${POSTGRES_VERSION}-server" "postgresql${POSTGRES_VERSION}" || \
-          run_privileged yum install -y "postgresql${POSTGRES_VERSION//./}-server" "postgresql${POSTGRES_VERSION//./}"
+        run_privileged_quiet yum -y module disable postgresql || true
+        run_privileged_quiet yum install -y "postgresql${POSTGRES_VERSION}-server" "postgresql${POSTGRES_VERSION}" || \
+          run_privileged_quiet yum install -y "postgresql${POSTGRES_VERSION//./}-server" "postgresql${POSTGRES_VERSION//./}"
       fi
       ;;
     *)
-      echo -e "${YELLOW}Unsupported distro '${DISTRO_ID}' for automated PostgreSQL install.${RESET}"
+      ui_warn "Unsupported distro '${DISTRO_ID}' for automated PostgreSQL install."
       return 1
       ;;
   esac
@@ -723,8 +1005,8 @@ ensure_engine_postgresql_ready() {
       ;;
   esac
   if command_exists systemctl; then
-    run_privileged systemctl enable "${service_name}" || true
-    run_privileged systemctl restart "${service_name}" || true
+    run_privileged_quiet systemctl enable "${service_name}" || true
+    run_privileged_quiet systemctl restart "${service_name}" || true
   fi
 
   # shellcheck disable=SC1090
@@ -733,7 +1015,7 @@ ensure_engine_postgresql_ready() {
   engine_password="${engine_password%@127.0.0.1:5432/borealis}"
 
   if command_exists psql; then
-    run_as_postgres "psql postgres -v ON_ERROR_STOP=1 <<'EOF'
+    run_as_postgres_quiet "psql postgres -v ON_ERROR_STOP=1 <<'EOF'
 DO \$\$
 BEGIN
    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'borealis_engine') THEN
@@ -745,8 +1027,8 @@ END
 \$\$;
 EOF
 "
-    run_as_postgres "psql postgres -tAc \"SELECT 1 FROM pg_database WHERE datname='borealis'\"" | grep -q 1 || \
-      run_as_postgres "createdb -O borealis_engine borealis"
+    run_as_postgres_quiet "psql postgres -tAc \"SELECT 1 FROM pg_database WHERE datname='borealis'\" | grep -q 1" || \
+      run_as_postgres_quiet "createdb -O borealis_engine borealis"
   fi
 }
 
@@ -754,14 +1036,14 @@ install_tesseract() {
   detect_distro
   case "$DISTRO_ID" in
     ubuntu|debian|linuxmint|pop)
-      run_privileged apt update -qq
-      run_privileged apt install -y tesseract-ocr
+      run_privileged_quiet apt update -qq
+      run_privileged_quiet apt install -y tesseract-ocr
       ;;
     rhel|centos|fedora|rocky|almalinux)
-      if command_exists dnf; then run_privileged dnf install -y tesseract; else run_privileged yum install -y tesseract; fi
+      if command_exists dnf; then run_privileged_quiet dnf install -y tesseract; else run_privileged_quiet yum install -y tesseract; fi
       ;;
     arch)
-      run_privileged pacman -Sy --noconfirm tesseract
+      run_privileged_quiet pacman -Sy --noconfirm tesseract
       ;;
     *) : ;;
   esac
@@ -791,23 +1073,23 @@ ensure_node_bins() {
   if command -v npm >/dev/null 2>&1; then
     NPM_BIN="$(command -v npm)"; NPX_BIN="$(command -v npx || echo npx)"; return 0
   fi
-  echo -e "${YELLOW}npm not found on PATH; installing portable NodeJS...${RESET}"
+  ui_warn "npm not found on PATH; installing portable NodeJS..."
   install_node_portable
   export PATH="${NODE_DIR}/bin:${PATH}"
 }
 
 install_server_dependencies() {
-  run_step "Dependency: Python (system)" install_shared_dependencies
-  run_step "Dependency: PostgreSQL (system)" install_postgresql_best_effort
-  run_step "Dependency: Tesseract-OCR (system)" install_tesseract
-  run_step "Dependency: WireGuard tools (system)" install_wireguard_tools_best_effort engine
-  run_step "Dependency: Traefik (system)" install_traefik_best_effort
-  run_step "Dependency: NodeJS (portable)" install_node_portable
+  install_shared_dependencies
+  install_postgresql_best_effort
+  install_tesseract
+  install_wireguard_tools_best_effort engine
+  install_traefik_best_effort
+  install_node_portable
 }
 
 install_agent_dependencies() {
-  run_step "Dependency: Python (system)" install_shared_dependencies
-  run_step "Dependency: WireGuard tools (system)" install_wireguard_tools_best_effort agent
+  install_shared_dependencies
+  install_wireguard_tools_best_effort agent
 }
 
 install_wireguard_tools_best_effort() {
@@ -825,18 +1107,18 @@ install_wireguard_tools_best_effort() {
   detect_distro
   case "$DISTRO_ID" in
     ubuntu|debian|linuxmint|pop)
-      run_privileged apt update -qq || true
-      run_privileged apt install -y wireguard-tools || true
+      run_privileged_quiet apt update -qq || true
+      run_privileged_quiet apt install -y wireguard-tools || true
       ;;
     rhel|centos|fedora|rocky|almalinux)
       if command_exists dnf; then
-        run_privileged dnf install -y wireguard-tools || true
+        run_privileged_quiet dnf install -y wireguard-tools || true
       else
-        run_privileged yum install -y wireguard-tools || true
+        run_privileged_quiet yum install -y wireguard-tools || true
       fi
       ;;
     arch)
-      run_privileged pacman -Sy --noconfirm wireguard-tools || true
+      run_privileged_quiet pacman -Sy --noconfirm wireguard-tools || true
       ;;
     *)
       ;;
@@ -854,7 +1136,7 @@ install_wireguard_tools_best_effort() {
     else
       write_agent_log "WireGuard tools not found; VPN tunnel workflows may fail until wireguard-tools is installed."
     fi
-    echo -e "${YELLOW}WireGuard tools not found. Install 'wireguard-tools' for VPN tunnel support.${RESET}"
+    ui_warn "WireGuard tools not found. Install 'wireguard-tools' for VPN tunnel support."
   fi
 }
 
@@ -867,11 +1149,11 @@ create_agent_venv_and_stage_data() {
   py_bin="$(resolve_python_bin)"
 
   [[ -n "$py_bin" ]] || {
-    echo -e "${RED}Python interpreter not found. Install Python 3 first.${RESET}" >&2
+    ui_error "Python interpreter not found. Install Python 3 first."
     return 1
   }
   [[ -d "$source_root" ]] || {
-    echo -e "${RED}Agent source directory '${source_root}' was not found.${RESET}" >&2
+    ui_error "Agent source directory '${source_root}' was not found."
     return 1
   }
 
@@ -931,13 +1213,13 @@ install_agent_python_deps() {
   local venv_py
   venv_py="$(agent_python_bin)"
   [[ -n "$venv_py" ]] || {
-    echo -e "${RED}Agent virtual environment is missing Python.${RESET}" >&2
+    ui_error "Agent virtual environment is missing Python."
     return 1
   }
 
   local req_path="${SCRIPT_DIR}/Data/Agent/agent-requirements.txt"
   if [[ -f "$req_path" ]]; then
-    "$venv_py" -m pip install --disable-pip-version-check -q -r "$req_path"
+    run_logged_command "$venv_py" -m pip install --disable-pip-version-check -q -r "$req_path"
   fi
 }
 
@@ -977,10 +1259,10 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-  run_privileged cp "$tmp_unit" "$unit_path" || return 1
-  run_privileged systemctl daemon-reload || return 1
-  run_privileged systemctl enable "$unit_name" || return 1
-  run_privileged systemctl restart "$unit_name" || return 1
+  run_privileged_quiet cp "$tmp_unit" "$unit_path" || return 1
+  run_privileged_quiet systemctl daemon-reload || return 1
+  run_privileged_quiet systemctl enable "$unit_name" || return 1
+  run_privileged_quiet systemctl restart "$unit_name" || return 1
   write_agent_log "Systemd service '${unit_name}' installed/restarted."
   return 0
 }
@@ -1034,13 +1316,13 @@ Unit=${service_name}
 WantedBy=timers.target
 EOF
 
-  run_privileged cp "${service_tmp}" "${service_path}" || return 1
-  run_privileged cp "${timer_tmp}" "${timer_path}" || return 1
-  run_privileged chmod 644 "${service_path}" "${timer_path}" || true
-  run_privileged chmod +x "${updater_script}" || true
-  run_privileged systemctl daemon-reload || return 1
-  run_privileged systemctl enable "${timer_name}" || return 1
-  run_privileged systemctl restart "${timer_name}" || return 1
+  run_privileged_quiet cp "${service_tmp}" "${service_path}" || return 1
+  run_privileged_quiet cp "${timer_tmp}" "${timer_path}" || return 1
+  run_privileged_quiet chmod 644 "${service_path}" "${timer_path}" || true
+  run_privileged_quiet chmod +x "${updater_script}" || true
+  run_privileged_quiet systemctl daemon-reload || return 1
+  run_privileged_quiet systemctl enable "${timer_name}" || return 1
+  run_privileged_quiet systemctl restart "${timer_name}" || return 1
   write_agent_log "Systemd updater timer '${timer_name}' installed/restarted."
   return 0
 }
@@ -1096,42 +1378,94 @@ stop_agent_supervision_if_running() {
   if ! command_exists systemctl; then
     return 0
   fi
-  run_privileged systemctl stop "${unit_name}" >/dev/null 2>&1 || true
+  run_privileged_quiet systemctl stop "${unit_name}" || true
+}
+
+print_systemd_unit_diagnostics() {
+  local unit_name="$1"
+  if ! command_exists systemctl; then
+    return 0
+  fi
+
+  ui_warn "Detailed systemd diagnostics for ${unit_name}:"
+  run_privileged systemctl --no-pager --full status "${unit_name}" || true
+  if command_exists journalctl; then
+    ui_warn "Recent journal entries for ${unit_name}:"
+    run_privileged journalctl -u "${unit_name}" -n 40 --no-pager || true
+  fi
+}
+
+print_systemd_unit_summary() {
+  local unit_name="$1"
+  local label="$2"
+  if ! command_exists systemctl; then
+    ui_warn "systemctl not available; skipping ${label} service summary."
+    return 0
+  fi
+
+  local active_state
+  active_state="$(run_privileged systemctl is-active "${unit_name}" 2>/dev/null || true)"
+  local enabled_state
+  enabled_state="$(run_privileged systemctl is-enabled "${unit_name}" 2>/dev/null || true)"
+  local sub_state
+  sub_state="$(run_privileged systemctl show -p SubState --value "${unit_name}" 2>/dev/null || true)"
+
+  if [[ "${active_state}" == "active" || "${active_state}" == "activating" ]]; then
+    if [[ -n "${sub_state}" ]]; then
+      ui_success "${label}: ${active_state}/${sub_state} (${enabled_state}; ${unit_name})"
+    else
+      ui_success "${label}: ${active_state} (${enabled_state}; ${unit_name})"
+    fi
+    if [[ "${VERBOSE_FLAG}" -eq 1 ]]; then
+      print_systemd_unit_diagnostics "${unit_name}"
+    fi
+    return 0
+  fi
+
+  if [[ -n "${sub_state}" ]]; then
+    ui_error "${label}: ${active_state:-unknown}/${sub_state} (${enabled_state}; ${unit_name})"
+  else
+    ui_error "${label}: ${active_state:-unknown} (${enabled_state}; ${unit_name})"
+  fi
+  print_systemd_unit_diagnostics "${unit_name}"
+  return 1
 }
 
 print_agent_service_status() {
   local unit_name="${BOREALIS_AGENT_SYSTEMD_UNIT:-borealis-agent.service}"
-  if ! command_exists systemctl; then
-    echo -e "${YELLOW}systemctl not available; skipping service status check.${RESET}"
+  print_systemd_unit_summary "${unit_name}" "Agent service"
+}
+
+print_agent_launch_summary() {
+  if [[ "${VERBOSE_FLAG}" -ne 1 ]]; then
     return 0
   fi
-
-  echo -e "${GREEN}Agent service status (${unit_name}):${RESET}"
-  run_privileged systemctl --no-pager --full status "${unit_name}" || true
-
-  local active_state
-  active_state="$(run_privileged systemctl is-active "${unit_name}" 2>/dev/null || true)"
-  if [[ "${active_state}" != "active" && "${active_state}" != "activating" ]]; then
-    if command_exists journalctl; then
-      echo -e "${YELLOW}Recent ${unit_name} logs:${RESET}"
-      run_privileged journalctl -u "${unit_name}" -n 40 --no-pager || true
-    fi
-  fi
+  local runtime_dir
+  runtime_dir="$(agent_runtime_dir)"
+  ui_info "Agent runtime directory: ${runtime_dir}"
+  ui_info "Agent install log: $(ensure_agent_log_dir)/install.log"
+  ui_info "Agent runtime logs: ${SCRIPT_DIR}/Agent/Logs/agent.log"
 }
 
 install_or_update_borealis_agent() {
   local noninteractive_mode="${1:-0}"
+  set_output_context agent
   if [[ "${NEW_ENGINE_FLAG}" -eq 0 ]] && env_flag_enabled "${BOOTSTRAP_NEW_ENGINE_DEFAULT}"; then
     NEW_ENGINE_FLAG=1
-    echo -e "${INFO} Bootstrap-invoked agent install detected; enabling --newEngine behavior."
+    ui_verbose "Bootstrap-invoked agent install detected; enabling --newEngine behavior."
   fi
 
-  echo -e "${GREEN}Ensuring Agent dependencies exist...${RESET}"
-  install_agent_dependencies
+  local total_steps=5
+  if [[ "${NEW_ENGINE_FLAG}" -eq 1 ]]; then
+    total_steps=$((total_steps + 1))
+  fi
+  set_step_plan "${total_steps}"
+
+  run_step "Installing / Updating Dependencies" install_agent_dependencies
 
   local runtime_dir
   runtime_dir="$(agent_runtime_dir)"
-  echo -e "${INFO} Agent runtime directory: ${runtime_dir}"
+  ui_verbose "Agent runtime directory: ${runtime_dir}"
   write_agent_log "Agent runtime directory resolved to '${runtime_dir}'."
 
   stop_agent_supervision_if_running
@@ -1147,11 +1481,12 @@ install_or_update_borealis_agent() {
   run_step "Install Agent Python dependencies" install_agent_python_deps
   run_step "Configure Agent settings" configure_agent_settings "$preserved_url" "$noninteractive_mode"
   if ! verify_agent_runtime_exec_path; then
-    echo -e "${RED}Agent runtime path is on a noexec mount. Set BOREALIS_AGENT_VENV to an executable path (for example /opt/Borealis/Agent).${RESET}"
+    ui_error "Agent runtime path is on a noexec mount. Set BOREALIS_AGENT_VENV to an executable path (for example /opt/Borealis/Agent)."
     return 1
   fi
   run_step "Configure Agent supervision" configure_agent_supervision
   print_agent_service_status
+  print_agent_launch_summary
 }
 
 # Prefer a resilient resolver for the Engine venv interpreter (some venvs only have 'python')
@@ -1257,7 +1592,7 @@ verify_engine_venv_writable() {
   local py_bin
   py_bin="$(resolve_python_bin)"
   if [[ -n "${py_bin}" && -w "${venv_dir}" ]]; then
-    echo -e "${YELLOW}Repairing stale Engine virtual environment ownership under '${venv_dir}'.${RESET}" >&2
+    ui_warn "Repairing stale Engine virtual environment ownership under '${venv_dir}'."
     local repair_stamp
     repair_stamp="$(date +%s)"
     local stale_path=""
@@ -1274,8 +1609,8 @@ verify_engine_venv_writable() {
       fi
     fi
   fi
-  echo -e "${RED}Engine virtual environment is not writable at '${site_packages_dir}'.${RESET}" >&2
-  echo -e "${YELLOW}Borealis could not repair the Engine venv automatically; recreate '${venv_dir}' with the current user before installing Python packages.${RESET}" >&2
+  ui_error "Engine virtual environment is not writable at '${site_packages_dir}'."
+  ui_warn "Borealis could not repair the Engine venv automatically; recreate '${venv_dir}' with the current user before installing Python packages."
   return 1
 }
 
@@ -1299,7 +1634,7 @@ install_engine_ansible_collections() {
   local venv_py
   venv_py="$(engine_python_bin)"
   [[ -n "$venv_py" ]] || {
-    echo -e "${RED}Engine virtual environment is missing Python.${RESET}" >&2
+    ui_error "Engine virtual environment is missing Python."
     return 1
   }
   verify_engine_venv_writable || return 1
@@ -1322,8 +1657,9 @@ install_engine_ansible_collections() {
     cmd=("${venv_py}" -m ansible.cli.galaxy collection install -r "${collections_req}" -p "${collections_dir}" --upgrade)
   fi
 
-  ANSIBLE_COLLECTIONS_PATH="${collections_dir}" \
-  ANSIBLE_COLLECTIONS_PATHS="${collections_dir}" \
+  run_logged_command env \
+    ANSIBLE_COLLECTIONS_PATH="${collections_dir}" \
+    ANSIBLE_COLLECTIONS_PATHS="${collections_dir}" \
     "${cmd[@]}"
 }
 
@@ -1346,19 +1682,19 @@ verify_engine_ansible_runtime() {
     version_cmd=("${venv_py}" -m ansible.cli.playbook --version)
   fi
 
-  "${venv_py}" - <<'PY' || return 1
-import importlib.util
-required = ("ansible", "ansible_runner", "winrm", "pypsrp")
-missing = [name for name in required if importlib.util.find_spec(name) is None]
-if missing:
-    raise SystemExit("Missing Python modules: " + ", ".join(missing))
-PY
+  run_logged_command "${venv_py}" -c $'import importlib.util\nrequired = ("ansible", "ansible_runner", "winrm", "pypsrp")\nmissing = [name for name in required if importlib.util.find_spec(name) is None]\nif missing:\n    raise SystemExit("Missing Python modules: " + ", ".join(missing))' || return 1
 
   if [[ -f "${collections_req}" ]]; then
-    ANSIBLE_COLLECTIONS_PATH="${collections_dir}" \
-    ANSIBLE_COLLECTIONS_PATHS="${collections_dir}" \
-      "${version_cmd[@]}" >/dev/null
+    run_logged_command env \
+      ANSIBLE_COLLECTIONS_PATH="${collections_dir}" \
+      ANSIBLE_COLLECTIONS_PATHS="${collections_dir}" \
+      "${version_cmd[@]}" || return 1
   fi
+}
+
+configure_engine_ansible_runtime() {
+  install_engine_ansible_collections || return 1
+  verify_engine_ansible_runtime
 }
 
 # ---- Engine TLS material ----
@@ -1622,8 +1958,8 @@ prompt_engine_public_edge_configuration() {
       printf '%s|%s\n' "${suggested_fqdn}" "${suggested_email}"
       return 0
     fi
-    echo -e "${RED}Borealis needs a public FQDN and Let's Encrypt email, but no interactive terminal is available.${RESET}" >&2
-    echo -e "${YELLOW}Set BOREALIS_PUBLIC_FQDN and BOREALIS_ACME_EMAIL, or rerun Borealis.sh interactively.${RESET}" >&2
+    ui_error "Borealis needs a public FQDN and Let's Encrypt email, but no interactive terminal is available."
+    ui_warn "Set BOREALIS_PUBLIC_FQDN and BOREALIS_ACME_EMAIL, or rerun Borealis.sh interactively."
     return 1
   fi
 
@@ -1644,7 +1980,7 @@ prompt_engine_public_edge_configuration() {
       fqdn="${input}"
       break
     fi
-    echo -e "${YELLOW}Enter a public FQDN with at least one dot, such as borealis.bunny-lab.io.${RESET}"
+    ui_warn "Enter a public FQDN with at least one dot, such as borealis.bunny-lab.io."
   done
 
   local email="${suggested_email}"
@@ -1665,7 +2001,7 @@ prompt_engine_public_edge_configuration() {
       email="${input}"
       break
     fi
-    echo -e "${YELLOW}Enter a valid email address for Let's Encrypt expiration notices.${RESET}"
+    ui_warn "Enter a valid email address for Let's Encrypt expiration notices."
   done
 
   printf '%s|%s\n' "${fqdn}" "${email}"
@@ -1709,8 +2045,8 @@ PY
 
 warn_about_unsupported_cloudflare_proxying() {
   local fqdn="${1:-}"
-  echo -e "${YELLOW}Notice: Borealis embedded Traefik does not support Cloudflare orange-cloud or other CDN-style TLS proxying in front of the engine.${RESET}"
-  echo -e "${YELLOW}Use DNS-only records or a transparent reverse proxy that forwards 80/tcp and TCP-passthrough 443/tcp to the engine host.${RESET}"
+  ui_warn "Borealis embedded Traefik does not support Cloudflare orange-cloud or other CDN-style TLS proxying in front of the engine."
+  ui_warn "Use DNS-only records or a transparent reverse proxy that forwards 80/tcp and TCP-passthrough 443/tcp to the engine host."
 
   [[ -n "${fqdn}" ]] || return 0
 
@@ -1723,8 +2059,8 @@ warn_about_unsupported_cloudflare_proxying() {
   local lowered
   lowered="$(printf '%s' "${headers}" | tr '[:upper:]' '[:lower:]')"
   if printf '%s\n' "${lowered}" | grep -qE '(^server:\s*cloudflare|^cf-ray:|^cf-cache-status:)'; then
-    echo -e "${RED}Detected Cloudflare proxy headers for ${fqdn}.${RESET}"
-    echo -e "${RED}Disable Cloudflare proxying and switch the DNS record to DNS only before using Borealis embedded Traefik + Let's Encrypt.${RESET}"
+    ui_error "Detected Cloudflare proxy headers for ${fqdn}."
+    ui_error "Disable Cloudflare proxying and switch the DNS record to DNS only before using Borealis embedded Traefik + Let's Encrypt."
   fi
 }
 
@@ -1755,24 +2091,23 @@ ensure_engine_public_edge_runtime() {
     fqdn="${current_fqdn}"
     email="${current_email}"
   else
-    echo -e "${INFO} Configuring Borealis embedded Traefik + Let's Encrypt..."
     if [[ "${settings_exist}" == "1" ]]; then
-      echo -e "${YELLOW}Existing Let's Encrypt settings are incomplete or invalid and will be regenerated.${RESET}"
+      ui_warn "Existing Let's Encrypt settings are incomplete or invalid and will be regenerated."
     fi
     local prompt_result
     prompt_result="$(prompt_engine_public_edge_configuration "${current_fqdn}" "${current_email}")" || return 1
     IFS='|' read -r fqdn email <<<"${prompt_result}"
     reset_engine_public_edge_runtime || return 1
+    warn_about_unsupported_cloudflare_proxying "${fqdn}"
   fi
 
-  warn_about_unsupported_cloudflare_proxying "${fqdn}"
-
-  BOREALIS_PROJECT_ROOT="${SCRIPT_DIR}" \
-  BOREALIS_DEV_UI_PROXY_ENABLED="$([[ "${mode}" == "developer" ]] && echo 1 || echo 0)" \
-  "${venv_py}" -m Data.Engine.edge_runtime ensure-files \
+  run_logged_command env \
+    BOREALIS_PROJECT_ROOT="${SCRIPT_DIR}" \
+    BOREALIS_DEV_UI_PROXY_ENABLED="$([[ "${mode}" == "developer" ]] && echo 1 || echo 0)" \
+    "${venv_py}" -m Data.Engine.edge_runtime ensure-files \
     --settings-path "$(engine_letsencrypt_settings_path)" \
     --fqdn "${fqdn}" \
-    --email "${email}" >/dev/null
+    --email "${email}"
 }
 
 resolve_traefik_binary() {
@@ -1870,7 +2205,7 @@ download_traefik_binary() {
     return 1
   }
 
-  run_privileged install -m 0755 "${tmp_dir}/traefik" /usr/local/bin/traefik || {
+  run_privileged_quiet install -m 0755 "${tmp_dir}/traefik" /usr/local/bin/traefik || {
     rm -rf "${tmp_dir}"
     return 1
   }
@@ -1885,18 +2220,18 @@ install_traefik_best_effort() {
   detect_distro
   case "$DISTRO_ID" in
     ubuntu|debian|linuxmint|pop)
-      run_privileged apt update -qq || true
-      run_privileged apt install -y traefik || true
+      run_privileged_quiet apt update -qq || true
+      run_privileged_quiet apt install -y traefik || true
       ;;
     rhel|centos|fedora|rocky|almalinux)
       if command_exists dnf; then
-        run_privileged dnf install -y traefik || true
+        run_privileged_quiet dnf install -y traefik || true
       else
-        run_privileged yum install -y traefik || true
+        run_privileged_quiet yum install -y traefik || true
       fi
       ;;
     arch)
-      run_privileged pacman -Sy --noconfirm traefik || true
+      run_privileged_quiet pacman -Sy --noconfirm traefik || true
       ;;
     *)
       ;;
@@ -1972,21 +2307,16 @@ TimeoutStopSec=30
 WantedBy=multi-user.target
 EOF
 
-  run_privileged cp "${tmp_unit}" "${unit_path}" || return 1
-  run_privileged systemctl daemon-reload || return 1
-  run_privileged systemctl enable "${unit_name}" || return 1
-  run_privileged systemctl restart "${unit_name}" || return 1
+  run_privileged_quiet cp "${tmp_unit}" "${unit_path}" || return 1
+  run_privileged_quiet systemctl daemon-reload || return 1
+  run_privileged_quiet systemctl enable "${unit_name}" || return 1
+  run_privileged_quiet systemctl restart "${unit_name}" || return 1
   write_engine_log "Systemd service '${unit_name}' installed/restarted."
 }
 
 print_traefik_service_status() {
   local unit_name="borealis-traefik.service"
-  if ! command_exists systemctl; then
-    return 0
-  fi
-
-  echo -e "${GREEN}Traefik edge service status (${unit_name}):${RESET}"
-  run_privileged systemctl --no-pager --full status "${unit_name}" || true
+  print_systemd_unit_summary "${unit_name}" "Traefik edge"
 }
 
 # ---- Engine web interface staging (parity with Ensure-EngineWebInterface) ----
@@ -1994,11 +2324,11 @@ ensure_engine_web_interface() {
   local project_root="$1"
   local dest="${project_root}/Engine/web-interface"
   local stage="${project_root}/Data/Engine/web-interface"
-  [[ -d "$stage" ]] || { echo -e "${RED}Engine web interface source missing at '$stage'.${RESET}" >&2; return 1; }
+  [[ -d "$stage" ]] || { ui_error "Engine web interface source missing at '$stage'."; return 1; }
   rm -rf "$dest" 2>/dev/null || true
   mkdir -p "$dest"
   cp -a "${stage}/." "$dest/"
-  [[ -f "${dest}/package.json" ]] || { echo -e "${RED}Failed to stage Engine web interface into '$dest'.${RESET}" >&2; return 1; }
+  [[ -f "${dest}/package.json" ]] || { ui_error "Failed to stage Engine web interface into '$dest'."; return 1; }
 }
 
 sync_engine_runtime() {
@@ -2173,31 +2503,64 @@ TimeoutStopSec=30
 WantedBy=multi-user.target
 EOF
 
-  run_privileged cp "${tmp_unit}" "${unit_path}" || return 1
-  run_privileged systemctl daemon-reload || return 1
-  run_privileged systemctl enable "${unit_name}" || return 1
-  run_privileged systemctl restart "${unit_name}" || return 1
+  run_privileged_quiet cp "${tmp_unit}" "${unit_path}" || return 1
+  run_privileged_quiet systemctl daemon-reload || return 1
+  run_privileged_quiet systemctl enable "${unit_name}" || return 1
+  run_privileged_quiet systemctl restart "${unit_name}" || return 1
   write_engine_log "Systemd service '${unit_name}' installed/restarted in ${mode} mode."
   return 0
 }
 
 print_engine_service_status() {
   local unit_name="borealis-engine.service"
-  if ! command_exists systemctl; then
-    echo -e "${YELLOW}systemctl not available; skipping engine service status check.${RESET}"
+  print_systemd_unit_summary "${unit_name}" "Engine service"
+}
+
+print_engine_runtime_status_summary() {
+  print_traefik_service_status
+  print_engine_service_status
+  print_wireguard_listener_status
+}
+
+print_wireguard_listener_status() {
+  local interface_name="${BOREALIS_WIREGUARD_INTERFACE:-borealis-wg}"
+  local config_path="${SCRIPT_DIR}/Engine/WireGuard/${interface_name}.conf"
+
+  if ! command_exists ip; then
+    [[ "${VERBOSE_FLAG}" -eq 1 ]] && ui_warn "WireGuard listener summary unavailable; 'ip' is not installed."
     return 0
   fi
 
-  echo -e "${GREEN}Engine service status (${unit_name}):${RESET}"
-  run_privileged systemctl --no-pager --full status "${unit_name}" || true
-
-  local active_state
-  active_state="$(run_privileged systemctl is-active "${unit_name}" 2>/dev/null || true)"
-  if [[ "${active_state}" != "active" && "${active_state}" != "activating" ]]; then
-    if command_exists journalctl; then
-      echo -e "${YELLOW}Recent ${unit_name} logs:${RESET}"
-      run_privileged journalctl -u "${unit_name}" -n 40 --no-pager || true
+  if ip link show dev "${interface_name}" >/dev/null 2>&1; then
+    local oper_state="present"
+    if [[ -r "/sys/class/net/${interface_name}/operstate" ]]; then
+      oper_state="$(cat "/sys/class/net/${interface_name}/operstate" 2>/dev/null || echo present)"
     fi
+    ui_success "WireGuard listener: ${oper_state} (${interface_name})"
+    return 0
+  fi
+
+  if [[ -f "${config_path}" ]]; then
+    ui_info "WireGuard listener: configured/idle (${interface_name})"
+    return 0
+  fi
+
+  [[ "${VERBOSE_FLAG}" -eq 1 ]] && ui_info "WireGuard listener: not provisioned (${interface_name})"
+  return 0
+}
+
+print_engine_launch_summary() {
+  if [[ "${VERBOSE_FLAG}" -ne 1 ]]; then
+    return 0
+  fi
+  local mode="${1:-production}"
+  local fqdn
+  fqdn="$(resolve_engine_public_fqdn)"
+  ui_info "Engine URL: https://${fqdn}"
+  ui_info "Engine install log: $(ensure_engine_log_dir)/install.log"
+  ui_info "Engine runtime log: ${SCRIPT_DIR}/Engine/Logs/engine.log"
+  if [[ "${mode}" == "developer" ]]; then
+    ui_info "Vite logs: ${SCRIPT_DIR}/Engine/Logs/vite-dev.stdout.log and ${SCRIPT_DIR}/Engine/Logs/vite-dev.stderr.log"
   fi
 }
 
@@ -2206,12 +2569,10 @@ configure_engine_supervision() {
   if command_exists systemctl; then
     ensure_traefik_systemd_service
     ensure_engine_systemd_service "${mode}"
-    print_traefik_service_status
-    print_engine_service_status
     return 0
   fi
 
-  echo -e "${YELLOW}systemctl not available; launching Engine in the current shell instead.${RESET}"
+  ui_warn "systemctl not available; launching Engine in the current shell instead."
   local traefik_runner=""
   local traefik_pid=""
   traefik_runner="$(ensure_traefik_service_runner 2>/dev/null || true)"
@@ -2232,7 +2593,7 @@ create_engine_venv_and_stage_data() {
   local py_bin
   py_bin="$(resolve_python_bin)"
   [[ -n "$py_bin" ]] || {
-    echo -e "${RED}Python interpreter not found. Install Python 3 first.${RESET}" >&2
+    ui_error "Python interpreter not found. Install Python 3 first."
     return 1
   }
 
@@ -2282,7 +2643,7 @@ install_engine_python_deps() {
   )
   for r in "${reqs[@]}"; do
     if [[ -f "$r" && -n "$venv_py" ]]; then
-      "$venv_py" -m pip install --disable-pip-version-check -q -r "$r"
+      run_logged_command "$venv_py" -m pip install --disable-pip-version-check -q -r "$r"
       if [[ -n "${site_packages_dir}" ]]; then
         printf '%s\n' "${pth_paths[@]}" > "${site_packages_dir}/borealis-project-root.pth"
       fi
@@ -2298,10 +2659,7 @@ install_engine_python_deps() {
 vite_web_frontend_install() {
   local engine_ui_dest="${SCRIPT_DIR}/Engine/web-interface"
   ensure_node_bins
-  (
-    cd "$engine_ui_dest" &&
-    PATH="${NODE_DIR}/bin:${PATH}" "$NPM_BIN" install --silent --no-fund --audit=false >/dev/null
-  )
+  run_logged_command bash -lc "cd \"$engine_ui_dest\" && PATH=\"${NODE_DIR}/bin:\$PATH\" \"${NPM_BIN}\" install --silent --no-fund --audit=false"
 }
 
 vite_web_frontend_start() {
@@ -2346,6 +2704,13 @@ vite_web_frontend_start() {
   fi
 }
 
+configure_engine_frontend() {
+  local mode="$1"
+  ensure_engine_web_interface "$SCRIPT_DIR" || return 1
+  vite_web_frontend_install || return 1
+  vite_web_frontend_start "$mode"
+}
+
 flask_engine_launch() {
   local mode="$1" # production|developer
   pushd "${SCRIPT_DIR}/Engine" >/dev/null
@@ -2373,15 +2738,14 @@ flask_engine_launch() {
     # shellcheck disable=SC1090
     . "$(engine_letsencrypt_runtime_env_path)"
   fi
-  echo -e "\n${GREEN}Launching Borealis Engine...${RESET}"
-  echo "===================================================================================="
+  ui_info "Launching Borealis Engine..."
   local start_label
   if [[ "$mode" == "developer" ]]; then
     start_label="(Dev) Borealis Edge + Vite HMR Started on https://$(resolve_engine_public_fqdn)"
   else
     start_label="(Production) Borealis Edge Started on https://$(resolve_engine_public_fqdn)"
   fi
-  echo "${HOURGLASS} ${start_label}"
+  ui_info "${start_label}"
   local logdir; logdir=$(ensure_engine_log_dir)
   local stdout_log="${logdir}/engine-launch.stdout.log"
   local stderr_log="${logdir}/engine-launch.stderr.log"
@@ -2393,9 +2757,13 @@ flask_engine_launch() {
 }
 
 # ---- Banner ----
-clear || true
-printf "%b" "${BOREALIS_BLUE}"
-cat << 'EOF'
+show_borealis_banner() {
+  if [[ -n "${CHOICE}" ]] || ! is_interactive_terminal; then
+    return 0
+  fi
+  clear || true
+  printf "%b" "${BOREALIS_BLUE}"
+  cat << 'EOF'
 :::::::::   ::::::::  :::::::::  ::::::::::     :::     :::        ::::::::::: :::::::: 
 :+:    :+: :+:    :+: :+:    :+: :+:          :+: :+:   :+:            :+:    :+:    :+:
 +:+    +:+ +:+    +:+ +:+    +:+ +:+         +:+   +:+  +:+            +:+    +:+       
@@ -2404,8 +2772,9 @@ cat << 'EOF'
 #+#    #+# #+#    #+# #+#    #+# #+#        #+#     #+# #+#            #+#    #+#    #+#
 #########   ########  ###    ### ########## ###     ### ########## ########### ######## 
 EOF
-printf "%b" "${RESET}"
-printf "%b\n" "${DARK_GRAY}Automation Platform${RESET}"
+  printf "%b" "${RESET}"
+  printf "%b\n" "${DARK_GRAY}Automation Platform${RESET}"
+}
 
 # ---- Menus ----
 server_menu() {
@@ -2414,27 +2783,38 @@ server_menu() {
   local engine_immediate_launch=0
 
   if [[ -z "${mode_choice}" ]]; then
-    echo -e "\nConfigure Borealis Engine Mode:"
-    echo -e " 1) Build & Launch > Borealis Traefik Edge + Engine"
-    echo -e " 2) [Skip Build] & Immediately Launch > Borealis Traefik Edge + Engine"
-    echo -e " 3) Launch > [Hotload-Ready] Vite Dev UI via Borealis Edge"
+    printf "\nConfigure Borealis Engine Mode:\n"
+    printf " 1) Build & Launch > Borealis Traefik Edge + Engine\n"
+    printf " 2) [Skip Build] & Immediately Launch > Borealis Traefik Edge + Engine\n"
+    printf " 3) Launch > [Hotload-Ready] Vite Dev UI via Borealis Edge\n"
     mode_choice="$(prompt_input "Enter choice [1/2/3]: ")"
   else
-    echo -e "${YELLOW}Auto-selecting Borealis Engine mode option ${mode_choice}.${RESET}"
+    ui_verbose "Auto-selecting Borealis Engine mode option ${mode_choice}."
   fi
 
   case "$mode_choice" in
     1) borealis_operation_mode="production" ;;
     2) borealis_operation_mode="production"; engine_immediate_launch=1 ;;
     3) borealis_operation_mode="developer" ;;
-    *) echo -e "${RED}Invalid mode choice${RESET}"; return 1 ;;
+    *) ui_error "Invalid mode choice."; return 1 ;;
   esac
 
-  echo -e "${GREEN}Ensuring Engine Dependencies Exist...${RESET}"
-  echo -e "${INFO} Engine source path: ${SCRIPT_DIR}/Data/Engine"
-  echo -e "${INFO} Engine runtime path: ${SCRIPT_DIR}/Engine/Data/Engine"
-  install_server_dependencies
-  run_step "Database: Configure PostgreSQL" ensure_engine_postgresql_ready
+  if [[ "$engine_immediate_launch" -eq 1 ]]; then
+    if ! test_webui_build_fresh "${SCRIPT_DIR}/Data/Engine/web-interface" "${SCRIPT_DIR}/Engine/web-interface/build"; then
+      ui_warn "Detected newer WebUI source than production build. Running full build instead of Quick/Skip."
+      engine_immediate_launch=0
+    fi
+  fi
+
+  set_output_context engine
+  if [[ "${engine_immediate_launch}" -eq 1 ]]; then
+    set_step_plan 6
+  else
+    set_step_plan 8
+  fi
+
+  run_step "Installing / Updating Dependencies" install_server_dependencies
+  run_step "Configure PostgreSQL" ensure_engine_postgresql_ready
   export PATH="${NODE_DIR}/bin:${PATH}"
   ENGINE_USE_SYSTEMD_SUPERVISION=0
   if command_exists systemctl; then
@@ -2442,35 +2822,30 @@ server_menu() {
   fi
 
   if [[ "$engine_immediate_launch" -eq 1 ]]; then
-    if ! test_webui_build_fresh "${SCRIPT_DIR}/Data/Engine/web-interface" "${SCRIPT_DIR}/Engine/web-interface/build"; then
-      echo -e "${YELLOW}Detected newer WebUI source than production build. Running full build instead of Quick/Skip.${RESET}"
-      engine_immediate_launch=0
-    fi
-  fi
-
-  if [[ "$engine_immediate_launch" -eq 1 ]]; then
-    run_step "Sync Engine runtime code from Data/Engine" sync_engine_runtime
-    run_step "Restore Engine database environment" ensure_engine_database_env_file
-    run_step "Render Borealis Let's Encrypt and Traefik runtime files" ensure_engine_public_edge_runtime "$borealis_operation_mode"
+    run_step "Sync Engine Runtime" sync_engine_runtime
+    ensure_engine_database_env_file
+    run_step "Configure Borealis Traefik Edge" ensure_engine_public_edge_runtime "$borealis_operation_mode"
     run_step "Verify Engine Ansible Runtime" verify_engine_ansible_runtime
     run_step "Configure Borealis Engine supervision (${borealis_operation_mode})" configure_engine_supervision "$borealis_operation_mode"
+    print_engine_runtime_status_summary
+    print_engine_launch_summary "$borealis_operation_mode"
     return 0
   fi
 
-  run_step "Create Borealis Engine Virtual Python Environment & Stage Data" create_engine_venv_and_stage_data
-  run_step "Restore Engine database environment" ensure_engine_database_env_file
+  run_step "Prepare Engine Python Environment" create_engine_venv_and_stage_data
+  ensure_engine_database_env_file
   run_step "Install Engine Python Dependencies" install_engine_python_deps
-  run_step "Render Borealis Let's Encrypt and Traefik runtime files" ensure_engine_public_edge_runtime "$borealis_operation_mode"
-  run_step "Install Engine Ansible Collections" install_engine_ansible_collections
-  run_step "Verify Engine Ansible Runtime" verify_engine_ansible_runtime
-  run_step "Copy Engine WebUI Files" ensure_engine_web_interface "$SCRIPT_DIR"
-  run_step "Vite Web Frontend: Install NPM Packages" vite_web_frontend_install
-  run_step "Vite Web Frontend: Start (${borealis_operation_mode})" vite_web_frontend_start "$borealis_operation_mode"
+  run_step "Configure Borealis Traefik Edge" ensure_engine_public_edge_runtime "$borealis_operation_mode"
+  run_step "Configure Engine Ansible Runtime" configure_engine_ansible_runtime
+  run_step "Configure Vite Engine Frontend" configure_engine_frontend "$borealis_operation_mode"
   run_step "Configure Borealis Engine supervision (${borealis_operation_mode})" configure_engine_supervision "$borealis_operation_mode"
+  print_engine_runtime_status_summary
+  print_engine_launch_summary "$borealis_operation_mode"
 }
 
 agent_menu() {
-  echo -e "\nDeploying Borealis Agent..."
+  printf "\n"
+  ui_info "Deploying Borealis Agent..."
   if [[ "${REFRESH_AGENT_RUNTIME_FLAG}" -eq 1 ]]; then
     install_or_update_borealis_agent 1
     return $?
@@ -2479,37 +2854,37 @@ agent_menu() {
 }
 
 main_menu() {
-  echo -e "\nPlease choose which function you want to launch:"
-  echo -e " 1) Borealis Engine"
-  echo -e " 2) Borealis Agent"
-  echo -e " 3) Exit"
+  printf "\nPlease choose which function you want to launch:\n"
+  printf " 1) Borealis Engine\n"
+  printf " 2) Borealis Agent\n"
+  printf " 3) Exit\n"
   choice="$(prompt_input "Enter a number: ")"
   case "$choice" in
     1) server_menu ;;
     2) agent_menu ;;
     3) exit 0 ;;
-    *) echo -e "${RED}Invalid selection. Exiting...${RESET}"; exit 1 ;;
+    *) ui_error "Invalid selection. Exiting."; exit 1 ;;
   esac
 }
 
 # ---- Flag validation parity ----
 if [[ $SERVER_FLAG -eq 1 && $AGENT_FLAG -eq 1 ]]; then
-  echo -e "${RED}Cannot use --server and --agent together.${RESET}"
+  ui_error "Cannot use --server and --agent together."
   exit 1
 fi
 
 if [[ $VITE_FLAG -eq 1 && $FLASK_FLAG -eq 1 ]]; then
-  echo -e "${RED}Cannot combine --vite and --flask.${RESET}"
+  ui_error "Cannot combine --vite and --flask."
   exit 1
 fi
 
 if [[ $ENGINE_PROD_FLAG -eq 1 && $ENGINE_DEV_FLAG -eq 1 ]]; then
-  echo -e "${RED}Cannot combine --engine-production and --engine-dev.${RESET}"
+  ui_error "Cannot combine --engine-production and --engine-dev."
   exit 1
 fi
 
 if [[ ($ENGINE_PROD_FLAG -eq 1 || $ENGINE_DEV_FLAG -eq 1) && ($SERVER_FLAG -eq 1 || $AGENT_FLAG -eq 1) ]]; then
-  echo -e "${RED}Engine automation switches cannot be combined with --server or --agent.${RESET}"
+  ui_error "Engine automation switches cannot be combined with --server or --agent."
   exit 1
 fi
 
@@ -2544,11 +2919,18 @@ if [[ $SERVER_FLAG -eq 1 && -z "${ENGINE_MODE_CHOICE}" ]]; then
   fi
 fi
 
+if [[ -z "${CHOICE}" ]] && ! is_interactive_terminal; then
+  ui_error "No launcher mode selected and no interactive terminal is available. Use --EngineProduction, --EngineDev, --server, or --agent."
+  exit 1
+fi
+
+show_borealis_banner
+
 if [[ -n "${CHOICE}" ]]; then
   case "${CHOICE}" in
     1) server_menu "${ENGINE_MODE_CHOICE}" ; exit $? ;;
     2) agent_menu ; exit $? ;;
-    *) echo -e "${RED}Invalid selection. Exiting...${RESET}" ; exit 1 ;;
+    *) ui_error "Invalid selection. Exiting." ; exit 1 ;;
   esac
 fi
 
