@@ -115,6 +115,8 @@ class AssemblyAPIService:
             dev_mode_manager=adapters.dev_mode_manager,
             config=adapters.config,
             logger=self.logger,
+            db_conn_factory=adapters.db_conn_factory,
+            aegis_cipher_service=adapters.aegis_cipher_service,
         )
 
     # ------------------------------------------------------------------

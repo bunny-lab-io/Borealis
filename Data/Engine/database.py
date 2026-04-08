@@ -19,19 +19,13 @@ from typing import Optional, Sequence
 from . import database_migrations
 
 
-_DEFAULT_ADMIN_HASH = (
-    "e6c83b282aeb2e022844595721cc00bbda47cb24537c1779f9bb84f04039e167"
-    "6e6ba8573e588da1052510e3aa0a32a9e55879ae22b0c2d62136fc0a3e85f8bb"
-)
-
-
 def _generate_install_code() -> str:
     raw = secrets.token_hex(16).upper()
     return "-".join(raw[i : i + 4] for i in range(0, len(raw), 4))
 
 
 def initialise_engine_database(database_url: str, *, logger: Optional[logging.Logger] = None) -> None:
-    """Ensure the Engine database has the required schema and default admin account."""
+    """Ensure the Engine database has the required schema."""
 
     database_url = str(database_url or "").strip()
     if not database_url:
@@ -51,7 +45,6 @@ def initialise_engine_database(database_url: str, *, logger: Optional[logging.Lo
         _ensure_users_table(conn, logger=logger)
         _ensure_user_passkeys(conn, logger=logger)
         _ensure_user_site_assignments(conn, logger=logger)
-        _ensure_default_admin(conn, logger=logger)
         _ensure_ansible_recaps(conn, logger=logger)
         _ensure_agent_service_accounts(conn, logger=logger)
         _ensure_credentials(conn, logger=logger)
@@ -281,7 +274,9 @@ def _ensure_users_table(conn: sqlite3.Connection, *, logger: Optional[logging.Lo
                 updated_at INTEGER,
                 mfa_enabled INTEGER NOT NULL DEFAULT 0,
                 mfa_disabled INTEGER NOT NULL DEFAULT 0,
-                mfa_secret TEXT
+                mfa_secret TEXT,
+                auth_reset_required INTEGER NOT NULL DEFAULT 0,
+                auth_reset_at INTEGER
             )
             """
         )
@@ -295,6 +290,10 @@ def _ensure_users_table(conn: sqlite3.Connection, *, logger: Optional[logging.Lo
             cur.execute("ALTER TABLE users ADD COLUMN mfa_disabled INTEGER NOT NULL DEFAULT 0")
         if "mfa_secret" not in columns:
             cur.execute("ALTER TABLE users ADD COLUMN mfa_secret TEXT")
+        if "auth_reset_required" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN auth_reset_required INTEGER NOT NULL DEFAULT 0")
+        if "auth_reset_at" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN auth_reset_at INTEGER")
     except Exception as exc:
         if logger:
             logger.error("Failed to ensure users table: %s", exc, exc_info=True)
@@ -320,14 +319,23 @@ def _ensure_user_passkeys(conn: sqlite3.Connection, *, logger: Optional[logging.
                 aaguid TEXT,
                 created_at INTEGER,
                 last_used_at INTEGER,
+                credential_lookup_hmac TEXT,
+                secret_encrypted TEXT,
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
         )
+        cur.execute("PRAGMA table_info(user_passkeys)")
+        columns = {row[1] for row in cur.fetchall()}
+        if "credential_lookup_hmac" not in columns:
+            cur.execute("ALTER TABLE user_passkeys ADD COLUMN credential_lookup_hmac TEXT")
+        if "secret_encrypted" not in columns:
+            cur.execute("ALTER TABLE user_passkeys ADD COLUMN secret_encrypted TEXT")
+        cur.execute("DROP INDEX IF EXISTS uq_user_passkeys_credential_id")
         cur.execute(
             """
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_user_passkeys_credential_id
-                ON user_passkeys(credential_id)
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_user_passkeys_lookup_hmac
+                ON user_passkeys(credential_lookup_hmac)
             """
         )
         cur.execute(
@@ -343,41 +351,6 @@ def _ensure_user_passkeys(conn: sqlite3.Connection, *, logger: Optional[logging.
             raise
     finally:
         cur.close()
-
-
-def _ensure_default_admin(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
-    cur = conn.cursor()
-    try:
-        cur.execute("SELECT COUNT(*) FROM users WHERE LOWER(role)='admin'")
-        admin_count = (cur.fetchone() or [0])[0] or 0
-        if admin_count > 0:
-            return
-
-        now_ts = int(time.time())
-
-        cur.execute("SELECT id, role FROM users WHERE LOWER(username)='admin'")
-        existing = cur.fetchone()
-        if existing:
-            cur.execute(
-                "UPDATE users SET role='Admin', updated_at=? WHERE id=? AND LOWER(role)!='admin'",
-                (now_ts, existing[0]),
-            )
-        else:
-            cur.execute(
-                """
-                INSERT INTO users(username, display_name, password_sha512, role, created_at, updated_at)
-                VALUES(?,?,?,?,?,?)
-                """,
-                ("admin", "Administrator", _DEFAULT_ADMIN_HASH, "Admin", now_ts, now_ts),
-            )
-    except Exception as exc:
-        if logger:
-            logger.error("Failed to ensure default admin: %s", exc, exc_info=True)
-        else:  # pragma: no cover - escalate without logger for tests
-            raise
-    finally:
-        cur.close()
-
 
 def _ensure_user_site_assignments(
     conn: sqlite3.Connection,

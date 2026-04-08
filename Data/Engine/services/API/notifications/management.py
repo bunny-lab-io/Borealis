@@ -41,6 +41,8 @@ def register_notifications(app: Flask, adapters: "EngineServiceAdapters") -> Non
         dev_mode_manager=adapters.dev_mode_manager,
         config=adapters.config,
         logger=adapters.context.logger,
+        db_conn_factory=adapters.db_conn_factory,
+        aegis_cipher_service=adapters.aegis_cipher_service,
     )
 
     def _broadcast(notification: Dict[str, Any]) -> None:

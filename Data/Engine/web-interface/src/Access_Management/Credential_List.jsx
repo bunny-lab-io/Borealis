@@ -146,10 +146,26 @@ function aegisRowFromStatus(aegisStatus) {
     name: "Aegis Cipher",
     credential_type: "protected secrets",
     connection_type: !configured ? "aegis_pending" : locked ? "aegis_locked" : "aegis_unlocked",
-    site_name: "Credentials + GitHub Token",
+    site_name: "Operator Auth + Credentials + GitHub Token",
     username: "",
     updated_at: aegisStatus?.updated_at || 0,
     aegis_status_label: !configured ? "Not configured" : locked ? "Locked" : "Unlocked",
+  };
+}
+
+function resolveRuntimeAegisStatus(aegisStatus, bootstrapState) {
+  if (String(bootstrapState?.phase || "") !== "login_required") {
+    return aegisStatus;
+  }
+  return {
+    configured: true,
+    locked: false,
+    unlock_scope: aegisStatus?.unlock_scope || "engine_global",
+    secret_scope:
+      Array.isArray(aegisStatus?.secret_scope) && aegisStatus.secret_scope.length
+        ? aegisStatus.secret_scope
+        : ["credentials", "github_token", "operator_auth"],
+    updated_at: Number(aegisStatus?.updated_at) || 0,
   };
 }
 
@@ -181,7 +197,7 @@ function githubTokenRowFromStatus(githubTokenState, aegisStatus) {
 }
 
 export default function CredentialList() {
-  const { aegisStatus, isAdmin, openAegisDialog } = useAuth();
+  const { aegisStatus, bootstrapState, isAdmin, openAegisDialog } = useAuth();
   const [rows, setRows] = useState([]);
   const [githubTokenState, setGithubTokenState] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -193,11 +209,15 @@ export default function CredentialList() {
   const [editingCredential, setEditingCredential] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
-  const canMutateCredentials = Boolean(aegisStatus?.configured) && !Boolean(aegisStatus?.locked);
-  const aegisRow = useMemo(() => aegisRowFromStatus(aegisStatus), [aegisStatus]);
+  const effectiveAegisStatus = useMemo(
+    () => resolveRuntimeAegisStatus(aegisStatus, bootstrapState),
+    [aegisStatus, bootstrapState]
+  );
+  const canMutateCredentials = String(bootstrapState?.phase || "") === "login_required";
+  const aegisRow = useMemo(() => aegisRowFromStatus(effectiveAegisStatus), [effectiveAegisStatus]);
   const githubTokenRow = useMemo(
-    () => githubTokenRowFromStatus(githubTokenState, aegisStatus),
-    [githubTokenState, aegisStatus]
+    () => githubTokenRowFromStatus(githubTokenState, effectiveAegisStatus),
+    [githubTokenState, effectiveAegisStatus]
   );
   const gridRows = useMemo(() => [aegisRow, githubTokenRow, ...rows], [aegisRow, githubTokenRow, rows]);
 
@@ -340,7 +360,7 @@ export default function CredentialList() {
         cellRenderer: connectionCellRenderer
       },
       {
-        headerName: "Site",
+        headerName: "Scope",
         field: "site_name",
         cellRenderer: (params) => {
           if (params.data?.row_kind === "aegis") {
@@ -451,7 +471,7 @@ export default function CredentialList() {
 
   useEffect(() => {
     fetchCredentials();
-  }, [fetchCredentials, aegisStatus?.configured, aegisStatus?.locked]);
+  }, [fetchCredentials]);
 
   const handleCreate = useCallback(() => {
     if (!canMutateCredentials) return;
@@ -518,19 +538,6 @@ export default function CredentialList() {
     const next = [];
     const resetCredentialCount = rows.filter((row) => rowRequiresSecretReset(row)).length;
     const githubResetRequired = rowRequiresSecretReset(githubTokenRow);
-    if (!aegisStatus?.configured) {
-      next.push({
-        severity: "warning",
-        message:
-          "Set up the Aegis Cipher before creating or changing credentials. Existing credential-backed workflows remain available until setup is completed.",
-      });
-    } else if (aegisStatus?.locked) {
-      next.push({
-        severity: "warning",
-        message:
-          "Aegis Cipher is locked. Credential metadata remains visible, but credential changes are disabled until the cipher is entered.",
-      });
-    }
     if (resetCredentialCount || githubResetRequired) {
       const credentialSummary =
         resetCredentialCount > 0
@@ -541,7 +548,7 @@ export default function CredentialList() {
       next.push({
         severity: "warning",
         message:
-          `Aegis Cipher was force reset. ${subjects} lost stored secret material and must be updated before dependent jobs can be safely re-enabled.`,
+          `Aegis Cipher was force reset. ${subjects} lost stored secret material and must be updated before dependent jobs can be safely re-enabled. Operator account recovery requirements are tracked from User Management.`,
       });
     }
     if (!error) return next;
@@ -557,7 +564,7 @@ export default function CredentialList() {
       message: `Unable to load credentials: ${error}`,
     });
     return next;
-  }, [aegisStatus, error, githubTokenRow, rows]);
+  }, [error, githubTokenRow, rows]);
 
   const pageHeaderActions = useMemo(() => {
     const actions = [
@@ -577,76 +584,28 @@ export default function CredentialList() {
       icon: <AddIcon />,
       tone: "primary",
       disabled: !canMutateCredentials,
-      tooltip: !aegisStatus?.configured
-        ? "Set up Aegis Cipher before adding credentials."
-        : aegisStatus?.locked
-        ? "Enter the Aegis Cipher before adding credentials."
-        : "",
+      tooltip: "",
       onClick: handleCreate,
     };
 
-    if (!aegisStatus?.configured) {
-      actions.push(newCredentialAction);
-      actions.push({
-        id: "credentials-aegis-setup",
-        label: "Setup Aegis Cipher",
-        icon: <VpnKeyIcon />,
-        tone: "primary",
-        onClick: () => openAegisDialog("setup"),
-      });
-      return actions;
-    }
-
-    if (aegisStatus?.locked) {
-      actions.push({
-        id: "credentials-aegis-unlock",
-        label: "Enter Aegis Cipher",
-        icon: <VpnKeyIcon />,
-        tone: "secondary",
-        onClick: () => openAegisDialog("unlock"),
-      });
-      actions.push(newCredentialAction);
-      return actions;
-    }
-
     actions.push(newCredentialAction);
     return actions;
-  }, [aegisStatus, canMutateCredentials, fetchCredentials, handleCreate, loading, openAegisDialog]);
+  }, [canMutateCredentials, fetchCredentials, handleCreate, loading]);
 
   const menuItems = useMemo(() => {
     if (menuRow?.row_kind === "aegis") {
-      const items = [];
-      if (!aegisStatus?.configured) {
-        items.push(
-          <MenuItem key="aegis-setup" onClick={() => handleAegisMenuAction("setup")}>
-            Setup Aegis Cipher
-          </MenuItem>
-        );
-      }
-      if (aegisStatus?.configured && aegisStatus?.locked) {
-        items.push(
-          <MenuItem key="aegis-unlock" onClick={() => handleAegisMenuAction("unlock")}>
-            Enter Aegis Cipher
-          </MenuItem>
-        );
-      }
-      if (aegisStatus?.configured) {
-        items.push(
-          <MenuItem key="aegis-rotate" onClick={() => handleAegisMenuAction("rotate")}>
-            Rotate Aegis Cipher
-          </MenuItem>
-        );
-        items.push(
-          <MenuItem
-            key="aegis-force-reset"
-            onClick={() => handleAegisMenuAction("force_reset")}
-            sx={{ color: "#ff9aa5" }}
-          >
-            Force Reset Aegis Cipher
-          </MenuItem>
-        );
-      }
-      return items;
+      return [
+        <MenuItem key="aegis-rotate" onClick={() => handleAegisMenuAction("rotate")}>
+          Rotate Aegis Cipher
+        </MenuItem>,
+        <MenuItem
+          key="aegis-force-reset"
+          onClick={() => handleAegisMenuAction("force_reset")}
+          sx={{ color: "#ff9aa5" }}
+        >
+          Force Reset Aegis Cipher
+        </MenuItem>,
+      ];
     }
     if (menuRow?.row_kind === "github_token") {
       return [
@@ -672,8 +631,6 @@ export default function CredentialList() {
       </MenuItem>,
     ];
   }, [
-    aegisStatus?.configured,
-    aegisStatus?.locked,
     canMutateCredentials,
     handleAegisMenuAction,
     handleDelete,
@@ -783,11 +740,7 @@ export default function CredentialList() {
             rowHeight={46}
             headerHeight={44}
             getRowId={getRowId}
-            overlayNoRowsTemplate={`<span class='ag-overlay-no-rows-center'>${
-              !aegisStatus?.configured
-                ? "Protected credentials will appear here once Aegis Cipher setup is complete."
-                : "No credentials have been created yet."
-            }</span>`}
+            overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No credentials have been created yet.</span>"
             suppressCellFocus
             theme={myTheme}
           />

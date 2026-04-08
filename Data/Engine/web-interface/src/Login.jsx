@@ -4,7 +4,7 @@ import { authenticateWithPasskey, isPasskeySupported } from "./app/utils/passkey
 
 export default function Login({ onLogin }) {
   // ----------------- Original state & logic -----------------
-  const [username, setUsername] = useState("admin");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -65,7 +65,13 @@ export default function Login({ onLogin }) {
       });
       const data = await resp.json();
       if (!resp.ok) {
-        throw new Error(data?.error || "Invalid username or password");
+        const messageMap = {
+          auth_reset_required:
+            "This account needs administrator recovery before it can sign in again.",
+          bootstrap_required:
+            "Borealis must finish Aegis bootstrap before sign-in is available.",
+        };
+        throw new Error(messageMap[data?.error] || data?.error || "Invalid username or password");
       }
       if (data?.status === "mfa_required") {
         setPendingToken(data.pending_token || "");
@@ -147,7 +153,8 @@ export default function Login({ onLogin }) {
         }
         const msgMap = {
           invalid_code: "Incorrect code. Please try again.",
-          mfa_not_configured: "MFA is not configured for this account."
+          mfa_not_configured: "MFA is not configured for this account.",
+          bootstrap_required: "Borealis must finish Aegis bootstrap before sign-in is available.",
         };
         setError(msgMap[errKey] || data?.error || "Failed to verify code.");
         return;

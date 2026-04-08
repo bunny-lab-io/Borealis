@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { EMPTY_AEGIS_STATUS, normalizeAegisStatus } from "../utils/aegis.js";
+import { EMPTY_BOOTSTRAP_STATE, normalizeBootstrapState } from "../utils/bootstrap.js";
 import { sha512 } from "../utils/crypto.js";
 import { postAppNotification } from "../utils/notifications.js";
 import {
@@ -63,9 +64,9 @@ export function AuthProvider({ children }) {
   const [mfaEnabled, setMfaEnabled] = useState(false);
   const [passkeyCount, setPasskeyCount] = useState(0);
   const [ready, setReady] = useState(false);
+  const [bootstrapState, setBootstrapState] = useState(EMPTY_BOOTSTRAP_STATE);
   const [aegisStatus, setAegisStatus] = useState(EMPTY_AEGIS_STATUS);
   const [aegisDialog, setAegisDialog] = useState(null);
-  const [aegisPromptDismissed, setAegisPromptDismissed] = useState(false);
 
   const clearClientSession = useCallback(() => {
     clearPersistedSession();
@@ -76,7 +77,6 @@ export function AuthProvider({ children }) {
     setPasskeyCount(0);
     setAegisStatus(EMPTY_AEGIS_STATUS);
     setAegisDialog(null);
-    setAegisPromptDismissed(false);
   }, []);
 
   const clearOperatorPresence = useCallback(() => {
@@ -87,7 +87,30 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  const refreshBootstrapState = useCallback(async () => {
+    try {
+      const response = await fetch("/api/bootstrap/state", { credentials: "include" });
+      if (!response.ok) {
+        const fallback = { ...EMPTY_BOOTSTRAP_STATE, phase: "aegis_setup_required" };
+        setBootstrapState(fallback);
+        return fallback;
+      }
+      const payload = await response.json();
+      const normalized = normalizeBootstrapState(payload);
+      setBootstrapState(normalized);
+      return normalized;
+    } catch {
+      const fallback = { ...EMPTY_BOOTSTRAP_STATE, phase: "aegis_setup_required" };
+      setBootstrapState(fallback);
+      return fallback;
+    }
+  }, []);
+
   const fetchAegisStatus = useCallback(async () => {
+    if (String(bootstrapState?.phase || "") !== "login_required") {
+      setAegisStatus(EMPTY_AEGIS_STATUS);
+      return EMPTY_AEGIS_STATUS;
+    }
     try {
       const response = await fetch("/api/aegis/status", { credentials: "include" });
       if (!response.ok) {
@@ -103,9 +126,13 @@ export function AuthProvider({ children }) {
     } catch {
       return EMPTY_AEGIS_STATUS;
     }
-  }, []);
+  }, [bootstrapState]);
 
   const refreshSession = useCallback(async () => {
+    if (String(bootstrapState?.phase || "") !== "login_required") {
+      clearClientSession();
+      return null;
+    }
     try {
       const response = await fetch("/api/auth/me", { credentials: "include" });
       if (response.ok) {
@@ -125,12 +152,21 @@ export function AuthProvider({ children }) {
       /* noop */
     }
     return null;
-  }, [clearClientSession]);
+  }, [bootstrapState, clearClientSession]);
 
   useEffect(() => {
     let cancelled = false;
 
     const hydrateSession = async () => {
+      const bootstrap = await refreshBootstrapState();
+      if (cancelled) return;
+
+      if (String(bootstrap?.phase || "") !== "login_required") {
+        clearClientSession();
+        setReady(true);
+        return;
+      }
+
       const cached = readPersistedSession();
       if (cached && !cancelled) {
         setUser(cached.username);
@@ -150,7 +186,7 @@ export function AuthProvider({ children }) {
             setPasskeyCount(Number(me.passkey_count || 0));
           }
           persistSession(me);
-        } else if ((response.status === 401 || response.status === 403) && !cancelled) {
+        } else if (!cancelled) {
           clearClientSession();
         }
       } catch {
@@ -166,24 +202,32 @@ export function AuthProvider({ children }) {
     return () => {
       cancelled = true;
     };
-  }, [clearClientSession]);
+  }, [clearClientSession, refreshBootstrapState]);
 
   useEffect(() => {
-    if (!ready || !user) {
+    if (!ready || !user || String(bootstrapState?.phase || "") !== "login_required") {
       setAegisStatus(EMPTY_AEGIS_STATUS);
       return;
     }
     fetchAegisStatus();
-  }, [fetchAegisStatus, ready, user]);
+  }, [bootstrapState, fetchAegisStatus, ready, user]);
 
   useEffect(() => {
-    if (!ready || !user) return undefined;
+    if (!ready || !user || String(bootstrapState?.phase || "") !== "login_required") return undefined;
 
     let cancelled = false;
     const validateSession = async () => {
       try {
+        const nextBootstrap = await refreshBootstrapState();
+        if (String(nextBootstrap?.phase || "") !== "login_required") {
+          if (!cancelled) {
+            clearClientSession();
+            setAegisStatus(EMPTY_AEGIS_STATUS);
+          }
+          return;
+        }
         const response = await fetch("/api/auth/me", { credentials: "include" });
-        if ((response.status === 401 || response.status === 403) && !cancelled) {
+        if (!response.ok && !cancelled) {
           clearClientSession();
           setAegisStatus(EMPTY_AEGIS_STATUS);
           return;
@@ -216,20 +260,11 @@ export function AuthProvider({ children }) {
       window.clearInterval(intervalId);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [clearClientSession, fetchAegisStatus, ready, user]);
-
-  useEffect(() => {
-    if (!ready || !user || String(role || "").toLowerCase() !== "admin") {
-      return;
-    }
-    if (!aegisStatus.configured || !aegisStatus.locked || aegisPromptDismissed) {
-      return;
-    }
-    setAegisDialog((previous) => previous || { mode: "unlock", source: "login" });
-  }, [aegisPromptDismissed, aegisStatus, ready, role, user]);
+  }, [bootstrapState, clearClientSession, fetchAegisStatus, ready, refreshBootstrapState, user]);
 
   const login = useCallback(
     async ({ username, role: nextRole }) => {
+      await refreshBootstrapState();
       setUser(username);
       setRole(nextRole || null);
       setDisplayName(username);
@@ -263,7 +298,7 @@ export function AuthProvider({ children }) {
         }
       })();
     },
-    [fetchAegisStatus]
+    [fetchAegisStatus, refreshBootstrapState]
   );
 
   const logout = useCallback(async () => {
@@ -277,35 +312,29 @@ export function AuthProvider({ children }) {
       /* noop */
     }
     clearClientSession();
-  }, [clearClientSession, clearOperatorPresence]);
+    await refreshBootstrapState();
+  }, [clearClientSession, clearOperatorPresence, refreshBootstrapState]);
 
   const openAegisDialog = useCallback((mode, source = "credentials") => {
     setAegisDialog({ mode, source });
   }, []);
 
-  const closeAegisDialog = useCallback(
-    async (reason) => {
-      const shouldWarn = reason === "cancel" && aegisDialog?.source === "login";
+  const closeAegisDialog = useCallback(() => {
+    setAegisDialog(null);
+  }, []);
+
+  const completeAegisDialog = useCallback(
+    async (payload) => {
       setAegisDialog(null);
-      if (shouldWarn) {
-        setAegisPromptDismissed(true);
-        await postAppNotification({
-          title: "Aegis Cipher",
-          message:
-            "Aegis Cipher not entered. Credential-backed jobs and other protected-secret workflows remain disabled until it is entered.",
-          icon: "pendingactions",
-          variant: "warning",
-        });
+      setAegisStatus(normalizeAegisStatus(payload));
+      if (payload?.force_reset) {
+        clearOperatorPresence();
+        clearClientSession();
+        await refreshBootstrapState();
       }
     },
-    [aegisDialog]
+    [clearClientSession, clearOperatorPresence, refreshBootstrapState]
   );
-
-  const completeAegisDialog = useCallback((payload) => {
-    setAegisDialog(null);
-    setAegisPromptDismissed(false);
-    setAegisStatus(normalizeAegisStatus(payload));
-  }, []);
 
   const resetPassword = useCallback(
     async ({ currentPassword, nextPassword, confirmPassword }) => {
@@ -360,6 +389,10 @@ export function AuthProvider({ children }) {
             "Choose a new password that differs from your current password.",
           "invalid current password hash": "Enter your current password.",
           "invalid new password hash": "Enter a valid new password.",
+          auth_reset_required:
+            "This account needs administrator recovery before it can change its password again.",
+          bootstrap_required:
+            "Borealis must finish Aegis bootstrap before account changes are available.",
         };
         throw new Error(
           errorMessageMap[responsePayload?.error] ||
@@ -480,6 +513,7 @@ export function AuthProvider({ children }) {
   const value = useMemo(
     () => ({
       ready,
+      bootstrapState,
       user,
       role,
       displayName,
@@ -498,6 +532,7 @@ export function AuthProvider({ children }) {
       listPasskeys,
       updatePasskeyLabel,
       deletePasskey,
+      refreshBootstrapState,
       fetchAegisStatus,
       openAegisDialog,
       closeAegisDialog,
@@ -507,6 +542,7 @@ export function AuthProvider({ children }) {
     [
       aegisDialog,
       aegisStatus,
+      bootstrapState,
       clearOperatorPresence,
       closeAegisDialog,
       completeAegisDialog,
@@ -520,6 +556,7 @@ export function AuthProvider({ children }) {
       passkeyCount,
       openAegisDialog,
       ready,
+      refreshBootstrapState,
       registerPasskey,
       refreshSession,
       resetMfa,

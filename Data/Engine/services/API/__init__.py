@@ -244,6 +244,7 @@ class EngineServiceAdapters:
             db_conn_factory=self.db_conn_factory,
             logger=self.context.logger,
             service_log=self.service_log,
+            hmac_secret=str(self.context.config.get("SECRET_KEY") or ""),
         )
         self.context.aegis_cipher_service = self.aegis_cipher_service
 

@@ -60,7 +60,7 @@ const gridTheme = themeQuartz.withParams({
 const themeClassName = gridTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
-const AUTO_SIZE_COLUMNS = ["display_name", "username", "last_login", "role", "mfa_enabled"];
+const AUTO_SIZE_COLUMNS = ["display_name", "username", "last_login", "role", "mfa_enabled", "auth_reset_required"];
 
 function formatTs(tsSec) {
   if (!tsSec) return "-";
@@ -121,6 +121,9 @@ export default function UserManagement() {
           data.users.map((u) => ({
             ...u,
             mfa_enabled: u && typeof u.mfa_enabled !== "undefined" ? (u.mfa_enabled ? 1 : 0) : 0,
+            auth_reset_required:
+              u && typeof u.auth_reset_required !== "undefined" ? (u.auth_reset_required ? 1 : 0) : 0,
+            auth_reset_at: Number(u?.auth_reset_at || 0),
           }))
         );
       } else {
@@ -180,6 +183,24 @@ export default function UserManagement() {
         return Boolean(key && selectedUsernames.has(key));
       }),
     [rows, selectedUsernames]
+  );
+
+  const recoveryTokenTheme = useMemo(
+    () => ({
+      ready: {
+        text: "#00d18c",
+        background: "rgba(0, 209, 140, 0.16)",
+        border: "1px solid rgba(0, 209, 140, 0.45)",
+        dot: "#00d18c",
+      },
+      recoveryRequired: {
+        text: "#ffb347",
+        background: "rgba(255, 179, 71, 0.16)",
+        border: "1px solid rgba(255, 179, 71, 0.45)",
+        dot: "#ffb347",
+      },
+    }),
+    []
   );
 
   const openMenu = (event, user) => {
@@ -427,6 +448,7 @@ export default function UserManagement() {
       setResetOpen(false);
       setResetTarget(null);
       setNewPassword("");
+      await fetchUsers();
       if (user?.username) {
         sendNotification(`Password Reset for ${user.username}`);
       }
@@ -617,11 +639,68 @@ export default function UserManagement() {
         },
       },
       {
+        headerName: "Recovery",
+        field: "auth_reset_required",
+        minWidth: 170,
+        cellClass: "status-pill-cell",
+        valueGetter: (params) => (params.data?.auth_reset_required ? "Recovery Required" : "Ready"),
+        comparator: (a, b) => String(a || "").localeCompare(String(b || "")),
+        cellRenderer: (params) => {
+          const recoveryRequired = Boolean(params.data?.auth_reset_required);
+          const resetAt = formatTs(params.data?.auth_reset_at || 0);
+          const theme = recoveryRequired
+            ? recoveryTokenTheme.recoveryRequired
+            : recoveryTokenTheme.ready;
+          return (
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%" }}>
+              <Box
+                component="span"
+                title={
+                  recoveryRequired && resetAt !== "-"
+                    ? `Aegis force reset flagged this operator for recovery on ${resetAt}.`
+                    : recoveryRequired
+                    ? "Aegis force reset flagged this operator for recovery."
+                    : "This operator is ready for normal sign-in."
+                }
+                sx={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  minWidth: recoveryRequired ? 148 : 86,
+                  px: 1.5,
+                  py: 0.4,
+                  borderRadius: 999,
+                  gap: 0.75,
+                  border: theme.border,
+                  backgroundColor: theme.background,
+                  color: theme.text,
+                  fontWeight: 600,
+                  fontSize: "13px",
+                  lineHeight: 1,
+                  fontFamily: gridFontFamily,
+                }}
+              >
+                <Box
+                  component="span"
+                  sx={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    backgroundColor: theme.dot,
+                    boxShadow: "0 0 0 2px rgba(0, 0, 0, 0.22)",
+                  }}
+                />
+                {recoveryRequired ? "Recovery Required" : "Ready"}
+              </Box>
+            </Box>
+          );
+        },
+      },
+      {
         headerName: "Actions",
         field: "actions",
-        minWidth: 110,
-        width: 110,
-        maxWidth: 110,
+        minWidth: 140,
+        flex: 1,
         sortable: false,
         filter: false,
         suppressHeaderMenuButton: true,
@@ -645,7 +724,7 @@ export default function UserManagement() {
         },
       },
     ],
-    [mfaBusyUser]
+    [mfaBusyUser, recoveryTokenTheme]
   );
 
   const defaultColDef = useMemo(
@@ -743,6 +822,30 @@ export default function UserManagement() {
                   backgroundColor: "rgba(125,211,252,0.2) !important",
                   boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
                 },
+                "& .status-pill-cell": {
+                  display: "flex",
+                  alignItems: "center",
+                },
+                "& .status-pill-cell .ag-cell-wrapper": {
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  height: "100%",
+                  paddingTop: 0,
+                  paddingBottom: 0,
+                  lineHeight: "normal",
+                },
+                "& .status-pill-cell .ag-cell-value": {
+                  width: "100%",
+                  display: "flex",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  height: "100%",
+                },
+                "& .status-pill-cell .ag-cell-value > span": {
+                  margin: 0,
+                },
               }}
             >
               <AgGridReact
@@ -802,7 +905,7 @@ export default function UserManagement() {
               openReset(user);
             }}
           >
-            Reset Password
+            {Boolean(menuUser?.auth_reset_required) ? "Recover Account" : "Reset Password"}
           </MenuItem>
           <MenuItem
             disabled={me && menuUser && String(me.username).toLowerCase() === String(menuUser.username).toLowerCase()}
@@ -815,7 +918,12 @@ export default function UserManagement() {
             Change Role
           </MenuItem>
           <MenuItem
-            disabled={Boolean(mfaBusyUser && menuUser && String(mfaBusyUser).toLowerCase() === String(menuUser.username || "").toLowerCase())}
+            disabled={
+              Boolean(menuUser?.auth_reset_required) ||
+              Boolean(
+                mfaBusyUser && menuUser && String(mfaBusyUser).toLowerCase() === String(menuUser.username || "").toLowerCase()
+              )
+            }
             onClick={() => {
               const user = menuUser;
               closeMenu();
@@ -830,7 +938,7 @@ export default function UserManagement() {
               closeMenu();
               openResetMfa(user);
             }}
-            disabled={!Boolean(menuUser?.mfa_enabled)}
+            disabled={!Boolean(menuUser?.mfa_enabled) || Boolean(menuUser?.auth_reset_required)}
           >
             Reset MFA
           </MenuItem>
@@ -839,13 +947,21 @@ export default function UserManagement() {
         <Dialog open={resetOpen} onClose={() => setResetOpen(false)} maxWidth="xs" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
           <DialogTitle sx={DIALOG_TITLE_SX}>
             <DialogHeaderBlock
-              title="Reset Password"
-              subtitle={resetTarget?.username ? `Set a new password for ${resetTarget.username}.` : undefined}
+              title={resetTarget?.auth_reset_required ? "Recover Account" : "Reset Password"}
+              subtitle={
+                resetTarget?.username
+                  ? resetTarget?.auth_reset_required
+                    ? `Restore sign-in for ${resetTarget.username} by setting a new password.`
+                    : `Set a new password for ${resetTarget.username}.`
+                  : undefined
+              }
             />
           </DialogTitle>
           <DialogContent sx={DIALOG_CONTENT_SX}>
             <DialogContentText sx={DIALOG_BODY_TEXT_SX}>
-              Enter a new password for {resetTarget?.username}.
+              {resetTarget?.auth_reset_required
+                ? `Enter a new password for ${resetTarget?.username}. This clears the forced recovery flag, removes any old passkeys, and requires MFA to be enrolled again on the next password sign-in.`
+                : `Enter a new password for ${resetTarget?.username}. This also clears any saved MFA secret and removes existing passkeys so the operator can re-enroll them cleanly.`}
             </DialogContentText>
             <TextField
               autoFocus

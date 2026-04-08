@@ -12,11 +12,12 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from flask import Request, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from .bootstrap_state import operator_auth_allowed
 from .dev_mode import DevModeManager
 from .secrets import require_app_secret
 
@@ -43,11 +44,15 @@ class RequestAuthContext:
         dev_mode_manager: DevModeManager,
         config: Optional[Mapping[str, Any]] = None,
         logger: Optional[logging.Logger] = None,
+        db_conn_factory: Optional[Callable[[], Any]] = None,
+        aegis_cipher_service: Any = None,
     ) -> None:
         self._app = app
         self._dev_mode_manager = dev_mode_manager
         self._config = config or {}
         self._logger = logger or logging.getLogger(__name__)
+        self._db_conn_factory = db_conn_factory
+        self._aegis_cipher_service = aegis_cipher_service
         secret = require_app_secret(app)
         self._serializer = URLSafeTimedSerializer(secret, salt="borealis-auth")
         default_token_ttl = int(os.environ.get("BOREALIS_TOKEN_TTL_SECONDS", 60 * 60 * 24 * 30))
@@ -74,6 +79,16 @@ class RequestAuthContext:
 
     def current_user(self) -> Optional[Dict[str, Any]]:
         """Return the authenticated operator profile, if any."""
+
+        if (
+            callable(self._db_conn_factory)
+            and self._aegis_cipher_service is not None
+            and not operator_auth_allowed(
+                db_conn_factory=self._db_conn_factory,
+                aegis_cipher_service=self._aegis_cipher_service,
+            )
+        ):
+            return None
 
         username = session.get("username")
         role = session.get("role") or "User"

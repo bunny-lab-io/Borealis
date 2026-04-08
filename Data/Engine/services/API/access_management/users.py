@@ -26,7 +26,10 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 if TYPE_CHECKING:  # pragma: no cover - typing helper
     from .. import EngineServiceAdapters
 
+from ...aegis_cipher import AegisDataCorruptionError
+from ...auth.bootstrap_state import operator_auth_allowed
 from ...auth.secrets import require_app_secret
+from .passkeys import delete_user_passkeys
 
 def _now_ts() -> int:
     return int(time.time())
@@ -47,6 +50,8 @@ def _row_to_user(row: Sequence[Any]) -> Mapping[str, Any]:
         "created_at": row[5] or 0,
         "updated_at": row[6] or 0,
         "mfa_enabled": 1 if (row[7] or 0) else 0,
+        "auth_reset_required": 1 if (row[8] or 0) else 0,
+        "auth_reset_at": row[9] or 0,
     }
 
 
@@ -58,6 +63,7 @@ class UserManagementService:
         self.adapters = adapters
         self.db_conn_factory = adapters.db_conn_factory
         self.logger = adapters.context.logger
+        self.aegis_cipher_service = adapters.aegis_cipher_service
 
     def _db_conn(self) -> sqlite3.Connection:
         return self.db_conn_factory()
@@ -67,6 +73,12 @@ class UserManagementService:
         return URLSafeTimedSerializer(secret, salt="borealis-auth")
 
     def _current_user(self) -> Optional[Dict[str, Any]]:
+        if not operator_auth_allowed(
+            db_conn_factory=self.db_conn_factory,
+            aegis_cipher_service=self.aegis_cipher_service,
+        ):
+            return None
+
         username = session.get("username")
         role = session.get("role") or "User"
         if username:
@@ -114,6 +126,15 @@ class UserManagementService:
             return ""
         return _sha512_hex(raw_password_text)
 
+    def _encrypt_password_hash(self, password_sha512: str) -> str:
+        return self.aegis_cipher_service.encrypt_secret_for_text(password_sha512) or ""
+
+    def _decrypt_password_hash(self, stored_value: Any) -> str:
+        text = str(stored_value or "")
+        if not text:
+            return ""
+        return self.aegis_cipher_service.decrypt_secret_text(text)
+
     # ------------------------------------------------------------------ #
     # Endpoint implementations
     # ------------------------------------------------------------------ #
@@ -138,7 +159,9 @@ class UserManagementService:
                     last_login,
                     created_at,
                     updated_at,
-                    CASE WHEN COALESCE(mfa_disabled, 0) = 1 THEN 0 ELSE 1 END AS mfa_enabled
+                    CASE WHEN COALESCE(mfa_disabled, 0) = 1 THEN 0 ELSE 1 END AS mfa_enabled,
+                    COALESCE(auth_reset_required, 0) AS auth_reset_required,
+                    COALESCE(auth_reset_at, 0) AS auth_reset_at
                 FROM users
                 ORDER BY LOWER(username) ASC
                 """
@@ -175,10 +198,11 @@ class UserManagementService:
         try:
             conn = self._db_conn()
             cur = conn.cursor()
+            encrypted_password = self._encrypt_password_hash(password_sha512)
             cur.execute(
-                "INSERT INTO users(username, display_name, password_sha512, role, created_at, updated_at, mfa_enabled, mfa_disabled) "
-                "VALUES(?,?,?,?,?,?,?,?)",
-                (username, display_name or username, password_sha512, role, now_ts, now_ts, 0, 0),
+                "INSERT INTO users(username, display_name, password_sha512, role, created_at, updated_at, mfa_enabled, mfa_disabled, auth_reset_required, auth_reset_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (username, display_name or username, encrypted_password, role, now_ts, now_ts, 0, 0, 0, None),
             )
             conn.commit()
             return jsonify({"status": "ok"})
@@ -258,13 +282,25 @@ class UserManagementService:
         try:
             conn = self._db_conn()
             cur = conn.cursor()
+            encrypted_password = self._encrypt_password_hash(password_sha512)
             now_ts = _now_ts()
             cur.execute(
-                "UPDATE users SET password_sha512=?, updated_at=? WHERE LOWER(username)=LOWER(?)",
-                (password_sha512, now_ts, username),
+                """
+                UPDATE users
+                   SET password_sha512=?,
+                       mfa_secret=NULL,
+                       mfa_enabled=0,
+                       mfa_disabled=0,
+                       auth_reset_required=0,
+                       auth_reset_at=NULL,
+                       updated_at=?
+                 WHERE LOWER(username)=LOWER(?)
+                """,
+                (encrypted_password, now_ts, username),
             )
             if cur.rowcount == 0:
                 return jsonify({"error": "user not found"}), 404
+            delete_user_passkeys(conn, username)
             conn.commit()
             return jsonify({"status": "ok"})
         except Exception as exc:
@@ -305,14 +341,28 @@ class UserManagementService:
             conn = self._db_conn()
             cur = conn.cursor()
             cur.execute(
-                "SELECT COALESCE(password_sha512, '') FROM users WHERE LOWER(username)=LOWER(?)",
+                "SELECT COALESCE(password_sha512, ''), COALESCE(auth_reset_required, 0) FROM users WHERE LOWER(username)=LOWER(?)",
                 (username,),
             )
             row = cur.fetchone()
             if not row:
                 return jsonify({"error": "user not found"}), 404
 
-            stored_hash = (row[0] or "").strip().lower()
+            if bool(row[1] or 0):
+                return jsonify({"error": "auth_reset_required"}), 423
+
+            try:
+                stored_hash = self._decrypt_password_hash(row[0]).strip().lower()
+            except AegisDataCorruptionError:
+                self.aegis_cipher_service.migrate_operator_auth_if_needed()
+                cur.execute(
+                    "SELECT COALESCE(password_sha512, ''), COALESCE(auth_reset_required, 0) FROM users WHERE LOWER(username)=LOWER(?)",
+                    (username,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return jsonify({"error": "user not found"}), 404
+                stored_hash = self._decrypt_password_hash(row[0]).strip().lower()
             if stored_hash != current_password_sha512:
                 return jsonify({"error": "invalid current password"}), 401
             if stored_hash == new_password_sha512:
@@ -321,7 +371,7 @@ class UserManagementService:
             now_ts = _now_ts()
             cur.execute(
                 "UPDATE users SET password_sha512=?, updated_at=? WHERE LOWER(username)=LOWER(?)",
-                (new_password_sha512, now_ts, username),
+                (self._encrypt_password_hash(new_password_sha512), now_ts, username),
             )
             conn.commit()
             return jsonify({"status": "ok"})

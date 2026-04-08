@@ -101,6 +101,8 @@ class UserSiteAssignmentService:
             dev_mode_manager=adapters.dev_mode_manager,
             config=adapters.config,
             logger=adapters.context.logger,
+            db_conn_factory=adapters.db_conn_factory,
+            aegis_cipher_service=adapters.aegis_cipher_service,
         )
 
     def _conn(self) -> sqlite3.Connection:

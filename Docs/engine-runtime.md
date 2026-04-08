@@ -120,12 +120,14 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 
 #### Protected secret storage
 - The Engine now exposes an Engine-global Aegis Cipher lifecycle through `Data/Engine/services/aegis_cipher.py` and `Data/Engine/services/API/access_management/aegis.py`.
-- Aegis v1 protects stored credentials and the GitHub API token at rest using `scrypt` plus `AES-256-GCM`.
-- Setup migrates any legacy plaintext credential or GitHub token rows into Aegis envelopes and stores KDF metadata plus a verification token in `aegis_cipher_state`.
+- The bootstrap gate for operator auth lives in `Data/Engine/services/API/access_management/login.py` and `Data/Engine/services/auth/bootstrap_state.py`.
+- Aegis v1 now protects stored credentials, the GitHub API token, operator password hashes, operator TOTP secrets, and passkey cryptographic material at rest using `scrypt` plus `AES-256-GCM`.
+- Setup migrates any legacy plaintext credential, GitHub token, password hash, MFA secret, or passkey cryptographic row into Aegis envelopes and stores KDF metadata plus a verification token in `aegis_cipher_state`.
 - The derived key is cached only in Engine memory. Restarting the Engine relocks protected secrets until an admin re-enters the cipher.
-- While locked, metadata-only credential reads remain available, but credential writes, GitHub token writes, and credential-backed remote SSH or WinRM execution stay blocked.
-- The WebUI auto-prompts authenticated admins after login when Aegis is configured but locked, and Access Management exposes manual unlock, rotation, and destructive force-reset actions from the Credentials page.
-- Force reset is the disaster-recovery path when the old cipher is gone: Borealis destroys unrecoverable secret material, clears the Aegis state row, marks affected credentials and the GitHub token for re-entry, and disables scheduled jobs that still point at wiped credentials.
+- Borealis does not render the login screen until bootstrap reaches `login_required`. Fresh installs require Aegis setup plus first-admin bootstrap; every later restart requires Aegis unlock before normal login or passkey auth can start.
+- While locked, operator-facing auth/session checks reject stale cookies and tokens until bootstrap unlock completes. Agent and device trust flows stay online because they do not depend on operator auth secrets.
+- Access Management now uses the Credentials page for Aegis status, rotation, and destructive force reset; setup and unlock moved to the bootstrap gate.
+- Force reset is the disaster-recovery path when the old cipher is gone: Borealis destroys unrecoverable operator auth secrets, clears the Aegis state row, marks existing users for recovery, marks affected credentials and the GitHub token for re-entry, and disables scheduled jobs that still point at wiped credentials.
 
 #### Reverse VPN tunnels
 - WireGuard reverse VPN design and lifecycle are documented in `vpn-and-remote-access.md`.
@@ -147,5 +149,5 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 - Remote SSH/WinRM runs synthesize ephemeral inventories from Borealis device/filter state and active WireGuard sessions, using site-qualified inventory aliases for duplicate-hostname safety.
 - Shared remote Ansible transport follows the scheduled job execution context; device `connection_type` metadata does not override the operator-selected `ssh` or `winrm` mode.
 - The credentials API now backs stored SSH/WinRM credentials for scheduler selection, while quick-run, cancel, PSRP, and richer recap UX remain in progress.
-- When Aegis is locked, credential-backed shared Ansible runs fail with an explicit `credential_locked` resolution reason instead of being reported as missing credentials.
+- When Aegis is locked, credential-backed shared Ansible runs are skipped instead of replayed later, and affected run targets record an explicit lock/reset reason instead of being reported as missing credentials.
 - When a credential survives an Aegis force reset but its secret material was destroyed, scheduled jobs surface `credential_reset_required` warnings and stay disabled until the operator restores the missing credential data.

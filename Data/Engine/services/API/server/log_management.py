@@ -402,6 +402,8 @@ def register_log_management(app, adapters: "EngineServiceAdapters") -> None:
         dev_mode_manager=adapters.dev_mode_manager,
         config=adapters.config,
         logger=adapters.context.logger,
+        db_conn_factory=adapters.db_conn_factory,
+        aegis_cipher_service=adapters.aegis_cipher_service,
     )
     log_root = _resolve_log_root(adapters.config)
     manager = EngineLogManager(

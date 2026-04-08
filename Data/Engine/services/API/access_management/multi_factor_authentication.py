@@ -21,6 +21,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 if TYPE_CHECKING:  # pragma: no cover - typing helper
     from .. import EngineServiceAdapters
 
+from ...auth.bootstrap_state import operator_auth_allowed
 from ...auth.secrets import require_app_secret
 def _now_ts() -> int:
     return int(time.time())
@@ -34,6 +35,7 @@ class MultiFactorAdministrationService:
         self.adapters = adapters
         self.db_conn_factory = adapters.db_conn_factory
         self.logger = adapters.context.logger
+        self.aegis_cipher_service = adapters.aegis_cipher_service
 
     def _db_conn(self) -> sqlite3.Connection:
         return self.db_conn_factory()
@@ -43,6 +45,12 @@ class MultiFactorAdministrationService:
         return URLSafeTimedSerializer(secret, salt="borealis-auth")
 
     def _current_user(self) -> Optional[Dict[str, Any]]:
+        if not operator_auth_allowed(
+            db_conn_factory=self.db_conn_factory,
+            aegis_cipher_service=self.aegis_cipher_service,
+        ):
+            return None
+
         username = session.get("username")
         role = session.get("role") or "User"
         if username:
