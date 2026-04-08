@@ -19,6 +19,7 @@
 """Authentication endpoints for the Borealis Engine API."""
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import io
@@ -154,6 +155,60 @@ def _totp_qr_data_uri(payload: str) -> Optional[str]:
 def _bytes_to_base64url(value: bytes) -> str:
     encoded = base64.urlsafe_b64encode(value or b"").decode("ascii")
     return encoded.rstrip("=")
+
+
+def _bytes_literal_to_bytes(value: Any) -> Optional[bytes]:
+    if value is None:
+        return None
+    text = str(value or "").strip()
+    if not text or not text.startswith("b"):
+        return None
+    try:
+        parsed = ast.literal_eval(text)
+    except Exception:
+        return None
+    if isinstance(parsed, bytearray):
+        return bytes(parsed)
+    if isinstance(parsed, bytes):
+        return parsed
+    return None
+
+
+def _normalize_webauthn_storage_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, bytearray):
+        value = bytes(value)
+    if isinstance(value, bytes):
+        return _bytes_to_base64url(value)
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    literal_bytes = _bytes_literal_to_bytes(text)
+    if literal_bytes is not None:
+        return _bytes_to_base64url(literal_bytes)
+    return text
+
+
+def _credential_lookup_candidates(credential_id: Any) -> list[str]:
+    normalized = _normalize_webauthn_storage_value(credential_id)
+    candidates: list[str] = []
+
+    def _add(value: str) -> None:
+        if value and value not in candidates:
+            candidates.append(value)
+
+    _add(normalized)
+    if normalized and base64url_to_bytes:
+        try:
+            _add(str(base64url_to_bytes(normalized)))
+        except Exception:
+            pass
+    return candidates
 
 
 def _user_row_to_dict(row: Sequence[Any]) -> Mapping[str, Any]:
@@ -606,10 +661,22 @@ class _AuthService:
         finally:
             conn.close()
 
-        exclude_credentials = [
-            PublicKeyCredentialDescriptor(id=base64url_to_bytes(item.credential_id))
-            for item in stored_passkeys
-        ]
+        exclude_credentials = []
+        for item in stored_passkeys:
+            normalized_credential_id = _normalize_webauthn_storage_value(item.credential_id)
+            if not normalized_credential_id:
+                continue
+            try:
+                exclude_credentials.append(
+                    PublicKeyCredentialDescriptor(id=base64url_to_bytes(normalized_credential_id))
+                )
+            except Exception:
+                self.logger.debug(
+                    "Skipping invalid stored passkey credential %s for %s",
+                    getattr(item, "id", 0),
+                    identity["username"],
+                    exc_info=True,
+                )
 
         try:
             options = generate_registration_options(
@@ -692,8 +759,10 @@ class _AuthService:
         except Exception as exc:
             return jsonify({"error": str(exc)}), 400
 
-        credential_id = str(getattr(verification, "credential_id", "") or credential.get("id") or "").strip()
-        public_key = str(getattr(verification, "credential_public_key", "") or "").strip()
+        credential_id = _normalize_webauthn_storage_value(
+            getattr(verification, "credential_id", None) or credential.get("id") or ""
+        )
+        public_key = _normalize_webauthn_storage_value(getattr(verification, "credential_public_key", None) or "")
         sign_count = int(getattr(verification, "sign_count", 0) or 0)
         aaguid = str(getattr(verification, "aaguid", "") or "").strip()
         transports = []
@@ -794,7 +863,7 @@ class _AuthService:
         payload = request.get_json(silent=True) or {}
         request_id = str(payload.get("request_id") or "").strip()
         credential = payload.get("credential") or {}
-        credential_id = str(credential.get("id") or "").strip()
+        credential_id = _normalize_webauthn_storage_value(credential.get("id") or "")
 
         if not request_id or request_id != ceremony.get("request_id"):
             return jsonify({"error": "invalid_session"}), 401
@@ -808,7 +877,11 @@ class _AuthService:
 
         conn = self._db_conn()
         try:
-            stored_passkey = get_passkey_by_credential_id(conn, credential_id)
+            stored_passkey = None
+            for candidate in _credential_lookup_candidates(credential_id):
+                stored_passkey = get_passkey_by_credential_id(conn, candidate)
+                if stored_passkey:
+                    break
             if not stored_passkey:
                 return jsonify({"error": "passkey_not_configured"}), 404
 
@@ -816,20 +889,31 @@ class _AuthService:
             if not identity:
                 return jsonify({"error": "user_not_found"}), 404
 
+            normalized_stored_credential_id = _normalize_webauthn_storage_value(stored_passkey.credential_id)
+            normalized_public_key = _normalize_webauthn_storage_value(stored_passkey.public_key)
+            if not normalized_stored_credential_id or not normalized_public_key:
+                return jsonify({"error": "invalid_passkey"}), 400
+
             verification = verify_authentication_response(
                 credential=credential,
                 expected_challenge=base64url_to_bytes(str(ceremony.get("challenge") or "")),
                 expected_rp_id=self._passkey_rp_id(),
                 expected_origin=self._passkey_origin(),
-                credential_public_key=base64url_to_bytes(stored_passkey.public_key),
+                credential_public_key=base64url_to_bytes(normalized_public_key),
                 credential_current_sign_count=int(stored_passkey.sign_count or 0),
                 require_user_verification=True,
             )
 
             cur = conn.cursor()
             cur.execute(
-                "UPDATE user_passkeys SET sign_count=?, last_used_at=? WHERE id=?",
-                (int(getattr(verification, "new_sign_count", stored_passkey.sign_count) or 0), now_ts, stored_passkey.id),
+                "UPDATE user_passkeys SET credential_id=?, public_key=?, sign_count=?, last_used_at=? WHERE id=?",
+                (
+                    normalized_stored_credential_id,
+                    normalized_public_key,
+                    int(getattr(verification, "new_sign_count", stored_passkey.sign_count) or 0),
+                    now_ts,
+                    stored_passkey.id,
+                ),
             )
             conn.commit()
         except Exception as exc:
