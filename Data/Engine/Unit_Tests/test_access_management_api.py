@@ -108,8 +108,35 @@ def _enable_fake_passkeys(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(access_login, "AuthenticatorSelectionCriteria", DummyAuthenticatorSelectionCriteria)
     monkeypatch.setattr(access_login, "ResidentKeyRequirement", DummyResidentKeyRequirement)
     monkeypatch.setattr(access_login, "UserVerificationRequirement", DummyUserVerificationRequirement)
-    monkeypatch.setattr(access_login, "generate_registration_options", lambda **kwargs: DummyOptions())
-    monkeypatch.setattr(access_login, "generate_authentication_options", lambda **kwargs: DummyOptions())
+    def fake_generate_registration_options(
+        *,
+        rp_id,
+        rp_name,
+        user_name,
+        user_id=None,
+        user_display_name=None,
+        challenge=None,
+        timeout=60000,
+        attestation=None,
+        authenticator_selection=None,
+        exclude_credentials=None,
+        supported_pub_key_algs=None,
+        hints=None,
+    ):
+        return DummyOptions()
+
+    def fake_generate_authentication_options(
+        *,
+        rp_id,
+        challenge=None,
+        timeout=60000,
+        allow_credentials=None,
+        user_verification=None,
+    ):
+        return DummyOptions()
+
+    monkeypatch.setattr(access_login, "generate_registration_options", fake_generate_registration_options)
+    monkeypatch.setattr(access_login, "generate_authentication_options", fake_generate_authentication_options)
     monkeypatch.setattr(
         access_login,
         "options_to_json",
@@ -1225,7 +1252,24 @@ def test_passkey_registration_finishes_mfa_setup(
         sign_count = 4
         aaguid = "aaguid-setup"
 
-    monkeypatch.setattr(access_login, "generate_registration_options", lambda **kwargs: DummyRegistrationOptions())
+    def fake_generate_registration_options(
+        *,
+        rp_id,
+        rp_name,
+        user_name,
+        user_id=None,
+        user_display_name=None,
+        challenge=None,
+        timeout=60000,
+        attestation=None,
+        authenticator_selection=None,
+        exclude_credentials=None,
+        supported_pub_key_algs=None,
+        hints=None,
+    ):
+        return DummyRegistrationOptions()
+
+    monkeypatch.setattr(access_login, "generate_registration_options", fake_generate_registration_options)
     monkeypatch.setattr(
         access_login,
         "options_to_json",
@@ -1323,7 +1367,17 @@ def test_passkey_authentication_completes_login(
     class DummyAuthenticationVerification:
         new_sign_count = 9
 
-    monkeypatch.setattr(access_login, "generate_authentication_options", lambda **kwargs: DummyAuthenticationOptions())
+    def fake_generate_authentication_options(
+        *,
+        rp_id,
+        challenge=None,
+        timeout=60000,
+        allow_credentials=None,
+        user_verification=None,
+    ):
+        return DummyAuthenticationOptions()
+
+    monkeypatch.setattr(access_login, "generate_authentication_options", fake_generate_authentication_options)
     monkeypatch.setattr(
         access_login,
         "options_to_json",

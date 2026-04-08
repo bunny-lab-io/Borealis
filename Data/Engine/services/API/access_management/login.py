@@ -579,19 +579,22 @@ class _AuthService:
             for item in stored_passkeys
         ]
 
-        options = generate_registration_options(
-            rp_id=self._passkey_rp_id(),
-            rp_name=self._passkey_rp_name(),
-            user_id=build_webauthn_user_id(identity["id"], identity["username"]),
-            user_name=identity["username"],
-            user_display_name=identity["display_name"],
-            exclude_credentials=exclude_credentials,
-            authenticator_selection=AuthenticatorSelectionCriteria(
-                resident_key=ResidentKeyRequirement.PREFERRED,
-                user_verification=UserVerificationRequirement.REQUIRED,
-            ),
-            user_verification=UserVerificationRequirement.REQUIRED,
-        )
+        try:
+            options = generate_registration_options(
+                rp_id=self._passkey_rp_id(),
+                rp_name=self._passkey_rp_name(),
+                user_id=build_webauthn_user_id(identity["id"], identity["username"]),
+                user_name=identity["username"],
+                user_display_name=identity["display_name"],
+                exclude_credentials=exclude_credentials,
+                authenticator_selection=AuthenticatorSelectionCriteria(
+                    resident_key=ResidentKeyRequirement.PREFERRED,
+                    user_verification=UserVerificationRequirement.REQUIRED,
+                ),
+            )
+        except Exception as exc:
+            self.logger.debug("Failed to generate passkey registration options for %s", identity["username"], exc_info=True)
+            return jsonify({"error": str(exc) or "passkey_setup_unavailable"}), 500
 
         request_id = uuid.uuid4().hex
         session["passkey_pending"] = {
@@ -759,11 +762,15 @@ class _AuthService:
             for item in stored_passkeys
         ]
 
-        options = generate_authentication_options(
-            rp_id=self._passkey_rp_id(),
-            allow_credentials=allow_credentials,
-            user_verification=UserVerificationRequirement.REQUIRED,
-        )
+        try:
+            options = generate_authentication_options(
+                rp_id=self._passkey_rp_id(),
+                allow_credentials=allow_credentials,
+                user_verification=UserVerificationRequirement.REQUIRED,
+            )
+        except Exception as exc:
+            self.logger.debug("Failed to generate passkey authentication options for %s", username, exc_info=True)
+            return jsonify({"error": str(exc) or "passkey_auth_unavailable"}), 500
 
         request_id = uuid.uuid4().hex
         session["passkey_pending"] = {
