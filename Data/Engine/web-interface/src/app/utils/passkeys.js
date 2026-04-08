@@ -3,11 +3,14 @@ import { startAuthentication, startRegistration } from "@simplewebauthn/browser"
 function extractError(payload, fallbackMessage) {
   const key = String(payload?.error || "").trim();
   const map = {
+    unauthorized: "Your session expired. Please sign in again.",
     passkeys_unavailable: "Passkeys are not available on this Borealis server yet.",
     passkey_pending: "Your passkey session expired. Please sign in again.",
     passkey_not_configured: "No passkey is configured for this account yet.",
+    passkey_not_found: "That passkey could not be found for this Borealis account.",
     invalid_passkey: "The passkey response was invalid.",
     passkey_already_registered: "That passkey is already registered to this account.",
+    invalid_label: "Passkey labels must be 80 characters or fewer.",
     invalid_session: "Your passkey session expired. Please sign in again.",
     expired: "Your passkey session expired. Please sign in again.",
     mfa_pending: "Your MFA session expired. Please sign in again.",
@@ -117,4 +120,41 @@ export async function authenticateWithPasskey({ pendingToken }) {
     throw new Error(extractError(verifyPayload, "Failed to verify the passkey sign-in."));
   }
   return verifyPayload;
+}
+
+export async function listPasskeys() {
+  const response = await fetch("/api/auth/passkeys", {
+    credentials: "include",
+  });
+  const payload = await readJson(response);
+  if (!response.ok) {
+    throw new Error(extractError(payload, "Failed to load passkeys."));
+  }
+  return payload;
+}
+
+export async function updatePasskeyLabel({ passkeyId, label = "" }) {
+  const response = await fetch(`/api/auth/passkeys/${encodeURIComponent(passkeyId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ label }),
+  });
+  const payload = await readJson(response);
+  if (!response.ok) {
+    throw new Error(extractError(payload, "Failed to update the passkey label."));
+  }
+  return payload;
+}
+
+export async function deletePasskey({ passkeyId }) {
+  const response = await fetch(`/api/auth/passkeys/${encodeURIComponent(passkeyId)}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  const payload = await readJson(response);
+  if (!response.ok) {
+    throw new Error(extractError(payload, "Failed to remove the passkey."));
+  }
+  return payload;
 }

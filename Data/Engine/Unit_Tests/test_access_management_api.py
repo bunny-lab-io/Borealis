@@ -1471,6 +1471,211 @@ def test_passkey_authentication_completes_login(
     assert row == (9,)
 
 
+def test_current_user_can_list_enrolled_passkeys(engine_harness: EngineTestHarness) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", _sha512_hex("operator-password"), "User", 0, 0, 0, 1, 0, None),
+        )
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (3, "other", "Other User", _sha512_hex("other-password"), "User", 0, 0, 0, 1, 0, None),
+        )
+        cur.executemany(
+            """
+            INSERT INTO user_passkeys (
+                user_id,
+                credential_id,
+                public_key,
+                sign_count,
+                label,
+                transports_json,
+                aaguid,
+                created_at,
+                last_used_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (2, "cred-alpha", "public-alpha", 3, "Laptop", '["internal"]', "", 1_700_000_100, 1_700_000_200),
+                (2, "cred-beta", "public-beta", 4, "Phone", '["hybrid"]', "", 1_700_000_300, 0),
+                (3, "cred-other", "public-other", 1, "Other User Key", "[]", "", 1_700_000_400, 0),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _user_client(engine_harness)
+    response = client.get("/api/auth/passkeys")
+    assert response.status_code == 200
+
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["passkey_count"] == 2
+    assert [item["label"] for item in payload["passkeys"]] == ["Laptop", "Phone"]
+    assert payload["passkeys"][0]["transports"] == ["internal"]
+    assert payload["passkeys"][1]["transports"] == ["hybrid"]
+
+
+def test_current_user_can_rename_enrolled_passkey(engine_harness: EngineTestHarness) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", _sha512_hex("operator-password"), "User", 0, 0, 0, 1, 0, None),
+        )
+        cur.execute(
+            """
+            INSERT INTO user_passkeys (
+                id,
+                user_id,
+                credential_id,
+                public_key,
+                sign_count,
+                label,
+                transports_json,
+                aaguid,
+                created_at,
+                last_used_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (11, 2, "cred-rename", "public-rename", 2, "Old Label", "[]", "", 1_700_000_500, 0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _user_client(engine_harness)
+    response = client.patch("/api/auth/passkeys/11", json={"label": "Desk YubiKey"})
+    assert response.status_code == 200
+
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["passkey"]["label"] == "Desk YubiKey"
+    assert payload["passkey_count"] == 1
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT label FROM user_passkeys WHERE id=11")
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row == ("Desk YubiKey",)
+
+
+def test_current_user_can_remove_enrolled_passkey(engine_harness: EngineTestHarness) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", _sha512_hex("operator-password"), "User", 0, 0, 0, 1, 0, None),
+        )
+        cur.executemany(
+            """
+            INSERT INTO user_passkeys (
+                id,
+                user_id,
+                credential_id,
+                public_key,
+                sign_count,
+                label,
+                transports_json,
+                aaguid,
+                created_at,
+                last_used_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (21, 2, "cred-remove", "public-remove", 2, "Old Laptop", "[]", "", 1_700_000_600, 0),
+                (22, 2, "cred-keep", "public-keep", 2, "Phone", "[]", "", 1_700_000_700, 0),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _user_client(engine_harness)
+    response = client.delete("/api/auth/passkeys/21")
+    assert response.status_code == 200
+
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["removed"] is True
+    assert payload["passkey_count"] == 1
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, label FROM user_passkeys ORDER BY id ASC")
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    assert rows == [(22, "Phone")]
+
+
 def test_reset_own_mfa_clears_passkeys(engine_harness: EngineTestHarness) -> None:
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:

@@ -2,7 +2,12 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { EMPTY_AEGIS_STATUS, normalizeAegisStatus } from "../utils/aegis.js";
 import { sha512 } from "../utils/crypto.js";
 import { postAppNotification } from "../utils/notifications.js";
-import { registerPasskey as registerPasskeyCeremony } from "../utils/passkeys.js";
+import {
+  deletePasskey as deletePasskeyCeremony,
+  listPasskeys as listPasskeysCeremony,
+  registerPasskey as registerPasskeyCeremony,
+  updatePasskeyLabel as updatePasskeyLabelCeremony,
+} from "../utils/passkeys.js";
 import { getBorealisSocket } from "../runtime/bootstrapClientRuntime.js";
 
 const SESSION_CACHE_KEY = "borealis_session";
@@ -442,6 +447,37 @@ export function AuthProvider({ children }) {
     [refreshSession]
   );
 
+  const listPasskeys = useCallback(async () => {
+    const payload = await listPasskeysCeremony();
+    return Array.isArray(payload?.passkeys) ? payload.passkeys : [];
+  }, []);
+
+  const updatePasskeyLabel = useCallback(async ({ passkeyId, label = "" }) => {
+    const payload = await updatePasskeyLabelCeremony({ passkeyId, label });
+    await postAppNotification({
+      title: "Passkey Updated",
+      message: "Your Borealis passkey label was updated.",
+      icon: "key",
+      variant: "info",
+    });
+    return payload;
+  }, []);
+
+  const deletePasskey = useCallback(
+    async ({ passkeyId }) => {
+      const payload = await deletePasskeyCeremony({ passkeyId });
+      await refreshSession();
+      await postAppNotification({
+        title: "Passkey Removed",
+        message: "The selected passkey was removed from your Borealis account.",
+        icon: "key",
+        variant: "info",
+      });
+      return payload;
+    },
+    [refreshSession]
+  );
+
   const value = useMemo(
     () => ({
       ready,
@@ -460,6 +496,9 @@ export function AuthProvider({ children }) {
       resetPassword,
       resetMfa,
       registerPasskey,
+      listPasskeys,
+      updatePasskeyLabel,
+      deletePasskey,
       fetchAegisStatus,
       openAegisDialog,
       closeAegisDialog,
@@ -474,7 +513,9 @@ export function AuthProvider({ children }) {
       completeAegisDialog,
       displayName,
       fetchAegisStatus,
+      deletePasskey,
       login,
+      listPasskeys,
       logout,
       mfaEnabled,
       passkeyCount,
@@ -485,6 +526,7 @@ export function AuthProvider({ children }) {
       resetMfa,
       resetPassword,
       role,
+      updatePasskeyLabel,
       user,
     ]
   );

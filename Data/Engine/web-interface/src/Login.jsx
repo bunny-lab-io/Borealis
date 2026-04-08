@@ -107,8 +107,7 @@ export default function Login({ onLogin }) {
     }
   };
 
-  const handlePasskeySubmit = async (e) => {
-    e.preventDefault();
+  const startPasskeyFlow = async () => {
     if (!pendingToken) {
       setError("Your MFA session expired. Please log in again.");
       resetMfaState();
@@ -213,6 +212,53 @@ export default function Login({ onLogin }) {
   const activeMfaMethod = passkeyAvailable && (!totpAvailable || (passkeySupported && selectedMfaMethod === "passkey"))
     ? "passkey"
     : "totp";
+  const showMethodChoices = passkeyAvailable && totpAvailable;
+  const showPasskeyActionButton = passkeyAvailable && !showMethodChoices;
+  const passkeyButtonLabel = isSubmitting && activeMfaMethod === "passkey"
+    ? mfaStage === "setup"
+      ? "Creating..."
+      : "Verifying..."
+    : mfaStage === "setup"
+      ? "Create Passkey"
+      : "Use Passkey";
+  const methodButtonSx = (active) => ({
+    flex: 1,
+    mt: 0,
+    minHeight: 48,
+    borderRadius: "14px",
+    textTransform: "none",
+    fontWeight: 700,
+    border: "1px solid rgba(125,183,255,0.24)",
+    color: active ? "#06121f" : "#8ecbff",
+    background: active
+      ? "linear-gradient(135deg, #34d399, #22d3ee)"
+      : "linear-gradient(180deg, rgba(10,18,34,0.92), rgba(9,15,28,0.92))",
+    boxShadow: active
+      ? "0 8px 18px rgba(88,166,255,.25)"
+      : "inset 0 0 0 1px rgba(125,183,255,0.06)",
+    "&:hover": {
+      background: active
+        ? "linear-gradient(135deg, #3dd7a2, #2ad5f0)"
+        : "linear-gradient(180deg, rgba(14,24,44,0.98), rgba(10,18,34,0.96))",
+      boxShadow: active
+        ? "0 10px 22px rgba(88,166,255,.35)"
+        : "inset 0 0 0 1px rgba(125,183,255,0.10)",
+    },
+    "&.Mui-disabled": {
+      color: "rgba(148,163,184,0.72)",
+      borderColor: "rgba(148,163,184,0.18)",
+      background: active
+        ? "linear-gradient(135deg, rgba(52,211,153,0.48), rgba(34,211,238,0.46))"
+        : "linear-gradient(180deg, rgba(10,18,34,0.62), rgba(9,15,28,0.62))",
+    },
+  });
+  const passkeyHelperText = mfaStage === "setup"
+    ? showMethodChoices
+      ? "Choose either a passkey or MFA code to finish setting up Borealis MFA."
+      : "Create a Borealis passkey to finish MFA setup."
+    : showMethodChoices
+      ? "Use either your passkey or MFA code to login."
+      : "Use your passkey to log in.";
 
   // ----------------- UI helpers -----------------
   const FieldLabel = ({ children }) => (
@@ -234,7 +280,7 @@ export default function Login({ onLogin }) {
           --accent-2: #a78bfa; /* purple */
           --accent-3: #22d3ee; /* cyan */
           --radius-xl: 20px;
-          --card-w: min(92vw, 420px);
+          --card-w: min(94vw, 500px);
         }
 
         .login-wrap {
@@ -323,7 +369,7 @@ export default function Login({ onLogin }) {
               rgba(88,166,255,.45),
               rgba(167,139,250,.0)) border-box;
           backdrop-filter: blur(10px);
-          padding: 28px 24px;
+          padding: 30px 28px;
         }
 
         .brand {
@@ -410,13 +456,7 @@ export default function Login({ onLogin }) {
           <div className="shine-inner">
             <Box
               component="form"
-              onSubmit={
-                step === "mfa"
-                  ? activeMfaMethod === "passkey"
-                    ? handlePasskeySubmit
-                    : handleMfaSubmit
-                  : handleCredentialsSubmit
-              }
+              onSubmit={step === "credentials" ? handleCredentialsSubmit : activeMfaMethod === "totp" ? handleMfaSubmit : undefined}
               sx={{ display: "flex", flexDirection: "column", gap: 1 }}
             >
               <div className="brand">
@@ -464,33 +504,32 @@ export default function Login({ onLogin }) {
                 </>
               ) : (
                 <>
-                  {passkeyAvailable && totpAvailable ? (
+                  {showMethodChoices ? (
                     <Box sx={{ display: "flex", gap: 1, mb: 0.5 }}>
                       <Button
                         type="button"
-                        variant={activeMfaMethod === "passkey" ? "contained" : "outlined"}
-                        className={activeMfaMethod === "passkey" ? "submit" : "muted-btn"}
+                        variant="contained"
                         onClick={() => {
                           setSelectedMfaMethod("passkey");
                           setError("");
+                          void startPasskeyFlow();
                         }}
                         disabled={isSubmitting || !passkeySupported}
-                        sx={activeMfaMethod === "passkey" ? { flex: 1, mt: 0 } : { flex: 1 }}
+                        sx={methodButtonSx(activeMfaMethod === "passkey")}
                       >
-                        Use Passkey
+                        {passkeyButtonLabel}
                       </Button>
                       <Button
                         type="button"
-                        variant={activeMfaMethod === "totp" ? "contained" : "outlined"}
-                        className={activeMfaMethod === "totp" ? "submit" : "muted-btn"}
+                        variant="contained"
                         onClick={() => {
                           setSelectedMfaMethod("totp");
                           setError("");
                         }}
                         disabled={isSubmitting}
-                        sx={activeMfaMethod === "totp" ? { flex: 1, mt: 0 } : { flex: 1 }}
+                        sx={methodButtonSx(activeMfaMethod === "totp")}
                       >
-                        Authenticator App
+                        Use MFA Code
                       </Button>
                     </Box>
                   ) : null}
@@ -498,9 +537,7 @@ export default function Login({ onLogin }) {
                   {activeMfaMethod === "passkey" ? (
                     <>
                       <Typography variant="body2" className="helper">
-                        {mfaStage === "setup"
-                          ? <>Create a Borealis passkey for <strong>{username}</strong> to finish MFA setup.</>
-                          : <>Use your Borealis passkey to finish signing in as <strong>{username}</strong>.</>}
+                        {passkeyHelperText}
                       </Typography>
                       {!passkeySupported ? (
                         <Typography variant="body2" className="helper">
@@ -511,20 +548,17 @@ export default function Login({ onLogin }) {
 
                       {error && <div className="error">{error}</div>}
 
-                      <Button
-                        type="submit"
-                        variant="contained"
-                        className="submit"
-                        disabled={isSubmitting || !passkeySupported}
-                      >
-                        {isSubmitting
-                          ? mfaStage === "setup"
-                            ? "Creating..."
-                            : "Verifying..."
-                          : mfaStage === "setup"
-                            ? "Create passkey"
-                            : "Use passkey"}
-                      </Button>
+                      {showPasskeyActionButton ? (
+                        <Button
+                          type="button"
+                          variant="contained"
+                          className="submit"
+                          disabled={isSubmitting || !passkeySupported}
+                          onClick={() => void startPasskeyFlow()}
+                        >
+                          {passkeyButtonLabel}
+                        </Button>
+                      ) : null}
                     </>
                   ) : (
                     <>
@@ -567,11 +601,7 @@ export default function Login({ onLogin }) {
                         variant="outlined"
                         fullWidth
                         value={mfaCode}
-                        onChange={(e) => {
-                          const raw = e.target.value || "";
-                          const digits = raw.replace(/\D/g, "").slice(0, 6);
-                          setMfaCode(digits);
-                        }}
+                        onChange={onCodeChange}
                         disabled={isSubmitting}
                         inputProps={{
                           inputMode: "numeric",

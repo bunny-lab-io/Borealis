@@ -10,6 +10,9 @@
 # - POST /api/auth/passkeys/register/verify (Authenticated or MFA pending) - Verifies a passkey registration response and stores the credential.
 # - POST /api/auth/passkeys/authenticate/options (Token Authenticated (MFA pending)) - Starts a passkey authentication ceremony for an active MFA login challenge.
 # - POST /api/auth/passkeys/authenticate/verify (Token Authenticated (MFA pending)) - Verifies a passkey authentication response and completes the operator login.
+# - GET /api/auth/passkeys (Token Authenticated) - Lists the current operator's enrolled passkeys.
+# - PATCH /api/auth/passkeys/<passkey_id> (Token Authenticated) - Updates the display label for one of the current operator's passkeys.
+# - DELETE /api/auth/passkeys/<passkey_id> (Token Authenticated) - Removes one of the current operator's passkeys.
 # - GET /api/auth/me (Token Authenticated) - Returns the currently authenticated operator profile, including MFA state.
 # ======================================================
 
@@ -80,9 +83,12 @@ from .multi_factor_authentication import register_mfa_management
 from .passkeys import (
     build_webauthn_user_id,
     count_user_passkeys,
+    delete_user_passkey,
+    get_user_passkey_by_id,
     get_user_passkey_by_credential_id,
     list_user_passkeys,
     serialize_transports,
+    update_user_passkey_label,
 )
 from .site_assignments import register_user_site_assignment_management
 from .users import register_user_management
@@ -166,6 +172,20 @@ def _user_row_to_dict(row: Sequence[Any]) -> Mapping[str, Any]:
         "created_at": row[5] or 0,
         "updated_at": row[6] or 0,
         "mfa_enabled": mfa_enabled,
+    }
+
+
+def _passkey_to_dict(item: Any) -> Dict[str, Any]:
+    label = str(getattr(item, "label", "") or "").strip() or "Passkey"
+    transports = getattr(item, "transports", None)
+    if not isinstance(transports, list):
+        transports = []
+    return {
+        "id": int(getattr(item, "id", 0) or 0),
+        "label": label,
+        "created_at": int(getattr(item, "created_at", 0) or 0),
+        "last_used_at": int(getattr(item, "last_used_at", 0) or 0),
+        "transports": [str(value).strip() for value in transports if str(value).strip()],
     }
 
 
@@ -857,6 +877,99 @@ class _AuthService:
 
         return self._finalize_login(username, role)
 
+    def list_passkeys(self):
+        user = self._current_user()
+        if not user:
+            return jsonify({"error": "unauthorized"}), 401
+
+        username = str(user.get("username") or "").strip()
+        if not username:
+            return jsonify({"error": "unauthorized"}), 401
+
+        conn = self._db_conn()
+        try:
+            stored_passkeys = list_user_passkeys(conn, username)
+        finally:
+            conn.close()
+
+        return jsonify(
+            {
+                "status": "ok",
+                "passkeys": [_passkey_to_dict(item) for item in stored_passkeys],
+                "passkey_count": len(stored_passkeys),
+            }
+        )
+
+    def update_passkey(self, passkey_id: int):
+        user = self._current_user()
+        if not user:
+            return jsonify({"error": "unauthorized"}), 401
+
+        username = str(user.get("username") or "").strip()
+        if not username:
+            return jsonify({"error": "unauthorized"}), 401
+
+        payload = request.get_json(silent=True) or {}
+        label = str(payload.get("label") or "").strip()
+        if len(label) > 80:
+            return jsonify({"error": "invalid_label"}), 400
+
+        conn = self._db_conn()
+        try:
+            updated = update_user_passkey_label(conn, username, int(passkey_id or 0), label)
+            if not updated:
+                conn.rollback()
+                return jsonify({"error": "passkey_not_found"}), 404
+            count = count_user_passkeys(conn, username)
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            self.logger.debug("Failed to update passkey label for %s", username, exc_info=True)
+            return jsonify({"error": str(exc) or "passkey_update_failed"}), 500
+        finally:
+            conn.close()
+
+        return jsonify(
+            {
+                "status": "ok",
+                "passkey": _passkey_to_dict(updated),
+                "passkey_count": count,
+            }
+        )
+
+    def delete_passkey(self, passkey_id: int):
+        user = self._current_user()
+        if not user:
+            return jsonify({"error": "unauthorized"}), 401
+
+        username = str(user.get("username") or "").strip()
+        if not username:
+            return jsonify({"error": "unauthorized"}), 401
+
+        conn = self._db_conn()
+        try:
+            existing = get_user_passkey_by_id(conn, username, int(passkey_id or 0))
+            if not existing:
+                conn.rollback()
+                return jsonify({"error": "passkey_not_found"}), 404
+            removed = delete_user_passkey(conn, username, int(passkey_id or 0))
+            count = count_user_passkeys(conn, username)
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            self.logger.debug("Failed to delete passkey for %s", username, exc_info=True)
+            return jsonify({"error": str(exc) or "passkey_delete_failed"}), 500
+        finally:
+            conn.close()
+
+        return jsonify(
+            {
+                "status": "ok",
+                "removed": bool(removed),
+                "passkey_count": count,
+            }
+        )
+
     def me(self):
         user = self._current_user()
         if not user:
@@ -945,6 +1058,18 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
     @blueprint.route("/api/auth/passkeys/authenticate/verify", methods=["POST"])
     def _passkey_authenticate_verify():
         return service.passkey_authenticate_verify()
+
+    @blueprint.route("/api/auth/passkeys", methods=["GET"])
+    def _list_passkeys():
+        return service.list_passkeys()
+
+    @blueprint.route("/api/auth/passkeys/<int:passkey_id>", methods=["PATCH"])
+    def _update_passkey(passkey_id: int):
+        return service.update_passkey(passkey_id)
+
+    @blueprint.route("/api/auth/passkeys/<int:passkey_id>", methods=["DELETE"])
+    def _delete_passkey(passkey_id: int):
+        return service.delete_passkey(passkey_id)
 
     @blueprint.route("/api/auth/me", methods=["GET"])
     def _me():

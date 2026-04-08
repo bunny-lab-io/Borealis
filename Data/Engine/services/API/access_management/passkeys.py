@@ -130,6 +130,90 @@ def get_user_passkey_by_credential_id(
     return _row_to_passkey(row)
 
 
+def get_user_passkey_by_id(
+    conn: sqlite3.Connection,
+    username: str,
+    passkey_id: int,
+) -> Optional[StoredPasskey]:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                up.id,
+                up.user_id,
+                COALESCE(up.credential_id, ''),
+                COALESCE(up.public_key, ''),
+                COALESCE(up.sign_count, 0),
+                COALESCE(up.label, ''),
+                COALESCE(up.transports_json, '[]'),
+                COALESCE(up.aaguid, ''),
+                COALESCE(up.created_at, 0),
+                COALESCE(up.last_used_at, 0)
+            FROM user_passkeys up
+            JOIN users u ON u.id = up.user_id
+            WHERE LOWER(u.username)=LOWER(?) AND up.id=?
+            LIMIT 1
+            """,
+            (username, int(passkey_id or 0)),
+        )
+        row = cur.fetchone()
+    finally:
+        cur.close()
+    if not row:
+        return None
+    return _row_to_passkey(row)
+
+
+def update_user_passkey_label(
+    conn: sqlite3.Connection,
+    username: str,
+    passkey_id: int,
+    label: str,
+) -> Optional[StoredPasskey]:
+    normalized_label = str(label or "").strip() or "Passkey"
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE user_passkeys
+            SET label=?
+            WHERE id=?
+              AND user_id IN (
+                  SELECT id FROM users WHERE LOWER(username)=LOWER(?)
+              )
+            """,
+            (normalized_label, int(passkey_id or 0), username),
+        )
+        if int(cur.rowcount or 0) <= 0:
+            return None
+    finally:
+        cur.close()
+    return get_user_passkey_by_id(conn, username, passkey_id)
+
+
+def delete_user_passkey(
+    conn: sqlite3.Connection,
+    username: str,
+    passkey_id: int,
+) -> int:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            DELETE FROM user_passkeys
+            WHERE id=?
+              AND user_id IN (
+                  SELECT id FROM users WHERE LOWER(username)=LOWER(?)
+              )
+            """,
+            (int(passkey_id or 0), username),
+        )
+        return int(cur.rowcount or 0)
+    finally:
+        cur.close()
+
+
 def delete_user_passkeys(conn: sqlite3.Connection, username: str) -> int:
     cur = conn.cursor()
     try:
@@ -160,4 +244,3 @@ def _row_to_passkey(row: Sequence[Any]) -> StoredPasskey:
         created_at=int(row[8] or 0),
         last_used_at=int(row[9] or 0),
     )
-
