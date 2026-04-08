@@ -71,6 +71,7 @@ const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 const BOREALIS_BLUE = "#58a6ff";
 const DARKER_GRAY = "#9aa3ad";
+const AURORA_REPOSITORY_URL = "https://github.com/bunny-lab-io/Aurora";
 const PAGE_SIZE = 25;
 const ASSEMBLY_TYPE_FILTER_OPTIONS = [
   { key: "applications", label: "Applications", match: "applications" },
@@ -467,8 +468,8 @@ const normalizeRow = (item, queueEntry) => {
     createdAt: item.created_at,
     officialManaged: Boolean(item.official_managed),
     officialUpdateAvailable: Boolean(item.official_update_available),
-    officialRepoUrl: item.official_repo_url || "https://github.com/bunny-lab-io/Aurora",
-    officialSourceUrl: item.official_source_url || item.official_repo_url || "https://github.com/bunny-lab-io/Aurora",
+    officialRepoUrl: item.official_repo_url || AURORA_REPOSITORY_URL,
+    officialSourceUrl: item.official_source_url || item.official_repo_url || AURORA_REPOSITORY_URL,
     officialCatalogSource: item.official_catalog_source || "",
     officialSourceVersion: item.official_source_version || "",
     officialLastAppliedSource: item.official_last_applied_source || "",
@@ -517,7 +518,7 @@ export default function AssemblyList() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [catalogStatus, setCatalogStatus] = useState({
-    repoUrl: "https://github.com/bunny-lab-io/Aurora",
+    repoUrl: AURORA_REPOSITORY_URL,
     source: "bundled",
     available: false,
     updateCount: 0,
@@ -595,7 +596,7 @@ export default function AssemblyList() {
       setCatalogStatus((prev) => {
         const hasChecked = forceCatalogRefresh || Boolean(prev?.hasChecked);
         return {
-          repoUrl: officialCatalog?.repo_url || "https://github.com/bunny-lab-io/Aurora",
+          repoUrl: officialCatalog?.repo_url || AURORA_REPOSITORY_URL,
           source: officialCatalog?.source || "bundled",
           available: hasChecked ? Boolean(officialCatalog?.available) : false,
           updateCount: hasChecked ? effectiveUpdateCount : 0,
@@ -619,7 +620,7 @@ export default function AssemblyList() {
       setCatalogStatus((prev) => {
         const hasChecked = forceCatalogRefresh || Boolean(prev?.hasChecked);
         return {
-          repoUrl: prev?.repoUrl || "https://github.com/bunny-lab-io/Aurora",
+          repoUrl: prev?.repoUrl || AURORA_REPOSITORY_URL,
           source: prev?.source || "bundled",
           available: false,
           updateCount: 0,
@@ -1401,6 +1402,34 @@ export default function AssemblyList() {
               </Box>
             ) : null}
           </Box>
+          <Box
+            sx={{
+              px: 2,
+              py: 1.5,
+              borderTop: "1px solid rgba(148, 163, 184, 0.16)",
+              background: "rgba(2, 6, 23, 0.32)",
+            }}
+          >
+            <Typography variant="caption" sx={{ color: DARKER_GRAY, lineHeight: 1.6 }}>
+              Note: Official published assemblies live in the{" "}
+              <MuiLink
+                href={AURORA_REPOSITORY_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                sx={{
+                  color: BOREALIS_BLUE,
+                  fontWeight: 500,
+                  textDecorationColor: "rgba(88,166,255,0.5)",
+                  "&:hover": {
+                    textDecorationColor: BOREALIS_BLUE,
+                  },
+                }}
+              >
+                Aurora Assembly Repository
+              </MuiLink>
+              .
+            </Typography>
+          </Box>
         </Box>
       </PageBodyFrame>
 
@@ -1543,7 +1572,7 @@ export default function AssemblyList() {
             Repository:
           </Typography>
           <MuiLink
-            href={officialUpdateDialog.row?.officialRepoUrl || catalogStatus.repoUrl || "https://github.com/bunny-lab-io/Aurora"}
+            href={officialUpdateDialog.row?.officialRepoUrl || catalogStatus.repoUrl || AURORA_REPOSITORY_URL}
             target="_blank"
             rel="noopener noreferrer"
             sx={{
@@ -1553,7 +1582,7 @@ export default function AssemblyList() {
               wordBreak: "break-all",
             }}
           >
-            {officialUpdateDialog.row?.officialRepoUrl || catalogStatus.repoUrl || "https://github.com/bunny-lab-io/Aurora"}
+            {officialUpdateDialog.row?.officialRepoUrl || catalogStatus.repoUrl || AURORA_REPOSITORY_URL}
           </MuiLink>
           {officialUpdateDialog.mode === "single" && officialUpdateDialog.row?.name ? (
             <Typography variant="body2" sx={{ mt: 1.5, color: "#9ba3b4" }}>
