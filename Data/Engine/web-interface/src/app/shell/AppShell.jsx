@@ -15,6 +15,7 @@ import {
   Typography,
 } from "@mui/material";
 import {
+  Fingerprint as FingerprintIcon,
   KeyboardArrowDown as KeyboardArrowDownIcon,
   LockReset as LockResetIcon,
   Logout as LogoutIcon,
@@ -82,7 +83,9 @@ export default function AppShell() {
     user,
     displayName,
     mfaEnabled,
+    passkeyCount,
     logout,
+    registerPasskey,
     resetPassword,
     resetMfa,
     aegisDialog,
@@ -103,6 +106,7 @@ export default function AppShell() {
   const [resetOwnPasswordError, setResetOwnPasswordError] = useState("");
   const [resetOwnMfaOpen, setResetOwnMfaOpen] = useState(false);
   const [resetOwnMfaBusy, setResetOwnMfaBusy] = useState(false);
+  const [addPasskeyBusy, setAddPasskeyBusy] = useState(false);
 
   const defaultChrome = useMemo(() => resolvePageChromeDefaults(matches), [matches]);
   const activeNavKey = useMemo(() => resolveActiveNavKey(matches), [matches]);
@@ -257,6 +261,19 @@ export default function AppShell() {
     resetPassword,
   ]);
 
+  const handleAddPasskey = useCallback(async () => {
+    handleUserMenuClose();
+    if (addPasskeyBusy) return;
+    setAddPasskeyBusy(true);
+    try {
+      await registerPasskey();
+    } catch {
+      /* notifications are already emitted by the auth layer */
+    } finally {
+      setAddPasskeyBusy(false);
+    }
+  }, [addPasskeyBusy, handleUserMenuClose, registerPasskey]);
+
   const handleOpenResetOwnMfaDialog = useCallback(() => {
     handleUserMenuClose();
     if (!mfaEnabled || resetOwnMfaBusy) return;
@@ -395,6 +412,18 @@ export default function AppShell() {
               open={Boolean(userMenuAnchorEl)}
               onClose={handleUserMenuClose}
             >
+              <MenuItem disabled={addPasskeyBusy} onClick={() => void handleAddPasskey()}>
+                <FingerprintIcon
+                  sx={{
+                    fontSize: 18,
+                    color: !addPasskeyBusy ? "#8ecbff" : "rgba(148,163,184,0.62)",
+                    mr: 1,
+                  }}
+                />
+                {addPasskeyBusy
+                  ? "Adding Passkey..."
+                  : `Add Passkey${passkeyCount ? ` (${passkeyCount})` : ""}`}
+              </MenuItem>
               <MenuItem disabled={resetOwnPasswordBusy} onClick={handleOpenResetOwnPasswordDialog}>
                 <VpnKeyIcon
                   sx={{
@@ -579,13 +608,14 @@ export default function AppShell() {
         <DialogTitle sx={DIALOG_TITLE_SX}>
           <DialogHeaderBlock
             title="Reset MFA"
-            subtitle="Clear your current Borealis MFA secret for this account."
+            subtitle="Clear your current Borealis MFA setup for this account."
           />
         </DialogTitle>
         <DialogContent sx={DIALOG_CONTENT_SX}>
           <Typography sx={DIALOG_BODY_TEXT_SX}>
-            Borealis will keep MFA enabled for your account, but the next time you sign in you will
-            be prompted to complete MFA setup again.
+            Borealis will keep MFA enabled for your account, but your current authenticator app
+            secret and passkeys will be cleared. The next time you sign in you will be prompted to
+            complete MFA setup again.
           </Typography>
         </DialogContent>
         <DialogActions sx={DIALOG_ACTIONS_SX}>

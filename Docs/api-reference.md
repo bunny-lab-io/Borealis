@@ -14,8 +14,12 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/auth/logout` (Token Authenticated) - operator logout.
 - `POST /api/auth/password/reset` (Token Authenticated) - verify the current operator password and replace it with a new password hash.
 - `POST /api/auth/mfa/verify` (Token Authenticated, MFA pending) - verify MFA.
-- `POST /api/auth/mfa/reset` (Token Authenticated) - clear the current operator's MFA secret so Borealis prompts for MFA setup on the next login.
-- `GET /api/auth/me` (Token Authenticated) - current operator profile, including MFA-enabled state for account menu actions.
+- `POST /api/auth/mfa/reset` (Token Authenticated) - clear the current operator's MFA setup, including authenticator secrets and passkeys, so Borealis prompts for MFA setup on the next login.
+- `POST /api/auth/passkeys/register/options` (Authenticated or MFA pending) - start a WebAuthn passkey registration ceremony.
+- `POST /api/auth/passkeys/register/verify` (Authenticated or MFA pending) - verify and store a new WebAuthn passkey credential.
+- `POST /api/auth/passkeys/authenticate/options` (Token Authenticated, MFA pending) - start a WebAuthn passkey sign-in ceremony during MFA.
+- `POST /api/auth/passkeys/authenticate/verify` (Token Authenticated, MFA pending) - verify a WebAuthn passkey sign-in response and complete operator login.
+- `GET /api/auth/me` (Token Authenticated) - current operator profile, including MFA-enabled state and passkey count for account menu actions.
 - `GET /api/credentials` (Token Authenticated) - list stored remote-execution credentials.
 - `GET /api/credentials/<int:credential_id>` (Token Authenticated) - get one stored credential without secret material.
 - `POST /api/credentials` (Admin) - create a stored credential.

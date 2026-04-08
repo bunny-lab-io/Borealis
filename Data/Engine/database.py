@@ -49,6 +49,7 @@ def initialise_engine_database(database_url: str, *, logger: Optional[logging.Lo
         _ensure_sites(conn, logger=logger)
         _ensure_site_enrollment_codes(conn, logger=logger)
         _ensure_users_table(conn, logger=logger)
+        _ensure_user_passkeys(conn, logger=logger)
         _ensure_user_site_assignments(conn, logger=logger)
         _ensure_default_admin(conn, logger=logger)
         _ensure_ansible_recaps(conn, logger=logger)
@@ -298,6 +299,47 @@ def _ensure_users_table(conn: sqlite3.Connection, *, logger: Optional[logging.Lo
         if logger:
             logger.error("Failed to ensure users table: %s", exc, exc_info=True)
         else:  # pragma: no cover - escalate without logger for tests
+            raise
+    finally:
+        cur.close()
+
+
+def _ensure_user_passkeys(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_passkeys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                credential_id TEXT NOT NULL,
+                public_key TEXT NOT NULL,
+                sign_count INTEGER NOT NULL DEFAULT 0,
+                label TEXT,
+                transports_json TEXT,
+                aaguid TEXT,
+                created_at INTEGER,
+                last_used_at INTEGER,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_user_passkeys_credential_id
+                ON user_passkeys(credential_id)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_user_passkeys_user_id
+                ON user_passkeys(user_id)
+            """
+        )
+    except Exception as exc:
+        if logger:
+            logger.error("Failed to ensure user_passkeys table: %s", exc, exc_info=True)
+        else:
             raise
     finally:
         cur.close()

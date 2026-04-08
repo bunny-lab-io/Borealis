@@ -940,7 +940,7 @@ export default function UserManagement() {
         message={
           confirmMfaStateTarget
             ? confirmMfaStateNextEnabled
-              ? `Require MFA for '${confirmMfaStateTarget.username}'? If they do not already have an authenticator configured, Borealis will require MFA setup on their next login.`
+              ? `Require MFA for '${confirmMfaStateTarget.username}'? If they do not already have an authenticator app or passkey configured, Borealis will require MFA setup on their next login.`
               : `Disable MFA for '${confirmMfaStateTarget.username}'? They will be able to sign in without MFA until an administrator enables it again.`
             : ""
         }
@@ -956,7 +956,7 @@ export default function UserManagement() {
       <ConfirmDeleteDialog
         open={resetMfaOpen}
         title="Reset MFA"
-        message={resetMfaTarget ? `Reset MFA enrollment for '${resetMfaTarget.username}'? This clears their existing authenticator.` : ""}
+        message={resetMfaTarget ? `Reset MFA enrollment for '${resetMfaTarget.username}'? This clears their existing authenticator app secret and passkeys.` : ""}
         onCancel={() => { setResetMfaOpen(false); setResetMfaTarget(null); }}
         onConfirm={doResetMfa}
         confirmLabel="Reset MFA"

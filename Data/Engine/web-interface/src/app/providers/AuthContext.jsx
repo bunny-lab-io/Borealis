@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { EMPTY_AEGIS_STATUS, normalizeAegisStatus } from "../utils/aegis.js";
 import { sha512 } from "../utils/crypto.js";
 import { postAppNotification } from "../utils/notifications.js";
+import { registerPasskey as registerPasskeyCeremony } from "../utils/passkeys.js";
 import { getBorealisSocket } from "../runtime/bootstrapClientRuntime.js";
 
 const SESSION_CACHE_KEY = "borealis_session";
@@ -55,6 +56,7 @@ export function AuthProvider({ children }) {
   const [role, setRole] = useState(null);
   const [displayName, setDisplayName] = useState(null);
   const [mfaEnabled, setMfaEnabled] = useState(false);
+  const [passkeyCount, setPasskeyCount] = useState(0);
   const [ready, setReady] = useState(false);
   const [aegisStatus, setAegisStatus] = useState(EMPTY_AEGIS_STATUS);
   const [aegisDialog, setAegisDialog] = useState(null);
@@ -66,6 +68,7 @@ export function AuthProvider({ children }) {
     setRole(null);
     setDisplayName(null);
     setMfaEnabled(false);
+    setPasskeyCount(0);
     setAegisStatus(EMPTY_AEGIS_STATUS);
     setAegisDialog(null);
     setAegisPromptDismissed(false);
@@ -106,6 +109,7 @@ export function AuthProvider({ children }) {
         setRole(me.role || null);
         setDisplayName(me.display_name || me.username);
         setMfaEnabled(Boolean(me.mfa_enabled));
+        setPasskeyCount(Number(me.passkey_count || 0));
         persistSession(me);
         return me;
       }
@@ -138,6 +142,7 @@ export function AuthProvider({ children }) {
             setRole(me.role || null);
             setDisplayName(me.display_name || me.username);
             setMfaEnabled(Boolean(me.mfa_enabled));
+            setPasskeyCount(Number(me.passkey_count || 0));
           }
           persistSession(me);
         } else if ((response.status === 401 || response.status === 403) && !cancelled) {
@@ -184,6 +189,7 @@ export function AuthProvider({ children }) {
           setRole(me.role || null);
           setDisplayName(me.display_name || me.username);
           setMfaEnabled(Boolean(me.mfa_enabled));
+          setPasskeyCount(Number(me.passkey_count || 0));
           persistSession(me);
           fetchAegisStatus();
         }
@@ -223,6 +229,7 @@ export function AuthProvider({ children }) {
       setRole(nextRole || null);
       setDisplayName(username);
       setMfaEnabled(false);
+      setPasskeyCount(0);
       persistSession({
         username,
         display_name: username,
@@ -238,6 +245,7 @@ export function AuthProvider({ children }) {
             setRole(me.role || null);
             setDisplayName(me.display_name || me.username);
             setMfaEnabled(Boolean(me.mfa_enabled));
+            setPasskeyCount(Number(me.passkey_count || 0));
             persistSession(me);
           }
         } catch {
@@ -390,16 +398,49 @@ export function AuthProvider({ children }) {
     }
 
     setMfaEnabled(Boolean(payload.mfa_enabled));
+    setPasskeyCount(0);
     await postAppNotification({
       title: "Reset MFA",
       message: payload.setup_required_on_next_login
-        ? "Your MFA setup was reset. The next time you sign in, Borealis will prompt you to set up MFA again."
+        ? "Your MFA setup was reset. Borealis cleared your authenticator app secret and passkeys, and the next time you sign in it will prompt you to set up MFA again."
         : "No active MFA setup was found for your account.",
       icon: "user",
       variant: "info",
     });
     return payload;
   }, [clearClientSession]);
+
+  const registerPasskey = useCallback(
+    async ({ label = "" } = {}) => {
+      try {
+        const payload = await registerPasskeyCeremony({ label });
+        const refreshed = await refreshSession();
+        await postAppNotification({
+          title: "Passkey Added",
+          message:
+            Number(refreshed?.passkey_count || payload?.passkey_count || 0) > 1
+              ? "Your new passkey is ready to use with Borealis."
+              : "Your first Borealis passkey is ready to use.",
+          icon: "key",
+          variant: "info",
+        });
+        return payload;
+      } catch (error) {
+        const message =
+          error instanceof Error && error.message
+            ? error.message
+            : "Borealis could not add a passkey right now.";
+        await postAppNotification({
+          title: "Add Passkey",
+          message,
+          icon: "warning",
+          variant: "error",
+        });
+        throw error;
+      }
+    },
+    [refreshSession]
+  );
 
   const value = useMemo(
     () => ({
@@ -408,6 +449,7 @@ export function AuthProvider({ children }) {
       role,
       displayName,
       mfaEnabled,
+      passkeyCount,
       aegisStatus,
       aegisDialog,
       isAuthenticated: Boolean(user),
@@ -417,6 +459,7 @@ export function AuthProvider({ children }) {
       refreshSession,
       resetPassword,
       resetMfa,
+      registerPasskey,
       fetchAegisStatus,
       openAegisDialog,
       closeAegisDialog,
@@ -434,8 +477,10 @@ export function AuthProvider({ children }) {
       login,
       logout,
       mfaEnabled,
+      passkeyCount,
       openAegisDialog,
       ready,
+      registerPasskey,
       refreshSession,
       resetMfa,
       resetPassword,

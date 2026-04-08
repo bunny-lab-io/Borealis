@@ -332,6 +332,18 @@ CREATE TABLE IF NOT EXISTS users (
     mfa_disabled INTEGER NOT NULL DEFAULT 0,
     mfa_secret TEXT
 );
+CREATE TABLE IF NOT EXISTS user_passkeys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    credential_id TEXT NOT NULL,
+    public_key TEXT NOT NULL,
+    sign_count INTEGER NOT NULL DEFAULT 0,
+    label TEXT,
+    transports_json TEXT,
+    aaguid TEXT,
+    created_at INTEGER,
+    last_used_at INTEGER
+);
 CREATE TABLE IF NOT EXISTS user_site_assignments (
     user_id INTEGER NOT NULL,
     site_id INTEGER NOT NULL,
