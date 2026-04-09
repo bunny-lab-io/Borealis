@@ -16,9 +16,8 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import LocationCityIcon from "@mui/icons-material/LocationCity";
-
-import DeleteIcon from "@mui/icons-material/DeleteOutline";
-import EditIcon from "@mui/icons-material/Edit";
+import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
+import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
@@ -43,7 +42,7 @@ const themeClassName = myTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 
-const AUTO_SIZE_COLUMNS = ["device_count", "agent_install_command", "enrollment_code"];
+const AUTO_SIZE_COLUMNS = ["device_count", "enrollment_code"];
 const BOOTSTRAP_POWERSHELL_URL = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1";
 const BOOTSTRAP_SHELL_URL = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh";
 const INSTALL_OS_OPTIONS = [
@@ -133,27 +132,6 @@ const SITE_DIALOG_DANGER_BUTTON_SX = {
     color: "rgba(255,154,165,0.48)",
     borderColor: "rgba(244,63,94,0.16)",
     background: "rgba(44,8,22,0.24)",
-  },
-};
-
-const INSTALL_ROW_BUTTON_SX = {
-  minWidth: 118,
-  minHeight: 34,
-  borderRadius: 999,
-  px: 1.8,
-  textTransform: "none",
-  fontWeight: 600,
-  color: MAGIC_UI.textBright,
-  border: "1px solid rgba(148,163,184,0.36)",
-  background: "rgba(5,10,24,0.82)",
-  "&:hover": {
-    background: "rgba(9,16,34,0.94)",
-    borderColor: "rgba(125,211,252,0.46)",
-  },
-  "&.Mui-disabled": {
-    color: "rgba(148,163,184,0.76)",
-    borderColor: "rgba(148,163,184,0.22)",
-    background: "rgba(15,23,42,0.42)",
   },
 };
 
@@ -355,6 +333,7 @@ export default function SiteList() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
+  const [actionsMenuAnchorEl, setActionsMenuAnchorEl] = useState(null);
   const [installMenuAnchorEl, setInstallMenuAnchorEl] = useState(null);
   const [installMenuSite, setInstallMenuSite] = useState(null);
   const gridRef = useRef(null);
@@ -500,13 +479,6 @@ export default function SiteList() {
     });
   }, [copyTextToClipboard, sendNotification]);
 
-  const handleOpenInstallMenu = useCallback((event, site) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setInstallMenuAnchorEl(event.currentTarget);
-    setInstallMenuSite(site || null);
-  }, []);
-
   const handleCloseInstallMenu = useCallback(() => {
     setInstallMenuAnchorEl(null);
     setInstallMenuSite(null);
@@ -629,51 +601,6 @@ export default function SiteList() {
       minWidth: 140,
     },
     {
-      headerName: "Agent Install Command",
-      colId: "agent_install_command",
-      minWidth: 220,
-      maxWidth: 240,
-      filter: false,
-      sortable: false,
-      suppressHeaderMenuButton: true,
-      suppressHeaderContextMenu: true,
-      cellRendererParams: {
-        suppressMouseEventHandling: () => true,
-      },
-      cellRenderer: (params) => {
-        const site = params?.data || null;
-        const hasInstallCommand = Boolean(installServerUrl && site?.enrollment_code);
-        const tooltipLabel = hasInstallCommand
-          ? "Copy an install command for this site"
-          : installServerUrl
-            ? "This site is missing an enrollment code"
-            : "Borealis public engine URL is unavailable";
-
-        return (
-          <Box
-            sx={{ width: "100%", display: "flex", justifyContent: "center" }}
-            onMouseDown={stopGridRowSelectionEvent}
-            onClick={stopGridRowSelectionEvent}
-            onDoubleClick={stopGridRowSelectionEvent}
-            onTouchStart={stopGridRowSelectionEvent}
-          >
-            <Tooltip title={tooltipLabel}>
-              <span>
-                <Button
-                  size="small"
-                  disabled={!hasInstallCommand}
-                  onClick={(event) => handleOpenInstallMenu(event, site)}
-                  sx={INSTALL_ROW_BUTTON_SX}
-                >
-                  Install Agent
-                </Button>
-              </span>
-            </Tooltip>
-          </Box>
-        );
-      },
-    },
-    {
       headerName: "Agent Enrollment Code",
       field: "enrollment_code",
       minWidth: 260,
@@ -716,7 +643,7 @@ export default function SiteList() {
         );
       },
     },
-  ], [handleCopy, handleOpenDevicesForSite, handleOpenInstallMenu, installServerUrl]);
+  ], [handleCopy, handleOpenDevicesForSite]);
 
   const defaultColDef = useMemo(() => ({
     sortable: true,
@@ -730,23 +657,92 @@ export default function SiteList() {
     [rows, selectedIds]
   );
 
+  const singleSelectedSite = useMemo(
+    () => (selectedSiteRows.length === 1 ? selectedSiteRows[0] : null),
+    [selectedSiteRows]
+  );
+
+  const hasSelectedSites = selectedSiteRows.length > 0;
+  const canOpenInstallMenu = Boolean(singleSelectedSite && installServerUrl && singleSelectedSite?.enrollment_code);
+  const installActionTooltip = selectedIds.size === 0
+    ? "Select one site to copy an install command"
+    : selectedIds.size > 1
+      ? "Select exactly one site to copy an install command"
+      : !installServerUrl
+        ? "Borealis public engine URL is unavailable"
+        : !singleSelectedSite?.enrollment_code
+          ? "The selected site is missing an enrollment code"
+          : undefined;
+  const actionsActionTooltip = selectedIds.size === 0
+    ? "Select one or more sites to manage"
+    : selectedIds.size > 1
+      ? "Delete supports multiple sites; rename requires exactly one"
+      : undefined;
+
+  const handleOpenInstallMenu = useCallback((event) => {
+    if (!singleSelectedSite) return;
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    setInstallMenuAnchorEl(event.currentTarget);
+    setInstallMenuSite(singleSelectedSite);
+  }, [singleSelectedSite]);
+
+  const handleOpenActionsMenu = useCallback((event) => {
+    if (!hasSelectedSites) return;
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    setActionsMenuAnchorEl(event.currentTarget);
+  }, [hasSelectedSites]);
+
+  const handleCloseActionsMenu = useCallback(() => {
+    setActionsMenuAnchorEl(null);
+  }, []);
+
+  const handleOpenDeleteDialog = useCallback(() => {
+    handleCloseActionsMenu();
+    if (!hasSelectedSites) return;
+    setDeleteOpen(true);
+  }, [handleCloseActionsMenu, hasSelectedSites]);
+
+  useEffect(() => {
+    if (!hasSelectedSites) {
+      setActionsMenuAnchorEl(null);
+      setInstallMenuAnchorEl(null);
+      setInstallMenuSite(null);
+      return;
+    }
+
+    if (!singleSelectedSite) {
+      setInstallMenuAnchorEl(null);
+      setInstallMenuSite(null);
+      return;
+    }
+
+    if (installMenuSite && String(installMenuSite.id) !== String(singleSelectedSite.id)) {
+      setInstallMenuAnchorEl(null);
+      setInstallMenuSite(null);
+    }
+  }, [hasSelectedSites, installMenuSite, singleSelectedSite]);
+
   const pageHeaderActions = useMemo(
     () => [
       {
-        id: "delete-site",
-        label: "Delete",
-        icon: <DeleteIcon />,
-        tone: "danger",
+        id: "site-actions",
+        label: "Actions",
+        icon: <MoreHorizIcon />,
+        tone: "secondary",
         disabled: selectedIds.size === 0,
-        onClick: () => setDeleteOpen(true),
+        tooltip: actionsActionTooltip,
+        onClick: handleOpenActionsMenu,
       },
       {
-        id: "rename-site",
-        label: "Rename",
-        icon: <EditIcon />,
-        tone: "secondary",
-        disabled: selectedIds.size !== 1,
-        onClick: openRenameDialog,
+        id: "install-site-agent",
+        label: "Install Agent(s)",
+        icon: <DownloadRoundedIcon />,
+        tone: "primary",
+        disabled: !canOpenInstallMenu,
+        tooltip: installActionTooltip,
+        onClick: handleOpenInstallMenu,
       },
       {
         id: "create-site",
@@ -756,7 +752,15 @@ export default function SiteList() {
         onClick: () => setCreateOpen(true),
       },
     ],
-    [openRenameDialog, selectedIds.size]
+    [
+      actionsActionTooltip,
+      canOpenInstallMenu,
+      hasSelectedSites,
+      handleOpenActionsMenu,
+      handleOpenInstallMenu,
+      installActionTooltip,
+      selectedIds.size,
+    ]
   );
 
   useRoutePageChrome({
@@ -801,6 +805,42 @@ export default function SiteList() {
             {option.label}
           </MenuItem>
         ))}
+      </Menu>
+      <Menu
+        anchorEl={actionsMenuAnchorEl}
+        open={Boolean(actionsMenuAnchorEl)}
+        onClose={handleCloseActionsMenu}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+        PaperProps={{ sx: INSTALL_MENU_PAPER_SX }}
+      >
+        <MenuItem
+          disabled={selectedIds.size !== 1}
+          onClick={() => {
+            handleCloseActionsMenu();
+            openRenameDialog();
+          }}
+          sx={INSTALL_MENU_ITEM_SX}
+        >
+          Rename
+        </MenuItem>
+        <MenuItem
+          onClick={handleOpenDeleteDialog}
+          sx={{
+            ...INSTALL_MENU_ITEM_SX,
+            color: "#ffb1b9",
+            "&:hover": {
+              background:
+                "linear-gradient(90deg, rgba(251,113,133,0.16) 0%, rgba(244,63,94,0.14) 100%)",
+            },
+            "&.Mui-focusVisible": {
+              background:
+                "linear-gradient(90deg, rgba(251,113,133,0.16) 0%, rgba(244,63,94,0.14) 100%)",
+            },
+          }}
+        >
+          Delete
+        </MenuItem>
       </Menu>
       <PageBodyFrame variant="grid">
         <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0 }}>
