@@ -7,6 +7,8 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Menu,
+  MenuItem,
   Paper,
   Typography,
   IconButton,
@@ -41,7 +43,14 @@ const themeClassName = myTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 
-const AUTO_SIZE_COLUMNS = ["device_count", "enrollment_code"];
+const AUTO_SIZE_COLUMNS = ["device_count", "agent_install_command", "enrollment_code"];
+const BOOTSTRAP_POWERSHELL_URL = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1";
+const BOOTSTRAP_SHELL_URL = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh";
+const INSTALL_OS_OPTIONS = [
+  { id: "windows", label: "Windows" },
+  { id: "linux", label: "Linux" },
+  { id: "macos", label: "MacOS" },
+];
 
 const MAGIC_UI = {
   shellBg:
@@ -126,6 +135,133 @@ const SITE_DIALOG_DANGER_BUTTON_SX = {
     background: "rgba(44,8,22,0.24)",
   },
 };
+
+const INSTALL_ROW_BUTTON_SX = {
+  minWidth: 118,
+  minHeight: 34,
+  borderRadius: 999,
+  px: 1.8,
+  textTransform: "none",
+  fontWeight: 600,
+  color: MAGIC_UI.textBright,
+  border: "1px solid rgba(148,163,184,0.36)",
+  background: "rgba(5,10,24,0.82)",
+  "&:hover": {
+    background: "rgba(9,16,34,0.94)",
+    borderColor: "rgba(125,211,252,0.46)",
+  },
+  "&.Mui-disabled": {
+    color: "rgba(148,163,184,0.76)",
+    borderColor: "rgba(148,163,184,0.22)",
+    background: "rgba(15,23,42,0.42)",
+  },
+};
+
+const INSTALL_MENU_PAPER_SX = {
+  mt: 0.8,
+  minWidth: 180,
+  borderRadius: 2.5,
+  overflow: "hidden",
+  background:
+    "radial-gradient(140% 140% at 0% 0%, rgba(76,186,255,0.18), transparent 52%), " +
+    "radial-gradient(140% 140% at 100% 0%, rgba(214,130,255,0.22), transparent 62%), rgba(8,12,24,0.96)",
+  backdropFilter: "blur(18px)",
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  boxShadow: "0 24px 60px rgba(2,8,23,0.72)",
+  color: MAGIC_UI.textBright,
+  "& .MuiList-root": {
+    py: 0.8,
+  },
+};
+
+const INSTALL_MENU_ITEM_SX = {
+  mx: 0.8,
+  my: 0.3,
+  borderRadius: 2,
+  minHeight: 40,
+  fontSize: "0.92rem",
+  fontWeight: 600,
+  color: MAGIC_UI.textBright,
+  transition: "background 160ms ease, color 160ms ease, transform 120ms ease",
+  "&:hover": {
+    background:
+      "linear-gradient(90deg, rgba(125,211,252,0.16) 0%, rgba(192,132,252,0.14) 100%)",
+  },
+  "&.Mui-focusVisible": {
+    background:
+      "linear-gradient(90deg, rgba(125,211,252,0.16) 0%, rgba(192,132,252,0.14) 100%)",
+  },
+};
+
+function normalizeInstallServerUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function deriveInstallServerUrl(payload) {
+  const explicitBaseUrl = normalizeInstallServerUrl(payload?.public_base_url);
+  if (explicitBaseUrl) {
+    return explicitBaseUrl;
+  }
+
+  const explicitHostname = String(payload?.public_hostname || "").trim();
+  if (explicitHostname) {
+    if (/^https?:\/\//i.test(explicitHostname)) {
+      return normalizeInstallServerUrl(explicitHostname);
+    }
+    return `https://${explicitHostname}`;
+  }
+
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  try {
+    const currentOrigin = String(window.location?.origin || "").trim();
+    if (!currentOrigin) return "";
+    const currentUrl = new URL(currentOrigin);
+    const host = currentUrl.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0") {
+      return "";
+    }
+    return normalizeInstallServerUrl(currentUrl.origin);
+  } catch {
+    return "";
+  }
+}
+
+function stopGridRowSelectionEvent(event) {
+  if (!event) return;
+  if (typeof event.stopPropagation === "function") {
+    event.stopPropagation();
+  }
+}
+
+function escapePowerShellDoubleQuoted(value) {
+  return String(value || "").replace(/`/g, "``").replace(/"/g, '`"');
+}
+
+function escapeShellDoubleQuoted(value) {
+  return String(value || "").replace(/(["\\$`])/g, "\\$1");
+}
+
+function buildInstallCommand(osId, serverUrl, enrollmentCode) {
+  const normalizedServerUrl = normalizeInstallServerUrl(serverUrl);
+  const normalizedEnrollmentCode = String(enrollmentCode || "").trim();
+  if (!normalizedServerUrl || !normalizedEnrollmentCode) {
+    return "";
+  }
+
+  if (osId === "windows") {
+    return `$env:BOREALIS_SERVER_URL="${escapePowerShellDoubleQuoted(normalizedServerUrl)}"; ` +
+      `$env:BOREALIS_ENROLLMENT_CODE="${escapePowerShellDoubleQuoted(normalizedEnrollmentCode)}"; ` +
+      `irm ${BOOTSTRAP_POWERSHELL_URL} | iex`;
+  }
+
+  const shellPrefix = osId === "macos" ? "bash" : "sudo bash";
+  return `curl -fsSL ${BOOTSTRAP_SHELL_URL} | ${shellPrefix} -s -- --agent --serverurl ` +
+    `"${escapeShellDoubleQuoted(normalizedServerUrl)}" --enrollmentcode ` +
+    `"${escapeShellDoubleQuoted(normalizedEnrollmentCode)}"`;
+}
 
 function SiteDeleteDialog({ open, onCancel, onConfirm, sites }) {
   const siteNames = Array.isArray(sites) ? sites.map((site) => site?.name).filter(Boolean) : [];
@@ -213,11 +349,14 @@ const PAGE_ICON = LocationCityIcon;
 export default function SiteList() {
   const navigate = useNavigate();
   const [rows, setRows] = useState([]);
+  const [installServerUrl, setInstallServerUrl] = useState("");
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
+  const [installMenuAnchorEl, setInstallMenuAnchorEl] = useState(null);
+  const [installMenuSite, setInstallMenuSite] = useState(null);
   const gridRef = useRef(null);
   const gridApiRef = useRef(null);
   const autoSizeHandleRef = useRef(null);
@@ -245,15 +384,37 @@ export default function SiteList() {
     [navigate]
   );
 
+  const fetchInstallServerUrlFromOverview = useCallback(async () => {
+    try {
+      const response = await fetch("/api/server/overview", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        return "";
+      }
+      const payload = await response.json().catch(() => ({}));
+      return deriveInstallServerUrl({
+        public_base_url: payload?.host?.public_base_url || payload?.public_edge?.public_base_url || "",
+        public_hostname: payload?.host?.public_hostname || payload?.public_edge?.fqdn || "",
+      });
+    } catch {
+      return "";
+    }
+  }, []);
+
   const fetchSites = useCallback(async () => {
     try {
       const res = await fetch("/api/sites");
       const data = await res.json();
+      const nextInstallServerUrl = deriveInstallServerUrl(data) || await fetchInstallServerUrlFromOverview();
       setRows(Array.isArray(data?.sites) ? data.sites : []);
+      setInstallServerUrl(nextInstallServerUrl);
     } catch {
       setRows([]);
+      setInstallServerUrl("");
     }
-  }, []);
+  }, [fetchInstallServerUrlFromOverview]);
 
   useEffect(() => { fetchSites(); }, [fetchSites]);
 
@@ -302,15 +463,98 @@ export default function SiteList() {
     };
   }, []);
 
-  const handleCopy = useCallback(async (code) => {
-    const value = (code || "").trim();
-    if (!value) return;
+  const copyTextToClipboard = useCallback(async (value, promptTitle = "Copy text") => {
+    const normalizedValue = String(value || "").trim();
+    if (!normalizedValue) {
+      return false;
+    }
     try {
-      await navigator.clipboard.writeText(value);
+      await navigator.clipboard.writeText(normalizedValue);
+      return true;
     } catch {
-      window.prompt("Copy enrollment code", value);
+      window.prompt(promptTitle, normalizedValue);
+      return false;
     }
   }, []);
+
+  const handleCopy = useCallback(async (code, siteName = "") => {
+    const value = (code || "").trim();
+    if (!value) return;
+    const normalizedSiteName = String(siteName || "Unknown Site").trim() || "Unknown Site";
+    const copied = await copyTextToClipboard(value, "Copy enrollment code");
+    if (copied) {
+      await sendNotification({
+        title: "Enrollment Code Copied",
+        message: `Enrollment code for <b>${normalizedSiteName}</b> copied to clipboard.`,
+        icon: "done",
+        variant: "info",
+      });
+      return;
+    }
+
+    await sendNotification({
+      title: "Manual Copy Required",
+      message: `Clipboard access was blocked, so Borealis opened a manual copy prompt for the enrollment code at <b>${normalizedSiteName}</b>.`,
+      icon: "warning",
+      variant: "warning",
+    });
+  }, [copyTextToClipboard, sendNotification]);
+
+  const handleOpenInstallMenu = useCallback((event, site) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setInstallMenuAnchorEl(event.currentTarget);
+    setInstallMenuSite(site || null);
+  }, []);
+
+  const handleCloseInstallMenu = useCallback(() => {
+    setInstallMenuAnchorEl(null);
+    setInstallMenuSite(null);
+  }, []);
+
+  const handleCopyInstallCommand = useCallback(async (osId, site) => {
+    const siteName = String(site?.name || "Unknown Site").trim() || "Unknown Site";
+    const enrollmentCode = String(site?.enrollment_code || "").trim();
+    const osLabel = INSTALL_OS_OPTIONS.find((option) => option.id === osId)?.label || "Agent";
+    const command = buildInstallCommand(osId, installServerUrl, enrollmentCode);
+
+    if (!command) {
+      await sendNotification({
+        title: "Install Command Unavailable",
+        message: `Borealis could not build the <b>${osLabel}</b> install command for <b>${siteName}</b> because the public engine URL or enrollment code is unavailable.`,
+        icon: "warning",
+        variant: "error",
+      });
+      return;
+    }
+
+    const copied = await copyTextToClipboard(command, `Copy ${osLabel} install command`);
+    if (copied) {
+      await sendNotification({
+        title: "Install Command Copied",
+        message: `Agent installation command for <b>${osLabel}</b> at <b>${siteName}</b> copied to clipboard.`,
+        icon: "done",
+        variant: "info",
+      });
+      return;
+    }
+
+    await sendNotification({
+      title: "Manual Copy Required",
+      message: `Clipboard access was blocked, so Borealis opened a manual copy prompt for the <b>${osLabel}</b> install command at <b>${siteName}</b>.`,
+      icon: "warning",
+      variant: "warning",
+    });
+  }, [copyTextToClipboard, installServerUrl, sendNotification]);
+
+  const handleSelectInstallOs = useCallback(async (osId) => {
+    const activeSite = installMenuSite;
+    handleCloseInstallMenu();
+    if (!activeSite) {
+      return;
+    }
+    await handleCopyInstallCommand(osId, activeSite);
+  }, [handleCloseInstallMenu, handleCopyInstallCommand, installMenuSite]);
 
   const openRenameDialog = useCallback(() => {
     const selId = selectedIds.size === 1 ? Array.from(selectedIds)[0] : null;
@@ -357,10 +601,17 @@ export default function SiteList() {
       field: "name",
       minWidth: 220,
       flex: 1,
+      cellRendererParams: {
+        suppressMouseEventHandling: () => true,
+      },
       cellRenderer: (params) => (
         <span
-          style={{ color: "#7dd3fc", cursor: "pointer", fontWeight: 500 }}
-          onClick={() => handleOpenDevicesForSite(params.value)}
+          style={{ color: "#58a6ff", cursor: "pointer", fontWeight: 500 }}
+          onMouseDown={stopGridRowSelectionEvent}
+          onClick={(event) => {
+            stopGridRowSelectionEvent(event);
+            handleOpenDevicesForSite(params.value);
+          }}
         >
           {params.value}
         </span>
@@ -378,24 +629,82 @@ export default function SiteList() {
       minWidth: 140,
     },
     {
+      headerName: "Agent Install Command",
+      colId: "agent_install_command",
+      minWidth: 220,
+      maxWidth: 240,
+      filter: false,
+      sortable: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      cellRendererParams: {
+        suppressMouseEventHandling: () => true,
+      },
+      cellRenderer: (params) => {
+        const site = params?.data || null;
+        const hasInstallCommand = Boolean(installServerUrl && site?.enrollment_code);
+        const tooltipLabel = hasInstallCommand
+          ? "Copy an install command for this site"
+          : installServerUrl
+            ? "This site is missing an enrollment code"
+            : "Borealis public engine URL is unavailable";
+
+        return (
+          <Box
+            sx={{ width: "100%", display: "flex", justifyContent: "center" }}
+            onMouseDown={stopGridRowSelectionEvent}
+            onClick={stopGridRowSelectionEvent}
+            onDoubleClick={stopGridRowSelectionEvent}
+            onTouchStart={stopGridRowSelectionEvent}
+          >
+            <Tooltip title={tooltipLabel}>
+              <span>
+                <Button
+                  size="small"
+                  disabled={!hasInstallCommand}
+                  onClick={(event) => handleOpenInstallMenu(event, site)}
+                  sx={INSTALL_ROW_BUTTON_SX}
+                >
+                  Install Agent
+                </Button>
+              </span>
+            </Tooltip>
+          </Box>
+        );
+      },
+    },
+    {
       headerName: "Agent Enrollment Code",
       field: "enrollment_code",
       minWidth: 260,
       filter: false,
       suppressHeaderMenuButton: true,
       suppressHeaderContextMenu: true,
+      cellRendererParams: {
+        suppressMouseEventHandling: () => true,
+      },
       cellRenderer: (params) => {
         const code = params.value || "—";
+        const siteName = params?.data?.name || "";
         return (
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            <Typography variant="body2" sx={{ fontFamily: "monospace", color: MAGIC_UI.textBright }}>
+          <Box
+            sx={{ display: "flex", alignItems: "center", gap: 1 }}
+            onMouseDown={stopGridRowSelectionEvent}
+            onClick={stopGridRowSelectionEvent}
+            onDoubleClick={stopGridRowSelectionEvent}
+            onTouchStart={stopGridRowSelectionEvent}
+          >
+            <Typography variant="body2" sx={{ fontFamily: "monospace", color: "#9aa3ad" }}>
               {code}
             </Typography>
             <Tooltip title="Copy">
               <span>
                 <IconButton
                   size="small"
-                  onClick={() => handleCopy(code)}
+                  onClick={(event) => {
+                    stopGridRowSelectionEvent(event);
+                    void handleCopy(code, siteName);
+                  }}
                   disabled={!code || code === "—"}
                   sx={{ color: MAGIC_UI.textMuted }}
                 >
@@ -407,7 +716,7 @@ export default function SiteList() {
         );
       },
     },
-  ], [handleCopy, handleOpenDevicesForSite]);
+  ], [handleCopy, handleOpenDevicesForSite, handleOpenInstallMenu, installServerUrl]);
 
   const defaultColDef = useMemo(() => ({
     sortable: true,
@@ -420,8 +729,6 @@ export default function SiteList() {
     () => rows.filter((row) => row?.id != null && selectedIds.has(row.id)),
     [rows, selectedIds]
   );
-
-  const selectedCount = selectedIds.size;
 
   const pageHeaderActions = useMemo(
     () => [
@@ -477,15 +784,26 @@ export default function SiteList() {
       }}
       elevation={0}
     >
+      <Menu
+        anchorEl={installMenuAnchorEl}
+        open={Boolean(installMenuAnchorEl)}
+        onClose={handleCloseInstallMenu}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+        PaperProps={{ sx: INSTALL_MENU_PAPER_SX }}
+      >
+        {INSTALL_OS_OPTIONS.map((option) => (
+          <MenuItem
+            key={option.id}
+            onClick={() => void handleSelectInstallOs(option.id)}
+            sx={INSTALL_MENU_ITEM_SX}
+          >
+            {option.label}
+          </MenuItem>
+        ))}
+      </Menu>
       <PageBodyFrame variant="grid">
         <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0 }}>
-          {selectedCount > 0 ? (
-            <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1.25 }}>
-              <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, fontWeight: 600 }}>
-                {selectedCount} selected
-              </Typography>
-            </Box>
-          ) : null}
           <Box
             className={themeClassName}
             sx={{

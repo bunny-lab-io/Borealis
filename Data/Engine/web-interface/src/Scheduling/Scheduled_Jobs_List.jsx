@@ -23,6 +23,7 @@ import {
   Schedule as HeaderIcon,
   Cached as CachedIcon,
   Add as AddIcon,
+  DeleteOutline as DeleteIcon,
   WarningAmberRounded as WarningAmberRoundedIcon,
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
@@ -814,6 +815,14 @@ export default function ScheduledJobsList({ refreshToken }) {
         onClick: handleRefreshClick,
       },
       {
+        id: "scheduled-jobs-delete",
+        label: "Delete Job",
+        icon: <DeleteIcon />,
+        tone: "secondary",
+        disabled: !anySelected,
+        onClick: () => setBulkDeleteOpen(true),
+      },
+      {
         id: "scheduled-jobs-create",
         label: "Create Job",
         icon: <AddIcon />,
@@ -821,7 +830,7 @@ export default function ScheduledJobsList({ refreshToken }) {
         onClick: () => navigate(APP_PATHS.jobNew),
       },
     ],
-    [handleRefreshClick, loading, navigate]
+    [anySelected, handleRefreshClick, loading, navigate]
   );
 
   useRoutePageChrome({
@@ -922,24 +931,6 @@ export default function ScheduledJobsList({ refreshToken }) {
                   : `Showing ${filterCounts[jobFilterMode] || 0} ${activeFilterLabel} job${(filterCounts[jobFilterMode] || 0) === 1 ? "" : "s"}`}
               </Typography>
             </Box>
-            {anySelected ? (
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: "#7db7ff" }}>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  sx={{
-                    color: "#ff8080",
-                    borderColor: "rgba(255,128,128,0.5)",
-                    textTransform: "none",
-                    borderRadius: 999,
-                    "&:hover": { borderColor: "#ff8080" },
-                  }}
-                  onClick={() => setBulkDeleteOpen(true)}
-                >
-                  Delete Job
-                </Button>
-              </Box>
-            ) : null}
             {credentialResetWarningCount ? (
               <Box
                 sx={{

@@ -760,13 +760,6 @@ export default function UserManagement() {
       >
         <PageBodyFrame variant="grid">
           <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0 }}>
-            {selectedUsers.length ? (
-              <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1.25 }}>
-                <Typography variant="body2" sx={{ color: "#94a3b8", fontWeight: 600 }}>
-                  {selectedUsers.length} selected
-                </Typography>
-              </Box>
-            ) : null}
             <Box
               className={themeClassName}
               sx={{

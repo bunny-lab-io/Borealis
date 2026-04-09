@@ -15,7 +15,7 @@
 # - POST /api/device_list_views (Token Authenticated) - Creates a custom device list view for the signed-in operator.
 # - PUT /api/device_list_views/<int:view_id> (Token Authenticated) - Updates an existing device list view definition.
 # - DELETE /api/device_list_views/<int:view_id> (Token Authenticated) - Deletes a saved device list view.
-# - GET /api/sites (Token Authenticated) - Lists known sites and their summary metadata.
+# - GET /api/sites (Token Authenticated) - Lists known sites, their summary metadata, and public install-command metadata.
 # - POST /api/sites (Token Authenticated (Admin)) - Creates a new site for grouping devices.
 # - POST /api/sites/delete (Token Authenticated (Admin)) - Deletes one or more sites by identifier.
 # - GET /api/sites/device_map (Token Authenticated) - Provides hostname to site assignment mapping data.
@@ -45,6 +45,8 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ....auth.guid_utils import normalize_guid
 from ....auth.device_auth import DeviceAuthError, require_device_auth
+from ....public_endpoints import public_base_url as resolve_public_base_url
+from ....public_endpoints import public_hostname as resolve_public_hostname
 from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
 from .agent_role_health import (
@@ -1491,10 +1493,28 @@ class DeviceManagementService:
         cur.execute(self._site_select_sql() + " WHERE s.id = ?", (site_id,))
         return cur.fetchone()
 
+    def _site_install_metadata(self) -> Dict[str, str]:
+        context = getattr(self.adapters, "context", None)
+        base_url = ""
+        public_hostname = ""
+        if context is not None:
+            try:
+                base_url = str(resolve_public_base_url(context, req=request) or "").strip().rstrip("/")
+            except Exception:
+                base_url = ""
+            try:
+                public_hostname = str(resolve_public_hostname(context, req=request) or "").strip()
+            except Exception:
+                public_hostname = ""
+        return {
+            "public_base_url": base_url,
+            "public_hostname": public_hostname,
+        }
+
     def list_sites(self) -> Tuple[Dict[str, Any], int]:
         allowed_site_ids = self.site_access.site_ids_for_user(self._current_user())
         if allowed_site_ids is not None and not allowed_site_ids:
-            return {"sites": []}, 200
+            return {"sites": [], **self._site_install_metadata()}, 200
         conn = self._db_conn()
         try:
             cur = conn.cursor()
@@ -1508,7 +1528,7 @@ class DeviceManagementService:
             cur.execute(sql, tuple(params))
             rows = cur.fetchall()
             sites = [_row_to_site(row) for row in rows]
-            return {"sites": sites}, 200
+            return {"sites": sites, **self._site_install_metadata()}, 200
         except Exception as exc:
             self.logger.debug("Failed to list sites", exc_info=True)
             return {"error": str(exc)}, 500

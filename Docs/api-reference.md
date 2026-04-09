@@ -63,7 +63,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/device_list_views` (Token Authenticated) - create saved view.
 - `PUT /api/device_list_views/<int:view_id>` (Token Authenticated) - update saved view.
 - `DELETE /api/device_list_views/<int:view_id>` (Token Authenticated) - delete saved view.
-- `GET /api/sites` (Token Authenticated) - list sites visible to the current operator.
+- `GET /api/sites` (Token Authenticated) - list sites visible to the current operator, plus `public_base_url` / `public_hostname` metadata for install-command UIs.
 - `POST /api/sites` (Admin) - create site.
 - `POST /api/sites/delete` (Admin) - delete sites.
 - `GET /api/sites/device_map` (Token Authenticated) - hostname to site map for devices in the current operator's site scope.

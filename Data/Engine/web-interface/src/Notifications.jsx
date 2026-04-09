@@ -108,6 +108,48 @@ function resolveIcon(name) {
   return mapped || NotificationsActiveIcon;
 }
 
+function renderNotificationMessage(message) {
+  const raw = typeof message === "string" ? message : String(message ?? "");
+  if (!raw.includes("<b>")) {
+    return raw;
+  }
+
+  const pattern = /<b>(.*?)<\/b>/gi;
+  const nodes = [];
+  let lastIndex = 0;
+  let match;
+  let segmentIndex = 0;
+
+  while ((match = pattern.exec(raw)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(
+        <React.Fragment key={`text-${segmentIndex}`}>
+          {raw.slice(lastIndex, match.index)}
+        </React.Fragment>
+      );
+      segmentIndex += 1;
+    }
+
+    nodes.push(
+      <Box component="span" key={`bold-${segmentIndex}`} sx={{ fontWeight: 700, color: "inherit" }}>
+        {match[1]}
+      </Box>
+    );
+    segmentIndex += 1;
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < raw.length) {
+    nodes.push(
+      <React.Fragment key={`text-${segmentIndex}`}>
+        {raw.slice(lastIndex)}
+      </React.Fragment>
+    );
+  }
+
+  return nodes.length ? nodes : raw;
+}
+
 function NotificationCard({ item, index }) {
   const Icon = useMemo(() => resolveIcon(item.icon), [item.icon]);
   const delay = Math.min(index * 40, 260);
@@ -182,7 +224,7 @@ function NotificationCard({ item, index }) {
             whiteSpace: "pre-line",
           }}
         >
-          {item.message}
+          {renderNotificationMessage(item.message)}
         </Typography>
       </Box>
     </Box>

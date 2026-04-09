@@ -54,7 +54,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `POST /api/device_list_views` (Token Authenticated) - create saved view.
 - `PUT /api/device_list_views/<int:view_id>` (Token Authenticated) - update saved view.
 - `DELETE /api/device_list_views/<int:view_id>` (Token Authenticated) - delete saved view.
-- `GET /api/sites` (Token Authenticated) - list sites.
+- `GET /api/sites` (Token Authenticated) - list sites plus public engine URL metadata used for copy-ready agent install commands.
 - `POST /api/sites` (Admin) - create site.
 - `POST /api/sites/delete` (Admin) - delete sites.
 - `GET /api/sites/device_map` (Token Authenticated) - hostname to site map.
@@ -115,6 +115,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Operator RBAC scope lives in `user_site_assignments`.
 - Enrollment codes are stored directly on `sites.enrollment_code`.
 - Rotating a site code updates the `sites` record only.
+- `GET /api/sites` also returns `public_base_url` and `public_hostname` so the Sites WebUI can generate per-site agent install commands without a second server-info fetch.
 
 ### Device filters (matching)
 - Filters are stored in typed basic/advanced payloads and normalized by `Data/Engine/services/filters/matcher.py`.
