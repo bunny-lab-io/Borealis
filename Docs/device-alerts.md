@@ -2,10 +2,10 @@
 [Back to Docs Index](index.md) | [Index (HTML)](index.html)
 
 ## Purpose
-Describe the runtime incident side of Watchdogs: the Active Alerts queue, incident lifecycle, and per-device alert handling workflow.
+Describe the runtime incident side of Watchdogs: the Alerts queue, incident lifecycle, and per-device alert handling workflow.
 
-## Active Alerts Queue
-- Active Alerts lives under `Alerting & Reporting` in the sidebar.
+## Alerts Queue
+- Alerts lives under `Alerting & Reporting` in the sidebar.
 - The queue is the operational surface for incidents opened by Watchdogs.
 - v1 queue behavior includes:
   - open and resolved tabs
@@ -38,7 +38,7 @@ Describe the runtime incident side of Watchdogs: the Active Alerts queue, incide
 - The Engine emits:
   - `watchdog_incidents_changed`
   - `device_watchdogs_changed`
-- Borealis uses those socket events to refresh the Watchdog list, Active Alerts queue, and the device-level Watchdogs tab without waiting for a full poll cycle.
+- Borealis uses those socket events to refresh the Watchdog list, Alerts queue, and the device-level Watchdogs tab without waiting for a full poll cycle.
 
 ## API Endpoints
 - `GET /api/watchdogs/incidents` (Token Authenticated) - list incidents by runtime state.
@@ -55,7 +55,7 @@ Describe the runtime incident side of Watchdogs: the Active Alerts queue, incide
 
 ## Codex Agent (Detailed)
 ### Main implementation files
-- Active Alerts page: `Data/Engine/web-interface/src/Alerting/Active_Alerts.jsx`
+- Alerts page: `Data/Engine/web-interface/src/Alerting/Active_Alerts.jsx`
 - Device tab: `Data/Engine/web-interface/src/Devices/Tabs/Device_Watchdogs.jsx`
 - Device Summary integration: `Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx`
 - Incident runtime: `Data/Engine/services/API/watchdogs/runtime.py`

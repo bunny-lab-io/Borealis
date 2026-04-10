@@ -49,6 +49,7 @@ from .devices.management import register_management
 from .filters import management as filters_management
 from .notifications import management as notifications_management
 from .scheduled_jobs import management as scheduled_jobs_management
+from .watchdogs import management as watchdogs_management
 from .workflows import management as workflows_management
 from .server import info as server_info, log_management
 
@@ -64,6 +65,7 @@ DEFAULT_API_GROUPS: Sequence[str] = (
     "workflows",
     "scheduled_jobs",
     "notifications",
+    "watchdogs",
 )
 
 _SERVER_SCOPE_PATTERN = re.compile(r"\\b(?:scope|context|agent_context)=([A-Za-z0-9_-]+)", re.IGNORECASE)
@@ -351,6 +353,10 @@ def _register_notifications(app: Flask, adapters: EngineServiceAdapters) -> None
     notifications_management.register_notifications(app, adapters)
 
 
+def _register_watchdogs(app: Flask, adapters: EngineServiceAdapters) -> None:
+    watchdogs_management.register_management(app, adapters)
+
+
 def _register_assemblies(app: Flask, adapters: EngineServiceAdapters) -> None:
     register_assemblies(app, adapters)
     register_execution(app, adapters)
@@ -372,6 +378,7 @@ _GROUP_REGISTRARS: Mapping[str, Callable[[Flask, EngineServiceAdapters], None]] 
     "workflows": _register_workflows,
     "scheduled_jobs": _register_scheduled_jobs,
     "notifications": _register_notifications,
+    "watchdogs": _register_watchdogs,
 }
 
 
@@ -397,6 +404,8 @@ def register_api(app: Flask, context: EngineContext) -> None:
         normalized.append("filters")
     if "notifications" not in normalized:
         normalized.append("notifications")
+    if "watchdogs" not in normalized:
+        normalized.append("watchdogs")
     adapters: Optional[EngineServiceAdapters] = None
 
     for group in normalized:

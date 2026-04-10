@@ -261,7 +261,7 @@ sites (id) -------------------< user_site_assignments (site_id)
 - Columns: `id`, `watchdog_id`, `device_guid`, `hostname`, `site_id`, `state`, `reason`, `created_by`, `created_at`, `expires_at`, `updated_at`.
 - Used by:
 - Device Watchdogs tab.
-- Active Alerts suppression flow.
+- Alerts suppression flow.
 
 #### `watchdog_device_state`
 - Status: Active.

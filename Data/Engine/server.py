@@ -340,15 +340,11 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
         return response
 
     from .services import API, WebSocket, WebUI  # Local import to avoid circular deps during bootstrap
-    from .services.API.watchdogs import management as watchdogs_management
     from .services.RemoteDesktop.vnc_proxy import ensure_vnc_proxy
 
     API.register_api(app, context)
     WebUI.register_web_ui(app, context)
     WebSocket.register_realtime(socketio, context)
-    if "watchdogs" not in app.blueprints:
-        watchdog_adapters = API.EngineServiceAdapters(context)
-        watchdogs_management.register_management(app, watchdog_adapters)
     try:
         registry = ensure_vnc_proxy(context, logger=logger.getChild("vnc_proxy"))
         if registry is None:
@@ -390,12 +386,8 @@ def register_engine_api(app: Flask, *, config: Optional[Mapping[str, Any]] = Non
     _register_assembly_shutdown_hook(assembly_cache, logger)
 
     from .services import API  # Local import avoids circular dependency at module import time
-    from .services.API.watchdogs import management as watchdogs_management
 
     API.register_api(app, context)
-    if "watchdogs" not in app.blueprints:
-        watchdog_adapters = API.EngineServiceAdapters(context)
-        watchdogs_management.register_management(app, watchdog_adapters)
     _attach_transition_logging(app, context, logger)
 
     groups_display = ", ".join(context.api_groups) if context.api_groups else "none"

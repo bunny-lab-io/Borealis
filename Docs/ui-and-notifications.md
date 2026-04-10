@@ -14,7 +14,7 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - Shared operator presence: authenticated browsers emit `operator_presence_sync` and `operator_presence_clear` on the shared socket; the Engine emits `server_operator_presence_changed` so informational admin pages can refresh live operator session data without waiting for their poll interval.
 - Navigation: `Data/Engine/web-interface/src/Navigation_Sidebar.jsx`.
 - Watchdog authoring: `Data/Engine/web-interface/src/Automation/Watchdogs/`.
-- Active Alerts queue: `Data/Engine/web-interface/src/Alerting/Active_Alerts.jsx`.
+- Alerts queue: `Data/Engine/web-interface/src/Alerting/Active_Alerts.jsx`.
 - Page template reference: `Data/Engine/web-interface/src/Admin/Page_Template.jsx` (layout only).
 
 ## Operator Bootstrap Gate
@@ -58,10 +58,10 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 ## Watchdogs and Alerts UX
 - Sidebar placement:
   - `Automation -> Watchdogs`
-  - `Alerting & Reporting -> Active Alerts`
+  - `Alerting & Reporting -> Alerts`
 - Watchdog authoring uses a tabbed editor with `Name`, `Scope`, `Targets`, `Rules`, `Actions`, and `Preview`.
 - The `Preview` tab is part of the primary authoring flow and resolves current targets before save.
-- Active Alerts is a separate incident queue so operators can work alerts without opening the underlying policy editor.
+- Alerts is a separate incident queue so operators can work alerts without opening the underlying policy editor.
 - Device Summary includes a `Watchdogs` tab so operators can acknowledge incidents, suppress a watchdog for one device, or launch a prefilled device-scoped watchdog draft.
 - Real-time refresh uses `watchdog_incidents_changed` and `device_watchdogs_changed` on the shared `window.BorealisSocket`.
 
@@ -75,8 +75,8 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - `POST /api/server/wireguard/recover` (Operator Admin Session) - triggers Borealis WireGuard listener recovery when active tunnels exist.
 - `GET /api/watchdogs` (Token Authenticated) - list watchdog policies for the Watchdogs page.
 - `POST /api/watchdogs/preview` (Token Authenticated) - preview the current watchdog outcome from the editor.
-- `GET /api/watchdogs/incidents` (Token Authenticated) - list queue incidents for Active Alerts.
-- `POST /api/watchdogs/incidents/<int:incident_id>/acknowledge` (Token Authenticated) - acknowledge an incident from Active Alerts or a device page.
+- `GET /api/watchdogs/incidents` (Token Authenticated) - list queue incidents for Alerts.
+- `POST /api/watchdogs/incidents/<int:incident_id>/acknowledge` (Token Authenticated) - acknowledge an incident from Alerts or a device page.
 - `GET /api/devices/<device_id>/watchdogs` (Token Authenticated) - hydrate the device-level Watchdogs tab.
 - `POST /api/devices/<device_id>/watchdogs/overrides` (Token Authenticated) - apply or clear a device-specific watchdog suppression.
 

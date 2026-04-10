@@ -383,8 +383,8 @@ export function buildAppRoutes() {
             {
               path: "alerts",
               handle: {
-                title: "Active Alerts",
-                breadcrumb: "Active Alerts",
+                title: "Alerts",
+                breadcrumb: "Alerts",
                 navKey: "alerts",
                 pageKey: "alerts",
               },

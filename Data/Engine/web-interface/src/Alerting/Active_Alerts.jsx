@@ -37,7 +37,7 @@ import {
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
-const PAGE_TITLE = "Active Alerts";
+const PAGE_TITLE = "Alerts";
 const PAGE_SUBTITLE =
   "Work the live watchdog incident queue, acknowledge noisy signals, and jump directly to affected devices or watchdog policies.";
 
@@ -150,8 +150,8 @@ export default function ActiveAlerts() {
     const reason =
       window.prompt(
         "Optional suppression reason for the selected device watchdog overrides:",
-        "Temporarily suppressed from Active Alerts."
-      ) || "Temporarily suppressed from Active Alerts.";
+        "Temporarily suppressed from Alerts."
+      ) || "Temporarily suppressed from Alerts.";
     setActionBusy(true);
     setError("");
     try {

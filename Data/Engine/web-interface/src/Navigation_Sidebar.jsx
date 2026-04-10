@@ -104,7 +104,7 @@ const NAV_SECTIONS = Object.freeze([
     items: [
       {
         icon: AlertsIcon,
-        label: "Active Alerts",
+        label: "Alerts",
         navKey: "alerts",
         to: APP_PATHS.alerts,
       },

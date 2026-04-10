@@ -290,7 +290,7 @@ export default function WatchdogList() {
           {loading ? <LinearProgress /> : null}
           {error ? <Alert severity="error">{error}</Alert> : null}
           <Typography variant="body2" sx={{ color: "rgba(203, 213, 225, 0.82)" }}>
-            Watchdogs live under Automation because they are policy authoring and remediation tools. Active incidents are handled separately from the dedicated Active Alerts queue.
+            Watchdogs live under Automation because they are policy authoring and remediation tools. Active incidents are handled separately from the dedicated Alerts queue.
           </Typography>
         </Stack>
       }
