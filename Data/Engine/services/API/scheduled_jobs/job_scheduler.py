@@ -33,6 +33,7 @@ from ....db import dbapi as sqlite3
 from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
 from ...filters.matcher import DeviceFilterMatcher
+from .targets import normalize_targets_for_save
 
 _WINRM_USERNAME_VAR = "__borealis_winrm_username"
 _WINRM_PASSWORD_VAR = "__borealis_winrm_password"
@@ -4338,83 +4339,17 @@ class JobScheduler:
             return base
 
         def _normalize_targets_for_save(raw_targets: Any) -> List[Any]:
-            normalized: List[Any] = []
             if not isinstance(raw_targets, list):
                 raw_list = [raw_targets]
             else:
                 raw_list = raw_targets
-            seen_devices: set[str] = set()
-            seen_filters: set[int] = set()
+            numeric_normalized: List[Any] = []
             for entry in raw_list:
-                if isinstance(entry, str):
-                    host = entry.strip()
-                    if not host:
-                        continue
-                    lowered = host.lower()
-                    if lowered in seen_devices:
-                        continue
-                    seen_devices.add(lowered)
-                    normalized.append(host)
-                    continue
-                if isinstance(entry, (int, float)):
-                    host = str(entry).strip()
-                    if not host:
-                        continue
-                    lowered = host.lower()
-                    if lowered in seen_devices:
-                        continue
-                    seen_devices.add(lowered)
-                    normalized.append(host)
-                    continue
-                if not isinstance(entry, dict):
-                    continue
-                kind = str(entry.get("kind") or entry.get("type") or "").strip().lower()
-                if kind == "filter" or entry.get("filter_id") is not None:
-                    filter_id = entry.get("filter_id") or entry.get("id")
-                    try:
-                        filter_id_int = int(filter_id)
-                    except (TypeError, ValueError):
-                        continue
-                    if filter_id_int in seen_filters:
-                        continue
-                    seen_filters.add(filter_id_int)
-                    normalized.append(
-                        {
-                            "kind": "filter",
-                            "filter_id": filter_id_int,
-                            "name": entry.get("name"),
-                        }
-                    )
-                    continue
-                hostname = entry.get("hostname")
-                if hostname:
-                    host = str(hostname).strip()
-                    if host:
-                        device_guid = str(entry.get("device_guid") or entry.get("guid") or "").strip().lower()
-                        site_id_value = entry.get("site_id")
-                        try:
-                            site_id_value = int(site_id_value) if site_id_value not in (None, "", "null") else None
-                        except Exception:
-                            site_id_value = None
-                        if device_guid:
-                            dedupe_key = f"guid:{device_guid}"
-                        elif site_id_value is not None:
-                            dedupe_key = f"site:{site_id_value}:{host.lower()}"
-                        else:
-                            dedupe_key = host.lower()
-                        if dedupe_key in seen_devices:
-                            continue
-                        seen_devices.add(dedupe_key)
-                        normalized.append(
-                            {
-                                "kind": "device",
-                                "device_guid": device_guid,
-                                "hostname": host,
-                                "site_id": site_id_value,
-                                "site_name": entry.get("site_name") or entry.get("site") or "",
-                            }
-                        )
-            return normalized
+                if isinstance(entry, (int, float)) and not isinstance(entry, bool):
+                    numeric_normalized.append(str(entry).strip())
+                else:
+                    numeric_normalized.append(entry)
+            return normalize_targets_for_save(numeric_normalized)
 
         def _validate_targets_for_save(targets: Sequence[Any]) -> Optional[str]:
             filter_ids: List[int] = []

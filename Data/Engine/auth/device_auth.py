@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, Optional
 import jwt
 from flask import g, jsonify, request
 
+from . import device_purge_state
 from .dpop import DPoPReplayError, DPoPValidator, DPoPVerificationError
 from .guid_utils import normalize_guid
 from .rate_limit import SlidingWindowRateLimiter
@@ -117,6 +118,9 @@ class DeviceAuthManager:
 
         with closing(self._db_conn_factory()) as conn:
             cur = conn.cursor()
+            required_token_version = device_purge_state.get_required_token_version(cur, guid)
+            if required_token_version is not None and token_version < required_token_version:
+                raise DeviceAuthError("device_purged", status_code=401)
             cur.execute(
                 """
                 SELECT guid, ssl_key_fingerprint, token_version, status
@@ -134,6 +138,9 @@ class DeviceAuthManager:
                     break
             if row is None and rows:
                 row = rows[0]
+
+            if row is None and required_token_version is not None:
+                raise DeviceAuthError("device_purged", status_code=401)
 
             if row is None:
                 row = self._recover_device_record(conn, guid, fingerprint, token_version, context_label)

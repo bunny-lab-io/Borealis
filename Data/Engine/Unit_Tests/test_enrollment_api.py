@@ -217,3 +217,120 @@ def test_enrollment_poll_finalizes_when_approved(engine_harness: EngineTestHarne
 
     assert refresh_count == 1
     assert key_count == 1
+
+
+def test_enrollment_poll_reuses_purged_guid_with_bumped_token_version(
+    engine_harness: EngineTestHarness,
+) -> None:
+    harness = engine_harness
+    client: FlaskClient = harness.app.test_client()
+
+    install_code = "INSTALL-CODE-003"
+    purged_guid = "3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9"
+    required_token_version = 4
+    _seed_install_code(harness.db_path, install_code)
+    private_key, _public_der, public_b64 = _generate_agent_material()
+    client_nonce_bytes = os.urandom(32)
+    client_nonce_b64 = base64.b64encode(client_nonce_bytes).decode("ascii")
+
+    request_response = client.post(
+        "/api/agent/enroll/request",
+        json={
+            "hostname": "agent-node-03",
+            "enrollment_code": install_code,
+            "agent_pubkey": public_b64,
+            "client_nonce": client_nonce_b64,
+        },
+        headers={"X-Borealis-Agent-Context": "system"},
+    )
+    assert request_response.status_code == 200
+    request_payload = request_response.get_json()
+    approval_reference = request_payload["approval_reference"]
+    server_nonce_b64 = request_payload["server_nonce"]
+
+    approved_at = _iso(_now())
+    with sqlite3.connect(str(harness.db_path)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_purge_barriers (
+                guid TEXT PRIMARY KEY,
+                required_token_version INTEGER NOT NULL,
+                purged_at TEXT NOT NULL,
+                purged_by TEXT,
+                last_hostname TEXT,
+                last_agent_id TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO device_purge_barriers (
+                guid, required_token_version, purged_at, purged_by, last_hostname, last_agent_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                purged_guid,
+                required_token_version,
+                approved_at,
+                "admin",
+                "agent-node-03",
+                "agent-node-03-service",
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE device_approvals
+               SET guid = ?,
+                   status = 'approved',
+                   updated_at = ?,
+                   approved_by_user_id = 'operator'
+             WHERE approval_reference = ?
+            """,
+            (purged_guid, approved_at, approval_reference),
+        )
+        conn.commit()
+
+    message = base64.b64decode(server_nonce_b64, validate=True) + approval_reference.encode("utf-8") + client_nonce_bytes
+    proof_sig = private_key.sign(message)
+    proof_sig_b64 = base64.b64encode(proof_sig).decode("ascii")
+
+    poll_response = client.post(
+        "/api/agent/enroll/poll",
+        json={
+            "approval_reference": approval_reference,
+            "client_nonce": client_nonce_b64,
+            "proof_sig": proof_sig_b64,
+        },
+    )
+
+    assert poll_response.status_code == 200
+    poll_payload = poll_response.get_json()
+    assert poll_payload["status"] == "approved"
+    assert poll_payload["guid"] == purged_guid
+
+    with sqlite3.connect(str(harness.db_path)) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT hostname, token_version, status FROM devices WHERE guid = ?",
+            (purged_guid,),
+        )
+        device_row = cur.fetchone()
+        cur.execute(
+            "SELECT COUNT(*) FROM refresh_tokens WHERE guid = ?",
+            (purged_guid,),
+        )
+        refresh_count = cur.fetchone()[0]
+        cur.execute(
+            "SELECT COUNT(*) FROM device_purge_barriers WHERE guid = ?",
+            (purged_guid,),
+        )
+        barrier_count = cur.fetchone()[0]
+
+    assert device_row is not None
+    hostname, token_version, status = device_row
+    assert hostname == "agent-node-03"
+    assert token_version == required_token_version
+    assert status == "active"
+    assert refresh_count == 1
+    assert barrier_count == 0

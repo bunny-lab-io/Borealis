@@ -31,6 +31,7 @@ def _canonical_context(value: Optional[str]) -> Optional[str]:
 
 from flask import Blueprint, jsonify, request
 
+from ....auth import device_purge_state
 from ....auth.rate_limit import SlidingWindowRateLimiter
 from ....crypto import keys as crypto_keys
 from ....enrollment.nonce_store import NonceCache
@@ -162,6 +163,10 @@ def register(
         guid_norm = normalize_guid(guid)
         now_iso = _iso(_now())
         now_ts = int(time.time())
+        required_token_version = max(
+            1,
+            int(device_purge_state.get_required_token_version(cur, guid_norm) or 1),
+        )
         cur.execute(
             """
             SELECT guid, hostname, token_version, status, ssl_key_fingerprint, key_added_at, last_enrollment_at
@@ -185,6 +190,11 @@ def register(
             record["guid"] = normalize_guid(record.get("guid"))
             stored_fp = (record.get("ssl_key_fingerprint") or "").strip().lower()
             new_fp = (fingerprint or "").strip().lower()
+            try:
+                current_version = max(1, int(record.get("token_version") or 1))
+            except Exception:
+                current_version = 1
+            effective_current_version = max(current_version, required_token_version)
             if not stored_fp and new_fp:
                 cur.execute(
                     """
@@ -192,19 +202,17 @@ def register(
                        SET ssl_key_fingerprint = ?,
                            key_added_at = ?,
                            last_enrollment_at = ?,
+                           token_version = ?,
                            status = 'active'
                      WHERE guid = ?
                     """,
-                    (fingerprint, now_iso, now_ts, record["guid"]),
+                    (fingerprint, now_iso, now_ts, effective_current_version, record["guid"]),
                 )
                 record["ssl_key_fingerprint"] = fingerprint
                 record["key_added_at"] = now_iso
+                record["token_version"] = effective_current_version
             elif new_fp and stored_fp != new_fp:
-                try:
-                    current_version = int(record.get("token_version") or 1)
-                except Exception:
-                    current_version = 1
-                new_version = max(current_version + 1, 1)
+                new_version = max(effective_current_version + 1, required_token_version, 1)
                 cur.execute(
                     """
                         UPDATE devices
@@ -231,15 +239,28 @@ def register(
                 record["status"] = "active"
                 record["key_added_at"] = now_iso
             else:
-                cur.execute(
-                    """
-                    UPDATE devices
-                       SET last_enrollment_at = ?,
-                           status = 'active'
-                     WHERE guid = ?
-                    """,
-                    (now_ts, record["guid"]),
-                )
+                if current_version != effective_current_version:
+                    cur.execute(
+                        """
+                        UPDATE devices
+                           SET last_enrollment_at = ?,
+                               token_version = ?,
+                               status = 'active'
+                         WHERE guid = ?
+                        """,
+                        (now_ts, effective_current_version, record["guid"]),
+                    )
+                    record["token_version"] = effective_current_version
+                else:
+                    cur.execute(
+                        """
+                        UPDATE devices
+                           SET last_enrollment_at = ?,
+                               status = 'active'
+                         WHERE guid = ?
+                        """,
+                        (now_ts, record["guid"]),
+                    )
                 record["status"] = "active"
             record["last_enrollment_at"] = now_ts
             return record
@@ -247,13 +268,14 @@ def register(
         resolved_hostname = _normalize_host(hostname, guid_norm, cur)
         created_at = int(time.time())
         key_added_at = _iso(_now())
+        insert_token_version = max(1, required_token_version)
         cur.execute(
             """
             INSERT INTO devices (
                 guid, hostname, created_at, last_enrollment_at, last_seen, ssl_key_fingerprint,
                 token_version, status, key_added_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, 1, 'active', ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)
             """,
             (
                 guid_norm,
@@ -262,13 +284,14 @@ def register(
                 created_at,
                 created_at,
                 fingerprint,
+                insert_token_version,
                 key_added_at,
             ),
         )
         return {
             "guid": guid_norm,
             "hostname": resolved_hostname,
-            "token_version": 1,
+            "token_version": insert_token_version,
             "status": "active",
             "ssl_key_fingerprint": fingerprint,
             "key_added_at": key_added_at,
@@ -640,6 +663,7 @@ def register(
                 fingerprint,
                 device_record.get("token_version") or 1,
             )
+            device_purge_state.clear_barrier(cur, effective_guid)
 
             conn.commit()
         finally:

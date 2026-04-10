@@ -17,6 +17,7 @@ from typing import Callable
 
 from flask import Blueprint, current_app, jsonify, request
 
+from ....auth import device_purge_state
 from ....auth.dpop import DPoPReplayError, DPoPValidator, DPoPVerificationError
 from ....auth.guid_utils import normalize_guid
 
@@ -55,6 +56,8 @@ def register(
         conn = db_conn_factory()
         try:
             cur = conn.cursor()
+            if device_purge_state.get_required_token_version(cur, guid) is not None:
+                return jsonify({"error": "device_purged"}), 401
             cur.execute(
                 """
                 SELECT id, guid, token_hash, dpop_jkt, created_at, expires_at, revoked_at

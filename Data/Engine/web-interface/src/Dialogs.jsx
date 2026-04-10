@@ -2,6 +2,7 @@
 
 import React from "react";
 import {
+  Alert,
   Box,
   Dialog,
   DialogTitle,
@@ -296,21 +297,24 @@ export function ConfirmDeleteDialog({
   );
 }
 
-export function DeleteDeviceDialog({ open, onCancel, onConfirm }) {
+export function DeleteDeviceDialog({ open, onCancel, onConfirm, busy = false, errorText = "" }) {
   return (
     <DialogFrame
       open={open}
       onClose={onCancel}
-      title="Remove Device"
+      title="Purge Device"
       actions={
         <>
-          <Button onClick={onCancel} sx={DIALOG_BUTTON_SX}>Cancel</Button>
-          <Button onClick={onConfirm} sx={DIALOG_DANGER_BUTTON_SX}>Remove</Button>
+          <Button onClick={onCancel} sx={DIALOG_BUTTON_SX} disabled={busy}>Cancel</Button>
+          <Button onClick={onConfirm} sx={DIALOG_DANGER_BUTTON_SX} disabled={busy}>
+            {busy ? "Purging..." : "Purge Device"}
+          </Button>
         </>
       }
     >
+      {errorText ? <Alert severity="error" sx={{ mb: 1.5 }}>{errorText}</Alert> : null}
       <DialogContentText sx={DIALOG_BODY_TEXT_SX}>
-          Are you sure you want to remove this device?  If the agent is still running, it will automatically re-enroll the device.
+          Borealis will permanently purge this device's identity, history, site assignment, keys and tokens, and scheduled-job references. If the same machine comes back, it will need fresh enrollment and approval.
       </DialogContentText>
     </DialogFrame>
   );

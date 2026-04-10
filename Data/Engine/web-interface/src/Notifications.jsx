@@ -75,6 +75,16 @@ const THEMES = {
     accentA: "rgba(125, 211, 252, 0.08)",
     accentB: "rgba(192, 132, 252, 0.07)",
   },
+  success: {
+    background:
+      "linear-gradient(135deg, rgba(11,33,28,0.95) 0%, rgba(15,45,37,0.92) 36%, rgba(20,58,46,0.9) 68%, rgba(24,74,57,0.86) 100%)",
+    glow: "0 12px 30px rgba(4, 18, 12, 0.58), 0 0 0 1px rgba(110, 255, 187, 0.16)",
+    border: "1px solid rgba(110, 255, 187, 0.22)",
+    text: "#e3f8ee",
+    icon: "#b8ffd9",
+    accentA: "rgba(90, 235, 170, 0.08)",
+    accentB: "rgba(52, 211, 153, 0.08)",
+  },
   warning: {
     background:
       "linear-gradient(135deg, rgba(44,35,10,0.95) 0%, rgba(54,42,14,0.92) 36%, rgba(64,50,18,0.9) 68%, rgba(78,60,20,0.86) 100%)",

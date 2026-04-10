@@ -25,7 +25,9 @@ import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-communi
 import { DeleteDeviceDialog, CreateCustomViewDialog, RenameCustomViewDialog } from "../Dialogs.jsx";
 import AddDevice from "./Add_Device.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import { useAuth } from "../app/providers/AuthContext.jsx";
 import { APP_PATHS } from "../app/routes/paths.js";
 import { createQuickJobDraft } from "../app/utils/quickJob.js";
 
@@ -358,11 +360,14 @@ export default function DeviceList({
   defaultAddType,
 }) {
   const navigate = useNavigate();
+  const { isAdmin, user } = useAuth();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [selected, setSelected] = useState(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   // Track selection by agent id to avoid duplicate hostname collisions
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const canLaunchQuickJob = selectedIds.size > 0;
@@ -414,6 +419,12 @@ export default function DeviceList({
     if (typeof showAddButton === "boolean") return showAddButton;
     return filterMode !== "agent";
   }, [showAddButton, filterMode]);
+  const notifyOperator = useAppNotifications({
+    title: computedTitle || "Device Inventory",
+    icon: "device",
+    variant: "info",
+    username: user || undefined,
+  });
 
   // Saved custom views (from server)
   const [views, setViews] = useState([]); // [{id, name, columns:[id], filters:{}}]
@@ -1184,6 +1195,7 @@ export default function DeviceList({
   }, []);
 
   const openMenu = useCallback((event, row) => {
+    setDeleteError("");
     setMenuAnchor(event.currentTarget);
     setSelected(row);
   }, []);
@@ -1191,30 +1203,68 @@ export default function DeviceList({
   const closeMenu = useCallback(() => setMenuAnchor(null), []);
 
   const confirmDelete = useCallback(() => {
+    setDeleteError("");
     closeMenu();
     setConfirmOpen(true);
   }, [closeMenu]);
 
   const handleDelete = useCallback(async () => {
-    if (!selected) return;
-    const targetAgentId = selected.agentId || selected.summary?.agent_id || selected.id;
-    try {
-      if (targetAgentId) {
-        await fetch(`/api/agent/${encodeURIComponent(targetAgentId)}`, { method: "DELETE" });
-      }
-    } catch (e) {
-      console.warn("Failed to remove agent", e);
+    if (!selected || deleteBusy) return;
+    if (!isAdmin) {
+      setDeleteError("Only administrators can purge devices.");
+      return;
     }
-    setRows((r) => r.filter((x) => x.id !== selected.id));
-    setSelectedIds((prev) => {
-      if (!prev.has(selected.id)) return prev;
-      const next = new Set(prev);
-      next.delete(selected.id);
-      return next;
-    });
-    setConfirmOpen(false);
-    setSelected(null);
-  }, [selected]);
+    const targetGuid =
+      (selected.agentGuid || selected.summary?.agent_guid || selected.guid || "").trim();
+    if (!targetGuid) {
+      setDeleteError("This device is missing a GUID and cannot be purged.");
+      return;
+    }
+    const selectedId = selected.id;
+    setDeleteBusy(true);
+    setDeleteError("");
+    try {
+      const response = await fetch(`/api/devices/${encodeURIComponent(targetGuid)}/purge`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message =
+          payload?.message ||
+          payload?.error ||
+          `Failed to purge device (${response.status})`;
+        throw new Error(message);
+      }
+      const targetHostname =
+        (payload?.hostname || selected.hostname || selected.summary?.hostname || "the selected device").trim();
+      const updatedJobs = Number(payload?.scheduled_jobs?.updated || 0);
+      const deletedJobs = Number(payload?.scheduled_jobs?.deleted || 0);
+      setRows((existingRows) => existingRows.filter((row) => row.id !== selectedId));
+      setSelectedIds((prev) => {
+        if (!prev.has(selectedId)) return prev;
+        const next = new Set(prev);
+        next.delete(selectedId);
+        return next;
+      });
+      setConfirmOpen(false);
+      setSelected(null);
+      await notifyOperator({
+        title: "Device Purged",
+        message:
+          `Borealis permanently purged ${targetHostname}. ` +
+          `Updated ${updatedJobs} scheduled job(s) and deleted ${deletedJobs} empty job(s).`,
+        icon: "device",
+        variant: "success",
+      });
+      await fetchDevices({ showLoading: false });
+    } catch (error) {
+      console.warn("Failed to purge device", error);
+      setDeleteError(error instanceof Error ? error.message : "Failed to purge device.");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [deleteBusy, fetchDevices, isAdmin, notifyOperator, selected]);
 
   const hostnameCellRenderer = useCallback(
     (params) => {
@@ -2143,12 +2193,18 @@ export default function DeviceList({
           setAssignSiteId(null);
           setAssignDialogOpen(true);
         }}>Move to Another Site</MenuItem>
-        <MenuItem onClick={confirmDelete} sx={{ color: '#ff8a8a' }}>Delete</MenuItem>
+        {isAdmin ? <MenuItem onClick={confirmDelete} sx={{ color: '#ff8a8a' }}>Delete</MenuItem> : null}
       </Menu>
       <DeleteDeviceDialog
         open={confirmOpen}
-        onCancel={() => setConfirmOpen(false)}
+        onCancel={() => {
+          if (deleteBusy) return;
+          setConfirmOpen(false);
+          setDeleteError("");
+        }}
         onConfirm={handleDelete}
+        busy={deleteBusy}
+        errorText={deleteError}
       />
 
       {assignDialogOpen && (
