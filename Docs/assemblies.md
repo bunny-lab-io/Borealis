@@ -43,6 +43,15 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - The Engine resolves the script, signs it, and emits a Socket.IO `quick_job_run` event.
 - Agents execute the payload and return `quick_job_result` for status and output.
 
+## Watchdog-Triggered Remediation
+- Watchdogs can use assemblies as remediation actions.
+- Borealis supports:
+  - script assemblies through the same quick-job dispatch path used by operator-launched script runs
+  - workflow assemblies through the workflow runtime's async run-start API
+  - Ansible assemblies through the Engine-side Ansible runner in `local` execution context
+- Watchdog-owned script remediations still create `activity_history` rows so the device activity UI and historical troubleshooting stay consistent.
+- Workflow remediations carry source metadata that links the workflow run back to the triggering watchdog and incident.
+
 ## Activity History
 - Quick job executions are tracked in `activity_history`.
 - Operators can view or delete device activity history via API.
@@ -83,6 +92,8 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - [Security and Trust](security-and-trust.md)
 - [API Reference](api-reference.md)
 - [Ansible Playbooks](features_to_implement/ansible_playbooks.md)
+- [Watchdogs](watchdogs.md)
+- [Device Alerts](device-alerts.md)
 
 ## Codex Agent (Detailed)
 ### Storage layout and caching

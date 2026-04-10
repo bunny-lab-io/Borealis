@@ -28,6 +28,15 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Filters can be `Global`, `Specific Sites`, or `Global w/ Exclusions`.
 - Operator visibility is based on the filter's effective included site scope, not the subset of matching devices the operator can see.
 
+## Device Watchdogs and Alerts
+- Device Summary now exposes a `Watchdogs` tab for incident-first per-device monitoring.
+- That tab shows:
+  - active incidents currently affecting the device
+  - effective watchdog assignments resolved onto the device
+  - active per-device suppressions and overrides
+- Operators can create a new prefilled watchdog for the current device without leaving the device page.
+- Per-device suppressions mute one watchdog/device relationship without cloning the shared watchdog policy.
+
 ## Device List Views
 - Operators can save custom table views for the device list UI.
 - Views are stored per operator and exposed via `/api/device_list_views`.
@@ -82,6 +91,10 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `POST /api/device_filters/<filter_id>/archive` (Token Authenticated) - archive filter.
 - `POST /api/device_filters/<filter_id>/unarchive` (Token Authenticated) - unarchive filter.
 - `DELETE /api/device_filters/<filter_id>` (Token Authenticated) - delete filter.
+- `GET /api/devices/<device_id>/watchdogs` (Token Authenticated) - load the device Watchdogs tab payload.
+- `POST /api/devices/<device_id>/watchdogs/overrides` (Token Authenticated) - create, update, or clear a device-specific watchdog override.
+- `GET /api/watchdogs/incidents` (Token Authenticated) - list current watchdog incidents.
+- `POST /api/watchdogs/incidents/<int:incident_id>/acknowledge` (Token Authenticated) - acknowledge an open incident.
 - `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
 - `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).
 - `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).
@@ -94,6 +107,8 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - [Database Reference](db-reference.md)
 - [Security and Trust](security-and-trust.md)
 - [Scheduled Jobs](scheduled-jobs.md)
+- [Watchdogs](watchdogs.md)
+- [Device Alerts](device-alerts.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
 - [API Reference](api-reference.md)
 

@@ -23,9 +23,11 @@ This page is the navigation hub for the Borealis documentation set. The knowledg
 - [Assemblies and Quick Jobs](assemblies.md)
 - [Flow Editor and Nodes](flow-editor-and-nodes.md)
 - [Scheduled Jobs](scheduled-jobs.md)
+- [Watchdogs](watchdogs.md)
 
 ### Operations and Remote Access
 - [Device Management](device-management.md)
+- [Device Alerts](device-alerts.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
 - [Logging and Operations](logging-and-operations.md)
 
@@ -61,6 +63,8 @@ None. This index only links to other pages.
 - Read `getting-started.md` and `architecture-overview.md` to build the global model.
 - Use `engine-runtime.md` and `agent-runtime.md` for implementation-level details.
 - Use `db-reference.md` for PostgreSQL table ownership, relationships, and legacy migration notes.
+- Use `watchdogs.md` for watchdog authoring, evaluation, and remediation behavior.
+- Use `device-alerts.md` for the operational incident queue and device-level watchdog handling.
 - Use `ui-and-notifications.md` for MagicUI, AG Grid, and toast notification rules.
 - Use `migrating-pages-to-react-router.md` when moving legacy WebUI pages onto the shared router and app shell.
 - Use `vpn-and-remote-access.md` for WireGuard and remote shell/VNC details.

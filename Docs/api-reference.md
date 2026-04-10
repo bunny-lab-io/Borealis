@@ -96,6 +96,19 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/device_filters/<filter_id>/unarchive` (Token Authenticated) - unarchive filter.
 - `DELETE /api/device_filters/<filter_id>` (Token Authenticated) - delete filter.
 
+### Watchdogs and Device Alerts
+- `GET /api/watchdogs` (Token Authenticated) - list watchdog policies within the current operator's site scope.
+- `GET /api/watchdogs/metadata` (Token Authenticated) - watchdog editor metadata for rule types, action types, severities, and scope modes.
+- `POST /api/watchdogs/preview` (Token Authenticated) - resolve targets and preview current watchdog evaluation results.
+- `GET /api/watchdogs/<int:watchdog_id>` (Token Authenticated) - get one watchdog policy.
+- `POST /api/watchdogs` (Token Authenticated) - create a watchdog policy.
+- `PUT /api/watchdogs/<int:watchdog_id>` (Token Authenticated) - update a watchdog policy.
+- `DELETE /api/watchdogs/<int:watchdog_id>` (Token Authenticated) - delete a watchdog policy and its runtime state.
+- `GET /api/watchdogs/incidents` (Token Authenticated) - list watchdog incidents in `open` or `resolved` state within the current operator's visible scope.
+- `POST /api/watchdogs/incidents/<int:incident_id>/acknowledge` (Token Authenticated) - acknowledge an open watchdog incident.
+- `GET /api/devices/<device_id>/watchdogs` (Token Authenticated) - load the device Watchdogs tab payload, including incidents, assignments, and overrides.
+- `POST /api/devices/<device_id>/watchdogs/overrides` (Token Authenticated) - create, update, or clear a per-device watchdog override.
+
 ### Assemblies and Execution
 - `GET /api/assemblies` (Token Authenticated) - list assemblies.
 - `GET /api/assemblies/<assembly_guid>` (Token Authenticated) - assembly details.
@@ -162,6 +175,8 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 - [Engine Runtime](engine-runtime.md)
 - [Database Reference](db-reference.md)
 - [Device Management](device-management.md)
+- [Watchdogs](watchdogs.md)
+- [Device Alerts](device-alerts.md)
 - [Assemblies and Quick Jobs](assemblies.md)
 - [Scheduled Jobs](scheduled-jobs.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)

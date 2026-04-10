@@ -36,6 +36,12 @@ scheduled_job_runs (id) ------< scheduled_job_run_activity (run_id)
 scheduled_job_runs (id) ------< scheduled_job_run_targets (run_id)
 activity_history (id) --------< scheduled_job_run_activity (activity_id, unique)
 
+watchdogs (id) ---------------< watchdog_sites (watchdog_id)
+watchdogs (id) ---------------< watchdog_targets (watchdog_id)
+watchdogs (id) ---------------< watchdog_device_overrides (watchdog_id)
+watchdogs (id) ---------------< watchdog_device_state (watchdog_id)
+watchdogs (id) ---------------< watchdog_incidents (watchdog_id)
+
 users (id/username) ----------< device_approvals.approved_by_user_id (soft relation)
 users (id) -------------------< user_site_assignments (user_id)
 sites (id) -------------------< user_site_assignments (site_id)
@@ -218,6 +224,64 @@ sites (id) -------------------< user_site_assignments (site_id)
 - No dedicated primary key; uniqueness is maintained by filter-write paths.
 - Used by:
 - `/api/device_filters*` write paths.
+
+#### `watchdogs`
+- Status: Active.
+- Purpose: Saved watchdog policy definitions.
+- Columns: `id`, `name`, `description`, `archived`, `enabled`, `severity`, `match_mode`, `site_mode`, `criteria_json`, `actions_json`, `evaluation_interval_seconds`, `cooldown_seconds`, `auto_resolve_after_seconds`, `min_consecutive_matches`, `boot_grace_seconds`, `last_edited_by`, `created_at`, `updated_at`, `last_evaluated_at`.
+- Used by:
+- `/api/watchdogs*`.
+- `WatchdogRuntimeService`.
+- Notes:
+- Watchdog definitions are saved independently from runtime state and incident history.
+- Saving a watchdog immediately triggers a fresh evaluation pass.
+
+#### `watchdog_sites`
+- Status: Active.
+- Purpose: Normalized site-scope rows for watchdogs with explicit site membership.
+- Columns: `watchdog_id`, `site_id`.
+- Used by:
+- Watchdog save paths.
+- RBAC visibility checks.
+
+#### `watchdog_targets`
+- Status: Active.
+- Purpose: Saved dynamic or explicit watchdog targets.
+- Columns: `id`, `watchdog_id`, `kind`, `target_json`, `created_at`.
+- Used by:
+- Watchdog target resolution.
+- Filter-backed device expansion.
+- Notes:
+- `kind` is `filter` or `device`.
+- `target_json` stores the normalized target payload used by runtime expansion.
+
+#### `watchdog_device_overrides`
+- Status: Active.
+- Purpose: Device-specific suppressions and disables for one watchdog/device pair.
+- Columns: `id`, `watchdog_id`, `device_guid`, `hostname`, `site_id`, `state`, `reason`, `created_by`, `created_at`, `expires_at`, `updated_at`.
+- Used by:
+- Device Watchdogs tab.
+- Active Alerts suppression flow.
+
+#### `watchdog_device_state`
+- Status: Active.
+- Purpose: Last-known per-device watchdog evaluation state.
+- Columns: `id`, `watchdog_id`, `device_guid`, `hostname`, `site_id`, `state`, `consecutive_matches`, `first_matched_at`, `clear_started_at`, `last_evaluated_at`, `last_matched_at`, `last_sample_json`, `current_incident_id`, `last_action_at`, `updated_at`.
+- Used by:
+- Watchdog list state summaries.
+- Device Watchdogs tab.
+- Incident reconciliation and cooldown logic.
+- Notes:
+- `state` can include `normal`, `pending`, `triggered`, `suppressed`, `disabled`, and `stale_data`.
+
+#### `watchdog_incidents`
+- Status: Active.
+- Purpose: Watchdog incident history and operator-facing alert queue rows.
+- Columns: `id`, `watchdog_id`, `device_guid`, `hostname`, `site_id`, `severity`, `state`, `title`, `message`, `sample_json`, `rule_summary_json`, `action_summary_json`, `opened_at`, `updated_at`, `resolved_at`, `resolution_reason`, `acknowledged_at`, `acknowledged_by`, `trigger_count`.
+- Used by:
+- `GET /api/watchdogs/incidents`.
+- Device Watchdogs tab.
+- Acknowledgement and auto-resolve flows.
 - `DeviceFilterMatcher.load_filters()` for site-mode hydration.
 
 #### `device_software_inventory`

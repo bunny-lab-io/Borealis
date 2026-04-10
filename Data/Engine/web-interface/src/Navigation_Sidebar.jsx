@@ -19,6 +19,8 @@ import {
   FilterAlt as FilterIcon,
   Schedule as ScheduleIcon,
   Apps as AssembliesIcon,
+  SmartToy as WatchdogIcon,
+  NotificationsActive as AlertsIcon,
   LocationCity as SitesIcon,
   Dns as ServerInfoIcon,
   VpnKey as CredentialIcon,
@@ -88,6 +90,24 @@ const NAV_SECTIONS = Object.freeze([
         navKey: "jobs",
         to: APP_PATHS.jobs,
       },
+      {
+        icon: WatchdogIcon,
+        label: "Watchdogs",
+        navKey: "watchdogs",
+        to: APP_PATHS.watchdogs,
+      },
+    ],
+  },
+  {
+    id: "alerting",
+    title: "Alerting & Reporting",
+    items: [
+      {
+        icon: AlertsIcon,
+        label: "Active Alerts",
+        navKey: "alerts",
+        to: APP_PATHS.alerts,
+      },
     ],
   },
   {
@@ -149,6 +169,7 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
     sites: true,
     devices: true,
     automation: true,
+    alerting: true,
     filters: true,
     access: true,
     admin: true,

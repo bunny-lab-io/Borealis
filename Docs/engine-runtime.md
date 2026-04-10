@@ -13,6 +13,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - VPN orchestration: `Data/Engine/services/VPN/` (WireGuard server manager + tunnel service).
 - Remote desktop proxy: `Data/Engine/services/RemoteDesktop/` (VNC WebSocket bridge).
 - Assemblies: `Data/Engine/assembly_management/` and `Data/Engine/services/assemblies/`.
+- Watchdog runtime: `Data/Engine/services/API/watchdogs/`.
 
 ## Runtime Paths
 - Source code: `Data/Engine/` (edit here).
@@ -37,6 +38,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - [Logging and Operations](logging-and-operations.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
 - [Technical Debt](technical-debt.md)
+- [Watchdogs](watchdogs.md)
+- [Device Alerts](device-alerts.md)
 - [Aegis Cipher](features_to_implement/aegis_cipher.md)
 - [Reverse Proxy Functionality](features_to_implement/reverse_proxy_functionality.md)
 
@@ -53,6 +56,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
   - API registration: `API.register_api(app, context)`
   - WebUI static hosting: `WebUI.register_web_ui(app, context)`
   - Realtime events: `WebSocket.register_realtime(socketio, context)`
+  - Watchdog API/runtime registration from `Data/Engine/services/API/watchdogs/management.py`
 
 ### API groups and adapters
 - Default groups live in `Data/Engine/services/API/__init__.py` (`DEFAULT_API_GROUPS`).
@@ -89,6 +93,19 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 ### Assembly runtime
 - Assembly cache is initialized in `Data/Engine/assembly_management` and attached to `context.assembly_cache`.
 - Quick jobs and scheduled jobs share this runtime to resolve scripts and variables.
+
+### Watchdog evaluator runtime
+- `EngineContext.watchdog_runtime` owns the Borealis-native watchdog evaluator.
+- Registration and bootstrap happen in `Data/Engine/server.py` after the primary API, WebUI, and Socket.IO registrars.
+- The evaluator loop periodically checks enabled watchdogs whose `evaluation_interval_seconds` has elapsed.
+- Immediate evaluation still happens on watchdog save and device-override updates so operator changes become visible without waiting for the scheduler tick.
+- Runtime responsibilities include:
+  - resolving explicit device and filter-backed targets
+  - evaluating rules against cached device data
+  - tracking per-device watchdog state
+  - opening and resolving incidents
+  - dispatching in-app alerts, service-control actions, and assembly remediation
+  - emitting `watchdog_incidents_changed` and `device_watchdogs_changed`
 
 ### Platform parity
 - Engine deployment is Linux-only via `Borealis.sh`.
