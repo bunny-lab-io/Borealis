@@ -41,8 +41,8 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 
 ### Enrollment and Tokens
 - `POST /api/agent/enroll/request` (No Authentication) - submit enrollment request.
-- `POST /api/agent/enroll/poll` (No Authentication) - finalize approved enrollment.
-- `POST /api/agent/token/refresh` (Refresh Token) - mint new access token.
+- `POST /api/agent/enroll/poll` (No Authentication) - finalize approved enrollment, including recreating a previously purged GUID with a bumped token version after fresh approval.
+- `POST /api/agent/token/refresh` (Refresh Token) - mint new access token; returns `401 device_purged` when a GUID is blocked by a purge barrier.
 
 ### Devices and Inventory
 - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
@@ -53,6 +53,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/devices` (Token Authenticated) - device summary list, scoped to the operator's assigned sites unless the operator is an admin.
 - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - hostname search matches for the shared header search, scoped to the operator's assigned sites unless the operator is an admin.
 - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID, site-scoped for operators.
+- `POST /api/devices/<guid>/purge` (Admin) - purge a device, revoke stale trust state, remove current-known references, and rewrite scheduled-job targets that referenced the device.
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details, site-scoped for operators.
 - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory for an in-scope device.
 - `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service on an in-scope device.

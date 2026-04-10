@@ -15,6 +15,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional, Sequence, Tuple
 
+from .auth import device_purge_state
+
 
 DEVICE_TABLE = "devices"
 
@@ -30,6 +32,7 @@ def apply_all(conn: sqlite3.Connection) -> None:
     _ensure_device_vpn_ip_lease_table(conn)
     _ensure_refresh_token_table(conn)
     _ensure_device_approval_table(conn)
+    device_purge_state.ensure_table(conn)
 
     conn.commit()
 

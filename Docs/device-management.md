@@ -37,6 +37,14 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Admins can approve any site; operators can approve only requests for sites they are assigned to.
 - Approvals enforce hostname conflict checks and device identity tracking.
 
+## Device Purge
+- The Device List `Delete` action is now an admin-only purge flow backed by `POST /api/devices/<guid>/purge`.
+- Purge is authoritative: Borealis deletes the device row plus current-known identity, trust, and inventory references including `device_keys`, `refresh_tokens`, `device_sites`, `device_software_inventory`, approval records, activity history, scheduled-job target history, Ansible recaps, and dormant per-agent VPN/service-account rows.
+- Purge also rewrites future scheduled-job definitions. Direct device targets for the purged GUID are removed, hostname and site fallback targets are stripped when no GUID is present, filter targets remain intact, and any job left with no targets is deleted entirely.
+- A purge creates a temporary auth barrier keyed by GUID and the required next token version so stale access tokens and stale refresh tokens fail with `device_purged` instead of recreating the device row.
+- If the same machine is approved again later, enrollment recreates the device row at or above the barrier token version and then clears the barrier so the device can return through normal approval.
+- After the purge transaction commits, the Engine best-effort disconnects active VPN transport and revokes cached VNC sessions for the purged agent ID.
+
 ## API Endpoints
 - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
 - `POST /api/agent/details` (Device Authenticated) - inventory and cached service payloads.
@@ -44,6 +52,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `GET /api/devices` (Token Authenticated) - device summary list.
 - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - site-scoped hostname search for the shared header search UI.
 - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID.
+- `POST /api/devices/<guid>/purge` (Admin) - holistically purge a device, its trust records, and scheduled-job references.
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details.
 - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory.
 - `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service.
@@ -109,6 +118,8 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 ### Device identity and keys
 - Device identity is tied to GUID + SSL fingerprint + token version.
 - `DeviceAuthManager` enforces fingerprint matches and token version checks.
+- Purge inserts a `device_purge_barriers` row so deleted devices cannot be silently recreated by stale access tokens or stale refresh tokens.
+- Re-enrollment clears the barrier only after the recreated device row has been seeded with a token version at or above the purge barrier.
 
 ### Sites and enrollment codes
 - Sites live in `sites` and `device_sites` tables (see `Data/Engine/database.py`).

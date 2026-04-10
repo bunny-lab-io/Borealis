@@ -8,6 +8,7 @@
 # - GET /api/devices (Token Authenticated) - Returns a summary list of known devices for the WebUI transition.
 # - GET /api/devices/search (Token Authenticated) - Returns hostname search matches scoped to the operator's assigned sites unless the operator is an admin.
 # - GET /api/devices/<guid> (Token Authenticated) - Retrieves a single device record by GUID, including summary fields.
+# - POST /api/devices/<guid>/purge (Token Authenticated (Admin)) - Holistically purges a device, its trust records, and scheduled-job references.
 # - GET /api/device/details/<hostname> (Token Authenticated) - Returns full device details keyed by hostname.
 # - POST /api/device/description/<hostname> (Token Authenticated) - Updates the human-readable description for a device.
 # - GET /api/device_list_views (Token Authenticated) - Lists saved device table view definitions.
@@ -43,12 +44,14 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from flask import Blueprint, jsonify, request, session, g
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from ....auth import device_purge_state
 from ....auth.guid_utils import normalize_guid
 from ....auth.device_auth import DeviceAuthError, require_device_auth
 from ....public_endpoints import public_base_url as resolve_public_base_url
 from ....public_endpoints import public_hostname as resolve_public_hostname
 from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
+from ..scheduled_jobs.targets import prune_device_targets
 from .agent_role_health import (
     merge_agent_role_health,
     normalize_agent_role_health,
@@ -1303,6 +1306,430 @@ class DeviceManagementService:
         finally:
             conn.close()
 
+    def _delete_where_any(
+        self,
+        cur: sqlite3.Cursor,
+        table: str,
+        predicates: List[Tuple[str, Tuple[Any, ...]]],
+    ) -> int:
+        active_predicates = [
+            (clause, tuple(params or ()))
+            for clause, params in (predicates or [])
+            if clause and tuple(params or ())
+        ]
+        if not active_predicates:
+            return 0
+        sql = " OR ".join(f"({clause})" for clause, _ in active_predicates)
+        params: List[Any] = []
+        for _clause, clause_params in active_predicates:
+            params.extend(clause_params)
+        cur.execute(f"DELETE FROM {table} WHERE {sql}", tuple(params))
+        return int(cur.rowcount or 0)
+
+    def _delete_by_id_list(
+        self,
+        cur: sqlite3.Cursor,
+        table: str,
+        column: str,
+        values: List[Any],
+    ) -> int:
+        items = [value for value in (values or []) if value not in (None, "")]
+        if not items:
+            return 0
+        placeholders = ",".join("?" for _ in items)
+        cur.execute(
+            f"DELETE FROM {table} WHERE {column} IN ({placeholders})",
+            tuple(items),
+        )
+        return int(cur.rowcount or 0)
+
+    def _load_device_purge_record(
+        self,
+        cur: sqlite3.Cursor,
+        guid: str,
+    ) -> Optional[Dict[str, Any]]:
+        normalized_guid = normalize_guid(guid)
+        if not normalized_guid:
+            return None
+        cur.execute(
+            """
+            SELECT d.guid,
+                   d.hostname,
+                   d.agent_id,
+                   d.ssl_key_fingerprint,
+                   d.token_version,
+                   ds.site_id
+              FROM devices AS d
+         LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
+             WHERE UPPER(d.guid) = ?
+            """,
+            (normalized_guid,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        try:
+            site_id = int(row[5]) if row[5] is not None else None
+        except Exception:
+            site_id = None
+        try:
+            token_version = max(1, int(row[4] or 1))
+        except Exception:
+            token_version = 1
+        return {
+            "guid": normalize_guid(row[0]) or normalized_guid,
+            "hostname": (row[1] or "").strip(),
+            "agent_id": (row[2] or "").strip(),
+            "ssl_key_fingerprint": (row[3] or "").strip().lower(),
+            "token_version": token_version,
+            "site_id": site_id,
+        }
+
+    def _rewrite_scheduled_jobs_for_purge(
+        self,
+        cur: sqlite3.Cursor,
+        *,
+        device_guid: str,
+        hostname: str,
+        site_id: Optional[int],
+    ) -> Dict[str, int]:
+        cur.execute("SELECT id, targets_json FROM scheduled_jobs")
+        rows = cur.fetchall()
+        now_ts = int(time.time())
+        summary = {
+            "updated": 0,
+            "deleted": 0,
+            "targets_removed": 0,
+        }
+        for job_id, targets_json in rows or []:
+            try:
+                raw_targets = json.loads(targets_json or "[]")
+            except Exception:
+                raw_targets = []
+            updated_targets, removed_count = prune_device_targets(
+                raw_targets,
+                device_guid=device_guid,
+                hostname=hostname,
+                site_id=site_id,
+            )
+            if removed_count <= 0:
+                continue
+            summary["targets_removed"] += int(removed_count)
+            if updated_targets:
+                cur.execute(
+                    """
+                    UPDATE scheduled_jobs
+                       SET targets_json = ?,
+                           updated_at = ?
+                     WHERE id = ?
+                    """,
+                    (json.dumps(updated_targets or []), now_ts, job_id),
+                )
+                if int(cur.rowcount or 0):
+                    summary["updated"] += 1
+            else:
+                cur.execute("DELETE FROM scheduled_jobs WHERE id = ?", (job_id,))
+                if int(cur.rowcount or 0):
+                    summary["deleted"] += 1
+        return summary
+
+    def _purge_device_rows(
+        self,
+        cur: sqlite3.Cursor,
+        *,
+        device_guid: str,
+        hostname: str,
+        agent_id: str,
+        fingerprint: str,
+    ) -> Dict[str, int]:
+        normalized_guid = normalize_guid(device_guid) or ""
+        normalized_hostname = (hostname or "").strip()
+        normalized_agent_id = (agent_id or "").strip()
+        normalized_fingerprint = (fingerprint or "").strip().lower()
+        deleted: Dict[str, int] = {}
+
+        activity_ids: List[int] = []
+        if normalized_hostname:
+            cur.execute(
+                """
+                SELECT id
+                  FROM activity_history
+                 WHERE LOWER(hostname) = LOWER(?)
+                """,
+                (normalized_hostname,),
+            )
+            activity_ids = [int(row[0]) for row in (cur.fetchall() or []) if row and row[0] is not None]
+
+        target_run_ids: List[int] = []
+        if normalized_hostname:
+            cur.execute(
+                """
+                SELECT id
+                  FROM scheduled_job_runs
+                 WHERE LOWER(target_hostname) = LOWER(?)
+                """,
+                (normalized_hostname,),
+            )
+            target_run_ids = [int(row[0]) for row in (cur.fetchall() or []) if row and row[0] is not None]
+
+        deleted["scheduled_job_run_targets"] = self._delete_by_id_list(
+            cur,
+            "scheduled_job_run_targets",
+            "run_id",
+            target_run_ids,
+        )
+        deleted["scheduled_job_run_targets"] += self._delete_where_any(
+            cur,
+            "scheduled_job_run_targets",
+            [
+                ("UPPER(device_guid) = ?", (normalized_guid,)) if normalized_guid else ("", ()),
+                ("LOWER(hostname) = LOWER(?)", (normalized_hostname,)) if normalized_hostname else ("", ()),
+            ],
+        )
+
+        deleted["scheduled_job_run_activity"] = self._delete_by_id_list(
+            cur,
+            "scheduled_job_run_activity",
+            "run_id",
+            target_run_ids,
+        )
+        deleted["scheduled_job_run_activity"] += self._delete_by_id_list(
+            cur,
+            "scheduled_job_run_activity",
+            "activity_id",
+            activity_ids,
+        )
+
+        deleted["scheduled_job_runs"] = self._delete_by_id_list(
+            cur,
+            "scheduled_job_runs",
+            "id",
+            target_run_ids,
+        )
+        deleted["activity_history"] = self._delete_by_id_list(
+            cur,
+            "activity_history",
+            "id",
+            activity_ids,
+        )
+
+        recap_predicates: List[Tuple[str, Tuple[Any, ...]]] = []
+        if target_run_ids:
+            placeholders = ",".join("?" for _ in target_run_ids)
+            recap_predicates.append((f"scheduled_run_id IN ({placeholders})", tuple(target_run_ids)))
+        if normalized_hostname:
+            recap_predicates.append(("LOWER(hostname) = LOWER(?)", (normalized_hostname,)))
+        if normalized_agent_id:
+            recap_predicates.append(("agent_id = ?", (normalized_agent_id,)))
+        deleted["ansible_play_recaps"] = self._delete_where_any(
+            cur,
+            "ansible_play_recaps",
+            recap_predicates,
+        )
+
+        deleted["workflow_child_jobs"] = self._delete_where_any(
+            cur,
+            "workflow_child_jobs",
+            [
+                ("LOWER(target_hostname) = LOWER(?)", (normalized_hostname,)) if normalized_hostname else ("", ()),
+            ],
+        )
+        deleted["device_software_inventory"] = self._delete_where_any(
+            cur,
+            "device_software_inventory",
+            [
+                ("UPPER(device_guid) = ?", (normalized_guid,)) if normalized_guid else ("", ()),
+            ],
+        )
+        deleted["device_sites"] = self._delete_where_any(
+            cur,
+            "device_sites",
+            [
+                ("LOWER(device_hostname) = LOWER(?)", (normalized_hostname,)) if normalized_hostname else ("", ()),
+            ],
+        )
+        deleted["device_approvals"] = self._delete_where_any(
+            cur,
+            "device_approvals",
+            [
+                ("UPPER(guid) = ?", (normalized_guid,)) if normalized_guid else ("", ()),
+                ("LOWER(hostname_claimed) = LOWER(?)", (normalized_hostname,)) if normalized_hostname else ("", ()),
+                (
+                    "LOWER(ssl_key_fingerprint_claimed) = LOWER(?)",
+                    (normalized_fingerprint,),
+                )
+                if normalized_fingerprint
+                else ("", ()),
+            ],
+        )
+        deleted["refresh_tokens"] = self._delete_where_any(
+            cur,
+            "refresh_tokens",
+            [
+                ("UPPER(guid) = ?", (normalized_guid,)) if normalized_guid else ("", ()),
+            ],
+        )
+        deleted["device_keys"] = self._delete_where_any(
+            cur,
+            "device_keys",
+            [
+                ("UPPER(guid) = ?", (normalized_guid,)) if normalized_guid else ("", ()),
+            ],
+        )
+        deleted["device_vpn_config"] = self._delete_where_any(
+            cur,
+            "device_vpn_config",
+            [
+                ("agent_id = ?", (normalized_agent_id,)) if normalized_agent_id else ("", ()),
+            ],
+        )
+        deleted["device_vpn_ip_leases"] = self._delete_where_any(
+            cur,
+            "device_vpn_ip_leases",
+            [
+                ("agent_id = ?", (normalized_agent_id,)) if normalized_agent_id else ("", ()),
+            ],
+        )
+        deleted["agent_service_account"] = self._delete_where_any(
+            cur,
+            "agent_service_account",
+            [
+                ("agent_id = ?", (normalized_agent_id,)) if normalized_agent_id else ("", ()),
+            ],
+        )
+        deleted["devices"] = self._delete_where_any(
+            cur,
+            "devices",
+            [
+                ("UPPER(guid) = ?", (normalized_guid,)) if normalized_guid else ("", ()),
+            ],
+        )
+        return deleted
+
+    def _disconnect_live_device_runtime(self, agent_id: str) -> Dict[str, Any]:
+        normalized_agent_id = (agent_id or "").strip()
+        summary: Dict[str, Any] = {
+            "vpn_disconnected": False,
+            "vnc_sessions_revoked": 0,
+        }
+        if not normalized_agent_id:
+            return summary
+
+        service = (
+            getattr(self.adapters.context, "vpn_tunnel_service", None)
+            or getattr(self.adapters, "_vpn_tunnel_service", None)
+        )
+        if service is not None and hasattr(service, "disconnect"):
+            try:
+                summary["vpn_disconnected"] = bool(
+                    service.disconnect(
+                        normalized_agent_id,
+                        reason="device_purged",
+                        force=True,
+                    )
+                )
+            except Exception:
+                self.logger.debug(
+                    "Failed to disconnect active tunnel for purged agent_id=%s",
+                    normalized_agent_id,
+                    exc_info=True,
+                )
+
+        registry = (
+            getattr(self.adapters.context, "vnc_registry", None)
+            or getattr(getattr(self.adapters.context, "vnc_proxy", None), "registry", None)
+        )
+        if registry is not None and hasattr(registry, "revoke_agent"):
+            try:
+                summary["vnc_sessions_revoked"] = int(registry.revoke_agent(normalized_agent_id) or 0)
+            except Exception:
+                self.logger.debug(
+                    "Failed to revoke VNC sessions for purged agent_id=%s",
+                    normalized_agent_id,
+                    exc_info=True,
+                )
+        return summary
+
+    def purge_device(self, guid: str) -> Tuple[Dict[str, Any], int]:
+        normalized_guid = normalize_guid(guid)
+        if not normalized_guid:
+            return {"error": "invalid guid"}, 400
+
+        current_user = self._current_user() or {}
+        purged_by = (current_user.get("username") or "").strip() or None
+        conn = self._db_conn()
+        device_record: Optional[Dict[str, Any]] = None
+        barrier_summary: Dict[str, Any] = {}
+        scheduled_job_summary: Dict[str, int] = {
+            "updated": 0,
+            "deleted": 0,
+            "targets_removed": 0,
+        }
+        deleted_rows: Dict[str, int] = {}
+        try:
+            device_purge_state.ensure_table(conn)
+            cur = conn.cursor()
+            device_record = self._load_device_purge_record(cur, normalized_guid)
+            if not device_record:
+                conn.rollback()
+                return {"error": "not found"}, 404
+
+            barrier_summary = device_purge_state.upsert_barrier(
+                cur,
+                guid=device_record["guid"],
+                required_token_version=int(device_record.get("token_version") or 1) + 1,
+                purged_by=purged_by,
+                last_hostname=device_record.get("hostname"),
+                last_agent_id=device_record.get("agent_id"),
+            )
+            scheduled_job_summary = self._rewrite_scheduled_jobs_for_purge(
+                cur,
+                device_guid=device_record["guid"],
+                hostname=device_record.get("hostname") or "",
+                site_id=device_record.get("site_id"),
+            )
+            deleted_rows = self._purge_device_rows(
+                cur,
+                device_guid=device_record["guid"],
+                hostname=device_record.get("hostname") or "",
+                agent_id=device_record.get("agent_id") or "",
+                fingerprint=device_record.get("ssl_key_fingerprint") or "",
+            )
+            conn.commit()
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            self.logger.debug("Failed to purge device guid=%s", normalized_guid, exc_info=True)
+            return {"error": str(exc)}, 500
+        finally:
+            conn.close()
+
+        runtime_cleanup = self._disconnect_live_device_runtime(device_record.get("agent_id") or "")
+        self.service_log(
+            "server",
+            (
+                f"/api/devices/{normalized_guid}/purge completed "
+                f"hostname={device_record.get('hostname') or '-'} "
+                f"jobs_updated={scheduled_job_summary.get('updated', 0)} "
+                f"jobs_deleted={scheduled_job_summary.get('deleted', 0)}"
+            ),
+            level="INFO",
+        )
+        return (
+            {
+                "status": "purged",
+                "device_guid": device_record.get("guid") or normalized_guid,
+                "hostname": device_record.get("hostname") or "",
+                "required_token_version": barrier_summary.get("required_token_version") or 1,
+                "scheduled_jobs": scheduled_job_summary,
+                "deleted_rows": deleted_rows,
+                "runtime_cleanup": runtime_cleanup,
+            },
+            200,
+        )
+
     def list_views(self) -> Tuple[Dict[str, Any], int]:
         conn = self._db_conn()
         try:
@@ -2066,6 +2493,15 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
             payload, status = requirement
             return jsonify(payload), status
         payload, status = service.get_device_by_guid(guid)
+        return jsonify(payload), status
+
+    @blueprint.route("/api/devices/<guid>/purge", methods=["POST"])
+    def _device_purge(guid: str):
+        requirement = service._require_admin()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+        payload, status = service.purge_device(guid)
         return jsonify(payload), status
 
     @blueprint.route("/api/device/details/<hostname>", methods=["GET"])
