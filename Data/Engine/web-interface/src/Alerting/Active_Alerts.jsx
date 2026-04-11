@@ -6,8 +6,7 @@ import {
   Chip,
   LinearProgress,
   Stack,
-  Tab,
-  Tabs,
+  Typography,
 } from "@mui/material";
 import {
   CachedRounded as RefreshIcon,
@@ -23,8 +22,9 @@ import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import { APP_PATHS } from "../app/routes/paths.js";
 import {
+  BOREALIS_BLUE,
+  CountSliderGroup,
   GRID_WRAPPER_SX,
-  buildNavTabsSx,
   formatTimestamp,
   gridTheme,
   severityColor,
@@ -35,9 +35,40 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 const PAGE_TITLE = "Alerts";
 const PAGE_SUBTITLE =
   "Work watchdog incidents, acknowledge noisy signals, and suppress active issues directly from the queue.";
+const STATUS_FILTER_OPTIONS = [
+  { key: "open", label: "Open" },
+  { key: "suppressed", label: "Suppressed" },
+  { key: "resolved", label: "Resolved" },
+];
+
+const INCIDENT_STATUS_META = {
+  open: {
+    label: "Open",
+    color: "#fcd34d",
+    borderColor: "rgba(252, 211, 77, 0.38)",
+    backgroundColor: "rgba(252, 211, 77, 0.12)",
+  },
+  suppressed: {
+    label: "Suppressed",
+    color: "#93c5fd",
+    borderColor: "rgba(147, 197, 253, 0.38)",
+    backgroundColor: "rgba(147, 197, 253, 0.12)",
+  },
+  resolved: {
+    label: "Resolved",
+    color: "#86efac",
+    borderColor: "rgba(134, 239, 172, 0.38)",
+    backgroundColor: "rgba(134, 239, 172, 0.12)",
+  },
+};
 
 function normalizeFilterValue(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function resolveIncidentStatusMeta(value) {
+  const normalized = normalizeFilterValue(value);
+  return INCIDENT_STATUS_META[normalized] || INCIDENT_STATUS_META.open;
 }
 
 function buildQueueCounts(payloadCounts = {}, items = []) {
@@ -282,6 +313,30 @@ export default function ActiveAlerts() {
   const columnDefs = useMemo(
     () => [
       {
+        field: "state",
+        headerName: "Status",
+        minWidth: 140,
+        width: 140,
+        pinned: "left",
+        filter: "agTextColumnFilter",
+        cellRenderer: (params) => {
+          const meta = resolveIncidentStatusMeta(params.value);
+          return (
+            <Chip
+              size="small"
+              label={meta.label}
+              variant="outlined"
+              sx={{
+                color: meta.color,
+                borderColor: meta.borderColor,
+                backgroundColor: meta.backgroundColor,
+                fontWeight: 600,
+              }}
+            />
+          );
+        },
+      },
+      {
         field: "severity",
         headerName: "Severity",
         width: 120,
@@ -318,7 +373,7 @@ export default function ActiveAlerts() {
               href="#"
               onClick={handleClick}
               title={hostname}
-              style={{ color: "#58a6ff", textDecoration: "none", fontWeight: 500 }}
+              style={{ color: BOREALIS_BLUE, textDecoration: "none", fontWeight: 500 }}
             >
               {hostname}
             </a>
@@ -344,7 +399,7 @@ export default function ActiveAlerts() {
               href="#"
               onClick={handleClick}
               title={watchdogName}
-              style={{ color: "#58a6ff", textDecoration: "none", fontWeight: 500 }}
+              style={{ color: BOREALIS_BLUE, textDecoration: "none", fontWeight: 500 }}
             >
               {watchdogName}
             </a>
@@ -401,11 +456,25 @@ export default function ActiveAlerts() {
       variant="grid_with_stack"
       stack={
         <Stack spacing={1.5}>
-          <Tabs value={stateTab} onChange={(_event, nextValue) => setStateTab(nextValue)} sx={buildNavTabsSx()}>
-            <Tab value="open" label={`Open (${queueCounts.open})`} />
-            <Tab value="suppressed" label={`Suppressed (${queueCounts.suppressed})`} />
-            <Tab value="resolved" label={`Resolved (${queueCounts.resolved})`} />
-          </Tabs>
+          <Box
+            sx={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 1.5,
+            }}
+          >
+            <CountSliderGroup
+              options={STATUS_FILTER_OPTIONS}
+              activeKey={stateTab}
+              counts={queueCounts}
+              onChange={setStateTab}
+            />
+            <Typography variant="body2" sx={{ color: "rgba(155, 163, 180, 0.96)" }}>
+              {`Showing ${queueCounts[stateTab] || 0} ${resolveIncidentStatusMeta(stateTab).label.toLowerCase()} alert${(queueCounts[stateTab] || 0) === 1 ? "" : "s"}`}
+            </Typography>
+          </Box>
           {loading ? <LinearProgress /> : null}
           {error ? <Alert severity="error">{error}</Alert> : null}
         </Stack>

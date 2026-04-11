@@ -8,8 +8,9 @@ Describe the runtime incident side of Watchdogs: the Alerts queue, incident life
 - Alerts lives under `Alerting & Reporting` in the sidebar.
 - The queue is the operational surface for incidents opened by Watchdogs.
 - v1 queue behavior includes:
-  - open, suppressed, and resolved tabs
+  - pill-style `Open`, `Suppressed`, and `Resolved` queue filters with live counts
   - AG Grid column filters for severity, site, device, watchdog, message, timestamps, and acknowledgement metadata
+  - a `Status` column that mirrors the current incident state in the grid
   - device hostname links directly into the affected device page
   - the watchdog name links directly into the source watchdog policy
   - acknowledge incidents

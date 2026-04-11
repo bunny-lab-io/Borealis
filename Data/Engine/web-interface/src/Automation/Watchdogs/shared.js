@@ -1,7 +1,9 @@
+import { Box } from "@mui/material";
 import { themeQuartz } from "ag-grid-community";
 
 export const gridFontFamily = "'IBM Plex Sans','Helvetica Neue',Arial,sans-serif";
 export const iconFontFamily = "'Quartz Regular'";
+export const BOREALIS_BLUE = "#58a6ff";
 export const NAV_TAB_HEIGHT = 32;
 export const NAV_TAB_COLORS = {
   text: "#cbd5e1",
@@ -143,4 +145,74 @@ export function summarizeRuleResults(sample) {
     .map((entry) => String(entry?.summary || "").trim())
     .filter(Boolean)
     .join(" | ");
+}
+
+export function CountSliderGroup({ options, activeKey, counts, onChange }) {
+  const entries = Array.isArray(options) ? options : [];
+  const countMap = counts && typeof counts === "object" ? counts : {};
+  return (
+    <Box
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.75,
+        background: "linear-gradient(120deg, rgba(8,12,24,0.92), rgba(4,7,17,0.85))",
+        borderRadius: 999,
+        border: "1px solid rgba(148,163,184,0.35)",
+        boxShadow: "0 18px 48px rgba(2,8,23,0.45)",
+        padding: "4px",
+      }}
+    >
+      {entries.map((option) => {
+        const active = activeKey === option.key;
+        return (
+          <Box
+            key={option.key}
+            component="button"
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange?.(option.key)}
+            sx={{
+              border: "none",
+              outline: "none",
+              background: active ? "linear-gradient(135deg,#7dd3fc,#c084fc)" : "transparent",
+              color: active ? "#041224" : "#cbd5e1",
+              fontWeight: 600,
+              fontSize: 13,
+              px: 2,
+              py: 0.5,
+              borderRadius: 999,
+              cursor: "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 0.6,
+              boxShadow: active ? "0 0 18px rgba(125,211,252,0.35)" : "none",
+              transition: "all 0.2s ease",
+            }}
+          >
+            <Box component="span" sx={{ userSelect: "none" }}>
+              {option.label}
+            </Box>
+            <Box
+              component="span"
+              sx={{
+                minWidth: 28,
+                textAlign: "center",
+                borderRadius: 999,
+                fontSize: 12,
+                fontWeight: 600,
+                px: 0.75,
+                py: 0.1,
+                color: active ? "#041224" : "#94a3b8",
+                backgroundColor: active ? "rgba(4,18,36,0.2)" : "rgba(15,23,42,0.65)",
+                border: active ? "1px solid rgba(4,18,36,0.3)" : "1px solid rgba(148,163,184,0.3)",
+              }}
+            >
+              {countMap?.[option.key] ?? 0}
+            </Box>
+          </Box>
+        );
+      })}
+    </Box>
+  );
 }
