@@ -324,11 +324,7 @@ export default function ActiveAlerts() {
         filter: "agTextColumnFilter",
         cellRenderer: (params) => {
           const meta = resolveIncidentStatusMeta(params.value);
-          return (
-            <span style={{ color: "#e2e8f0", fontWeight: 600 }}>
-              {meta.label}
-            </span>
-          );
+          return <span style={{ color: "#e2e8f0" }}>{meta.label}</span>;
         },
       },
       {
