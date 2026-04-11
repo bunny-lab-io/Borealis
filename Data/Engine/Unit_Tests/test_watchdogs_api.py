@@ -382,6 +382,49 @@ def test_watchdog_do_nothing_action_persists_as_incident_only(engine_harness: En
     assert "Incident only" in body["action_summaries"][0]
 
 
+def test_watchdog_run_assembly_action_preserves_variable_values(engine_harness: EngineTestHarness) -> None:
+    client = _client_with_admin_session(engine_harness)
+
+    payload = _offline_watchdog_payload(
+        targets=[
+            {
+                "kind": "device",
+                "device_guid": "GUID-TEST-0001",
+                "hostname": "test-device",
+                "site_id": 1,
+                "site_name": "Main Lab",
+            }
+        ]
+    )
+    payload["actions"] = {
+        "actions": [
+            {
+                "id": "assembly-1",
+                "type": "assembly",
+                "enabled": True,
+                "assembly_guid": "TEST-ASSEMBLY-GUID",
+                "run_mode": "system",
+                "execution_context": "local",
+                "variable_values": {
+                    "command": "hostname",
+                    "use_shell": True,
+                },
+            }
+        ]
+    }
+
+    response = client.post("/api/watchdogs", json=payload)
+    assert response.status_code == 201
+    body = response.get_json()
+    action = body["actions"]["actions"][0]
+    assert action["type"] == "assembly"
+    assert action["assembly_guid"] == "test-assembly-guid"
+    assert action["variable_values"] == {
+        "command": "hostname",
+        "use_shell": True,
+    }
+
+
 def test_watchdog_incident_acknowledge_and_device_override_round_trip(
     engine_harness: EngineTestHarness,
 ) -> None:

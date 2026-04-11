@@ -49,6 +49,9 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
   - script assemblies through the same quick-job dispatch path used by operator-launched script runs
   - workflow assemblies through the workflow runtime's async run-start API
   - Ansible assemblies through the Engine-side Ansible runner in `local` execution context
+- Watchdog `Run Assembly` actions expose assembly-defined runtime variables in the editor, similar to Scheduled Job assembly inputs.
+- Script and Ansible watchdog actions apply those `variable_values` directly during execution.
+- Workflow watchdog actions currently carry `variable_values` inside the trigger metadata so downstream workflow logic can inspect the launch context, but they do not yet have a dedicated workflow-input contract like scripts and playbooks.
 - Watchdog-owned script remediations still create `activity_history` rows so the device activity UI and historical troubleshooting stay consistent.
 - Workflow remediations carry source metadata that links the workflow run back to the triggering watchdog and incident.
 

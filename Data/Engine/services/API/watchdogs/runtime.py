@@ -2100,6 +2100,7 @@ class WatchdogRuntimeService:
         *,
         device: Mapping[str, Any],
         assembly_record: Mapping[str, Any],
+        action: Mapping[str, Any],
         incident: Mapping[str, Any],
     ) -> Dict[str, Any]:
         if self._app is None or self._adapters is None:
@@ -2114,6 +2115,7 @@ class WatchdogRuntimeService:
                 "watchdog_id": incident.get("watchdog_id"),
                 "hostname": _clean_text(device.get("hostname")),
                 "device_guid": normalize_guid(device.get("guid") or device.get("agent_guid") or "") or "",
+                "variable_values": dict(action.get("variable_values") or {}),
             },
             created_by="watchdog",
             execute_async=True,
@@ -2213,7 +2215,12 @@ class WatchdogRuntimeService:
                     continue
                 assembly_type = _clean_text(record.get("assembly_type")).lower()
                 if assembly_type == "workflow":
-                    response = self._dispatch_workflow_assembly(device=device, assembly_record=record, incident=incident)
+                    response = self._dispatch_workflow_assembly(
+                        device=device,
+                        assembly_record=record,
+                        action=action,
+                        incident=incident,
+                    )
                 elif assembly_type == "ansible":
                     response = self._dispatch_ansible_assembly(assembly_record=record, action=action)
                 else:

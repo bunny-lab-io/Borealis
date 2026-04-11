@@ -30,7 +30,11 @@ import { AgGridReact } from "ag-grid-react";
 import { AllCommunityModule, ModuleRegistry } from "ag-grid-community";
 
 import PageBodyFrame from "../../PageBodyFrame.jsx";
-import { buildAssemblyIndex, parseAssembliesCollectionPayload } from "../../Assemblies/assemblyUtils";
+import {
+  buildAssemblyIndex,
+  parseAssembliesCollectionPayload,
+  parseAssemblyExport,
+} from "../../Assemblies/assemblyUtils";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
 import { APP_PATHS } from "../../app/routes/paths.js";
@@ -150,6 +154,145 @@ function normalizeArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function normalizeVariableDefinitions(vars = []) {
+  return normalizeArray(vars)
+    .map((raw) => {
+      if (!raw || typeof raw !== "object") return null;
+      const name =
+        typeof raw.name === "string"
+          ? raw.name.trim()
+          : typeof raw.key === "string"
+            ? raw.key.trim()
+            : "";
+      if (!name) return null;
+      const label = typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : name;
+      const type = typeof raw.type === "string" ? raw.type.toLowerCase() : "string";
+      const required = Boolean(raw.required);
+      const description = typeof raw.description === "string" ? raw.description : "";
+      let defaultValue = "";
+      if (Object.prototype.hasOwnProperty.call(raw, "default")) defaultValue = raw.default;
+      else if (Object.prototype.hasOwnProperty.call(raw, "defaultValue")) defaultValue = raw.defaultValue;
+      else if (Object.prototype.hasOwnProperty.call(raw, "default_value")) defaultValue = raw.default_value;
+      return { name, label, type, required, description, default: defaultValue };
+    })
+    .filter(Boolean);
+}
+
+function coerceVariableValue(type, value) {
+  if (type === "boolean") {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number") return value !== 0;
+    if (value == null) return false;
+    const normalized = String(value).trim().toLowerCase();
+    if (!normalized) return false;
+    return ["true", "1", "yes", "on"].includes(normalized);
+  }
+  if (type === "number") {
+    if (value == null || value === "") return "";
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? String(parsed) : "";
+  }
+  return value == null ? "" : String(value);
+}
+
+function mergeAssemblyVariables(docVars = [], storedVars = [], storedValueMap = {}) {
+  const definitions = normalizeVariableDefinitions(docVars);
+  const overrides = {};
+  const storedMeta = {};
+
+  normalizeArray(storedVars).forEach((raw) => {
+    if (!raw || typeof raw !== "object") return;
+    const name = typeof raw.name === "string" ? raw.name.trim() : "";
+    if (!name) return;
+    if (Object.prototype.hasOwnProperty.call(raw, "value")) overrides[name] = raw.value;
+    else if (Object.prototype.hasOwnProperty.call(raw, "default")) overrides[name] = raw.default;
+    storedMeta[name] = {
+      label: typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : name,
+      type: typeof raw.type === "string" ? raw.type.toLowerCase() : undefined,
+      required: Boolean(raw.required),
+      description: typeof raw.description === "string" ? raw.description : "",
+      default: Object.prototype.hasOwnProperty.call(raw, "default") ? raw.default : "",
+    };
+  });
+
+  if (storedValueMap && typeof storedValueMap === "object") {
+    Object.entries(storedValueMap).forEach(([nameRaw, value]) => {
+      const name = typeof nameRaw === "string" ? nameRaw.trim() : "";
+      if (name) overrides[name] = value;
+    });
+  }
+
+  const used = new Set();
+  const merged = definitions.map((definition) => {
+    const override = Object.prototype.hasOwnProperty.call(overrides, definition.name)
+      ? overrides[definition.name]
+      : undefined;
+    used.add(definition.name);
+    return {
+      ...definition,
+      value:
+        override !== undefined
+          ? coerceVariableValue(definition.type, override)
+          : coerceVariableValue(definition.type, definition.default),
+    };
+  });
+
+  normalizeArray(storedVars).forEach((raw) => {
+    if (!raw || typeof raw !== "object") return;
+    const name = typeof raw.name === "string" ? raw.name.trim() : "";
+    if (!name || used.has(name)) return;
+    const meta = storedMeta[name] || {};
+    const type =
+      meta.type ||
+      (typeof overrides[name] === "boolean" ? "boolean" : typeof overrides[name] === "number" ? "number" : "string");
+    const defaultValue = Object.prototype.hasOwnProperty.call(meta, "default") ? meta.default : "";
+    const override = Object.prototype.hasOwnProperty.call(overrides, name)
+      ? overrides[name]
+      : Object.prototype.hasOwnProperty.call(raw, "value")
+        ? raw.value
+        : defaultValue;
+    merged.push({
+      name,
+      label: meta.label || name,
+      type,
+      required: Boolean(meta.required),
+      description: meta.description || "",
+      default: defaultValue,
+      value: coerceVariableValue(type, override),
+    });
+    used.add(name);
+  });
+
+  Object.entries(overrides).forEach(([nameRaw, value]) => {
+    const name = typeof nameRaw === "string" ? nameRaw.trim() : "";
+    if (!name || used.has(name)) return;
+    const type = typeof value === "boolean" ? "boolean" : typeof value === "number" ? "number" : "string";
+    merged.push({
+      name,
+      label: name,
+      type,
+      required: false,
+      description: "",
+      default: "",
+      value: coerceVariableValue(type, value),
+    });
+  });
+
+  return merged;
+}
+
+function buildVariableValuesMap(variables = []) {
+  const next = {};
+  normalizeArray(variables).forEach((variable) => {
+    if (!variable || typeof variable.name !== "string" || !variable.name.trim()) return;
+    if (Object.prototype.hasOwnProperty.call(variable, "value")) {
+      next[variable.name.trim()] = variable.value;
+    }
+  });
+  return next;
+}
+
 function normalizeTargets(targets = []) {
   const seen = new Set();
   return normalizeArray(targets)
@@ -219,6 +362,45 @@ function normalizeActions(actions = []) {
   });
 }
 
+function sanitizeActionForPayload(action) {
+  const normalized = { ...makeAction(action?.type || "notification"), ...(action || {}) };
+  const payload = {
+    id: normalized.id || undefined,
+    type: String(normalized.type || "notification").trim().toLowerCase() || "notification",
+    enabled: normalized.enabled !== false,
+  };
+
+  if (payload.type === "notification") {
+    payload.variant = String(normalized.variant || "warning").trim().toLowerCase() || "warning";
+    payload.title = String(normalized.title || "").trim();
+    payload.message_template = String(normalized.message_template || "").trim();
+    return payload;
+  }
+
+  if (payload.type === "do_nothing") {
+    return payload;
+  }
+
+  if (payload.type === "service_control") {
+    payload.service_name = String(normalized.service_name || "").trim();
+    payload.action = String(normalized.action || "restart").trim().toLowerCase() || "restart";
+    return payload;
+  }
+
+  if (payload.type === "assembly") {
+    payload.assembly_guid = String(normalized.assembly_guid || normalized.assemblyGuid || "").trim().toLowerCase();
+    payload.run_mode = String(normalized.run_mode || "system").trim().toLowerCase() || "system";
+    payload.execution_context = String(normalized.execution_context || "local").trim().toLowerCase() || "local";
+    payload.variable_values =
+      normalized.variable_values && typeof normalized.variable_values === "object"
+        ? { ...normalized.variable_values }
+        : buildVariableValuesMap(normalized.variables);
+    return payload;
+  }
+
+  return payload;
+}
+
 function defaultWatchdog(draft = {}) {
   return {
     id: draft?.id || null,
@@ -265,7 +447,9 @@ function buildPayload(state) {
       rules: normalizeRules(state?.criteria?.rules || []),
     },
     actions: {
-      actions: normalizeActions(state?.actions?.actions || []),
+      actions: normalizeArray(state?.actions?.actions || [])
+        .map((action) => sanitizeActionForPayload(action))
+        .filter(Boolean),
     },
     targets: normalizeTargets(state?.targets || []),
   };
@@ -484,11 +668,16 @@ function RuleCard({ rule, onChange, onRemove }) {
   );
 }
 
-function ActionCard({ action, assemblyOptions, onChange, onRemove }) {
+function ActionCard({ action, assemblyOptions, onAssemblyChange, onVariableChange, onChange, onRemove }) {
   const type = String(action?.type || "notification");
   const selectedAssembly = assemblyOptions.find(
     (item) => String(item?.assemblyGuid || "").toLowerCase() === String(action?.assembly_guid || "").toLowerCase()
   );
+  const variables = normalizeArray(action?.variables).filter(
+    (variable) => variable && typeof variable.name === "string" && variable.name.trim()
+  );
+  const variableLoadError = String(action?.assembly_variable_error || "").trim();
+  const variableLoading = Boolean(action?.assembly_variables_loading);
 
   return (
     <SectionCard
@@ -584,7 +773,7 @@ function ActionCard({ action, assemblyOptions, onChange, onRemove }) {
             select
             label="Assembly"
             value={action.assembly_guid || ""}
-            onChange={(event) => onChange({ ...action, assembly_guid: event.target.value })}
+            onChange={(event) => onAssemblyChange(event.target.value)}
           >
             <MenuItem value="">Select an Assembly</MenuItem>
             {assemblyOptions.map((record) => (
@@ -620,6 +809,74 @@ function ActionCard({ action, assemblyOptions, onChange, onRemove }) {
               </TextField>
             </Stack>
           ) : null}
+          {action.assembly_guid ? (
+            <SectionCard
+              title="Runtime Variables"
+              subtitle="Pass ad-hoc values into the selected assembly the same way Borealis does for scheduled jobs."
+            >
+              {variableLoading ? <LinearProgress /> : null}
+              {variableLoadError ? <Alert severity="warning">{variableLoadError}</Alert> : null}
+              {selectedAssembly?.kind === "workflow" ? (
+                <Alert severity="info">
+                  Workflow-backed watchdog actions store these values in the workflow trigger metadata. Script and
+                  Ansible actions apply them directly at runtime.
+                </Alert>
+              ) : null}
+              {!variableLoading && !variableLoadError && variables.length ? (
+                <Stack spacing={1.25}>
+                  {variables.map((variable) => (
+                    <Box key={variable.name}>
+                      {variable.type === "boolean" ? (
+                        <>
+                          <FormControlLabel
+                            sx={{
+                              color: "#e2e8f0",
+                              "& .MuiTypography-root": { color: "#e2e8f0", fontWeight: 500 },
+                            }}
+                            control={
+                              <Checkbox
+                                size="small"
+                                checked={Boolean(variable.value)}
+                                onChange={(event) => onVariableChange(variable.name, event.target.checked)}
+                              />
+                            }
+                            label={`${variable.label || variable.name}${variable.required ? " *" : ""}`}
+                          />
+                          {variable.description ? (
+                            <Typography variant="caption" sx={{ color: "#94a3b8", display: "block", ml: 4 }}>
+                              {variable.description}
+                            </Typography>
+                          ) : null}
+                        </>
+                      ) : (
+                        <TextField
+                          fullWidth
+                          size="small"
+                          label={`${variable.label || variable.name}${variable.required ? " *" : ""}`}
+                          type={
+                            variable.type === "number"
+                              ? "number"
+                              : variable.type === "credential"
+                                ? "password"
+                                : "text"
+                          }
+                          value={variable.value ?? ""}
+                          onChange={(event) => onVariableChange(variable.name, event.target.value)}
+                          InputLabelProps={{ shrink: true }}
+                          helperText={variable.description || ""}
+                        />
+                      )}
+                    </Box>
+                  ))}
+                </Stack>
+              ) : null}
+              {!variableLoading && !variableLoadError && !variables.length ? (
+                <Typography variant="body2" sx={{ color: "#94a3b8" }}>
+                  No runtime variables defined for this assembly.
+                </Typography>
+              ) : null}
+            </SectionCard>
+          ) : null}
         </Stack>
       ) : null}
     </SectionCard>
@@ -632,6 +889,8 @@ export default function WatchdogEditor() {
   const { watchdogId } = useParams();
   const notifyOperator = useAppNotifications({ title: "Watchdogs", icon: "notification" });
   const previewGridRef = useRef(null);
+  const assemblyExportCacheRef = useRef(new Map());
+  const pendingAssemblyHydrationRef = useRef(new Set());
   const [activeTab, setActiveTab] = useState("name");
   const [formState, setFormState] = useState(() => defaultWatchdog(watchDraftFromLocation(location.state)));
   const [metadata, setMetadata] = useState({});
@@ -735,6 +994,70 @@ export default function WatchdogEditor() {
     return sites.filter((site) => ids.has(Number(site.id)));
   }, [formState.site_ids, sites]);
 
+  const loadAssemblyExport = useCallback(async (assemblyGuid) => {
+    const cacheKey = String(assemblyGuid || "").trim().toLowerCase();
+    if (!cacheKey) {
+      throw new Error("Select an assembly before loading runtime variables.");
+    }
+    if (assemblyExportCacheRef.current.has(cacheKey)) {
+      return assemblyExportCacheRef.current.get(cacheKey);
+    }
+    const response = await fetch(`/api/assemblies/${encodeURIComponent(cacheKey)}/export`, {
+      credentials: "include",
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      throw new Error(`Unable to load assembly definition (HTTP ${response.status}).`);
+    }
+    const payload = await response.json().catch(() => ({}));
+    assemblyExportCacheRef.current.set(cacheKey, payload);
+    return payload;
+  }, []);
+
+  const hydrateAssemblyActionVariables = useCallback(
+    async (action) => {
+      const assemblyGuid = String(action?.assembly_guid || action?.assemblyGuid || "").trim().toLowerCase();
+      if (!assemblyGuid) {
+        return {
+          ...action,
+          assembly_guid: "",
+          variables: [],
+          variable_values: {},
+          assembly_variables_source_guid: "",
+          assembly_variable_error: "",
+          assembly_variables_loading: false,
+        };
+      }
+      try {
+        const exportDoc = await loadAssemblyExport(assemblyGuid);
+        const parsed = parseAssemblyExport(exportDoc);
+        const docVars = Array.isArray(parsed?.rawVariables) ? parsed.rawVariables : [];
+        const mergedVariables = mergeAssemblyVariables(docVars, action?.variables, action?.variable_values);
+        return {
+          ...action,
+          assembly_guid: assemblyGuid,
+          variables: mergedVariables,
+          variable_values: buildVariableValuesMap(mergedVariables),
+          assembly_variables_source_guid: assemblyGuid,
+          assembly_variable_error: "",
+          assembly_variables_loading: false,
+        };
+      } catch (err) {
+        return {
+          ...action,
+          assembly_guid: assemblyGuid,
+          variables: normalizeArray(action?.variables),
+          variable_values:
+            action?.variable_values && typeof action.variable_values === "object" ? { ...action.variable_values } : {},
+          assembly_variables_source_guid: "",
+          assembly_variable_error: String(err?.message || err || "Unable to load assembly variables."),
+          assembly_variables_loading: false,
+        };
+      }
+    },
+    [loadAssemblyExport]
+  );
+
   const selectedFilterTargets = useMemo(() => {
     const ids = new Set(
       normalizeArray(formState.targets)
@@ -818,10 +1141,6 @@ export default function WatchdogEditor() {
 
   const updateCriteria = useCallback((patch) => {
     setFormState((prev) => ({ ...prev, criteria: { ...(prev.criteria || {}), ...patch } }));
-  }, []);
-
-  const updateActionsRoot = useCallback((patch) => {
-    setFormState((prev) => ({ ...prev, actions: { ...(prev.actions || {}), ...patch } }));
   }, []);
 
   const addDeviceTarget = useCallback(() => {
@@ -915,6 +1234,103 @@ export default function WatchdogEditor() {
       },
     }));
   }, []);
+
+  const updateAssemblySelection = useCallback((actionId, assemblyGuid) => {
+    const normalizedGuid = String(assemblyGuid || "").trim().toLowerCase();
+    setFormState((prev) => ({
+      ...prev,
+      actions: {
+        ...(prev.actions || {}),
+        actions: normalizeActions(
+          normalizeArray(prev.actions?.actions).map((action) => {
+            if (action.id !== actionId) return action;
+            return {
+              ...action,
+              assembly_guid: normalizedGuid,
+              variables: [],
+              variable_values: {},
+              assembly_variables_source_guid: "",
+              assembly_variable_error: "",
+              assembly_variables_loading: Boolean(normalizedGuid),
+            };
+          })
+        ),
+      },
+    }));
+  }, []);
+
+  const updateActionVariable = useCallback((actionId, variableName, value) => {
+    if (!actionId || !variableName) return;
+    setFormState((prev) => ({
+      ...prev,
+      actions: {
+        ...(prev.actions || {}),
+        actions: normalizeActions(
+          normalizeArray(prev.actions?.actions).map((action) => {
+            if (action.id !== actionId) return action;
+            const nextVariables = normalizeArray(action.variables).map((variable) =>
+              variable?.name === variableName
+                ? { ...variable, value: coerceVariableValue(variable.type || "string", value) }
+                : variable
+            );
+            return {
+              ...action,
+              variables: nextVariables,
+              variable_values: buildVariableValuesMap(nextVariables),
+            };
+          })
+        ),
+      },
+    }));
+  }, []);
+
+  useEffect(() => {
+    normalizeArray(formState.actions?.actions).forEach((action) => {
+      if (!action || String(action.type || "").trim().toLowerCase() !== "assembly") return;
+      const assemblyGuid = String(action.assembly_guid || "").trim().toLowerCase();
+      if (!assemblyGuid) return;
+      const hydratedGuid = String(action.assembly_variables_source_guid || "").trim().toLowerCase();
+      if (hydratedGuid === assemblyGuid && Array.isArray(action.variables)) return;
+
+      const requestKey = `${action.id}:${assemblyGuid}`;
+      if (pendingAssemblyHydrationRef.current.has(requestKey)) return;
+      pendingAssemblyHydrationRef.current.add(requestKey);
+
+      setFormState((prev) => ({
+        ...prev,
+        actions: {
+          ...(prev.actions || {}),
+          actions: normalizeActions(
+            normalizeArray(prev.actions?.actions).map((candidate) => {
+              if (candidate.id !== action.id) return candidate;
+              if (String(candidate.assembly_guid || "").trim().toLowerCase() !== assemblyGuid) return candidate;
+              return { ...candidate, assembly_variables_loading: true, assembly_variable_error: "" };
+            })
+          ),
+        },
+      }));
+
+      hydrateAssemblyActionVariables(action)
+        .then((hydratedAction) => {
+          setFormState((prev) => ({
+            ...prev,
+            actions: {
+              ...(prev.actions || {}),
+              actions: normalizeActions(
+                normalizeArray(prev.actions?.actions).map((candidate) => {
+                  if (candidate.id !== action.id) return candidate;
+                  if (String(candidate.assembly_guid || "").trim().toLowerCase() !== assemblyGuid) return candidate;
+                  return { ...candidate, ...hydratedAction };
+                })
+              ),
+            },
+          }));
+        })
+        .finally(() => {
+          pendingAssemblyHydrationRef.current.delete(requestKey);
+        });
+    });
+  }, [formState.actions?.actions, hydrateAssemblyActionVariables]);
 
   const runPreview = useCallback(async () => {
     setPreviewing(true);
@@ -1358,6 +1774,8 @@ export default function WatchdogEditor() {
                   key={action.id}
                   action={action}
                   assemblyOptions={assemblyOptions}
+                  onAssemblyChange={(assemblyGuid) => updateAssemblySelection(action.id, assemblyGuid)}
+                  onVariableChange={(variableName, value) => updateActionVariable(action.id, variableName, value)}
                   onChange={(nextAction) => updateAction(action.id, nextAction)}
                   onRemove={() => removeAction(action.id)}
                 />

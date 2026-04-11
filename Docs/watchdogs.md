@@ -57,10 +57,11 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
   - Engine Toast Notification
   - control a Windows service
   - run an assembly remediation
+- `Run Assembly` surfaces the selected assembly's runtime variables directly in the Watchdog editor so operators can pass ad-hoc values at save time.
 - Assembly remediation supports:
-  - script assemblies by queueing a watchdog-owned quick job
-  - workflow assemblies by starting an async workflow run
-  - Ansible assemblies by queueing an Engine-side Ansible run in `local` execution context
+  - script assemblies by queueing a watchdog-owned quick job and applying `variable_values` at runtime
+  - workflow assemblies by starting an async workflow run and carrying `variable_values` in the workflow trigger metadata
+  - Ansible assemblies by queueing an Engine-side Ansible run in `local` execution context with the configured `variable_values`
 
 ## Preview Behavior
 - The Watchdog editor includes a dedicated `Preview` tab.
