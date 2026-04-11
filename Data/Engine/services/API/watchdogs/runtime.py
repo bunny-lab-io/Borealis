@@ -471,6 +471,14 @@ def summarize_action(action: Mapping[str, Any]) -> str:
     return "Action"
 
 
+def _rules_are_offline_only(criteria: Mapping[str, Any]) -> bool:
+    rules = criteria.get("rules") if isinstance(criteria, dict) else []
+    normalized_rules = [rule for rule in rules if isinstance(rule, dict)]
+    if not normalized_rules:
+        return False
+    return all(_clean_text(rule.get("type")).lower() == "device_offline" for rule in normalized_rules)
+
+
 def _build_rule_summaries(criteria: Mapping[str, Any]) -> List[str]:
     rules = criteria.get("rules") if isinstance(criteria, dict) else []
     return [summarize_rule(rule) for rule in rules if isinstance(rule, dict)]
@@ -1946,6 +1954,28 @@ class WatchdogRuntimeService:
             (now_ts, reason, now_ts, incident_id),
         )
 
+    def _delete_incident(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        incident_id: int,
+    ) -> None:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM watchdog_incidents WHERE id=?", (int(incident_id),))
+
+    def _should_purge_cleared_incident(
+        self,
+        watchdog: Mapping[str, Any],
+        *,
+        stale_state: bool,
+        resolution_reason: str,
+    ) -> bool:
+        if _clean_text(resolution_reason).lower() != "cleared":
+            return False
+        if stale_state:
+            return False
+        return _rules_are_offline_only(watchdog.get("criteria") if isinstance(watchdog.get("criteria"), dict) else {})
+
     def _set_incident_state(
         self,
         conn: sqlite3.Connection,
@@ -2510,11 +2540,19 @@ class WatchdogRuntimeService:
                         elif clear_started_at is None:
                             clear_started_at = now_ts
                         if auto_resolve_after_seconds <= 0 or (now_ts - int(clear_started_at or now_ts)) >= auto_resolve_after_seconds:
-                            self._resolve_open_incident(
-                                conn,
-                                incident_id=int(incident["id"]),
-                                reason="cleared" if not stale_state else "telemetry_stale",
-                            )
+                            resolution_reason = "cleared" if not stale_state else "telemetry_stale"
+                            if self._should_purge_cleared_incident(
+                                record,
+                                stale_state=stale_state,
+                                resolution_reason=resolution_reason,
+                            ):
+                                self._delete_incident(conn, incident_id=int(incident["id"]))
+                            else:
+                                self._resolve_open_incident(
+                                    conn,
+                                    incident_id=int(incident["id"]),
+                                    reason=resolution_reason,
+                                )
                             incident_id = None
                             clear_started_at = None
                     else:

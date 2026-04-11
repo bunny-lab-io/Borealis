@@ -25,6 +25,7 @@ Describe the runtime incident side of Watchdogs: the Alerts queue, incident life
 - `acknowledged`: an operator reviewed the incident and recorded ownership through the acknowledge action.
 - `suppressed`: an operator intentionally muted the current incident without marking the underlying condition as fixed. Suppressed incidents stay historical until manually reopened or until the condition truly clears.
 - `resolved`: the condition cleared, the watchdog was disabled or archived, the target disappeared, or telemetry became stale long enough for auto-resolution.
+- Offline-only watchdog incidents are the exception: once the device checks back in and the offline condition auto-clears, Borealis purges that incident instead of keeping a resolved historical row.
 - If a resolved condition later comes back, Borealis opens a new incident record so operators keep a clean historical dataset per device instead of overloading the old resolved entry.
 
 ## Device-Level Workflow
@@ -77,6 +78,7 @@ Describe the runtime incident side of Watchdogs: the Alerts queue, incident life
   - sampled rule data
   - acknowledgement metadata
   - opened, updated, and resolved timestamps
+- Offline-only incidents that auto-clear are deleted, so they disappear from the queue instead of moving into the resolved dataset.
 
 ### Suppression behavior
 - Queue-level suppression is an incident-state transition, not just a visual filter.

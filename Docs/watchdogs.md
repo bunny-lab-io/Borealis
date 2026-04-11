@@ -50,6 +50,7 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
   - auto-resolve delay after the condition clears
   - minimum consecutive matches before an incident opens
   - boot grace period
+- Offline-only watchdogs treat auto-clear differently: when the device checks back in, the transient offline incident is purged instead of retained as a resolved record.
 
 ### Actions
 - v1 actions are:

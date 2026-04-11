@@ -90,6 +90,23 @@ def _seed_storage_usage(harness: EngineTestHarness, *, entries: list[dict] | Non
         conn.close()
 
 
+def _set_device_last_seen(harness: EngineTestHarness, *, hostname: str, last_seen: int) -> None:
+    conn = sqlite3.connect(str(harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE devices
+               SET last_seen = ?
+             WHERE hostname = ?
+            """,
+            (int(last_seen), hostname),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _offline_watchdog_payload(*, targets) -> dict:
     return {
         "name": "Offline Watchdog",
@@ -556,3 +573,55 @@ def test_watchdog_incident_acknowledge_and_device_override_round_trip(
     cleared_payload = clear_response.get_json()
     assert cleared_payload["overrides"] == []
     assert len(cleared_payload["assignments"]) == 1
+
+
+def test_offline_watchdog_incident_is_deleted_when_device_recovers(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+
+    create_response = client.post(
+        "/api/watchdogs",
+        json=_offline_watchdog_payload(
+            targets=[
+                {
+                    "kind": "device",
+                    "device_guid": "GUID-TEST-0001",
+                    "hostname": "test-device",
+                    "site_id": 1,
+                    "site_name": "Main Lab",
+                }
+            ]
+        ),
+    )
+    assert create_response.status_code == 201
+    created = create_response.get_json()
+
+    incidents_response = client.get("/api/watchdogs/incidents?state=all")
+    assert incidents_response.status_code == 200
+    incidents_payload = incidents_response.get_json()
+    assert incidents_payload["counts"]["open"] == 1
+    assert len(incidents_payload["items"]) == 1
+    incident_id = incidents_payload["items"][0]["id"]
+
+    _set_device_last_seen(engine_harness, hostname="test-device", last_seen=int(time.time()))
+    runtime = engine_harness.context.watchdog_runtime
+    assert runtime is not None
+    runtime.evaluate_watchdog(created["id"])
+
+    after_response = client.get("/api/watchdogs/incidents?state=all")
+    assert after_response.status_code == 200
+    after_payload = after_response.get_json()
+    assert after_payload["counts"]["open"] == 0
+    assert after_payload["counts"]["suppressed"] == 0
+    assert after_payload["counts"]["resolved"] == 0
+    assert after_payload["items"] == []
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM watchdog_incidents WHERE id = ?", (incident_id,))
+        remaining = cur.fetchone()[0]
+    finally:
+        conn.close()
+    assert remaining == 0
