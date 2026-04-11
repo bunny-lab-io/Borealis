@@ -6,11 +6,9 @@ import {
   Button,
   Chip,
   LinearProgress,
-  MenuItem,
   Stack,
   Tab,
   Tabs,
-  TextField,
 } from "@mui/material";
 import {
   CachedRounded as RefreshIcon,
@@ -83,13 +81,6 @@ export default function ActiveAlerts() {
   const [actionBusy, setActionBusy] = useState(false);
   const [error, setError] = useState("");
   const [selectedRows, setSelectedRows] = useState([]);
-  const [filters, setFilters] = useState({
-    severity: "all",
-    site: "",
-    device: "",
-    watchdog: "",
-    acknowledged: "all",
-  });
 
   const getRowId = useCallback((params) => String(params.data?.id ?? ""), []);
 
@@ -174,23 +165,6 @@ export default function ActiveAlerts() {
     () => incidents.filter((item) => normalizeFilterValue(item?.state) === stateTab),
     [incidents, stateTab]
   );
-
-  const visibleRows = useMemo(() => {
-    return queueRows.filter((item) => {
-      const severity = normalizeFilterValue(item?.severity);
-      const siteName = normalizeFilterValue(item?.site_name);
-      const hostname = normalizeFilterValue(item?.hostname);
-      const watchdogName = normalizeFilterValue(item?.watchdog_name);
-      const acknowledged = Boolean(item?.acknowledged_at);
-      if (filters.severity !== "all" && severity !== filters.severity) return false;
-      if (filters.site && !siteName.includes(normalizeFilterValue(filters.site))) return false;
-      if (filters.device && !hostname.includes(normalizeFilterValue(filters.device))) return false;
-      if (filters.watchdog && !watchdogName.includes(normalizeFilterValue(filters.watchdog))) return false;
-      if (filters.acknowledged === "yes" && !acknowledged) return false;
-      if (filters.acknowledged === "no" && acknowledged) return false;
-      return true;
-    });
-  }, [filters, queueRows]);
 
   const selectedOpenRows = useMemo(
     () => selectedRows.filter((item) => normalizeFilterValue(item?.state) === "open"),
@@ -415,46 +389,6 @@ export default function ActiveAlerts() {
             <Tab value="suppressed" label={`Suppressed (${queueCounts.suppressed})`} />
             <Tab value="resolved" label={`Resolved (${queueCounts.resolved})`} />
           </Tabs>
-          <Stack direction={{ xs: "column", xl: "row" }} spacing={1.25}>
-            <TextField
-              select
-              label="Severity"
-              value={filters.severity}
-              onChange={(event) => setFilters((prev) => ({ ...prev, severity: event.target.value }))}
-              sx={{ minWidth: 150 }}
-            >
-              <MenuItem value="all">All</MenuItem>
-              <MenuItem value="info">Info</MenuItem>
-              <MenuItem value="warning">Warning</MenuItem>
-              <MenuItem value="error">Error</MenuItem>
-            </TextField>
-            <TextField
-              label="Site"
-              value={filters.site}
-              onChange={(event) => setFilters((prev) => ({ ...prev, site: event.target.value }))}
-            />
-            <TextField
-              label="Device"
-              value={filters.device}
-              onChange={(event) => setFilters((prev) => ({ ...prev, device: event.target.value }))}
-            />
-            <TextField
-              label="Watchdog"
-              value={filters.watchdog}
-              onChange={(event) => setFilters((prev) => ({ ...prev, watchdog: event.target.value }))}
-            />
-            <TextField
-              select
-              label="Acknowledged"
-              value={filters.acknowledged}
-              onChange={(event) => setFilters((prev) => ({ ...prev, acknowledged: event.target.value }))}
-              sx={{ minWidth: 170 }}
-            >
-              <MenuItem value="all">All</MenuItem>
-              <MenuItem value="yes">Acknowledged</MenuItem>
-              <MenuItem value="no">Unacknowledged</MenuItem>
-            </TextField>
-          </Stack>
           {loading ? <LinearProgress /> : null}
           {error ? <Alert severity="error">{error}</Alert> : null}
         </Stack>
@@ -463,7 +397,7 @@ export default function ActiveAlerts() {
         <Box sx={GRID_WRAPPER_SX}>
           <AgGridReact
             theme={gridTheme}
-            rowData={visibleRows}
+            rowData={queueRows}
             columnDefs={columnDefs}
             rowSelection={rowSelection}
             selectionColumnDef={selectionColumnDef}

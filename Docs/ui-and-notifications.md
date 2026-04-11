@@ -62,6 +62,7 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - Watchdog authoring uses a tabbed editor with `Name`, `Scope`, `Targets`, `Rules`, `Actions`, and `Preview`.
 - The `Preview` tab is part of the primary authoring flow and resolves current targets before save.
 - Alerts is a separate incident queue so operators can work alerts without opening the underlying policy editor.
+- Alerts relies on AG Grid's built-in column filters rather than a page-level custom filter bar.
 - Device Summary includes a `Watchdogs` tab so operators can acknowledge incidents, suppress a watchdog for one device, or launch a prefilled device-scoped watchdog draft.
 - Real-time refresh uses `watchdog_incidents_changed` and `device_watchdogs_changed` on the shared `window.BorealisSocket`.
 
