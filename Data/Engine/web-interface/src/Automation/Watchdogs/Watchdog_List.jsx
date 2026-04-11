@@ -8,8 +8,6 @@ import {
   LinearProgress,
   Stack,
   Switch,
-  Tab,
-  Tabs,
   Typography,
 } from "@mui/material";
 import {
@@ -26,7 +24,7 @@ import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
 import { APP_PATHS } from "../../app/routes/paths.js";
 import {
   GRID_WRAPPER_SX,
-  buildNavTabsSx,
+  CountSliderGroup,
   formatTimestamp,
   gridTheme,
   severityColor,
@@ -48,6 +46,43 @@ export default function WatchdogList() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [selectedIds, setSelectedIds] = useState([]);
+
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "watchdogs-refresh",
+        label: "Refresh",
+        icon: <RefreshIcon />,
+        tone: "secondary",
+        disabled: loading,
+        onClick: loadItems,
+      },
+      {
+        id: "watchdogs-delete",
+        label: "Delete",
+        icon: <DeleteIcon />,
+        tone: "secondary",
+        disabled: !selectedIds.length,
+        onClick: deleteSelected,
+      },
+      {
+        id: "watchdogs-new",
+        label: "New Watchdog",
+        icon: <AddIcon />,
+        tone: "primary",
+        onClick: () => navigate(APP_PATHS.watchdogNew),
+      },
+    ],
+    [deleteSelected, loadItems, loading, navigate, selectedIds.length]
+  );
+
+  const tabCounts = useMemo(
+    () => ({
+      active: items.length,
+      archived: archivedItems.length,
+    }),
+    [archivedItems.length, items.length]
+  );
 
   const rowSelection = useMemo(
     () => ({
@@ -271,6 +306,7 @@ export default function WatchdogList() {
     title: PAGE_TITLE,
     subtitle: PAGE_SUBTITLE,
     Icon: HeaderIcon,
+    actions: pageHeaderActions,
   });
 
   return (
@@ -278,41 +314,32 @@ export default function WatchdogList() {
       variant="grid_with_stack"
       stack={
         <Stack spacing={1.5}>
-          <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} justifyContent="space-between">
-            <Tabs
-              value={activeTab}
-              onChange={(_event, nextValue) => setActiveTab(nextValue)}
-              sx={buildNavTabsSx()}
-            >
-              <Tab value="active" label={`Active (${items.length})`} />
-              <Tab value="archived" label={`Archived (${archivedItems.length})`} />
-            </Tabs>
-            <Stack direction="row" spacing={1}>
-              <Button startIcon={<RefreshIcon />} onClick={loadItems} disabled={loading}>
-                Refresh
-              </Button>
-              <Button
-                color="error"
-                startIcon={<DeleteIcon />}
-                onClick={deleteSelected}
-                disabled={!selectedIds.length}
-              >
-                Delete
-              </Button>
-              <Button
-                variant="contained"
-                startIcon={<AddIcon />}
-                onClick={() => navigate(APP_PATHS.watchdogNew)}
-              >
-                New Watchdog
-              </Button>
-            </Stack>
-          </Stack>
+          <Box
+            sx={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 1.5,
+            }}
+          >
+            <CountSliderGroup
+              options={[
+                { key: "active", label: "Active" },
+                { key: "archived", label: "Archived" },
+              ]}
+              activeKey={activeTab}
+              counts={tabCounts}
+              onChange={(nextKey) => setActiveTab(nextKey || "active")}
+            />
+            <Typography variant="body2" sx={{ color: "rgba(155, 163, 180, 0.96)" }}>
+              {activeTab === "archived"
+                ? `Showing ${archivedItems.length} archived watchdog${archivedItems.length === 1 ? "" : "s"}`
+                : `Showing ${items.length} active watchdog${items.length === 1 ? "" : "s"}`}
+            </Typography>
+          </Box>
           {loading ? <LinearProgress /> : null}
           {error ? <Alert severity="error">{error}</Alert> : null}
-          <Typography variant="body2" sx={{ color: "rgba(203, 213, 225, 0.82)" }}>
-            Watchdogs live under Automation because they are policy authoring and remediation tools. Active incidents are handled separately from the dedicated Alerts queue.
-          </Typography>
         </Stack>
       }
       main={
