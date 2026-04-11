@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Alert,
@@ -73,13 +73,14 @@ function normalizeArray(value) {
 
 export default function ActiveAlerts() {
   const navigate = useNavigate();
+  const gridRef = useRef(null);
   const [stateTab, setStateTab] = useState("open");
   const [incidents, setIncidents] = useState([]);
   const [queueCounts, setQueueCounts] = useState({ open: 0, suppressed: 0, resolved: 0 });
   const [loading, setLoading] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
   const [error, setError] = useState("");
-  const [selectedRows, setSelectedRows] = useState([]);
+  const [selectedIncidentIds, setSelectedIncidentIds] = useState([]);
 
   const getRowId = useCallback((params) => String(params.data?.id ?? ""), []);
 
@@ -127,11 +128,15 @@ export default function ActiveAlerts() {
       const nextItems = Array.isArray(payload?.items) ? payload.items : [];
       setIncidents(nextItems);
       setQueueCounts(buildQueueCounts(payload?.counts, nextItems));
-      setSelectedRows([]);
+      setSelectedIncidentIds((previousIds) => {
+        const nextIdSet = new Set(nextItems.map((item) => String(item?.id ?? "")));
+        return previousIds.filter((incidentId) => nextIdSet.has(incidentId));
+      });
     } catch (err) {
       setIncidents([]);
       setQueueCounts({ open: 0, suppressed: 0, resolved: 0 });
-      setSelectedRows([]);
+      setSelectedIncidentIds([]);
+      gridRef.current?.api?.deselectAll?.();
       setError(String(err?.message || err || "Failed to load incidents."));
     } finally {
       setLoading(false);
@@ -143,7 +148,8 @@ export default function ActiveAlerts() {
   }, [loadIncidents]);
 
   useEffect(() => {
-    setSelectedRows([]);
+    setSelectedIncidentIds([]);
+    gridRef.current?.api?.deselectAll?.();
   }, [stateTab]);
 
   useEffect(() => {
@@ -164,6 +170,11 @@ export default function ActiveAlerts() {
     () => incidents.filter((item) => normalizeFilterValue(item?.state) === stateTab),
     [incidents, stateTab]
   );
+
+  const selectedRows = useMemo(() => {
+    const selectedIdSet = new Set(selectedIncidentIds);
+    return incidents.filter((item) => selectedIdSet.has(String(item?.id ?? "")));
+  }, [incidents, selectedIncidentIds]);
 
   const selectedOpenRows = useMemo(
     () => selectedRows.filter((item) => normalizeFilterValue(item?.state) === "open"),
@@ -250,20 +261,20 @@ export default function ActiveAlerts() {
         onClick: loadIncidents,
       },
       {
-        id: "alerts-acknowledge",
-        label: "Acknowledge",
-        icon: <AcknowledgeIcon />,
-        tone: "primary",
-        disabled: !selectedOpenRows.length || loading || actionBusy,
-        onClick: acknowledgeSelected,
-      },
-      {
         id: "alerts-queue-toggle",
         label: queueToggleMode === "reopen" ? "RE-OPEN" : "Suppress",
         icon: queueToggleMode === "reopen" ? <ReopenIcon /> : <SuppressIcon />,
         tone: "secondary",
         disabled: !selectedRows.length || !queueToggleMode || loading || actionBusy,
         onClick: toggleSelectedQueue,
+      },
+      {
+        id: "alerts-acknowledge",
+        label: "Acknowledge",
+        icon: <AcknowledgeIcon />,
+        tone: "primary",
+        disabled: !selectedOpenRows.length || loading || actionBusy,
+        onClick: acknowledgeSelected,
       },
     ],
     [acknowledgeSelected, actionBusy, loadIncidents, loading, queueToggleMode, selectedOpenRows.length, selectedRows.length, toggleSelectedQueue]
@@ -381,6 +392,7 @@ export default function ActiveAlerts() {
       main={
         <Box sx={GRID_WRAPPER_SX}>
           <AgGridReact
+            ref={gridRef}
             theme={gridTheme}
             rowData={queueRows}
             columnDefs={columnDefs}
@@ -388,7 +400,9 @@ export default function ActiveAlerts() {
             selectionColumnDef={selectionColumnDef}
             getRowId={getRowId}
             suppressRowClickSelection
-            onSelectionChanged={(event) => setSelectedRows(event.api.getSelectedRows() || [])}
+            onSelectionChanged={(event) =>
+              setSelectedIncidentIds((event.api.getSelectedRows() || []).map((row) => String(row?.id ?? "")))
+            }
             defaultColDef={{
               sortable: true,
               filter: true,
