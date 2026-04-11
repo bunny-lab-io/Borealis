@@ -64,6 +64,7 @@ const RULE_TYPE_OPTIONS = [
 ];
 
 const ACTION_TYPE_OPTIONS = [
+  { value: "do_nothing", label: "No Nothing" },
   { value: "notification", label: "Send In-App Alert" },
   { value: "service_control", label: "Control Service" },
   { value: "assembly", label: "Run Assembly" },
@@ -115,6 +116,13 @@ function makeRule(type = "device_offline") {
 }
 
 function makeAction(type = "notification") {
+  if (type === "do_nothing") {
+    return {
+      id: makeId("action"),
+      type,
+      enabled: true,
+    };
+  }
   if (type === "service_control") {
     return { id: makeId("action"), type, enabled: true, service_name: "", action: "restart" };
   }
@@ -543,6 +551,11 @@ function ActionCard({ action, assemblyOptions, onChange, onRemove }) {
             helperText="Optional operator-facing message override. If blank, Borealis will use the rule evaluation message."
           />
         </Stack>
+      ) : null}
+      {type === "do_nothing" ? (
+        <Alert severity="info" sx={{ alignItems: "center" }}>
+          Borealis will still open and track the incident, but it will not send a toast notification or run any remediation.
+        </Alert>
       ) : null}
       {type === "service_control" ? (
         <Stack direction={{ xs: "column", md: "row" }} spacing={1.25}>

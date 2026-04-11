@@ -53,7 +53,7 @@ VALID_WATCHDOG_RULE_TYPES = {
     "software_presence_or_version",
     "agent_version_status",
 }
-VALID_WATCHDOG_ACTION_TYPES = {"notification", "service_control", "assembly"}
+VALID_WATCHDOG_ACTION_TYPES = {"notification", "service_control", "assembly", "do_nothing"}
 VALID_INCIDENT_STATES = {"open", "resolved"}
 VALID_DEVICE_OVERRIDE_STATES = {"suppressed", "disabled"}
 VALID_AGENT_VERSION_STATES = {"Up-to-Date", "Needs Updated"}
@@ -397,6 +397,8 @@ def _normalize_action(index: int, raw_action: Any) -> Optional[Dict[str, Any]]:
         base["title"] = _clean_single_line(raw_action.get("title"))
         base["message_template"] = _clean_text(raw_action.get("message_template"))
         return base
+    if action_type == "do_nothing":
+        return base
     if action_type == "service_control":
         action = normalize_service_action(raw_action.get("action"))
         service_name = _clean_single_line(raw_action.get("service_name") or raw_action.get("name"))
@@ -459,6 +461,8 @@ def summarize_action(action: Mapping[str, Any]) -> str:
     action_type = _clean_text(action.get("type")).lower()
     if action_type == "notification":
         return "Send in-app alert"
+    if action_type == "do_nothing":
+        return "Incident only (no notification or remediation)"
     if action_type == "service_control":
         return f"{_clean_text(action.get('action')).capitalize()} service {_clean_text(action.get('service_name'))}"
     if action_type == "assembly":
@@ -2186,6 +2190,15 @@ class WatchdogRuntimeService:
                 message = _clean_text(evaluation.get("message")) or f"{_clean_text(device.get('hostname'))} triggered a watchdog incident."
                 self._emit_broadcast_notification(title=title, message=message, variant=_clean_text(action.get("variant")).lower() or "warning")
                 results.append({"type": action_type, "status": "sent", "message": title})
+                continue
+            if action_type == "do_nothing":
+                results.append(
+                    {
+                        "type": action_type,
+                        "status": "noop",
+                        "message": "Incident recorded without notification or remediation.",
+                    }
+                )
                 continue
             if action_type == "service_control":
                 results.append(self._attempt_service_control(device=device, action=action))
