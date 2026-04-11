@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import {
   Alert,
   Box,
-  Button,
   Chip,
   LinearProgress,
   Stack,
@@ -304,34 +303,53 @@ export default function ActiveAlerts() {
         headerName: "Device",
         minWidth: 180,
         flex: 1,
-        cellRenderer: (params) => (
-          <Button
-            color="inherit"
-            onClick={() =>
-              navigate(APP_PATHS.device(params?.data?.hostname), {
-                state: { initialDevice: { hostname: params?.data?.hostname } },
-              })
-            }
-            sx={{ justifyContent: "flex-start", px: 0, textTransform: "none" }}
-          >
-            {params.value}
-          </Button>
-        ),
+        cellRenderer: (params) => {
+          const hostname = String(params?.data?.hostname || "").trim();
+          if (!hostname) return null;
+          const handleClick = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            navigate(APP_PATHS.device(hostname), {
+              state: { initialDevice: { hostname } },
+            });
+          };
+          return (
+            <a
+              href="#"
+              onClick={handleClick}
+              title={hostname}
+              style={{ color: "#58a6ff", textDecoration: "none", fontWeight: 500 }}
+            >
+              {hostname}
+            </a>
+          );
+        },
       },
       {
         field: "watchdog_name",
         headerName: "Watchdog",
         minWidth: 220,
         flex: 1.1,
-        cellRenderer: (params) => (
-          <Button
-            color="inherit"
-            onClick={() => navigate(APP_PATHS.watchdog(params?.data?.watchdog_id))}
-            sx={{ justifyContent: "flex-start", px: 0, textTransform: "none" }}
-          >
-            {params.value}
-          </Button>
-        ),
+        cellRenderer: (params) => {
+          const watchdogId = params?.data?.watchdog_id;
+          const watchdogName = String(params?.value || "").trim();
+          if (!watchdogId || !watchdogName) return watchdogName || "";
+          const handleClick = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            navigate(APP_PATHS.watchdog(watchdogId));
+          };
+          return (
+            <a
+              href="#"
+              onClick={handleClick}
+              title={watchdogName}
+              style={{ color: "#58a6ff", textDecoration: "none", fontWeight: 500 }}
+            >
+              {watchdogName}
+            </a>
+          );
+        },
       },
       {
         field: "site_name",
@@ -358,14 +376,17 @@ export default function ActiveAlerts() {
         valueFormatter: (params) => formatTimestamp(params.value),
       },
       {
-        field: "acknowledged_by",
-        headerName: "Acknowledged By",
-        minWidth: 160,
+        field: stateTab === "suppressed" ? "resolution_reason" : "acknowledged_by",
+        headerName: stateTab === "suppressed" ? "Suppression Reason" : "Acknowledged By",
+        minWidth: stateTab === "suppressed" ? 240 : 160,
         flex: 0.7,
-        valueGetter: (params) => params?.data?.acknowledged_by || "",
+        valueGetter: (params) =>
+          stateTab === "suppressed"
+            ? params?.data?.resolution_reason || ""
+            : params?.data?.acknowledged_by || "",
       },
     ],
-    [navigate]
+    [navigate, stateTab]
   );
 
   useRoutePageChrome({

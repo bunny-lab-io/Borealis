@@ -15,6 +15,7 @@ Describe the runtime incident side of Watchdogs: the Alerts queue, incident life
   - acknowledge incidents
   - suppress an active incident into the dedicated suppressed queue
   - `RE-OPEN` for suppressed incidents that should return to the open queue
+  - the suppressed queue surfaces the operator-provided suppression reason directly in the table
 
 ## Incident Lifecycle
 - `open`: a watchdog met its match conditions and opened or refreshed an incident.
