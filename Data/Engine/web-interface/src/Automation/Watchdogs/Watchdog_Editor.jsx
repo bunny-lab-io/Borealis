@@ -1647,11 +1647,7 @@ export default function WatchdogEditor() {
         message: `${String(data?.name || formState.name || "Watchdog").trim()} saved successfully.`,
         variant: "info",
       });
-      if (targetId) {
-        navigate(APP_PATHS.watchdog(targetId), { replace: true });
-      } else {
-        navigate(APP_PATHS.watchdogs);
-      }
+      navigate(APP_PATHS.watchdogs);
     } catch (err) {
       setError(String(err?.message || err || "Save failed."));
     } finally {
