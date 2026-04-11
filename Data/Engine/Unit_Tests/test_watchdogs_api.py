@@ -425,6 +425,69 @@ def test_watchdog_run_assembly_action_preserves_variable_values(engine_harness: 
     }
 
 
+def test_watchdog_incident_suppressed_queue_counts_and_reopen_round_trip(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+
+    create_response = client.post(
+        "/api/watchdogs",
+        json=_offline_watchdog_payload(
+            targets=[
+                {
+                    "kind": "device",
+                    "device_guid": "GUID-TEST-0001",
+                    "hostname": "test-device",
+                    "site_id": 1,
+                    "site_name": "Main Lab",
+                }
+            ]
+        ),
+    )
+    assert create_response.status_code == 201
+
+    all_response = client.get("/api/watchdogs/incidents?state=all")
+    assert all_response.status_code == 200
+    all_payload = all_response.get_json()
+    assert all_payload["counts"]["open"] == 1
+    assert all_payload["counts"]["suppressed"] == 0
+    assert all_payload["counts"]["resolved"] == 0
+    incident_id = all_payload["items"][0]["id"]
+
+    suppress_response = client.post(
+        f"/api/watchdogs/incidents/{incident_id}/state",
+        json={"state": "suppressed", "reason": "Temporarily suppressed from Alerts."},
+    )
+    assert suppress_response.status_code == 200
+    suppressed = suppress_response.get_json()
+    assert suppressed["state"] == "suppressed"
+    assert suppressed["resolution_reason"] == "Temporarily suppressed from Alerts."
+
+    suppressed_list = client.get("/api/watchdogs/incidents?state=suppressed")
+    assert suppressed_list.status_code == 200
+    suppressed_payload = suppressed_list.get_json()
+    assert suppressed_payload["counts"]["open"] == 0
+    assert suppressed_payload["counts"]["suppressed"] == 1
+    assert suppressed_payload["counts"]["resolved"] == 0
+    assert len(suppressed_payload["items"]) == 1
+
+    reopen_response = client.post(
+        f"/api/watchdogs/incidents/{incident_id}/state",
+        json={"state": "open"},
+    )
+    assert reopen_response.status_code == 200
+    reopened = reopen_response.get_json()
+    assert reopened["state"] == "open"
+    assert reopened["resolved_at"] is None
+
+    reopened_list = client.get("/api/watchdogs/incidents?state=all")
+    assert reopened_list.status_code == 200
+    reopened_payload = reopened_list.get_json()
+    assert reopened_payload["counts"]["open"] == 1
+    assert reopened_payload["counts"]["suppressed"] == 0
+    assert reopened_payload["counts"]["resolved"] == 0
+
+
 def test_watchdog_incident_acknowledge_and_device_override_round_trip(
     engine_harness: EngineTestHarness,
 ) -> None:

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Alert,
@@ -11,7 +11,6 @@ import {
   Tab,
   Tabs,
   TextField,
-  Typography,
 } from "@mui/material";
 import {
   CachedRounded as RefreshIcon,
@@ -19,6 +18,7 @@ import {
   NotificationsActiveRounded as HeaderIcon,
   OpenInNewRounded as OpenIcon,
   PauseCircleOutlineRounded as SuppressIcon,
+  ReplayRounded as ReopenIcon,
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { AllCommunityModule, ModuleRegistry } from "ag-grid-community";
@@ -32,24 +32,53 @@ import {
   formatTimestamp,
   gridTheme,
   severityColor,
-  summarizeRuleResults,
 } from "../Automation/Watchdogs/shared.js";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const PAGE_TITLE = "Alerts";
 const PAGE_SUBTITLE =
-  "Work the live watchdog incident queue, acknowledge noisy signals, and jump directly to affected devices or watchdog policies.";
+  "Work watchdog incidents, acknowledge noisy signals, suppress active issues, and jump directly to the source policy.";
 
 function normalizeFilterValue(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function buildQueueCounts(payloadCounts = {}, items = []) {
+  const counts = {
+    open: 0,
+    suppressed: 0,
+    resolved: 0,
+  };
+
+  Object.entries(payloadCounts || {}).forEach(([state, count]) => {
+    const normalizedState = normalizeFilterValue(state);
+    if (Object.prototype.hasOwnProperty.call(counts, normalizedState)) {
+      counts[normalizedState] = Number(count || 0);
+    }
+  });
+
+  if (!Object.values(counts).some((value) => value > 0)) {
+    normalizeArray(items).forEach((item) => {
+      const normalizedState = normalizeFilterValue(item?.state);
+      if (Object.prototype.hasOwnProperty.call(counts, normalizedState)) {
+        counts[normalizedState] += 1;
+      }
+    });
+  }
+
+  return counts;
+}
+
+function normalizeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
 export default function ActiveAlerts() {
   const navigate = useNavigate();
-  const gridRef = useRef(null);
   const [stateTab, setStateTab] = useState("open");
   const [incidents, setIncidents] = useState([]);
+  const [queueCounts, setQueueCounts] = useState({ open: 0, suppressed: 0, resolved: 0 });
   const [loading, setLoading] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
   const [error, setError] = useState("");
@@ -62,11 +91,42 @@ export default function ActiveAlerts() {
     acknowledged: "all",
   });
 
+  const getRowId = useCallback((params) => String(params.data?.id ?? ""), []);
+
+  const rowSelection = useMemo(
+    () => ({
+      mode: "multiRow",
+      checkboxes: true,
+      headerCheckbox: true,
+      enableSelectionWithoutKeys: true,
+      enableClickSelection: false,
+    }),
+    []
+  );
+
+  const selectionColumnDef = useMemo(
+    () => ({
+      headerName: "",
+      width: 52,
+      minWidth: 52,
+      maxWidth: 52,
+      resizable: false,
+      sortable: false,
+      filter: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      pinned: "left",
+      lockPosition: true,
+      suppressMovable: true,
+    }),
+    []
+  );
+
   const loadIncidents = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch(`/api/watchdogs/incidents?state=${encodeURIComponent(stateTab)}`, {
+      const response = await fetch("/api/watchdogs/incidents?state=all", {
         credentials: "include",
         cache: "no-store",
       });
@@ -74,18 +134,27 @@ export default function ActiveAlerts() {
       if (!response.ok) {
         throw new Error(payload?.errors?.[0] || payload?.error || payload?.message || `HTTP ${response.status}`);
       }
-      setIncidents(Array.isArray(payload?.items) ? payload.items : []);
+      const nextItems = Array.isArray(payload?.items) ? payload.items : [];
+      setIncidents(nextItems);
+      setQueueCounts(buildQueueCounts(payload?.counts, nextItems));
+      setSelectedRows([]);
     } catch (err) {
       setIncidents([]);
+      setQueueCounts({ open: 0, suppressed: 0, resolved: 0 });
+      setSelectedRows([]);
       setError(String(err?.message || err || "Failed to load incidents."));
     } finally {
       setLoading(false);
     }
-  }, [stateTab]);
+  }, []);
 
   useEffect(() => {
     loadIncidents();
   }, [loadIncidents]);
+
+  useEffect(() => {
+    setSelectedRows([]);
+  }, [stateTab]);
 
   useEffect(() => {
     const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
@@ -101,8 +170,13 @@ export default function ActiveAlerts() {
     };
   }, [loadIncidents]);
 
+  const queueRows = useMemo(
+    () => incidents.filter((item) => normalizeFilterValue(item?.state) === stateTab),
+    [incidents, stateTab]
+  );
+
   const visibleRows = useMemo(() => {
-    return incidents.filter((item) => {
+    return queueRows.filter((item) => {
       const severity = normalizeFilterValue(item?.severity);
       const siteName = normalizeFilterValue(item?.site_name);
       const hostname = normalizeFilterValue(item?.hostname);
@@ -116,12 +190,23 @@ export default function ActiveAlerts() {
       if (filters.acknowledged === "no" && acknowledged) return false;
       return true;
     });
-  }, [filters, incidents]);
+  }, [filters, queueRows]);
 
   const selectedOpenRows = useMemo(
-    () => selectedRows.filter((item) => String(item?.state || "").toLowerCase() === "open"),
+    () => selectedRows.filter((item) => normalizeFilterValue(item?.state) === "open"),
     [selectedRows]
   );
+
+  const queueToggleMode = useMemo(() => {
+    if (!selectedRows.length) {
+      return stateTab === "suppressed" ? "reopen" : stateTab === "open" ? "suppress" : null;
+    }
+    const states = Array.from(new Set(selectedRows.map((row) => normalizeFilterValue(row?.state)).filter(Boolean)));
+    if (states.length !== 1) return null;
+    if (states[0] === "open") return "suppress";
+    if (states[0] === "suppressed") return "reopen";
+    return null;
+  }, [selectedRows, stateTab]);
 
   const acknowledgeSelected = useCallback(async () => {
     if (!selectedOpenRows.length) return;
@@ -136,8 +221,7 @@ export default function ActiveAlerts() {
           })
         )
       );
-      setSelectedRows([]);
-      loadIncidents();
+      await loadIncidents();
     } catch (err) {
       setError(String(err?.message || err || "Failed to acknowledge selected incidents."));
     } finally {
@@ -145,44 +229,42 @@ export default function ActiveAlerts() {
     }
   }, [loadIncidents, selectedOpenRows]);
 
-  const suppressSelected = useCallback(async () => {
-    if (!selectedOpenRows.length) return;
+  const toggleSelectedQueue = useCallback(async () => {
+    if (!selectedRows.length || !queueToggleMode) return;
+    const desiredState = queueToggleMode === "reopen" ? "open" : "suppressed";
     const reason =
-      window.prompt(
-        "Optional suppression reason for the selected device watchdog overrides:",
-        "Temporarily suppressed from Alerts."
-      ) || "Temporarily suppressed from Alerts.";
+      desiredState === "suppressed"
+        ? window.prompt("Optional suppression reason for the selected alerts:", "Temporarily suppressed from Alerts.") ||
+          "Temporarily suppressed from Alerts."
+        : "";
     setActionBusy(true);
     setError("");
     try {
       await Promise.all(
-        selectedOpenRows.map((row) =>
-          fetch(`/api/devices/${encodeURIComponent(row.device_guid || row.hostname)}/watchdogs/overrides`, {
+        selectedRows.map((row) =>
+          fetch(`/api/watchdogs/incidents/${encodeURIComponent(row.id)}/state`, {
             method: "POST",
             credentials: "include",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              watchdog_id: row.watchdog_id,
-              state: "suppressed",
+              state: desiredState,
               reason,
             }),
+          }).then(async (response) => {
+            if (response.ok) return response;
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload?.errors?.[0] || payload?.error || payload?.message || `HTTP ${response.status}`);
           })
         )
       );
-      setSelectedRows([]);
-      loadIncidents();
+      await loadIncidents();
+      setStateTab(desiredState === "suppressed" ? "suppressed" : "open");
     } catch (err) {
-      setError(String(err?.message || err || "Failed to suppress selected incidents."));
+      setError(String(err?.message || err || `Failed to ${desiredState === "open" ? "re-open" : "suppress"} selected incidents.`));
     } finally {
       setActionBusy(false);
     }
-  }, [loadIncidents, selectedOpenRows]);
-
-  const openSelectedDevice = useCallback(() => {
-    const target = selectedRows[0];
-    if (!target?.hostname) return;
-    navigate(APP_PATHS.device(target.hostname), { state: { initialDevice: { hostname: target.hostname } } });
-  }, [navigate, selectedRows]);
+  }, [loadIncidents, queueToggleMode, selectedRows]);
 
   const openSelectedPolicy = useCallback(() => {
     const target = selectedRows[0];
@@ -190,16 +272,46 @@ export default function ActiveAlerts() {
     navigate(APP_PATHS.watchdog(target.watchdog_id));
   }, [navigate, selectedRows]);
 
-  const columnDefs = useMemo(
+  const pageHeaderActions = useMemo(
     () => [
       {
-        checkboxSelection: true,
-        headerCheckboxSelection: true,
-        width: 54,
-        pinned: "left",
-        sortable: false,
-        filter: false,
+        id: "alerts-refresh",
+        label: "Refresh",
+        icon: <RefreshIcon />,
+        tone: "secondary",
+        disabled: loading || actionBusy,
+        onClick: loadIncidents,
       },
+      {
+        id: "alerts-acknowledge",
+        label: "Acknowledge",
+        icon: <AcknowledgeIcon />,
+        tone: "secondary",
+        disabled: !selectedOpenRows.length || loading || actionBusy,
+        onClick: acknowledgeSelected,
+      },
+      {
+        id: "alerts-queue-toggle",
+        label: queueToggleMode === "reopen" ? "RE-OPEN" : "Suppress",
+        icon: queueToggleMode === "reopen" ? <ReopenIcon /> : <SuppressIcon />,
+        tone: "secondary",
+        disabled: !selectedRows.length || !queueToggleMode || loading || actionBusy,
+        onClick: toggleSelectedQueue,
+      },
+      {
+        id: "alerts-open-policy",
+        label: "Open Policy",
+        icon: <OpenIcon />,
+        tone: "primary",
+        disabled: selectedRows.length !== 1 || !selectedRows[0]?.watchdog_id,
+        onClick: openSelectedPolicy,
+      },
+    ],
+    [acknowledgeSelected, actionBusy, loadIncidents, loading, openSelectedPolicy, queueToggleMode, selectedOpenRows.length, selectedRows, toggleSelectedQueue]
+  );
+
+  const columnDefs = useMemo(
+    () => [
       {
         field: "severity",
         headerName: "Severity",
@@ -260,15 +372,8 @@ export default function ActiveAlerts() {
       {
         field: "message",
         headerName: "Message",
-        minWidth: 260,
-        flex: 1.4,
-      },
-      {
-        field: "sample",
-        headerName: "Matched Details",
-        minWidth: 320,
-        flex: 1.4,
-        valueGetter: (params) => summarizeRuleResults(params?.data?.sample),
+        minWidth: 300,
+        flex: 1.6,
       },
       {
         field: "opened_at",
@@ -278,7 +383,7 @@ export default function ActiveAlerts() {
       },
       {
         field: "updated_at",
-        headerName: "Updated",
+        headerName: "Last Updated",
         minWidth: 180,
         valueFormatter: (params) => formatTimestamp(params.value),
       },
@@ -297,6 +402,7 @@ export default function ActiveAlerts() {
     title: PAGE_TITLE,
     subtitle: PAGE_SUBTITLE,
     Icon: HeaderIcon,
+    actions: pageHeaderActions,
   });
 
   return (
@@ -304,48 +410,11 @@ export default function ActiveAlerts() {
       variant="grid_with_stack"
       stack={
         <Stack spacing={1.5}>
-          <Stack direction={{ xs: "column", lg: "row" }} spacing={1.5} justifyContent="space-between">
-            <Tabs value={stateTab} onChange={(_event, nextValue) => setStateTab(nextValue)} sx={buildNavTabsSx()}>
-              <Tab value="open" label={`Open (${incidents.filter((item) => item?.state === "open").length})`} />
-              <Tab
-                value="resolved"
-                label={`Resolved (${incidents.filter((item) => item?.state === "resolved").length})`}
-              />
-            </Tabs>
-            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-              <Button startIcon={<RefreshIcon />} onClick={loadIncidents} disabled={loading || actionBusy}>
-                Refresh
-              </Button>
-              <Button
-                startIcon={<AcknowledgeIcon />}
-                onClick={acknowledgeSelected}
-                disabled={!selectedOpenRows.length || actionBusy || stateTab !== "open"}
-              >
-                Acknowledge
-              </Button>
-              <Button
-                startIcon={<SuppressIcon />}
-                onClick={suppressSelected}
-                disabled={!selectedOpenRows.length || actionBusy || stateTab !== "open"}
-              >
-                Suppress
-              </Button>
-              <Button
-                startIcon={<OpenIcon />}
-                onClick={openSelectedDevice}
-                disabled={selectedRows.length !== 1}
-              >
-                Open Device
-              </Button>
-              <Button
-                startIcon={<OpenIcon />}
-                onClick={openSelectedPolicy}
-                disabled={selectedRows.length !== 1}
-              >
-                Open Policy
-              </Button>
-            </Stack>
-          </Stack>
+          <Tabs value={stateTab} onChange={(_event, nextValue) => setStateTab(nextValue)} sx={buildNavTabsSx()}>
+            <Tab value="open" label={`Open (${queueCounts.open})`} />
+            <Tab value="suppressed" label={`Suppressed (${queueCounts.suppressed})`} />
+            <Tab value="resolved" label={`Resolved (${queueCounts.resolved})`} />
+          </Tabs>
           <Stack direction={{ xs: "column", xl: "row" }} spacing={1.25}>
             <TextField
               select
@@ -388,19 +457,17 @@ export default function ActiveAlerts() {
           </Stack>
           {loading ? <LinearProgress /> : null}
           {error ? <Alert severity="error">{error}</Alert> : null}
-          <Typography variant="body2" sx={{ color: "rgba(203, 213, 225, 0.82)" }}>
-            Alerts stay separate from Watchdog authoring so operators can focus on incidents here while automation engineers refine policy behavior under Automation.
-          </Typography>
         </Stack>
       }
       main={
         <Box sx={GRID_WRAPPER_SX}>
           <AgGridReact
-            ref={gridRef}
             theme={gridTheme}
             rowData={visibleRows}
             columnDefs={columnDefs}
-            rowSelection={{ mode: "multiRow" }}
+            rowSelection={rowSelection}
+            selectionColumnDef={selectionColumnDef}
+            getRowId={getRowId}
             suppressRowClickSelection
             onSelectionChanged={(event) => setSelectedRows(event.api.getSelectedRows() || [])}
             defaultColDef={{

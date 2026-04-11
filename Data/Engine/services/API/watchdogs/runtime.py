@@ -54,7 +54,8 @@ VALID_WATCHDOG_RULE_TYPES = {
     "agent_version_status",
 }
 VALID_WATCHDOG_ACTION_TYPES = {"notification", "service_control", "assembly", "do_nothing"}
-VALID_INCIDENT_STATES = {"open", "resolved"}
+VALID_INCIDENT_STATES = {"open", "suppressed", "resolved"}
+VALID_INCIDENT_QUERY_STATES = VALID_INCIDENT_STATES | {"all"}
 VALID_DEVICE_OVERRIDE_STATES = {"suppressed", "disabled"}
 VALID_AGENT_VERSION_STATES = {"Up-to-Date", "Needs Updated"}
 VALID_RULE_STATUSES = {"healthy", "recovering", "unhealthy", "pending", "unsupported", "unknown"}
@@ -1163,7 +1164,7 @@ class WatchdogRuntimeService:
         if existing is None:
             return False
         state_lookup = self._load_watchdog_state(int(existing["id"]))
-        incident_lookup = self._load_open_incidents(int(existing["id"]))
+        incident_lookup = self._load_active_incidents(int(existing["id"]))
         affected_hosts = {
             _clean_text(state.get("hostname")) for state in state_lookup.values() if _clean_text(state.get("hostname"))
         }
@@ -1372,7 +1373,7 @@ class WatchdogRuntimeService:
         finally:
             conn.close()
 
-    def _load_open_incidents(self, watchdog_id: int) -> Dict[str, Dict[str, Any]]:
+    def _load_active_incidents(self, watchdog_id: int) -> Dict[str, Dict[str, Any]]:
         conn = self._conn()
         try:
             cur = conn.cursor()
@@ -1384,7 +1385,7 @@ class WatchdogRuntimeService:
                     resolved_at, resolution_reason, acknowledged_at, acknowledged_by, trigger_count
                   FROM watchdog_incidents
                  WHERE watchdog_id=?
-                   AND state='open'
+                   AND state IN ('open', 'suppressed')
               ORDER BY updated_at DESC, id DESC
                 """,
                 (int(watchdog_id),),
@@ -1398,6 +1399,13 @@ class WatchdogRuntimeService:
             return lookup
         finally:
             conn.close()
+
+    def _load_open_incidents(self, watchdog_id: int) -> Dict[str, Dict[str, Any]]:
+        return {
+            hostname: incident
+            for hostname, incident in self._load_active_incidents(watchdog_id).items()
+            if _clean_text(incident.get("state")).lower() == "open"
+        }
 
     def _row_to_incident(self, row: Any) -> Dict[str, Any]:
         return {
@@ -1905,6 +1913,34 @@ class WatchdogRuntimeService:
             (now_ts, reason, now_ts, incident_id),
         )
 
+    def _set_incident_state(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        incident_id: int,
+        state: str,
+        reason: str = "",
+    ) -> None:
+        now_ts = _now_ts()
+        normalized_state = _clean_text(state).lower()
+        if normalized_state not in VALID_INCIDENT_STATES:
+            normalized_state = "open"
+        cur = conn.cursor()
+        if normalized_state == "resolved":
+            self._resolve_open_incident(conn, incident_id=incident_id, reason=reason)
+            return
+        cur.execute(
+            """
+            UPDATE watchdog_incidents
+               SET state=?,
+                   resolved_at=NULL,
+                   resolution_reason=?,
+                   updated_at=?
+             WHERE id=?
+            """,
+            (normalized_state, _clean_single_line(reason), now_ts, int(incident_id)),
+        )
+
     def _create_or_update_incident(
         self,
         conn: sqlite3.Connection,
@@ -2284,14 +2320,14 @@ class WatchdogRuntimeService:
             return
         if _coerce_bool(record.get("archived")) or not _coerce_bool(record.get("enabled"), True):
             current_state = self._load_watchdog_state(int(record["id"]))
-            open_incidents = self._load_open_incidents(int(record["id"]))
+            active_incidents = self._load_active_incidents(int(record["id"]))
             now_ts = _now_ts()
             deactivated_state = "disabled"
             resolution_reason = "archived" if _coerce_bool(record.get("archived")) else "disabled"
             conn = self._conn()
             try:
                 cur = conn.cursor()
-                for incident in open_incidents.values():
+                for incident in active_incidents.values():
                     incident_id = _coerce_optional_int(incident.get("id"))
                     if incident_id:
                         self._resolve_open_incident(conn, incident_id=incident_id, reason=resolution_reason)
@@ -2329,7 +2365,7 @@ class WatchdogRuntimeService:
         resolved_devices = self.resolve_targets(record)
         overrides = self._load_active_overrides(int(record["id"]))
         current_state = self._load_watchdog_state(int(record["id"]))
-        open_incidents = self._load_open_incidents(int(record["id"]))
+        active_incidents = self._load_active_incidents(int(record["id"]))
         now_ts = _now_ts()
         touched_hosts: set[str] = set()
         conn = self._conn()
@@ -2343,11 +2379,22 @@ class WatchdogRuntimeService:
                 touched_hosts.add(host_key)
                 prior_state = current_state.get(host_key) or {}
                 override = overrides.get(host_key)
-                incident = open_incidents.get(host_key)
+                incident = active_incidents.get(host_key)
                 if override and _clean_text(override.get("state")).lower() in VALID_DEVICE_OVERRIDE_STATES:
                     if incident:
-                        self._resolve_open_incident(conn, incident_id=int(incident["id"]), reason=_clean_text(override.get("state")) or "suppressed")
-                        incident = None
+                        self._set_incident_state(
+                            conn,
+                            incident_id=int(incident["id"]),
+                            state="suppressed",
+                            reason=_clean_text(override.get("state")) or "suppressed",
+                        )
+                        incident = {
+                            **incident,
+                            "state": "suppressed",
+                            "resolved_at": None,
+                            "resolution_reason": _clean_text(override.get("state")) or "suppressed",
+                            "updated_at": now_ts,
+                        }
                     self._upsert_state_row(
                         conn,
                         watchdog_id=int(record["id"]),
@@ -2361,7 +2408,7 @@ class WatchdogRuntimeService:
                         last_evaluated_at=now_ts,
                         last_matched_at=None,
                         last_sample={"override": override},
-                        current_incident_id=None,
+                        current_incident_id=_coerce_optional_int(incident.get("id")) if isinstance(incident, dict) else None,
                         last_action_at=_coerce_optional_int(prior_state.get("last_action_at")),
                     )
                     continue
@@ -2389,8 +2436,10 @@ class WatchdogRuntimeService:
                             action_summary=[],
                         )
                         incident_id = int(incident["id"])
-                        should_run_actions = last_action_at is None or (
-                            _coerce_int(record.get("cooldown_seconds"), DEFAULT_WATCHDOG_COOLDOWN_SECONDS) <= 0
+                        incident_state = _clean_text(incident.get("state")).lower() or "open"
+                        should_run_actions = incident_state == "open" and (
+                            last_action_at is None
+                            or _coerce_int(record.get("cooldown_seconds"), DEFAULT_WATCHDOG_COOLDOWN_SECONDS) <= 0
                             or (now_ts - int(last_action_at)) >= _coerce_int(record.get("cooldown_seconds"), DEFAULT_WATCHDOG_COOLDOWN_SECONDS)
                         )
                         if should_run_actions:
@@ -2411,7 +2460,7 @@ class WatchdogRuntimeService:
                                 )
                                 incident_id = int(incident["id"])
                             last_action_at = now_ts
-                        state_name = "triggered"
+                        state_name = "suppressed" if incident_state == "suppressed" else "triggered"
                         last_matched_at = now_ts
                     else:
                         state_name = "pending"
@@ -2518,13 +2567,12 @@ class WatchdogRuntimeService:
         state: str = "open",
     ) -> List[Dict[str, Any]]:
         normalized_state = _clean_text(state).lower()
-        if normalized_state not in VALID_INCIDENT_STATES:
+        if normalized_state not in VALID_INCIDENT_QUERY_STATES:
             normalized_state = "open"
         conn = self._conn()
         try:
             cur = conn.cursor()
-            cur.execute(
-                """
+            base_query = """
                 SELECT
                     i.id, i.watchdog_id, i.device_guid, i.hostname, i.site_id, i.severity, i.state,
                     i.title, i.message, i.sample_json, i.rule_summary_json, i.action_summary_json,
@@ -2533,11 +2581,14 @@ class WatchdogRuntimeService:
                     w.name, w.description
                   FROM watchdog_incidents AS i
                   JOIN watchdogs AS w ON w.id = i.watchdog_id
-                 WHERE i.state = ?
-              ORDER BY i.updated_at DESC, i.id DESC
-                """,
-                (normalized_state,),
-            )
+            """
+            if normalized_state == "all":
+                cur.execute(f"{base_query} ORDER BY i.updated_at DESC, i.id DESC")
+            else:
+                cur.execute(
+                    f"{base_query} WHERE i.state = ? ORDER BY i.updated_at DESC, i.id DESC",
+                    (normalized_state,),
+                )
             rows = cur.fetchall()
         finally:
             conn.close()
@@ -2579,6 +2630,18 @@ class WatchdogRuntimeService:
             incidents.append(incident)
         return incidents
 
+    def list_incident_counts(
+        self,
+        *,
+        user: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, int]:
+        counts = {state: 0 for state in VALID_INCIDENT_STATES}
+        for incident in self.list_incidents(user=user, state="all"):
+            state = _clean_text(incident.get("state")).lower()
+            if state in counts:
+                counts[state] += 1
+        return counts
+
     def acknowledge_incident(
         self,
         incident_id: Any,
@@ -2609,6 +2672,79 @@ class WatchdogRuntimeService:
         self._emit_watchdog_refresh(hostname=target.get("hostname") or "", watchdog_id=target.get("watchdog_id"))
         refreshed = self.list_incidents(user=user, state="open")
         return next((item for item in refreshed if int(item["id"]) == int(target["id"])), None)
+
+    def update_incident_state(
+        self,
+        incident_id: Any,
+        *,
+        state: str,
+        user: Optional[Mapping[str, Any]] = None,
+        reason: str = "",
+    ) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+        target_id = _coerce_int(incident_id, 0)
+        desired_state = _clean_text(state).lower()
+        if desired_state not in {"open", "suppressed"}:
+            return None, ["Unsupported incident state transition."]
+        incidents = self.list_incidents(user=user, state="all")
+        target = next((item for item in incidents if int(item["id"]) == target_id), None)
+        if target is None:
+            return None, ["Incident not found."]
+        current_state = _clean_text(target.get("state")).lower()
+        if current_state == "resolved":
+            return None, ["Resolved incidents are historical records and cannot be reopened."]
+        if current_state == desired_state:
+            return target, []
+
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            if desired_state == "open":
+                cur.execute(
+                    "DELETE FROM watchdog_device_overrides WHERE watchdog_id=? AND LOWER(hostname)=LOWER(?)",
+                    (int(target["watchdog_id"]), _clean_text(target.get("hostname"))),
+                )
+            self._set_incident_state(
+                conn,
+                incident_id=target_id,
+                state=desired_state,
+                reason=reason if desired_state == "suppressed" else "",
+            )
+            cur.execute(
+                """
+                SELECT
+                    state, consecutive_matches, first_matched_at, clear_started_at, last_evaluated_at,
+                    last_matched_at, last_sample_json, last_action_at, device_guid, hostname, site_id
+                  FROM watchdog_device_state
+                 WHERE watchdog_id=? AND LOWER(hostname)=LOWER(?)
+                 LIMIT 1
+                """,
+                (int(target["watchdog_id"]), _clean_text(target.get("hostname"))),
+            )
+            state_row = cur.fetchone()
+            if state_row:
+                next_device_state = "suppressed" if desired_state == "suppressed" else "triggered"
+                self._upsert_state_row(
+                    conn,
+                    watchdog_id=int(target["watchdog_id"]),
+                    device_guid=normalize_guid(state_row[8]) or target.get("device_guid") or "",
+                    hostname=_clean_text(state_row[9]) or _clean_text(target.get("hostname")),
+                    site_id=_coerce_optional_int(state_row[10]) if state_row[10] is not None else _coerce_optional_int(target.get("site_id")),
+                    state=next_device_state,
+                    consecutive_matches=_coerce_int(state_row[1], 0),
+                    first_matched_at=_coerce_optional_int(state_row[2]),
+                    clear_started_at=None if desired_state == "open" else _coerce_optional_int(state_row[3]),
+                    last_evaluated_at=max(_coerce_int(state_row[4], 0), _now_ts()),
+                    last_matched_at=_coerce_optional_int(state_row[5]),
+                    last_sample=_safe_json_loads(state_row[6], {}),
+                    current_incident_id=target_id,
+                    last_action_at=_coerce_optional_int(state_row[7]),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+        self._emit_watchdog_refresh(hostname=target.get("hostname") or "", watchdog_id=target.get("watchdog_id"))
+        refreshed = self.list_incidents(user=user, state=desired_state)
+        return next((item for item in refreshed if int(item["id"]) == target_id), None), []
 
     def _resolve_device_reference(
         self,

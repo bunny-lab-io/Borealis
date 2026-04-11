@@ -11,8 +11,9 @@
 # - POST /api/watchdogs (Token Authenticated) - Creates a watchdog policy.
 # - PUT /api/watchdogs/<int:watchdog_id> (Token Authenticated) - Updates a watchdog policy.
 # - DELETE /api/watchdogs/<int:watchdog_id> (Token Authenticated) - Deletes a watchdog policy.
-# - GET /api/watchdogs/incidents (Token Authenticated) - Lists active or resolved watchdog incidents in scope.
+# - GET /api/watchdogs/incidents (Token Authenticated) - Lists watchdog incidents in open, suppressed, resolved, or all states in scope.
 # - POST /api/watchdogs/incidents/<int:incident_id>/acknowledge (Token Authenticated) - Acknowledges one active incident.
+# - POST /api/watchdogs/incidents/<int:incident_id>/state (Token Authenticated) - Moves an incident between the open and suppressed queues.
 # - GET /api/devices/<device_id>/watchdogs (Token Authenticated) - Returns device-specific watchdog assignments, incidents, and overrides.
 # - POST /api/devices/<device_id>/watchdogs/overrides (Token Authenticated) - Creates, updates, or clears a per-device watchdog override.
 # ======================================================
@@ -179,7 +180,12 @@ def register_management(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if error:
             return jsonify(error[0]), error[1]
         state = request.args.get("state") or "open"
-        return jsonify({"items": runtime.list_incidents(user=user, state=state)})
+        return jsonify(
+            {
+                "items": runtime.list_incidents(user=user, state=state),
+                "counts": runtime.list_incident_counts(user=user),
+            }
+        )
 
     @blueprint.route("/api/watchdogs/incidents/<int:incident_id>/acknowledge", methods=["POST"])
     def acknowledge_watchdog_incident(incident_id: int):
@@ -187,6 +193,26 @@ def register_management(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if error:
             return jsonify(error[0]), error[1]
         incident = runtime.acknowledge_incident(incident_id, user=user)
+        if incident is None:
+            return jsonify({"error": "not_found"}), 404
+        return jsonify(incident)
+
+    @blueprint.route("/api/watchdogs/incidents/<int:incident_id>/state", methods=["POST"])
+    def update_watchdog_incident_state(incident_id: int):
+        user, error = _require_user()
+        if error:
+            return jsonify(error[0]), error[1]
+        payload = request.get_json(silent=True) or {}
+        incident, errors = runtime.update_incident_state(
+            incident_id,
+            state=payload.get("state") or "open",
+            user=user,
+            reason=payload.get("reason") or "",
+        )
+        if errors:
+            if len(errors) == 1 and errors[0] == "Incident not found.":
+                return jsonify({"error": "not_found"}), 404
+            return jsonify({"errors": errors}), 400
         if incident is None:
             return jsonify({"error": "not_found"}), 404
         return jsonify(incident)

@@ -75,8 +75,9 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - `POST /api/server/wireguard/recover` (Operator Admin Session) - triggers Borealis WireGuard listener recovery when active tunnels exist.
 - `GET /api/watchdogs` (Token Authenticated) - list watchdog policies for the Watchdogs page.
 - `POST /api/watchdogs/preview` (Token Authenticated) - preview the current watchdog outcome from the editor.
-- `GET /api/watchdogs/incidents` (Token Authenticated) - list queue incidents for Alerts.
+- `GET /api/watchdogs/incidents` (Token Authenticated) - list queue incidents for Alerts and return queue counts.
 - `POST /api/watchdogs/incidents/<int:incident_id>/acknowledge` (Token Authenticated) - acknowledge an incident from Alerts or a device page.
+- `POST /api/watchdogs/incidents/<int:incident_id>/state` (Token Authenticated) - move an incident between the Alerts `Open` and `Suppressed` queues.
 - `GET /api/devices/<device_id>/watchdogs` (Token Authenticated) - hydrate the device-level Watchdogs tab.
 - `POST /api/devices/<device_id>/watchdogs/overrides` (Token Authenticated) - apply or clear a device-specific watchdog suppression.
 

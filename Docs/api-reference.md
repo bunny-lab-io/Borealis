@@ -104,8 +104,9 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/watchdogs` (Token Authenticated) - create a watchdog policy.
 - `PUT /api/watchdogs/<int:watchdog_id>` (Token Authenticated) - update a watchdog policy.
 - `DELETE /api/watchdogs/<int:watchdog_id>` (Token Authenticated) - delete a watchdog policy and its runtime state.
-- `GET /api/watchdogs/incidents` (Token Authenticated) - list watchdog incidents in `open` or `resolved` state within the current operator's visible scope.
+- `GET /api/watchdogs/incidents` (Token Authenticated) - list watchdog incidents in `open`, `suppressed`, `resolved`, or `all` state within the current operator's visible scope, including queue counts.
 - `POST /api/watchdogs/incidents/<int:incident_id>/acknowledge` (Token Authenticated) - acknowledge an open watchdog incident.
+- `POST /api/watchdogs/incidents/<int:incident_id>/state` (Token Authenticated) - move a watchdog incident between the `open` and `suppressed` queues.
 - `GET /api/devices/<device_id>/watchdogs` (Token Authenticated) - load the device Watchdogs tab payload, including incidents, assignments, and overrides.
 - `POST /api/devices/<device_id>/watchdogs/overrides` (Token Authenticated) - create, update, or clear a per-device watchdog override.
 

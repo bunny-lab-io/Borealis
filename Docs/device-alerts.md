@@ -8,18 +8,20 @@ Describe the runtime incident side of Watchdogs: the Alerts queue, incident life
 - Alerts lives under `Alerting & Reporting` in the sidebar.
 - The queue is the operational surface for incidents opened by Watchdogs.
 - v1 queue behavior includes:
-  - open and resolved tabs
+  - open, suppressed, and resolved tabs
   - filter by severity, site, device, watchdog, and acknowledgement state
-  - jump directly to the affected device
-  - jump directly to the source watchdog policy
+  - device hostname links directly into the affected device page
+  - a page-header `Open Policy` action for the selected incident
   - acknowledge incidents
-  - suppress a watchdog for the impacted device
+  - suppress an active incident into the dedicated suppressed queue
+  - `RE-OPEN` for suppressed incidents that should return to the open queue
 
 ## Incident Lifecycle
 - `open`: a watchdog met its match conditions and opened or refreshed an incident.
 - `acknowledged`: an operator reviewed the incident and recorded ownership through the acknowledge action.
+- `suppressed`: an operator intentionally muted the current incident without marking the underlying condition as fixed. Suppressed incidents stay historical until manually reopened or until the condition truly clears.
 - `resolved`: the condition cleared, the watchdog was disabled or archived, the target disappeared, or telemetry became stale long enough for auto-resolution.
-- `suppressed` or `disabled`: these are device override states applied at the watchdog/device relationship, not separate incident states.
+- If a resolved condition later comes back, Borealis opens a new incident record so operators keep a clean historical dataset per device instead of overloading the old resolved entry.
 
 ## Device-Level Workflow
 - Device Summary now includes a `Watchdogs` tab.
@@ -41,8 +43,9 @@ Describe the runtime incident side of Watchdogs: the Alerts queue, incident life
 - Borealis uses those socket events to refresh the Watchdog list, Alerts queue, and the device-level Watchdogs tab without waiting for a full poll cycle.
 
 ## API Endpoints
-- `GET /api/watchdogs/incidents` (Token Authenticated) - list incidents by runtime state.
+- `GET /api/watchdogs/incidents` (Token Authenticated) - list incidents by runtime state and return queue counts for `open`, `suppressed`, and `resolved`.
 - `POST /api/watchdogs/incidents/<int:incident_id>/acknowledge` (Token Authenticated) - acknowledge an open incident.
+- `POST /api/watchdogs/incidents/<int:incident_id>/state` (Token Authenticated) - move an incident between the `open` and `suppressed` queues.
 - `GET /api/devices/<device_id>/watchdogs` (Token Authenticated) - load the current device watchdog view, including incidents, assignments, and overrides.
 - `POST /api/devices/<device_id>/watchdogs/overrides` (Token Authenticated) - create, update, or clear a per-device watchdog override.
 
@@ -72,6 +75,6 @@ Describe the runtime incident side of Watchdogs: the Alerts queue, incident life
   - opened, updated, and resolved timestamps
 
 ### Suppression behavior
-- Device suppressions are stored in `watchdog_device_overrides`.
-- An active override prevents further incident creation for that watchdog/device pair.
-- Applying an override immediately re-evaluates the watchdog, resolves any open incident for that device, and emits the refresh socket events.
+- Queue-level suppression is an incident-state transition, not just a visual filter.
+- Suppressed incidents remain distinct from resolved history so operators can re-open them later without manufacturing a brand-new record.
+- Device-level suppressions still exist separately in `watchdog_device_overrides` for the per-device Watchdogs tab.
