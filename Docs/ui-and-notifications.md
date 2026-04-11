@@ -61,6 +61,7 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
   - `Alerting & Reporting -> Alerts`
 - Watchdog authoring uses a tabbed editor with `Name`, `Scope`, `Targets`, `Rules`, `Actions`, and `Preview`.
 - The `Preview` tab is part of the primary authoring flow and resolves current targets before save.
+- The `Targets` tab uses 3-character minimum typeahead search panels for devices and saved filters instead of large autocomplete dropdowns.
 - Alerts is a separate incident queue so operators can work alerts without opening the underlying policy editor.
 - Alerts and Device Filters use the shared pill-style count slider pattern for queue/state filters instead of the older Material tab rail.
 - Alerts starts in an unfiltered all-alerts view; clicking a status pill applies that queue filter, and clicking the same pill again clears it back to all alerts.

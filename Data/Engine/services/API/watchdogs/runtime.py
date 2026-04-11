@@ -528,6 +528,14 @@ class WatchdogRuntimeService:
     def start(self) -> None:
         if self._running:
             return
+        try:
+            purged_count = self._purge_resolved_offline_incidents()
+            if purged_count > 0:
+                self._log(
+                    f"purged {purged_count} resolved offline watchdog incident{'s' if purged_count != 1 else ''} during startup cleanup"
+                )
+        except Exception as exc:
+            self._log(f"watchdog startup cleanup failed err={exc}", level="ERROR")
         self._running = True
 
         def _loop() -> None:
@@ -1975,6 +1983,40 @@ class WatchdogRuntimeService:
         if stale_state:
             return False
         return _rules_are_offline_only(watchdog.get("criteria") if isinstance(watchdog.get("criteria"), dict) else {})
+
+    def _purge_resolved_offline_incidents(self) -> int:
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT i.id, w.criteria_json
+                  FROM watchdog_incidents AS i
+                  JOIN watchdogs AS w ON w.id = i.watchdog_id
+                 WHERE i.state = 'resolved'
+                """
+            )
+            incident_ids = []
+            for row in cur.fetchall():
+                incident_id = _coerce_int(row[0], 0)
+                criteria = _safe_json_loads(row[1], DEFAULT_WATCHDOG_CRITERIA)
+                if incident_id > 0 and _rules_are_offline_only(criteria if isinstance(criteria, dict) else {}):
+                    incident_ids.append(incident_id)
+            if not incident_ids:
+                return 0
+            placeholders = ",".join("?" for _ in incident_ids)
+            cur.execute(
+                f"UPDATE watchdog_device_state SET current_incident_id = NULL WHERE current_incident_id IN ({placeholders})",
+                tuple(incident_ids),
+            )
+            cur.execute(
+                f"DELETE FROM watchdog_incidents WHERE id IN ({placeholders})",
+                tuple(incident_ids),
+            )
+            conn.commit()
+            return len(incident_ids)
+        finally:
+            conn.close()
 
     def _set_incident_state(
         self,

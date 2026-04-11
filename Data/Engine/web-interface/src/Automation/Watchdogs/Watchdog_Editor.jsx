@@ -84,6 +84,7 @@ const ROLE_STATUS_OPTIONS = [
 ];
 
 const PREVIEW_AUTO_SIZE_COLUMNS = ["hostname", "site_name", "state", "status"];
+const TARGET_SEARCH_MIN_CHARS = 3;
 
 function makeId(prefix) {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -905,7 +906,10 @@ export default function WatchdogEditor() {
   const [previewRows, setPreviewRows] = useState([]);
   const [previewSummary, setPreviewSummary] = useState({ device_count: 0, matched_count: 0 });
   const [previewStale, setPreviewStale] = useState(true);
-  const [deviceTargetDraft, setDeviceTargetDraft] = useState("");
+  const [deviceTargetSearch, setDeviceTargetSearch] = useState("");
+  const [filterTargetSearch, setFilterTargetSearch] = useState("");
+  const [deviceTargetMatches, setDeviceTargetMatches] = useState([]);
+  const [deviceTargetSearchLoading, setDeviceTargetSearchLoading] = useState(false);
 
   const hydrateFromRecord = useCallback((record) => {
     setFormState(defaultWatchdog(record || {}));
@@ -1077,6 +1081,109 @@ export default function WatchdogEditor() {
     [formState.targets]
   );
 
+  const selectedDeviceTargetKeys = useMemo(
+    () =>
+      new Set(
+        explicitDeviceTargets.map((target) =>
+          `${String(target.device_guid || "").trim().toLowerCase()}::${String(target.hostname || "").trim().toLowerCase()}`
+        )
+      ),
+    [explicitDeviceTargets]
+  );
+
+  const selectedFilterTargetIds = useMemo(
+    () => new Set(selectedFilterTargets.map((record) => Number(record.id))),
+    [selectedFilterTargets]
+  );
+
+  useEffect(() => {
+    const trimmedQuery = String(deviceTargetSearch || "").trim();
+    if (trimmedQuery.length < TARGET_SEARCH_MIN_CHARS) {
+      setDeviceTargetSearchLoading(false);
+      setDeviceTargetMatches([]);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setDeviceTargetSearchLoading(true);
+      try {
+        const response = await fetch(
+          `/api/devices/search?hostname=${encodeURIComponent(trimmedQuery)}`,
+          {
+            credentials: "include",
+            cache: "no-store",
+            signal: controller.signal,
+          }
+        );
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload?.errors?.[0] || payload?.error || payload?.message || `HTTP ${response.status}`);
+        }
+        if (controller.signal.aborted) return;
+        const rows = Array.isArray(payload?.devices) ? payload.devices : [];
+        setDeviceTargetMatches(
+          rows.map((device, index) => ({
+            id:
+              String(device?.agent_guid || "").trim().toLowerCase() ||
+              `${String(device?.hostname || "").trim().toLowerCase()}-${String(device?.site_id ?? "").trim()}-${index}`,
+            hostname: String(device?.hostname || "").trim(),
+            site_name: String(device?.site_name || "").trim() || "Not Configured",
+            site_id: device?.site_id ?? null,
+            device_guid: String(device?.agent_guid || "").trim(),
+            agent_id: String(device?.agent_id || "").trim(),
+            connection_type: String(device?.connection_type || "").trim(),
+          }))
+        );
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          setDeviceTargetMatches([]);
+          setError(String(err?.message || err || "Unable to search devices."));
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setDeviceTargetSearchLoading(false);
+        }
+      }
+    }, 180);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [deviceTargetSearch]);
+
+  const matchingFilterRows = useMemo(() => {
+    const trimmedQuery = String(filterTargetSearch || "").trim().toLowerCase();
+    if (trimmedQuery.length < TARGET_SEARCH_MIN_CHARS) return [];
+    return normalizeArray(filters)
+      .filter((record) => {
+        const haystack = [
+          record?.name,
+          record?.description,
+          record?.site_mode,
+          Array.isArray(record?.site_names) ? record.site_names.join(" ") : "",
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(trimmedQuery);
+      })
+      .map((record) => ({
+        id: Number(record?.id || 0),
+        name: String(record?.name || "").trim() || `Filter ${record?.id || ""}`,
+        description: String(record?.description || "").trim(),
+        scope:
+          String(record?.site_mode || "").trim() === "specific_sites"
+            ? "Specific Sites"
+            : String(record?.site_mode || "").trim() === "global_exclusions"
+              ? "Global w/ Exclusions"
+              : "Global",
+        device_count: Number(record?.matching_device_count || record?.device_count || 0),
+      }))
+      .filter((record) => Number.isFinite(record.id) && record.id > 0);
+  }, [filterTargetSearch, filters]);
+
   const previewColumns = useMemo(
     () => [
       { field: "hostname", headerName: "Hostname", minWidth: 200, flex: 1 },
@@ -1135,6 +1242,126 @@ export default function WatchdogEditor() {
     [formState.severity]
   );
 
+  const deviceSearchOverlay = useMemo(() => {
+    const trimmedQuery = String(deviceTargetSearch || "").trim();
+    if (trimmedQuery.length < TARGET_SEARCH_MIN_CHARS) {
+      return `Type at least ${TARGET_SEARCH_MIN_CHARS} characters to search devices.`;
+    }
+    if (deviceTargetSearchLoading) {
+      return "Searching devices...";
+    }
+    return "No devices match your search.";
+  }, [deviceTargetSearch, deviceTargetSearchLoading]);
+
+  const filterSearchOverlay = useMemo(() => {
+    const trimmedQuery = String(filterTargetSearch || "").trim();
+    if (trimmedQuery.length < TARGET_SEARCH_MIN_CHARS) {
+      return `Type at least ${TARGET_SEARCH_MIN_CHARS} characters to search filters.`;
+    }
+    if (!filters.length) {
+      return "No device filters available.";
+    }
+    return "No filters match your search.";
+  }, [filterTargetSearch, filters.length]);
+
+  const targetSearchGridDefaultColDef = useMemo(
+    () => ({
+      sortable: true,
+      filter: false,
+      resizable: true,
+      floatingFilter: false,
+    }),
+    []
+  );
+
+  const deviceSearchColumns = useMemo(
+    () => [
+      { field: "site_name", headerName: "Site", minWidth: 170, width: 190 },
+      { field: "hostname", headerName: "Hostname", minWidth: 220, width: 240 },
+      { field: "agent_id", headerName: "Agent ID", minWidth: 160, width: 180 },
+      { field: "connection_type", headerName: "Connection", minWidth: 140, width: 150 },
+      {
+        field: "actions",
+        headerName: "",
+        minWidth: 120,
+        width: 120,
+        sortable: false,
+        filter: false,
+        cellRenderer: (params) => {
+          const row = params?.data || {};
+          const selectedKey = `${String(row.device_guid || "").trim().toLowerCase()}::${String(row.hostname || "").trim().toLowerCase()}`;
+          const alreadyAdded = selectedDeviceTargetKeys.has(selectedKey);
+          return (
+            <Box sx={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
+              <Button
+                size="small"
+                variant={alreadyAdded ? "outlined" : "contained"}
+                disabled={alreadyAdded}
+                startIcon={!alreadyAdded ? <AddIcon fontSize="small" /> : null}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  addDeviceTarget(row);
+                }}
+                sx={{ minWidth: 92, textTransform: "none" }}
+              >
+                {alreadyAdded ? "Added" : "Add"}
+              </Button>
+            </Box>
+          );
+        },
+      },
+    ],
+    [addDeviceTarget, selectedDeviceTargetKeys]
+  );
+
+  const filterSearchColumns = useMemo(
+    () => [
+      { field: "name", headerName: "Name", minWidth: 220, width: 240 },
+      { field: "description", headerName: "Description", minWidth: 240, width: 320 },
+      { field: "scope", headerName: "Scope", minWidth: 170, width: 190 },
+      {
+        field: "device_count",
+        headerName: "Devices",
+        minWidth: 110,
+        width: 120,
+        valueFormatter: (params) => `${Number(params.value || 0)}`,
+      },
+      {
+        field: "actions",
+        headerName: "",
+        minWidth: 120,
+        width: 120,
+        sortable: false,
+        filter: false,
+        cellRenderer: (params) => {
+          const row = params?.data || {};
+          const filterId = Number(row.id || 0);
+          const alreadyAdded = selectedFilterTargetIds.has(filterId);
+          return (
+            <Box sx={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
+              <Button
+                size="small"
+                variant={alreadyAdded ? "outlined" : "contained"}
+                disabled={alreadyAdded}
+                startIcon={!alreadyAdded ? <AddIcon fontSize="small" /> : null}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  addFilterTarget(row);
+                }}
+                sx={{ minWidth: 92, textTransform: "none" }}
+              >
+                {alreadyAdded ? "Added" : "Add"}
+              </Button>
+            </Box>
+          );
+        },
+      },
+    ],
+    [addFilterTarget, selectedFilterTargetIds]
+  );
+
   const updateTopLevel = useCallback((patch) => {
     setFormState((prev) => ({ ...prev, ...patch }));
   }, []);
@@ -1143,15 +1370,39 @@ export default function WatchdogEditor() {
     setFormState((prev) => ({ ...prev, criteria: { ...(prev.criteria || {}), ...patch } }));
   }, []);
 
-  const addDeviceTarget = useCallback(() => {
-    const hostname = String(deviceTargetDraft || "").trim();
+  const addDeviceTarget = useCallback((device) => {
+    const hostname = String(device?.hostname || "").trim();
     if (!hostname) return;
     setFormState((prev) => ({
       ...prev,
-      targets: normalizeTargets([...(prev.targets || []), { kind: "device", hostname }]),
+      targets: normalizeTargets([
+        ...(prev.targets || []),
+        {
+          kind: "device",
+          hostname,
+          device_guid: String(device?.device_guid || device?.agent_guid || "").trim(),
+          site_id: device?.site_id ?? null,
+          site_name: String(device?.site_name || "").trim(),
+        },
+      ]),
     }));
-    setDeviceTargetDraft("");
-  }, [deviceTargetDraft]);
+  }, []);
+
+  const addFilterTarget = useCallback((record) => {
+    const filterId = Number(record?.id || record?.filter_id || 0);
+    if (!Number.isFinite(filterId) || filterId <= 0) return;
+    setFormState((prev) => ({
+      ...prev,
+      targets: normalizeTargets([
+        ...(prev.targets || []),
+        {
+          kind: "filter",
+          filter_id: filterId,
+          name: String(record?.name || "").trim(),
+        },
+      ]),
+    }));
+  }, []);
 
   const toggleAllDevicesTarget = useCallback((enabled) => {
     setFormState((prev) => {
@@ -1663,52 +1914,76 @@ export default function WatchdogEditor() {
                 )}
               </SectionCard>
               <SectionCard title="Filter Targets" subtitle="Use existing Borealis device filters to keep watchdog assignments dynamic.">
-                <Autocomplete
-                  multiple
-                  options={filters}
-                  value={selectedFilterTargets}
-                  isOptionEqualToValue={(option, value) => Number(option?.id) === Number(value?.id)}
-                  getOptionLabel={(option) => option?.name || ""}
-                  onChange={(_event, nextValue) => {
-                    const filterTargets = nextValue.map((record) => ({
-                      kind: "filter",
-                      filter_id: Number(record.id),
-                      name: record.name || "",
-                    }));
-                    const deviceTargets = normalizeArray(formState.targets).filter((target) => target?.kind !== "filter");
-                    updateTopLevel({ targets: normalizeTargets([...deviceTargets, ...filterTargets]) });
-                  }}
-                  renderTags={(value, getTagProps) =>
-                    value.map((option, index) => (
+                <TextField
+                  label="Search Device Filters"
+                  value={filterTargetSearch}
+                  onChange={(event) => setFilterTargetSearch(event.target.value)}
+                  helperText={
+                    String(filterTargetSearch || "").trim().length < TARGET_SEARCH_MIN_CHARS
+                      ? `Type at least ${TARGET_SEARCH_MIN_CHARS} characters to search filters.`
+                      : ""
+                  }
+                />
+                <Box sx={{ ...GRID_WRAPPER_SX, minHeight: 260, height: 260 }}>
+                  <AgGridReact
+                    rowData={matchingFilterRows}
+                    columnDefs={filterSearchColumns}
+                    defaultColDef={targetSearchGridDefaultColDef}
+                    animateRows
+                    suppressCellFocus
+                    suppressRowClickSelection
+                    overlayNoRowsTemplate={`<span class='ag-overlay-no-rows-center'>${filterSearchOverlay}</span>`}
+                    getRowId={(params) => String(params.data?.id || params.rowIndex)}
+                    theme={gridTheme}
+                  />
+                </Box>
+                {!selectedFilterTargets.length ? (
+                  <Typography variant="body2" sx={{ color: "#94a3b8" }}>
+                    No saved filters targeted yet.
+                  </Typography>
+                ) : (
+                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                    {selectedFilterTargets.map((option) => (
                       <Chip
-                        {...getTagProps({ index })}
                         key={`${option.id}-${option.name}`}
                         label={option.name || `Filter ${option.id}`}
+                        onDelete={() =>
+                          updateTopLevel({
+                            targets: normalizeArray(formState.targets).filter(
+                              (item) => !(item?.kind === "filter" && Number(item?.filter_id) === Number(option.id))
+                            ),
+                          })
+                        }
                       />
-                    ))
-                  }
-                  renderInput={(params) => <TextField {...params} label="Device Filters" placeholder="Select filters" />}
-                />
+                    ))}
+                  </Stack>
+                )}
               </SectionCard>
               <SectionCard title="Explicit Device Targets" subtitle="Add one-off device targets directly. This is especially useful from the per-device Watchdogs tab.">
-                <Stack direction={{ xs: "column", md: "row" }} spacing={1.25}>
-                  <TextField
-                    label="Hostname"
-                    value={deviceTargetDraft}
-                    onChange={(event) => setDeviceTargetDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        addDeviceTarget();
-                      }
-                    }}
-                    helperText="Enter a hostname and press Add."
-                    sx={{ flex: 1 }}
+                <TextField
+                  label="Search Devices by Hostname"
+                  value={deviceTargetSearch}
+                  onChange={(event) => setDeviceTargetSearch(event.target.value)}
+                  helperText={
+                    String(deviceTargetSearch || "").trim().length < TARGET_SEARCH_MIN_CHARS
+                      ? `Type at least ${TARGET_SEARCH_MIN_CHARS} characters to search devices.`
+                      : ""
+                  }
+                />
+                {deviceTargetSearchLoading ? <LinearProgress /> : null}
+                <Box sx={{ ...GRID_WRAPPER_SX, minHeight: 260, height: 260 }}>
+                  <AgGridReact
+                    rowData={deviceTargetMatches}
+                    columnDefs={deviceSearchColumns}
+                    defaultColDef={targetSearchGridDefaultColDef}
+                    animateRows
+                    suppressCellFocus
+                    suppressRowClickSelection
+                    overlayNoRowsTemplate={`<span class='ag-overlay-no-rows-center'>${deviceSearchOverlay}</span>`}
+                    getRowId={(params) => String(params.data?.id || params.rowIndex)}
+                    theme={gridTheme}
                   />
-                  <Button startIcon={<AddIcon />} variant="contained" onClick={addDeviceTarget}>
-                    Add Device
-                  </Button>
-                </Stack>
+                </Box>
                 {!explicitDeviceTargets.length ? (
                   <Typography variant="body2" sx={{ color: "#94a3b8" }}>
                     No explicit devices added yet.

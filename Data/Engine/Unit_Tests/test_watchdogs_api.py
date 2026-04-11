@@ -625,3 +625,57 @@ def test_offline_watchdog_incident_is_deleted_when_device_recovers(
     finally:
         conn.close()
     assert remaining == 0
+
+
+def test_startup_cleanup_purges_resolved_offline_watchdog_incidents(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+
+    create_response = client.post(
+        "/api/watchdogs",
+        json=_offline_watchdog_payload(
+            targets=[
+                {
+                    "kind": "device",
+                    "device_guid": "GUID-TEST-0001",
+                    "hostname": "test-device",
+                    "site_id": 1,
+                    "site_name": "Main Lab",
+                }
+            ]
+        ),
+    )
+    assert create_response.status_code == 201
+
+    incidents_response = client.get("/api/watchdogs/incidents?state=all")
+    assert incidents_response.status_code == 200
+    incident_id = incidents_response.get_json()["items"][0]["id"]
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE watchdog_incidents
+               SET state = 'resolved',
+                   resolved_at = ?,
+                   resolution_reason = 'cleared'
+             WHERE id = ?
+            """,
+            (int(time.time()), incident_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    runtime = engine_harness.context.watchdog_runtime
+    assert runtime is not None
+    purged_count = runtime._purge_resolved_offline_incidents()
+    assert purged_count == 1
+
+    after_response = client.get("/api/watchdogs/incidents?state=all")
+    assert after_response.status_code == 200
+    after_payload = after_response.get_json()
+    assert after_payload["items"] == []
+    assert after_payload["counts"]["resolved"] == 0

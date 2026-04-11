@@ -31,6 +31,7 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
   - saved device filters
 - Filter targets stay dynamic. When inventory changes, the watchdog's resolved device set changes with it.
 - `All Devices in Scope` resolves every device that currently falls inside the watchdog's site scope, without requiring a separate saved filter.
+- The Watchdog editor uses 3-character minimum search inputs for explicit device targeting and saved filter targeting so operators can type to find matches instead of working through long dropdown menus.
 
 ### Rules
 - v1 rules only use telemetry Borealis already stores:
@@ -135,3 +136,4 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
 - Saving a watchdog immediately re-evaluates it so operators see current state without waiting for the next scheduler tick.
 - Disabling or archiving a watchdog resolves open incidents and marks saved device state as disabled instead of leaving stale incidents behind.
 - Deleting a watchdog removes related targets, site scope rows, overrides, runtime state rows, and incidents.
+- On Engine startup, Borealis purges any lingering resolved incidents belonging to offline-only watchdogs so transient offline history does not accumulate after restarts or earlier bugs.
