@@ -19,7 +19,7 @@ import {
   FilterAlt as FilterIcon,
   Schedule as ScheduleIcon,
   Apps as AssembliesIcon,
-  SmartToy as WatchdogIcon,
+  Policy as WatchdogIcon,
   NotificationsActive as AlertsIcon,
   LocationCity as SitesIcon,
   Dns as ServerInfoIcon,

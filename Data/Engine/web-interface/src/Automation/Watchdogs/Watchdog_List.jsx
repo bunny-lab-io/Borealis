@@ -16,7 +16,7 @@ import {
   AddRounded as AddIcon,
   CachedRounded as RefreshIcon,
   DeleteRounded as DeleteIcon,
-  SecurityRounded as HeaderIcon,
+  Policy as HeaderIcon,
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { AllCommunityModule, ModuleRegistry } from "ag-grid-community";

@@ -22,9 +22,9 @@ import {
   AddRounded as AddIcon,
   CloseRounded as CancelIcon,
   DeleteRounded as DeleteIcon,
+  Policy as HeaderIcon,
   PreviewRounded as PreviewIcon,
   SaveRounded as SaveIcon,
-  SecurityRounded as HeaderIcon,
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { AllCommunityModule, ModuleRegistry } from "ag-grid-community";
