@@ -104,7 +104,7 @@ function normalizeArray(value) {
 export default function ActiveAlerts() {
   const navigate = useNavigate();
   const gridRef = useRef(null);
-  const [stateTab, setStateTab] = useState("open");
+  const [stateTab, setStateTab] = useState("");
   const [incidents, setIncidents] = useState([]);
   const [queueCounts, setQueueCounts] = useState({ open: 0, suppressed: 0, resolved: 0 });
   const [loading, setLoading] = useState(false);
@@ -196,10 +196,16 @@ export default function ActiveAlerts() {
     };
   }, [loadIncidents]);
 
-  const queueRows = useMemo(
-    () => incidents.filter((item) => normalizeFilterValue(item?.state) === stateTab),
-    [incidents, stateTab]
-  );
+  const queueRows = useMemo(() => {
+    const filteredRows = stateTab
+      ? incidents.filter((item) => normalizeFilterValue(item?.state) === stateTab)
+      : incidents;
+    return [...filteredRows].sort((left, right) => {
+      const leftTime = Number(left?.opened_at || 0);
+      const rightTime = Number(right?.opened_at || 0);
+      return rightTime - leftTime;
+    });
+  }, [incidents, stateTab]);
 
   const selectedRows = useMemo(() => {
     const selectedIdSet = new Set(selectedIncidentIds);
@@ -272,7 +278,6 @@ export default function ActiveAlerts() {
         )
       );
       await loadIncidents();
-      setStateTab(desiredState === "suppressed" ? "suppressed" : "open");
     } catch (err) {
       setError(String(err?.message || err || `Failed to ${desiredState === "open" ? "re-open" : "suppress"} selected incidents.`));
     } finally {
@@ -432,13 +437,21 @@ export default function ActiveAlerts() {
       },
       {
         field: stateTab === "suppressed" ? "resolution_reason" : "acknowledged_by",
-        headerName: stateTab === "suppressed" ? "Suppression Reason" : "Acknowledged By",
-        minWidth: stateTab === "suppressed" ? 240 : 160,
-        flex: 0.7,
-        valueGetter: (params) =>
+        headerName:
           stateTab === "suppressed"
-            ? params?.data?.resolution_reason || ""
-            : params?.data?.acknowledged_by || "",
+            ? "Suppression Reason"
+            : stateTab
+              ? "Acknowledged By"
+              : "Acknowledged / Suppression",
+        minWidth: stateTab === "suppressed" ? 240 : 180,
+        flex: 0.8,
+        valueGetter: (params) => {
+          const incidentState = normalizeFilterValue(params?.data?.state);
+          if (stateTab === "suppressed" || incidentState === "suppressed") {
+            return params?.data?.resolution_reason || "";
+          }
+          return params?.data?.acknowledged_by || "";
+        },
       },
     ],
     [navigate, stateTab]
@@ -472,7 +485,9 @@ export default function ActiveAlerts() {
               onChange={setStateTab}
             />
             <Typography variant="body2" sx={{ color: "rgba(155, 163, 180, 0.96)" }}>
-              {`Showing ${queueCounts[stateTab] || 0} ${resolveIncidentStatusMeta(stateTab).label.toLowerCase()} alert${(queueCounts[stateTab] || 0) === 1 ? "" : "s"}`}
+              {stateTab
+                ? `Showing ${queueRows.length} ${resolveIncidentStatusMeta(stateTab).label.toLowerCase()} alert${queueRows.length === 1 ? "" : "s"}`
+                : `Showing all ${queueRows.length} alert${queueRows.length === 1 ? "" : "s"}`}
             </Typography>
           </Box>
           {loading ? <LinearProgress /> : null}
@@ -497,6 +512,11 @@ export default function ActiveAlerts() {
               sortable: true,
               filter: true,
               resizable: true,
+            }}
+            initialState={{
+              sort: {
+                sortModel: [{ colId: "opened_at", sort: "desc" }],
+              },
             }}
             animateRows
             domLayout="autoHeight"

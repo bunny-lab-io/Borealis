@@ -269,7 +269,11 @@ export default function DeviceFilterList({ refreshToken }) {
   const [error, setError] = useState("");
   const [actionError, setActionError] = useState("");
   const [jobsDialog, setJobsDialog] = useState({ open: false, jobs: [], title: "" });
-  const filters = useMemo(() => filterCollections[tab] || [], [filterCollections, tab]);
+  const filters = useMemo(() => {
+    if (tab === "archived") return filterCollections.archived || [];
+    if (tab === "active") return filterCollections.active || [];
+    return [...(filterCollections.active || []), ...(filterCollections.archived || [])];
+  }, [filterCollections, tab]);
   const filterCounts = useMemo(
     () => ({
       active: Array.isArray(filterCollections.active) ? filterCollections.active.length : 0,
@@ -633,7 +637,9 @@ export default function DeviceFilterList({ refreshToken }) {
           onChange={setTab}
         />
         <Typography variant="body2" sx={{ color: "rgba(155, 163, 180, 0.96)" }}>
-          {`Showing ${filterCounts[tab] || 0} ${tab === "archived" ? "archived" : "active"} filter${(filterCounts[tab] || 0) === 1 ? "" : "s"}`}
+          {tab
+            ? `Showing ${filters.length} ${tab === "archived" ? "archived" : "active"} filter${filters.length === 1 ? "" : "s"}`
+            : `Showing all ${filters.length} filter${filters.length === 1 ? "" : "s"}`}
         </Typography>
       </Box>
       {loading ? <LinearProgress /> : null}

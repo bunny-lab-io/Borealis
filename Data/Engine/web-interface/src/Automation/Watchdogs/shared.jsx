@@ -171,7 +171,7 @@ export function CountSliderGroup({ options, activeKey, counts, onChange }) {
             component="button"
             type="button"
             aria-pressed={active}
-            onClick={() => onChange?.(option.key)}
+            onClick={() => onChange?.(active ? "" : option.key)}
             sx={{
               border: "none",
               outline: "none",
