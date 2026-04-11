@@ -117,8 +117,26 @@ export default function ActiveAlerts() {
   const rowSelection = useMemo(
     () => ({
       mode: "multiRow",
-      enableSelectionWithoutKeys: true,
-      enableClickSelection: false,
+      checkboxes: true,
+      headerCheckbox: true,
+    }),
+    []
+  );
+
+  const selectionColumnDef = useMemo(
+    () => ({
+      headerName: "",
+      width: 52,
+      maxWidth: 52,
+      minWidth: 52,
+      pinned: "left",
+      resizable: false,
+      sortable: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      suppressMovable: true,
+      lockPinned: true,
+      lockPosition: true,
     }),
     []
   );
@@ -481,16 +499,7 @@ export default function ActiveAlerts() {
             rowData={queueRows}
             columnDefs={columnDefs}
             rowSelection={rowSelection}
-            selectionColumnDef={{
-              pinned: "left",
-              width: 52,
-              minWidth: 52,
-              maxWidth: 52,
-              resizable: false,
-              sortable: false,
-              suppressHeaderMenuButton: true,
-              suppressMovable: true,
-            }}
+            selectionColumnDef={selectionColumnDef}
             getRowId={getRowId}
             suppressRowClickSelection
             onSelectionChanged={(event) =>
