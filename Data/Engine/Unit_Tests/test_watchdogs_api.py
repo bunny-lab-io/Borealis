@@ -60,7 +60,17 @@ def _seed_watchdog_filter(harness: EngineTestHarness, *, filter_id: int = 1) -> 
         conn.close()
 
 
-def _seed_storage_usage(harness: EngineTestHarness) -> None:
+def _seed_storage_usage(harness: EngineTestHarness, *, entries: list[dict] | None = None) -> None:
+    storage_entries = entries or [
+        {
+            "drive": "C",
+            "total": 1000,
+            "used": 930,
+            "free": 70,
+            "usage": 93,
+            "disk_type": "Fixed Disk",
+        }
+    ]
     conn = sqlite3.connect(str(harness.db_path))
     try:
         cur = conn.cursor()
@@ -68,21 +78,10 @@ def _seed_storage_usage(harness: EngineTestHarness) -> None:
             """
             UPDATE devices
                SET storage = ?
-             WHERE hostname = ?
+            WHERE hostname = ?
             """,
             (
-                json.dumps(
-                    [
-                        {
-                            "drive": "C",
-                            "total": 1000,
-                            "used": 930,
-                            "free": 70,
-                            "usage": 93,
-                            "disk_type": "Fixed Disk",
-                        }
-                    ]
-                ),
+                json.dumps(storage_entries),
                 "test-device",
             ),
         )
@@ -218,6 +217,113 @@ def test_watchdog_storage_preview_returns_threshold_sample(engine_harness: Engin
     assert device["sample"]["results"][0]["sample"]["drive"] == "C"
     assert device["sample"]["results"][0]["sample"]["usage_percent"] == 93.0
     assert device["sample"]["results"][0]["sample"]["threshold"] == 90.0
+
+
+def test_watchdog_storage_specific_drive_does_not_fallback_to_other_disks(
+    engine_harness: EngineTestHarness,
+) -> None:
+    _seed_storage_usage(
+        engine_harness,
+        entries=[
+            {
+                "drive": "C:",
+                "total": 1000,
+                "used": 400,
+                "free": 600,
+                "usage": 40,
+                "disk_type": "Fixed Disk",
+            },
+            {
+                "drive": "D:",
+                "total": 1000,
+                "used": 960,
+                "free": 40,
+                "usage": 96,
+                "disk_type": "Fixed Disk",
+            },
+        ],
+    )
+    client = _client_with_admin_session(engine_harness)
+
+    specific_drive_response = client.post(
+        "/api/watchdogs/preview",
+        json={
+            "name": "Specific Disk Watchdog",
+            "description": "Only checks the selected drive.",
+            "enabled": True,
+            "severity": "warning",
+            "site_mode": "global",
+            "criteria": {
+                "match_mode": "all",
+                "rules": [
+                    {
+                        "id": "rule-storage-specific",
+                        "type": "storage_usage_percent",
+                        "drive_mode": "specific",
+                        "drive": "C",
+                        "threshold": 90,
+                    }
+                ],
+            },
+            "actions": {"actions": []},
+            "targets": [
+                {
+                    "kind": "device",
+                    "device_guid": "GUID-TEST-0001",
+                    "hostname": "test-device",
+                    "site_id": 1,
+                    "site_name": "Main Lab",
+                }
+            ],
+        },
+    )
+    assert specific_drive_response.status_code == 200
+    specific_body = specific_drive_response.get_json()
+    assert specific_body["matched_count"] == 0
+    specific_rule = specific_body["devices"][0]["sample"]["results"][0]
+    assert specific_rule["sample"]["drive_scope"] == "specific"
+    assert specific_rule["sample"]["drive"] == "C:"
+    assert specific_rule["sample"]["usage_percent"] == 40.0
+
+    all_drives_response = client.post(
+        "/api/watchdogs/preview",
+        json={
+            "name": "All Disk Watchdog",
+            "description": "Checks every drive in scope.",
+            "enabled": True,
+            "severity": "warning",
+            "site_mode": "global",
+            "criteria": {
+                "match_mode": "all",
+                "rules": [
+                    {
+                        "id": "rule-storage-all",
+                        "type": "storage_usage_percent",
+                        "drive_mode": "all",
+                        "threshold": 90,
+                    }
+                ],
+            },
+            "actions": {"actions": []},
+            "targets": [
+                {
+                    "kind": "device",
+                    "device_guid": "GUID-TEST-0001",
+                    "hostname": "test-device",
+                    "site_id": 1,
+                    "site_name": "Main Lab",
+                }
+            ],
+        },
+    )
+    assert all_drives_response.status_code == 200
+    all_drives_body = all_drives_response.get_json()
+    assert all_drives_body["matched_count"] == 1
+    all_drives_rule = all_drives_body["devices"][0]["sample"]["results"][0]
+    assert all_drives_rule["sample"]["drive_scope"] == "all"
+    assert all_drives_rule["sample"]["highest_drive"] == "D:"
+    assert all_drives_rule["sample"]["highest_usage_percent"] == 96.0
+    assert all_drives_rule["sample"]["matched_drives"][0]["drive"] == "D:"
 
 
 def test_watchdog_all_devices_target_resolves_scope(engine_harness: EngineTestHarness) -> None:

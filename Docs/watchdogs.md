@@ -35,7 +35,7 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
 ### Rules
 - v1 rules only use telemetry Borealis already stores:
   - `device_offline`
-  - `storage_usage_percent`
+  - `storage_usage_percent` with either a specific drive or all drives on the device
   - `service_state`
   - `agent_role_health`
   - `software_presence_or_version`

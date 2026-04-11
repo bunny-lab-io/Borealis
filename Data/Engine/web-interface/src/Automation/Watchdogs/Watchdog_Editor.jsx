@@ -89,7 +89,7 @@ function makeId(prefix) {
 
 function makeRule(type = "device_offline") {
   if (type === "storage_usage_percent") {
-    return { id: makeId("rule"), type, threshold: 90, drive: "" };
+    return { id: makeId("rule"), type, threshold: 90, drive_mode: "all", drive: "" };
   }
   if (type === "service_state") {
     return { id: makeId("rule"), type, service_name: "", expected_status: "running" };
@@ -191,6 +191,9 @@ function normalizeRules(rules = []) {
   return normalizeArray(rules).map((rule, index) => {
     const next = { ...makeRule(rule?.type || "device_offline"), ...(rule || {}) };
     if (!next.id) next.id = makeId(`rule-${index + 1}`);
+    if (next.type === "storage_usage_percent") {
+      next.drive_mode = String(next.drive_mode || (next.drive ? "specific" : "all")).trim() || "all";
+    }
     if (next.type === "agent_role_health") {
       next.trigger_statuses = normalizeArray(next.trigger_statuses).map((item) => String(item).toLowerCase());
       if (!next.trigger_statuses.length) next.trigger_statuses = ["unhealthy"];
@@ -330,23 +333,46 @@ function RuleCard({ rule, onChange, onRemove }) {
         />
       ) : null}
       {type === "storage_usage_percent" ? (
-        <Stack direction={{ xs: "column", md: "row" }} spacing={1.25}>
+        <Stack spacing={1.25}>
           <TextField
-            label="Drive"
-            value={rule.drive || ""}
-            onChange={(event) => onChange({ ...rule, drive: event.target.value })}
-            helperText="Leave blank to evaluate the fullest disk on the device."
-            sx={{ flex: 1 }}
-          />
-          <TextField
-            type="number"
-            label="Threshold (%)"
-            value={rule.threshold ?? 90}
+            select
+            label="Drive Scope"
+            value={rule.drive_mode || (rule.drive ? "specific" : "all")}
             onChange={(event) =>
-              onChange({ ...rule, threshold: Math.max(1, Math.min(100, Number(event.target.value || 90))) })
+              onChange({
+                ...rule,
+                drive_mode: event.target.value,
+                drive: event.target.value === "all" ? "" : rule.drive || "",
+              })
             }
-            sx={{ width: { xs: "100%", md: 180 } }}
-          />
+            sx={{ maxWidth: 240 }}
+          >
+            <MenuItem value="all">All Drives</MenuItem>
+            <MenuItem value="specific">Specific Drive</MenuItem>
+          </TextField>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={1.25}>
+            <TextField
+              label="Drive Letter / Mount"
+              value={rule.drive || ""}
+              onChange={(event) => onChange({ ...rule, drive: event.target.value })}
+              helperText={
+                (rule.drive_mode || (rule.drive ? "specific" : "all")) === "specific"
+                  ? "Examples: C, C:, /, /var"
+                  : "All drives will be evaluated."
+              }
+              disabled={(rule.drive_mode || (rule.drive ? "specific" : "all")) !== "specific"}
+              sx={{ flex: 1 }}
+            />
+            <TextField
+              type="number"
+              label="Threshold (%)"
+              value={rule.threshold ?? 90}
+              onChange={(event) =>
+                onChange({ ...rule, threshold: Math.max(1, Math.min(100, Number(event.target.value || 90))) })
+              }
+              sx={{ width: { xs: "100%", md: 180 } }}
+            />
+          </Stack>
         </Stack>
       ) : null}
       {type === "service_state" ? (

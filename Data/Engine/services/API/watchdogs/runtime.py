@@ -60,6 +60,7 @@ VALID_AGENT_VERSION_STATES = {"Up-to-Date", "Needs Updated"}
 VALID_RULE_STATUSES = {"healthy", "recovering", "unhealthy", "pending", "unsupported", "unknown"}
 VALID_SERVICE_EXPECTED_STATUSES = {"running", "stopped"}
 VALID_SCRIPT_RUN_MODES = {"system", "currentuser"}
+VALID_STORAGE_DRIVE_MODES = {"all", "specific"}
 
 DEFAULT_WATCHDOG_CRITERIA = {"rules": [], "match_mode": "all"}
 DEFAULT_WATCHDOG_ACTIONS = {"actions": []}
@@ -291,6 +292,28 @@ def _normalize_targets(entries: Sequence[Any]) -> List[Any]:
     return normalize_targets_for_save(entries)
 
 
+def _normalize_storage_drive_mode(value: Any, drive: Any = None) -> str:
+    normalized = _clean_text(value).lower()
+    if normalized in VALID_STORAGE_DRIVE_MODES:
+        return normalized
+    return "specific" if _clean_text(drive) else "all"
+
+
+def _normalize_storage_drive_key(value: Any) -> str:
+    text = _clean_text(value).lower()
+    if not text:
+        return ""
+    text = text.replace("\\", "/")
+    if text == "/":
+        return text
+    text = text.rstrip("/")
+    if len(text) >= 2 and text[0].isalpha() and text[1] == ":":
+        return text[0]
+    if len(text) == 1 and text.isalpha():
+        return text
+    return text
+
+
 def _normalize_rule(index: int, raw_rule: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(raw_rule, dict):
         return None
@@ -309,6 +332,7 @@ def _normalize_rule(index: int, raw_rule: Any) -> Optional[Dict[str, Any]]:
         threshold = _coerce_float(raw_rule.get("threshold"))
         base["threshold"] = 90.0 if threshold is None else max(1.0, min(100.0, threshold))
         base["drive"] = _clean_text(raw_rule.get("drive"))
+        base["drive_mode"] = _normalize_storage_drive_mode(raw_rule.get("drive_mode"), raw_rule.get("drive"))
         return base
     if rule_type == "service_state":
         service_name = _clean_single_line(raw_rule.get("service_name") or raw_rule.get("name"))
@@ -410,7 +434,8 @@ def summarize_rule(rule: Mapping[str, Any]) -> str:
         return f"Device offline for at least {max(1, seconds // 60)} minute(s)"
     if rule_type == "storage_usage_percent":
         drive = _clean_text(rule.get("drive"))
-        prefix = f"{drive} " if drive else "Storage "
+        drive_mode = _normalize_storage_drive_mode(rule.get("drive_mode"), drive)
+        prefix = f"{drive} " if drive_mode == "specific" and drive else "Any drive "
         return f"{prefix}usage at or above {int(_coerce_float(rule.get('threshold')) or 90)}%"
     if rule_type == "service_state":
         return f"Service {rule.get('service_name') or 'service'} not {rule.get('expected_status') or 'running'}"
@@ -840,6 +865,13 @@ class WatchdogRuntimeService:
         rules = record.get("criteria", {}).get("rules") if isinstance(record.get("criteria"), dict) else []
         if not isinstance(rules, list) or not rules:
             errors.append("At least one watchdog rule is required.")
+        for rule in rules if isinstance(rules, list) else []:
+            if not isinstance(rule, dict):
+                continue
+            if _clean_text(rule.get("type")).lower() == "storage_usage_percent":
+                drive_mode = _normalize_storage_drive_mode(rule.get("drive_mode"), rule.get("drive"))
+                if drive_mode == "specific" and not _clean_text(rule.get("drive")):
+                    errors.append("Storage usage rules using Specific Drive must include a drive letter or mount path.")
         targets = record.get("targets") if isinstance(record.get("targets"), list) else []
         if not targets:
             errors.append("At least one target device or filter is required.")
@@ -1428,17 +1460,30 @@ class WatchdogRuntimeService:
                     "summary": "Storage inventory is not available",
                     "sample": {},
                 }
-            drive_name = _clean_text(rule.get("drive")).lower()
-            chosen = None
-            if drive_name:
-                for row in storage_rows:
-                    if _clean_text(row.get("drive")).lower() == drive_name:
-                        chosen = row
-                        break
-            if chosen is None:
-                ranked = [row for row in storage_rows if row.get("usage_percent") is not None]
-                chosen = max(ranked, key=lambda row: float(row.get("usage_percent") or 0), default=None)
-            if chosen is None or chosen.get("usage_percent") is None:
+            threshold = float(_coerce_float(rule.get("threshold")) or 90.0)
+            drive_mode = _normalize_storage_drive_mode(rule.get("drive_mode"), rule.get("drive"))
+            selected_drive = _clean_text(rule.get("drive"))
+            selected_drive_key = _normalize_storage_drive_key(selected_drive)
+            evaluated_rows = [row for row in storage_rows if row.get("usage_percent") is not None]
+            if drive_mode == "specific":
+                evaluated_rows = [
+                    row for row in evaluated_rows if _normalize_storage_drive_key(row.get("drive")) == selected_drive_key
+                ]
+                if not evaluated_rows:
+                    return {
+                        "rule_id": rule.get("id"),
+                        "type": rule_type,
+                        "matched": False,
+                        "stale": False,
+                        "summary": f"Drive {selected_drive or 'target drive'} is not present in storage inventory",
+                        "sample": {
+                            "drive_scope": "specific",
+                            "drive": selected_drive,
+                            "present": False,
+                            "threshold": round(threshold, 2),
+                        },
+                    }
+            if not evaluated_rows:
                 return {
                     "rule_id": rule.get("id"),
                     "type": rule_type,
@@ -1447,20 +1492,53 @@ class WatchdogRuntimeService:
                     "summary": "Storage usage data is incomplete",
                     "sample": {},
                 }
+            ranked = sorted(evaluated_rows, key=lambda row: float(row.get("usage_percent") or 0), reverse=True)
+            chosen = ranked[0]
             usage = float(chosen.get("usage_percent") or 0.0)
-            threshold = float(_coerce_float(rule.get("threshold")) or 90.0)
-            matched = usage >= threshold
+            matched_rows = [row for row in ranked if float(row.get("usage_percent") or 0.0) >= threshold]
+            matched = bool(matched_rows)
+            if drive_mode == "specific":
+                matched = usage >= threshold
+                summary = f"{chosen.get('drive')} usage is {usage:.1f}% (threshold {threshold:.1f}%)"
+                sample = {
+                    "drive_scope": "specific",
+                    "drive": chosen.get("drive"),
+                    "usage_percent": round(usage, 2),
+                    "threshold": round(threshold, 2),
+                    "present": True,
+                }
+            else:
+                if matched_rows:
+                    if len(matched_rows) == 1:
+                        summary = (
+                            f"{matched_rows[0].get('drive')} usage is "
+                            f"{float(matched_rows[0].get('usage_percent') or 0.0):.1f}% "
+                            f"(threshold {threshold:.1f}%)"
+                        )
+                    else:
+                        summary = f"{len(matched_rows)} drives are at or above {threshold:.1f}% usage"
+                else:
+                    summary = f"Highest drive usage is {chosen.get('drive')} at {usage:.1f}% (threshold {threshold:.1f}%)"
+                sample = {
+                    "drive_scope": "all",
+                    "threshold": round(threshold, 2),
+                    "highest_drive": chosen.get("drive"),
+                    "highest_usage_percent": round(usage, 2),
+                    "matched_drives": [
+                        {
+                            "drive": row.get("drive"),
+                            "usage_percent": round(float(row.get("usage_percent") or 0.0), 2),
+                        }
+                        for row in matched_rows
+                    ],
+                }
             return {
                 "rule_id": rule.get("id"),
                 "type": rule_type,
                 "matched": matched,
                 "stale": False,
-                "summary": f"{chosen.get('drive')} usage is {usage:.1f}% (threshold {threshold:.1f}%)",
-                "sample": {
-                    "drive": chosen.get("drive"),
-                    "usage_percent": round(usage, 2),
-                    "threshold": round(threshold, 2),
-                },
+                "summary": summary,
+                "sample": sample,
             }
         if rule_type == "service_state":
             services_payload = device.get("services_payload") if isinstance(device.get("services_payload"), dict) else {}
