@@ -24,6 +24,7 @@ import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
 import { APP_PATHS } from "../../app/routes/paths.js";
 import {
   GRID_WRAPPER_SX,
+  BOREALIS_BLUE,
   CountSliderGroup,
   formatTimestamp,
   gridTheme,
@@ -208,19 +209,44 @@ export default function WatchdogList() {
   const columnDefs = useMemo(
     () => [
       {
+        field: "severity",
+        headerName: "Severity",
+        width: 120,
+        cellRenderer: (params) => (
+          <Chip
+            label={String(params.value || "warning").replace(/^./, (char) => char.toUpperCase())}
+            size="small"
+            sx={{
+              color: severityColor(params.value),
+              borderColor: severityColor(params.value),
+              backgroundColor: "rgba(15,23,42,0.5)",
+            }}
+            variant="outlined"
+          />
+        ),
+      },
+      {
         field: "name",
-        headerName: "Watchdog",
+        headerName: "Name",
         minWidth: 220,
         flex: 1.2,
-        cellRenderer: (params) => (
-          <Button
-            color="inherit"
-            onClick={() => navigate(APP_PATHS.watchdog(params?.data?.id))}
-            sx={{ justifyContent: "flex-start", px: 0, textTransform: "none" }}
-          >
-            {params.value}
-          </Button>
-        ),
+        cellRenderer: (params) => {
+          const label = String(params.value || "").trim();
+          if (!label) return "";
+          return (
+            <a
+              href="#"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                navigate(APP_PATHS.watchdog(params?.data?.id));
+              }}
+              style={{ color: BOREALIS_BLUE, textDecoration: "none", fontWeight: 500 }}
+            >
+              {label}
+            </a>
+          );
+        },
       },
       {
         field: "description",
@@ -266,23 +292,6 @@ export default function WatchdogList() {
         headerName: "Updated",
         minWidth: 170,
         valueFormatter: (params) => formatTimestamp(params.value),
-      },
-      {
-        field: "severity",
-        headerName: "Severity",
-        width: 120,
-        cellRenderer: (params) => (
-          <Chip
-            label={String(params.value || "warning").replace(/^./, (char) => char.toUpperCase())}
-            size="small"
-            sx={{
-              color: severityColor(params.value),
-              borderColor: severityColor(params.value),
-              backgroundColor: "rgba(15,23,42,0.5)",
-            }}
-            variant="outlined"
-          />
-        ),
       },
       {
         field: "enabled",
