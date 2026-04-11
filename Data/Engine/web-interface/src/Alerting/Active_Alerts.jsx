@@ -302,8 +302,6 @@ export default function ActiveAlerts() {
         headerName: "Status",
         minWidth: 140,
         width: 140,
-        pinned: "left",
-        lockPosition: true,
         filter: "agTextColumnFilter",
         cellRenderer: (params) => {
           const meta = resolveIncidentStatusMeta(params.value);
@@ -483,6 +481,16 @@ export default function ActiveAlerts() {
             rowData={queueRows}
             columnDefs={columnDefs}
             rowSelection={rowSelection}
+            selectionColumnDef={{
+              pinned: "left",
+              width: 52,
+              minWidth: 52,
+              maxWidth: 52,
+              resizable: false,
+              sortable: false,
+              suppressHeaderMenuButton: true,
+              suppressMovable: true,
+            }}
             getRowId={getRowId}
             suppressRowClickSelection
             onSelectionChanged={(event) =>
