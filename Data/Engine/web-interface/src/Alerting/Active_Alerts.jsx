@@ -14,7 +14,6 @@ import {
   CachedRounded as RefreshIcon,
   CheckCircleOutlineRounded as AcknowledgeIcon,
   NotificationsActiveRounded as HeaderIcon,
-  OpenInNewRounded as OpenIcon,
   PauseCircleOutlineRounded as SuppressIcon,
   ReplayRounded as ReopenIcon,
 } from "@mui/icons-material";
@@ -36,7 +35,7 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 
 const PAGE_TITLE = "Alerts";
 const PAGE_SUBTITLE =
-  "Work watchdog incidents, acknowledge noisy signals, suppress active issues, and jump directly to the source policy.";
+  "Work watchdog incidents, acknowledge noisy signals, and suppress active issues directly from the queue.";
 
 function normalizeFilterValue(value) {
   return String(value || "").trim().toLowerCase();
@@ -240,12 +239,6 @@ export default function ActiveAlerts() {
     }
   }, [loadIncidents, queueToggleMode, selectedRows]);
 
-  const openSelectedPolicy = useCallback(() => {
-    const target = selectedRows[0];
-    if (!target?.watchdog_id) return;
-    navigate(APP_PATHS.watchdog(target.watchdog_id));
-  }, [navigate, selectedRows]);
-
   const pageHeaderActions = useMemo(
     () => [
       {
@@ -260,7 +253,7 @@ export default function ActiveAlerts() {
         id: "alerts-acknowledge",
         label: "Acknowledge",
         icon: <AcknowledgeIcon />,
-        tone: "secondary",
+        tone: "primary",
         disabled: !selectedOpenRows.length || loading || actionBusy,
         onClick: acknowledgeSelected,
       },
@@ -272,16 +265,8 @@ export default function ActiveAlerts() {
         disabled: !selectedRows.length || !queueToggleMode || loading || actionBusy,
         onClick: toggleSelectedQueue,
       },
-      {
-        id: "alerts-open-policy",
-        label: "Open Policy",
-        icon: <OpenIcon />,
-        tone: "primary",
-        disabled: selectedRows.length !== 1 || !selectedRows[0]?.watchdog_id,
-        onClick: openSelectedPolicy,
-      },
     ],
-    [acknowledgeSelected, actionBusy, loadIncidents, loading, openSelectedPolicy, queueToggleMode, selectedOpenRows.length, selectedRows, toggleSelectedQueue]
+    [acknowledgeSelected, actionBusy, loadIncidents, loading, queueToggleMode, selectedOpenRows.length, selectedRows.length, toggleSelectedQueue]
   );
 
   const columnDefs = useMemo(

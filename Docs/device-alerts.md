@@ -11,7 +11,7 @@ Describe the runtime incident side of Watchdogs: the Alerts queue, incident life
   - open, suppressed, and resolved tabs
   - AG Grid column filters for severity, site, device, watchdog, message, timestamps, and acknowledgement metadata
   - device hostname links directly into the affected device page
-  - a page-header `Open Policy` action for the selected incident
+  - the watchdog name links directly into the source watchdog policy
   - acknowledge incidents
   - suppress an active incident into the dedicated suppressed queue
   - `RE-OPEN` for suppressed incidents that should return to the open queue
