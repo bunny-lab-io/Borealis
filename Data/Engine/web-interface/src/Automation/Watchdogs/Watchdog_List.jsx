@@ -48,43 +48,6 @@ export default function WatchdogList() {
   const [error, setError] = useState("");
   const [selectedIds, setSelectedIds] = useState([]);
 
-  const pageHeaderActions = useMemo(
-    () => [
-      {
-        id: "watchdogs-refresh",
-        label: "Refresh",
-        icon: <RefreshIcon />,
-        tone: "secondary",
-        disabled: loading,
-        onClick: loadItems,
-      },
-      {
-        id: "watchdogs-delete",
-        label: "Delete",
-        icon: <DeleteIcon />,
-        tone: "secondary",
-        disabled: !selectedIds.length,
-        onClick: deleteSelected,
-      },
-      {
-        id: "watchdogs-new",
-        label: "New Watchdog",
-        icon: <AddIcon />,
-        tone: "primary",
-        onClick: () => navigate(APP_PATHS.watchdogNew),
-      },
-    ],
-    [deleteSelected, loadItems, loading, navigate, selectedIds.length]
-  );
-
-  const tabCounts = useMemo(
-    () => ({
-      active: items.length,
-      archived: archivedItems.length,
-    }),
-    [archivedItems.length, items.length]
-  );
-
   const rowSelection = useMemo(
     () => ({
       mode: "multiRow",
@@ -205,6 +168,43 @@ export default function WatchdogList() {
       setError(String(err?.message || err || "Failed to delete watchdogs."));
     }
   }, [loadItems, selectedIds]);
+
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "watchdogs-refresh",
+        label: "Refresh",
+        icon: <RefreshIcon />,
+        tone: "secondary",
+        disabled: loading,
+        onClick: loadItems,
+      },
+      {
+        id: "watchdogs-delete",
+        label: "Delete",
+        icon: <DeleteIcon />,
+        tone: "secondary",
+        disabled: !selectedIds.length,
+        onClick: deleteSelected,
+      },
+      {
+        id: "watchdogs-new",
+        label: "New Watchdog",
+        icon: <AddIcon />,
+        tone: "primary",
+        onClick: () => navigate(APP_PATHS.watchdogNew),
+      },
+    ],
+    [deleteSelected, loadItems, loading, navigate, selectedIds.length]
+  );
+
+  const tabCounts = useMemo(
+    () => ({
+      active: items.length,
+      archived: archivedItems.length,
+    }),
+    [archivedItems.length, items.length]
+  );
 
   const columnDefs = useMemo(
     () => [

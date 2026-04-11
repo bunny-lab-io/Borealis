@@ -119,6 +119,7 @@ export default function ActiveAlerts() {
       mode: "multiRow",
       checkboxes: true,
       headerCheckbox: true,
+      enableClickSelection: false,
     }),
     []
   );
@@ -493,7 +494,6 @@ export default function ActiveAlerts() {
             rowSelection={rowSelection}
             selectionColumnDef={selectionColumnDef}
             getRowId={getRowId}
-            suppressRowClickSelection
             onSelectionChanged={(event) =>
               setSelectedIncidentIds((event.api.getSelectedRows() || []).map((row) => String(row?.id ?? "")))
             }
