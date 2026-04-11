@@ -1274,6 +1274,56 @@ export default function WatchdogEditor() {
     []
   );
 
+  const updateTopLevel = useCallback((patch) => {
+    setFormState((prev) => ({ ...prev, ...patch }));
+  }, []);
+
+  const addDeviceTarget = useCallback((device) => {
+    const hostname = String(device?.hostname || "").trim();
+    if (!hostname) return;
+    setFormState((prev) => ({
+      ...prev,
+      targets: normalizeTargets([
+        ...(prev.targets || []),
+        {
+          kind: "device",
+          hostname,
+          device_guid: String(device?.device_guid || device?.agent_guid || "").trim(),
+          site_id: device?.site_id ?? null,
+          site_name: String(device?.site_name || "").trim(),
+        },
+      ]),
+    }));
+  }, []);
+
+  const addFilterTarget = useCallback((record) => {
+    const filterId = Number(record?.id || record?.filter_id || 0);
+    if (!Number.isFinite(filterId) || filterId <= 0) return;
+    setFormState((prev) => ({
+      ...prev,
+      targets: normalizeTargets([
+        ...(prev.targets || []),
+        {
+          kind: "filter",
+          filter_id: filterId,
+          name: String(record?.name || "").trim(),
+        },
+      ]),
+    }));
+  }, []);
+
+  const toggleAllDevicesTarget = useCallback((enabled) => {
+    setFormState((prev) => {
+      const otherTargets = normalizeArray(prev.targets).filter((target) => target?.kind !== "all_devices");
+      return {
+        ...prev,
+        targets: enabled
+          ? normalizeTargets([{ kind: "all_devices", name: "All Devices in Scope" }, ...otherTargets])
+          : normalizeTargets(otherTargets),
+      };
+    });
+  }, []);
+
   const deviceSearchColumns = useMemo(
     () => [
       { field: "site_name", headerName: "Site", minWidth: 170, width: 190 },
@@ -1362,58 +1412,8 @@ export default function WatchdogEditor() {
     [addFilterTarget, selectedFilterTargetIds]
   );
 
-  const updateTopLevel = useCallback((patch) => {
-    setFormState((prev) => ({ ...prev, ...patch }));
-  }, []);
-
   const updateCriteria = useCallback((patch) => {
     setFormState((prev) => ({ ...prev, criteria: { ...(prev.criteria || {}), ...patch } }));
-  }, []);
-
-  const addDeviceTarget = useCallback((device) => {
-    const hostname = String(device?.hostname || "").trim();
-    if (!hostname) return;
-    setFormState((prev) => ({
-      ...prev,
-      targets: normalizeTargets([
-        ...(prev.targets || []),
-        {
-          kind: "device",
-          hostname,
-          device_guid: String(device?.device_guid || device?.agent_guid || "").trim(),
-          site_id: device?.site_id ?? null,
-          site_name: String(device?.site_name || "").trim(),
-        },
-      ]),
-    }));
-  }, []);
-
-  const addFilterTarget = useCallback((record) => {
-    const filterId = Number(record?.id || record?.filter_id || 0);
-    if (!Number.isFinite(filterId) || filterId <= 0) return;
-    setFormState((prev) => ({
-      ...prev,
-      targets: normalizeTargets([
-        ...(prev.targets || []),
-        {
-          kind: "filter",
-          filter_id: filterId,
-          name: String(record?.name || "").trim(),
-        },
-      ]),
-    }));
-  }, []);
-
-  const toggleAllDevicesTarget = useCallback((enabled) => {
-    setFormState((prev) => {
-      const otherTargets = normalizeArray(prev.targets).filter((target) => target?.kind !== "all_devices");
-      return {
-        ...prev,
-        targets: enabled
-          ? normalizeTargets([{ kind: "all_devices", name: "All Devices in Scope" }, ...otherTargets])
-          : normalizeTargets(otherTargets),
-      };
-    });
   }, []);
 
   const updateRule = useCallback((ruleId, nextRule) => {
