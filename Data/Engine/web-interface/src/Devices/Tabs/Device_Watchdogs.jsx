@@ -21,7 +21,7 @@ import {
 } from "@mui/icons-material";
 
 import { APP_PATHS } from "../../app/routes/paths.js";
-import { formatTimestamp, severityColor, summarizeRuleResults } from "../../Automation/Watchdogs/shared.js";
+import { formatTimestamp, severityColor, summarizeRuleResults } from "../../Automation/Watchdogs/shared.jsx";
 
 function SectionShell({ title, subtitle, action, children }) {
   return (

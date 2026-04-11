@@ -38,7 +38,7 @@ import {
 } from "../../DialogStyles.jsx";
 import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
 import { APP_PATHS } from "../../app/routes/paths.js";
-import { CountSliderGroup } from "../../Automation/Watchdogs/shared.js";
+import { CountSliderGroup } from "../../Automation/Watchdogs/shared.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 

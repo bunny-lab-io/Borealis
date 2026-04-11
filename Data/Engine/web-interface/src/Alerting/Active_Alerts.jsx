@@ -28,7 +28,7 @@ import {
   formatTimestamp,
   gridTheme,
   severityColor,
-} from "../Automation/Watchdogs/shared.js";
+} from "../Automation/Watchdogs/shared.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 

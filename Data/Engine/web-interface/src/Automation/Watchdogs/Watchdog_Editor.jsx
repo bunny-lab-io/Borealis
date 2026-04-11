@@ -45,7 +45,7 @@ import {
   gridTheme,
   severityColor,
   summarizeRuleResults,
-} from "./shared.js";
+} from "./shared.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 

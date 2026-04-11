@@ -31,7 +31,7 @@ import {
   gridTheme,
   severityColor,
   siteModeSummary,
-} from "./shared.js";
+} from "./shared.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
