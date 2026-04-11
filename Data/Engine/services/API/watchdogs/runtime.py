@@ -757,6 +757,39 @@ class WatchdogRuntimeService:
         effective_site_ids = self._effective_watchdog_site_ids(record, all_site_ids=all_site_ids)
         return effective_site_ids.issubset(allowed_site_ids)
 
+    def _visible_watchdog_ids_for_user(
+        self,
+        user: Optional[Mapping[str, Any]],
+    ) -> Optional[set[int]]:
+        allowed_site_ids = self._site_access.site_ids_for_user(user)
+        if allowed_site_ids is None:
+            return None
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id, site_mode FROM watchdogs")
+            rows = cur.fetchall()
+        finally:
+            conn.close()
+        if not rows:
+            return set()
+        watchdog_ids = [_coerce_int(row[0], 0) for row in rows]
+        site_lookup = self._load_watchdog_sites(watchdog_ids)
+        all_site_ids = self._load_all_site_ids()
+        visible_ids: set[int] = set()
+        for row in rows:
+            watchdog_id = _coerce_int(row[0], 0)
+            if watchdog_id <= 0:
+                continue
+            record = {
+                "id": watchdog_id,
+                "site_mode": _clean_text(row[1]).lower() or "global",
+                "site_ids": list(site_lookup.get(watchdog_id, [])),
+            }
+            if self._watchdog_visible_to_user(record, user, all_site_ids=all_site_ids):
+                visible_ids.add(watchdog_id)
+        return visible_ids
+
     def _load_filter_records(self, filter_ids: Sequence[int]) -> Dict[int, Dict[str, Any]]:
         ids = [int(value) for value in filter_ids if value is not None]
         if not ids:
@@ -2569,6 +2602,9 @@ class WatchdogRuntimeService:
         normalized_state = _clean_text(state).lower()
         if normalized_state not in VALID_INCIDENT_QUERY_STATES:
             normalized_state = "open"
+        visible_watchdog_ids = self._visible_watchdog_ids_for_user(user)
+        if visible_watchdog_ids is not None and not visible_watchdog_ids:
+            return []
         conn = self._conn()
         try:
             cur = conn.cursor()
@@ -2582,28 +2618,26 @@ class WatchdogRuntimeService:
                   FROM watchdog_incidents AS i
                   JOIN watchdogs AS w ON w.id = i.watchdog_id
             """
-            if normalized_state == "all":
-                cur.execute(f"{base_query} ORDER BY i.updated_at DESC, i.id DESC")
-            else:
-                cur.execute(
-                    f"{base_query} WHERE i.state = ? ORDER BY i.updated_at DESC, i.id DESC",
-                    (normalized_state,),
-                )
+            clauses: List[str] = []
+            params: List[Any] = []
+            if normalized_state != "all":
+                clauses.append("i.state = ?")
+                params.append(normalized_state)
+            if visible_watchdog_ids is not None:
+                placeholders = ",".join("?" for _ in visible_watchdog_ids)
+                clauses.append(f"i.watchdog_id IN ({placeholders})")
+                params.extend(sorted(visible_watchdog_ids))
+            where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+            cur.execute(f"{base_query}{where_sql} ORDER BY i.updated_at DESC, i.id DESC", tuple(params))
             rows = cur.fetchall()
         finally:
             conn.close()
         site_names = self._load_site_name_map(
             {_coerce_optional_int((row["site_id"] if isinstance(row, sqlite3.Row) else row[4])) for row in rows}
         )
-        visible_watchdogs = {int(item["id"]) for item in self.list_watchdogs(user=user)}
-        allowed_site_ids = self._site_access.site_ids_for_user(user)
-        if allowed_site_ids is not None and not visible_watchdogs:
-            return []
         incidents: List[Dict[str, Any]] = []
         for row in rows:
             watchdog_id = _coerce_int(row["watchdog_id"] if isinstance(row, sqlite3.Row) else row[1], 0)
-            if allowed_site_ids is not None and watchdog_id not in visible_watchdogs:
-                continue
             incident = {
                 "id": _coerce_int(row["id"] if isinstance(row, sqlite3.Row) else row[0], 0),
                 "watchdog_id": watchdog_id,
@@ -2636,10 +2670,35 @@ class WatchdogRuntimeService:
         user: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, int]:
         counts = {state: 0 for state in VALID_INCIDENT_STATES}
-        for incident in self.list_incidents(user=user, state="all"):
-            state = _clean_text(incident.get("state")).lower()
+        visible_watchdog_ids = self._visible_watchdog_ids_for_user(user)
+        if visible_watchdog_ids is not None and not visible_watchdog_ids:
+            return counts
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            clauses: List[str] = []
+            params: List[Any] = []
+            if visible_watchdog_ids is not None:
+                placeholders = ",".join("?" for _ in visible_watchdog_ids)
+                clauses.append(f"watchdog_id IN ({placeholders})")
+                params.extend(sorted(visible_watchdog_ids))
+            where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+            cur.execute(
+                f"""
+                SELECT state, COUNT(*)
+                  FROM watchdog_incidents
+                  {where_sql}
+              GROUP BY state
+                """,
+                tuple(params),
+            )
+            rows = cur.fetchall()
+        finally:
+            conn.close()
+        for row in rows:
+            state = _clean_text(row[0]).lower()
             if state in counts:
-                counts[state] += 1
+                counts[state] = _coerce_int(row[1], 0)
         return counts
 
     def acknowledge_incident(

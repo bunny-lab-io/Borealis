@@ -117,28 +117,8 @@ export default function ActiveAlerts() {
   const rowSelection = useMemo(
     () => ({
       mode: "multiRow",
-      checkboxes: true,
-      headerCheckbox: true,
       enableSelectionWithoutKeys: true,
       enableClickSelection: false,
-    }),
-    []
-  );
-
-  const selectionColumnDef = useMemo(
-    () => ({
-      headerName: "",
-      width: 52,
-      minWidth: 52,
-      maxWidth: 52,
-      resizable: false,
-      sortable: false,
-      filter: false,
-      suppressHeaderMenuButton: true,
-      suppressHeaderContextMenu: true,
-      pinned: "left",
-      lockPosition: true,
-      suppressMovable: true,
     }),
     []
   );
@@ -318,11 +298,29 @@ export default function ActiveAlerts() {
   const columnDefs = useMemo(
     () => [
       {
+        headerName: "",
+        field: "__select__",
+        width: 52,
+        minWidth: 52,
+        maxWidth: 52,
+        checkboxSelection: true,
+        headerCheckboxSelection: true,
+        resizable: false,
+        sortable: false,
+        filter: false,
+        suppressHeaderMenuButton: true,
+        suppressHeaderContextMenu: true,
+        pinned: "left",
+        lockPosition: true,
+        suppressMovable: true,
+      },
+      {
         field: "state",
         headerName: "Status",
         minWidth: 140,
         width: 140,
         pinned: "left",
+        lockPosition: true,
         filter: "agTextColumnFilter",
         cellRenderer: (params) => {
           const meta = resolveIncidentStatusMeta(params.value);
@@ -362,7 +360,7 @@ export default function ActiveAlerts() {
         field: "hostname",
         headerName: "Device",
         minWidth: 180,
-        flex: 1,
+        width: 220,
         cellRenderer: (params) => {
           const hostname = String(params?.data?.hostname || "").trim();
           if (!hostname) return null;
@@ -389,7 +387,7 @@ export default function ActiveAlerts() {
         field: "watchdog_name",
         headerName: "Watchdog",
         minWidth: 220,
-        flex: 1.1,
+        width: 260,
         cellRenderer: (params) => {
           const watchdogId = params?.data?.watchdog_id;
           const watchdogName = String(params?.value || "").trim();
@@ -415,13 +413,13 @@ export default function ActiveAlerts() {
         field: "site_name",
         headerName: "Site",
         minWidth: 160,
-        flex: 0.8,
+        width: 180,
       },
       {
         field: "message",
         headerName: "Message",
         minWidth: 300,
-        flex: 1.6,
+        width: 420,
       },
       {
         field: "opened_at",
@@ -444,7 +442,7 @@ export default function ActiveAlerts() {
               ? "Acknowledged By"
               : "Acknowledged / Suppression",
         minWidth: stateTab === "suppressed" ? 240 : 180,
-        flex: 0.8,
+        width: stateTab === "suppressed" ? 280 : 220,
         valueGetter: (params) => {
           const incidentState = normalizeFilterValue(params?.data?.state);
           if (stateTab === "suppressed" || incidentState === "suppressed") {
@@ -502,7 +500,6 @@ export default function ActiveAlerts() {
             rowData={queueRows}
             columnDefs={columnDefs}
             rowSelection={rowSelection}
-            selectionColumnDef={selectionColumnDef}
             getRowId={getRowId}
             suppressRowClickSelection
             onSelectionChanged={(event) =>
