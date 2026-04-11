@@ -104,7 +104,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
   - evaluating rules against cached device data
   - tracking per-device watchdog state
   - opening and resolving incidents
-  - dispatching in-app alerts, service-control actions, and assembly remediation
+  - dispatching Engine toast notifications, service-control actions, and assembly remediation
   - emitting `watchdog_incidents_changed` and `device_watchdogs_changed`
 
 ### Platform parity

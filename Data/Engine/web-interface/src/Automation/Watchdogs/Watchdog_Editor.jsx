@@ -65,7 +65,7 @@ const RULE_TYPE_OPTIONS = [
 
 const ACTION_TYPE_OPTIONS = [
   { value: "do_nothing", label: "No Nothing" },
-  { value: "notification", label: "Send In-App Alert" },
+  { value: "notification", label: "Engine Toast Notification" },
   { value: "service_control", label: "Control Service" },
   { value: "assembly", label: "Run Assembly" },
 ];

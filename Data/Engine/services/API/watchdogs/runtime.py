@@ -460,7 +460,7 @@ def summarize_rule(rule: Mapping[str, Any]) -> str:
 def summarize_action(action: Mapping[str, Any]) -> str:
     action_type = _clean_text(action.get("type")).lower()
     if action_type == "notification":
-        return "Send in-app alert"
+        return "Engine toast notification"
     if action_type == "do_nothing":
         return "Incident only (no notification or remediation)"
     if action_type == "service_control":

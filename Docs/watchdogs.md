@@ -54,7 +54,7 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
 ### Actions
 - v1 actions are:
   - `No Nothing` for incident-only tracking with no notification or remediation
-  - send an in-app alert
+  - Engine Toast Notification
   - control a Windows service
   - run an assembly remediation
 - Assembly remediation supports:
