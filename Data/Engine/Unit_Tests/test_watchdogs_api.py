@@ -220,6 +220,31 @@ def test_watchdog_storage_preview_returns_threshold_sample(engine_harness: Engin
     assert device["sample"]["results"][0]["sample"]["threshold"] == 90.0
 
 
+def test_watchdog_all_devices_target_resolves_scope(engine_harness: EngineTestHarness) -> None:
+    client = _client_with_admin_session(engine_harness)
+
+    payload = _offline_watchdog_payload(
+        targets=[
+            {
+                "kind": "all_devices",
+                "name": "All Devices in Scope",
+            }
+        ]
+    )
+
+    preview_response = client.post("/api/watchdogs/preview", json=payload)
+    assert preview_response.status_code == 200
+    preview_body = preview_response.get_json()
+    assert preview_body["device_count"] == 1
+    assert preview_body["devices"][0]["hostname"] == "test-device"
+
+    create_response = client.post("/api/watchdogs", json=payload)
+    assert create_response.status_code == 201
+    created = create_response.get_json()
+    assert created["target_device_count"] == 1
+    assert created["targets"][0]["kind"] == "all_devices"
+
+
 def test_watchdog_incident_acknowledge_and_device_override_round_trip(
     engine_harness: EngineTestHarness,
 ) -> None:

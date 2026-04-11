@@ -25,6 +25,7 @@ def normalize_targets_for_save(entries: Sequence[Any]) -> List[Any]:
     normalized: List[Any] = []
     seen_filters: set[int] = set()
     seen_devices: set[str] = set()
+    include_all_devices = False
     if not isinstance(entries, (list, tuple)):
         return normalized
     for entry in entries:
@@ -41,6 +42,17 @@ def normalize_targets_for_save(entries: Sequence[Any]) -> List[Any]:
         if not isinstance(entry, dict):
             continue
         kind = str(entry.get("kind") or entry.get("type") or "").strip().lower()
+        if kind == "all_devices" or entry.get("all_devices") is True:
+            if include_all_devices:
+                continue
+            include_all_devices = True
+            normalized.append(
+                {
+                    "kind": "all_devices",
+                    "name": entry.get("name") or "All Devices in Scope",
+                }
+            )
+            continue
         if kind == "filter" or entry.get("filter_id") is not None:
             filter_id = entry.get("filter_id") or entry.get("id")
             try:
@@ -105,7 +117,9 @@ def prune_device_targets(
             drop = bool(normalized_host and entry.strip().lower() == normalized_host)
         elif isinstance(entry, dict):
             kind = str(entry.get("kind") or entry.get("type") or "").strip().lower()
-            if kind == "filter" or entry.get("filter_id") is not None:
+            if kind == "all_devices" or entry.get("all_devices") is True:
+                drop = False
+            elif kind == "filter" or entry.get("filter_id") is not None:
                 drop = False
             else:
                 entry_guid = normalize_guid(str(entry.get("device_guid") or entry.get("guid") or "").strip())

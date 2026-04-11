@@ -152,6 +152,12 @@ function normalizeTargets(targets = []) {
         return { kind: "device", hostname, device_guid: "", site_id: null, site_name: "" };
       }
       if (!target || typeof target !== "object") return null;
+      if (String(target.kind || target.type || "").toLowerCase() === "all_devices" || target.all_devices === true) {
+        return {
+          kind: "all_devices",
+          name: String(target.name || "All Devices in Scope").trim() || "All Devices in Scope",
+        };
+      }
       if (String(target.kind || target.type || "").toLowerCase() === "filter" || target.filter_id != null) {
         const filterId = Number(target.filter_id || target.id || 0);
         if (!Number.isFinite(filterId) || filterId <= 0) return null;
@@ -170,7 +176,9 @@ function normalizeTargets(targets = []) {
     .filter(Boolean)
     .filter((target) => {
       const dedupeKey =
-        target.kind === "filter"
+        target.kind === "all_devices"
+          ? "all_devices"
+          : target.kind === "filter"
           ? `filter:${target.filter_id}`
           : `device:${String(target.device_guid || "").toLowerCase() || String(target.hostname || "").toLowerCase()}`;
       if (seen.has(dedupeKey)) return false;
@@ -636,7 +644,13 @@ export default function WatchdogEditor() {
       setSites(Array.isArray(sitesPayload?.sites) ? sitesPayload.sites : []);
 
       const filtersPayload = await filtersResp.json().catch(() => ({}));
-      setFilters(Array.isArray(filtersPayload?.items) ? filtersPayload.items : []);
+      setFilters(
+        Array.isArray(filtersPayload?.filters)
+          ? filtersPayload.filters
+          : Array.isArray(filtersPayload?.items)
+            ? filtersPayload.items
+            : []
+      );
 
       const assembliesPayload = await assembliesResp.json().catch(() => ({}));
       const normalizedAssemblies = parseAssembliesCollectionPayload(assembliesPayload);
@@ -691,8 +705,13 @@ export default function WatchdogEditor() {
     return filters.filter((record) => ids.has(Number(record.id)));
   }, [filters, formState.targets]);
 
+  const scopeWideTargetEnabled = useMemo(
+    () => normalizeArray(formState.targets).some((target) => target?.kind === "all_devices"),
+    [formState.targets]
+  );
+
   const explicitDeviceTargets = useMemo(
-    () => normalizeArray(formState.targets).filter((target) => target?.kind !== "filter"),
+    () => normalizeArray(formState.targets).filter((target) => target?.kind === "device"),
     [formState.targets]
   );
 
@@ -775,6 +794,18 @@ export default function WatchdogEditor() {
     }));
     setDeviceTargetDraft("");
   }, [deviceTargetDraft]);
+
+  const toggleAllDevicesTarget = useCallback((enabled) => {
+    setFormState((prev) => {
+      const otherTargets = normalizeArray(prev.targets).filter((target) => target?.kind !== "all_devices");
+      return {
+        ...prev,
+        targets: enabled
+          ? normalizeTargets([{ kind: "all_devices", name: "All Devices in Scope" }, ...otherTargets])
+          : normalizeTargets(otherTargets),
+      };
+    });
+  }, []);
 
   const updateRule = useCallback((ruleId, nextRule) => {
     setFormState((prev) => ({
@@ -1151,11 +1182,37 @@ export default function WatchdogEditor() {
 
           {activeTab === "targets" ? (
             <Stack spacing={2}>
+              <SectionCard
+                title="Scope-wide Targeting"
+                subtitle="Target every device currently inside the selected scope. This is the fastest way to monitor all devices in the scoped sites."
+              >
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={scopeWideTargetEnabled}
+                      onChange={(event) => toggleAllDevicesTarget(event.target.checked)}
+                    />
+                  }
+                  label="Include All Devices in Scope"
+                />
+                {scopeWideTargetEnabled ? (
+                  <Chip
+                    label="All Devices in Scope"
+                    sx={{ alignSelf: "flex-start" }}
+                    onDelete={() => toggleAllDevicesTarget(false)}
+                  />
+                ) : (
+                  <Typography variant="body2" sx={{ color: "#94a3b8" }}>
+                    Leave this off if you only want to target explicit devices or saved filters.
+                  </Typography>
+                )}
+              </SectionCard>
               <SectionCard title="Filter Targets" subtitle="Use existing Borealis device filters to keep watchdog assignments dynamic.">
                 <Autocomplete
                   multiple
                   options={filters}
                   value={selectedFilterTargets}
+                  isOptionEqualToValue={(option, value) => Number(option?.id) === Number(value?.id)}
                   getOptionLabel={(option) => option?.name || ""}
                   onChange={(_event, nextValue) => {
                     const filterTargets = nextValue.map((record) => ({

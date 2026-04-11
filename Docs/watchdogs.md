@@ -26,9 +26,11 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
 
 ### Targets
 - Watchdogs target devices by:
+  - all devices in the current watchdog scope
   - explicit device targets
   - saved device filters
 - Filter targets stay dynamic. When inventory changes, the watchdog's resolved device set changes with it.
+- `All Devices in Scope` resolves every device that currently falls inside the watchdog's site scope, without requiring a separate saved filter.
 
 ### Rules
 - v1 rules only use telemetry Borealis already stores:

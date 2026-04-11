@@ -1205,12 +1205,26 @@ class WatchdogRuntimeService:
         targets = watchdog.get("targets") if isinstance(watchdog.get("targets"), list) else []
         if not targets:
             return []
+        if any(
+            isinstance(target, dict)
+            and (_clean_text(target.get("kind") or target.get("type")).lower() == "all_devices" or _coerce_bool(target.get("all_devices"), False))
+            for target in targets
+        ):
+            return sorted(
+                devices,
+                key=lambda item: (
+                    _clean_text(item.get("site_name")).lower(),
+                    _clean_text(item.get("hostname")).lower(),
+                ),
+            )
         filter_ids = []
         explicit_targets: List[Dict[str, Any]] = []
         for target in targets:
             if not isinstance(target, dict):
                 continue
             kind = _clean_text(target.get("kind") or target.get("type")).lower()
+            if kind == "all_devices" or _coerce_bool(target.get("all_devices"), False):
+                continue
             if kind == "filter" or target.get("filter_id") is not None:
                 filter_id = _coerce_optional_int(target.get("filter_id") or target.get("id"))
                 if filter_id is not None:
