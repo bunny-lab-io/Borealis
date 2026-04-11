@@ -49,6 +49,35 @@ export default function WatchdogList() {
   const [error, setError] = useState("");
   const [selectedIds, setSelectedIds] = useState([]);
 
+  const rowSelection = useMemo(
+    () => ({
+      mode: "multiRow",
+      checkboxes: true,
+      headerCheckbox: true,
+      enableClickSelection: false,
+    }),
+    []
+  );
+
+  const selectionColumnDef = useMemo(
+    () => ({
+      headerName: "",
+      width: 54,
+      maxWidth: 54,
+      minWidth: 54,
+      pinned: "left",
+      resizable: false,
+      sortable: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      suppressMovable: true,
+      lockPinned: true,
+      lockPosition: true,
+      filter: false,
+    }),
+    []
+  );
+
   const loadItems = useCallback(async () => {
     setLoading(true);
     setError("");
@@ -143,14 +172,6 @@ export default function WatchdogList() {
 
   const columnDefs = useMemo(
     () => [
-      {
-        checkboxSelection: true,
-        headerCheckboxSelection: true,
-        width: 54,
-        pinned: "left",
-        sortable: false,
-        filter: false,
-      },
       {
         field: "name",
         headerName: "Watchdog",
@@ -301,8 +322,8 @@ export default function WatchdogList() {
             theme={gridTheme}
             rowData={rows}
             columnDefs={columnDefs}
-            rowSelection={{ mode: "multiRow" }}
-            suppressRowClickSelection
+            rowSelection={rowSelection}
+            selectionColumnDef={selectionColumnDef}
             onSelectionChanged={(event) => {
               const selected = event.api.getSelectedRows() || [];
               setSelectedIds(selected.map((item) => item.id).filter(Boolean));

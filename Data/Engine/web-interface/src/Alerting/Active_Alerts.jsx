@@ -324,17 +324,9 @@ export default function ActiveAlerts() {
         cellRenderer: (params) => {
           const meta = resolveIncidentStatusMeta(params.value);
           return (
-            <Chip
-              size="small"
-              label={meta.label}
-              variant="outlined"
-              sx={{
-                color: meta.color,
-                borderColor: meta.borderColor,
-                backgroundColor: meta.backgroundColor,
-                fontWeight: 600,
-              }}
-            />
+            <span style={{ color: "#e2e8f0", fontWeight: 600 }}>
+              {meta.label}
+            </span>
           );
         },
       },
