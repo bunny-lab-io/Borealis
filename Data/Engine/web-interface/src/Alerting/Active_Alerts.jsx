@@ -298,23 +298,6 @@ export default function ActiveAlerts() {
   const columnDefs = useMemo(
     () => [
       {
-        headerName: "",
-        field: "__select__",
-        width: 52,
-        minWidth: 52,
-        maxWidth: 52,
-        checkboxSelection: true,
-        headerCheckboxSelection: true,
-        resizable: false,
-        sortable: false,
-        filter: false,
-        suppressHeaderMenuButton: true,
-        suppressHeaderContextMenu: true,
-        pinned: "left",
-        lockPosition: true,
-        suppressMovable: true,
-      },
-      {
         field: "state",
         headerName: "Status",
         minWidth: 140,
