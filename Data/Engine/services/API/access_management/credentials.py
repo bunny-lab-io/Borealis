@@ -389,8 +389,17 @@ class CredentialManagementService:
             _metadata_json, _metadata = self._normalize_metadata(payload)
             metadata = self._merge_aegis_reset_metadata(_metadata, resolved_fields=_AFFECTED_SECRET_FIELDS)
             metadata_json = json.dumps(metadata, sort_keys=True)
+            password_blob = self.aegis.encrypt_secret_for_blob(payload.get("password"))
+            private_key_blob = self.aegis.encrypt_secret_for_blob(
+                _normalize_private_key_text(payload.get("private_key")) or None
+            )
+            passphrase_blob = self.aegis.encrypt_secret_for_blob(payload.get("private_key_passphrase"))
+            become_password_blob = self.aegis.encrypt_secret_for_blob(payload.get("become_password"))
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
+        except Exception as exc:
+            self.logger.debug("Failed to prepare credential %s", name, exc_info=True)
+            return jsonify({"error": str(exc)}), 500
 
         now_ts = _now_ts()
         conn: Optional[sqlite3.Connection] = None
@@ -398,12 +407,6 @@ class CredentialManagementService:
             conn = self._db_conn()
             cur = conn.cursor()
             self._ensure_site_exists(cur, site_id)
-            password_blob = self.aegis.encrypt_secret_for_blob(payload.get("password"))
-            private_key_blob = self.aegis.encrypt_secret_for_blob(
-                _normalize_private_key_text(payload.get("private_key")) or None
-            )
-            passphrase_blob = self.aegis.encrypt_secret_for_blob(payload.get("private_key_passphrase"))
-            become_password_blob = self.aegis.encrypt_secret_for_blob(payload.get("become_password"))
             cur.execute(
                 """
                 INSERT INTO credentials(
@@ -475,6 +478,7 @@ class CredentialManagementService:
 
         payload = request.get_json(silent=True) or {}
         conn: Optional[sqlite3.Connection] = None
+        existing: Optional[Sequence[Any]] = None
         try:
             conn = self._db_conn()
             cur = conn.cursor()
@@ -501,37 +505,39 @@ class CredentialManagementService:
                 (int(credential_id),),
             )
             existing = cur.fetchone()
-            if not existing:
-                return jsonify({"error": "credential not found"}), 404
+        except Exception as exc:
+            self.logger.debug("Failed to load credential %s for update", credential_id, exc_info=True)
+            return jsonify({"error": str(exc)}), 500
+        finally:
+            if conn is not None:
+                conn.close()
 
-            name = str(payload.get("name") if "name" in payload else existing[1] or "").strip()
-            description = str(payload.get("description") if "description" in payload else existing[2] or "").strip()
-            username = str(payload.get("username") if "username" in payload else existing[6] or "").strip()
-            become_method = str(payload.get("become_method") if "become_method" in payload else existing[10] or "").strip().lower()
-            become_username = str(payload.get("become_username") if "become_username" in payload else existing[11] or "").strip()
-            if not name:
-                return jsonify({"error": "name is required"}), 400
+        if not existing:
+            return jsonify({"error": "credential not found"}), 404
 
-            try:
-                site_id = self._normalize_site_id(payload.get("site_id")) if "site_id" in payload else existing[3]
-                site_id = int(site_id) if site_id is not None else None
-                credential_type = (
-                    self._normalize_credential_type(payload.get("credential_type"))
-                    if "credential_type" in payload
-                    else str(existing[4] or "machine").lower()
-                )
-                connection_type = (
-                    self._normalize_connection_type(payload.get("connection_type"))
-                    if "connection_type" in payload
-                    else str(existing[5] or "ssh").lower()
-                )
-                existing_metadata = _parse_metadata(existing[13])
-                _metadata_json, _metadata = self._normalize_metadata(payload, existing=existing_metadata)
-            except ValueError as exc:
-                return jsonify({"error": str(exc)}), 400
+        name = str(payload.get("name") if "name" in payload else existing[1] or "").strip()
+        description = str(payload.get("description") if "description" in payload else existing[2] or "").strip()
+        username = str(payload.get("username") if "username" in payload else existing[6] or "").strip()
+        become_method = str(payload.get("become_method") if "become_method" in payload else existing[10] or "").strip().lower()
+        become_username = str(payload.get("become_username") if "become_username" in payload else existing[11] or "").strip()
+        if not name:
+            return jsonify({"error": "name is required"}), 400
 
-            self._ensure_site_exists(cur, site_id)
-
+        try:
+            site_id = self._normalize_site_id(payload.get("site_id")) if "site_id" in payload else existing[3]
+            site_id = int(site_id) if site_id is not None else None
+            credential_type = (
+                self._normalize_credential_type(payload.get("credential_type"))
+                if "credential_type" in payload
+                else str(existing[4] or "machine").lower()
+            )
+            connection_type = (
+                self._normalize_connection_type(payload.get("connection_type"))
+                if "connection_type" in payload
+                else str(existing[5] or "ssh").lower()
+            )
+            existing_metadata = _parse_metadata(existing[13])
+            _metadata_json, _metadata = self._normalize_metadata(payload, existing=existing_metadata)
             password_blob = (
                 self.aegis.encrypt_secret_for_blob(payload.get("password"))
                 if "password" in payload
@@ -554,23 +560,34 @@ class CredentialManagementService:
                 if "become_password" in payload
                 else (None if payload.get("clear_become_password") else existing[12])
             )
-            resolved_secret_fields = []
-            if "password" in payload or payload.get("clear_password"):
-                resolved_secret_fields.append("password")
-            if "private_key" in payload or payload.get("clear_private_key"):
-                resolved_secret_fields.append("private_key")
-            if "private_key_passphrase" in payload or payload.get("clear_private_key_passphrase"):
-                resolved_secret_fields.append("private_key_passphrase")
-            if "become_password" in payload or payload.get("clear_become_password"):
-                resolved_secret_fields.append("become_password")
-            metadata = self._merge_aegis_reset_metadata(
-                _metadata,
-                existing_metadata=existing_metadata,
-                resolved_fields=resolved_secret_fields,
-            )
-            metadata_json = json.dumps(metadata, sort_keys=True)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except Exception as exc:
+            self.logger.debug("Failed to prepare credential update %s", credential_id, exc_info=True)
+            return jsonify({"error": str(exc)}), 500
 
-            now_ts = _now_ts()
+        resolved_secret_fields = []
+        if "password" in payload or payload.get("clear_password"):
+            resolved_secret_fields.append("password")
+        if "private_key" in payload or payload.get("clear_private_key"):
+            resolved_secret_fields.append("private_key")
+        if "private_key_passphrase" in payload or payload.get("clear_private_key_passphrase"):
+            resolved_secret_fields.append("private_key_passphrase")
+        if "become_password" in payload or payload.get("clear_become_password"):
+            resolved_secret_fields.append("become_password")
+        metadata = self._merge_aegis_reset_metadata(
+            _metadata,
+            existing_metadata=existing_metadata,
+            resolved_fields=resolved_secret_fields,
+        )
+        metadata_json = json.dumps(metadata, sort_keys=True)
+
+        now_ts = _now_ts()
+        conn = None
+        try:
+            conn = self._db_conn()
+            cur = conn.cursor()
+            self._ensure_site_exists(cur, site_id)
             cur.execute(
                 """
                 UPDATE credentials

@@ -169,6 +169,7 @@ def _make_db_conn_factory(
     pool_size: int = 10,
     max_overflow: int = 20,
     connect_timeout: int = 15,
+    idle_in_transaction_timeout_ms: int = 60000,
     logger: Optional[logging.Logger] = None,
 ) -> Callable[[], sqlite3.Connection]:
     manager = get_database_manager(
@@ -177,6 +178,7 @@ def _make_db_conn_factory(
         pool_size=pool_size,
         max_overflow=max_overflow,
         connect_timeout=connect_timeout,
+        idle_in_transaction_timeout_ms=idle_in_transaction_timeout_ms,
         logger=logger,
     )
 
@@ -214,6 +216,7 @@ class EngineServiceAdapters:
             pool_size=int(self.context.config.get("db_pool_size") or 10),
             max_overflow=int(self.context.config.get("db_max_overflow") or 20),
             connect_timeout=int(self.context.config.get("db_connect_timeout") or 15),
+            idle_in_transaction_timeout_ms=int(self.context.config.get("db_idle_in_transaction_timeout_ms") or 60000),
             logger=self.context.logger,
         )
         self.db_conn_factory = _make_db_conn_factory(
@@ -222,6 +225,7 @@ class EngineServiceAdapters:
             pool_size=int(self.context.config.get("db_pool_size") or 10),
             max_overflow=int(self.context.config.get("db_max_overflow") or 20),
             connect_timeout=int(self.context.config.get("db_connect_timeout") or 15),
+            idle_in_transaction_timeout_ms=int(self.context.config.get("db_idle_in_transaction_timeout_ms") or 60000),
             logger=self.context.logger,
         )
         initialise_engine_database(self.context.database_url, logger=self.context.logger)

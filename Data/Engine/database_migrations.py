@@ -272,10 +272,20 @@ def _ensure_watchdog_tables(conn: sqlite3.Connection) -> None:
             last_edited_by TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
-            last_evaluated_at INTEGER
+            last_evaluated_at INTEGER,
+            target_device_count INTEGER NOT NULL DEFAULT 0
         )
         """
     )
+    cur.execute("PRAGMA table_info(watchdogs)")
+    watchdog_columns = {str(row[1]) for row in cur.fetchall()}
+    if "target_device_count" not in watchdog_columns:
+        cur.execute(
+            """
+            ALTER TABLE watchdogs
+                ADD COLUMN target_device_count INTEGER NOT NULL DEFAULT 0
+            """
+        )
     cur.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_watchdogs_archived_updated

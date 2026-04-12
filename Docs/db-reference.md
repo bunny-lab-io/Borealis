@@ -51,6 +51,75 @@ sites (id) -------------------< user_site_assignments (site_id)
 - Borealis uses PostgreSQL as the live Engine database, so engine troubleshooting should focus on server-side constraints, indexes, sequences, and transaction boundaries.
 - Constraint enforcement, indexes, and transactions are handled server-side by PostgreSQL.
 - Some Borealis relations remain intentionally soft in schema/API logic, so application code still performs explicit cleanup and validation for tables such as `device_sites` and approval mappings.
+- Borealis now treats database connections as short-lived pooled resources. Request handlers and background services should fetch rows, release the connection, and then perform Python-side enrichment, JSON shaping, crypto, GitHub lookups, or target expansion outside the transaction boundary.
+- Healthy pooled sessions often appear in `pg_stat_activity` as `state = idle`, `wait_event = ClientRead`, and a recent `ROLLBACK` statement. That pattern means the session is clean and ready to be reused.
+- Unhealthy sessions usually appear as `state = idle in transaction` with an older `SELECT`, `UPDATE`, or `INSERT` still attached. That pattern means Borealis is holding a transaction open after the SQL work is already done.
+
+## Connection Lifecycle Guidelines
+### Healthy patterns
+- Open the connection immediately before the SQL work starts.
+- Execute the minimum required statements.
+- Fetch the rows or commit the write.
+- Close or return the connection to the pool immediately.
+- Perform non-DB work after the connection has been released:
+- JSON parsing and payload shaping.
+- Device/filter/watchdog target expansion.
+- Aegis encryption or decryption.
+- GitHub or other network lookups.
+- AG Grid summary aggregation and UI formatting.
+
+### Unhealthy patterns
+- Holding a connection open while calling `resolve_target_entries()`, `fetch_devices()`, or other target-resolution helpers.
+- Holding a connection open while decrypting credentials or encrypting secret blobs.
+- Holding a connection open while fetching repo hashes, waiting on Socket.IO, or calling other integrations.
+- Returning large payloads after `cur.fetchall()` without first closing the connection.
+- Reusing a write transaction for post-commit readback when the response can be assembled in a fresh short-lived read.
+
+### Practical symptoms
+- `QueuePool` timeout errors in `Engine/Logs/error.log`.
+- Operators seeing random `500` responses on otherwise unrelated routes such as `/api/auth/me`.
+- Socket reconnect churn or delayed page refreshes when the Engine is under load.
+- `pg_stat_activity` showing many `idle in transaction` rows older than a few seconds.
+- Pages that should be read-only becoming slower as more operators are online.
+
+### Operator CLI check for live PostgreSQL sessions
+- Operators with root access on the Engine host can inspect Borealis PostgreSQL sessions directly during troubleshooting.
+- Run this command from the Engine host shell:
+```sh
+sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start, now()-query_start as age, left(query,200) as query from pg_stat_activity where datname='borealis' order by query_start;"
+```
+- Healthy pooled connections usually appear as `state = idle`, `wait_event = ClientRead`, and a recent `ROLLBACK` statement.
+- Problematic sessions usually appear as `state = idle in transaction` with an older `SELECT`, `UPDATE`, or `INSERT` still attached.
+- If Borealis feels slow, this command is the fastest way to distinguish normal pooled connections from sessions that are holding transactions open too long.
+
+### Preferred remediation pattern
+```python
+conn = db_conn_factory()
+try:
+    cur = conn.cursor()
+    cur.execute("SELECT ...")
+    rows = cur.fetchall()
+finally:
+    conn.close()
+
+# Safe to do slower work now.
+payload = [shape_row(row) for row in rows]
+payload = enrich_payload(payload)
+return payload
+```
+
+### Patterns to avoid
+```python
+conn = db_conn_factory()
+try:
+    cur = conn.cursor()
+    cur.execute("SELECT ...")
+    rows = cur.fetchall()
+    payload = enrich_payload(rows)  # bad: could do crypto/network/target expansion here
+    return payload
+finally:
+    conn.close()
+```
 
 ## Engine Runtime Database Tables (`engine.*`)
 ### Enrollment, Identity, and Site Mapping
@@ -569,6 +638,19 @@ LIMIT 200;
 SELECT COUNT(*) AS has_legacy_sites_col
 FROM pragma_table_info('sites')
 WHERE name = 'enrollment_code_id';
+
+-- 9) Identify sessions that are cleanly pooled and waiting for reuse
+SELECT pid, state, wait_event, query_start, now() - query_start AS age, left(query, 200) AS query
+FROM pg_stat_activity
+WHERE datname = 'borealis'
+ORDER BY query_start;
+
+-- 10) Focus only on bad pooled sessions (these should be rare and short-lived)
+SELECT pid, usename, state, wait_event, xact_start, now() - xact_start AS txn_age, left(query, 200) AS query
+FROM pg_stat_activity
+WHERE datname = 'borealis'
+  AND state = 'idle in transaction'
+ORDER BY xact_start NULLS LAST;
 ```
 
 ### Change-management checklist for schema edits
@@ -581,6 +663,31 @@ WHERE name = 'enrollment_code_id';
 - Keep site/code association in `sites.enrollment_code` unless the enrollment model changes fundamentally.
 - Keep `device_sites` as hostname-to-site map for UI and filter joins.
 - Treat `device_approvals.enrollment_code` as immutable audit snapshot of the code used at request time.
+
+### Codex checklist for DB connection hygiene
+- Start with the hottest request or loop, not the easiest file. Prioritize watchdogs, device inventory, scheduled jobs, workflows, and auth-sensitive routes.
+- Search for `conn =`, `_db_conn()`, `_conn()`, `cur.fetchall()`, `commit()`, and `conn.close()` in the target module before editing.
+- Look for any work between the last SQL statement and `conn.close()`:
+- payload shaping loops
+- `json.loads()` or other parsing
+- `resolve_target_entries()` or `fetch_devices()`
+- Aegis crypto helpers
+- GitHub or other integration lookups
+- If that work does not require the live cursor or transaction, move it after `conn.close()`.
+- For write paths, keep the transaction open only for validation reads that must be consistent with the write. Do not leave the connection open for response shaping.
+- If a route resolves filters or device targets more than once, fetch one inventory snapshot and reuse it for the whole request.
+- If a helper repeatedly asks for repo or catalog metadata, add a short TTL cache so repeated reads do not create unnecessary external latency while DB connections are checked out.
+- After each fix, test the route and inspect `pg_stat_activity` to confirm pooled sessions return to `idle` rather than `idle in transaction`.
+
+### Codex remediation workflow
+1. Reproduce the route or background loop that is suspected of exhausting the pool.
+2. Inspect `pg_stat_activity` and note whether the bad rows are `idle in transaction`, long-lived `active`, or simply a large number of healthy `idle` sessions.
+3. Read the corresponding service code and mark every line between the final SQL statement and `conn.close()`.
+4. Move all non-DB work out of the connection scope unless the logic requires transactional consistency.
+5. For repeated target resolution, build one device snapshot and pass it to downstream helpers instead of refetching inventory.
+6. For repeated integration lookups, add a small in-memory TTL cache rather than doing the lookup on every request.
+7. Re-run the route, verify the behavior, and check `pg_stat_activity` again.
+8. If the route is still heavy, then consider query-count reduction, bulk loading, or schema/index tuning. Do not jump to pool-size changes before the connection lifecycle is clean.
 
 ## Related Documentation
 - [Engine Runtime](engine-runtime.md)

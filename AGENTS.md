@@ -6,12 +6,17 @@ Use this file as the entrypoint for Codex instructions. The full knowledgebase n
 - Start here: `Docs/index.md` (table of contents and documentation rules).
 - Agent runtime: `Docs/agent-runtime.md` (runtime paths, logging, security, roles, platform parity, Ansible status).
 - Engine runtime: `Docs/engine-runtime.md` (architecture, logging, security/API parity, platform parity, migration notes).
+- Database reference: `Docs/db-reference.md` (schema ownership, connection-lifecycle rules, troubleshooting queries, and DB hygiene guardrails for implementation work).
 - UI and notifications: `Docs/ui-and-notifications.md` (MagicUI styling, AG Grid rules, toast notifications, UI handoffs).
 - VPN and remote access: `Docs/vpn-and-remote-access.md` (WireGuard tunnels, remote shell, VNC, troubleshooting context).
 - Security and trust: `Docs/security-and-trust.md` (enrollment, tokens, code signing, sequence diagrams).
 - Technical debt: `Docs/technical-debt.md` (patches, workarounds, dev/prod mismatches).
 
 Precedence: follow domain docs first; where overlap exists, the domain page wins. The Codex Agent sections inside each page are the authoritative agent guidance.
+
+## Database Work
+- For any code change, migration, troubleshooting step, or implementation that reads from, writes to, or otherwise interacts with PostgreSQL, read `Docs/db-reference.md` first.
+- Follow the connection-lifecycle guidance in `Docs/db-reference.md`: do the minimum SQL work needed, release the connection immediately, and perform payload shaping, crypto, target expansion, and integration lookups only after the DB connection has been returned to the pool.
 
 ## UI / AG Grid
 - MagicUI styling language and AG Grid rules are consolidated in `Docs/ui-and-notifications.md`.

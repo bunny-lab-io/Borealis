@@ -284,6 +284,7 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
 
     def _load_decrypted_credential(credential_id: int):
         conn = None
+        row = None
         try:
             conn = adapters.db_conn_factory()
             cur = conn.cursor()
@@ -309,37 +310,37 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
                 (int(credential_id),),
             )
             row = cur.fetchone()
-            if not row:
-                return None
-            metadata = {}
-            try:
-                metadata = json.loads(row[12] or "{}")
-            except Exception:
-                metadata = {}
-            if credential_secret_reset_required(metadata if isinstance(metadata, dict) else {}):
-                raise AegisSecretResetRequiredError(job_scheduler.CREDENTIAL_RESET_REQUIRED_MESSAGE)
-            aegis = adapters.aegis_cipher_service
-            return {
-                "id": int(row[0]),
-                "name": row[1] or "",
-                "site_id": row[2],
-                "credential_type": row[3] or "",
-                "connection_type": row[4] or "",
-                "username": row[5] or "",
-                "password": aegis.decrypt_secret_blob(row[6]),
-                "private_key": aegis.decrypt_secret_blob(row[7]),
-                "private_key_passphrase": aegis.decrypt_secret_blob(row[8]),
-                "become_method": row[9] or "",
-                "become_username": row[10] or "",
-                "become_password": aegis.decrypt_secret_blob(row[11]),
-                "metadata": metadata if isinstance(metadata, dict) else {},
-            }
         finally:
             try:
                 if conn is not None:
                     conn.close()
             except Exception:
                 pass
+        if not row:
+            return None
+        metadata = {}
+        try:
+            metadata = json.loads(row[12] or "{}")
+        except Exception:
+            metadata = {}
+        if credential_secret_reset_required(metadata if isinstance(metadata, dict) else {}):
+            raise AegisSecretResetRequiredError(job_scheduler.CREDENTIAL_RESET_REQUIRED_MESSAGE)
+        aegis = adapters.aegis_cipher_service
+        return {
+            "id": int(row[0]),
+            "name": row[1] or "",
+            "site_id": row[2],
+            "credential_type": row[3] or "",
+            "connection_type": row[4] or "",
+            "username": row[5] or "",
+            "password": aegis.decrypt_secret_blob(row[6]),
+            "private_key": aegis.decrypt_secret_blob(row[7]),
+            "private_key_passphrase": aegis.decrypt_secret_blob(row[8]),
+            "become_method": row[9] or "",
+            "become_username": row[10] or "",
+            "become_password": aegis.decrypt_secret_blob(row[11]),
+            "metadata": metadata if isinstance(metadata, dict) else {},
+        }
 
     scheduler = job_scheduler.register(
         app,

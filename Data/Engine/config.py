@@ -30,6 +30,8 @@ defaults. Key environment variables are
 ``BOREALIS_DB_MAX_OVERFLOW`` SQLAlchemy max overflow (default: ``20``).
 ``BOREALIS_DB_CONNECT_TIMEOUT`` PostgreSQL connect timeout in seconds
                                 (default: ``15``).
+``BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS`` PostgreSQL idle-in-transaction timeout
+                                       in milliseconds (default: ``60000``).
 ``BOREALIS_OFFICIAL_ASSEMBLIES_ROOT`` bundled official assembly catalog root
                                       (default:
                                       ``<ProjectRoot>/Data/Engine/Official_Assemblies``).
@@ -319,6 +321,7 @@ class EngineSettings:
     db_pool_size: int
     db_max_overflow: int
     db_connect_timeout: int
+    db_idle_in_transaction_timeout_ms: int
     official_assemblies_root: str
     official_assemblies_repo_url: str
     official_assemblies_repo_git_url: str
@@ -464,6 +467,13 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         default=15,
         minimum=1,
         maximum=300,
+    )
+    db_idle_in_transaction_timeout_ms = _parse_int(
+        runtime_config.get("DB_IDLE_IN_TXN_TIMEOUT_MS")
+        or os.environ.get("BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS"),
+        default=60000,
+        minimum=0,
+        maximum=3600000,
     )
     official_assemblies_root = str(
         Path(
@@ -709,6 +719,7 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         db_pool_size=db_pool_size,
         db_max_overflow=db_max_overflow,
         db_connect_timeout=db_connect_timeout,
+        db_idle_in_transaction_timeout_ms=db_idle_in_transaction_timeout_ms,
         official_assemblies_root=official_assemblies_root,
         official_assemblies_repo_url=official_assemblies_repo_url,
         official_assemblies_repo_git_url=official_assemblies_repo_git_url,

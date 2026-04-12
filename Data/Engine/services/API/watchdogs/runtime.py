@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -72,6 +73,7 @@ DEFAULT_WATCHDOG_MIN_CONSECUTIVE_MATCHES = 1
 DEFAULT_WATCHDOG_BOOT_GRACE_SECONDS = 0
 DEFAULT_DEVICE_OFFLINE_SECONDS = 300
 DEFAULT_TELEMETRY_STALE_SECONDS = 900
+DEFAULT_DEVICE_SNAPSHOT_CACHE_SECONDS = 15
 MAX_RULES_PER_WATCHDOG = 24
 EVALUATION_LOOP_INTERVAL_SECONDS = 30
 ENGINE_LOCAL_ALIAS = "borealis-engine-01"
@@ -524,6 +526,8 @@ class WatchdogRuntimeService:
         self._github_integration = github_integration
         self._running = False
         self._repo_hash_cache: Dict[str, Any] = {"sha": "", "expires_at": 0}
+        self._device_snapshot_cache: Dict[str, Any] = {"devices": [], "expires_at": 0}
+        self._device_snapshot_lock = threading.Lock()
 
     def start(self) -> None:
         if self._running:
@@ -595,6 +599,88 @@ class WatchdogRuntimeService:
             "expires_at": now_ts + 60,
         }
         return sha
+
+    def _invalidate_device_snapshot_cache(self) -> None:
+        with self._device_snapshot_lock:
+            self._device_snapshot_cache = {"devices": [], "expires_at": 0}
+
+    def _build_watchdog_device_snapshot(self) -> List[Dict[str, Any]]:
+        devices = self._matcher.fetch_devices()
+        if not devices:
+            return []
+        by_guid = {normalize_guid(device.get("guid") or device.get("agent_guid") or "") or "": device for device in devices}
+        by_host = {_clean_text(device.get("hostname")).lower(): device for device in devices if _clean_text(device.get("hostname"))}
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT guid, hostname, services, agent_role_health, last_seen, uptime, agent_hash, connection_type, connection_endpoint, agent_id
+                  FROM devices
+                """
+            )
+            rows = cur.fetchall()
+        finally:
+            conn.close()
+        repo_hash = self._current_target_repo_hash()
+        for row in rows:
+            guid = normalize_guid(row[0]) or ""
+            hostname = _clean_text(row[1])
+            device = by_guid.get(guid) or by_host.get(hostname.lower())
+            if not device:
+                continue
+            services_payload = normalize_device_services(row[2], default_captured_at=_coerce_int(row[4], 0))
+            role_health_payload = normalize_agent_role_health(row[3])
+            installed_hash = _clean_text(row[6]).lower()
+            agent_version_status = "Up-to-Date" if installed_hash and repo_hash and installed_hash == repo_hash else "Needs Updated"
+            device["services_payload"] = services_payload
+            device["services"] = services_payload.get("services") or []
+            device["agent_role_health_payload"] = role_health_payload
+            device["agent_role_health"] = role_health_payload.get("roles") or []
+            device["agent_version_status"] = agent_version_status
+            device["uptime"] = _coerce_int(row[5], device.get("uptime") or 0)
+            device["agent_hash"] = _clean_text(row[6]) or _clean_text(device.get("agent_hash"))
+            device["connection_type"] = _clean_text(row[7]).lower() or _clean_text(device.get("connection_type")).lower()
+            device["connection_endpoint"] = _clean_text(row[8]) or _clean_text(device.get("connection_endpoint"))
+            device["agent_id"] = _clean_text(row[9]) or _clean_text(device.get("agent_id"))
+        return devices
+
+    def _get_watchdog_device_snapshot(self, *, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        now_ts = _now_ts()
+        with self._device_snapshot_lock:
+            cached_devices = self._device_snapshot_cache.get("devices") if isinstance(self._device_snapshot_cache, dict) else []
+            cached_expires_at = _coerce_int(
+                self._device_snapshot_cache.get("expires_at") if isinstance(self._device_snapshot_cache, dict) else 0,
+                0,
+            )
+            if not force_refresh and isinstance(cached_devices, list) and cached_devices and cached_expires_at > now_ts:
+                return list(cached_devices)
+        devices = self._build_watchdog_device_snapshot()
+        with self._device_snapshot_lock:
+            self._device_snapshot_cache = {
+                "devices": list(devices),
+                "expires_at": now_ts + DEFAULT_DEVICE_SNAPSHOT_CACHE_SECONDS,
+            }
+        return list(devices)
+
+    def _scoped_watchdog_devices(
+        self,
+        watchdog: Mapping[str, Any],
+        *,
+        devices: Optional[Sequence[Mapping[str, Any]]] = None,
+        all_site_ids: Optional[set[int]] = None,
+    ) -> List[Dict[str, Any]]:
+        effective_site_ids = self._effective_watchdog_site_ids(watchdog, all_site_ids=all_site_ids)
+        if not effective_site_ids:
+            return []
+        dataset = list(devices) if devices is not None else self._get_watchdog_device_snapshot()
+        if not dataset:
+            return []
+        return [
+            dict(device)
+            for device in dataset
+            if _coerce_optional_int(device.get("site_id")) in effective_site_ids
+        ]
 
     def _emit_watchdog_refresh(self, *, hostname: str = "", watchdog_id: Optional[int] = None) -> None:
         if self._socketio is None:
@@ -811,7 +897,11 @@ class WatchdogRuntimeService:
         if not ids:
             return {}
         records = self._matcher.load_filters(ids, include_archived=False)
-        return {int(record["id"]): record for record in records if record.get("id") is not None}
+        return {
+            int(filter_id): dict(record)
+            for filter_id, record in (records or {}).items()
+            if record.get("id") is not None
+        }
 
     def _normalize_watchdog_record(
         self,
@@ -902,6 +992,7 @@ class WatchdogRuntimeService:
             "created_at": _coerce_int(base.get("created_at"), now_ts),
             "updated_at": now_ts,
             "last_evaluated_at": _coerce_optional_int(base.get("last_evaluated_at")),
+            "target_device_count": _coerce_int(base.get("target_device_count"), 0),
         }
         if not normalized_record["name"]:
             normalized_record["name"] = "Unnamed Watchdog"
@@ -973,6 +1064,7 @@ class WatchdogRuntimeService:
                 _coerce_int(record.get("created_at"), _now_ts()),
                 _coerce_int(record.get("updated_at"), _now_ts()),
                 _coerce_optional_int(record.get("last_evaluated_at")),
+                _coerce_int(record.get("target_device_count"), 0),
             )
             if record_id is None:
                 cur.execute(
@@ -981,8 +1073,8 @@ class WatchdogRuntimeService:
                         name, description, archived, enabled, severity, match_mode, site_mode,
                         criteria_json, actions_json, evaluation_interval_seconds, cooldown_seconds,
                         auto_resolve_after_seconds, min_consecutive_matches, boot_grace_seconds,
-                        last_edited_by, created_at, updated_at, last_evaluated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        last_edited_by, created_at, updated_at, last_evaluated_at, target_device_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     payload,
                 )
@@ -1008,7 +1100,8 @@ class WatchdogRuntimeService:
                            last_edited_by=?,
                            created_at=?,
                            updated_at=?,
-                           last_evaluated_at=?
+                           last_evaluated_at=?,
+                           target_device_count=?
                      WHERE id=?
                     """,
                     payload + (record_id,),
@@ -1077,7 +1170,8 @@ class WatchdogRuntimeService:
                     last_edited_by,
                     created_at,
                     updated_at,
-                    last_evaluated_at
+                    last_evaluated_at,
+                    target_device_count
                   FROM watchdogs
                   {where_sql}
               ORDER BY COALESCE(updated_at, created_at, 0) DESC, id DESC
@@ -1110,8 +1204,6 @@ class WatchdogRuntimeService:
             record["rule_summaries"] = _build_rule_summaries(record.get("criteria") or {})
             record["action_summaries"] = _build_action_summaries(record.get("actions") or {})
             if self._watchdog_visible_to_user(record, user, all_site_ids=all_site_ids):
-                resolved_devices = self.resolve_targets(record)
-                record["target_device_count"] = len(resolved_devices)
                 hydrated.append(record)
         return hydrated
 
@@ -1136,6 +1228,10 @@ class WatchdogRuntimeService:
             "created_at": _coerce_int(row["created_at"] if isinstance(row, sqlite3.Row) else row[16], 0),
             "updated_at": _coerce_int(row["updated_at"] if isinstance(row, sqlite3.Row) else row[17], 0),
             "last_evaluated_at": _coerce_optional_int(row["last_evaluated_at"] if isinstance(row, sqlite3.Row) else row[18]),
+            "target_device_count": _coerce_int(
+                row["target_device_count"] if isinstance(row, sqlite3.Row) else row[19],
+                0,
+            ),
             "site_ids": [],
             "site_names": [],
             "targets": [],
@@ -1166,7 +1262,7 @@ class WatchdogRuntimeService:
                         id, name, description, archived, enabled, severity, match_mode, site_mode,
                         criteria_json, actions_json, evaluation_interval_seconds, cooldown_seconds,
                         auto_resolve_after_seconds, min_consecutive_matches, boot_grace_seconds,
-                        last_edited_by, created_at, updated_at, last_evaluated_at
+                        last_edited_by, created_at, updated_at, last_evaluated_at, target_device_count
                       FROM watchdogs
                      WHERE id=?
                     """,
@@ -1184,7 +1280,6 @@ class WatchdogRuntimeService:
             record["targets"] = self._load_watchdog_targets([watchdog_id_int]).get(watchdog_id_int, [])
             record["rule_summaries"] = _build_rule_summaries(record.get("criteria") or {})
             record["action_summaries"] = _build_action_summaries(record.get("actions") or {})
-            record["target_device_count"] = len(self.resolve_targets(record))
             record["open_incident_count"] = self._load_open_incident_counts([watchdog_id_int]).get(watchdog_id_int, 0)
             record["state_counts"] = self._load_current_state_counts([watchdog_id_int]).get(watchdog_id_int, {})
             return record
@@ -1239,53 +1334,14 @@ class WatchdogRuntimeService:
         self._emit_watchdog_refresh(watchdog_id=int(existing["id"]))
         return True
 
-    def _load_watchdog_devices(
+    def resolve_targets(
         self,
+        watchdog: Mapping[str, Any],
         *,
-        allowed_site_ids: Optional[Iterable[int]] = None,
+        devices: Optional[Sequence[Mapping[str, Any]]] = None,
+        all_site_ids: Optional[set[int]] = None,
     ) -> List[Dict[str, Any]]:
-        devices = self._matcher.fetch_devices(allowed_site_ids=allowed_site_ids)
-        if not devices:
-            return []
-        by_guid = {normalize_guid(device.get("guid") or device.get("agent_guid") or "") or "": device for device in devices}
-        by_host = {_clean_text(device.get("hostname")).lower(): device for device in devices if _clean_text(device.get("hostname"))}
-        conn = self._conn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT guid, hostname, services, agent_role_health, last_seen, uptime, agent_hash, connection_type, connection_endpoint, agent_id
-                  FROM devices
-                """
-            )
-            repo_hash = self._current_target_repo_hash()
-            for row in cur.fetchall():
-                guid = normalize_guid(row[0]) or ""
-                hostname = _clean_text(row[1])
-                device = by_guid.get(guid) or by_host.get(hostname.lower())
-                if not device:
-                    continue
-                services_payload = normalize_device_services(row[2], default_captured_at=_coerce_int(row[4], 0))
-                role_health_payload = normalize_agent_role_health(row[3])
-                installed_hash = _clean_text(row[6]).lower()
-                agent_version_status = "Up-to-Date" if installed_hash and repo_hash and installed_hash == repo_hash else "Needs Updated"
-                device["services_payload"] = services_payload
-                device["services"] = services_payload.get("services") or []
-                device["agent_role_health_payload"] = role_health_payload
-                device["agent_role_health"] = role_health_payload.get("roles") or []
-                device["agent_version_status"] = agent_version_status
-                device["uptime"] = _coerce_int(row[5], device.get("uptime") or 0)
-                device["agent_hash"] = _clean_text(row[6]) or _clean_text(device.get("agent_hash"))
-                device["connection_type"] = _clean_text(row[7]).lower() or _clean_text(device.get("connection_type")).lower()
-                device["connection_endpoint"] = _clean_text(row[8]) or _clean_text(device.get("connection_endpoint"))
-                device["agent_id"] = _clean_text(row[9]) or _clean_text(device.get("agent_id"))
-        finally:
-            conn.close()
-        return devices
-
-    def resolve_targets(self, watchdog: Mapping[str, Any]) -> List[Dict[str, Any]]:
-        effective_site_ids = self._effective_watchdog_site_ids(watchdog)
-        devices = self._load_watchdog_devices(allowed_site_ids=effective_site_ids)
+        devices = self._scoped_watchdog_devices(watchdog, devices=devices, all_site_ids=all_site_ids)
         if not devices:
             return []
         targets = watchdog.get("targets") if isinstance(watchdog.get("targets"), list) else []
@@ -1782,7 +1838,8 @@ class WatchdogRuntimeService:
         }
 
     def evaluate_preview(self, record: Mapping[str, Any]) -> Dict[str, Any]:
-        targets = self.resolve_targets(record)
+        device_snapshot = self._get_watchdog_device_snapshot()
+        targets = self.resolve_targets(record, devices=device_snapshot)
         overrides = self._load_active_overrides(int(record["id"])) if record.get("id") else {}
         results = []
         matched_count = 0
@@ -1882,6 +1939,25 @@ class WatchdogRuntimeService:
             "sample": sample,
             "rule_results": sample["results"],
         }
+
+    def _update_watchdog_evaluation_metadata(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        watchdog_id: int,
+        last_evaluated_at: int,
+        target_device_count: int,
+    ) -> None:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE watchdogs
+               SET last_evaluated_at=?,
+                   target_device_count=?
+             WHERE id=?
+            """,
+            (int(last_evaluated_at), max(0, int(target_device_count)), int(watchdog_id)),
+        )
 
     def _upsert_state_row(
         self,
@@ -2408,6 +2484,7 @@ class WatchdogRuntimeService:
             conn.commit()
         finally:
             conn.close()
+        self._invalidate_device_snapshot_cache()
         try:
             if self._socketio is not None:
                 self._socketio.emit("device_services_changed", {"hostname": hostname, "change": "updated"})
@@ -2419,10 +2496,19 @@ class WatchdogRuntimeService:
             "message": f"{service_action.capitalize()} queued for {service_name}.",
         }
 
-    def evaluate_watchdog(self, watchdog: Mapping[str, Any] | int) -> None:
+    def evaluate_watchdog(
+        self,
+        watchdog: Mapping[str, Any] | int,
+        *,
+        device_snapshot: Optional[Sequence[Mapping[str, Any]]] = None,
+        all_site_ids: Optional[set[int]] = None,
+    ) -> None:
         record = watchdog if isinstance(watchdog, dict) else self.get_watchdog(watchdog, user=None)
         if not isinstance(record, dict) or not record.get("id"):
             return
+        effective_snapshot = list(device_snapshot) if device_snapshot is not None else self._get_watchdog_device_snapshot(force_refresh=True)
+        resolved_devices = self.resolve_targets(record, devices=effective_snapshot, all_site_ids=all_site_ids)
+        target_device_count = len(resolved_devices)
         if _coerce_bool(record.get("archived")) or not _coerce_bool(record.get("enabled"), True):
             current_state = self._load_watchdog_state(int(record["id"]))
             active_incidents = self._load_active_incidents(int(record["id"]))
@@ -2456,7 +2542,12 @@ class WatchdogRuntimeService:
                         current_incident_id=None,
                         last_action_at=_coerce_optional_int(prior_state.get("last_action_at")),
                     )
-                cur.execute("UPDATE watchdogs SET last_evaluated_at=? WHERE id=?", (now_ts, int(record["id"])))
+                self._update_watchdog_evaluation_metadata(
+                    conn,
+                    watchdog_id=int(record["id"]),
+                    last_evaluated_at=now_ts,
+                    target_device_count=target_device_count,
+                )
                 conn.commit()
             finally:
                 conn.close()
@@ -2467,7 +2558,6 @@ class WatchdogRuntimeService:
             if not current_state:
                 self._emit_watchdog_refresh(watchdog_id=int(record["id"]))
             return
-        resolved_devices = self.resolve_targets(record)
         overrides = self._load_active_overrides(int(record["id"]))
         current_state = self._load_watchdog_state(int(record["id"]))
         active_incidents = self._load_active_incidents(int(record["id"]))
@@ -2577,24 +2667,29 @@ class WatchdogRuntimeService:
                     state_name = _clean_text(evaluation.get("state")).lower() or ("stale_data" if stale_state else "normal")
                     if incident:
                         auto_resolve_after_seconds = _coerce_int(record.get("auto_resolve_after_seconds"), DEFAULT_WATCHDOG_AUTO_RESOLVE_SECONDS)
+                        resolution_reason = "cleared" if not stale_state else "telemetry_stale"
+                        should_purge_cleared = self._should_purge_cleared_incident(
+                            record,
+                            stale_state=stale_state,
+                            resolution_reason=resolution_reason,
+                        )
                         if stale_state:
                             clear_started_at = now_ts if clear_started_at is None else clear_started_at
+                        elif should_purge_cleared:
+                            self._delete_incident(conn, incident_id=int(incident["id"]))
+                            incident_id = None
+                            clear_started_at = None
                         elif clear_started_at is None:
                             clear_started_at = now_ts
-                        if auto_resolve_after_seconds <= 0 or (now_ts - int(clear_started_at or now_ts)) >= auto_resolve_after_seconds:
-                            resolution_reason = "cleared" if not stale_state else "telemetry_stale"
-                            if self._should_purge_cleared_incident(
-                                record,
-                                stale_state=stale_state,
-                                resolution_reason=resolution_reason,
-                            ):
-                                self._delete_incident(conn, incident_id=int(incident["id"]))
-                            else:
-                                self._resolve_open_incident(
-                                    conn,
-                                    incident_id=int(incident["id"]),
-                                    reason=resolution_reason,
-                                )
+                        if incident_id and (
+                            auto_resolve_after_seconds <= 0
+                            or (now_ts - int(clear_started_at or now_ts)) >= auto_resolve_after_seconds
+                        ):
+                            self._resolve_open_incident(
+                                conn,
+                                incident_id=int(incident["id"]),
+                                reason=resolution_reason,
+                            )
                             incident_id = None
                             clear_started_at = None
                     else:
@@ -2638,7 +2733,12 @@ class WatchdogRuntimeService:
                     current_incident_id=None,
                     last_action_at=_coerce_optional_int(prior_state.get("last_action_at")),
                 )
-            cur.execute("UPDATE watchdogs SET last_evaluated_at=? WHERE id=?", (now_ts, int(record["id"])))
+            self._update_watchdog_evaluation_metadata(
+                conn,
+                watchdog_id=int(record["id"]),
+                last_evaluated_at=now_ts,
+                target_device_count=target_device_count,
+            )
             conn.commit()
         finally:
             conn.close()
@@ -2663,6 +2763,7 @@ class WatchdogRuntimeService:
         finally:
             conn.close()
         now_ts = _now_ts()
+        due_watchdog_ids: List[int] = []
         for row in candidates:
             watchdog_id = _coerce_int(row[0], 0)
             last_evaluated_at = _coerce_int(row[1], 0)
@@ -2671,7 +2772,13 @@ class WatchdogRuntimeService:
                 continue
             if last_evaluated_at > 0 and (now_ts - last_evaluated_at) < interval_seconds:
                 continue
-            self.evaluate_watchdog(watchdog_id)
+            due_watchdog_ids.append(watchdog_id)
+        if not due_watchdog_ids:
+            return
+        device_snapshot = self._get_watchdog_device_snapshot()
+        all_site_ids = self._load_all_site_ids()
+        for watchdog_id in due_watchdog_ids:
+            self.evaluate_watchdog(watchdog_id, device_snapshot=device_snapshot, all_site_ids=all_site_ids)
 
     def list_incidents(
         self,
@@ -2952,9 +3059,11 @@ class WatchdogRuntimeService:
             return None
         hostname_key = _clean_text(device_ref.get("hostname")).lower()
         watchdogs = self.list_watchdogs(user=user)
+        device_snapshot = self._get_watchdog_device_snapshot()
+        all_site_ids = self._load_all_site_ids()
         assignments: List[Dict[str, Any]] = []
         for watchdog in watchdogs:
-            targets = self.resolve_targets(watchdog)
+            targets = self.resolve_targets(watchdog, devices=device_snapshot, all_site_ids=all_site_ids)
             target = next((entry for entry in targets if _clean_text(entry.get("hostname")).lower() == hostname_key), None)
             if target is None:
                 continue
@@ -3049,4 +3158,4 @@ class WatchdogRuntimeService:
             conn.close()
         self.evaluate_watchdog(watchdog)
         self._emit_watchdog_refresh(hostname=device_ref["hostname"], watchdog_id=int(watchdog["id"]))
-        return self.get_device_watchdogs(device_ref["device_guid"] or device_ref["hostname"], user=user), []
+        return self.get_device_watchdogs(device_ref["hostname"], user=user), []

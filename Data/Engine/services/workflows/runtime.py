@@ -1032,13 +1032,13 @@ class WorkflowRuntimeService:
                 (int(run_id),),
             )
             row = cur.fetchone()
-            if not row:
-                return None
-            payload = self._row_to_workflow_run(row[:20], graph_snapshot_json=row[20])
-            payload["node_runs"] = self._list_node_runs_for_run(int(run_id), conn=conn)
-            return payload
         finally:
             conn.close()
+        if not row:
+            return None
+        payload = self._row_to_workflow_run(row[:20], graph_snapshot_json=row[20])
+        payload["node_runs"] = self._list_node_runs_for_run(int(run_id))
+        return payload
 
     def get_node_run(self, run_id: int, node_id: str) -> Optional[Dict[str, Any]]:
         conn = self._conn()
@@ -1071,13 +1071,13 @@ class WorkflowRuntimeService:
                 (int(run_id), str(node_id or "")),
             )
             row = cur.fetchone()
-            if not row:
-                return None
-            payload = self._row_to_node_run(row)
-            payload["child_jobs"] = self._list_child_jobs_for_node_run(int(payload["id"]), conn=conn)
-            return payload
         finally:
             conn.close()
+        if not row:
+            return None
+        payload = self._row_to_node_run(row)
+        payload["child_jobs"] = self._list_child_jobs_for_node_run(int(payload["id"]))
+        return payload
 
     def list_webhooks(self, workflow_guid: str) -> List[Dict[str, Any]]:
         conn = self._conn()

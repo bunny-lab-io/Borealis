@@ -135,6 +135,24 @@ class UserManagementService:
             return ""
         return self.aegis_cipher_service.decrypt_secret_text(text)
 
+    def _load_password_auth_state(self, username: str) -> Optional[Tuple[str, int]]:
+        username_norm = (username or "").strip()
+        if not username_norm:
+            return None
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT COALESCE(password_sha512, ''), COALESCE(auth_reset_required, 0) FROM users WHERE LOWER(username)=LOWER(?)",
+                (username_norm,),
+            )
+            row = cur.fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return None
+        return str(row[0] or ""), int(row[1] or 0)
+
     # ------------------------------------------------------------------ #
     # Endpoint implementations
     # ------------------------------------------------------------------ #
@@ -146,6 +164,7 @@ class UserManagementService:
             return jsonify(payload), status
 
         conn: Optional[sqlite3.Connection] = None
+        rows: List[Sequence[Any]] = []
         try:
             conn = self._db_conn()
             cur = conn.cursor()
@@ -167,14 +186,14 @@ class UserManagementService:
                 """
             )
             rows = cur.fetchall()
-            users: List[Mapping[str, Any]] = [_row_to_user(row) for row in rows]
-            return jsonify({"users": users})
         except Exception as exc:
             self.logger.debug("Failed to list users", exc_info=True)
             return jsonify({"error": str(exc)}), 500
         finally:
             if conn:
                 conn.close()
+        users: List[Mapping[str, Any]] = [_row_to_user(row) for row in rows]
+        return jsonify({"users": users})
 
     def create_user(self):
         requirement = self._require_admin()
@@ -194,11 +213,11 @@ class UserManagementService:
             return jsonify({"error": "invalid role"}), 400
 
         now_ts = _now_ts()
+        encrypted_password = self._encrypt_password_hash(password_sha512)
         conn: Optional[sqlite3.Connection] = None
         try:
             conn = self._db_conn()
             cur = conn.cursor()
-            encrypted_password = self._encrypt_password_hash(password_sha512)
             cur.execute(
                 "INSERT INTO users(username, display_name, password_sha512, role, created_at, updated_at, mfa_enabled, mfa_disabled, auth_reset_required, auth_reset_at) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -278,11 +297,11 @@ class UserManagementService:
         if not password_sha512 or len(password_sha512) != 128:
             return jsonify({"error": "invalid password hash"}), 400
 
+        encrypted_password = self._encrypt_password_hash(password_sha512)
         conn: Optional[sqlite3.Connection] = None
         try:
             conn = self._db_conn()
             cur = conn.cursor()
-            encrypted_password = self._encrypt_password_hash(password_sha512)
             now_ts = _now_ts()
             cur.execute(
                 """
@@ -336,51 +355,51 @@ class UserManagementService:
         if len(new_password_sha512) != 128:
             return jsonify({"error": "invalid new password hash"}), 400
 
-        conn: Optional[sqlite3.Connection] = None
         try:
-            conn = self._db_conn()
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT COALESCE(password_sha512, ''), COALESCE(auth_reset_required, 0) FROM users WHERE LOWER(username)=LOWER(?)",
-                (username,),
-            )
-            row = cur.fetchone()
-            if not row:
+            password_state = self._load_password_auth_state(username)
+            if not password_state:
                 return jsonify({"error": "user not found"}), 404
+            stored_password_hash, auth_reset_required = password_state
 
-            if bool(row[1] or 0):
+            if bool(auth_reset_required):
                 return jsonify({"error": "auth_reset_required"}), 423
 
             try:
-                stored_hash = self._decrypt_password_hash(row[0]).strip().lower()
+                stored_hash = self._decrypt_password_hash(stored_password_hash).strip().lower()
             except AegisDataCorruptionError:
                 self.aegis_cipher_service.migrate_operator_auth_if_needed()
-                cur.execute(
-                    "SELECT COALESCE(password_sha512, ''), COALESCE(auth_reset_required, 0) FROM users WHERE LOWER(username)=LOWER(?)",
-                    (username,),
-                )
-                row = cur.fetchone()
-                if not row:
+                password_state = self._load_password_auth_state(username)
+                if not password_state:
                     return jsonify({"error": "user not found"}), 404
-                stored_hash = self._decrypt_password_hash(row[0]).strip().lower()
+                stored_password_hash, auth_reset_required = password_state
+                if bool(auth_reset_required):
+                    return jsonify({"error": "auth_reset_required"}), 423
+                stored_hash = self._decrypt_password_hash(stored_password_hash).strip().lower()
             if stored_hash != current_password_sha512:
                 return jsonify({"error": "invalid current password"}), 401
             if stored_hash == new_password_sha512:
                 return jsonify({"error": "new password must differ from the current password"}), 400
 
             now_ts = _now_ts()
-            cur.execute(
-                "UPDATE users SET password_sha512=?, updated_at=? WHERE LOWER(username)=LOWER(?)",
-                (self._encrypt_password_hash(new_password_sha512), now_ts, username),
-            )
-            conn.commit()
+            encrypted_password = self._encrypt_password_hash(new_password_sha512)
+            conn: Optional[sqlite3.Connection] = None
+            try:
+                conn = self._db_conn()
+                cur = conn.cursor()
+                cur.execute(
+                    "UPDATE users SET password_sha512=?, updated_at=? WHERE LOWER(username)=LOWER(?)",
+                    (encrypted_password, now_ts, username),
+                )
+                if cur.rowcount == 0:
+                    return jsonify({"error": "user not found"}), 404
+                conn.commit()
+            finally:
+                if conn:
+                    conn.close()
             return jsonify({"status": "ok"})
         except Exception as exc:
             self.logger.debug("Failed to reset own password for %s", username, exc_info=True)
             return jsonify({"error": str(exc)}), 500
-        finally:
-            if conn:
-                conn.close()
 
     def change_role(self, username: str):
         requirement = self._require_admin()
