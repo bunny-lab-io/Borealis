@@ -13,6 +13,8 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - Global socket: `window.BorealisSocket` (Socket.IO client).
 - Shared operator presence: authenticated browsers emit `operator_presence_sync` and `operator_presence_clear` on the shared socket; the Engine emits `server_operator_presence_changed` so informational admin pages can refresh live operator session data without waiting for their poll interval.
 - Navigation: `Data/Engine/web-interface/src/Navigation_Sidebar.jsx`.
+- Watchdog authoring: `Data/Engine/web-interface/src/Automation/Watchdogs/`.
+- Alerts queue: `Data/Engine/web-interface/src/Alerting/Active_Alerts.jsx`.
 - Page template reference: `Data/Engine/web-interface/src/Admin/Page_Template.jsx` (layout only).
 
 ## Operator Bootstrap Gate
@@ -53,6 +55,20 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - Frontend: `Data/Engine/web-interface/src/Notifications.jsx`.
 - Scope: include `username` in the payload to target a specific signed-in operator; the frontend filters user-scoped notifications to that operator while unscoped notifications still broadcast to all connected operators.
 
+## Watchdogs and Alerts UX
+- Sidebar placement:
+  - `Automation -> Watchdogs`
+  - `Alerting & Reporting -> Alerts`
+- Watchdog authoring uses a tabbed editor with `Name`, `Scope`, `Targets`, `Rules`, `Actions`, and `Preview`.
+- The `Preview` tab is part of the primary authoring flow and resolves current targets before save.
+- The `Targets` tab uses 3-character minimum typeahead search panels for devices and saved filters instead of large autocomplete dropdowns.
+- Alerts is a separate incident queue so operators can work alerts without opening the underlying policy editor.
+- Alerts and Device Filters use the shared pill-style count slider pattern for queue/state filters instead of the older Material tab rail.
+- Alerts starts in an unfiltered all-alerts view; clicking a status pill applies that queue filter, and clicking the same pill again clears it back to all alerts.
+- Alerts relies on AG Grid's built-in column filters rather than a page-level custom filter bar.
+- Device Summary includes a `Watchdogs` tab so operators can acknowledge incidents, suppress a watchdog for one device, or launch a prefilled device-scoped watchdog draft.
+- Real-time refresh uses `watchdog_incidents_changed` and `device_watchdogs_changed` on the shared `window.BorealisSocket`.
+
 ## API Endpoints
 - `POST /api/notifications/notify` (Token Authenticated) - broadcast a toast to all connected operators.
 - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - shared header device search, scoped to the current operator's visible sites unless the operator is an admin.
@@ -61,6 +77,13 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - `GET /api/server/overview` (Operator Admin Session) - returns the Server Info dashboard snapshot including service state, host runtime details, WireGuard runtime status, public-edge certificate health, and live operator presence.
 - `POST /api/server/services/<service_key>/restart` (Operator Admin Session) - queues a safe detached restart for `borealis_engine`, `borealis_traefik`, or a specific `postgresql_cluster` instance.
 - `POST /api/server/wireguard/recover` (Operator Admin Session) - triggers Borealis WireGuard listener recovery when active tunnels exist.
+- `GET /api/watchdogs` (Token Authenticated) - list watchdog policies for the Watchdogs page.
+- `POST /api/watchdogs/preview` (Token Authenticated) - preview the current watchdog outcome from the editor.
+- `GET /api/watchdogs/incidents` (Token Authenticated) - list queue incidents for Alerts and return queue counts.
+- `POST /api/watchdogs/incidents/<int:incident_id>/acknowledge` (Token Authenticated) - acknowledge an incident from Alerts or a device page.
+- `POST /api/watchdogs/incidents/<int:incident_id>/state` (Token Authenticated) - move an incident between the Alerts `Open` and `Suppressed` queues.
+- `GET /api/devices/<device_id>/watchdogs` (Token Authenticated) - hydrate the device-level Watchdogs tab.
+- `POST /api/devices/<device_id>/watchdogs/overrides` (Token Authenticated) - apply or clear a device-specific watchdog suppression.
 
 ## Related Documentation
 - [Engine Runtime](engine-runtime.md)
@@ -70,6 +93,8 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - [VPN and Remote Access](vpn-and-remote-access.md)
 - [Flow Editor and Nodes](flow-editor-and-nodes.md)
 - [Migrating Pages to React Router](migrating-pages-to-react-router.md)
+- [Watchdogs](watchdogs.md)
+- [Device Alerts](device-alerts.md)
 
 ## Codex Agent (Detailed)
 ### Shared Conventions (Full)
@@ -184,7 +209,7 @@ useRoutePageChrome({
 - Label treatment: the floating label text should blend directly into the page/header background. Do not add a chip, pill, or opaque backdrop behind the label text.
 - Badges/metadata: do not standardize badges as part of the shared header rail. Page-specific metadata belongs in the page body, usually directly under the subtitle or near the first relevant control group.
 - Secondary action overflow: on narrow widths, if the full rail no longer fits on a single row, the shared rail automatically collapses all secondary actions into a single `Actions` secondary button while keeping primary/warning/danger actions visible. Overflow menu ordering should place the secondary action closest to the primary buttons at the top of the menu.
-- Device Summary uses a page-local `Actions` menu inside `Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx`; it currently exposes `Quick Job`, `Update Agent`, and `Clear Device Activity`.
+- Device Summary uses a page-local `Actions` menu inside `Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx`; it now exposes `Quick Job`, `New Watchdog`, `Update Agent`, and `Clear Device Activity`.
 - Responsive behavior: tabs remain in normal flow beneath the header band. On narrow widths, the title block and action rail stack vertically. The rail should prefer collapsing secondary actions before wrapping and must never cover the tabs or the first content section.
 - Placement: tabs sit directly below the shared header band (8-16px gap). Tabs span the full width of the content column.
 - Typography: match Navigation Sidebar typography. Inherit the font family (IBM Plex Sans via theme), use `fontSize: "0.8rem"`, mixed case labels (`textTransform: "none"`). Default `fontWeight: 400`; active tabs are `fontWeight: 600`. Standard rail height is `32px` (compact stacks use `28px`).

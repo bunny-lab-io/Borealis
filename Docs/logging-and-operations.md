@@ -12,6 +12,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - Engine Traefik log: `Engine/Logs/traefik.log`.
 - Engine Traefik access log: `Engine/Logs/traefik-access.log`.
 - Service logs: `Engine/Logs/<service>.log` (per-domain).
+- Watchdog service log: `Engine/Logs/watchdogs.log`.
 - VPN logs: `Engine/Logs/VPN_Tunnel/tunnel.log` and `Engine/Logs/VPN_Tunnel/remote_shell.log`.
 - Agent bootstrap/install log: `Agent/Logs/install.log` (launcher dependency/install output captured by `Borealis.sh`).
 - Agent logs: `Agent/Logs/agent.log` and `Agent/Logs/agent.error.log` (daily rotation).
@@ -27,6 +28,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - `GET /api/server/overview` returns the Borealis Server Info dashboard snapshot used by administrators for Engine host health, systemd service state, public certificate expiry, live operator presence, WireGuard runtime health, and Aegis lock state.
 - `POST /api/server/services/<service_key>/restart` queues safe detached service restarts through `systemd-run` so the request can return before an Engine self-restart interrupts the caller.
 - `POST /api/server/wireguard/recover` triggers a Borealis-managed WireGuard listener recovery attempt when live tunnels exist.
+- Watchdog evaluator activity and remediation dispatch are logged through the `watchdogs` service log domain.
 
 ## API Endpoints
 - `GET /health` (No Authentication) - liveness probe.
@@ -43,6 +45,8 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - [Engine Runtime](engine-runtime.md)
 - [Security and Trust](security-and-trust.md)
 - [API Reference](api-reference.md)
+- [Watchdogs](watchdogs.md)
+- [Device Alerts](device-alerts.md)
 
 ## Codex Agent (Detailed)
 ### Engine log formatting
@@ -61,6 +65,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - API access metrics appear in `Engine/Logs/api.log` (method, path, duration, status).
 - Embedded edge request outcomes appear in `Engine/Logs/traefik-access.log` (frontend path, upstream target, status, latency).
 - VPN-specific logs are under `Engine/Logs/VPN_Tunnel/`.
+- Watchdog evaluator ticks, incident transitions, and remediation dispatch failures are written through the `watchdogs` service log domain.
 - The Server Info admin page is informational first: it surfaces service health, public cert expiry, live operator sessions, and WireGuard listener state. It intentionally does not embed journal tails or recent log snippets.
 - Service restarts initiated from Server Info are queued through transient `systemd-run` units with a short delay instead of direct in-process `systemctl restart`, reducing the risk of cutting off the initiating request during Engine self-restarts.
 
@@ -76,6 +81,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - Use `traefik-access.log` to confirm whether the embedded edge returned a `502` before the Engine loopback runtime was ready.
 - Use service logs to diagnose domain-specific behavior.
 - If troubleshooting WireGuard, inspect both Engine and Agent VPN logs.
+- If troubleshooting watchdogs, compare `watchdogs.log`, device inventory freshness, and the current `watchdog_device_state` / `watchdog_incidents` rows.
 
 ### Operational safety
 - Do not delete logs by hand while debugging; use the log API or archive first.

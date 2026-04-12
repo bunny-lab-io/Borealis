@@ -11,8 +11,6 @@ import {
   IconButton,
   LinearProgress,
   Stack,
-  Tab,
-  Tabs,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -40,6 +38,7 @@ import {
 } from "../../DialogStyles.jsx";
 import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
 import { APP_PATHS } from "../../app/routes/paths.js";
+import { CountSliderGroup } from "../../Automation/Watchdogs/shared.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -49,16 +48,10 @@ const PAGE_SUBTITLE =
 const PAGE_ICON = HeaderIcon;
 const gridFontFamily = "'IBM Plex Sans','Helvetica Neue',Arial,sans-serif";
 const iconFontFamily = "'Quartz Regular'";
-const NAV_TAB_HEIGHT = 32;
-const NAV_TAB_COLORS = {
-  text: "#cbd5e1",
-  textActive: "#e6f2ff",
-  icon: "#8fbfff",
-  iconActive: "#7db7ff",
-  hover: "rgba(255,255,255,0.05)",
-  activeBg:
-    "linear-gradient(to top, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
-};
+const FILTER_TAB_OPTIONS = [
+  { key: "active", label: "Active" },
+  { key: "archived", label: "Archived" },
+];
 
 const gridTheme = themeQuartz.withParams({
   accentColor: "#7dd3fc",
@@ -69,11 +62,6 @@ const gridTheme = themeQuartz.withParams({
   headerFontSize: 13,
 });
 
-const TAB_LABELS = {
-  active: "Active",
-  archived: "Archived",
-};
-
 const AUTO_SIZE_COLUMNS = [
   "name",
   "description",
@@ -83,44 +71,6 @@ const AUTO_SIZE_COLUMNS = [
   "last_edited_by",
   "updated_at",
 ];
-
-const buildNavTabsSx = (minHeight = NAV_TAB_HEIGHT) => ({
-  borderBottom: "1px solid rgba(148, 163, 184, 0.16)",
-  minHeight,
-  height: minHeight,
-  "& .MuiTabs-flexContainer": {
-    minHeight,
-    height: minHeight,
-    alignItems: "stretch",
-  },
-  "& .MuiTab-root": {
-    color: NAV_TAB_COLORS.text,
-    textTransform: "none",
-    fontWeight: 400,
-    fontFamily: "inherit",
-    fontSize: "0.8rem",
-    minHeight,
-    height: minHeight,
-    opacity: 1,
-    borderRadius: 1,
-    py: 0.35,
-    transition: "background 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease",
-    "&:hover": {
-      background: NAV_TAB_COLORS.hover,
-    },
-    "&:active": {
-      transform: "translateY(0.5px)",
-    },
-  },
-  "& .MuiTab-root.Mui-selected": {
-    color: NAV_TAB_COLORS.textActive,
-    fontWeight: 600,
-    background: NAV_TAB_COLORS.activeBg,
-    "&:hover": {
-      background: NAV_TAB_COLORS.activeBg,
-    },
-  },
-});
 
 const GRID_WRAPPER_SX = {
   width: "100%",
@@ -314,30 +264,48 @@ export default function DeviceFilterList({ refreshToken }) {
   const navigate = useNavigate();
   const gridRef = useRef(null);
   const [tab, setTab] = useState("active");
-  const [filters, setFilters] = useState([]);
+  const [filterCollections, setFilterCollections] = useState({ active: [], archived: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [actionError, setActionError] = useState("");
   const [jobsDialog, setJobsDialog] = useState({ open: false, jobs: [], title: "" });
+  const filters = useMemo(() => {
+    if (tab === "archived") return filterCollections.archived || [];
+    if (tab === "active") return filterCollections.active || [];
+    return [...(filterCollections.active || []), ...(filterCollections.archived || [])];
+  }, [filterCollections, tab]);
+  const filterCounts = useMemo(
+    () => ({
+      active: Array.isArray(filterCollections.active) ? filterCollections.active.length : 0,
+      archived: Array.isArray(filterCollections.archived) ? filterCollections.archived.length : 0,
+    }),
+    [filterCollections]
+  );
 
   const loadFilters = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const archived = tab === "archived" ? "1" : "0";
-      const response = await fetch(`/api/device_filters?archived=${archived}`);
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data?.message || data?.error || `Failed to load filters (${response.status})`);
-      }
-      setFilters(Array.isArray(data?.filters) ? data.filters : []);
+      const loadBucket = async (archived) => {
+        const response = await fetch(`/api/device_filters?archived=${archived ? "1" : "0"}`);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data?.message || data?.error || `Failed to load filters (${response.status})`);
+        }
+        return Array.isArray(data?.filters) ? data.filters : [];
+      };
+      const [activeFilters, archivedFilters] = await Promise.all([loadBucket(false), loadBucket(true)]);
+      setFilterCollections({
+        active: activeFilters,
+        archived: archivedFilters,
+      });
     } catch (err) {
-      setFilters([]);
+      setFilterCollections({ active: [], archived: [] });
       setError(err?.message || "Unable to load filters.");
     } finally {
       setLoading(false);
     }
-  }, [tab]);
+  }, []);
 
   useEffect(() => {
     loadFilters();
@@ -653,23 +621,27 @@ export default function DeviceFilterList({ refreshToken }) {
 
   const stack = (
     <Stack spacing={1.5}>
-      <Tabs
-        value={tab}
-        onChange={(_, next) => setTab(next)}
-        variant="scrollable"
-        scrollButtons="auto"
-        TabIndicatorProps={{
-          style: {
-            height: 3,
-            borderRadius: 3,
-            background: NAV_TAB_COLORS.iconActive,
-          },
+      <Box
+        sx={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 1.5,
         }}
-        sx={buildNavTabsSx()}
       >
-        <Tab value="active" label={TAB_LABELS.active} />
-        <Tab value="archived" label={TAB_LABELS.archived} />
-      </Tabs>
+        <CountSliderGroup
+          options={FILTER_TAB_OPTIONS}
+          activeKey={tab}
+          counts={filterCounts}
+          onChange={setTab}
+        />
+        <Typography variant="body2" sx={{ color: "rgba(155, 163, 180, 0.96)" }}>
+          {tab
+            ? `Showing ${filters.length} ${tab === "archived" ? "archived" : "active"} filter${filters.length === 1 ? "" : "s"}`
+            : `Showing all ${filters.length} filter${filters.length === 1 ? "" : "s"}`}
+        </Typography>
+      </Box>
       {loading ? <LinearProgress /> : null}
       {error ? <Alert severity="error">{error}</Alert> : null}
       {actionError ? <Alert severity="warning">{actionError}</Alert> : null}

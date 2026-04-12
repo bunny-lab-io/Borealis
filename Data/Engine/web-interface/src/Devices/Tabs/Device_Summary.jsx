@@ -26,6 +26,7 @@ import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import ListAltRoundedIcon from "@mui/icons-material/ListAltRounded";
 import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
 import DesktopWindowsRoundedIcon from "@mui/icons-material/DesktopWindowsRounded";
+import SmartToyRoundedIcon from "@mui/icons-material/SmartToyRounded";
 import SpeedRoundedIcon from "@mui/icons-material/SpeedRounded";
 import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
@@ -41,6 +42,7 @@ import {
 import { AgGridReact } from "ag-grid-react";
 import ActivityHistoryTab from "./Activity_History.jsx";
 import InstalledSoftwareTab from "./Installed_Software.jsx";
+import DeviceWatchdogsTab from "./Device_Watchdogs.jsx";
 import RemoteShellTab from "./RemoteShell.jsx";
 import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
 import ServiceList from "../Services/Service_List.jsx";
@@ -101,6 +103,7 @@ const TOP_TABS = [
   { key: "summary", label: "Device Summary", icon: InfoOutlinedIcon },
   { key: "software", label: "Installed Software", icon: AppsRoundedIcon },
   { key: "services", label: "Services", icon: SettingsRoundedIcon },
+  { key: "watchdogs", label: "Watchdogs", icon: SmartToyRoundedIcon },
   { key: "activity", label: "Activity History", icon: ListAltRoundedIcon },
   { key: "shell", label: "Remote Shell", icon: TerminalRoundedIcon },
   { key: "vnc", label: "Remote Desktop (VNC)", icon: DesktopWindowsRoundedIcon },
@@ -109,6 +112,7 @@ const DEVICE_DETAILS_TAB_URL_BY_KEY = Object.freeze({
   summary: "device_summary",
   software: "installed_software",
   services: "services",
+  watchdogs: "watchdogs",
   activity: "activity_history",
   shell: "remote_shell",
   vnc: "remote_desktop",
@@ -119,6 +123,7 @@ const DEVICE_DETAILS_TAB_KEY_BY_URL = Object.freeze({
   installed_software: "software",
   software: "software",
   services: "services",
+  watchdogs: "watchdogs",
   activity_history: "activity",
   activity: "activity",
   remote_shell: "shell",
@@ -2720,6 +2725,15 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   const renderHistory = () => (
     <ActivityHistoryTab hostname={activityHostname} refreshToken={historyRefreshToken} />
   );
+  const renderWatchdogsTab = () => (
+    <DeviceWatchdogsTab
+      deviceId={deviceId}
+      hostname={activityHostname}
+      deviceGuid={meta.agentGuid || summary.agent_guid || device?.agent_guid || agent?.agent_guid || ""}
+      siteId={meta.siteId ?? null}
+      siteName={meta.siteName || ""}
+    />
+  );
 
   const status = lockedStatus || statusFromHeartbeat(agent.last_seen || device?.lastSeen);
 
@@ -2752,6 +2766,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     renderDeviceSummaryTab,
     renderSoftware,
     renderServicesTab,
+    renderWatchdogsTab,
     renderHistory,
     renderRemoteShellTab,
     renderRemoteDesktopTab,
@@ -2799,6 +2814,35 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           }}
         >
           Quick Job
+        </MenuItem>
+        <MenuItem
+          disabled={!activityHostname}
+          onClick={() => {
+            setMenuAnchor(null);
+            if (!activityHostname) return;
+            navigate(APP_PATHS.watchdogNew, {
+              state: {
+                watchdogDraft: {
+                  name: `${activityHostname} Watchdog`,
+                  description: `Device-scoped watchdog for ${activityHostname}.`,
+                  site_mode: meta.siteId ? "specific_sites" : "global",
+                  site_ids: meta.siteId ? [Number(meta.siteId)] : [],
+                  targets: [
+                    {
+                      kind: "device",
+                      device_guid:
+                        meta.agentGuid || summary.agent_guid || device?.agent_guid || agent?.agent_guid || "",
+                      hostname: activityHostname,
+                      site_id: meta.siteId ?? null,
+                      site_name: meta.siteName || "",
+                    },
+                  ],
+                },
+              },
+            });
+          }}
+        >
+          New Watchdog
         </MenuItem>
         <MenuItem
           disabled={!activityHostname || updateAgentBusy}

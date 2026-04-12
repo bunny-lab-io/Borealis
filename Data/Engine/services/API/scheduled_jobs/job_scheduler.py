@@ -4742,21 +4742,22 @@ class JobScheduler:
                 return json.dumps({"error": "no fields to update"}), 400, {"Content-Type": "application/json"}
             try:
                 conn = self._conn()
-                cur = conn.cursor()
-                cur.execute(
-                    """
-                    SELECT credential_id, enabled, components_json, execution_context, targets_json
-                      FROM scheduled_jobs
-                     WHERE id=?
-                    """,
-                    (job_id,),
-                )
-                current_row = cur.fetchone()
-                if not current_row:
+                try:
+                    cur = conn.cursor()
+                    cur.execute(
+                        """
+                        SELECT credential_id, enabled, components_json, execution_context, targets_json
+                          FROM scheduled_jobs
+                         WHERE id=?
+                        """,
+                        (job_id,),
+                    )
+                    current_row = cur.fetchone()
+                finally:
                     conn.close()
+                if not current_row:
                     return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
                 if not self._job_visible_to_user(user, current_row[4]):
-                    conn.close()
                     return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
                 if next_components is None:
                     try:
@@ -4780,14 +4781,11 @@ class JobScheduler:
                 )
                 is_workflow_job = workflow_job_error is None and bool(_workflow_components(next_components or []))
                 if workflow_job_error:
-                    conn.close()
                     return json.dumps({"error": workflow_job_error}), 400, {"Content-Type": "application/json"}
                 if not is_workflow_job and not effective_targets:
-                    conn.close()
                     return json.dumps({"error": "targets required"}), 400, {"Content-Type": "application/json"}
                 component_error = _validate_components_for_context(next_components or [], str(effective_context))
                 if component_error:
-                    conn.close()
                     return json.dumps({"error": component_error}), 400, {"Content-Type": "application/json"}
                 effective_enabled = int(fields.get("enabled", current_row[1] or 0))
                 credential_warning = None if is_workflow_job else self._credential_reset_warning(effective_credential_id)
@@ -4795,21 +4793,26 @@ class JobScheduler:
                     fields["enabled"] = 0
                 sets = ", ".join([f"{k}=?" for k in fields.keys()])
                 params = list(fields.values()) + [_now_ts(), job_id]
-                cur.execute(f"UPDATE scheduled_jobs SET {sets}, updated_at=? WHERE id=?", params)
-                if cur.rowcount == 0:
+                conn = self._conn()
+                try:
+                    cur = conn.cursor()
+                    cur.execute(f"UPDATE scheduled_jobs SET {sets}, updated_at=? WHERE id=?", params)
+                    if cur.rowcount == 0:
+                        return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                    conn.commit()
+                    cur.execute(
+                        """
+                        SELECT id, name, components_json, targets_json, schedule_type, start_ts,
+                               duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at
+                        FROM scheduled_jobs WHERE id=?
+                        """,
+                        (job_id,),
+                    )
+                    row = cur.fetchone()
+                finally:
                     conn.close()
+                if not row:
                     return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
-                conn.commit()
-                cur.execute(
-                    """
-                    SELECT id, name, components_json, targets_json, schedule_type, start_ts,
-                           duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at
-                    FROM scheduled_jobs WHERE id=?
-                    """,
-                    (job_id,),
-                )
-                row = cur.fetchone()
-                conn.close()
                 payload = {"job": _job_row_to_dict(row)}
                 if credential_warning:
                     payload.update(credential_warning)
@@ -4986,25 +4989,40 @@ class JobScheduler:
                 occ = int(occurrence) if occurrence else None
 
                 conn = self._conn()
-                cur = conn.cursor()
-                cur.execute(
-                    "SELECT targets_json, execution_context FROM scheduled_jobs WHERE id=?",
-                    (job_id,)
-                )
-                row = cur.fetchone()
-                if not row:
+                try:
+                    cur = conn.cursor()
+                    cur.execute(
+                        "SELECT targets_json, execution_context FROM scheduled_jobs WHERE id=?",
+                        (job_id,)
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                    if not self._job_visible_to_user(user, row[0]):
+                        return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                    if occ is None:
+                        cur.execute("SELECT MAX(scheduled_ts) FROM scheduled_job_runs WHERE job_id=?", (job_id,))
+                        occ_row = cur.fetchone()
+                        occ = int(occ_row[0]) if occ_row and occ_row[0] else None
+                finally:
                     conn.close()
-                    return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
-                if not self._job_visible_to_user(user, row[0]):
-                    conn.close()
-                    return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
                 try:
                     raw_targets = json.loads(row[0] or "[]")
                 except Exception:
                     raw_targets = []
                 execution_context_value = str(row[1] or "").strip().lower()
+                include_filters = self._targets_include_filters(raw_targets)
+                device_inventory_cache = None
+                if include_filters:
+                    try:
+                        device_inventory_cache = self._filter_matcher.fetch_devices()
+                    except Exception:
+                        device_inventory_cache = []
                 try:
-                    targets, target_meta = self._filter_matcher.resolve_target_entries(raw_targets)
+                    targets, target_meta = self._filter_matcher.resolve_target_entries(
+                        raw_targets,
+                        devices=device_inventory_cache if include_filters else None,
+                    )
                 except Exception as exc:
                     self._log_event(
                         "failed to resolve targets for devices endpoint",
@@ -5014,12 +5032,6 @@ class JobScheduler:
                     )
                     targets = [str(t) for t in raw_targets if isinstance(t, (str, int))]
                     target_meta = {"resolved_targets": []}
-
-                # Determine occurrence if not provided
-                if occ is None:
-                    cur.execute("SELECT MAX(scheduled_ts) FROM scheduled_job_runs WHERE job_id=?", (job_id,))
-                    occ_row = cur.fetchone()
-                    occ = int(occ_row[0]) if occ_row and occ_row[0] else None
 
                 occurrence_runs: List[Dict[str, Any]] = []
                 occurrence_target_rows: List[Dict[str, Any]] = []
@@ -5046,24 +5058,30 @@ class JobScheduler:
                 if run_ids:
                     try:
                         placeholders = ",".join(["?"] * len(run_ids))
-                        cur.execute(
-                            f"""
-                            SELECT
-                                s.run_id,
-                                s.activity_id,
-                                s.component_kind,
-                                s.script_type,
-                                s.component_path,
-                                s.component_name,
-                                COALESCE(LENGTH(h.stdout), 0),
-                                COALESCE(LENGTH(h.stderr), 0)
-                            FROM scheduled_job_run_activity s
-                            LEFT JOIN activity_history h ON h.id = s.activity_id
-                            WHERE s.run_id IN ({placeholders})
-                            """,
-                            run_ids,
-                        )
-                        for rid, act_id, kind, stype, path, name, so_len, se_len in cur.fetchall():
+                        conn = self._conn()
+                        try:
+                            cur = conn.cursor()
+                            cur.execute(
+                                f"""
+                                SELECT
+                                    s.run_id,
+                                    s.activity_id,
+                                    s.component_kind,
+                                    s.script_type,
+                                    s.component_path,
+                                    s.component_name,
+                                    COALESCE(LENGTH(h.stdout), 0),
+                                    COALESCE(LENGTH(h.stderr), 0)
+                                FROM scheduled_job_run_activity s
+                                LEFT JOIN activity_history h ON h.id = s.activity_id
+                                WHERE s.run_id IN ({placeholders})
+                                """,
+                                run_ids,
+                            )
+                            activity_rows = cur.fetchall()
+                        finally:
+                            conn.close()
+                        for rid, act_id, kind, stype, path, name, so_len, se_len in activity_rows:
                             rid = int(rid)
                             entry = {
                                 "activity_id": int(act_id),
@@ -5082,8 +5100,6 @@ class JobScheduler:
                             level="ERROR",
                             extra={"occurrence": occ, "error": str(exc)},
                         )
-
-                conn.close()
 
                 # Online snapshot
                 online = set()

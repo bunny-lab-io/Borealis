@@ -32,6 +32,7 @@ def apply_all(conn: sqlite3.Connection) -> None:
     _ensure_device_vpn_ip_lease_table(conn)
     _ensure_refresh_token_table(conn)
     _ensure_device_approval_table(conn)
+    _ensure_watchdog_tables(conn)
     device_purge_state.ensure_table(conn)
 
     conn.commit()
@@ -244,6 +245,181 @@ def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_da_site
             ON device_approvals(site_id)
+        """
+    )
+
+
+def _ensure_watchdog_tables(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS watchdogs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            archived INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            severity TEXT NOT NULL DEFAULT 'warning',
+            match_mode TEXT NOT NULL DEFAULT 'all',
+            site_mode TEXT NOT NULL DEFAULT 'global',
+            criteria_json TEXT NOT NULL DEFAULT '{"rules":[]}',
+            actions_json TEXT NOT NULL DEFAULT '{"actions":[]}',
+            evaluation_interval_seconds INTEGER NOT NULL DEFAULT 60,
+            cooldown_seconds INTEGER NOT NULL DEFAULT 900,
+            auto_resolve_after_seconds INTEGER NOT NULL DEFAULT 300,
+            min_consecutive_matches INTEGER NOT NULL DEFAULT 1,
+            boot_grace_seconds INTEGER NOT NULL DEFAULT 0,
+            last_edited_by TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            last_evaluated_at INTEGER,
+            target_device_count INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    cur.execute("PRAGMA table_info(watchdogs)")
+    watchdog_columns = {str(row[1]) for row in cur.fetchall()}
+    if "target_device_count" not in watchdog_columns:
+        cur.execute(
+            """
+            ALTER TABLE watchdogs
+                ADD COLUMN target_device_count INTEGER NOT NULL DEFAULT 0
+            """
+        )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_watchdogs_archived_updated
+            ON watchdogs(archived, updated_at)
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS watchdog_sites (
+            watchdog_id INTEGER NOT NULL,
+            site_id INTEGER NOT NULL,
+            FOREIGN KEY(watchdog_id) REFERENCES watchdogs(id) ON DELETE CASCADE,
+            FOREIGN KEY(site_id) REFERENCES sites(id) ON DELETE CASCADE
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_watchdog_sites_watchdog_site
+            ON watchdog_sites(watchdog_id, site_id)
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS watchdog_targets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            watchdog_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            target_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(watchdog_id) REFERENCES watchdogs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_watchdog_targets_watchdog
+            ON watchdog_targets(watchdog_id)
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS watchdog_device_overrides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            watchdog_id INTEGER NOT NULL,
+            device_guid TEXT,
+            hostname TEXT NOT NULL,
+            site_id INTEGER,
+            state TEXT NOT NULL,
+            reason TEXT,
+            created_by TEXT,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY(watchdog_id) REFERENCES watchdogs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_watchdog_device_overrides_lookup
+            ON watchdog_device_overrides(watchdog_id, hostname, state, expires_at)
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS watchdog_incidents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            watchdog_id INTEGER NOT NULL,
+            device_guid TEXT,
+            hostname TEXT NOT NULL,
+            site_id INTEGER,
+            severity TEXT NOT NULL,
+            state TEXT NOT NULL,
+            title TEXT,
+            message TEXT,
+            sample_json TEXT,
+            rule_summary_json TEXT,
+            action_summary_json TEXT,
+            opened_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            resolved_at INTEGER,
+            resolution_reason TEXT,
+            acknowledged_at INTEGER,
+            acknowledged_by TEXT,
+            trigger_count INTEGER NOT NULL DEFAULT 1,
+            FOREIGN KEY(watchdog_id) REFERENCES watchdogs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_watchdog_incidents_watchdog_state
+            ON watchdog_incidents(watchdog_id, state, updated_at)
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_watchdog_incidents_hostname_state
+            ON watchdog_incidents(hostname, state, updated_at)
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS watchdog_device_state (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            watchdog_id INTEGER NOT NULL,
+            device_guid TEXT,
+            hostname TEXT NOT NULL,
+            site_id INTEGER,
+            state TEXT NOT NULL,
+            consecutive_matches INTEGER NOT NULL DEFAULT 0,
+            first_matched_at INTEGER,
+            clear_started_at INTEGER,
+            last_evaluated_at INTEGER NOT NULL,
+            last_matched_at INTEGER,
+            last_sample_json TEXT,
+            current_incident_id INTEGER,
+            last_action_at INTEGER,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY(watchdog_id) REFERENCES watchdogs(id) ON DELETE CASCADE,
+            FOREIGN KEY(current_incident_id) REFERENCES watchdog_incidents(id) ON DELETE SET NULL
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_watchdog_device_state_identity
+            ON watchdog_device_state(watchdog_id, hostname)
         """
     )
 

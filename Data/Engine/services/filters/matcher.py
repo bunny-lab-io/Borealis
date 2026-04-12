@@ -487,6 +487,7 @@ class DeviceFilterMatcher:
         } if allowed_site_ids is not None else None
         if normalized_site_ids is not None and not normalized_site_ids:
             return []
+        rows = []
         conn = self._conn()
         try:
             cur = conn.cursor()
@@ -498,17 +499,18 @@ class DeviceFilterMatcher:
                 params = tuple(sorted(normalized_site_ids))
             cur.execute(sql, params)
             rows = cur.fetchall()
-            guids = [normalize_guid(row["guid"]) or "" for row in rows]
-            software_map = self._load_software_by_guid([guid for guid in guids if guid])
-            return [self._row_to_device(row, software_map=software_map) for row in rows]
         finally:
             conn.close()
+        guids = [normalize_guid(row["guid"]) or "" for row in rows]
+        software_map = self._load_software_by_guid([guid for guid in guids if guid])
+        return [self._row_to_device(row, software_map=software_map) for row in rows]
 
     def _load_software_by_guid(self, guids: Sequence[str]) -> Dict[str, List[Dict[str, Any]]]:
         lookup: Dict[str, List[Dict[str, Any]]] = {}
         unique = [guid for guid in {normalize_guid(value) or "" for value in guids if value}]
         if not unique:
             return lookup
+        rows = []
         conn = self._conn()
         try:
             cur = conn.cursor()
@@ -522,22 +524,23 @@ class DeviceFilterMatcher:
                 """,
                 tuple(unique),
             )
-            for row in cur.fetchall():
-                guid = normalize_guid(row["device_guid"]) or ""
-                if not guid:
-                    continue
-                lookup.setdefault(guid, []).append(
-                    {
-                        "name": _normalize_string(row["name"]),
-                        "version": _normalize_string(row["version"]),
-                        "source": _normalize_string(row["source"]),
-                        "metadata": _safe_json(row["metadata_json"], {}),
-                    }
-                )
+            rows = cur.fetchall()
         except Exception:
             return {}
         finally:
             conn.close()
+        for row in rows:
+            guid = normalize_guid(row["device_guid"]) or ""
+            if not guid:
+                continue
+            lookup.setdefault(guid, []).append(
+                {
+                    "name": _normalize_string(row["name"]),
+                    "version": _normalize_string(row["version"]),
+                    "source": _normalize_string(row["source"]),
+                    "metadata": _safe_json(row["metadata_json"], {}),
+                }
+            )
         return lookup
 
     def _row_to_device(

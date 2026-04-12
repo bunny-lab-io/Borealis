@@ -518,6 +518,7 @@ class DeviceManagementService:
         self.service_log = adapters.service_log
         self.logger = adapters.context.logger or logging.getLogger(__name__)
         self.repo_cache = adapters.github_integration
+        self._repo_hash_cache: Dict[str, Any] = {"sha": "", "expires_at": 0}
         self.site_access = UserSiteAccessManager(self.db_conn_factory, logger=self.logger)
 
     def _emit_device_services_changed(self, hostname: str, *, change: str) -> None:
@@ -543,14 +544,24 @@ class DeviceManagementService:
         return repo_name or "bunny-lab-io/Borealis", branch_name or "main"
 
     def _current_target_repo_hash(self) -> str:
+        now_ts = int(time.time())
+        cached_sha = (_clean_device_str(self._repo_hash_cache.get("sha")) or "").lower()
+        try:
+            expires_at = int(self._repo_hash_cache.get("expires_at") or 0)
+        except Exception:
+            expires_at = 0
+        if expires_at > now_ts:
+            return cached_sha
         repo_name, branch_name = self._target_repo_config()
+        sha = ""
         try:
             payload, status = self.repo_cache.current_repo_hash(repo_name, branch_name)
+            if status == 200 and isinstance(payload, dict):
+                sha = (_clean_device_str(payload.get("sha")) or "").lower()
         except Exception:
-            return ""
-        if status != 200 or not isinstance(payload, dict):
-            return ""
-        return (_clean_device_str(payload.get("sha")) or "").lower()
+            sha = ""
+        self._repo_hash_cache = {"sha": sha, "expires_at": now_ts + 60}
+        return sha
 
     def _compute_agent_version_status(self, installed_build_id: Any, target_build_id: Optional[str] = None) -> str:
         installed = (_clean_device_str(installed_build_id) or "").lower()
@@ -785,14 +796,14 @@ class DeviceManagementService:
                 sql += " WHERE " + " AND ".join(clauses)
             cur.execute(sql, params)
             rows = cur.fetchall()
-            devices: List[Dict[str, Any]] = []
-            for row in rows:
-                device_tuple = row[: len(self._DEVICE_COLUMNS)]
-                site_tuple = row[len(self._DEVICE_COLUMNS):]
-                devices.append(self._build_device_payload(device_tuple, site_tuple))
-            return devices
         finally:
             conn.close()
+        devices: List[Dict[str, Any]] = []
+        for row in rows:
+            device_tuple = row[: len(self._DEVICE_COLUMNS)]
+            site_tuple = row[len(self._DEVICE_COLUMNS):]
+            devices.append(self._build_device_payload(device_tuple, site_tuple))
+        return devices
     def list_devices(self) -> Tuple[Dict[str, Any], int]:
         try:
             only_agents = request.args.get("only_agents") in {"1", "true", "yes"}
@@ -833,56 +844,56 @@ class DeviceManagementService:
                 sql += f" AND ds.site_id IN ({placeholders})"
                 params.extend(sorted(allowed_site_ids))
             cur.execute(sql, params)
-
-            seen: set[tuple[str, str, Any, str]] = set()
-            matches: List[Dict[str, Any]] = []
-            query_lc = normalized_query.lower()
-            for row in cur.fetchall():
-                raw_guid = _clean_device_str(row[0]) or ""
-                try:
-                    agent_guid = normalize_guid(raw_guid) if raw_guid else ""
-                except Exception:
-                    agent_guid = raw_guid
-                hostname = _clean_device_str(row[1]) or ""
-                if not hostname:
-                    continue
-                agent_id = _clean_device_str(row[2]) or ""
-                site_id = row[4]
-                dedupe_key = (
-                    agent_guid.lower(),
-                    hostname.lower(),
-                    site_id,
-                    agent_id.lower(),
-                )
-                if dedupe_key in seen:
-                    continue
-                seen.add(dedupe_key)
-                matches.append(
-                    {
-                        "agent_guid": agent_guid,
-                        "agent_id": agent_id,
-                        "hostname": hostname,
-                        "connection_type": _clean_device_str(row[3]) or "",
-                        "site_id": site_id,
-                        "site_name": _clean_device_str(row[5]) or "",
-                        "site_description": _clean_device_str(row[6]) or "",
-                    }
-                )
-
-            matches.sort(
-                key=lambda item: (
-                    0 if item["hostname"].lower() == query_lc else 1,
-                    0 if item["hostname"].lower().startswith(query_lc) else 1,
-                    item["hostname"].lower(),
-                    item["site_name"].lower(),
-                )
-            )
-            return {"devices": matches, "query": normalized_query, "count": len(matches)}, 200
+            rows = cur.fetchall()
         except Exception as exc:
             self.logger.debug("Failed to search devices by hostname", exc_info=True)
             return {"error": str(exc)}, 500
         finally:
             conn.close()
+        seen: set[tuple[str, str, Any, str]] = set()
+        matches: List[Dict[str, Any]] = []
+        query_lc = normalized_query.lower()
+        for row in rows:
+            raw_guid = _clean_device_str(row[0]) or ""
+            try:
+                agent_guid = normalize_guid(raw_guid) if raw_guid else ""
+            except Exception:
+                agent_guid = raw_guid
+            hostname = _clean_device_str(row[1]) or ""
+            if not hostname:
+                continue
+            agent_id = _clean_device_str(row[2]) or ""
+            site_id = row[4]
+            dedupe_key = (
+                agent_guid.lower(),
+                hostname.lower(),
+                site_id,
+                agent_id.lower(),
+            )
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            matches.append(
+                {
+                    "agent_guid": agent_guid,
+                    "agent_id": agent_id,
+                    "hostname": hostname,
+                    "connection_type": _clean_device_str(row[3]) or "",
+                    "site_id": site_id,
+                    "site_name": _clean_device_str(row[5]) or "",
+                    "site_description": _clean_device_str(row[6]) or "",
+                }
+            )
+
+        matches.sort(
+            key=lambda item: (
+                0 if item["hostname"].lower() == query_lc else 1,
+                0 if item["hostname"].lower().startswith(query_lc) else 1,
+                item["hostname"].lower(),
+                item["site_name"].lower(),
+            )
+        )
+        return {"devices": matches, "query": normalized_query, "count": len(matches)}, 200
 
     def list_agents(self) -> Tuple[Dict[str, Any], int]:
         try:
@@ -966,21 +977,24 @@ class DeviceManagementService:
         if not normalized_guid:
             return {"error": "invalid guid"}, 400
         current_user = self._current_user()
-        conn = self._db_conn()
         try:
-            cur = conn.cursor()
-            columns_sql = ", ".join(f"d.{col}" for col in self._DEVICE_COLUMNS)
-            cur.execute(
-                f"""
-                SELECT {columns_sql}, s.id, s.name, s.description
-                  FROM devices AS d
-             LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
-             LEFT JOIN sites AS s ON s.id = ds.site_id
-                 WHERE LOWER(d.guid) = ?
-                """,
-                (normalized_guid.lower(),),
-            )
-            row = cur.fetchone()
+            conn = self._db_conn()
+            try:
+                cur = conn.cursor()
+                columns_sql = ", ".join(f"d.{col}" for col in self._DEVICE_COLUMNS)
+                cur.execute(
+                    f"""
+                    SELECT {columns_sql}, s.id, s.name, s.description
+                      FROM devices AS d
+                 LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
+                 LEFT JOIN sites AS s ON s.id = ds.site_id
+                     WHERE LOWER(d.guid) = ?
+                    """,
+                    (normalized_guid.lower(),),
+                )
+                row = cur.fetchone()
+            finally:
+                conn.close()
             if not row:
                 return {"error": "not found"}, 404
             device_tuple = row[: len(self._DEVICE_COLUMNS)]
@@ -993,8 +1007,6 @@ class DeviceManagementService:
         except Exception as exc:
             self.logger.debug("Failed to load device by guid", exc_info=True)
             return {"error": str(exc)}, 500
-        finally:
-            conn.close()
 
     def save_agent_details(self) -> Tuple[Dict[str, Any], int]:
         ctx = getattr(g, "device_auth", None)
@@ -1253,21 +1265,24 @@ class DeviceManagementService:
 
     def get_device_details(self, hostname: str) -> Tuple[Dict[str, Any], int]:
         current_user = self._current_user()
-        conn = self._db_conn()
         try:
-            cur = conn.cursor()
-            columns_sql = ", ".join(f"d.{col}" for col in self._DEVICE_COLUMNS)
-            cur.execute(
-                f"""
-                SELECT {columns_sql}, s.id, s.name, s.description
-                  FROM devices AS d
-             LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
-             LEFT JOIN sites AS s ON s.id = ds.site_id
-                 WHERE d.hostname = ?
-                """,
-                (hostname,),
-            )
-            row = cur.fetchone()
+            conn = self._db_conn()
+            try:
+                cur = conn.cursor()
+                columns_sql = ", ".join(f"d.{col}" for col in self._DEVICE_COLUMNS)
+                cur.execute(
+                    f"""
+                    SELECT {columns_sql}, s.id, s.name, s.description
+                      FROM devices AS d
+                 LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
+                 LEFT JOIN sites AS s ON s.id = ds.site_id
+                     WHERE d.hostname = ?
+                    """,
+                    (hostname,),
+                )
+                row = cur.fetchone()
+            finally:
+                conn.close()
             if not row:
                 return {}, 200
             device_tuple = row[: len(self._DEVICE_COLUMNS)]
@@ -1280,8 +1295,6 @@ class DeviceManagementService:
         except Exception as exc:
             self.logger.debug("Failed to load device details", exc_info=True)
             return {"error": str(exc)}, 500
-        finally:
-            conn.close()
 
     def set_device_description(self, hostname: str, description: str) -> Tuple[Dict[str, Any], int]:
         current_user = self._current_user()

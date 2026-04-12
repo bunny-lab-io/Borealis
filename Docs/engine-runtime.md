@@ -13,11 +13,13 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - VPN orchestration: `Data/Engine/services/VPN/` (WireGuard server manager + tunnel service).
 - Remote desktop proxy: `Data/Engine/services/RemoteDesktop/` (VNC WebSocket bridge).
 - Assemblies: `Data/Engine/assembly_management/` and `Data/Engine/services/assemblies/`.
+- Watchdog runtime: `Data/Engine/services/API/watchdogs/`.
 
 ## Runtime Paths
 - Source code: `Data/Engine/` (edit here).
 - Runtime copy: `Engine/` (regenerated each launch).
 - Database: PostgreSQL via `BOREALIS_DATABASE_URL`.
+- Launcher-generated DB/profile env: `Engine/database.env` (database URL, Engine profile metadata, SQLAlchemy pool settings, PostgreSQL tuning values).
 - Logs: `Engine/Logs/` (engine.log, error.log, api.log, service logs).
 - Ansible runtime: `Engine/Ansible/` (staged manifest, installed collections, generated execution workspaces).
 - Certificates: `Engine/Certificates/` (TLS bundle + code signing keys).
@@ -37,6 +39,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - [Logging and Operations](logging-and-operations.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
 - [Technical Debt](technical-debt.md)
+- [Watchdogs](watchdogs.md)
+- [Device Alerts](device-alerts.md)
 - [Aegis Cipher](features_to_implement/aegis_cipher.md)
 - [Reverse Proxy Functionality](features_to_implement/reverse_proxy_functionality.md)
 
@@ -53,6 +57,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
   - API registration: `API.register_api(app, context)`
   - WebUI static hosting: `WebUI.register_web_ui(app, context)`
   - Realtime events: `WebSocket.register_realtime(socketio, context)`
+  - Watchdog API/runtime registration from `Data/Engine/services/API/watchdogs/management.py`
 
 ### API groups and adapters
 - Default groups live in `Data/Engine/services/API/__init__.py` (`DEFAULT_API_GROUPS`).
@@ -79,6 +84,17 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Dev UI uses Vite and still relies on Engine APIs for data.
 - The SPA fallback in `Data/Engine/services/WebUI/__init__.py` prevents 404s on client routes.
 
+### Launcher auto-profiling
+- `Borealis.sh` profiles the Engine host during deployment and re-deployment.
+- Profile selection is based on detected CPU and RAM only. Storage is surfaced in the CLI as guidance, but it does not affect the selected profile.
+- The launcher currently auto-selects one of the single-node profiles:
+  - `Homelab`
+  - `Small Business`
+  - `MSP / Production`
+  - `Enterprise`
+- The launcher writes the selected profile metadata and the resulting PostgreSQL/Engine DB tuning into `Engine/database.env`.
+- PostgreSQL tuning is applied through launcher-managed `ALTER SYSTEM` statements during the PostgreSQL configuration step so a re-deploy can raise the profile if the host later gains CPU or RAM.
+
 ### WireGuard and VNC wiring
 - WireGuard server manager: `Data/Engine/services/VPN/wireguard_server.py`.
 - Tunnel orchestration: `Data/Engine/services/VPN/vpn_tunnel_service.py`.
@@ -89,6 +105,20 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 ### Assembly runtime
 - Assembly cache is initialized in `Data/Engine/assembly_management` and attached to `context.assembly_cache`.
 - Quick jobs and scheduled jobs share this runtime to resolve scripts and variables.
+
+### Watchdog evaluator runtime
+- `EngineContext.watchdog_runtime` owns the Borealis-native watchdog evaluator.
+- Registration and bootstrap happen in `Data/Engine/server.py` after the primary API, WebUI, and Socket.IO registrars.
+- The evaluator loop periodically checks enabled watchdogs whose `evaluation_interval_seconds` has elapsed.
+- Immediate evaluation still happens on watchdog save and device-override updates so operator changes become visible without waiting for the scheduler tick.
+- On startup, the runtime purges any lingering resolved incidents that belong to offline-only watchdogs before the evaluator loop begins.
+- Runtime responsibilities include:
+  - resolving explicit device and filter-backed targets
+  - evaluating rules against cached device data
+  - tracking per-device watchdog state
+  - opening and resolving incidents
+  - dispatching Engine toast notifications, service-control actions, and assembly remediation
+  - emitting `watchdog_incidents_changed` and `device_watchdogs_changed`
 
 ### Platform parity
 - Engine deployment is Linux-only via `Borealis.sh`.

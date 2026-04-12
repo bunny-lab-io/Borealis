@@ -106,6 +106,7 @@ class EngineRealtimeAdapters:
             pool_size=int(self.context.config.get("db_pool_size") or 10),
             max_overflow=int(self.context.config.get("db_max_overflow") or 20),
             connect_timeout=int(self.context.config.get("db_connect_timeout") or 15),
+            idle_in_transaction_timeout_ms=int(self.context.config.get("db_idle_in_transaction_timeout_ms") or 60000),
             logger=self.context.logger,
         )
 

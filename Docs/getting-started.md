@@ -9,6 +9,8 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Linux dev: `./Borealis.sh --EngineDev` (public UI on `https://<your-public-fqdn>` through the embedded Traefik edge, with Vite HMR running on loopback `127.0.0.1:5173` behind Traefik).
 - Add `--verbose` (or `BOREALIS_VERBOSE=1`) to stream the underlying package-manager, installer, and service output instead of the default quieter step view.
 - Production TLS is managed by the embedded Traefik edge; the Python Engine stays on loopback HTTP.
+- During Engine deployment, `Borealis.sh` profiles the host CPU and RAM, prints the detected Engine profile in the CLI, and auto-configures PostgreSQL plus Engine DB pool settings from that profile.
+- Storage is displayed during profile detection as an advisory guideline only. It does not change which Engine profile gets selected.
 
 ## Optional: Install the Agent (Windows)
 - Run in elevated PowerShell: `./Borealis.ps1`.
@@ -55,6 +57,8 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Dev mode (`--EngineDev`) uses Vite for the WebUI behind the embedded Traefik edge, while the Engine API stays on loopback.
 - Production (`--EngineProduction`) runs the Engine on loopback HTTP and publishes the app through the embedded Traefik edge.
 - `Borealis.sh` now defaults to a compact step-oriented console view. Detailed bootstrap subprocess output is captured in `Engine/Logs/install.log` or `Agent/Logs/install.log` and is surfaced inline only on failures unless `--verbose` is enabled.
+- Engine deployment auto-detects a CPU/RAM-based profile (`Homelab`, `Small Business`, `MSP / Production`, or `Enterprise`) and persists the resulting PostgreSQL and Engine DB tuning into `Engine/database.env`.
+- Re-running `Borealis.sh` on a resized host re-evaluates the profile and prints the previous/new profile state in the CLI so operators can see when the deployment has scaled up.
 
 ### Configuration precedence
 - Engine config is assembled by `Data/Engine/config.py` in this order:

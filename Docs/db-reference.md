@@ -36,6 +36,12 @@ scheduled_job_runs (id) ------< scheduled_job_run_activity (run_id)
 scheduled_job_runs (id) ------< scheduled_job_run_targets (run_id)
 activity_history (id) --------< scheduled_job_run_activity (activity_id, unique)
 
+watchdogs (id) ---------------< watchdog_sites (watchdog_id)
+watchdogs (id) ---------------< watchdog_targets (watchdog_id)
+watchdogs (id) ---------------< watchdog_device_overrides (watchdog_id)
+watchdogs (id) ---------------< watchdog_device_state (watchdog_id)
+watchdogs (id) ---------------< watchdog_incidents (watchdog_id)
+
 users (id/username) ----------< device_approvals.approved_by_user_id (soft relation)
 users (id) -------------------< user_site_assignments (user_id)
 sites (id) -------------------< user_site_assignments (site_id)
@@ -45,6 +51,225 @@ sites (id) -------------------< user_site_assignments (site_id)
 - Borealis uses PostgreSQL as the live Engine database, so engine troubleshooting should focus on server-side constraints, indexes, sequences, and transaction boundaries.
 - Constraint enforcement, indexes, and transactions are handled server-side by PostgreSQL.
 - Some Borealis relations remain intentionally soft in schema/API logic, so application code still performs explicit cleanup and validation for tables such as `device_sites` and approval mappings.
+- Borealis now treats database connections as short-lived pooled resources. Request handlers and background services should fetch rows, release the connection, and then perform Python-side enrichment, JSON shaping, crypto, GitHub lookups, or target expansion outside the transaction boundary.
+- Healthy pooled sessions often appear in `pg_stat_activity` as `state = idle`, `wait_event = ClientRead`, and a recent `ROLLBACK` statement. That pattern means the session is clean and ready to be reused.
+- Unhealthy sessions usually appear as `state = idle in transaction` with an older `SELECT`, `UPDATE`, or `INSERT` still attached. That pattern means Borealis is holding a transaction open after the SQL work is already done.
+
+## Connection Lifecycle Guidelines
+### Healthy patterns
+- Open the connection immediately before the SQL work starts.
+- Execute the minimum required statements.
+- Fetch the rows or commit the write.
+- Close or return the connection to the pool immediately.
+- Perform non-DB work after the connection has been released:
+- JSON parsing and payload shaping.
+- Device/filter/watchdog target expansion.
+- Aegis encryption or decryption.
+- GitHub or other network lookups.
+- AG Grid summary aggregation and UI formatting.
+
+### Unhealthy patterns
+- Holding a connection open while calling `resolve_target_entries()`, `fetch_devices()`, or other target-resolution helpers.
+- Holding a connection open while decrypting credentials or encrypting secret blobs.
+- Holding a connection open while fetching repo hashes, waiting on Socket.IO, or calling other integrations.
+- Returning large payloads after `cur.fetchall()` without first closing the connection.
+- Reusing a write transaction for post-commit readback when the response can be assembled in a fresh short-lived read.
+
+### Practical symptoms
+- `QueuePool` timeout errors in `Engine/Logs/error.log`.
+- Operators seeing random `500` responses on otherwise unrelated routes such as `/api/auth/me`.
+- Socket reconnect churn or delayed page refreshes when the Engine is under load.
+- `pg_stat_activity` showing many `idle in transaction` rows older than a few seconds.
+- Pages that should be read-only becoming slower as more operators are online.
+
+### Operator CLI check for live PostgreSQL sessions
+- Operators with root access on the Engine host can inspect Borealis PostgreSQL sessions directly during troubleshooting.
+- Run this command from the Engine host shell:
+```sh
+sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start, now()-query_start as age, left(query,200) as query from pg_stat_activity where datname='borealis' order by query_start;"
+```
+- Healthy pooled connections usually appear as `state = idle`, `wait_event = ClientRead`, and a recent `ROLLBACK` statement.
+- Problematic sessions usually appear as `state = idle in transaction` with an older `SELECT`, `UPDATE`, or `INSERT` still attached.
+- If Borealis feels slow, this command is the fastest way to distinguish normal pooled connections from sessions that are holding transactions open too long.
+
+## Engine Tuning Profiles
+- `Borealis.sh` now auto-detects the Engine host profile during deployment and re-deployment.
+- Profile selection is based on detected CPU and RAM only.
+- Storage is displayed in the CLI as deployment guidance, but it does not change the selected profile or the applied DB tuning.
+- The launcher writes the selected profile metadata and tuning values into `Engine/database.env` and then applies the PostgreSQL settings with launcher-managed `ALTER SYSTEM` statements.
+- The current auto-selected single-node profiles are:
+  - `Homelab`
+  - `Small Business`
+  - `MSP / Production`
+  - `Enterprise`
+- The roadmap-only `Enterprise Clustered` profile in `README.md` is not auto-selected today because Borealis does not yet support clustered orchestration.
+
+### Profile selection thresholds
+- Borealis scores CPU and RAM separately, then uses the lower of the two ranks as the effective profile so an unbalanced host does not get over-tuned.
+- CPU thresholds:
+  - `Homelab`: fewer than `8` vCPU
+  - `Small Business`: `8-15` vCPU
+  - `MSP / Production`: `16-23` vCPU
+  - `Enterprise`: `24+` vCPU
+- RAM thresholds:
+  - `Homelab`: fewer than `16 GiB`
+  - `Small Business`: `16-31 GiB`
+  - `MSP / Production`: `32-63 GiB`
+  - `Enterprise`: `64 GiB+`
+
+### Shared values across all auto-configured profiles
+- Engine DB connect timeout:
+  - `BOREALIS_DB_CONNECT_TIMEOUT = 15`
+- Engine idle-in-transaction safety timeout:
+  - `BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS = 60000`
+- PostgreSQL autovacuum scale factors:
+  - `autovacuum_vacuum_scale_factor = 0.02`
+  - `autovacuum_analyze_scale_factor = 0.01`
+- PostgreSQL WAL and planner defaults:
+  - `wal_compression = on`
+  - `checkpoint_timeout = 15min`
+  - `checkpoint_completion_target = 0.9`
+  - `random_page_cost = 1.1`
+
+### `Homelab`
+- Intended host shape:
+  - fewer than `8` vCPU or fewer than `16 GiB` RAM
+- Engine DB pool:
+  - `BOREALIS_DB_POOL_SIZE = 10`
+  - `BOREALIS_DB_MAX_OVERFLOW = 10`
+  - effective pooled Engine connection burst capacity: `20`
+- PostgreSQL connection ceiling:
+  - `max_connections = 80`
+- PostgreSQL memory and cache:
+  - `shared_buffers = max(1 GiB, min(25% of RAM, 4 GiB))`
+  - `effective_cache_size = max(4 GiB, min(62.5% of RAM, 12 GiB))`
+  - `work_mem = 4 MB`
+  - `maintenance_work_mem = 256 MB`
+- PostgreSQL worker and planner parallelism:
+  - `max_worker_processes = 8`
+  - `max_parallel_workers = 8`
+  - `max_parallel_workers_per_gather = 2`
+- PostgreSQL autovacuum:
+  - `autovacuum_max_workers = 3`
+  - `autovacuum_vacuum_cost_limit = 1000`
+  - `autovacuum_naptime = 30s`
+- PostgreSQL WAL / IO:
+  - `max_wal_size = 4GB`
+  - `min_wal_size = 512MB`
+  - `effective_io_concurrency = 16`
+
+### `Small Business`
+- Intended host shape:
+  - at least `8` vCPU and at least `16 GiB` RAM, but below `16` vCPU or below `32 GiB` RAM
+- Engine DB pool:
+  - `BOREALIS_DB_POOL_SIZE = 12`
+  - `BOREALIS_DB_MAX_OVERFLOW = 16`
+  - effective pooled Engine connection burst capacity: `28`
+- PostgreSQL connection ceiling:
+  - `max_connections = 120`
+- PostgreSQL memory and cache:
+  - `shared_buffers = max(4 GiB, min(25% of RAM, 8 GiB))`
+  - `effective_cache_size = max(8 GiB, min(62.5% of RAM, 16 GiB))`
+  - `work_mem = 8 MB`
+  - `maintenance_work_mem = 512 MB`
+- PostgreSQL worker and planner parallelism:
+  - `max_worker_processes = 8`
+  - `max_parallel_workers = 8`
+  - `max_parallel_workers_per_gather = 2`
+- PostgreSQL autovacuum:
+  - `autovacuum_max_workers = 4`
+  - `autovacuum_vacuum_cost_limit = 1500`
+  - `autovacuum_naptime = 20s`
+- PostgreSQL WAL / IO:
+  - `max_wal_size = 6GB`
+  - `min_wal_size = 1GB`
+  - `effective_io_concurrency = 32`
+
+### `MSP / Production`
+- Intended host shape:
+  - at least `16` vCPU and at least `32 GiB` RAM, but below `24` vCPU or below `64 GiB` RAM
+- Engine DB pool:
+  - `BOREALIS_DB_POOL_SIZE = 20`
+  - `BOREALIS_DB_MAX_OVERFLOW = 20`
+  - effective pooled Engine connection burst capacity: `40`
+- PostgreSQL connection ceiling:
+  - `max_connections = 150`
+- PostgreSQL memory and cache:
+  - `shared_buffers = max(8 GiB, min(25% of RAM, 16 GiB))`
+  - `effective_cache_size = max(20 GiB, min(62.5% of RAM, 32 GiB))`
+  - `work_mem = 8 MB`
+  - `maintenance_work_mem = 512 MB`
+- PostgreSQL worker and planner parallelism:
+  - `max_worker_processes = 12`
+  - `max_parallel_workers = 12`
+  - `max_parallel_workers_per_gather = 4`
+- PostgreSQL autovacuum:
+  - `autovacuum_max_workers = 5`
+  - `autovacuum_vacuum_cost_limit = 2000`
+  - `autovacuum_naptime = 15s`
+- PostgreSQL WAL / IO:
+  - `max_wal_size = 8GB`
+  - `min_wal_size = 1GB`
+  - `effective_io_concurrency = 64`
+
+### `Enterprise`
+- Intended host shape:
+  - at least `24` vCPU and at least `64 GiB` RAM
+- Engine DB pool:
+  - `BOREALIS_DB_POOL_SIZE = 24`
+  - `BOREALIS_DB_MAX_OVERFLOW = 24`
+  - effective pooled Engine connection burst capacity: `48`
+- PostgreSQL connection ceiling:
+  - `max_connections = 180`
+- PostgreSQL memory and cache:
+  - `shared_buffers = max(12 GiB, min(25% of RAM, 24 GiB))`
+  - `effective_cache_size = max(32 GiB, min(62.5% of RAM, 64 GiB))`
+  - `work_mem = 16 MB`
+  - `maintenance_work_mem = 1 GiB`
+- PostgreSQL worker and planner parallelism:
+  - `max_worker_processes = 16`
+  - `max_parallel_workers = 16`
+  - `max_parallel_workers_per_gather = 4`
+- PostgreSQL autovacuum:
+  - `autovacuum_max_workers = 6`
+  - `autovacuum_vacuum_cost_limit = 2500`
+  - `autovacuum_naptime = 15s`
+- PostgreSQL WAL / IO:
+  - `max_wal_size = 12GB`
+  - `min_wal_size = 2GB`
+  - `effective_io_concurrency = 64`
+
+### Maintenance rule
+- If you change the profile thresholds or any of the profile-tuned values in `Borealis.sh`, update this section in `Docs/db-reference.md` in the same change so the operator and Codex guidance stays accurate.
+
+### Preferred remediation pattern
+```python
+conn = db_conn_factory()
+try:
+    cur = conn.cursor()
+    cur.execute("SELECT ...")
+    rows = cur.fetchall()
+finally:
+    conn.close()
+
+# Safe to do slower work now.
+payload = [shape_row(row) for row in rows]
+payload = enrich_payload(payload)
+return payload
+```
+
+### Patterns to avoid
+```python
+conn = db_conn_factory()
+try:
+    cur = conn.cursor()
+    cur.execute("SELECT ...")
+    rows = cur.fetchall()
+    payload = enrich_payload(rows)  # bad: could do crypto/network/target expansion here
+    return payload
+finally:
+    conn.close()
+```
 
 ## Engine Runtime Database Tables (`engine.*`)
 ### Enrollment, Identity, and Site Mapping
@@ -218,6 +443,64 @@ sites (id) -------------------< user_site_assignments (site_id)
 - No dedicated primary key; uniqueness is maintained by filter-write paths.
 - Used by:
 - `/api/device_filters*` write paths.
+
+#### `watchdogs`
+- Status: Active.
+- Purpose: Saved watchdog policy definitions.
+- Columns: `id`, `name`, `description`, `archived`, `enabled`, `severity`, `match_mode`, `site_mode`, `criteria_json`, `actions_json`, `evaluation_interval_seconds`, `cooldown_seconds`, `auto_resolve_after_seconds`, `min_consecutive_matches`, `boot_grace_seconds`, `last_edited_by`, `created_at`, `updated_at`, `last_evaluated_at`.
+- Used by:
+- `/api/watchdogs*`.
+- `WatchdogRuntimeService`.
+- Notes:
+- Watchdog definitions are saved independently from runtime state and incident history.
+- Saving a watchdog immediately triggers a fresh evaluation pass.
+
+#### `watchdog_sites`
+- Status: Active.
+- Purpose: Normalized site-scope rows for watchdogs with explicit site membership.
+- Columns: `watchdog_id`, `site_id`.
+- Used by:
+- Watchdog save paths.
+- RBAC visibility checks.
+
+#### `watchdog_targets`
+- Status: Active.
+- Purpose: Saved dynamic or explicit watchdog targets.
+- Columns: `id`, `watchdog_id`, `kind`, `target_json`, `created_at`.
+- Used by:
+- Watchdog target resolution.
+- Filter-backed device expansion.
+- Notes:
+- `kind` is `filter` or `device`.
+- `target_json` stores the normalized target payload used by runtime expansion.
+
+#### `watchdog_device_overrides`
+- Status: Active.
+- Purpose: Device-specific suppressions and disables for one watchdog/device pair.
+- Columns: `id`, `watchdog_id`, `device_guid`, `hostname`, `site_id`, `state`, `reason`, `created_by`, `created_at`, `expires_at`, `updated_at`.
+- Used by:
+- Device Watchdogs tab.
+- Alerts suppression flow.
+
+#### `watchdog_device_state`
+- Status: Active.
+- Purpose: Last-known per-device watchdog evaluation state.
+- Columns: `id`, `watchdog_id`, `device_guid`, `hostname`, `site_id`, `state`, `consecutive_matches`, `first_matched_at`, `clear_started_at`, `last_evaluated_at`, `last_matched_at`, `last_sample_json`, `current_incident_id`, `last_action_at`, `updated_at`.
+- Used by:
+- Watchdog list state summaries.
+- Device Watchdogs tab.
+- Incident reconciliation and cooldown logic.
+- Notes:
+- `state` can include `normal`, `pending`, `triggered`, `suppressed`, `disabled`, and `stale_data`.
+
+#### `watchdog_incidents`
+- Status: Active.
+- Purpose: Watchdog incident history and operator-facing alert queue rows.
+- Columns: `id`, `watchdog_id`, `device_guid`, `hostname`, `site_id`, `severity`, `state`, `title`, `message`, `sample_json`, `rule_summary_json`, `action_summary_json`, `opened_at`, `updated_at`, `resolved_at`, `resolution_reason`, `acknowledged_at`, `acknowledged_by`, `trigger_count`.
+- Used by:
+- `GET /api/watchdogs/incidents`.
+- Device Watchdogs tab.
+- Acknowledgement and auto-resolve flows.
 - `DeviceFilterMatcher.load_filters()` for site-mode hydration.
 
 #### `device_software_inventory`
@@ -505,6 +788,19 @@ LIMIT 200;
 SELECT COUNT(*) AS has_legacy_sites_col
 FROM pragma_table_info('sites')
 WHERE name = 'enrollment_code_id';
+
+-- 9) Identify sessions that are cleanly pooled and waiting for reuse
+SELECT pid, state, wait_event, query_start, now() - query_start AS age, left(query, 200) AS query
+FROM pg_stat_activity
+WHERE datname = 'borealis'
+ORDER BY query_start;
+
+-- 10) Focus only on bad pooled sessions (these should be rare and short-lived)
+SELECT pid, usename, state, wait_event, xact_start, now() - xact_start AS txn_age, left(query, 200) AS query
+FROM pg_stat_activity
+WHERE datname = 'borealis'
+  AND state = 'idle in transaction'
+ORDER BY xact_start NULLS LAST;
 ```
 
 ### Change-management checklist for schema edits
@@ -517,6 +813,31 @@ WHERE name = 'enrollment_code_id';
 - Keep site/code association in `sites.enrollment_code` unless the enrollment model changes fundamentally.
 - Keep `device_sites` as hostname-to-site map for UI and filter joins.
 - Treat `device_approvals.enrollment_code` as immutable audit snapshot of the code used at request time.
+
+### Codex checklist for DB connection hygiene
+- Start with the hottest request or loop, not the easiest file. Prioritize watchdogs, device inventory, scheduled jobs, workflows, and auth-sensitive routes.
+- Search for `conn =`, `_db_conn()`, `_conn()`, `cur.fetchall()`, `commit()`, and `conn.close()` in the target module before editing.
+- Look for any work between the last SQL statement and `conn.close()`:
+- payload shaping loops
+- `json.loads()` or other parsing
+- `resolve_target_entries()` or `fetch_devices()`
+- Aegis crypto helpers
+- GitHub or other integration lookups
+- If that work does not require the live cursor or transaction, move it after `conn.close()`.
+- For write paths, keep the transaction open only for validation reads that must be consistent with the write. Do not leave the connection open for response shaping.
+- If a route resolves filters or device targets more than once, fetch one inventory snapshot and reuse it for the whole request.
+- If a helper repeatedly asks for repo or catalog metadata, add a short TTL cache so repeated reads do not create unnecessary external latency while DB connections are checked out.
+- After each fix, test the route and inspect `pg_stat_activity` to confirm pooled sessions return to `idle` rather than `idle in transaction`.
+
+### Codex remediation workflow
+1. Reproduce the route or background loop that is suspected of exhausting the pool.
+2. Inspect `pg_stat_activity` and note whether the bad rows are `idle in transaction`, long-lived `active`, or simply a large number of healthy `idle` sessions.
+3. Read the corresponding service code and mark every line between the final SQL statement and `conn.close()`.
+4. Move all non-DB work out of the connection scope unless the logic requires transactional consistency.
+5. For repeated target resolution, build one device snapshot and pass it to downstream helpers instead of refetching inventory.
+6. For repeated integration lookups, add a small in-memory TTL cache rather than doing the lookup on every request.
+7. Re-run the route, verify the behavior, and check `pg_stat_activity` again.
+8. If the route is still heavy, then consider query-count reduction, bulk loading, or schema/index tuning. Do not jump to pool-size changes before the connection lifecycle is clean.
 
 ## Related Documentation
 - [Engine Runtime](engine-runtime.md)

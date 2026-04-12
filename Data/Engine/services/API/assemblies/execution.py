@@ -545,6 +545,25 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
         emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
         target_service_mode = _normalize_target_service_mode(run_mode)
 
+        def _mark_activity_failed(job_id: int, failure_text: str) -> None:
+            conn = None
+            try:
+                conn = adapters.db_conn_factory()
+                cur = conn.cursor()
+                cur.execute(
+                    "UPDATE activity_history SET status=?, stderr=? WHERE id=?",
+                    ("Failed", failure_text, int(job_id)),
+                )
+                conn.commit()
+            except Exception:
+                if conn is not None:
+                    conn.rollback()
+                raise
+            finally:
+                if conn is not None:
+                    conn.close()
+
+        activity_rows: List[tuple[str, int]] = []
         conn = None
         try:
             conn = adapters.db_conn_factory()
@@ -566,9 +585,18 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                         "",
                     ),
                 )
-                job_id = cur.lastrowid
-                conn.commit()
+                activity_rows.append((host, int(cur.lastrowid or 0)))
+            conn.commit()
+        except Exception as exc:
+            if conn is not None:
+                conn.rollback()
+            return jsonify({"error": str(exc)}), 500
+        finally:
+            if conn is not None:
+                conn.close()
 
+        try:
+            for host, job_id in activity_rows:
                 payload = {
                     "job_id": job_id,
                     "target_hostname": host,
@@ -616,11 +644,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                         f"No {target_service_mode} agent socket is registered for host {host}; "
                         "unable to dispatch quick job."
                     )
-                    cur.execute(
-                        "UPDATE activity_history SET status=?, stderr=? WHERE id=?",
-                        ("Failed", failure_text, job_id),
-                    )
-                    conn.commit()
+                    _mark_activity_failed(job_id, failure_text)
                     try:
                         socketio.emit(
                             "device_activity_changed",
@@ -675,12 +699,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                     ),
                 )
         except Exception as exc:
-            if conn is not None:
-                conn.rollback()
             return jsonify({"error": str(exc)}), 500
-        finally:
-            if conn is not None:
-                conn.close()
 
         return jsonify({"results": results})
 

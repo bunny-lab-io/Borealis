@@ -161,6 +161,7 @@ class EngineContext:
     vnc_registry: Optional[Any] = None
     aegis_cipher_service: Optional[Any] = None
     workflow_runtime: Optional[Any] = None
+    watchdog_runtime: Optional[Any] = None
 
 
 __all__ = ["EngineContext", "create_app", "register_engine_api"]
@@ -202,6 +203,7 @@ def _build_engine_context(settings: EngineSettings, logger: logging.Logger) -> E
         assembly_cache=None,
         aegis_cipher_service=None,
         workflow_runtime=None,
+        watchdog_runtime=None,
     )
 
 

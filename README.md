@@ -18,6 +18,54 @@ I'm the sole maintainer and still learning as I go while working a full-time IT 
 
 ---
 
+# System Requirements
+
+Borealis currently runs as a single-node Engine deployment that bundles the Python API/runtime, PostgreSQL, Traefik, WebSockets, scheduling, and automation services onto one host. Because of that, the Engine will use the resources you give it in a few predictable ways:
+
+- **CPU**:
+  - operator-driven activity such as Web UI requests, AG Grid-backed searches, filtering, and live socket updates
+  - scheduler, watchdog evaluation, workflow execution, and assembly dispatch
+  - PostgreSQL query execution, indexing, and autovacuum work
+- **RAM**:
+  - PostgreSQL shared buffers and filesystem cache for device inventory, job history, and alerting data
+  - Engine process memory for operator sessions, active WebSocket clients, background workers, and runtime caches
+  - temporary headroom during large queries, scheduled job bursts, or watchdog preview/evaluation work
+- **Storage**:
+  - PostgreSQL tables, indexes, and WAL files
+  - Engine logs, job history, and other retained operational artifacts
+  - staged runtime assets such as the built Web UI, certificates, and Aurora-managed assembly content
+
+Storage requirements are driven more by retention policy than by the Borealis binaries themselves. Shorter log and job-history retention keeps storage needs much lower, while longer retention and heavier automation output will grow the requirement over time.
+During Engine deployment and re-deployment, `Borealis.sh` profiles the host CPU and RAM, prints the detected Engine profile in the CLI, and auto-configures the PostgreSQL and Engine DB tuning for that host. Storage is displayed as guidance only and does not change the selected profile.
+
+## Engine Deployment Profiles
+
+| Profile | Typical Use | Endpoints | Active Operators | vCPU | RAM | NVMe Storage |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Homelab | Personal labs, testing, feature development, and very small sites | Up to 250 | 1-3 | 4-8 | 8-16 GiB | 80-150 GiB |
+| Small Business | Smaller production environments with light-to-moderate operator activity | Up to 1,000 | 2-4 | 8-12 | 16-24 GiB | 150-250 GiB |
+| MSP / Production | The main Borealis target for real-world SMB and managed-service usage | Up to 2,000 | 4-8 | 16 | 32 GiB | 500 GiB |
+| Enterprise | Larger single-node environments on the current Borealis architecture | Up to 10,000 | 10-20 | 16-24 | 32-64 GiB | 500 GiB-1 TiB |
+| Enterprise Clustered (Not Implemented Yet) | Much larger multi-node clustered environments | 10,000+ | 20+ per node | 16-24 per node | 32-64 GiB per node | 500 GiB-1 TiB per node |
+
+## Practical Guidance
+
+- The `Homelab` profile is intended for personal labs, development work, and very small environments where operator concurrency and retained history stay light.
+- The `Small Business` profile is intended for smaller real-world deployments and provides a practical production floor before Borealis starts benefiting heavily from larger PostgreSQL cache and job-history headroom.
+- The `MSP / Production` profile is the primary Borealis target today and should feel very strong at `2,000` endpoints or less with `4-8` active operators.
+- The `Enterprise` profile represents the upper single-node range of the current architecture. It should remain comfortable around `5,000` endpoints with disciplined retention policies and can function decently up to `10,000` endpoints on a well-tuned host.
+- All production-oriented profiles benefit most from additional RAM and fast NVMe storage because PostgreSQL cache, WAL activity, alerting history, job history, and device inventory all scale with real usage.
+- The clustered enterprise profile is intentionally marked as roadmap-only guidance. It describes the kind of per-node sizing that would likely make sense once Borealis gains orchestrated horizontal scaling, but that deployment model is not implemented today.
+
+## Current Architecture and Future Scale
+
+- The sizing guidance above assumes Borealis is running in its current single-node architecture.
+- Borealis is intentionally being sized today so it can soar for homelab users and smaller businesses, remain strong for typical MSP-style environments, and still operate reasonably well at higher endpoint counts.
+- Horizontal scaling through orchestrated clustering is a future roadmap item, but it is not required for the common `2,000`-endpoint-or-less usage profile that Borealis is primarily targeting today.
+- Until clustering exists, the `Enterprise Clustered (Not Implemented Yet)` row should be read as a forward-looking planning placeholder rather than a currently supported deployment topology.
+
+---
+
 # Core Architecture
 
 ## Secure Connectivity (WireGuard)

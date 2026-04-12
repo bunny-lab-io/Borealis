@@ -220,6 +220,57 @@ export function buildAppRoutes() {
               ],
             },
             {
+              path: "automation",
+              element: <RootShell />,
+              handle: {
+                title: "Automation",
+                breadcrumb: "Automation",
+                navKey: "watchdogs",
+                pageKey: "watchdogs",
+              },
+              children: [
+                {
+                  path: "watchdogs",
+                  handle: {
+                    title: "Watchdogs",
+                    breadcrumb: "Watchdogs",
+                    navKey: "watchdogs",
+                    pageKey: "watchdogs",
+                  },
+                  lazy: lazyNamed(
+                    () => import("../route-modules/watchdogRoutes.jsx"),
+                    "WatchdogListRoute"
+                  ),
+                },
+                {
+                  path: "watchdogs/new",
+                  handle: {
+                    title: "New Watchdog",
+                    breadcrumb: "New Watchdog",
+                    navKey: "watchdogs",
+                    pageKey: "watchdog",
+                  },
+                  lazy: lazyNamed(
+                    () => import("../route-modules/watchdogRoutes.jsx"),
+                    "WatchdogEditorRoute"
+                  ),
+                },
+                {
+                  path: "watchdogs/:watchdogId",
+                  handle: {
+                    title: "Watchdog",
+                    breadcrumb: "Watchdog",
+                    navKey: "watchdogs",
+                    pageKey: "watchdog",
+                  },
+                  lazy: lazyNamed(
+                    () => import("../route-modules/watchdogRoutes.jsx"),
+                    "WatchdogEditorRoute"
+                  ),
+                },
+              ],
+            },
+            {
               path: "assemblies",
               element: <RootShell />,
               handle: {
@@ -328,6 +379,19 @@ export function buildAppRoutes() {
                   ),
                 },
               ],
+            },
+            {
+              path: "alerts",
+              handle: {
+                title: "Alerts",
+                breadcrumb: "Alerts",
+                navKey: "alerts",
+                pageKey: "alerts",
+              },
+              lazy: lazyNamed(
+                () => import("../route-modules/watchdogRoutes.jsx"),
+                "ActiveAlertsRoute"
+              ),
             },
             {
               element: <RequireAdmin />,

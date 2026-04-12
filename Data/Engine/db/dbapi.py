@@ -356,6 +356,10 @@ class Connection:
         self._raw_connection.rollback()
 
     def close(self) -> None:
+        try:
+            self._raw_connection.rollback()
+        except Exception:
+            pass
         self._raw_connection.close()
 
     def execute(self, sql: str, params: Optional[Sequence[Any]] = None) -> Cursor:
