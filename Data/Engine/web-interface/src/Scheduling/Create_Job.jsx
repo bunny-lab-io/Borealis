@@ -440,6 +440,7 @@ const normalizeJobStatusKey = (status) => {
 
 const isWorkflowComponentRecord = (component) => {
   const typeRaw = String(
+    component?.kind ||
     component?.type ||
     component?.component_type ||
     component?.assembly_type ||
@@ -457,6 +458,7 @@ const isWorkflowComponentRecord = (component) => {
 
 const isAnsibleComponentRecord = (component) => {
   const typeRaw = String(
+    component?.kind ||
     component?.type ||
     component?.component_type ||
     component?.assembly_type ||
@@ -470,6 +472,19 @@ const isAnsibleComponentRecord = (component) => {
     ""
   ).trim().toLowerCase();
   return typeRaw === "ansible" || typeRaw === "playbook" || subtypeRaw === "ansible" || subtypeRaw === "playbook";
+};
+
+const componentExecutionDomain = (component) => {
+  if (isWorkflowComponentRecord(component)) {
+    return "workflow";
+  }
+  if (isAnsibleComponentRecord(component)) {
+    return "ansible";
+  }
+  if (component && typeof component === "object") {
+    return "script";
+  }
+  return "";
 };
 
 const StatusPill = ({ label, theme }) => {
@@ -646,13 +661,53 @@ const GlassPanel = ({ children, sx }) => (
   <Box sx={{ ...GLASS_PANEL_BASE_SX, ...(sx || {}) }}>{children}</Box>
 );
 
-const EXEC_CONTEXT_COPY = {
-  system: { title: "Windows (System)", detail: "Runs on device as SYSTEM" },
-  current_user: { title: "Windows (Logged-In User)", detail: "Runs on device as user session" },
-  local: { title: "Engine Localhost", detail: "Runs on the Linux Engine via Ansible local connection" },
-  ssh: { title: "Remote SSH", detail: "Executes from engine host" },
-  winrm: { title: "Remote WinRM", detail: "Executes from engine host" },
-};
+const EXEC_CONTEXT_OPTIONS = Object.freeze([
+  {
+    value: "system",
+    title: "Execute Assembly via AGENT (SYSTEM / root)",
+    detail: "Runs script assemblies on the target device as SYSTEM or root.",
+    domain: "script",
+  },
+  {
+    value: "current_user",
+    title: "Execute Assembly via AGENT (CurrentUser)",
+    detail: "Runs script assemblies in the logged-in user session.",
+    domain: "script",
+  },
+  {
+    value: "ssh",
+    title: "Ansible Playbook via SSH (Run Together)",
+    detail: "Runs the selected playbook assemblies from the Engine in one shared SSH batch.",
+    domain: "ansible",
+  },
+  {
+    value: "winrm",
+    title: "Ansible Playbook via WinRM (Run Together)",
+    detail: "Runs the selected playbook assemblies from the Engine in one shared WinRM batch.",
+    domain: "ansible",
+  },
+]);
+
+const LEGACY_EXEC_CONTEXT_COPY = Object.freeze({
+  local: {
+    title: "Run on Engine via Ansible localhost (Legacy)",
+    detail: "Legacy/internal Engine-side Ansible mode kept only so older jobs can still be reviewed and migrated.",
+    domain: "ansible",
+  },
+});
+
+const EXEC_CONTEXT_COPY = Object.freeze(
+  {
+    ...EXEC_CONTEXT_OPTIONS.reduce((acc, item) => {
+      acc[item.value] = { title: item.title, detail: item.detail, domain: item.domain };
+      return acc;
+    }, {}),
+    ...LEGACY_EXEC_CONTEXT_COPY,
+  }
+);
+
+const SCRIPT_EXEC_CONTEXTS = Object.freeze(["system", "current_user"]);
+const ANSIBLE_EXEC_CONTEXTS = Object.freeze(["ssh", "winrm"]);
 
 const SCHEDULE_LABELS = {
   immediately: "Immediate",
@@ -1380,7 +1435,71 @@ export default function CreateJob() {
     runAssemblyGridLayoutPass();
   }, [addCompOpen, assemblyRowData, compTab, filteredAssemblyRows, runAssemblyGridLayoutPass]);
 
-  const remoteExec = useMemo(() => execContext === "ssh" || execContext === "winrm", [execContext]);
+  const componentDomainSummary = useMemo(() => {
+    const domains = new Set(
+      components
+        .map((component) => componentExecutionDomain(component))
+        .filter(Boolean)
+    );
+    if (!domains.size) {
+      return { kind: "none", domains: [] };
+    }
+    const ordered = Array.from(domains.values()).sort();
+    if (ordered.includes("workflow")) {
+      return {
+        kind: ordered.length === 1 ? "workflow" : "mixed",
+        domains: ordered,
+      };
+    }
+    if (ordered.length === 1) {
+      return { kind: ordered[0], domains: ordered };
+    }
+    return { kind: "mixed", domains: ordered };
+  }, [components]);
+
+  const mixedDomainWarning = useMemo(() => {
+    if (componentDomainSummary.kind !== "mixed") return "";
+    if (componentDomainSummary.domains.includes("workflow")) {
+      return "Workflow-backed scheduled jobs cannot mix workflow, script, or Ansible assemblies. Remove the cross-domain assemblies before saving this job.";
+    }
+    if (
+      componentDomainSummary.domains.includes("script") &&
+      componentDomainSummary.domains.includes("ansible")
+    ) {
+      return "Scheduled jobs cannot mix script assemblies with Ansible playbook assemblies. Remove the cross-domain assemblies or split them into separate jobs.";
+    }
+    return "Scheduled jobs cannot mix assemblies from different execution domains.";
+  }, [componentDomainSummary]);
+
+  const availableExecContextOptions = useMemo(() => {
+    if (componentDomainSummary.kind === "workflow" || componentDomainSummary.kind === "mixed") {
+      return [];
+    }
+    const legacyLocalOption = execContext === "local"
+      ? [{ value: "local", ...LEGACY_EXEC_CONTEXT_COPY.local }]
+      : [];
+    if (componentDomainSummary.kind === "script") {
+      return EXEC_CONTEXT_OPTIONS.filter((option) => option.domain === "script");
+    }
+    if (componentDomainSummary.kind === "ansible") {
+      return [
+        ...legacyLocalOption,
+        ...EXEC_CONTEXT_OPTIONS.filter((option) => option.domain === "ansible"),
+      ];
+    }
+    return [...legacyLocalOption, ...EXEC_CONTEXT_OPTIONS];
+  }, [componentDomainSummary, execContext]);
+
+  const defaultExecContext = useMemo(() => {
+    if (componentDomainSummary.kind === "ansible") return "ssh";
+    if (componentDomainSummary.kind === "script") return "system";
+    return "system";
+  }, [componentDomainSummary]);
+
+  const remoteExec = useMemo(
+    () => ANSIBLE_EXEC_CONTEXTS.includes(execContext),
+    [execContext]
+  );
   const handleExecContextChange = useCallback((value) => {
     const normalized = String(value || "system").toLowerCase();
     setExecContext(normalized);
@@ -1429,6 +1548,25 @@ export default function CreateJob() {
       setSelectedCredentialId(String(filteredCredentials[0].id));
     }
   }, [remoteExec, filteredCredentials, selectedCredentialId, execContext, useSvcAccount]);
+
+  useEffect(() => {
+    if (componentDomainSummary.kind === "workflow" || componentDomainSummary.kind === "mixed") {
+      return;
+    }
+    const validContexts = new Set(availableExecContextOptions.map((option) => option.value));
+    if (!validContexts.size) {
+      return;
+    }
+    if (!validContexts.has(execContext)) {
+      handleExecContextChange(defaultExecContext);
+    }
+  }, [
+    availableExecContextOptions,
+    componentDomainSummary,
+    defaultExecContext,
+    execContext,
+    handleExecContextChange,
+  ]);
 
   useEffect(() => {
     if (!isWorkflowJob) return;
@@ -3190,6 +3328,16 @@ export default function CreateJob() {
         return false;
       }
 
+      const existingDomains = new Set(
+        components
+          .map((component) => componentExecutionDomain(component))
+          .filter((domain) => domain && domain !== "workflow")
+      );
+      if ((nextKind === "script" || nextKind === "ansible") && existingDomains.size && !existingDomains.has(nextKind)) {
+        alert("Scheduled jobs cannot mix script assemblies with Ansible playbook assemblies. Remove the cross-domain assemblies or split them into separate jobs.");
+        return false;
+      }
+
       const docVars = Array.isArray(parsed.rawVariables) ? parsed.rawVariables : [];
       const mergedVariables = mergeComponentVariables(docVars, [], {});
       const type = nextKind;
@@ -3303,6 +3451,11 @@ export default function CreateJob() {
 
   const handleCreate = async () => {
     const workflowComponents = components.filter((component) => isWorkflowComponentRecord(component));
+    const componentDomains = new Set(
+      components
+        .map((component) => componentExecutionDomain(component))
+        .filter(Boolean)
+    );
     if (workflowComponents.length > 1) {
       alert("Workflow-backed scheduled jobs currently support exactly one workflow component.");
       return;
@@ -3311,12 +3464,26 @@ export default function CreateJob() {
       alert("Workflow-backed scheduled jobs cannot mix workflow, script, or Ansible components.");
       return;
     }
+    if (componentDomains.has("script") && componentDomains.has("ansible")) {
+      alert("Scheduled jobs cannot mix script assemblies with Ansible playbook assemblies. Remove the cross-domain assemblies or split them into separate jobs.");
+      return;
+    }
     const workflowMode = workflowComponents.length === 1;
-    const requiresAnsibleOnly = !workflowMode && (execContext === "local" || execContext === "ssh" || execContext === "winrm");
+    const requiresAnsibleOnly = !workflowMode && ANSIBLE_EXEC_CONTEXTS.includes(execContext);
     if (requiresAnsibleOnly) {
       const hasNonAnsibleComponent = components.some((component) => !isAnsibleComponentRecord(component));
       if (hasNonAnsibleComponent) {
-        alert("Jobs using local, SSH, or WinRM execution contexts must contain only Ansible playbook assemblies.");
+        alert("Jobs using SSH or WinRM execution contexts must contain only Ansible playbook assemblies.");
+        return;
+      }
+    }
+    const requiresScriptOnly = !workflowMode && SCRIPT_EXEC_CONTEXTS.includes(execContext);
+    if (requiresScriptOnly) {
+      const hasNonScriptComponent = components.some(
+        (component) => isWorkflowComponentRecord(component) || isAnsibleComponentRecord(component)
+      );
+      if (hasNonScriptComponent) {
+        alert("Jobs using agent execution contexts must contain only script assemblies.");
         return;
       }
     }
@@ -3841,21 +4008,38 @@ const heroTiles = useMemo(() => {
         {activeTabKey === "context" && (
           <Box sx={TAB_SECTION_SX}>
             <SectionHeader title="Execution Context" />
-            <TextField
-              select
-              size="small"
-              label="Context"
-              value={execContext}
-              onChange={(e) => handleExecContextChange(e.target.value)}
-              sx={{ minWidth: 320, ...INPUT_FIELD_SX }}
-            >
-              <MenuItem value="system">Run on agent as SYSTEM (device-local)</MenuItem>
-              <MenuItem value="current_user">Run on agent as logged-in user (device-local)</MenuItem>
-              <MenuItem value="local">Run on Engine via Ansible localhost (testing)</MenuItem>
-              <MenuItem value="ssh">Run from server via SSH (remote)</MenuItem>
-              <MenuItem value="winrm">Run from server via WinRM (remote)</MenuItem>
-            </TextField>
-            {remoteExec && (
+            {isWorkflowJob ? (
+              <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
+                Workflow-backed scheduled jobs ignore scheduler-level execution context. Configure execution inside the saved workflow instead.
+              </Typography>
+            ) : mixedDomainWarning ? (
+              <Typography variant="body2" sx={{ color: "#fda4af" }}>
+                {mixedDomainWarning}
+              </Typography>
+            ) : (
+              <>
+                <TextField
+                  select
+                  size="small"
+                  label="Context"
+                  value={execContext}
+                  onChange={(e) => handleExecContextChange(e.target.value)}
+                  sx={{ minWidth: 320, ...INPUT_FIELD_SX }}
+                >
+                  {availableExecContextOptions.map((option) => (
+                    <MenuItem key={option.value} value={option.value}>
+                      {option.title}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, mt: 1 }}>
+                  {componentDomainSummary.kind === "none"
+                    ? "Add script or Ansible playbook assemblies to automatically narrow the execution contexts shown here."
+                    : (EXEC_CONTEXT_COPY[execContext]?.detail || "")}
+                </Typography>
+              </>
+            )}
+            {!isWorkflowJob && !mixedDomainWarning && remoteExec && (
               <Box sx={{ mt: 2, display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
                 {execContext === "winrm" && (
                   <FormControlLabel

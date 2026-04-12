@@ -39,18 +39,24 @@ Supported schedule types (from the scheduler core):
 4) Device-local script runs emit quick job payloads with `scheduled_job_id` context.
 5) Engine-side Ansible jobs using `local`, `ssh`, or `winrm` create one shared run row per playbook component, synthesize an ephemeral inventory, and execute directly on the Linux Engine.
 6) Remote Ansible runs map Borealis inventory aliases to active WireGuard peer IPs and exclude devices that are not currently eligible.
-7) Remote SSH/WinRM targets that fail the Engine-side transport preflight check are excluded from the generated inventory; before that preflight, Borealis ensures the active WireGuard session allows the selected SSH/WinRM transport port. Standard SSH `22` is part of the default shell/VNC/SSH allowlist, while non-default SSH or WinRM ports are widened in addition to that baseline. SSH targets must answer with an SSH banner and then complete a short non-interactive SSH readiness probe using the selected Borealis credential, while WinRM targets must still accept the TCP port. If no targets remain eligible, the run is recorded as `Skipped` with `skip_reason = no_eligible_targets`.
-8) SSH banner preflight defaults to `20` seconds on a successful TCP connection and can be overridden with `BOREALIS_SHARED_ANSIBLE_SSH_BANNER_TIMEOUT_SECONDS` without changing the shorter TCP connect timeout/retry loop.
-9) SSH session readiness preflight defaults to `20` seconds and can be overridden with `BOREALIS_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS`; Borealis uses it to catch hosts that open port `22` but cannot complete the same credentialed SSH command path Ansible needs.
-10) The Engine updates run status, activity links, and Ansible recap rows as results arrive.
-11) If zero devices are resolved, the occurrence is recorded as `Skipped` with `skip_reason = no_devices_targeted`.
+7) Remote SSH/WinRM targets still require an active WireGuard peer IP before they can enter the generated inventory, and Borealis ensures the active session allows the selected transport port. Standard SSH `22` is part of the default shell/VNC/SSH allowlist, while non-default SSH or WinRM ports are widened in addition to that baseline.
+8) For `execution_context = ssh`, Borealis now defers host reachability, authentication, and task connectivity to Ansible itself instead of running scheduler-side SSH banner/session probes first. Shared runs pass through the WireGuard peer IP plus the selected credential, and Ansible records unreachable/auth/task failures in the normal recap and per-device status surfaces.
+9) Engine-side Ansible SSH runs pin the SSH KEX list to `curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256` by default because some OpenSSH `9.x` peers stalled during the larger `sntrup761x25519-sha512@openssh.com` handshake over the managed WireGuard path. Override with `BOREALIS_SHARED_ANSIBLE_SSH_KEX_ALGORITHMS` if needed.
+10) For `execution_context = winrm`, Borealis still does a lightweight Engine-side TCP preflight and excludes targets that fail it with `resolution_reason = remote_preflight_failed`. If no targets remain eligible, the run is recorded as `Skipped` with `skip_reason = no_eligible_targets`.
+11) The Engine updates run status, activity links, and Ansible recap rows as results arrive.
+12) If zero devices are resolved, the occurrence is recorded as `Skipped` with `skip_reason = no_devices_targeted`.
 
 ## Execution Contexts
 - `system` - runs on the agent as SYSTEM.
 - `current_user` - runs on the agent in the logged-in user context.
-- `local` - runs on the Linux Engine through the Engine-side Ansible runner and targets the Engine host alias directly.
 - `ssh` - runs on the Linux Engine, synthesizes an ephemeral inventory, and targets SSH devices over the managed WireGuard network.
 - `winrm` - runs on the Linux Engine, synthesizes an ephemeral inventory, and targets WinRM devices over the managed WireGuard network.
+- The scheduled-job editor now filters the dropdown by assembly domain:
+  - script assemblies expose only `system` and `current_user`
+  - Ansible playbook assemblies expose only `ssh` and `winrm`
+  - workflow assemblies ignore scheduler-level execution context entirely
+- The editor and API both reject jobs that mix script assemblies with Ansible playbook assemblies. Use separate jobs instead of mixing execution domains in one scheduled occurrence.
+- `local` remains an internal Engine-side Ansible context for legacy/internal flows such as watchdog Ansible remediations, but it is no longer exposed in the scheduled-job editor.
 - For shared Ansible runs, the selected execution context is the transport source of truth. Borealis uses `ssh` or `winrm` based on that operator choice and gates targets on WireGuard reachability plus credential/service-account readiness, not on the device row's stored `connection_type`.
 
 ## Run History and Retention
@@ -106,8 +112,11 @@ Supported schedule types (from the scheduler core):
 - `quick_job_result` updates `scheduled_job_runs` and `activity_history`.
 - `execution_context = local` is Engine-side only and runs the playbook directly on the Linux Engine against the localhost-style Engine target.
 - `execution_context = ssh` and `execution_context = winrm` now run from the Linux Engine, synthesize per-run inventories, and target remote devices over the managed WireGuard network.
+- Scheduled-job authoring only exposes `system` / `current_user` for script assemblies and `ssh` / `winrm` for Ansible playbook assemblies. Mixing script and Ansible components is rejected in both the editor and API, while workflow-backed jobs continue to own their runtime inside the workflow document.
 - Shared Ansible occurrences write one `scheduled_job_runs` row per playbook component and freeze one deduplicated target snapshot per resolved device in `scheduled_job_run_targets`.
-- Remote SSH/WinRM targets that fail Engine-side transport preflight are marked `resolution_status = skipped` with `resolution_reason = remote_preflight_failed` and are not forwarded into Ansible. For SSH targets, Borealis now requires TCP reachability, an SSH banner, and a short credentialed SSH session probe before admitting the host into the generated inventory.
+- Remote SSH targets are admitted when Borealis has a WireGuard peer IP and resolved credential material; Ansible itself now owns SSH reachability and authentication outcomes.
+- Engine-side Ansible SSH runs write `ssh_common_args` that prefer `curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256` unless `BOREALIS_SHARED_ANSIBLE_SSH_KEX_ALGORITHMS` overrides that list, which avoids OpenSSH `9.x` sntrup handshake stalls seen on some WireGuard peers.
+- Remote WinRM targets that fail Engine-side TCP preflight are marked `resolution_status = skipped` with `resolution_reason = remote_preflight_failed` and are not forwarded into Ansible.
 
 ### Retention and cleanup
 - Retention defaults to 30 days and is configured by `BOREALIS_JOB_HISTORY_DAYS`.

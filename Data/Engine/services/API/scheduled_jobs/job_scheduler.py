@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import math
 import os
 import re
 import shlex
@@ -51,8 +52,8 @@ _DEFAULT_PREPARED_REMOTE_PREFLIGHT_ATTEMPTS = 5
 _DEFAULT_PREPARED_REMOTE_PREFLIGHT_RETRY_DELAY_SECONDS = 1.0
 _DEFAULT_SHARED_ANSIBLE_SSH_BANNER_TIMEOUT_SECONDS = 20.0
 _DEFAULT_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS = 20.0
-_DEFAULT_SHARED_ANSIBLE_SSH_RETRIES = 30
-_DEFAULT_SHARED_ANSIBLE_SSH_TIMEOUT_SECONDS = 5
+_DEFAULT_SHARED_ANSIBLE_SSH_RETRIES = 3
+_DEFAULT_SHARED_ANSIBLE_SSH_TIMEOUT_SECONDS = 20
 
 RUN_STATUS_PENDING = "Pending"
 RUN_STATUS_RUNNING = "Running"
@@ -1875,11 +1876,19 @@ class JobScheduler:
             if banner_timeout_seconds is not None
             else max(0.1, float(timeout_seconds or 0.0))
         )
+        connect_timeout_seconds = max(0.1, float(timeout_seconds or 0.0))
+        normalized_attempts = max(1, int(attempts))
+        if normalized_probe == "ssh_banner":
+            # Slow WireGuard-backed SSH targets can need a single sustained
+            # connect window. Reconnecting every ~1s can falsely reject hosts
+            # that Ansible can still reach successfully.
+            connect_timeout_seconds = max(connect_timeout_seconds, resolved_banner_timeout)
+            normalized_attempts = 1
         last_error = ""
-        for attempt in range(max(1, int(attempts))):
+        for attempt in range(normalized_attempts):
             sock = None
             try:
-                sock = socket.create_connection((normalized_host, normalized_port), timeout=timeout_seconds)
+                sock = socket.create_connection((normalized_host, normalized_port), timeout=connect_timeout_seconds)
                 if normalized_probe == "ssh_banner":
                     banner_error = self._preflight_ssh_banner(sock, timeout_seconds=resolved_banner_timeout)
                     if banner_error:
@@ -1894,7 +1903,7 @@ class JobScheduler:
                         sock.close()
                     except Exception:
                         pass
-            if attempt + 1 < max(1, int(attempts)):
+            if attempt + 1 < normalized_attempts:
                 time.sleep(max(0.0, float(retry_delay_seconds)))
         return last_error or "connection_failed"
 
@@ -1955,7 +1964,7 @@ class JobScheduler:
         sudo_prompt_marker = "__BOREALIS_SUDO_PROMPT__"
         ready_marker = "__BOREALIS_READY__"
         normalized_timeout = max(1.0, float(timeout_seconds or 0.0))
-        connect_timeout = max(1, min(int(normalized_timeout), _DEFAULT_SHARED_ANSIBLE_SSH_TIMEOUT_SECONDS))
+        connect_timeout = max(1, int(math.ceil(normalized_timeout)))
 
         remote_steps = [
             f"printf '%s\\n' {login_marker}",
@@ -3415,50 +3424,6 @@ class JobScheduler:
                     resolution_reason = "wireguard_unavailable"
                 else:
                     ssh_port = _extract_endpoint_port(connection_endpoint) or 22
-                    preflight_kwargs: Dict[str, Any] = {}
-                    preflight_kwargs["banner_timeout_seconds"] = _env_non_negative_float(
-                        _SSH_BANNER_TIMEOUT_ENV,
-                        _DEFAULT_SHARED_ANSIBLE_SSH_BANNER_TIMEOUT_SECONDS,
-                    )
-                    ssh_username = ""
-                    ssh_become_method = ""
-                    ssh_become_username = ""
-                    ssh_become_password = ""
-                    if credential:
-                        ssh_username = str(credential.get("username") or "").strip()
-                        ssh_become_method = str(credential.get("become_method") or "").strip()
-                        ssh_become_username = str(credential.get("become_username") or "").strip()
-                        ssh_become_password = str(credential.get("become_password") or "").strip()
-                    if bool(session.get("_requested_start")):
-                        preflight_kwargs["attempts"] = _env_positive_int(
-                            _PREPARED_REMOTE_PREFLIGHT_ATTEMPTS_ENV,
-                            _DEFAULT_PREPARED_REMOTE_PREFLIGHT_ATTEMPTS,
-                        )
-                        preflight_kwargs["retry_delay_seconds"] = _env_non_negative_float(
-                            _PREPARED_REMOTE_PREFLIGHT_RETRY_DELAY_ENV,
-                            _DEFAULT_PREPARED_REMOTE_PREFLIGHT_RETRY_DELAY_SECONDS,
-                        )
-                        preflight_error = self._preflight_remote_port(
-                            host=wireguard_peer_ip,
-                            port=ssh_port,
-                            probe="ssh_banner",
-                            **preflight_kwargs,
-                        )
-                        if not preflight_error:
-                            preflight_error = self._preflight_ssh_session(
-                                host=wireguard_peer_ip,
-                                port=ssh_port,
-                                username=ssh_username,
-                                password=credential_password,
-                                private_key_text=normalized_private_key,
-                                timeout_seconds=_env_non_negative_float(
-                                    _SSH_SESSION_TIMEOUT_ENV,
-                                    _DEFAULT_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS,
-                                ),
-                                become_method=ssh_become_method,
-                                become_user=ssh_become_username,
-                                become_password=ssh_become_password,
-                            )
                     host_vars = {
                         "ansible_host": wireguard_peer_ip,
                         "ansible_connection": "ssh",
@@ -3492,20 +3457,6 @@ class JobScheduler:
                                 host_vars["ansible_become_user"] = become_username
                             if become_password:
                                 host_vars["ansible_become_password"] = become_password
-                    if preflight_error:
-                        resolution_status = RESOLUTION_STATUS_SKIPPED
-                        resolution_reason = RESOLUTION_REASON_REMOTE_PREFLIGHT_FAILED
-                        preflight_failed_targets_for_log.append(
-                            {
-                                "hostname": hostname,
-                                "inventory_hostname": inventory_hostname,
-                                "site_name": site_name,
-                                "agent_id": agent_id,
-                                "wireguard_peer_ip": wireguard_peer_ip,
-                                "connection_endpoint": connection_endpoint,
-                                "preflight_error": preflight_error,
-                            }
-                        )
             elif run_mode_norm == "winrm":
                 session = vpn_sessions.get(agent_id) or {}
                 wireguard_peer_ip = str(session.get("virtual_ip") or "").split("/", 1)[0]
@@ -4682,6 +4633,7 @@ class JobScheduler:
             if not isinstance(component, dict):
                 return False
             raw_values = [
+                component.get("kind"),
                 component.get("type"),
                 component.get("component_type"),
                 component.get("assembly_type"),
@@ -4697,6 +4649,7 @@ class JobScheduler:
             if not isinstance(component, dict):
                 return False
             raw_values = [
+                component.get("kind"),
                 component.get("type"),
                 component.get("component_type"),
                 component.get("assembly_type"),
@@ -4708,6 +4661,15 @@ class JobScheduler:
             normalized = {str(value or "").strip().lower() for value in raw_values if str(value or "").strip()}
             return "ansible" in normalized or "playbook" in normalized
 
+        def _component_execution_domain(component: Any) -> str:
+            if not isinstance(component, dict):
+                return ""
+            if _is_workflow_component(component):
+                return "workflow"
+            if _is_ansible_component(component):
+                return "ansible"
+            return "script"
+
         def _workflow_components(components: Sequence[Any]) -> List[Dict[str, Any]]:
             return [dict(component) for component in (components or []) if _is_workflow_component(component)]
 
@@ -4716,15 +4678,25 @@ class JobScheduler:
             workflow_components = _workflow_components(components)
             if workflow_components:
                 return None
-            if context_value not in {"local", "ssh", "winrm"}:
+            component_domains = {
+                _component_execution_domain(component)
+                for component in (components or [])
+                if _component_execution_domain(component)
+            }
+            if "script" in component_domains and "ansible" in component_domains:
+                return (
+                    "Scheduled jobs cannot mix script assemblies with Ansible playbook assemblies. "
+                    "Remove the cross-domain assemblies or split them into separate jobs."
+                )
+            if context_value not in {"local", "ssh", "winrm", "system", "current_user"}:
                 return None
-            if not isinstance(components, (list, tuple)) or not components:
-                return "At least one Ansible component is required."
-            if any(not _is_ansible_component(component) for component in components):
+            if context_value in {"local", "ssh", "winrm"} and component_domains and component_domains != {"ansible"}:
                 return (
                     "Jobs using local, ssh, or winrm execution contexts must contain only Ansible components "
                     "so Borealis can execute them as one shared Engine-side playbook run."
                 )
+            if context_value in {"system", "current_user"} and component_domains and component_domains != {"script"}:
+                return "Jobs using agent execution contexts must contain only script assemblies."
             return None
 
         def _validate_workflow_job_configuration(

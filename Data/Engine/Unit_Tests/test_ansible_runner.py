@@ -221,3 +221,48 @@ def test_runner_normalizes_eventlet_wrapped_timeout_exceptions(
     recap_payload = json.loads(recap_row[1])
     assert recap_payload["timed_out"] is True
     assert recap_payload["timeout_seconds"] == 900
+
+
+def test_runner_writes_curve25519_ssh_kex_args(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    runner = EngineAnsibleRunner(
+        socketio=_DummySocketIO(),
+        db_conn_factory=lambda: sqlite3.connect(str(engine_harness.db_path)),
+    )
+
+    generated_root = engine_harness.db_path.parent / "ansible-generated"
+    collections_root = engine_harness.db_path.parent / "collections"
+    collections_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(runner, "_generated_runtime_root", lambda: generated_root)
+    monkeypatch.setattr(runner, "_collections_root", lambda: collections_root)
+
+    workspace = runner._prepare_workspace(
+        run_id="run-kex-1",
+        hostname="borealis-engine-01",
+        playbook_abs_path="",
+        playbook_content="---\n- hosts: all\n  gather_facts: false\n  tasks: []\n",
+        playbook_rel_path="Ansible_Playbooks/test-kex.yml",
+        playbook_name="KEX Test",
+        payload_files=[],
+        runtime_files=[],
+        target_specifications=[
+            {
+                "hostname": "example-host",
+                "inventory_hostname": "example_host",
+                "site_group": "site_test",
+                "host_vars": {
+                    "ansible_host": "10.255.0.10",
+                    "ansible_connection": "ssh",
+                },
+            }
+        ],
+        connection="ssh",
+    )
+
+    cfg_text = workspace["cfg_path"].read_text(encoding="utf-8")
+    assert (
+        "-o KexAlgorithms=curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256"
+        in cfg_text
+    )

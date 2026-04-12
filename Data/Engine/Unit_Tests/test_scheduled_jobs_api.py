@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import socket
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -159,9 +161,11 @@ def test_preflight_remote_port_uses_configured_ssh_banner_timeout_once(
     _client, scheduler = _scheduled_jobs_client(engine_harness)
     fake_socket = _FakePreflightSocket([socket.timeout()])
     create_calls = {"count": 0}
+    captured_timeouts: list[float] = []
 
     def _fake_create_connection(*_args, **_kwargs):
         create_calls["count"] += 1
+        captured_timeouts.append(float(_kwargs.get("timeout") or 0.0))
         return fake_socket
 
     monkeypatch.setattr(
@@ -182,12 +186,61 @@ def test_preflight_remote_port_uses_configured_ssh_banner_timeout_once(
 
     assert result == "ssh_banner_timeout"
     assert create_calls["count"] == 1
+    assert captured_timeouts
+    assert captured_timeouts[0] >= 14.0
     assert fake_socket.closed is True
     assert fake_socket.timeouts
     assert fake_socket.timeouts[0] >= 14.0
 
 
-def test_shared_ansible_dispatch_skips_targets_that_fail_ssh_session_preflight(
+def test_preflight_ssh_session_uses_full_timeout_for_connecttimeout(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    captured: dict[str, object] = {}
+
+    class _FakeSpawn:
+        def __init__(self, command, args, encoding=None, timeout=None) -> None:
+            captured["command"] = command
+            captured["args"] = list(args)
+            captured["encoding"] = encoding
+            captured["timeout"] = timeout
+            self.before = ""
+
+        def expect(self, _patterns):
+            return 1
+
+        def sendline(self, _text):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(scheduled_job_module.shutil, "which", lambda _name: "/usr/bin/ssh")
+    monkeypatch.setitem(
+        sys.modules,
+        "pexpect",
+        SimpleNamespace(
+            EOF=object(),
+            TIMEOUT=object(),
+            spawn=_FakeSpawn,
+        ),
+    )
+
+    result = scheduler._preflight_ssh_session(
+        host="10.255.0.10",
+        port=22,
+        username="ubuntu",
+        timeout_seconds=20.0,
+    )
+
+    assert result == "ssh_session_timeout"
+    args = [str(item) for item in captured["args"]]
+    assert "ConnectTimeout=20" in args
+
+
+def test_shared_ansible_dispatch_defers_ssh_connectivity_to_ansible(
     engine_harness: EngineTestHarness,
     monkeypatch,
 ) -> None:
@@ -239,7 +292,7 @@ def test_shared_ansible_dispatch_skips_targets_that_fail_ssh_session_preflight(
                 1,
                 0,
                 "ansible",
-                "Playbook SSH Session Probe",
+                "Playbook SSH Deferred Probe",
             ),
         )
         cur.execute(
@@ -283,14 +336,22 @@ def test_shared_ansible_dispatch_skips_targets_that_fail_ssh_session_preflight(
         "_prepare_vpn_sessions",
         lambda _agent_ids, required_ports=None: {"test-device-agent": {"virtual_ip": "10.77.0.15/32", "_requested_start": True}},
     )
-    monkeypatch.setattr(scheduler, "_preflight_remote_port", lambda **_kwargs: "")
-    monkeypatch.setattr(scheduler, "_preflight_ssh_session", lambda **_kwargs: "ssh_session_timeout")
+    monkeypatch.setattr(
+        scheduler,
+        "_preflight_remote_port",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("SSH preflight should not run")),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_preflight_ssh_session",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("SSH session probe should not run")),
+    )
     monkeypatch.setattr(
         scheduler,
         "_load_credential",
         lambda _credential_id: {
             "id": 15,
-            "name": "SSH Session Probe",
+            "name": "SSH Deferred Probe",
             "connection_type": "ssh",
             "username": "ubuntu",
             "password": "secret",
@@ -306,7 +367,7 @@ def test_shared_ansible_dispatch_skips_targets_that_fail_ssh_session_preflight(
         "_resolve_runtime_document",
         lambda rel_path, _default_type, assembly_guid=None: (
             {
-                "name": "Playbook SSH Session Probe",
+                "name": "Playbook SSH Deferred Probe",
                 "script": "---\n- hosts: all\n  gather_facts: false\n  tasks:\n    - ansible.builtin.ping:\n",
                 "variables": [],
                 "files": [],
@@ -327,13 +388,17 @@ def test_shared_ansible_dispatch_skips_targets_that_fail_ssh_session_preflight(
         run_row_id=75,
         scheduled_ts=1_773_782_700,
         run_mode="ssh",
-        component={"name": "Playbook SSH Session Probe", "path": "probe.yml"},
+        component={"name": "Playbook SSH Deferred Probe", "path": "probe.yml"},
         credential_id=15,
         use_service_account=False,
     )
 
-    assert result is None
-    assert "kwargs" not in captured
+    assert result is not None
+    assert "kwargs" in captured
+    target_specifications = captured["kwargs"]["target_specifications"]
+    assert len(target_specifications) == 1
+    assert target_specifications[0]["host_vars"]["ansible_connection"] == "ssh"
+    assert target_specifications[0]["host_vars"]["ansible_host"] == "10.77.0.15"
 
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:
@@ -347,23 +412,11 @@ def test_shared_ansible_dispatch_skips_targets_that_fail_ssh_session_preflight(
             (75,),
         )
         row = cur.fetchone()
-        cur.execute(
-            """
-            SELECT status, skip_reason, error
-              FROM scheduled_job_runs
-             WHERE id=?
-            """,
-            (75,),
-        )
-        run_row = cur.fetchone()
     finally:
         conn.close()
 
-    assert row[0] == "skipped"
-    assert row[1] == "remote_preflight_failed"
-    assert run_row[0] == "Skipped"
-    assert run_row[1] == "no_eligible_targets"
-    assert run_row[2] == "No eligible devices were available for this Ansible run."
+    assert row[0] == "eligible"
+    assert row[1] == ""
 
 
 def test_scheduled_job_create_recovers_when_lastrowid_is_missing(
@@ -728,7 +781,83 @@ def test_scheduled_job_create_rejects_mixed_components_for_remote_ansible_contex
 
     assert response.status_code == 400
     payload = response.get_json()
-    assert "must contain only Ansible" in payload["error"]
+    assert "cannot mix script assemblies with Ansible" in payload["error"]
+
+
+def test_scheduled_job_create_rejects_ansible_components_for_agent_context(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client, _scheduler = _scheduled_jobs_client(engine_harness)
+
+    response = client.post(
+        "/api/scheduled_jobs",
+        json={
+            "name": "Invalid Agent Context",
+            "components": [
+                {"type": "ansible", "name": "Playbook A"},
+            ],
+            "targets": ["test-device"],
+            "schedule": {"type": "immediately"},
+            "execution_context": "system",
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert "must contain only script assemblies" in payload["error"]
+
+
+def test_scheduled_job_update_rejects_mixed_script_and_ansible_components(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client, _scheduler = _scheduled_jobs_client(engine_harness)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO scheduled_jobs(
+                id,
+                name,
+                components_json,
+                targets_json,
+                schedule_type,
+                execution_context,
+                enabled,
+                created_at,
+                updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                91,
+                "Script Only Job",
+                json.dumps([{"type": "script", "name": "Script A"}]),
+                json.dumps(["test-device"]),
+                "once",
+                "system",
+                1,
+                1_773_782_800,
+                1_773_782_800,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = client.put(
+        "/api/scheduled_jobs/91",
+        json={
+            "components": [
+                {"type": "script", "name": "Script A"},
+                {"type": "ansible", "name": "Playbook B"},
+            ]
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert "cannot mix script assemblies with Ansible" in payload["error"]
 
 
 def test_scheduled_job_create_persists_structured_device_targets(
@@ -1058,11 +1187,6 @@ def test_shared_ansible_dispatch_uses_execution_context_for_remote_transport(
     )
     monkeypatch.setattr(
         scheduler,
-        "_preflight_remote_port",
-        lambda **_kwargs: "",
-    )
-    monkeypatch.setattr(
-        scheduler,
         "_load_credential",
         lambda _credential_id: {
             "id": 5,
@@ -1117,8 +1241,8 @@ def test_shared_ansible_dispatch_uses_execution_context_for_remote_transport(
     assert target_specifications[0]["inventory_hostname"] == "main_lab__test_device"
     assert target_specifications[0]["host_vars"]["ansible_connection"] == "ssh"
     assert target_specifications[0]["host_vars"]["ansible_host"] == "10.77.0.15"
-    assert target_specifications[0]["host_vars"]["ansible_ssh_retries"] == 30
-    assert target_specifications[0]["host_vars"]["ansible_ssh_timeout"] == 5
+    assert target_specifications[0]["host_vars"]["ansible_ssh_retries"] == 3
+    assert target_specifications[0]["host_vars"]["ansible_ssh_timeout"] == 20
     assert target_specifications[0]["host_vars"]["ansible_user"] == "ubuntu"
 
     conn = sqlite3.connect(str(engine_harness.db_path))
@@ -1247,8 +1371,6 @@ def test_shared_ansible_dispatch_requests_ssh_port_in_vpn_prepare(
         return {"test-device-agent": {"virtual_ip": "10.77.0.15/32"}}
 
     monkeypatch.setattr(scheduler, "_prepare_vpn_sessions", _capture_prepare)
-    monkeypatch.setattr(scheduler, "_preflight_remote_port", lambda **_kwargs: "")
-    monkeypatch.setattr(scheduler, "_preflight_ssh_session", lambda **_kwargs: "")
     monkeypatch.setattr(
         scheduler,
         "_load_credential",
@@ -2178,7 +2300,7 @@ def test_shared_ansible_dispatch_fails_for_passphrase_only_ssh_key(
     assert target_row[1] == "credential_private_key_passphrase_unsupported"
 
 
-def test_shared_ansible_dispatch_skips_targets_with_preflight_failures(
+def test_shared_ansible_dispatch_skips_winrm_targets_with_preflight_failures(
     engine_harness: EngineTestHarness,
     monkeypatch,
 ) -> None:
@@ -2210,7 +2332,7 @@ def test_shared_ansible_dispatch_skips_targets_with_preflight_failures(
                    connection_endpoint=''
              WHERE guid=?
             """,
-            ("Ubuntu 24.04 LTS", "test-device-agent", "GUID-TEST-0001"),
+            ("Windows Server 2022", "test-device-agent", "GUID-TEST-0001"),
         )
         cur.execute(
             """
@@ -2267,7 +2389,7 @@ def test_shared_ansible_dispatch_skips_targets_with_preflight_failures(
                 None,
                 "main_lab__test_device",
                 "",
-                "ssh",
+                "winrm",
                 "pending",
                 "",
                 json.dumps([]),
@@ -2295,11 +2417,12 @@ def test_shared_ansible_dispatch_skips_targets_with_preflight_failures(
         "_load_credential",
         lambda _credential_id: {
             "id": 5,
-            "name": "SSH Test Credential",
-            "connection_type": "ssh",
-            "username": "ubuntu",
+            "name": "WinRM Test Credential",
+            "connection_type": "winrm",
+            "username": "Administrator",
             "password": "secret",
             "private_key": "",
+            "metadata": {"winrm_transport": "ntlm"},
             "become_method": "",
             "become_username": "",
             "become_password": "",
@@ -2331,7 +2454,7 @@ def test_shared_ansible_dispatch_skips_targets_with_preflight_failures(
         job_id=7,
         run_row_id=61,
         scheduled_ts=1_773_782_701,
-        run_mode="ssh",
+        run_mode="winrm",
         component={"name": "Playbook B", "path": "playbook_b.yml"},
         credential_id=5,
         use_service_account=False,
