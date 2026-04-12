@@ -92,6 +92,156 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
 - Problematic sessions usually appear as `state = idle in transaction` with an older `SELECT`, `UPDATE`, or `INSERT` still attached.
 - If Borealis feels slow, this command is the fastest way to distinguish normal pooled connections from sessions that are holding transactions open too long.
 
+## Engine Tuning Profiles
+- `Borealis.sh` now auto-detects the Engine host profile during deployment and re-deployment.
+- Profile selection is based on detected CPU and RAM only.
+- Storage is displayed in the CLI as deployment guidance, but it does not change the selected profile or the applied DB tuning.
+- The launcher writes the selected profile metadata and tuning values into `Engine/database.env` and then applies the PostgreSQL settings with launcher-managed `ALTER SYSTEM` statements.
+- The current auto-selected single-node profiles are:
+  - `Homelab`
+  - `Small Business`
+  - `MSP / Production`
+  - `Enterprise`
+- The roadmap-only `Enterprise Clustered` profile in `README.md` is not auto-selected today because Borealis does not yet support clustered orchestration.
+
+### Profile selection thresholds
+- Borealis scores CPU and RAM separately, then uses the lower of the two ranks as the effective profile so an unbalanced host does not get over-tuned.
+- CPU thresholds:
+  - `Homelab`: fewer than `8` vCPU
+  - `Small Business`: `8-15` vCPU
+  - `MSP / Production`: `16-23` vCPU
+  - `Enterprise`: `24+` vCPU
+- RAM thresholds:
+  - `Homelab`: fewer than `16 GiB`
+  - `Small Business`: `16-31 GiB`
+  - `MSP / Production`: `32-63 GiB`
+  - `Enterprise`: `64 GiB+`
+
+### Shared values across all auto-configured profiles
+- Engine DB connect timeout:
+  - `BOREALIS_DB_CONNECT_TIMEOUT = 15`
+- Engine idle-in-transaction safety timeout:
+  - `BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS = 60000`
+- PostgreSQL autovacuum scale factors:
+  - `autovacuum_vacuum_scale_factor = 0.02`
+  - `autovacuum_analyze_scale_factor = 0.01`
+- PostgreSQL WAL and planner defaults:
+  - `wal_compression = on`
+  - `checkpoint_timeout = 15min`
+  - `checkpoint_completion_target = 0.9`
+  - `random_page_cost = 1.1`
+
+### `Homelab`
+- Intended host shape:
+  - fewer than `8` vCPU or fewer than `16 GiB` RAM
+- Engine DB pool:
+  - `BOREALIS_DB_POOL_SIZE = 10`
+  - `BOREALIS_DB_MAX_OVERFLOW = 10`
+  - effective pooled Engine connection burst capacity: `20`
+- PostgreSQL connection ceiling:
+  - `max_connections = 80`
+- PostgreSQL memory and cache:
+  - `shared_buffers = max(1 GiB, min(25% of RAM, 4 GiB))`
+  - `effective_cache_size = max(4 GiB, min(62.5% of RAM, 12 GiB))`
+  - `work_mem = 4 MB`
+  - `maintenance_work_mem = 256 MB`
+- PostgreSQL worker and planner parallelism:
+  - `max_worker_processes = 8`
+  - `max_parallel_workers = 8`
+  - `max_parallel_workers_per_gather = 2`
+- PostgreSQL autovacuum:
+  - `autovacuum_max_workers = 3`
+  - `autovacuum_vacuum_cost_limit = 1000`
+  - `autovacuum_naptime = 30s`
+- PostgreSQL WAL / IO:
+  - `max_wal_size = 4GB`
+  - `min_wal_size = 512MB`
+  - `effective_io_concurrency = 16`
+
+### `Small Business`
+- Intended host shape:
+  - at least `8` vCPU and at least `16 GiB` RAM, but below `16` vCPU or below `32 GiB` RAM
+- Engine DB pool:
+  - `BOREALIS_DB_POOL_SIZE = 12`
+  - `BOREALIS_DB_MAX_OVERFLOW = 16`
+  - effective pooled Engine connection burst capacity: `28`
+- PostgreSQL connection ceiling:
+  - `max_connections = 120`
+- PostgreSQL memory and cache:
+  - `shared_buffers = max(4 GiB, min(25% of RAM, 8 GiB))`
+  - `effective_cache_size = max(8 GiB, min(62.5% of RAM, 16 GiB))`
+  - `work_mem = 8 MB`
+  - `maintenance_work_mem = 512 MB`
+- PostgreSQL worker and planner parallelism:
+  - `max_worker_processes = 8`
+  - `max_parallel_workers = 8`
+  - `max_parallel_workers_per_gather = 2`
+- PostgreSQL autovacuum:
+  - `autovacuum_max_workers = 4`
+  - `autovacuum_vacuum_cost_limit = 1500`
+  - `autovacuum_naptime = 20s`
+- PostgreSQL WAL / IO:
+  - `max_wal_size = 6GB`
+  - `min_wal_size = 1GB`
+  - `effective_io_concurrency = 32`
+
+### `MSP / Production`
+- Intended host shape:
+  - at least `16` vCPU and at least `32 GiB` RAM, but below `24` vCPU or below `64 GiB` RAM
+- Engine DB pool:
+  - `BOREALIS_DB_POOL_SIZE = 20`
+  - `BOREALIS_DB_MAX_OVERFLOW = 20`
+  - effective pooled Engine connection burst capacity: `40`
+- PostgreSQL connection ceiling:
+  - `max_connections = 150`
+- PostgreSQL memory and cache:
+  - `shared_buffers = max(8 GiB, min(25% of RAM, 16 GiB))`
+  - `effective_cache_size = max(20 GiB, min(62.5% of RAM, 32 GiB))`
+  - `work_mem = 8 MB`
+  - `maintenance_work_mem = 512 MB`
+- PostgreSQL worker and planner parallelism:
+  - `max_worker_processes = 12`
+  - `max_parallel_workers = 12`
+  - `max_parallel_workers_per_gather = 4`
+- PostgreSQL autovacuum:
+  - `autovacuum_max_workers = 5`
+  - `autovacuum_vacuum_cost_limit = 2000`
+  - `autovacuum_naptime = 15s`
+- PostgreSQL WAL / IO:
+  - `max_wal_size = 8GB`
+  - `min_wal_size = 1GB`
+  - `effective_io_concurrency = 64`
+
+### `Enterprise`
+- Intended host shape:
+  - at least `24` vCPU and at least `64 GiB` RAM
+- Engine DB pool:
+  - `BOREALIS_DB_POOL_SIZE = 24`
+  - `BOREALIS_DB_MAX_OVERFLOW = 24`
+  - effective pooled Engine connection burst capacity: `48`
+- PostgreSQL connection ceiling:
+  - `max_connections = 180`
+- PostgreSQL memory and cache:
+  - `shared_buffers = max(12 GiB, min(25% of RAM, 24 GiB))`
+  - `effective_cache_size = max(32 GiB, min(62.5% of RAM, 64 GiB))`
+  - `work_mem = 16 MB`
+  - `maintenance_work_mem = 1 GiB`
+- PostgreSQL worker and planner parallelism:
+  - `max_worker_processes = 16`
+  - `max_parallel_workers = 16`
+  - `max_parallel_workers_per_gather = 4`
+- PostgreSQL autovacuum:
+  - `autovacuum_max_workers = 6`
+  - `autovacuum_vacuum_cost_limit = 2500`
+  - `autovacuum_naptime = 15s`
+- PostgreSQL WAL / IO:
+  - `max_wal_size = 12GB`
+  - `min_wal_size = 2GB`
+  - `effective_io_concurrency = 64`
+
+### Maintenance rule
+- If you change the profile thresholds or any of the profile-tuned values in `Borealis.sh`, update this section in `Docs/db-reference.md` in the same change so the operator and Codex guidance stays accurate.
+
 ### Preferred remediation pattern
 ```python
 conn = db_conn_factory()

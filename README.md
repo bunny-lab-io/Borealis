@@ -36,8 +36,9 @@ Borealis currently runs as a single-node Engine deployment that bundles the Pyth
   - staged runtime assets such as the built Web UI, certificates, and Aurora-managed assembly content
 
 Storage requirements are driven more by retention policy than by the Borealis binaries themselves. Shorter log and job-history retention keeps storage needs much lower, while longer retention and heavier automation output will grow the requirement over time.
+During Engine deployment and re-deployment, `Borealis.sh` profiles the host CPU and RAM, prints the detected Engine profile in the CLI, and auto-configures the PostgreSQL and Engine DB tuning for that host. Storage is displayed as guidance only and does not change the selected profile.
 
-## Recommended Deployment Profiles
+## Engine Deployment Profiles
 
 | Profile | Typical Use | Endpoints | Active Operators | vCPU | RAM | NVMe Storage |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
@@ -45,7 +46,7 @@ Storage requirements are driven more by retention policy than by the Borealis bi
 | Small Business | Smaller production environments with light-to-moderate operator activity | Up to 1,000 | 2-4 | 8-12 | 16-24 GiB | 150-250 GiB |
 | MSP / Production | The main Borealis target for real-world SMB and managed-service usage | Up to 2,000 | 4-8 | 16 | 32 GiB | 500 GiB |
 | Enterprise | Larger single-node environments on the current Borealis architecture | Up to 10,000 | 10-20 | 16-24 | 32-64 GiB | 500 GiB-1 TiB |
-| Enterprise Clustered `Not Implemented Yet` | Much larger multi-node clustered environments | 10,000+ | 20+ per node | 16-24 per node | 32-64 GiB per node | 500 GiB-1 TiB per node |
+| Enterprise Clustered (Not Implemented Yet) | Much larger multi-node clustered environments | 10,000+ | 20+ per node | 16-24 per node | 32-64 GiB per node | 500 GiB-1 TiB per node |
 
 ## Practical Guidance
 
@@ -61,7 +62,7 @@ Storage requirements are driven more by retention policy than by the Borealis bi
 - The sizing guidance above assumes Borealis is running in its current single-node architecture.
 - Borealis is intentionally being sized today so it can soar for homelab users and smaller businesses, remain strong for typical MSP-style environments, and still operate reasonably well at higher endpoint counts.
 - Horizontal scaling through orchestrated clustering is a future roadmap item, but it is not required for the common `2,000`-endpoint-or-less usage profile that Borealis is primarily targeting today.
-- Until clustering exists, the `Enterprise Clustered Not Implemented Yet` row should be read as a forward-looking planning placeholder rather than a currently supported deployment topology.
+- Until clustering exists, the `Enterprise Clustered (Not Implemented Yet)` row should be read as a forward-looking planning placeholder rather than a currently supported deployment topology.
 
 ---
 

@@ -19,6 +19,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Source code: `Data/Engine/` (edit here).
 - Runtime copy: `Engine/` (regenerated each launch).
 - Database: PostgreSQL via `BOREALIS_DATABASE_URL`.
+- Launcher-generated DB/profile env: `Engine/database.env` (database URL, Engine profile metadata, SQLAlchemy pool settings, PostgreSQL tuning values).
 - Logs: `Engine/Logs/` (engine.log, error.log, api.log, service logs).
 - Ansible runtime: `Engine/Ansible/` (staged manifest, installed collections, generated execution workspaces).
 - Certificates: `Engine/Certificates/` (TLS bundle + code signing keys).
@@ -82,6 +83,17 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Production UI is served from `Engine/web-interface/`.
 - Dev UI uses Vite and still relies on Engine APIs for data.
 - The SPA fallback in `Data/Engine/services/WebUI/__init__.py` prevents 404s on client routes.
+
+### Launcher auto-profiling
+- `Borealis.sh` profiles the Engine host during deployment and re-deployment.
+- Profile selection is based on detected CPU and RAM only. Storage is surfaced in the CLI as guidance, but it does not affect the selected profile.
+- The launcher currently auto-selects one of the single-node profiles:
+  - `Homelab`
+  - `Small Business`
+  - `MSP / Production`
+  - `Enterprise`
+- The launcher writes the selected profile metadata and the resulting PostgreSQL/Engine DB tuning into `Engine/database.env`.
+- PostgreSQL tuning is applied through launcher-managed `ALTER SYSTEM` statements during the PostgreSQL configuration step so a re-deploy can raise the profile if the host later gains CPU or RAM.
 
 ### WireGuard and VNC wiring
 - WireGuard server manager: `Data/Engine/services/VPN/wireguard_server.py`.

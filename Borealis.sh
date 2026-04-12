@@ -51,6 +51,37 @@ ENGINE_USE_SYSTEMD_SUPERVISION=0
 POSTGRES_VERSION="${BOREALIS_PG_VERSION:-17}"
 ENGINE_DB_ENV_FILE="${SCRIPT_DIR}/Engine/database.env"
 ENGINE_DB_PASSWORD_FILE="${SCRIPT_DIR}/Engine/.postgres-password"
+ENGINE_PROFILE_KEY=""
+ENGINE_PROFILE_NAME=""
+ENGINE_PROFILE_VCPU=0
+ENGINE_PROFILE_RAM_MIB=0
+ENGINE_PROFILE_STORAGE_KIB=0
+ENGINE_PROFILE_PREVIOUS_NAME=""
+ENGINE_PROFILE_STORAGE_GUIDANCE=""
+ENGINE_PROFILE_STORAGE_MIN_GIB=0
+ENGINE_PROFILE_DB_POOL_SIZE=10
+ENGINE_PROFILE_DB_MAX_OVERFLOW=20
+ENGINE_PROFILE_DB_CONNECT_TIMEOUT=15
+ENGINE_PROFILE_DB_IDLE_IN_TXN_TIMEOUT_MS=60000
+ENGINE_PROFILE_PG_MAX_CONNECTIONS=100
+ENGINE_PROFILE_PG_SHARED_BUFFERS_MB=2048
+ENGINE_PROFILE_PG_EFFECTIVE_CACHE_SIZE_MB=8192
+ENGINE_PROFILE_PG_WORK_MEM_MB=4
+ENGINE_PROFILE_PG_MAINTENANCE_WORK_MEM_MB=256
+ENGINE_PROFILE_PG_MAX_WORKER_PROCESSES=8
+ENGINE_PROFILE_PG_MAX_PARALLEL_WORKERS=8
+ENGINE_PROFILE_PG_MAX_PARALLEL_WORKERS_PER_GATHER=2
+ENGINE_PROFILE_PG_AUTOVACUUM_MAX_WORKERS=3
+ENGINE_PROFILE_PG_AUTOVACUUM_VACUUM_COST_LIMIT=1000
+ENGINE_PROFILE_PG_AUTOVACUUM_NAPTIME="30s"
+ENGINE_PROFILE_PG_AUTOVACUUM_VACUUM_SCALE_FACTOR="0.02"
+ENGINE_PROFILE_PG_AUTOVACUUM_ANALYZE_SCALE_FACTOR="0.01"
+ENGINE_PROFILE_PG_MAX_WAL_SIZE="4GB"
+ENGINE_PROFILE_PG_MIN_WAL_SIZE="512MB"
+ENGINE_PROFILE_PG_WAL_COMPRESSION="on"
+ENGINE_PROFILE_PG_CHECKPOINT_TIMEOUT="15min"
+ENGINE_PROFILE_PG_RANDOM_PAGE_COST="1.1"
+ENGINE_PROFILE_PG_EFFECTIVE_IO_CONCURRENCY=32
 
 while (( "$#" )); do
   case "$1" in
@@ -517,6 +548,254 @@ resolve_engine_database_url() {
   echo ""
 }
 
+clamp_int() {
+  local value="${1:-0}"
+  local minimum="${2:-0}"
+  local maximum="${3:-0}"
+  (( value < minimum )) && value="${minimum}"
+  if (( maximum > 0 && value > maximum )); then
+    value="${maximum}"
+  fi
+  printf '%s' "${value}"
+}
+
+format_mib_to_gib() {
+  local mib="${1:-0}"
+  awk -v mib="${mib}" 'BEGIN { printf "%.1f", mib / 1024 }'
+}
+
+format_kib_to_gib() {
+  local kib="${1:-0}"
+  awk -v kib="${kib}" 'BEGIN { printf "%.1f", kib / 1048576 }'
+}
+
+load_existing_engine_profile_name() {
+  if [[ ! -f "${ENGINE_DB_ENV_FILE}" ]]; then
+    echo ""
+    return 0
+  fi
+  bash -lc "source '${ENGINE_DB_ENV_FILE}' >/dev/null 2>&1 || exit 0; printf '%s' \"\${BOREALIS_ENGINE_PROFILE_NAME:-}\"" 2>/dev/null || true
+}
+
+detect_engine_host_specs() {
+  local vcpu_count=0
+  local ram_kib=0
+  local storage_kib=0
+
+  if command_exists nproc; then
+    vcpu_count="$(nproc 2>/dev/null || echo 0)"
+  elif command_exists getconf; then
+    vcpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 0)"
+  fi
+  [[ "${vcpu_count}" =~ ^[0-9]+$ ]] || vcpu_count=0
+  (( vcpu_count > 0 )) || vcpu_count=1
+
+  if [[ -r /proc/meminfo ]]; then
+    ram_kib="$(awk '/MemTotal:/ { print $2; exit }' /proc/meminfo 2>/dev/null || echo 0)"
+  fi
+  [[ "${ram_kib}" =~ ^[0-9]+$ ]] || ram_kib=0
+  (( ram_kib > 0 )) || ram_kib=$((8 * 1024 * 1024))
+
+  storage_kib="$(df -Pk "${SCRIPT_DIR}" 2>/dev/null | awk 'NR==2 { print $2; exit }' || echo 0)"
+  [[ "${storage_kib}" =~ ^[0-9]+$ ]] || storage_kib=0
+
+  ENGINE_PROFILE_VCPU="${vcpu_count}"
+  ENGINE_PROFILE_RAM_MIB=$(( (ram_kib + 1023) / 1024 ))
+  ENGINE_PROFILE_STORAGE_KIB="${storage_kib}"
+}
+
+resolve_engine_profile_rank() {
+  local vcpu="${1:-1}"
+  local ram_mib="${2:-8192}"
+  local cpu_rank=0
+  local ram_rank=0
+
+  if (( vcpu >= 24 )); then
+    cpu_rank=3
+  elif (( vcpu >= 16 )); then
+    cpu_rank=2
+  elif (( vcpu >= 8 )); then
+    cpu_rank=1
+  fi
+
+  if (( ram_mib >= 65536 )); then
+    ram_rank=3
+  elif (( ram_mib >= 32768 )); then
+    ram_rank=2
+  elif (( ram_mib >= 16384 )); then
+    ram_rank=1
+  fi
+
+  if (( cpu_rank < ram_rank )); then
+    printf '%s' "${cpu_rank}"
+  else
+    printf '%s' "${ram_rank}"
+  fi
+}
+
+configure_engine_profile_from_specs() {
+  local rank="${1:-0}"
+  local quarter_ram_mb=$(( ENGINE_PROFILE_RAM_MIB / 4 ))
+  local effective_cache_mb=$(( (ENGINE_PROFILE_RAM_MIB * 5) / 8 ))
+
+  case "${rank}" in
+    0)
+      ENGINE_PROFILE_KEY="homelab"
+      ENGINE_PROFILE_NAME="Homelab"
+      ENGINE_PROFILE_STORAGE_GUIDANCE="80-150 GiB"
+      ENGINE_PROFILE_STORAGE_MIN_GIB=80
+      ENGINE_PROFILE_DB_POOL_SIZE=10
+      ENGINE_PROFILE_DB_MAX_OVERFLOW=10
+      ENGINE_PROFILE_PG_MAX_CONNECTIONS=80
+      ENGINE_PROFILE_PG_SHARED_BUFFERS_MB="$(clamp_int "${quarter_ram_mb}" 1024 4096)"
+      ENGINE_PROFILE_PG_EFFECTIVE_CACHE_SIZE_MB="$(clamp_int "${effective_cache_mb}" 4096 12288)"
+      ENGINE_PROFILE_PG_WORK_MEM_MB=4
+      ENGINE_PROFILE_PG_MAINTENANCE_WORK_MEM_MB=256
+      ENGINE_PROFILE_PG_MAX_WORKER_PROCESSES=8
+      ENGINE_PROFILE_PG_MAX_PARALLEL_WORKERS=8
+      ENGINE_PROFILE_PG_MAX_PARALLEL_WORKERS_PER_GATHER=2
+      ENGINE_PROFILE_PG_AUTOVACUUM_MAX_WORKERS=3
+      ENGINE_PROFILE_PG_AUTOVACUUM_VACUUM_COST_LIMIT=1000
+      ENGINE_PROFILE_PG_AUTOVACUUM_NAPTIME="30s"
+      ENGINE_PROFILE_PG_MAX_WAL_SIZE="4GB"
+      ENGINE_PROFILE_PG_MIN_WAL_SIZE="512MB"
+      ENGINE_PROFILE_PG_EFFECTIVE_IO_CONCURRENCY=16
+      ;;
+    1)
+      ENGINE_PROFILE_KEY="small_business"
+      ENGINE_PROFILE_NAME="Small Business"
+      ENGINE_PROFILE_STORAGE_GUIDANCE="150-250 GiB"
+      ENGINE_PROFILE_STORAGE_MIN_GIB=150
+      ENGINE_PROFILE_DB_POOL_SIZE=12
+      ENGINE_PROFILE_DB_MAX_OVERFLOW=16
+      ENGINE_PROFILE_PG_MAX_CONNECTIONS=120
+      ENGINE_PROFILE_PG_SHARED_BUFFERS_MB="$(clamp_int "${quarter_ram_mb}" 4096 8192)"
+      ENGINE_PROFILE_PG_EFFECTIVE_CACHE_SIZE_MB="$(clamp_int "${effective_cache_mb}" 8192 16384)"
+      ENGINE_PROFILE_PG_WORK_MEM_MB=8
+      ENGINE_PROFILE_PG_MAINTENANCE_WORK_MEM_MB=512
+      ENGINE_PROFILE_PG_MAX_WORKER_PROCESSES=8
+      ENGINE_PROFILE_PG_MAX_PARALLEL_WORKERS=8
+      ENGINE_PROFILE_PG_MAX_PARALLEL_WORKERS_PER_GATHER=2
+      ENGINE_PROFILE_PG_AUTOVACUUM_MAX_WORKERS=4
+      ENGINE_PROFILE_PG_AUTOVACUUM_VACUUM_COST_LIMIT=1500
+      ENGINE_PROFILE_PG_AUTOVACUUM_NAPTIME="20s"
+      ENGINE_PROFILE_PG_MAX_WAL_SIZE="6GB"
+      ENGINE_PROFILE_PG_MIN_WAL_SIZE="1GB"
+      ENGINE_PROFILE_PG_EFFECTIVE_IO_CONCURRENCY=32
+      ;;
+    2)
+      ENGINE_PROFILE_KEY="msp_production"
+      ENGINE_PROFILE_NAME="MSP / Production"
+      ENGINE_PROFILE_STORAGE_GUIDANCE="500 GiB"
+      ENGINE_PROFILE_STORAGE_MIN_GIB=500
+      ENGINE_PROFILE_DB_POOL_SIZE=20
+      ENGINE_PROFILE_DB_MAX_OVERFLOW=20
+      ENGINE_PROFILE_PG_MAX_CONNECTIONS=150
+      ENGINE_PROFILE_PG_SHARED_BUFFERS_MB="$(clamp_int "${quarter_ram_mb}" 8192 16384)"
+      ENGINE_PROFILE_PG_EFFECTIVE_CACHE_SIZE_MB="$(clamp_int "${effective_cache_mb}" 20480 32768)"
+      ENGINE_PROFILE_PG_WORK_MEM_MB=8
+      ENGINE_PROFILE_PG_MAINTENANCE_WORK_MEM_MB=512
+      ENGINE_PROFILE_PG_MAX_WORKER_PROCESSES=12
+      ENGINE_PROFILE_PG_MAX_PARALLEL_WORKERS=12
+      ENGINE_PROFILE_PG_MAX_PARALLEL_WORKERS_PER_GATHER=4
+      ENGINE_PROFILE_PG_AUTOVACUUM_MAX_WORKERS=5
+      ENGINE_PROFILE_PG_AUTOVACUUM_VACUUM_COST_LIMIT=2000
+      ENGINE_PROFILE_PG_AUTOVACUUM_NAPTIME="15s"
+      ENGINE_PROFILE_PG_MAX_WAL_SIZE="8GB"
+      ENGINE_PROFILE_PG_MIN_WAL_SIZE="1GB"
+      ENGINE_PROFILE_PG_EFFECTIVE_IO_CONCURRENCY=64
+      ;;
+    *)
+      ENGINE_PROFILE_KEY="enterprise"
+      ENGINE_PROFILE_NAME="Enterprise"
+      ENGINE_PROFILE_STORAGE_GUIDANCE="500 GiB-1 TiB"
+      ENGINE_PROFILE_STORAGE_MIN_GIB=500
+      ENGINE_PROFILE_DB_POOL_SIZE=24
+      ENGINE_PROFILE_DB_MAX_OVERFLOW=24
+      ENGINE_PROFILE_PG_MAX_CONNECTIONS=180
+      ENGINE_PROFILE_PG_SHARED_BUFFERS_MB="$(clamp_int "${quarter_ram_mb}" 12288 24576)"
+      ENGINE_PROFILE_PG_EFFECTIVE_CACHE_SIZE_MB="$(clamp_int "${effective_cache_mb}" 32768 65536)"
+      ENGINE_PROFILE_PG_WORK_MEM_MB=16
+      ENGINE_PROFILE_PG_MAINTENANCE_WORK_MEM_MB=1024
+      ENGINE_PROFILE_PG_MAX_WORKER_PROCESSES=16
+      ENGINE_PROFILE_PG_MAX_PARALLEL_WORKERS=16
+      ENGINE_PROFILE_PG_MAX_PARALLEL_WORKERS_PER_GATHER=4
+      ENGINE_PROFILE_PG_AUTOVACUUM_MAX_WORKERS=6
+      ENGINE_PROFILE_PG_AUTOVACUUM_VACUUM_COST_LIMIT=2500
+      ENGINE_PROFILE_PG_AUTOVACUUM_NAPTIME="15s"
+      ENGINE_PROFILE_PG_MAX_WAL_SIZE="12GB"
+      ENGINE_PROFILE_PG_MIN_WAL_SIZE="2GB"
+      ENGINE_PROFILE_PG_EFFECTIVE_IO_CONCURRENCY=64
+      ;;
+  esac
+}
+
+auto_configure_engine_profile() {
+  detect_engine_host_specs
+  ENGINE_PROFILE_PREVIOUS_NAME="$(load_existing_engine_profile_name)"
+  configure_engine_profile_from_specs "$(resolve_engine_profile_rank "${ENGINE_PROFILE_VCPU}" "${ENGINE_PROFILE_RAM_MIB}")"
+  ensure_engine_database_env_file || return 1
+
+  local detected_ram_gib detected_storage_gib
+  detected_ram_gib="$(format_mib_to_gib "${ENGINE_PROFILE_RAM_MIB}")"
+  detected_storage_gib="$(format_kib_to_gib "${ENGINE_PROFILE_STORAGE_KIB}")"
+
+  ui_info "Detected System Specs: ${ENGINE_PROFILE_VCPU} vCPU, ${detected_ram_gib} GiB RAM, ${detected_storage_gib} GiB storage"
+  if [[ -n "${ENGINE_PROFILE_PREVIOUS_NAME}" ]]; then
+    ui_info "Previous Engine Profile: ${ENGINE_PROFILE_PREVIOUS_NAME}"
+    if [[ "${ENGINE_PROFILE_PREVIOUS_NAME}" == "${ENGINE_PROFILE_NAME}" ]]; then
+      ui_info "Engine Profile Status: unchanged on re-deployment"
+    else
+      ui_info "Engine Profile Status: updated on re-deployment to ${ENGINE_PROFILE_NAME}"
+    fi
+  fi
+  ui_info "Engine Profile (Auto-Configured from System Specs): ${ENGINE_PROFILE_NAME}"
+  ui_verbose "Auto-configured DB pool: ${ENGINE_PROFILE_DB_POOL_SIZE} base / ${ENGINE_PROFILE_DB_MAX_OVERFLOW} overflow"
+  ui_verbose "Auto-configured PostgreSQL shared_buffers: ${ENGINE_PROFILE_PG_SHARED_BUFFERS_MB}MB"
+
+  if (( ENGINE_PROFILE_STORAGE_KIB > 0 )); then
+    local detected_storage_gib_int=$(( (ENGINE_PROFILE_STORAGE_KIB + 1048575) / 1048576 ))
+    if (( detected_storage_gib_int < ENGINE_PROFILE_STORAGE_MIN_GIB )); then
+      ui_warn "Storage guidance for ${ENGINE_PROFILE_NAME}: recommended ${ENGINE_PROFILE_STORAGE_GUIDANCE}. Detected ${detected_storage_gib} GiB. Storage does not change the selected Engine profile."
+    else
+      ui_info "Storage guidance for ${ENGINE_PROFILE_NAME}: ${ENGINE_PROFILE_STORAGE_GUIDANCE} (detected ${detected_storage_gib} GiB). Storage is advisory only and does not change the selected Engine profile."
+    fi
+  fi
+
+  write_engine_log "Auto-configured engine profile '${ENGINE_PROFILE_NAME}' from ${ENGINE_PROFILE_VCPU} vCPU / ${detected_ram_gib} GiB RAM." "engine-supervision.log"
+}
+
+apply_engine_postgresql_profile() {
+  # shellcheck disable=SC1090
+  . "${ENGINE_DB_ENV_FILE}"
+
+  run_as_postgres_quiet "psql postgres -v ON_ERROR_STOP=1 <<EOF
+ALTER SYSTEM SET max_connections = '${BOREALIS_PG_MAX_CONNECTIONS}';
+ALTER SYSTEM SET shared_buffers = '${BOREALIS_PG_SHARED_BUFFERS_MB}MB';
+ALTER SYSTEM SET effective_cache_size = '${BOREALIS_PG_EFFECTIVE_CACHE_SIZE_MB}MB';
+ALTER SYSTEM SET work_mem = '${BOREALIS_PG_WORK_MEM_MB}MB';
+ALTER SYSTEM SET maintenance_work_mem = '${BOREALIS_PG_MAINTENANCE_WORK_MEM_MB}MB';
+ALTER SYSTEM SET max_worker_processes = '${BOREALIS_PG_MAX_WORKER_PROCESSES}';
+ALTER SYSTEM SET max_parallel_workers = '${BOREALIS_PG_MAX_PARALLEL_WORKERS}';
+ALTER SYSTEM SET max_parallel_workers_per_gather = '${BOREALIS_PG_MAX_PARALLEL_WORKERS_PER_GATHER}';
+ALTER SYSTEM SET autovacuum_max_workers = '${BOREALIS_PG_AUTOVACUUM_MAX_WORKERS}';
+ALTER SYSTEM SET autovacuum_vacuum_cost_limit = '${BOREALIS_PG_AUTOVACUUM_VACUUM_COST_LIMIT}';
+ALTER SYSTEM SET autovacuum_naptime = '${BOREALIS_PG_AUTOVACUUM_NAPTIME}';
+ALTER SYSTEM SET autovacuum_vacuum_scale_factor = '${BOREALIS_PG_AUTOVACUUM_VACUUM_SCALE_FACTOR}';
+ALTER SYSTEM SET autovacuum_analyze_scale_factor = '${BOREALIS_PG_AUTOVACUUM_ANALYZE_SCALE_FACTOR}';
+ALTER SYSTEM SET max_wal_size = '${BOREALIS_PG_MAX_WAL_SIZE}';
+ALTER SYSTEM SET min_wal_size = '${BOREALIS_PG_MIN_WAL_SIZE}';
+ALTER SYSTEM SET wal_compression = '${BOREALIS_PG_WAL_COMPRESSION}';
+ALTER SYSTEM SET checkpoint_timeout = '${BOREALIS_PG_CHECKPOINT_TIMEOUT}';
+ALTER SYSTEM SET checkpoint_completion_target = '0.9';
+ALTER SYSTEM SET random_page_cost = '${BOREALIS_PG_RANDOM_PAGE_COST}';
+ALTER SYSTEM SET effective_io_concurrency = '${BOREALIS_PG_EFFECTIVE_IO_CONCURRENCY}';
+ALTER SYSTEM SET idle_in_transaction_session_timeout = '${BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS}';
+SELECT pg_reload_conf();
+EOF
+"
+}
+
 run_privileged() {
   if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     "$@"
@@ -971,6 +1250,30 @@ install_postgresql_best_effort() {
 ensure_engine_database_env_file() {
   mkdir -p "$(dirname "${ENGINE_DB_ENV_FILE}")"
   local password=""
+  local db_sslmode="${BOREALIS_DB_SSLMODE:-prefer}"
+  local db_pool_size="${BOREALIS_DB_POOL_SIZE:-${ENGINE_PROFILE_DB_POOL_SIZE}}"
+  local db_max_overflow="${BOREALIS_DB_MAX_OVERFLOW:-${ENGINE_PROFILE_DB_MAX_OVERFLOW}}"
+  local db_connect_timeout="${BOREALIS_DB_CONNECT_TIMEOUT:-${ENGINE_PROFILE_DB_CONNECT_TIMEOUT}}"
+  local db_idle_in_txn_timeout_ms="${BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS:-${ENGINE_PROFILE_DB_IDLE_IN_TXN_TIMEOUT_MS}}"
+  local pg_max_connections="${BOREALIS_PG_MAX_CONNECTIONS:-${ENGINE_PROFILE_PG_MAX_CONNECTIONS}}"
+  local pg_shared_buffers_mb="${BOREALIS_PG_SHARED_BUFFERS_MB:-${ENGINE_PROFILE_PG_SHARED_BUFFERS_MB}}"
+  local pg_effective_cache_size_mb="${BOREALIS_PG_EFFECTIVE_CACHE_SIZE_MB:-${ENGINE_PROFILE_PG_EFFECTIVE_CACHE_SIZE_MB}}"
+  local pg_work_mem_mb="${BOREALIS_PG_WORK_MEM_MB:-${ENGINE_PROFILE_PG_WORK_MEM_MB}}"
+  local pg_maintenance_work_mem_mb="${BOREALIS_PG_MAINTENANCE_WORK_MEM_MB:-${ENGINE_PROFILE_PG_MAINTENANCE_WORK_MEM_MB}}"
+  local pg_max_worker_processes="${BOREALIS_PG_MAX_WORKER_PROCESSES:-${ENGINE_PROFILE_PG_MAX_WORKER_PROCESSES}}"
+  local pg_max_parallel_workers="${BOREALIS_PG_MAX_PARALLEL_WORKERS:-${ENGINE_PROFILE_PG_MAX_PARALLEL_WORKERS}}"
+  local pg_max_parallel_workers_per_gather="${BOREALIS_PG_MAX_PARALLEL_WORKERS_PER_GATHER:-${ENGINE_PROFILE_PG_MAX_PARALLEL_WORKERS_PER_GATHER}}"
+  local pg_autovacuum_max_workers="${BOREALIS_PG_AUTOVACUUM_MAX_WORKERS:-${ENGINE_PROFILE_PG_AUTOVACUUM_MAX_WORKERS}}"
+  local pg_autovacuum_vacuum_cost_limit="${BOREALIS_PG_AUTOVACUUM_VACUUM_COST_LIMIT:-${ENGINE_PROFILE_PG_AUTOVACUUM_VACUUM_COST_LIMIT}}"
+  local pg_autovacuum_naptime="${BOREALIS_PG_AUTOVACUUM_NAPTIME:-${ENGINE_PROFILE_PG_AUTOVACUUM_NAPTIME}}"
+  local pg_autovacuum_vacuum_scale_factor="${BOREALIS_PG_AUTOVACUUM_VACUUM_SCALE_FACTOR:-${ENGINE_PROFILE_PG_AUTOVACUUM_VACUUM_SCALE_FACTOR}}"
+  local pg_autovacuum_analyze_scale_factor="${BOREALIS_PG_AUTOVACUUM_ANALYZE_SCALE_FACTOR:-${ENGINE_PROFILE_PG_AUTOVACUUM_ANALYZE_SCALE_FACTOR}}"
+  local pg_max_wal_size="${BOREALIS_PG_MAX_WAL_SIZE:-${ENGINE_PROFILE_PG_MAX_WAL_SIZE}}"
+  local pg_min_wal_size="${BOREALIS_PG_MIN_WAL_SIZE:-${ENGINE_PROFILE_PG_MIN_WAL_SIZE}}"
+  local pg_wal_compression="${BOREALIS_PG_WAL_COMPRESSION:-${ENGINE_PROFILE_PG_WAL_COMPRESSION}}"
+  local pg_checkpoint_timeout="${BOREALIS_PG_CHECKPOINT_TIMEOUT:-${ENGINE_PROFILE_PG_CHECKPOINT_TIMEOUT}}"
+  local pg_random_page_cost="${BOREALIS_PG_RANDOM_PAGE_COST:-${ENGINE_PROFILE_PG_RANDOM_PAGE_COST}}"
+  local pg_effective_io_concurrency="${BOREALIS_PG_EFFECTIVE_IO_CONCURRENCY:-${ENGINE_PROFILE_PG_EFFECTIVE_IO_CONCURRENCY}}"
   if [[ -f "${ENGINE_DB_PASSWORD_FILE}" ]]; then
     password="$(cat "${ENGINE_DB_PASSWORD_FILE}")"
   fi
@@ -981,10 +1284,35 @@ ensure_engine_database_env_file() {
   fi
   cat > "${ENGINE_DB_ENV_FILE}" <<EOF
 export BOREALIS_DATABASE_URL="postgresql+psycopg://borealis_engine:${password}@127.0.0.1:5432/borealis"
-export BOREALIS_DB_SSLMODE="${BOREALIS_DB_SSLMODE:-prefer}"
-export BOREALIS_DB_POOL_SIZE="${BOREALIS_DB_POOL_SIZE:-10}"
-export BOREALIS_DB_MAX_OVERFLOW="${BOREALIS_DB_MAX_OVERFLOW:-20}"
-export BOREALIS_DB_CONNECT_TIMEOUT="${BOREALIS_DB_CONNECT_TIMEOUT:-15}"
+export BOREALIS_DB_SSLMODE="${db_sslmode}"
+export BOREALIS_DB_POOL_SIZE="${db_pool_size}"
+export BOREALIS_DB_MAX_OVERFLOW="${db_max_overflow}"
+export BOREALIS_DB_CONNECT_TIMEOUT="${db_connect_timeout}"
+export BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS="${db_idle_in_txn_timeout_ms}"
+export BOREALIS_ENGINE_PROFILE_KEY="${ENGINE_PROFILE_KEY:-manual}"
+export BOREALIS_ENGINE_PROFILE_NAME="${ENGINE_PROFILE_NAME:-Manual Override}"
+export BOREALIS_ENGINE_PROFILE_VCPU="${ENGINE_PROFILE_VCPU:-0}"
+export BOREALIS_ENGINE_PROFILE_RAM_MIB="${ENGINE_PROFILE_RAM_MIB:-0}"
+export BOREALIS_ENGINE_PROFILE_STORAGE_KIB="${ENGINE_PROFILE_STORAGE_KIB:-0}"
+export BOREALIS_PG_MAX_CONNECTIONS="${pg_max_connections}"
+export BOREALIS_PG_SHARED_BUFFERS_MB="${pg_shared_buffers_mb}"
+export BOREALIS_PG_EFFECTIVE_CACHE_SIZE_MB="${pg_effective_cache_size_mb}"
+export BOREALIS_PG_WORK_MEM_MB="${pg_work_mem_mb}"
+export BOREALIS_PG_MAINTENANCE_WORK_MEM_MB="${pg_maintenance_work_mem_mb}"
+export BOREALIS_PG_MAX_WORKER_PROCESSES="${pg_max_worker_processes}"
+export BOREALIS_PG_MAX_PARALLEL_WORKERS="${pg_max_parallel_workers}"
+export BOREALIS_PG_MAX_PARALLEL_WORKERS_PER_GATHER="${pg_max_parallel_workers_per_gather}"
+export BOREALIS_PG_AUTOVACUUM_MAX_WORKERS="${pg_autovacuum_max_workers}"
+export BOREALIS_PG_AUTOVACUUM_VACUUM_COST_LIMIT="${pg_autovacuum_vacuum_cost_limit}"
+export BOREALIS_PG_AUTOVACUUM_NAPTIME="${pg_autovacuum_naptime}"
+export BOREALIS_PG_AUTOVACUUM_VACUUM_SCALE_FACTOR="${pg_autovacuum_vacuum_scale_factor}"
+export BOREALIS_PG_AUTOVACUUM_ANALYZE_SCALE_FACTOR="${pg_autovacuum_analyze_scale_factor}"
+export BOREALIS_PG_MAX_WAL_SIZE="${pg_max_wal_size}"
+export BOREALIS_PG_MIN_WAL_SIZE="${pg_min_wal_size}"
+export BOREALIS_PG_WAL_COMPRESSION="${pg_wal_compression}"
+export BOREALIS_PG_CHECKPOINT_TIMEOUT="${pg_checkpoint_timeout}"
+export BOREALIS_PG_RANDOM_PAGE_COST="${pg_random_page_cost}"
+export BOREALIS_PG_EFFECTIVE_IO_CONCURRENCY="${pg_effective_io_concurrency}"
 EOF
   chmod 600 "${ENGINE_DB_ENV_FILE}"
 }
@@ -1029,6 +1357,10 @@ EOF
 "
     run_as_postgres_quiet "psql postgres -tAc \"SELECT 1 FROM pg_database WHERE datname='borealis'\" | grep -q 1" || \
       run_as_postgres_quiet "createdb -O borealis_engine borealis"
+    apply_engine_postgresql_profile
+    if command_exists systemctl; then
+      run_privileged_quiet systemctl restart "${service_name}" || true
+    fi
   fi
 }
 
@@ -2808,12 +3140,13 @@ server_menu() {
 
   set_output_context engine
   if [[ "${engine_immediate_launch}" -eq 1 ]]; then
-    set_step_plan 6
+    set_step_plan 7
   else
-    set_step_plan 8
+    set_step_plan 9
   fi
 
   run_step "Installing / Updating Dependencies" install_server_dependencies
+  run_step "Auto-Configure Engine Profile" auto_configure_engine_profile
   run_step "Configure PostgreSQL" ensure_engine_postgresql_ready
   export PATH="${NODE_DIR}/bin:${PATH}"
   ENGINE_USE_SYSTEMD_SUPERVISION=0
@@ -2823,7 +3156,6 @@ server_menu() {
 
   if [[ "$engine_immediate_launch" -eq 1 ]]; then
     run_step "Sync Engine Runtime" sync_engine_runtime
-    ensure_engine_database_env_file
     run_step "Configure Borealis Traefik Edge" ensure_engine_public_edge_runtime "$borealis_operation_mode"
     run_step "Verify Engine Ansible Runtime" verify_engine_ansible_runtime
     run_step "Configure Borealis Engine supervision (${borealis_operation_mode})" configure_engine_supervision "$borealis_operation_mode"
@@ -2833,7 +3165,6 @@ server_menu() {
   fi
 
   run_step "Prepare Engine Python Environment" create_engine_venv_and_stage_data
-  ensure_engine_database_env_file
   run_step "Install Engine Python Dependencies" install_engine_python_deps
   run_step "Configure Borealis Traefik Edge" ensure_engine_public_edge_runtime "$borealis_operation_mode"
   run_step "Configure Engine Ansible Runtime" configure_engine_ansible_runtime
