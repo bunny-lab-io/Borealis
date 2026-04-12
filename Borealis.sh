@@ -2164,6 +2164,19 @@ PY
   echo "localhost"
 }
 
+engine_public_url() {
+  printf 'https://%s' "$(resolve_engine_public_fqdn)"
+}
+
+engine_mode_display_label() {
+  local mode="${1:-production}"
+  if [[ "${mode}" == "developer" ]]; then
+    echo "Dev"
+  else
+    echo "Production"
+  fi
+}
+
 looks_like_public_fqdn() {
   local raw="${1:-}"
   local host
@@ -2854,6 +2867,30 @@ print_engine_runtime_status_summary() {
   print_wireguard_listener_status
 }
 
+format_wireguard_listener_state() {
+  local interface_name="$1"
+  local oper_state="${2:-}"
+  local link_summary=""
+
+  if command_exists ip; then
+    link_summary="$(ip link show dev "${interface_name}" 2>/dev/null | head -n 1 || true)"
+  fi
+
+  if [[ "${oper_state}" == "up" ]]; then
+    echo "active/running"
+    return 0
+  fi
+
+  if [[ -z "${oper_state}" || "${oper_state}" == "unknown" ]]; then
+    if [[ "${link_summary}" == *"<UP,"* || "${link_summary}" == *",UP,"* || "${link_summary}" == *",UP>"* || "${link_summary}" == *" state UP "* ]]; then
+      echo "active/running"
+      return 0
+    fi
+  fi
+
+  echo "${oper_state:-present}"
+}
+
 print_wireguard_listener_status() {
   local interface_name="${BOREALIS_WIREGUARD_INTERFACE:-borealis-wg}"
   local config_path="${SCRIPT_DIR}/Engine/WireGuard/${interface_name}.conf"
@@ -2864,11 +2901,11 @@ print_wireguard_listener_status() {
   fi
 
   if ip link show dev "${interface_name}" >/dev/null 2>&1; then
-    local oper_state="present"
+    local oper_state=""
     if [[ -r "/sys/class/net/${interface_name}/operstate" ]]; then
-      oper_state="$(cat "/sys/class/net/${interface_name}/operstate" 2>/dev/null || echo present)"
+      oper_state="$(cat "/sys/class/net/${interface_name}/operstate" 2>/dev/null || true)"
     fi
-    ui_success "WireGuard listener: ${oper_state} (${interface_name})"
+    ui_success "WireGuard listener: $(format_wireguard_listener_state "${interface_name}" "${oper_state}") (${interface_name})"
     return 0
   fi
 
@@ -2881,14 +2918,17 @@ print_wireguard_listener_status() {
   return 0
 }
 
+print_engine_ready_message() {
+  local mode="${1:-production}"
+  ui_success "Borealis Engine ($(engine_mode_display_label "${mode}")) Started Successfully @ $(engine_public_url)"
+}
+
 print_engine_launch_summary() {
   if [[ "${VERBOSE_FLAG}" -ne 1 ]]; then
     return 0
   fi
   local mode="${1:-production}"
-  local fqdn
-  fqdn="$(resolve_engine_public_fqdn)"
-  ui_info "Engine URL: https://${fqdn}"
+  ui_info "Engine URL: $(engine_public_url)"
   ui_info "Engine install log: $(ensure_engine_log_dir)/install.log"
   ui_info "Engine runtime log: ${SCRIPT_DIR}/Engine/Logs/engine.log"
   if [[ "${mode}" == "developer" ]]; then
@@ -3071,13 +3111,7 @@ flask_engine_launch() {
     . "$(engine_letsencrypt_runtime_env_path)"
   fi
   ui_info "Launching Borealis Engine..."
-  local start_label
-  if [[ "$mode" == "developer" ]]; then
-    start_label="(Dev) Borealis Edge + Vite HMR Started on https://$(resolve_engine_public_fqdn)"
-  else
-    start_label="(Production) Borealis Edge Started on https://$(resolve_engine_public_fqdn)"
-  fi
-  ui_info "${start_label}"
+  ui_info "Bootstrapping Borealis Engine ($(engine_mode_display_label "${mode}")) @ $(engine_public_url)"
   local logdir; logdir=$(ensure_engine_log_dir)
   local stdout_log="${logdir}/engine-launch.stdout.log"
   local stderr_log="${logdir}/engine-launch.stderr.log"
@@ -3160,6 +3194,7 @@ server_menu() {
     run_step "Verify Engine Ansible Runtime" verify_engine_ansible_runtime
     run_step "Configure Borealis Engine supervision (${borealis_operation_mode})" configure_engine_supervision "$borealis_operation_mode"
     print_engine_runtime_status_summary
+    print_engine_ready_message "$borealis_operation_mode"
     print_engine_launch_summary "$borealis_operation_mode"
     return 0
   fi
@@ -3171,6 +3206,7 @@ server_menu() {
   run_step "Configure Vite Engine Frontend" configure_engine_frontend "$borealis_operation_mode"
   run_step "Configure Borealis Engine supervision (${borealis_operation_mode})" configure_engine_supervision "$borealis_operation_mode"
   print_engine_runtime_status_summary
+  print_engine_ready_message "$borealis_operation_mode"
   print_engine_launch_summary "$borealis_operation_mode"
 }
 
