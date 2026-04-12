@@ -14,7 +14,10 @@ import json
 import logging
 import os
 import re
+import shlex
+import shutil
 import socket
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -40,10 +43,14 @@ _WINRM_PASSWORD_VAR = "__borealis_winrm_password"
 _WINRM_TRANSPORT_VAR = "__borealis_winrm_transport"
 _PREPARED_REMOTE_PREFLIGHT_ATTEMPTS_ENV = "BOREALIS_SHARED_ANSIBLE_PREPARED_PREFLIGHT_ATTEMPTS"
 _PREPARED_REMOTE_PREFLIGHT_RETRY_DELAY_ENV = "BOREALIS_SHARED_ANSIBLE_PREPARED_PREFLIGHT_RETRY_DELAY_SECONDS"
+_SSH_BANNER_TIMEOUT_ENV = "BOREALIS_SHARED_ANSIBLE_SSH_BANNER_TIMEOUT_SECONDS"
+_SSH_SESSION_TIMEOUT_ENV = "BOREALIS_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS"
 _SHARED_ANSIBLE_SSH_RETRIES_ENV = "BOREALIS_SHARED_ANSIBLE_SSH_RETRIES"
 _SHARED_ANSIBLE_SSH_TIMEOUT_ENV = "BOREALIS_SHARED_ANSIBLE_SSH_TIMEOUT_SECONDS"
 _DEFAULT_PREPARED_REMOTE_PREFLIGHT_ATTEMPTS = 5
 _DEFAULT_PREPARED_REMOTE_PREFLIGHT_RETRY_DELAY_SECONDS = 1.0
+_DEFAULT_SHARED_ANSIBLE_SSH_BANNER_TIMEOUT_SECONDS = 20.0
+_DEFAULT_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS = 20.0
 _DEFAULT_SHARED_ANSIBLE_SSH_RETRIES = 30
 _DEFAULT_SHARED_ANSIBLE_SSH_TIMEOUT_SECONDS = 5
 
@@ -70,6 +77,7 @@ RESOLUTION_STATUS_PENDING = "pending"
 RESOLUTION_STATUS_ELIGIBLE = "eligible"
 RESOLUTION_STATUS_SKIPPED = "skipped"
 RESOLUTION_STATUS_UNRESOLVED = "unresolved"
+RESOLUTION_REASON_REMOTE_PREFLIGHT_FAILED = "remote_preflight_failed"
 ENGINE_LOCAL_ALIAS = "borealis-engine-01"
 CREDENTIAL_RESET_REQUIRED_MESSAGE = (
     "The credential associated with this scheduled job can no longer be decrypted due to the "
@@ -611,6 +619,23 @@ def _aggregate_statuses(statuses: Sequence[Any]) -> str:
     return next(iter(normalized))
 
 
+def _all_skipped_for_reason(
+    aggregated_rows: Mapping[str, Mapping[str, Any]],
+    *,
+    resolution_reason: str = "",
+) -> bool:
+    rows = list((aggregated_rows or {}).values())
+    if not rows:
+        return False
+    normalized_reason = str(resolution_reason or "").strip().lower()
+    for row in rows:
+        if str(row.get("status") or "").strip() != RUN_STATUS_SKIPPED:
+            return False
+        if normalized_reason and str(row.get("resolution_reason") or "").strip().lower() != normalized_reason:
+            return False
+    return True
+
+
 class JobScheduler:
     def __init__(
         self,
@@ -652,7 +677,9 @@ class JobScheduler:
         # Optional callback to fetch active WireGuard sessions keyed by agent_id.
         self._vpn_session_lookup: Optional[Callable[[], Dict[str, Dict[str, Any]]]] = None
         # Optional callback to re-prime existing WireGuard sessions for selected agents.
-        self._vpn_session_prepare: Optional[Callable[[Sequence[str]], Dict[str, Dict[str, Any]]]] = None
+        self._vpn_session_prepare: Optional[
+            Callable[[Sequence[str], Optional[Sequence[int]]], Dict[str, Dict[str, Any]]]
+        ] = None
         # Optional callback to launch workflow-backed scheduled jobs.
         self._workflow_run_launcher: Optional[Callable[..., Dict[str, Any]]] = None
         # Optional callback to validate a saved workflow document before jobs reference it.
@@ -1482,7 +1509,10 @@ class JobScheduler:
     def set_vpn_session_lookup(self, fn: Optional[Callable[[], Dict[str, Dict[str, Any]]]]):
         self._vpn_session_lookup = fn
 
-    def set_vpn_session_prepare(self, fn: Optional[Callable[[Sequence[str]], Dict[str, Dict[str, Any]]]]):
+    def set_vpn_session_prepare(
+        self,
+        fn: Optional[Callable[[Sequence[str], Optional[Sequence[int]]], Dict[str, Dict[str, Any]]]],
+    ):
         self._vpn_session_prepare = fn
 
     def set_workflow_run_launcher(self, fn: Optional[Callable[..., Dict[str, Any]]]):
@@ -1777,19 +1807,28 @@ class JobScheduler:
             normalized[key] = payload
         return normalized
 
-    def _prepare_vpn_sessions(self, agent_ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+    def _prepare_vpn_sessions(
+        self,
+        agent_ids: Sequence[str],
+        *,
+        required_ports: Optional[Sequence[int]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
         normalized_agent_ids = sorted({str(agent_id or "").strip() for agent_id in agent_ids if str(agent_id or "").strip()})
         if not normalized_agent_ids:
             return self._active_vpn_sessions()
         if not callable(self._vpn_session_prepare):
             return self._active_vpn_sessions()
         try:
-            sessions = self._vpn_session_prepare(normalized_agent_ids) or {}
+            sessions = self._vpn_session_prepare(normalized_agent_ids, required_ports) or {}
         except Exception as exc:
             self._log_event(
                 "failed to prepare vpn sessions for shared ansible run",
                 level="ERROR",
-                extra={"agent_count": len(normalized_agent_ids), "error": str(exc)},
+                extra={
+                    "agent_count": len(normalized_agent_ids),
+                    "required_ports": [int(port) for port in (required_ports or []) if str(port).strip()],
+                    "error": str(exc),
+                },
             )
             return self._active_vpn_sessions()
         normalized: Dict[str, Dict[str, Any]] = {}
@@ -1823,16 +1862,29 @@ class JobScheduler:
         attempts: int = 3,
         timeout_seconds: float = 1.25,
         retry_delay_seconds: float = 0.5,
+        probe: str = "tcp",
+        banner_timeout_seconds: Optional[float] = None,
     ) -> str:
         normalized_host = str(host or "").strip()
         if not normalized_host:
             return "missing_host"
         normalized_port = int(port)
+        normalized_probe = str(probe or "tcp").strip().lower() or "tcp"
+        resolved_banner_timeout = (
+            max(0.1, float(banner_timeout_seconds))
+            if banner_timeout_seconds is not None
+            else max(0.1, float(timeout_seconds or 0.0))
+        )
         last_error = ""
         for attempt in range(max(1, int(attempts))):
             sock = None
             try:
                 sock = socket.create_connection((normalized_host, normalized_port), timeout=timeout_seconds)
+                if normalized_probe == "ssh_banner":
+                    banner_error = self._preflight_ssh_banner(sock, timeout_seconds=resolved_banner_timeout)
+                    if banner_error:
+                        last_error = banner_error
+                        return last_error
                 return ""
             except Exception as exc:
                 last_error = str(exc).strip() or exc.__class__.__name__
@@ -1845,6 +1897,214 @@ class JobScheduler:
             if attempt + 1 < max(1, int(attempts)):
                 time.sleep(max(0.0, float(retry_delay_seconds)))
         return last_error or "connection_failed"
+
+    def _preflight_ssh_banner(self, sock: socket.socket, *, timeout_seconds: float) -> str:
+        deadline = time.monotonic() + max(0.1, float(timeout_seconds or 0.0))
+        received = b""
+        while len(received) < 255:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                sock.settimeout(remaining)
+                chunk = sock.recv(128)
+            except socket.timeout:
+                break
+            except Exception as exc:
+                return str(exc).strip() or exc.__class__.__name__
+            if not chunk:
+                break
+            received += chunk
+            for raw_line in received.splitlines():
+                if raw_line.startswith(b"SSH-"):
+                    return ""
+        if received:
+            compact = received.decode("utf-8", errors="replace").replace("\r", "\\r").replace("\n", "\\n").strip()
+            if compact:
+                return f"invalid_ssh_banner:{compact[:80]}"
+        return "ssh_banner_timeout"
+
+    def _preflight_ssh_session(
+        self,
+        *,
+        host: str,
+        port: int,
+        username: str,
+        password: str = "",
+        private_key_text: str = "",
+        timeout_seconds: float = _DEFAULT_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS,
+        become_method: str = "",
+        become_user: str = "",
+        become_password: str = "",
+    ) -> str:
+        normalized_host = str(host or "").strip()
+        normalized_username = str(username or "").strip()
+        if not normalized_host or not normalized_username:
+            return ""
+
+        ssh_bin = shutil.which("ssh")
+        if not ssh_bin:
+            return "ssh_client_unavailable"
+
+        try:
+            import pexpect  # type: ignore
+        except Exception:
+            return "ssh_probe_dependency_unavailable"
+
+        login_marker = "__BOREALIS_LOGIN_OK__"
+        sudo_prompt_marker = "__BOREALIS_SUDO_PROMPT__"
+        ready_marker = "__BOREALIS_READY__"
+        normalized_timeout = max(1.0, float(timeout_seconds or 0.0))
+        connect_timeout = max(1, min(int(normalized_timeout), _DEFAULT_SHARED_ANSIBLE_SSH_TIMEOUT_SECONDS))
+
+        remote_steps = [
+            f"printf '%s\\n' {login_marker}",
+            "mkdir -p /tmp/.ansible-borealis",
+        ]
+        normalized_become_method = str(become_method or "").strip().lower()
+        if normalized_become_method == "sudo":
+            target_user = str(become_user or "root").strip() or "root"
+            remote_steps.append(
+                "sudo -S -p {prompt} -u {user} /bin/sh -lc {command}".format(
+                    prompt=shlex.quote(sudo_prompt_marker),
+                    user=shlex.quote(target_user),
+                    command=shlex.quote("true"),
+                )
+            )
+        remote_steps.append(f"printf '%s\\n' {ready_marker}")
+        remote_command = " && ".join(remote_steps)
+
+        probe_root = Path(tempfile.mkdtemp(prefix="borealis-ssh-preflight-"))
+        known_hosts_path = probe_root / "known_hosts"
+        key_path = probe_root / "id_borealis_ssh"
+        try:
+            known_hosts_path.touch(exist_ok=True)
+            try:
+                os.chmod(known_hosts_path, 0o600)
+            except Exception:
+                pass
+
+            args = [
+                ssh_bin,
+                "-T",
+                "-o",
+                f"ConnectTimeout={connect_timeout}",
+                "-o",
+                "ConnectionAttempts=1",
+                "-o",
+                f"UserKnownHostsFile={known_hosts_path}",
+                "-o",
+                "GlobalKnownHostsFile=/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UpdateHostKeys=no",
+                "-o",
+                "PreferredAuthentications=publickey,password,keyboard-interactive",
+                "-o",
+                "PubkeyAuthentication=yes",
+                "-o",
+                "PasswordAuthentication=yes",
+                "-o",
+                "KbdInteractiveAuthentication=yes",
+                "-o",
+                "NumberOfPasswordPrompts=1",
+                "-o",
+                "ServerAliveInterval=5",
+                "-o",
+                "ServerAliveCountMax=1",
+                "-p",
+                str(int(port)),
+            ]
+            if private_key_text:
+                key_path.write_text(str(private_key_text), encoding="utf-8")
+                try:
+                    os.chmod(key_path, 0o600)
+                except Exception:
+                    pass
+                args.extend(["-o", f"IdentityFile={key_path}"])
+            args.append(f"{normalized_username}@{normalized_host}")
+            args.append(remote_command)
+
+            child = pexpect.spawn(args[0], args[1:], encoding="utf-8", timeout=normalized_timeout)
+            transcript_parts: List[str] = []
+            login_seen = False
+            ready_seen = False
+            ssh_password_sent = False
+            sudo_password_sent = False
+
+            patterns = [
+                pexpect.EOF,
+                pexpect.TIMEOUT,
+                r"(?i)are you sure you want to continue connecting",
+                sudo_prompt_marker,
+                r"(?i)(?:password|passphrase).*:",
+                login_marker,
+                ready_marker,
+                r"(?i)permission denied",
+            ]
+
+            while True:
+                index = child.expect(patterns)
+                before = str(child.before or "")
+                if before:
+                    transcript_parts.append(before)
+
+                if index == 0:
+                    break
+                if index == 1:
+                    return "ssh_session_timeout"
+                if index == 2:
+                    child.sendline("yes")
+                    continue
+                if index == 3:
+                    secret = str(become_password or password or "").strip()
+                    if not secret or sudo_password_sent:
+                        return "sudo_password_required"
+                    child.sendline(secret)
+                    sudo_password_sent = True
+                    continue
+                if index == 4:
+                    if login_seen:
+                        secret = str(become_password or password or "").strip()
+                        if not secret or sudo_password_sent:
+                            return "sudo_password_required"
+                        child.sendline(secret)
+                        sudo_password_sent = True
+                    else:
+                        secret = str(password or "").strip()
+                        if not secret or ssh_password_sent:
+                            return "ssh_password_required"
+                        child.sendline(secret)
+                        ssh_password_sent = True
+                    continue
+                if index == 5:
+                    login_seen = True
+                    continue
+                if index == 6:
+                    ready_seen = True
+                    continue
+                if index == 7:
+                    return "permission_denied"
+
+            trailing = str(child.before or "")
+            if trailing:
+                transcript_parts.append(trailing)
+            try:
+                child.close()
+            except Exception:
+                pass
+
+            if ready_seen:
+                return ""
+
+            transcript = " ".join(part.strip() for part in transcript_parts if str(part).strip())
+            compact = transcript.replace("\r", " ").replace("\n", " ").strip()
+            if compact:
+                return f"ssh_session_failed:{compact[:80]}"
+            return "ssh_session_failed"
+        finally:
+            shutil.rmtree(str(probe_root), ignore_errors=True)
 
     def _resolved_targets_from_meta(self, resolution_meta: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
         entries = []
@@ -3099,17 +3359,21 @@ class JobScheduler:
 
         if run_mode_norm in {"ssh", "winrm"}:
             candidate_agent_ids: List[str] = []
+            required_vpn_ports: List[int] = []
             for target in run_targets:
                 device = device_lookup.get(self._device_lookup_key_for_target(target)) or {}
                 agent_id = str(device.get("agent_id") or target.get("agent_id") or "").strip()
                 if agent_id:
                     candidate_agent_ids.append(agent_id)
-            vpn_sessions = self._prepare_vpn_sessions(candidate_agent_ids)
+                connection_endpoint = str(device.get("connection_endpoint") or target.get("connection_endpoint") or "").strip()
+                default_port = 22 if run_mode_norm == "ssh" else 5985
+                required_vpn_ports.append(_extract_endpoint_port(connection_endpoint) or default_port)
+            vpn_sessions = self._prepare_vpn_sessions(candidate_agent_ids, required_ports=required_vpn_ports)
 
         target_specifications: List[Dict[str, Any]] = []
         target_updates: List[Tuple[str, str, str, str, str, int]] = []
         skipped_targets_for_log: List[Dict[str, Any]] = []
-        preflight_warning_targets_for_log: List[Dict[str, Any]] = []
+        preflight_failed_targets_for_log: List[Dict[str, Any]] = []
         local_allowed = {"localhost", "127.0.0.1", "::1", ENGINE_LOCAL_ALIAS}
         for target in run_targets:
             hostname = str(target.get("hostname") or "").strip()
@@ -3152,6 +3416,19 @@ class JobScheduler:
                 else:
                     ssh_port = _extract_endpoint_port(connection_endpoint) or 22
                     preflight_kwargs: Dict[str, Any] = {}
+                    preflight_kwargs["banner_timeout_seconds"] = _env_non_negative_float(
+                        _SSH_BANNER_TIMEOUT_ENV,
+                        _DEFAULT_SHARED_ANSIBLE_SSH_BANNER_TIMEOUT_SECONDS,
+                    )
+                    ssh_username = ""
+                    ssh_become_method = ""
+                    ssh_become_username = ""
+                    ssh_become_password = ""
+                    if credential:
+                        ssh_username = str(credential.get("username") or "").strip()
+                        ssh_become_method = str(credential.get("become_method") or "").strip()
+                        ssh_become_username = str(credential.get("become_username") or "").strip()
+                        ssh_become_password = str(credential.get("become_password") or "").strip()
                     if bool(session.get("_requested_start")):
                         preflight_kwargs["attempts"] = _env_positive_int(
                             _PREPARED_REMOTE_PREFLIGHT_ATTEMPTS_ENV,
@@ -3161,11 +3438,27 @@ class JobScheduler:
                             _PREPARED_REMOTE_PREFLIGHT_RETRY_DELAY_ENV,
                             _DEFAULT_PREPARED_REMOTE_PREFLIGHT_RETRY_DELAY_SECONDS,
                         )
-                    preflight_error = self._preflight_remote_port(
-                        host=wireguard_peer_ip,
-                        port=ssh_port,
-                        **preflight_kwargs,
-                    )
+                        preflight_error = self._preflight_remote_port(
+                            host=wireguard_peer_ip,
+                            port=ssh_port,
+                            probe="ssh_banner",
+                            **preflight_kwargs,
+                        )
+                        if not preflight_error:
+                            preflight_error = self._preflight_ssh_session(
+                                host=wireguard_peer_ip,
+                                port=ssh_port,
+                                username=ssh_username,
+                                password=credential_password,
+                                private_key_text=normalized_private_key,
+                                timeout_seconds=_env_non_negative_float(
+                                    _SSH_SESSION_TIMEOUT_ENV,
+                                    _DEFAULT_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS,
+                                ),
+                                become_method=ssh_become_method,
+                                become_user=ssh_become_username,
+                                become_password=ssh_become_password,
+                            )
                     host_vars = {
                         "ansible_host": wireguard_peer_ip,
                         "ansible_connection": "ssh",
@@ -3200,7 +3493,9 @@ class JobScheduler:
                             if become_password:
                                 host_vars["ansible_become_password"] = become_password
                     if preflight_error:
-                        preflight_warning_targets_for_log.append(
+                        resolution_status = RESOLUTION_STATUS_SKIPPED
+                        resolution_reason = RESOLUTION_REASON_REMOTE_PREFLIGHT_FAILED
+                        preflight_failed_targets_for_log.append(
                             {
                                 "hostname": hostname,
                                 "inventory_hostname": inventory_hostname,
@@ -3264,7 +3559,9 @@ class JobScheduler:
                         if winrm_port:
                             host_vars["ansible_port"] = winrm_port
                         if preflight_error:
-                            preflight_warning_targets_for_log.append(
+                            resolution_status = RESOLUTION_STATUS_SKIPPED
+                            resolution_reason = RESOLUTION_REASON_REMOTE_PREFLIGHT_FAILED
+                            preflight_failed_targets_for_log.append(
                                 {
                                     "hostname": hostname,
                                     "inventory_hostname": inventory_hostname,
@@ -3330,9 +3627,9 @@ class JobScheduler:
         finally:
             conn.close()
 
-        if preflight_warning_targets_for_log:
+        if preflight_failed_targets_for_log:
             self._log_event(
-                "shared ansible run continuing despite remote preflight warnings",
+                "shared ansible run skipped targets that failed remote preflight",
                 job_id=int(job_id),
                 run_id=int(run_row_id),
                 level="WARNING",
@@ -3343,8 +3640,8 @@ class JobScheduler:
                         dict(component or {}),
                         fallback=f"Ansible Playbook {int(run_row_id)}",
                     ),
-                    "warning_count": len(preflight_warning_targets_for_log),
-                    "warning_details": json.dumps(preflight_warning_targets_for_log, sort_keys=True),
+                    "warning_count": len(preflight_failed_targets_for_log),
+                    "warning_details": json.dumps(preflight_failed_targets_for_log, sort_keys=True),
                 },
             )
 
@@ -3469,6 +3766,7 @@ class JobScheduler:
                 hostname=ENGINE_LOCAL_ALIAS,
                 playbook_rel_path=rel_norm,
                 playbook_name=friendly_name,
+                playbook_abs_path="",
                 playbook_content=normalized_script,
                 credential_id=credential_id,
                 variable_values=overrides_map,
@@ -4275,9 +4573,13 @@ class JobScheduler:
                             summary_status = RUN_STATUS_SKIPPED
                         has_no_targets_skip = False
                     else:
-                        _aggregated_by_host, aggregated_counts, has_no_targets_skip = self._aggregate_occurrence_targets(
+                        aggregated_by_host, aggregated_counts, has_no_targets_skip = self._aggregate_occurrence_targets(
                             occurrence_rows,
                             occurrence_target_rows,
+                        )
+                        has_no_eligible_targets_skip = _all_skipped_for_reason(
+                            aggregated_by_host,
+                            resolution_reason=RESOLUTION_REASON_REMOTE_PREFLIGHT_FAILED,
                         )
                         total_targets = int(aggregated_counts.get("total_targets") or total_targets or 0)
                         result_counts["total_targets"] = total_targets
@@ -4303,6 +4605,8 @@ class JobScheduler:
                             summary_status = RUN_STATUS_PENDING
                         elif result_counts["success"]:
                             summary_status = RUN_STATUS_SUCCESS
+                        elif has_no_eligible_targets_skip:
+                            summary_status = "No Eligible Targets"
                         elif has_no_targets_skip:
                             summary_status = "No Devices Targeted"
                         elif result_counts["skipped"]:
@@ -5296,7 +5600,7 @@ def set_vpn_session_lookup(scheduler: JobScheduler, fn: Callable[[], Dict[str, D
 
 def set_vpn_session_prepare(
     scheduler: JobScheduler,
-    fn: Callable[[Sequence[str]], Dict[str, Dict[str, Any]]],
+    fn: Callable[[Sequence[str], Optional[Sequence[int]]], Dict[str, Dict[str, Any]]],
 ):
     scheduler._vpn_session_prepare = fn
 

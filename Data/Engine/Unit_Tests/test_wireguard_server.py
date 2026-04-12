@@ -27,7 +27,7 @@ def _build_config(root: Path) -> WireGuardServerConfig:
         peer_network="10.255.0.0/24",
         private_key_path=cert_dir / "server.key",
         public_key_path=cert_dir / "server.pub",
-        acl_allowlist_ports=(47002, 5900),
+        acl_allowlist_ports=(47002, 5900, 22),
         log_path=logs_dir / "wireguard.log",
     )
 
@@ -39,6 +39,7 @@ def test_start_listener_secures_linux_runtime_files(tmp_path: Path, monkeypatch:
     monkeypatch.setattr(manager, "_linux_interface_exists", lambda: False)
     monkeypatch.setattr(manager, "_linux_bring_up", lambda _config_path: None)
     monkeypatch.setattr(manager, "_linux_upsert_peer", lambda _peer: None)
+    monkeypatch.setattr(manager, "_ensure_linux_peer_route", lambda: None)
     monkeypatch.setattr(manager, "_ensure_linux_listener_rule", lambda: None)
 
     manager.start_listener(
@@ -132,16 +133,37 @@ def test_ensure_listener_bootstraps_interface_when_absent(tmp_path: Path, monkey
     manager = WireGuardServerManager(_build_config(tmp_path))
     up_calls: list[Path] = []
     apply_runtime_calls: list[str] = []
+    route_calls: list[str] = []
 
     monkeypatch.setattr(manager, "_linux_interface_exists", lambda: False)
     monkeypatch.setattr(manager, "_linux_bring_up", lambda config_path: up_calls.append(config_path))
     monkeypatch.setattr(manager, "_linux_apply_interface_runtime", lambda: apply_runtime_calls.append("apply"))
+    monkeypatch.setattr(manager, "_ensure_linux_peer_route", lambda: route_calls.append(str(manager.config.peer_subnet())))
     monkeypatch.setattr(manager, "_ensure_linux_listener_rule", lambda: None)
 
     manager.ensure_listener()
 
     assert up_calls == [manager._listener_config_path()]
     assert apply_runtime_calls == []
+    assert route_calls == [str(manager.config.peer_subnet())]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Linux listener lifecycle checks do not apply on Windows.")
+def test_ensure_listener_reapplies_peer_route_when_interface_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wireguard_server.engine_config, "PROJECT_ROOT", tmp_path)
+    manager = WireGuardServerManager(_build_config(tmp_path))
+    apply_runtime_calls: list[str] = []
+    route_calls: list[str] = []
+
+    monkeypatch.setattr(manager, "_linux_interface_exists", lambda: True)
+    monkeypatch.setattr(manager, "_linux_apply_interface_runtime", lambda: apply_runtime_calls.append("apply"))
+    monkeypatch.setattr(manager, "_ensure_linux_peer_route", lambda: route_calls.append(str(manager.config.peer_subnet())))
+    monkeypatch.setattr(manager, "_ensure_linux_listener_rule", lambda: None)
+
+    manager.ensure_listener()
+
+    assert apply_runtime_calls == ["apply"]
+    assert route_calls == [str(manager.config.peer_subnet())]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Linux listener lifecycle checks do not apply on Windows.")
@@ -184,7 +206,7 @@ def test_linux_bring_up_deletes_stale_interface_before_retry(tmp_path: Path, mon
         return 0, "", ""
 
     monkeypatch.setattr(manager, "_run_command", _fake_run)
-    monkeypatch.setattr(manager, "_linux_interface_exists", lambda: interface_present["value"])
+    monkeypatch.setattr(manager, "_linux_interface_exists", lambda name=None: interface_present["value"])
 
     manager._linux_bring_up(manager._listener_config_path())
 
@@ -225,3 +247,22 @@ def test_upsert_peer_uses_live_wg_set_when_interface_present(tmp_path: Path, mon
     assert ["wg-quick", "down", str(manager._listener_config_path())] not in commands
     assert ["wg-quick", "up", str(manager._listener_config_path())] not in commands
     assert ["wg", "set", manager._interface_name, "peer", "peer-public-key", "allowed-ips", "10.255.0.2/32"] in commands
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Linux route mutation checks do not apply on Windows.")
+def test_ensure_linux_peer_route_replaces_peer_network_route(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wireguard_server.engine_config, "PROJECT_ROOT", tmp_path)
+    manager = WireGuardServerManager(_build_config(tmp_path))
+    manager._ip = "ip"
+
+    commands: list[list[str]] = []
+
+    def _fake_run(args):
+        commands.append(list(args))
+        return 0, "", ""
+
+    monkeypatch.setattr(manager, "_run_command", _fake_run)
+
+    manager._ensure_linux_peer_route()
+
+    assert commands == [["ip", "route", "replace", "10.255.0.0/24", "dev", manager._interface_name]]

@@ -21,7 +21,7 @@ import json
 import os
 import time
 from urllib.parse import urlsplit
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 
 from ...ansible import EngineAnsibleRunner
 from ...assemblies.service import AssemblyRuntimeService
@@ -112,6 +112,7 @@ def _bootstrap_vpn_session(
     *,
     agent_id: str,
     endpoint_host: str,
+    required_ports: list[int] | tuple[int, ...] | None = None,
 ) -> None:
     last_error: Exception | None = None
     for attempt in range(2):
@@ -120,6 +121,7 @@ def _bootstrap_vpn_session(
                 agent_id=agent_id,
                 operator_id=None,
                 endpoint_host=endpoint_host or None,
+                required_ports=required_ports,
             )
             return
         except Exception as exc:
@@ -220,7 +222,7 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
             snapshot[agent_id] = dict(session)
         return snapshot
 
-    def _prepare_vpn_session_snapshot(agent_ids: List[str]):
+    def _prepare_vpn_session_snapshot(agent_ids: List[str], required_ports: Optional[List[int] | tuple[int, ...]] = None):
         try:
             from ..devices.tunnel import _get_tunnel_service
 
@@ -246,12 +248,17 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
             try:
                 session_payload = tunnel_service.session_payload(agent_id, include_token=False)
                 if session_payload:
-                    tunnel_service.request_agent_start(agent_id)
+                    tunnel_service.request_agent_start(
+                        agent_id,
+                        reason="shared_ansible_prepare",
+                        required_ports=required_ports,
+                    )
                 else:
                     _bootstrap_vpn_session(
                         tunnel_service,
                         agent_id=agent_id,
                         endpoint_host=endpoint_host,
+                        required_ports=required_ports,
                     )
                 requested_start = True
             except Exception as exc:

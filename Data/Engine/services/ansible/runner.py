@@ -98,6 +98,17 @@ def _coerce_subprocess_output(raw_text: Any) -> str:
     return str(raw_text)
 
 
+def _coerce_timeout_expired_exception(exc: Exception) -> Optional[Any]:
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return exc
+    cls = exc.__class__
+    if cls.__name__ != "TimeoutExpired":
+        return None
+    if not hasattr(exc, "cmd") and not hasattr(exc, "timeout"):
+        return None
+    return exc
+
+
 class EngineAnsibleRunner:
     """Queue and execute Engine-side Ansible playbooks."""
 
@@ -210,6 +221,56 @@ class EngineAnsibleRunner:
                 self._logger.debug("Ansible service log write failed", exc_info=True)
         numeric_level = getattr(logging, level.upper(), logging.INFO)
         self._logger.log(numeric_level, "%s", message)
+
+    def _handle_timeout_exception(
+        self,
+        *,
+        run_id: str,
+        hostname: str,
+        exc: Any,
+        workspace: Optional[Dict[str, Any]],
+        recap_payload: Dict[str, Any],
+    ) -> tuple[str, str, str]:
+        stdout_raw = getattr(exc, "stdout", None)
+        if stdout_raw is None:
+            stdout_raw = getattr(exc, "output", None)
+        stdout_text = _coerce_subprocess_output(stdout_raw).strip()
+        partial_stderr = _coerce_subprocess_output(getattr(exc, "stderr", None)).strip()
+        timeout_seconds = _env_positive_int(
+            _SHARED_ANSIBLE_RUN_TIMEOUT_ENV,
+            _DEFAULT_SHARED_ANSIBLE_RUN_TIMEOUT_SECONDS,
+        )
+        timeout_message = f"Ansible playbook execution exceeded {timeout_seconds} seconds and was terminated."
+        stderr_parts = [timeout_message]
+        if partial_stderr:
+            stderr_parts.append(partial_stderr)
+        stderr_text = "\n\n".join(part for part in stderr_parts if part).strip()
+        recap_payload.update(
+            {
+                "timed_out": True,
+                "inventory_group": (workspace or {}).get("limit_name", ""),
+                "inventory_hosts": list((workspace or {}).get("inventory_hosts") or []),
+                "timeout_seconds": timeout_seconds,
+                "workspace": str((workspace or {}).get("root") or ""),
+            }
+        )
+        preview_bits = []
+        stdout_preview = _log_preview(stdout_text)
+        stderr_preview = _log_preview(stderr_text)
+        if stdout_preview:
+            preview_bits.append(f"stdout_preview={stdout_preview}")
+        if stderr_preview:
+            preview_bits.append(f"stderr_preview={stderr_preview}")
+        preview_suffix = f" {' '.join(preview_bits)}" if preview_bits else ""
+        self._log(
+            (
+                f"run timed out run_id={run_id} host={hostname} "
+                f"timeout_seconds={timeout_seconds}{preview_suffix}"
+            ),
+            level="ERROR",
+            host=hostname,
+        )
+        return RUN_STATUS_TIMED_OUT, stdout_text, stderr_text
 
     # ------------------------------------------------------------------
     # Runtime staging helpers
@@ -775,54 +836,31 @@ class EngineAnsibleRunner:
                     host=hostname,
                 )
         except subprocess.TimeoutExpired as exc:
-            status = RUN_STATUS_TIMED_OUT
-            stdout_text = _coerce_subprocess_output(exc.stdout).strip()
-            partial_stderr = _coerce_subprocess_output(exc.stderr).strip()
-            timeout_message = (
-                f"Ansible playbook execution exceeded "
-                f"{_env_positive_int(_SHARED_ANSIBLE_RUN_TIMEOUT_ENV, _DEFAULT_SHARED_ANSIBLE_RUN_TIMEOUT_SECONDS)} "
-                f"seconds and was terminated."
-            )
-            stderr_parts = [timeout_message]
-            if partial_stderr:
-                stderr_parts.append(partial_stderr)
-            stderr_text = "\n\n".join(part for part in stderr_parts if part).strip()
-            recap_payload.update(
-                {
-                    "timed_out": True,
-                    "inventory_group": (workspace or {}).get("limit_name", ""),
-                    "inventory_hosts": list((workspace or {}).get("inventory_hosts") or []),
-                    "timeout_seconds": _env_positive_int(
-                        _SHARED_ANSIBLE_RUN_TIMEOUT_ENV,
-                        _DEFAULT_SHARED_ANSIBLE_RUN_TIMEOUT_SECONDS,
-                    ),
-                    "workspace": str((workspace or {}).get("root") or ""),
-                }
-            )
-            preview_bits = []
-            stdout_preview = _log_preview(stdout_text)
-            stderr_preview = _log_preview(stderr_text)
-            if stdout_preview:
-                preview_bits.append(f"stdout_preview={stdout_preview}")
-            if stderr_preview:
-                preview_bits.append(f"stderr_preview={stderr_preview}")
-            preview_suffix = f" {' '.join(preview_bits)}" if preview_bits else ""
-            self._log(
-                (
-                    f"run timed out run_id={run_id} host={hostname} "
-                    f"timeout_seconds={recap_payload.get('timeout_seconds')}{preview_suffix}"
-                ),
-                level="ERROR",
-                host=hostname,
+            status, stdout_text, stderr_text = self._handle_timeout_exception(
+                run_id=run_id,
+                hostname=hostname,
+                exc=exc,
+                workspace=workspace,
+                recap_payload=recap_payload,
             )
         except Exception as exc:
-            stderr_text = str(exc)
-            recap_payload["exception"] = str(exc)
-            self._log(
-                f"run exception run_id={run_id} host={hostname} err={exc}",
-                level="ERROR",
-                host=hostname,
-            )
+            timeout_exc = _coerce_timeout_expired_exception(exc)
+            if timeout_exc is not None:
+                status, stdout_text, stderr_text = self._handle_timeout_exception(
+                    run_id=run_id,
+                    hostname=hostname,
+                    exc=timeout_exc,
+                    workspace=workspace,
+                    recap_payload=recap_payload,
+                )
+            else:
+                stderr_text = str(exc)
+                recap_payload["exception"] = str(exc)
+                self._log(
+                    f"run exception run_id={run_id} host={hostname} err={exc}",
+                    level="ERROR",
+                    host=hostname,
+                )
         finally:
             finished_ts = _now_ts()
             self._finalize_run(

@@ -13,8 +13,9 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - No idle teardown while the agent service is running.
 - Agent recovery: if the Windows agent receives the same `tunnel_id` again and its WireGuard service is stopped or unhealthy, it rerenders the config and attempts an in-place service recovery instead of assuming the tunnel is still healthy.
 - Engine recovery: in persistent mode the Engine keeps one Linux WireGuard interface online, updates peers live one at a time during normal connect/disconnect activity, and only falls back to full peer reconciliation when the listener is unhealthy. A watchdog validates listener health every 15 seconds, uses an effective probe grace aligned with WireGuard keepalive timing before declaring `stale_handshake`, and rate-limits full recovery attempts to one every 30 seconds while active sessions exist.
+- Linux listener routing: the Engine explicitly restores the configured WireGuard peer-subnet route on `borealis-wg` during listener bring-up and runtime reapply, which keeps `/32` Engine listener addressing able to reach agent `/32` peers after interface repairs.
 - Session-scoped transport confirmations: shell output and shell idle-keepalive pongs can refresh tunnel health without requiring visible operator traffic, which keeps quiet RemoteShell sessions from being mistaken for a dead tunnel.
-- Port access: the tunnel is trusted end-to-end, and Engine/Agent firewall rules allow a global port allowlist between the Engine /32 and Agent /32 (defaults to 47002 and 5900, configurable via `BOREALIS_WIREGUARD_PORT_ALLOWLIST`).
+- Port access: the tunnel is trusted end-to-end, and Engine/Agent firewall rules allow a default port allowlist between the Engine /32 and Agent /32 (defaults to 47002, 5900, and 22, configurable via `BOREALIS_WIREGUARD_PORT_ALLOWLIST`). Standard SSH is therefore always available over the managed WireGuard path, while Engine-side remote Ansible can still widen an active session just-in-time for non-default SSH or WinRM transport ports without replacing the default shell/VNC/SSH ports.
 
 ## Remote PowerShell
 - Uses the WireGuard tunnel and a TCP shell server on the agent.
@@ -128,6 +129,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - Confirm WireGuard service is running (Engine and Agent).
 - Confirm the agent successfully calls `/api/agent/vpn/ensure` after boot.
 - Confirm `/api/tunnel/status` returns `status=up` and `agent_socket=true` for a healthy tunnel, and inspect `listener_healthy` / `recovery_in_progress` when the transport is degraded.
+- On the Engine, verify peer-subnet routing lands on the WireGuard interface: `ip route get <agent_vpn_ip>` should resolve to `dev borealis-wg`, not the default LAN gateway.
 - Verify `Agent/Borealis/Settings/WireGuard/Borealis.conf` during an active session.
 - Test TCP shell reachability: `Test-NetConnection <agent_vpn_ip> -Port 47002`.
 
@@ -154,7 +156,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
   - Runs the persistent-mode listener watchdog, records the last recovery attempt timestamp, and throttles full recovery attempts to avoid restart storms.
   - Emits Socket.IO events: `vpn_tunnel_start`, `vpn_tunnel_stop`, `vpn_tunnel_activity`.
 - WireGuard manager: `Data/Engine/services/VPN/wireguard_server.py`
-  - Generates server keys, bootstraps the Linux interface, mutates peers live with `wg set`, checks listener health, and applies allowlist-based firewall rules.
+  - Generates server keys, bootstraps the Linux interface, restores the peer-subnet route on Linux listener ensure/reapply, mutates peers live with `wg set`, checks listener health, and applies allowlist-based firewall rules.
 - PowerShell bridge: `Data/Engine/services/WebSocket/vpn_shell.py`
   - Proxies UI shell input/output to the agent's TCP shell server over WireGuard.
 - Logging: `Engine/Logs/VPN_Tunnel/tunnel.log`; persistent WireGuard tunnel lifecycle is intentionally suppressed from Device Activity history, and shell I/O is in `Engine/Logs/VPN_Tunnel/remote_shell.log`.

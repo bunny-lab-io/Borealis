@@ -399,14 +399,21 @@ const JOB_RESULT_THEME = {
     dot: "#cbd5f5",
   },
   skipped: {
+    label: "Skipped",
+    text: "#fbbf24",
+    background: "rgba(251,191,36,0.14)",
+    border: "1px solid rgba(251,191,36,0.32)",
+    dot: "#f59e0b",
+  },
+  no_devices_targeted: {
     label: "No Devices Targeted",
     text: "#fbbf24",
     background: "rgba(251,191,36,0.14)",
     border: "1px solid rgba(251,191,36,0.32)",
     dot: "#f59e0b",
   },
-  "no devices targeted": {
-    label: "No Devices Targeted",
+  no_eligible_targets: {
+    label: "No Eligible Targets",
     text: "#fbbf24",
     background: "rgba(251,191,36,0.14)",
     border: "1px solid rgba(251,191,36,0.32)",
@@ -426,7 +433,8 @@ const normalizeJobStatusKey = (status) => {
   if (!normalized || normalized === "scheduled" || normalized === "queued") return "pending";
   if (normalized === "failure") return "failed";
   if (normalized === "timed out" || normalized === "timed_out") return "timed_out";
-  if (normalized === "no devices targeted") return "skipped";
+  if (normalized === "no devices targeted" || normalized === "no_devices_targeted") return "no_devices_targeted";
+  if (normalized === "no eligible targets" || normalized === "no_eligible_targets") return "no_eligible_targets";
   return normalized;
 };
 
@@ -2471,6 +2479,9 @@ export default function CreateJob() {
               if (String(entry?.status || "").toLowerCase() === "skipped" && skipReason === "no_devices_targeted") {
                 return { ...entry, status: "No Devices Targeted" };
               }
+              if (String(entry?.status || "").toLowerCase() === "skipped" && skipReason === "no_eligible_targets") {
+                return { ...entry, status: "No Eligible Targets" };
+              }
               return entry;
             })
           : []
@@ -2535,12 +2546,18 @@ export default function CreateJob() {
       if (!statuses.length) return;
       const hasInFlight = statuses.some((s) => s === "running" || s === "pending");
       if (hasInFlight) return;
-      const allSkipped = statuses.every((s) => s === "skipped");
+      const allSkipped = statuses.every((s) => ["skipped", "no_devices_targeted", "no_eligible_targets"].includes(s));
+      const allNoDevicesTargeted = statuses.every((s) => s === "no_devices_targeted");
+      const allNoEligibleTargets = statuses.every((s) => s === "no_eligible_targets");
       const hasFailure = statuses.some((s) => ["failed", "expired", "timed_out"].includes(s));
       const hasWarning = statuses.some((s) => s === "warning");
       const hasSuccess = statuses.some((s) => s === "success");
       const statusLabel = allSkipped
-        ? "No Devices Targeted"
+        ? allNoEligibleTargets
+          ? "No Eligible Targets"
+          : allNoDevicesTargeted
+            ? "No Devices Targeted"
+            : "Skipped"
         : hasFailure
           ? "Failed"
           : hasWarning

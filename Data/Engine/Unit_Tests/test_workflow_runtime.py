@@ -490,3 +490,52 @@ def test_admin_can_resolve_stuck_workflow_run_via_api(monkeypatch) -> None:
             "recovery_reason": "manual_admin_resolve",
         }
     ]
+
+
+def test_workflow_ansible_target_build_requests_ssh_port_in_vpn_prepare(tmp_path: Path) -> None:
+    db_path = tmp_path / "workflow_runtime.sqlite3"
+    _create_activity_table(db_path)
+
+    runtime = WorkflowRuntimeService(
+        db_conn_factory=lambda: sqlite3.connect(str(db_path)),
+        assembly_runtime=_DummyAssemblyRuntime(),
+        logger=logging.getLogger("workflow-runtime-test"),
+    )
+
+    captured: dict[str, object] = {}
+
+    def _capture_prepare(agent_ids, required_ports=None):
+        captured["agent_ids"] = list(agent_ids)
+        captured["required_ports"] = list(required_ports or [])
+        return {"agent-1": {"virtual_ip": "10.77.0.25/32"}}
+
+    runtime.set_vpn_session_prepare(_capture_prepare)
+
+    target_specifications, runtime_files = runtime._build_ansible_target_specifications(
+        execution_mode="ssh",
+        active_targets=[
+            {
+                "agent_id": "agent-1",
+                "hostname": "lab-docs-01",
+                "site_name": "Bunny Lab",
+                "site_id": 1,
+                "connection_endpoint": "",
+            }
+        ],
+        credential={
+            "username": "ubuntu",
+            "password": "secret",
+            "private_key": "",
+            "private_key_passphrase": "",
+            "become_method": "",
+            "become_username": "",
+            "become_password": "",
+        },
+        use_service_account=False,
+    )
+
+    assert captured["agent_ids"] == ["agent-1"]
+    assert captured["required_ports"] == [22]
+    assert runtime_files == []
+    assert len(target_specifications) == 1
+    assert target_specifications[0]["host_vars"]["ansible_host"] == "10.77.0.25"

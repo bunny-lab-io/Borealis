@@ -444,7 +444,9 @@ class WorkflowRuntimeService:
         self._online_lookup: Optional[Callable[[], List[str]]] = None
         self._credential_fetcher: Optional[Callable[[int], Optional[Dict[str, Any]]]] = None
         self._vpn_session_lookup: Optional[Callable[[], Dict[str, Dict[str, Any]]]] = None
-        self._vpn_session_prepare: Optional[Callable[[Sequence[str]], Dict[str, Dict[str, Any]]]] = None
+        self._vpn_session_prepare: Optional[
+            Callable[[Sequence[str], Optional[Sequence[int]]], Dict[str, Dict[str, Any]]]
+        ] = None
         self._lock = threading.Lock()
         self._init_tables()
         self._recover_orphaned_runs_on_startup()
@@ -464,7 +466,10 @@ class WorkflowRuntimeService:
     def set_vpn_session_lookup(self, fn: Optional[Callable[[], Dict[str, Dict[str, Any]]]]) -> None:
         self._vpn_session_lookup = fn
 
-    def set_vpn_session_prepare(self, fn: Optional[Callable[[Sequence[str]], Dict[str, Dict[str, Any]]]]) -> None:
+    def set_vpn_session_prepare(
+        self,
+        fn: Optional[Callable[[Sequence[str], Optional[Sequence[int]]], Dict[str, Dict[str, Any]]]],
+    ) -> None:
         self._vpn_session_prepare = fn
 
     # ------------------------------------------------------------------
@@ -3136,7 +3141,17 @@ class WorkflowRuntimeService:
                 }
             )
 
-        sessions = self._prepare_vpn_sessions([str(target.get("agent_id") or "").strip() for target in active_targets])
+        required_vpn_ports: List[int] = []
+        for target in active_targets:
+            endpoint_port = _coerce_optional_int(str(target.get("connection_endpoint") or "").rsplit(":", 1)[-1])
+            if execution_mode == "ssh":
+                required_vpn_ports.append(endpoint_port or 22)
+            elif execution_mode == "winrm":
+                required_vpn_ports.append(endpoint_port or 5985)
+        sessions = self._prepare_vpn_sessions(
+            [str(target.get("agent_id") or "").strip() for target in active_targets],
+            required_ports=required_vpn_ports,
+        )
         target_specifications: List[Dict[str, Any]] = []
         for target in active_targets:
             hostname = str(target.get("hostname") or "").strip()
@@ -3212,13 +3227,18 @@ class WorkflowRuntimeService:
             return self._credential_fetcher(int(credential_id))
         return None
 
-    def _prepare_vpn_sessions(self, agent_ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+    def _prepare_vpn_sessions(
+        self,
+        agent_ids: Sequence[str],
+        *,
+        required_ports: Optional[Sequence[int]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
         normalized_ids = [str(agent_id or "").strip() for agent_id in agent_ids if str(agent_id or "").strip()]
         if not normalized_ids:
             return {}
         if callable(self._vpn_session_prepare):
             try:
-                return self._vpn_session_prepare(normalized_ids) or {}
+                return self._vpn_session_prepare(normalized_ids, required_ports) or {}
             except Exception:
                 self._logger.debug("Workflow VPN prepare callback failed", exc_info=True)
         if callable(self._vpn_session_lookup):

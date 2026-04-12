@@ -138,7 +138,7 @@ def test_tunnel_service_creation_is_singleton_under_concurrency(monkeypatch: pyt
         wireguard_peer_network="10.255.0.0/24",
         wireguard_server_private_key_path="/tmp/wg.key",
         wireguard_server_public_key_path="/tmp/wg.pub",
-        wireguard_port_allowlist=(47002, 5900),
+        wireguard_port_allowlist=(47002, 5900, 22),
         vpn_tunnel_log_path="/tmp/vpn_tunnel.log",
         socketio=None,
     )
@@ -408,7 +408,7 @@ def _build_vpn_service(
         wireguard_port=30000,
         wireguard_engine_virtual_ip="10.255.0.1/24",
         wireguard_peer_network="10.255.0.0/24",
-        wireguard_port_allowlist=(47002, 5900),
+        wireguard_port_allowlist=(47002, 5900, 22),
     )
     service = VpnTunnelService(
         context=context,
@@ -1085,6 +1085,25 @@ def test_vpn_service_request_agent_start_can_force_restart() -> None:
     assert payload["restart_reason"] == "shell_connect_retry"
     assert socketio.emits[-1][0] == "vpn_tunnel_start"
     assert socketio.emits[-1][1]["force_restart"] is True
+
+
+def test_vpn_service_request_agent_start_expands_allowed_ports_for_nondefault_ansible_transport() -> None:
+    service, wg, socketio, _service_events = _build_vpn_service()
+    initial = service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+
+    payload = service.request_agent_start(
+        "agent-1",
+        reason="shared_ansible_prepare",
+        required_ports=[2222],
+    )
+
+    assert initial["allowed_ports"] == [47002, 5900, 22]
+    assert payload is not None
+    assert payload["allowed_ports"] == [47002, 5900, 22, 2222]
+    assert wg.apply_calls == 2
+    assert wg.removed_rules == [["rule-agent-1"]]
+    assert socketio.emits[-1][0] == "vpn_tunnel_start"
+    assert socketio.emits[-1][1]["allowed_ports"] == [47002, 5900, 22, 2222]
 
 
 def test_vpn_service_live_upserts_additional_peers_without_full_reconcile() -> None:

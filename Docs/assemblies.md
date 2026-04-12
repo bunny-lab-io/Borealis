@@ -68,6 +68,7 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - The Linux Engine packages an Ansible control-node runtime inside the Engine venv.
 - Scheduled jobs support Engine-side playbook execution for `execution_context = local`, `ssh`, and `winrm`.
 - Remote SSH/WinRM runs synthesize per-run inventories from Borealis device state, credentials, and active WireGuard sessions.
+- Remote SSH/WinRM runs ensure the active WireGuard session allows the requested transport port before preflight. Standard SSH `22` is already part of the default shell/VNC/SSH allowlist, while non-default SSH or WinRM ports are widened in addition to that baseline. Targets that still fail Engine-side transport checks are excluded; SSH targets must answer with an SSH banner and then complete a short credentialed SSH readiness probe, while WinRM targets must still accept the TCP port. The SSH banner wait defaults to `20` seconds and is configurable via `BOREALIS_SHARED_ANSIBLE_SSH_BANNER_TIMEOUT_SECONDS`; the deeper SSH session probe defaults to `20` seconds and is configurable via `BOREALIS_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS`. If none remain eligible, Borealis skips the occurrence instead of waiting on Ansible transport retries.
 - Ansible quick-run still exists as an endpoint placeholder and is not implemented yet.
 
 ## API Endpoints

@@ -22,7 +22,7 @@ def _build_session(*, endpoint: str = "borealis.bunny-lab.io:30000") -> SessionC
         allowed_ips="10.255.0.1/32",
         endpoint=endpoint,
         server_public_key="server-public-key",
-        allowed_ports="47002,5900",
+        allowed_ports="47002,5900,22",
     )
 
 
@@ -81,7 +81,7 @@ def test_role_build_session_honors_force_restart_flag() -> None:
             "allowed_ips": "10.255.0.1/32",
             "endpoint": "borealis.bunny-lab.io:30000",
             "server_public_key": "server-public-key",
-            "allowed_ports": [47002, 5900],
+            "allowed_ports": [47002, 5900, 22],
             "force_restart": True,
             "restart_reason": "shell_connect_retry",
         }

@@ -476,6 +476,24 @@ class WireGuardServerManager:
             detail = (err or out or "unknown error").strip()
             raise RuntimeError(f"WireGuard Linux interface activation failed: {detail}")
 
+    def _ensure_linux_peer_route(self) -> None:
+        if not self._ip:
+            raise RuntimeError("WireGuard tools missing on Linux Engine: 'ip' not found")
+
+        code, out, err = self._run_command(
+            [
+                self._ip,
+                "route",
+                "replace",
+                str(self.config.peer_subnet()),
+                "dev",
+                self._interface_name,
+            ]
+        )
+        if code != 0:
+            detail = (err or out or "unknown error").strip()
+            raise RuntimeError(f"WireGuard Linux peer route configuration failed: {detail}")
+
     def _linux_bring_up(self, config_path: Path) -> None:
         if not self._wg_quick:
             raise RuntimeError("WireGuard tools missing on Linux Engine: 'wg-quick' not found")
@@ -1175,6 +1193,7 @@ class WireGuardServerManager:
                     self._managed_peers.clear()
                 else:
                     self._linux_apply_interface_runtime()
+                self._ensure_linux_peer_route()
                 self._ensure_linux_listener_rule()
                 self.logger.info("WireGuard listener ready on Linux interface %s", self._interface_name)
                 return

@@ -152,7 +152,7 @@ def ensure_workflow_runtime(app: "Flask", adapters: "EngineServiceAdapters") -> 
 
     runtime.set_vpn_session_lookup(_active_vpn_session_snapshot)
 
-    def _prepare_vpn_session_snapshot(agent_ids: List[str]):
+    def _prepare_vpn_session_snapshot(agent_ids: List[str], required_ports: Optional[List[int] | tuple[int, ...]] = None):
         try:
             from ..devices.tunnel import _get_tunnel_service
 
@@ -178,9 +178,18 @@ def ensure_workflow_runtime(app: "Flask", adapters: "EngineServiceAdapters") -> 
             try:
                 session_payload = tunnel_service.session_payload(agent_id, include_token=False)
                 if session_payload:
-                    tunnel_service.request_agent_start(agent_id)
+                    tunnel_service.request_agent_start(
+                        agent_id,
+                        reason="workflow_ansible_prepare",
+                        required_ports=required_ports,
+                    )
                 else:
-                    tunnel_service.connect(agent_id=agent_id, operator_id=None, endpoint_host=endpoint_host or None)
+                    tunnel_service.connect(
+                        agent_id=agent_id,
+                        operator_id=None,
+                        endpoint_host=endpoint_host or None,
+                        required_ports=required_ports,
+                    )
                 requested_start = True
             except Exception:
                 continue

@@ -64,6 +64,7 @@ SERVICE_DISPLAY_NAME = "Borealis - WireGuard - Agent"
 TUNNEL_IDLE_ADDRESS = "169.254.255.254/32"
 FIREWALL_RULE_NAME = "Borealis - WireGuard - Agent"
 DEFAULT_VNC_PORT = 5900
+DEFAULT_SSH_PORT = 22
 
 
 def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int = 3600) -> int:
@@ -427,7 +428,7 @@ class WireGuardClient:
             return
         ports = _parse_allowed_ports(allowed_ports)
         if not ports:
-            fallback_ports = [_resolve_shell_port(), _resolve_vnc_port()]
+            fallback_ports = [_resolve_shell_port(), _resolve_vnc_port(), DEFAULT_SSH_PORT]
             ports = [p for p in fallback_ports if 1 <= p <= 65535]
             ports = list(dict.fromkeys(ports))
             if ports:

@@ -498,6 +498,87 @@ class VpnTunnelService:
     def _load_allowed_ports(self, agent_id: str) -> Tuple[int, ...]:
         return tuple(self.context.wireguard_port_allowlist or ())
 
+    def _merge_allowed_ports(
+        self,
+        agent_id: str,
+        *,
+        current_ports: Optional[Iterable[int]] = None,
+        required_ports: Optional[Iterable[int]] = None,
+    ) -> Tuple[int, ...]:
+        merged: List[int] = []
+        for source in (self._load_allowed_ports(agent_id), current_ports or (), required_ports or ()):
+            for raw_port in source:
+                try:
+                    port = int(raw_port)
+                except Exception:
+                    continue
+                if 1 <= port <= 65535:
+                    merged.append(port)
+        return tuple(dict.fromkeys(merged))
+
+    def _ensure_session_allowed_ports(
+        self,
+        session: VpnSession,
+        *,
+        required_ports: Optional[Iterable[int]] = None,
+    ) -> bool:
+        desired_ports = self._merge_allowed_ports(
+            session.agent_id,
+            current_ports=session.allowed_ports,
+            required_ports=required_ports,
+        )
+        previous_ports = tuple(session.allowed_ports or ())
+        if desired_ports == previous_ports:
+            return False
+
+        previous_rule_names = list(session.firewall_rules or [])
+        self._service_log_event(
+            "vpn_tunnel_allowed_ports_update agent_id={0} tunnel_id={1} previous_ports={2} allowed_ports={3}".format(
+                session.agent_id,
+                session.tunnel_id,
+                _format_ports(previous_ports),
+                _format_ports(desired_ports),
+            )
+        )
+
+        try:
+            if previous_rule_names:
+                self.wg.remove_firewall_rules(previous_rule_names)
+            peer = self.wg.build_peer_profile(
+                session.agent_id,
+                session.virtual_ip,
+                allowed_ports=desired_ports,
+            )
+            rule_names = self.wg.apply_firewall_rules(peer)
+        except Exception:
+            self.logger.debug("Failed to update firewall rules for agent=%s", session.agent_id, exc_info=True)
+            if previous_ports:
+                try:
+                    rollback_peer = self.wg.build_peer_profile(
+                        session.agent_id,
+                        session.virtual_ip,
+                        allowed_ports=previous_ports,
+                    )
+                    session.firewall_rules = self.wg.apply_firewall_rules(rollback_peer)
+                except Exception:
+                    self.logger.debug(
+                        "Failed to restore firewall rules after allowed-port update failure for agent=%s",
+                        session.agent_id,
+                        exc_info=True,
+                    )
+            raise
+
+        session.allowed_ports = desired_ports
+        session.firewall_rules = rule_names
+        self._service_log_event(
+            "vpn_tunnel_firewall_applied agent_id={0} tunnel_id={1} rules={2}".format(
+                session.agent_id,
+                session.tunnel_id,
+                len(rule_names),
+            )
+        )
+        return True
+
     def _generate_client_keys(self) -> Tuple[str, str]:
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric import x25519
@@ -1143,6 +1224,7 @@ class VpnTunnelService:
         operator_id: Optional[str],
         endpoint_host: Optional[str] = None,
         mark_activity: bool = True,
+        required_ports: Optional[Iterable[int]] = None,
     ) -> Mapping[str, Any]:
         now = time.time()
         normalized_host = self._normalize_endpoint_host(endpoint_host)
@@ -1155,6 +1237,7 @@ class VpnTunnelService:
                 str(bool(mark_activity)).lower(),
             )
         )
+        existing: Optional[VpnSession] = None
         with self._lock:
             existing = self._sessions_by_agent.get(agent_id)
             if existing:
@@ -1178,18 +1261,19 @@ class VpnTunnelService:
                         str(bool(mark_activity)).lower(),
                     )
                 )
-                payload = dict(self._session_payload(existing))
             else:
-                payload = {}
+                existing = None
 
-        if payload:
+        if existing is not None:
+            self._ensure_session_allowed_ports(existing, required_ports=required_ports)
             self._ensure_listener_ready(trigger="connect_reuse", reason="session_reuse")
-            return payload
+            payload = self.session_payload(agent_id, include_token=True)
+            return dict(payload or {})
 
         with self._lock:
             tunnel_id = uuid.uuid4().hex
             virtual_ip = self._allocate_virtual_ip(agent_id)
-            allowed_ports = self._load_allowed_ports(agent_id)
+            allowed_ports = self._merge_allowed_ports(agent_id, required_ports=required_ports)
             client_private, client_public = self._load_or_create_client_keys(agent_id)
             token = self._issue_token(agent_id, tunnel_id, now + 300)
             self.wg.require_orchestration_token(token)
@@ -1320,7 +1404,14 @@ class VpnTunnelService:
         *,
         force_restart: bool = False,
         reason: Optional[str] = None,
+        required_ports: Optional[Iterable[int]] = None,
     ) -> Optional[Mapping[str, Any]]:
+        with self._lock:
+            session = self._sessions_by_agent.get(agent_id)
+        if not session:
+            self._service_log_event("vpn_tunnel_agent_start_missing agent_id={0}".format(agent_id or "-"))
+            return None
+        self._ensure_session_allowed_ports(session, required_ports=required_ports)
         payload = self.session_payload(agent_id, include_token=True)
         if not payload:
             self._service_log_event("vpn_tunnel_agent_start_missing agent_id={0}".format(agent_id or "-"))

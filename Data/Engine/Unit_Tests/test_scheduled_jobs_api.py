@@ -7,9 +7,11 @@
 from __future__ import annotations
 
 import json
+import socket
 
 import pytest
 
+from Data.Engine.services.API.scheduled_jobs import job_scheduler as scheduled_job_module
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.server import create_app
 
@@ -77,6 +79,291 @@ class _MissingLastRowIdConnection:
 
     def __getattr__(self, name):
         return getattr(self._inner, name)
+
+
+class _FakePreflightSocket:
+    def __init__(self, responses) -> None:
+        self._responses = list(responses)
+        self.closed = False
+        self.timeouts = []
+
+    def settimeout(self, value) -> None:
+        self.timeouts.append(value)
+
+    def recv(self, _size: int) -> bytes:
+        if not self._responses:
+            return b""
+        response = self._responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_preflight_remote_port_accepts_valid_ssh_banner(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    fake_socket = _FakePreflightSocket([b"SSH-2.0-OpenSSH_9.6\r\n"])
+
+    monkeypatch.setattr(
+        scheduled_job_module.socket,
+        "create_connection",
+        lambda *_args, **_kwargs: fake_socket,
+    )
+
+    result = scheduler._preflight_remote_port(
+        host="10.255.0.10",
+        port=22,
+        attempts=1,
+        timeout_seconds=1.0,
+        probe="ssh_banner",
+    )
+
+    assert result == ""
+    assert fake_socket.closed is True
+
+
+def test_preflight_remote_port_rejects_ssh_targets_without_banner(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    fake_socket = _FakePreflightSocket([socket.timeout()])
+
+    monkeypatch.setattr(
+        scheduled_job_module.socket,
+        "create_connection",
+        lambda *_args, **_kwargs: fake_socket,
+    )
+
+    result = scheduler._preflight_remote_port(
+        host="10.255.0.10",
+        port=22,
+        attempts=1,
+        timeout_seconds=1.0,
+        probe="ssh_banner",
+    )
+
+    assert result == "ssh_banner_timeout"
+    assert fake_socket.closed is True
+
+
+def test_preflight_remote_port_uses_configured_ssh_banner_timeout_once(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    fake_socket = _FakePreflightSocket([socket.timeout()])
+    create_calls = {"count": 0}
+
+    def _fake_create_connection(*_args, **_kwargs):
+        create_calls["count"] += 1
+        return fake_socket
+
+    monkeypatch.setattr(
+        scheduled_job_module.socket,
+        "create_connection",
+        _fake_create_connection,
+    )
+
+    result = scheduler._preflight_remote_port(
+        host="10.255.0.10",
+        port=22,
+        attempts=5,
+        timeout_seconds=1.25,
+        retry_delay_seconds=1.0,
+        probe="ssh_banner",
+        banner_timeout_seconds=15.0,
+    )
+
+    assert result == "ssh_banner_timeout"
+    assert create_calls["count"] == 1
+    assert fake_socket.closed is True
+    assert fake_socket.timeouts
+    assert fake_socket.timeouts[0] >= 14.0
+
+
+def test_shared_ansible_dispatch_skips_targets_that_fail_ssh_session_preflight(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE devices
+               SET operating_system=?,
+                   agent_id=?,
+                   connection_endpoint=''
+             WHERE guid=?
+            """,
+            ("Ubuntu 24.04 LTS", "test-device-agent", "GUID-TEST-0001"),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_runs(
+                id,
+                job_id,
+                target_hostname,
+                scheduled_ts,
+                started_ts,
+                finished_ts,
+                status,
+                error,
+                created_at,
+                updated_at,
+                shared_execution,
+                component_index,
+                component_kind,
+                component_name
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                75,
+                9,
+                "",
+                1_773_782_700,
+                1_773_782_700,
+                None,
+                "Running",
+                "",
+                1_773_782_700,
+                1_773_782_700,
+                1,
+                0,
+                "ansible",
+                "Playbook SSH Session Probe",
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_run_targets(
+                id,
+                run_id,
+                device_guid,
+                hostname,
+                site_id,
+                inventory_hostname,
+                wireguard_peer_ip,
+                resolved_connection,
+                resolution_status,
+                resolution_reason,
+                resolved_from_filter_ids_json,
+                created_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                205,
+                75,
+                "GUID-TEST-0001",
+                "test-device",
+                1,
+                "main_lab__test_device",
+                "",
+                "",
+                "pending",
+                "",
+                json.dumps([]),
+                1_773_782_700,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(
+        scheduler,
+        "_prepare_vpn_sessions",
+        lambda _agent_ids, required_ports=None: {"test-device-agent": {"virtual_ip": "10.77.0.15/32", "_requested_start": True}},
+    )
+    monkeypatch.setattr(scheduler, "_preflight_remote_port", lambda **_kwargs: "")
+    monkeypatch.setattr(scheduler, "_preflight_ssh_session", lambda **_kwargs: "ssh_session_timeout")
+    monkeypatch.setattr(
+        scheduler,
+        "_load_credential",
+        lambda _credential_id: {
+            "id": 15,
+            "name": "SSH Session Probe",
+            "connection_type": "ssh",
+            "username": "ubuntu",
+            "password": "secret",
+            "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----",
+            "private_key_passphrase": "",
+            "become_method": "",
+            "become_username": "",
+            "become_password": "",
+        },
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_resolve_runtime_document",
+        lambda rel_path, _default_type, assembly_guid=None: (
+            {
+                "name": "Playbook SSH Session Probe",
+                "script": "---\n- hosts: all\n  gather_facts: false\n  tasks:\n    - ansible.builtin.ping:\n",
+                "variables": [],
+                "files": [],
+            },
+            {"virtual_path": rel_path},
+        ),
+    )
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        scheduler,
+        "_server_ansible_runner",
+        lambda **kwargs: captured.setdefault("kwargs", kwargs),
+    )
+
+    result = scheduler._dispatch_shared_ansible(
+        job_id=9,
+        run_row_id=75,
+        scheduled_ts=1_773_782_700,
+        run_mode="ssh",
+        component={"name": "Playbook SSH Session Probe", "path": "probe.yml"},
+        credential_id=15,
+        use_service_account=False,
+    )
+
+    assert result is None
+    assert "kwargs" not in captured
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT resolution_status, resolution_reason
+              FROM scheduled_job_run_targets
+             WHERE run_id=?
+            """,
+            (75,),
+        )
+        row = cur.fetchone()
+        cur.execute(
+            """
+            SELECT status, skip_reason, error
+              FROM scheduled_job_runs
+             WHERE id=?
+            """,
+            (75,),
+        )
+        run_row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row[0] == "skipped"
+    assert row[1] == "remote_preflight_failed"
+    assert run_row[0] == "Skipped"
+    assert run_row[1] == "no_eligible_targets"
+    assert run_row[2] == "No eligible devices were available for this Ansible run."
 
 
 def test_scheduled_job_create_recovers_when_lastrowid_is_missing(
@@ -303,6 +590,112 @@ def test_scheduled_job_summary_stays_pending_until_all_hosts_finish(
     assert payload["last_status"] == "Pending"
     assert payload["result_counts"]["success"] == 1
     assert payload["result_counts"]["pending"] == 1
+
+
+def test_scheduled_job_summary_reports_no_eligible_targets_for_remote_preflight_skips(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client, _scheduler = _scheduled_jobs_client(engine_harness)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO scheduled_jobs(
+                id,
+                name,
+                components_json,
+                targets_json,
+                schedule_type,
+                created_at,
+                updated_at,
+                enabled
+            ) VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (
+                3,
+                "Remote SSH Check",
+                json.dumps([]),
+                json.dumps(["lab-linux-01"]),
+                "once",
+                1_773_780_000,
+                1_773_780_000,
+                1,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_runs(
+                id,
+                job_id,
+                target_hostname,
+                scheduled_ts,
+                started_ts,
+                finished_ts,
+                status,
+                created_at,
+                updated_at,
+                skip_reason,
+                error
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                30,
+                3,
+                "lab-linux-01",
+                1_773_782_900,
+                1_773_782_905,
+                1_773_782_910,
+                "Skipped",
+                1_773_782_900,
+                1_773_782_910,
+                "no_eligible_targets",
+                "No eligible devices were available for this Ansible run.",
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_run_targets(
+                run_id,
+                device_guid,
+                hostname,
+                site_id,
+                resolved_from_filter_id,
+                inventory_hostname,
+                wireguard_peer_ip,
+                resolved_connection,
+                resolution_status,
+                resolution_reason,
+                resolved_from_filter_ids_json,
+                created_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                30,
+                "GUID-LINUX-0001",
+                "lab-linux-01",
+                1,
+                None,
+                "lab__lab_linux_01",
+                "10.255.0.44",
+                "ssh",
+                "skipped",
+                "remote_preflight_failed",
+                json.dumps([]),
+                1_773_782_900,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = client.get("/api/scheduled_jobs/3")
+    assert response.status_code == 200
+    payload = response.get_json()["job"]
+    assert payload["last_status"] == "No Eligible Targets"
+    assert payload["result_counts"]["skipped"] == 1
+    assert payload["result_counts"]["total_targets"] == 1
 
 
 def test_scheduled_job_create_rejects_mixed_components_for_remote_ansible_context(
@@ -661,7 +1054,7 @@ def test_shared_ansible_dispatch_uses_execution_context_for_remote_transport(
     monkeypatch.setattr(
         scheduler,
         "_prepare_vpn_sessions",
-        lambda _agent_ids: {"test-device-agent": {"virtual_ip": "10.77.0.15/32"}},
+        lambda _agent_ids, required_ports=None: {"test-device-agent": {"virtual_ip": "10.77.0.15/32"}},
     )
     monkeypatch.setattr(
         scheduler,
@@ -745,6 +1138,162 @@ def test_shared_ansible_dispatch_uses_execution_context_for_remote_transport(
 
     assert row[0] == "eligible"
     assert row[1] == ""
+
+
+def test_shared_ansible_dispatch_requests_ssh_port_in_vpn_prepare(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS activity_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hostname TEXT,
+                script_path TEXT,
+                script_name TEXT,
+                script_type TEXT,
+                ran_at INTEGER,
+                status TEXT,
+                stdout TEXT,
+                stderr TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            UPDATE devices
+               SET operating_system=?,
+                   agent_id=?,
+                   connection_endpoint=''
+             WHERE guid=?
+            """,
+            ("Ubuntu 24.04 LTS", "test-device-agent", "GUID-TEST-0001"),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_runs(
+                id,
+                job_id,
+                scheduled_ts,
+                status,
+                created_at,
+                updated_at,
+                skip_reason,
+                shared_execution,
+                component_index,
+                component_kind,
+                component_name
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                61,
+                16,
+                1_773_782_701,
+                "Pending",
+                1_773_782_701,
+                1_773_782_701,
+                "",
+                1,
+                0,
+                "ansible",
+                "Playbook Port Probe",
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_run_targets(
+                run_id,
+                device_guid,
+                hostname,
+                site_id,
+                resolved_from_filter_id,
+                inventory_hostname,
+                wireguard_peer_ip,
+                resolved_connection,
+                resolution_status,
+                resolution_reason,
+                resolved_from_filter_ids_json,
+                created_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                61,
+                "GUID-TEST-0001",
+                "test-device",
+                1,
+                None,
+                "main_lab__test_device",
+                "",
+                "ssh",
+                "pending",
+                "",
+                json.dumps([]),
+                1_773_782_701,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    captured_prepare: dict[str, object] = {}
+
+    def _capture_prepare(_agent_ids, required_ports=None):
+        captured_prepare["required_ports"] = list(required_ports or [])
+        return {"test-device-agent": {"virtual_ip": "10.77.0.15/32"}}
+
+    monkeypatch.setattr(scheduler, "_prepare_vpn_sessions", _capture_prepare)
+    monkeypatch.setattr(scheduler, "_preflight_remote_port", lambda **_kwargs: "")
+    monkeypatch.setattr(scheduler, "_preflight_ssh_session", lambda **_kwargs: "")
+    monkeypatch.setattr(
+        scheduler,
+        "_load_credential",
+        lambda _credential_id: {
+            "id": 5,
+            "name": "SSH Test Credential",
+            "connection_type": "ssh",
+            "username": "ubuntu",
+            "password": "secret",
+            "private_key": "",
+            "become_method": "",
+            "become_username": "",
+            "become_password": "",
+        },
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_resolve_runtime_document",
+        lambda rel_path, _default_type, assembly_guid=None: (
+            {
+                "name": "Playbook Port Probe",
+                "script": "---\n- hosts: all\n  gather_facts: false\n  tasks:\n    - ansible.builtin.ping:\n",
+                "variables": [],
+                "files": [],
+            },
+            {
+                "assembly_guid": assembly_guid or "guid-test-0001",
+                "virtual_path": rel_path or "Ansible_Playbooks/playbook_port_probe.yml",
+            },
+        ),
+    )
+    monkeypatch.setattr(scheduler, "_server_ansible_runner", lambda **_kwargs: "runner-1")
+
+    result = scheduler._dispatch_shared_ansible(
+        job_id=16,
+        run_row_id=61,
+        scheduled_ts=1_773_782_701,
+        run_mode="ssh",
+        component={"name": "Playbook Port Probe", "path": "playbook_port_probe.yml"},
+        credential_id=5,
+        use_service_account=False,
+    )
+
+    assert result is not None
+    assert captured_prepare["required_ports"] == [22]
 
 
 def test_shared_ansible_dispatch_reports_aegis_locked_and_recovers_after_unlock(
@@ -977,7 +1526,7 @@ def test_shared_ansible_dispatch_reports_aegis_locked_and_recovers_after_unlock(
     monkeypatch.setattr(
         scheduler,
         "_prepare_vpn_sessions",
-        lambda _agent_ids: {"test-device-agent": {"virtual_ip": "10.77.0.15/32"}},
+        lambda _agent_ids, required_ports=None: {"test-device-agent": {"virtual_ip": "10.77.0.15/32"}},
     )
     monkeypatch.setattr(
         scheduler,
@@ -1432,7 +1981,7 @@ def test_shared_ansible_dispatch_normalizes_private_key_runtime_file(
     monkeypatch.setattr(
         scheduler,
         "_prepare_vpn_sessions",
-        lambda _agent_ids: {"test-device-agent": {"virtual_ip": "10.77.0.15/32"}},
+        lambda _agent_ids, required_ports=None: {"test-device-agent": {"virtual_ip": "10.77.0.15/32"}},
     )
     monkeypatch.setattr(
         scheduler,
@@ -1629,7 +2178,7 @@ def test_shared_ansible_dispatch_fails_for_passphrase_only_ssh_key(
     assert target_row[1] == "credential_private_key_passphrase_unsupported"
 
 
-def test_shared_ansible_dispatch_allows_targets_with_preflight_warnings(
+def test_shared_ansible_dispatch_skips_targets_with_preflight_failures(
     engine_harness: EngineTestHarness,
     monkeypatch,
 ) -> None:
@@ -1734,7 +2283,7 @@ def test_shared_ansible_dispatch_allows_targets_with_preflight_warnings(
     monkeypatch.setattr(
         scheduler,
         "_prepare_vpn_sessions",
-        lambda _agent_ids: {"test-device-agent": {"virtual_ip": "10.77.0.15/32", "_requested_start": True}},
+        lambda _agent_ids, required_ports=None: {"test-device-agent": {"virtual_ip": "10.77.0.15/32", "_requested_start": True}},
     )
     monkeypatch.setattr(
         scheduler,
@@ -1788,11 +2337,8 @@ def test_shared_ansible_dispatch_allows_targets_with_preflight_warnings(
         use_service_account=False,
     )
 
-    assert result is not None
-    assert "kwargs" in captured
-    target_specifications = captured["kwargs"]["target_specifications"]
-    assert len(target_specifications) == 1
-    assert target_specifications[0]["host_vars"]["ansible_host"] == "10.77.0.15"
+    assert result is None
+    assert "kwargs" not in captured
 
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:
@@ -1800,17 +2346,29 @@ def test_shared_ansible_dispatch_allows_targets_with_preflight_warnings(
         cur.execute(
             """
             SELECT resolution_status, resolution_reason
-              FROM scheduled_job_run_targets
+             FROM scheduled_job_run_targets
              WHERE run_id=?
             """,
             (61,),
         )
         row = cur.fetchone()
+        cur.execute(
+            """
+            SELECT status, skip_reason, error
+              FROM scheduled_job_runs
+             WHERE id=?
+            """,
+            (61,),
+        )
+        run_row = cur.fetchone()
     finally:
         conn.close()
 
-    assert row[0] == "eligible"
-    assert row[1] == ""
+    assert row[0] == "skipped"
+    assert row[1] == "remote_preflight_failed"
+    assert run_row[0] == "Skipped"
+    assert run_row[1] == "no_eligible_targets"
+    assert run_row[2] == "No eligible devices were available for this Ansible run."
 
 
 def test_tick_persists_activity_links_for_shared_ansible_runs(
@@ -1889,7 +2447,7 @@ def test_tick_persists_activity_links_for_shared_ansible_runs(
     monkeypatch.setattr(
         scheduler,
         "_prepare_vpn_sessions",
-        lambda _agent_ids: {"test-device-agent": {"virtual_ip": "10.77.0.15/32"}},
+        lambda _agent_ids, required_ports=None: {"test-device-agent": {"virtual_ip": "10.77.0.15/32"}},
     )
     monkeypatch.setattr(
         scheduler,
