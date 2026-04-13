@@ -6,12 +6,11 @@ import {
   Tabs,
   Tab,
   TextField,
+  InputBase,
   Button,
   IconButton,
   Checkbox,
   FormControlLabel,
-  Select,
-  Menu,
   MenuItem,
   Divider,
   Dialog,
@@ -32,9 +31,9 @@ import {
   Check as CheckIcon,
   Error as ErrorIcon,
   Refresh as RefreshIcon,
+  Search as SearchIcon,
   Apps as AppsIcon,
   DriveFileRenameOutline as DriveFileRenameOutlineIcon,
-  ExtensionRounded as ExtensionRoundedIcon,
   DevicesRounded as DevicesRoundedIcon,
   ScheduleRounded as ScheduleRoundedIcon,
   SettingsApplicationsRounded as SettingsApplicationsRoundedIcon,
@@ -62,12 +61,11 @@ import "prismjs/components/prism-bash";
 import "prismjs/components/prism-powershell";
 import "prismjs/components/prism-batch";
 import "prismjs/themes/prism-okaidia.css";
-import Editor from "react-simple-code-editor";
 import ReactFlow, { Handle, Position } from "reactflow";
 import "reactflow/dist/style.css";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
-import { DomainBadge } from "../Assemblies/Assembly_Badges";
+import { DirtyStatePill, DomainBadge } from "../Assemblies/Assembly_Badges";
 import {
   buildAssemblyIndex,
   parseAssembliesCollectionPayload,
@@ -125,6 +123,28 @@ const CREATE_JOB_TAB_KEY_BY_URL = Object.freeze({
   job_history: "history",
   history: "history",
 });
+const JOB_HISTORY_SUBTAB_URL_BY_KEY = Object.freeze({
+  current: "current_run",
+  historical: "historical_runs",
+});
+const JOB_HISTORY_SUBTAB_KEY_BY_URL = Object.freeze({
+  current_run: "current",
+  historical_runs: "historical",
+  current: "current",
+  historical: "historical",
+});
+
+const ASSEMBLY_TYPE_FILTER_OPTIONS = [
+  { key: "applications", label: "Applications", match: "applications" },
+  { key: "playbooks", label: "Playbooks", match: "playbooks" },
+  { key: "scripts", label: "Scripts", match: "scripts" },
+  { key: "workflows", label: "Workflows", match: "workflows" },
+];
+const ASSEMBLY_OS_FILTER_OPTIONS = [
+  { key: "windows", label: "Windows", match: "windows" },
+  { key: "linux", label: "Linux", match: "linux" },
+  { key: "macos", label: "MacOS", match: "macos" },
+];
 
 function hasHydratedJobPayload(job) {
   if (!job || typeof job !== "object") {
@@ -142,7 +162,7 @@ function hasHydratedJobPayload(job) {
 }
 
 const gridTheme = themeQuartz.withParams({
-  accentColor: "#8b5cf6",
+  accentColor: "#7dd3fc",
   backgroundColor: "#070b1a",
   browserColorScheme: "dark",
   fontFamily: { googleFont: "IBM Plex Sans" },
@@ -171,8 +191,8 @@ const GRID_STYLE_BASE = {
   "--ag-header-background-color": "#0f172a",
   "--ag-header-foreground-color": "#cfe0ff",
   "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
-  "--ag-row-hover-color": "rgba(125,183,255,0.08)",
-  "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
+  "--ag-row-hover-color": "rgba(73,156,196,0.2)",
+  "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
   "--ag-border-color": "rgba(125,183,255,0.18)",
   "--ag-row-border-color": "rgba(125,183,255,0.14)",
   "--ag-border-radius": "8px",
@@ -217,8 +237,8 @@ const GRID_WRAPPER_SX = {
     backgroundColor: "rgba(125,183,255,0.08) !important",
   },
   "& .ag-row-selected": {
-    backgroundColor: "rgba(56,189,248,0.14) !important",
-    boxShadow: "inset 0 0 0 1px rgba(56,189,248,0.3)",
+    backgroundColor: "rgba(125,211,252,0.2) !important",
+    boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
   },
   "& .ag-icon": {
     fontFamily: iconFontFamily,
@@ -272,6 +292,24 @@ const GRID_WRAPPER_SX = {
     textAlign: "left",
     display: "flex",
     justifyContent: "flex-start",
+    alignItems: "center",
+  },
+  "& .ag-center-cols-container .ag-cell.output-actions-cell, & .ag-pinned-left-cols-container .ag-cell.output-actions-cell, & .ag-pinned-right-cols-container .ag-cell.output-actions-cell": {
+    paddingRight: "18px",
+    paddingLeft: "12px",
+    justifyContent: "flex-start",
+    textAlign: "left",
+  },
+  "& .ag-center-cols-container .ag-cell.output-actions-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell.output-actions-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell.output-actions-cell .ag-cell-wrapper": {
+    width: "100%",
+    justifyContent: "flex-start",
+    alignItems: "center",
+  },
+  "& .ag-center-cols-container .ag-cell.output-actions-cell .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell.output-actions-cell .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell.output-actions-cell .ag-cell-value": {
+    width: "100%",
+    justifyContent: "flex-start",
+    textAlign: "left",
+    display: "flex",
     alignItems: "center",
   },
   "& .status-pill-cell": {
@@ -428,6 +466,20 @@ const JOB_RESULT_THEME = {
   },
 };
 
+const JOB_STATUS_SORT_RANK = Object.freeze({
+  success: 0,
+  warning: 1,
+  failed: 2,
+  running: 3,
+  expired: 4,
+  timed_out: 4,
+  skipped: 4,
+  no_devices_targeted: 4,
+  no_eligible_targets: 4,
+  pending: 5,
+  default: 6,
+});
+
 const normalizeJobStatusKey = (status) => {
   const normalized = String(status || "").trim().toLowerCase();
   if (!normalized || normalized === "scheduled" || normalized === "queued") return "pending";
@@ -436,6 +488,11 @@ const normalizeJobStatusKey = (status) => {
   if (normalized === "no devices targeted" || normalized === "no_devices_targeted") return "no_devices_targeted";
   if (normalized === "no eligible targets" || normalized === "no_eligible_targets") return "no_eligible_targets";
   return normalized;
+};
+
+const getJobStatusSortRank = (status) => {
+  const key = normalizeJobStatusKey(status);
+  return JOB_STATUS_SORT_RANK[key] ?? JOB_STATUS_SORT_RANK.default;
 };
 
 const isWorkflowComponentRecord = (component) => {
@@ -601,27 +658,79 @@ const buildNavTabsSx = (minHeight = NAV_TAB_HEIGHT) => ({
   },
 });
 
-const PRIMARY_CTA_SX = {
+const ACTION_BUTTON_BASE_SX = {
+  minHeight: 38,
+  height: 38,
+  px: 1.8,
   borderRadius: 999,
-  px: 3,
-  py: 1,
+  fontFamily: gridFontFamily,
   fontWeight: 600,
+  fontSize: "0.92rem",
+  lineHeight: 1,
   textTransform: "none",
-  color: "#041317",
-  backgroundImage: "linear-gradient(120deg,#34d399,#22d3ee)",
+  whiteSpace: "nowrap",
+  boxSizing: "border-box",
+  borderWidth: "1px",
+  borderStyle: "solid",
+  transition:
+    "background 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease, transform 120ms ease, opacity 120ms ease",
+  "& .MuiButton-startIcon": {
+    mr: 0.8,
+  },
   "&:hover": {
-    backgroundImage: "linear-gradient(120deg,#22d3ee,#34d399)",
+    transform: "translateY(-0.5px)",
+  },
+  "&:active": {
+    transform: "translateY(0)",
+  },
+  "&.Mui-disabled": {
+    opacity: 0.42,
+    color: "rgba(226, 232, 240, 0.7)",
+    borderColor: "rgba(148, 163, 184, 0.22)",
+    background: "rgba(51, 65, 85, 0.5)",
+  },
+};
+
+const PRIMARY_CTA_SX = {
+  ...ACTION_BUTTON_BASE_SX,
+  borderRadius: 999,
+  color: "#06101d",
+  borderColor: "transparent",
+  background: "linear-gradient(135deg, #7dd3fc 0%, #c084fc 100%)",
+  boxShadow: "0 16px 34px rgba(125, 211, 252, 0.18)",
+  "&:hover": {
+    ...ACTION_BUTTON_BASE_SX["&:hover"],
+    background: "linear-gradient(135deg, #91dcff 0%, #cfa0ff 100%)",
+    boxShadow: "0 18px 36px rgba(192, 132, 252, 0.22)",
+  },
+  "&.Mui-disabled": {
+    ...ACTION_BUTTON_BASE_SX["&.Mui-disabled"],
+    color: "rgba(9, 18, 33, 0.6)",
+    background: "linear-gradient(135deg, rgba(125, 211, 252, 0.38) 0%, rgba(192, 132, 252, 0.34) 100%)",
+    borderColor: "transparent",
+  },
+};
+
+const PRIMARY_CTA_FLAT_SX = {
+  ...PRIMARY_CTA_SX,
+  boxShadow: "none",
+  "&:hover": {
+    ...PRIMARY_CTA_SX["&:hover"],
+    boxShadow: "none",
   },
 };
 
 const OUTLINE_BUTTON_SX = {
-  borderRadius: 999,
-  px: 2.5,
-  textTransform: "none",
+  ...ACTION_BUTTON_BASE_SX,
   borderColor: "rgba(148,163,184,0.45)",
   color: MAGIC_UI.textBright,
+  background: "rgba(5, 10, 24, 0.84)",
+  boxShadow: "0 10px 24px rgba(2, 6, 23, 0.3)",
   "&:hover": {
-    borderColor: MAGIC_UI.accentA,
+    ...ACTION_BUTTON_BASE_SX["&:hover"],
+    borderColor: "rgba(125, 211, 252, 0.52)",
+    background: "rgba(8, 14, 30, 0.92)",
+    boxShadow: "0 14px 32px rgba(2, 6, 23, 0.42)",
   },
 };
 
@@ -649,17 +758,136 @@ const INPUT_FIELD_SX = {
   },
 };
 
-const HERO_CARD_SX = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 0.2,
-  px: 0,
-  py: 0,
-  minWidth: 160,
+const SELECT_FIELD_SX = {
+  ...INPUT_FIELD_SX,
+  "& .MuiOutlinedInput-root": {
+    ...INPUT_FIELD_SX["& .MuiOutlinedInput-root"],
+    minHeight: 42,
+    bgcolor: "rgba(8,13,30,0.94)",
+    background: "linear-gradient(160deg, rgba(8,13,30,0.96), rgba(11,18,38,0.94))",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
+  },
+  "& .MuiSelect-select": {
+    display: "flex",
+    alignItems: "center",
+    minHeight: "20px !important",
+    paddingTop: "7px !important",
+    paddingBottom: "7px !important",
+  },
+  "& .MuiSvgIcon-root": {
+    color: MAGIC_UI.accentA,
+  },
 };
+
+const SELECT_MENU_PROPS = {
+  PaperProps: {
+    sx: {
+      mt: 1,
+      borderRadius: 2.5,
+      border: `1px solid ${MAGIC_UI.panelBorder}`,
+      background:
+        "linear-gradient(180deg, rgba(8, 13, 30, 0.98) 0%, rgba(7, 11, 24, 0.98) 55%, rgba(10, 16, 34, 0.98) 100%)",
+      boxShadow: "0 24px 60px rgba(2, 8, 23, 0.7)",
+      backdropFilter: "blur(18px)",
+      color: MAGIC_UI.textBright,
+      overflow: "hidden",
+      "& .MuiMenu-list": {
+        p: 0.5,
+      },
+      "& .MuiMenuItem-root": {
+        minHeight: 27,
+        px: 1.3,
+        py: 0.35,
+        borderRadius: 1.25,
+        fontSize: "0.88rem",
+        color: MAGIC_UI.textBright,
+        transition: "background 140ms ease, color 140ms ease",
+      },
+      "& .MuiMenuItem-root:hover": {
+        background: "rgba(125, 183, 255, 0.12)",
+      },
+      "& .MuiMenuItem-root.Mui-selected": {
+        background: "rgba(125, 183, 255, 0.2)",
+        color: "#f8fbff",
+      },
+      "& .MuiMenuItem-root.Mui-selected:hover": {
+        background: "rgba(125, 183, 255, 0.28)",
+      },
+    },
+  },
+};
+
 const GlassPanel = ({ children, sx }) => (
   <Box sx={{ ...GLASS_PANEL_BASE_SX, ...(sx || {}) }}>{children}</Box>
 );
+
+function CountSliderGroup({ options, activeKey, counts, onChange }) {
+  return (
+    <Box
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.75,
+        background: "linear-gradient(120deg, rgba(8,12,24,0.92), rgba(4,7,17,0.85))",
+        borderRadius: 999,
+        border: "1px solid rgba(148,163,184,0.35)",
+        boxShadow: "0 18px 48px rgba(2,8,23,0.45)",
+        padding: "4px",
+      }}
+    >
+      {options.map((option) => {
+        const active = activeKey === option.key;
+        return (
+          <Box
+            key={option.key}
+            component="button"
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(active ? "" : option.key)}
+            sx={{
+              border: "none",
+              outline: "none",
+              background: active ? "linear-gradient(135deg,#7dd3fc,#c084fc)" : "transparent",
+              color: active ? "#041224" : "#cbd5e1",
+              fontWeight: 600,
+              fontSize: 13,
+              px: 2,
+              py: 0.5,
+              borderRadius: 999,
+              cursor: "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 0.6,
+              boxShadow: active ? "0 0 18px rgba(125,211,252,0.35)" : "none",
+              transition: "all 0.2s ease",
+            }}
+          >
+            <Box component="span" sx={{ userSelect: "none" }}>
+              {option.label}
+            </Box>
+            <Box
+              component="span"
+              sx={{
+                minWidth: 28,
+                textAlign: "center",
+                borderRadius: 999,
+                fontSize: 12,
+                fontWeight: 600,
+                px: 0.75,
+                py: 0.1,
+                color: active ? "#041224" : "#94a3b8",
+                backgroundColor: active ? "rgba(4,18,36,0.2)" : "rgba(15,23,42,0.65)",
+                border: active ? "1px solid rgba(4,18,36,0.3)" : "1px solid rgba(148,163,184,0.3)",
+              }}
+            >
+              {counts?.[option.key] ?? 0}
+            </Box>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
 
 const EXEC_CONTEXT_OPTIONS = Object.freeze([
   {
@@ -730,21 +958,6 @@ const normalizeRemoteTransport = (value) => {
 
 const isWinRMExecContext = (value) => normalizeRemoteTransport(value) === "winrm";
 
-const SCHEDULE_LABELS = {
-  immediately: "Immediate",
-  once: "Single run",
-  every_5_minutes: "Every 5 minutes",
-  every_10_minutes: "Every 10 minutes",
-  every_15_minutes: "Every 15 minutes",
-  every_30_minutes: "Every 30 minutes",
-  every_15: "Every 15 minutes",
-  every_hour: "Hourly cadence",
-  daily: "Daily cadence",
-  weekly: "Weekly cadence",
-  monthly: "Monthly cadence",
-  yearly: "Yearly cadence",
-};
-
 const hiddenHandleStyle = {
   width: 12,
   height: 12,
@@ -762,15 +975,6 @@ const STATUS_META = {
   warning: { label: "Warning", color: "#fbbf24", Icon: WarningAmberRoundedIcon },
   failed: { label: "Failed", color: "#ff4f4f", Icon: ErrorIcon }
 };
-
-const DEVICE_COLUMNS = [
-  { key: "hostname", label: "Hostname" },
-  { key: "online", label: "Status" },
-  { key: "site", label: "Site" },
-  { key: "ran_on", label: "Ran On" },
-  { key: "job_status", label: "Job Status" },
-  { key: "output", label: "StdOut / StdErr" }
-];
 
 const normalizeFilterCatalog = (raw) => {
   if (!Array.isArray(raw)) return [];
@@ -907,6 +1111,113 @@ function SectionHeader({ title, action, sx }) {
     </Box>
   );
 }
+
+const formatPathSegment = (segment) => {
+  const value = String(segment || "").trim();
+  if (!value) return "";
+  return value.charAt(0).toUpperCase() + value.slice(1);
+};
+
+const formatPathDisplay = (folderPath) => {
+  const segments = String(folderPath || "")
+    .split("/")
+    .map((segment) => formatPathSegment(segment))
+    .filter(Boolean);
+  return segments.join(" \u203A ");
+};
+
+const buildPathSearchValue = (folderPath) => {
+  const rawPath = String(folderPath || "").replace(/\\/g, "/");
+  const formattedPath = formatPathDisplay(rawPath);
+  return [rawPath, formattedPath]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+};
+
+const buildFilterFlags = (pathSearchValue, options) =>
+  options.reduce((acc, option) => {
+    acc[option.key] = pathSearchValue.includes(String(option.match || "").toLowerCase());
+    return acc;
+  }, {});
+
+const resolveAssemblyPickerIcon = (typeKey) => {
+  if (typeKey === "workflow") return AccountTreeRoundedIcon;
+  if (typeKey === "ansible") return MenuBookRoundedIcon;
+  return TerminalRoundedIcon;
+};
+
+const AssemblyPickerSourceCellRenderer = React.memo(function AssemblyPickerSourceCellRenderer(props) {
+  const { data } = props;
+  if (!data) return null;
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
+      <DomainBadge domain={data.domain} size="small" />
+      {data.isDirty ? <DirtyStatePill compact /> : null}
+    </Box>
+  );
+});
+
+const AssemblyPickerNameCellRenderer = React.memo(function AssemblyPickerNameCellRenderer(props) {
+  const { data } = props;
+  if (!data) return null;
+  return (
+    <Typography
+      component="span"
+      sx={{
+        color: "#58a6ff",
+        fontSize: 14,
+        fontWeight: 600,
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      }}
+    >
+      {data.name || ""}
+    </Typography>
+  );
+});
+
+const AssemblyPickerPathCellRenderer = React.memo(function AssemblyPickerPathCellRenderer(props) {
+  const { data } = props;
+  if (!data) return null;
+  const Icon = resolveAssemblyPickerIcon(data.typeKey);
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", gap: 1.1, minWidth: 0 }}>
+      <Icon sx={{ fontSize: 19, color: "#58a6ff", flexShrink: 0 }} />
+      <Typography
+        component="span"
+        sx={{
+          fontSize: 13,
+          color: MAGIC_UI.textMuted,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {data.pathDisplay || ""}
+      </Typography>
+    </Box>
+  );
+});
+
+const AssemblyPickerUpdateCellRenderer = React.memo(function AssemblyPickerUpdateCellRenderer(props) {
+  const available = Boolean(props?.data?.officialUpdateAvailable);
+  if (!available) return null;
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%" }}>
+      <StatusPill
+        label="Available"
+        theme={{
+          text: "#7dd3fc",
+          background: "rgba(125, 211, 252, 0.18)",
+          border: "1px solid rgba(125, 211, 252, 0.42)",
+          dot: "#7dd3fc",
+        }}
+      />
+    </Box>
+  );
+});
 
 function normalizeVariableDefinitions(vars = []) {
   return (Array.isArray(vars) ? vars : [])
@@ -1158,7 +1469,7 @@ export default function CreateJob() {
   const isWorkflowJob = workflowComponentCount > 0;
   const [targets, setTargets] = useState([]); // array of target descriptors
   const [filterCatalog, setFilterCatalog] = useState([]);
-  const [loadingFilterCatalog, setLoadingFilterCatalog] = useState(false);
+  const [, setLoadingFilterCatalog] = useState(false);
   const filterCatalogMapRef = useRef({});
   const loadFilterCatalog = useCallback(async () => {
     setLoadingFilterCatalog(true);
@@ -1189,8 +1500,7 @@ export default function CreateJob() {
   }, [filterCatalog]);
   const [scheduleType, setScheduleType] = useState("immediately");
   const [startDateTime, setStartDateTime] = useState(() => dayjs().add(5, "minute").second(0));
-  const [stopAfterEnabled, setStopAfterEnabled] = useState(false);
-  const [expiration, setExpiration] = useState("no_expire");
+  const [expiration, setExpiration] = useState("1h");
   const [execContext, setExecContext] = useState("system");
   const [credentials, setCredentials] = useState([]);
   const [credentialLoading, setCredentialLoading] = useState(false);
@@ -1215,12 +1525,6 @@ export default function CreateJob() {
     title: resolvedPageTitle,
     icon: "pendingactions",
     variant: "info",
-  });
-
-  useRoutePageChrome({
-    title: resolvedPageTitle,
-    subtitle: resolvedPageSubtitle,
-    Icon: PAGE_ICON,
   });
   const [useSvcAccount, setUseSvcAccount] = useState(true);
   const [assembliesPayload, setAssembliesPayload] = useState({ items: [], queue: [] });
@@ -1332,23 +1636,41 @@ export default function CreateJob() {
     () => buildAssemblyIndex(assembliesPayload.items, assembliesPayload.queue),
     [assembliesPayload.items, assembliesPayload.queue]
   );
-  const assemblyGridRows = useMemo(() => {
-    const toRow = (record) => ({
-      id: record.assemblyGuid || record.pathLower || record.displayName,
-      name: record.displayName || record.path || record.assemblyGuid,
-      domain: record.domainLabel || record.domain || "General",
-      path: record.path || "",
-      summary: record.summary || "",
-      kind: record.kind || "script",
-      record
-    });
-    const grouped = assemblyIndex.grouped || {};
-    return {
-      scripts: (grouped.scripts || []).map(toRow),
-      ansible: (grouped.ansible || []).map(toRow),
-      workflows: (grouped.workflows || []).map(toRow)
-    };
-  }, [assemblyIndex]);
+  const assemblyPickerRows = useMemo(
+    () =>
+      (assemblyIndex.records || []).map((record) => {
+        const sourcePath = String(record.path || "").replace(/\\/g, "/");
+        const pathParts = sourcePath.split("/");
+        const folder = pathParts.length > 1 ? pathParts.slice(0, -1).join("/") : "";
+        const pathDisplay = formatPathDisplay(folder);
+        const pathSearchValue = buildPathSearchValue(folder);
+        let typeKey = "script";
+        if (record.kind === "workflow" || record.type === "workflow") {
+          typeKey = "workflow";
+        } else if (record.kind === "ansible" || record.type === "ansible") {
+          typeKey = "ansible";
+        }
+
+        return {
+          id: record.assemblyGuid || record.pathLower || record.displayName,
+          assemblyGuid: record.assemblyGuid,
+          name: record.displayName || record.path || record.assemblyGuid,
+          domain: record.domain || "user",
+          domainLabel: record.domainLabel || record.domain || "General",
+          isDirty: Boolean(record.isDirty),
+          officialUpdateAvailable: Boolean(record.raw?.official_update_available),
+          pathDisplay,
+          pathSearchValue,
+          typeKey,
+          description: record.summary || "",
+          rawPath: sourcePath,
+          assemblyTypeFlags: buildFilterFlags(pathSearchValue, ASSEMBLY_TYPE_FILTER_OPTIONS),
+          targetOsFlags: buildFilterFlags(pathSearchValue, ASSEMBLY_OS_FILTER_OPTIONS),
+          record,
+        };
+      }),
+    [assemblyIndex.records]
+  );
 
   const loadAssemblyExport = useCallback(
     async (assemblyGuid) => {
@@ -1376,48 +1698,133 @@ export default function CreateJob() {
 
   // dialogs state
   const [addCompOpen, setAddCompOpen] = useState(false);
-  const [compTab, setCompTab] = useState("scripts");
   const [selectedNodeId, setSelectedNodeId] = useState("");
   const [assemblyFilterText, setAssemblyFilterText] = useState("");
-
-  useEffect(() => {
-    setSelectedNodeId("");
-  }, [compTab]);
+  const [assemblyTypeFilterMode, setAssemblyTypeFilterMode] = useState("");
+  const [assemblyOsFilterMode, setAssemblyOsFilterMode] = useState("");
   const selectedAssemblyRecord = useMemo(() => {
     if (!selectedNodeId) return null;
     const key = String(selectedNodeId).toLowerCase();
     return assemblyIndex.byGuid?.get(key) || null;
   }, [selectedNodeId, assemblyIndex]);
-  const assemblyRowData = useMemo(() => assemblyGridRows[compTab] || [], [assemblyGridRows, compTab]);
+  const assemblyTypeScopedRows = useMemo(() => {
+    if (!assemblyOsFilterMode) return assemblyPickerRows;
+    return assemblyPickerRows.filter((row) => row?.targetOsFlags?.[assemblyOsFilterMode]);
+  }, [assemblyOsFilterMode, assemblyPickerRows]);
+  const assemblyOsScopedRows = useMemo(() => {
+    if (!assemblyTypeFilterMode) return assemblyPickerRows;
+    return assemblyPickerRows.filter((row) => row?.assemblyTypeFlags?.[assemblyTypeFilterMode]);
+  }, [assemblyPickerRows, assemblyTypeFilterMode]);
+  const assemblyTypeCounts = useMemo(() => {
+    const totals = ASSEMBLY_TYPE_FILTER_OPTIONS.reduce((acc, option) => {
+      acc[option.key] = 0;
+      return acc;
+    }, {});
+    assemblyTypeScopedRows.forEach((row) => {
+      ASSEMBLY_TYPE_FILTER_OPTIONS.forEach((option) => {
+        if (row?.assemblyTypeFlags?.[option.key]) {
+          totals[option.key] += 1;
+        }
+      });
+    });
+    return totals;
+  }, [assemblyTypeScopedRows]);
+  const assemblyOsCounts = useMemo(() => {
+    const totals = ASSEMBLY_OS_FILTER_OPTIONS.reduce((acc, option) => {
+      acc[option.key] = 0;
+      return acc;
+    }, {});
+    assemblyOsScopedRows.forEach((row) => {
+      ASSEMBLY_OS_FILTER_OPTIONS.forEach((option) => {
+        if (row?.targetOsFlags?.[option.key]) {
+          totals[option.key] += 1;
+        }
+      });
+    });
+    return totals;
+  }, [assemblyOsScopedRows]);
   const filteredAssemblyRows = useMemo(() => {
     const query = assemblyFilterText.trim().toLowerCase();
-    if (!query) return assemblyRowData;
-    return assemblyRowData.filter((row) => {
-      const fields = [row.name, row.domain, row.path, row.summary];
+    return assemblyPickerRows.filter((row) => {
+      if (assemblyTypeFilterMode && !row?.assemblyTypeFlags?.[assemblyTypeFilterMode]) {
+        return false;
+      }
+      if (assemblyOsFilterMode && !row?.targetOsFlags?.[assemblyOsFilterMode]) {
+        return false;
+      }
+      if (!query) return true;
+      const fields = [row.name, row.domainLabel, row.pathDisplay, row.rawPath, row.description];
       return fields.some((value) => typeof value === "string" && value.toLowerCase().includes(query));
     });
-  }, [assemblyRowData, assemblyFilterText]);
+  }, [assemblyFilterText, assemblyOsFilterMode, assemblyPickerRows, assemblyTypeFilterMode]);
   const assemblyColumnDefs = useMemo(
     () => [
-      { colId: "name", field: "name", headerName: "Name", minWidth: 200, flex: 1.1 },
-      { colId: "domain", field: "domain", headerName: "Domain", minWidth: 140, flex: 0.8 },
-      { colId: "path", field: "path", headerName: "Path", minWidth: 220, flex: 1.2 }
+      {
+        colId: "source",
+        field: "domain",
+        headerName: "Source",
+        valueGetter: (params) => params?.data?.domain || "",
+        cellRenderer: AssemblyPickerSourceCellRenderer,
+        minWidth: 132,
+        width: 132,
+        flex: 0,
+        sortable: true,
+        resizable: true,
+        filter: "agTextColumnFilter",
+      },
+      {
+        colId: "name",
+        field: "name",
+        headerName: "Name",
+        valueGetter: (params) => params?.data?.name || "",
+        cellRenderer: AssemblyPickerNameCellRenderer,
+        minWidth: 420,
+        flex: 1,
+        sortable: true,
+        sort: "asc",
+        resizable: true,
+        filter: "agTextColumnFilter",
+      },
+      {
+        colId: "path",
+        field: "pathDisplay",
+        headerName: "Path",
+        valueGetter: (params) => params?.data?.pathDisplay || "",
+        cellRenderer: AssemblyPickerPathCellRenderer,
+        minWidth: 280,
+        width: 280,
+        flex: 0,
+        sortable: true,
+        resizable: true,
+        filter: "agTextColumnFilter",
+      },
+      {
+        colId: "officialUpdate",
+        field: "officialUpdateAvailable",
+        headerName: "Update Available",
+        minWidth: 160,
+        width: 160,
+        sortable: false,
+        filter: false,
+        resizable: true,
+        cellRenderer: AssemblyPickerUpdateCellRenderer,
+      },
     ],
     []
   );
   const assemblyDefaultColDef = useMemo(
     () => ({
       sortable: true,
-      resizable: false,
-      flex: 1,
-      filter: true,
+      resizable: true,
+      flex: 0,
+      filter: "agTextColumnFilter",
       floatingFilter: false,
       cellClass: "auto-col-tight",
       cellStyle: LEFT_ALIGN_CELL_STYLE,
     }),
     []
   );
-  const ASSEMBLY_AUTO_COLUMNS = useRef(["name", "domain", "path", "summary"]);
+  const ASSEMBLY_AUTO_COLUMNS = useRef(["source", "name", "path"]);
   const assemblyGridApiRef = useRef(null);
   const runAssemblyGridLayoutPass = useCallback((apiOverride = null) => {
     const api = apiOverride || assemblyGridApiRef.current;
@@ -1454,7 +1861,12 @@ export default function CreateJob() {
   useEffect(() => {
     if (!addCompOpen || !assemblyGridApiRef.current) return;
     runAssemblyGridLayoutPass();
-  }, [addCompOpen, assemblyRowData, compTab, filteredAssemblyRows, runAssemblyGridLayoutPass]);
+  }, [addCompOpen, filteredAssemblyRows, runAssemblyGridLayoutPass]);
+  useEffect(() => {
+    const api = assemblyGridApiRef.current;
+    if (!api) return;
+    api.paginationGoToFirstPage();
+  }, [assemblyFilterText, assemblyOsFilterMode, assemblyTypeFilterMode]);
 
   const componentDomainSummary = useMemo(() => {
     const domains = new Set(
@@ -1635,10 +2047,6 @@ export default function CreateJob() {
   }, [components]);
   const [deviceRows, setDeviceRows] = useState([]);
   const [deviceStatusFilter, setDeviceStatusFilter] = useState(null);
-  const [deviceFilters, setDeviceFilters] = useState({});
-  const [filterAnchorEl, setFilterAnchorEl] = useState(null);
-  const [activeFilterColumn, setActiveFilterColumn] = useState(null);
-  const [pendingFilterValue, setPendingFilterValue] = useState("");
   const devicePickerGridApiRef = useRef(null);
   const filterPickerGridApiRef = useRef(null);
 
@@ -2146,6 +2554,132 @@ export default function CreateJob() {
     }
     setSelectedFilterTargets(next);
   }, []);
+  const handleAddSelectedTargets = useCallback(() => {
+    if (targetPickerTab === "filters") {
+      const gridNodes =
+        (filterPickerGridApiRef.current &&
+          filterPickerGridApiRef.current.getSelectedNodes()) ||
+        [];
+      const additions = [];
+      const api = filterPickerGridApiRef.current;
+      const fromStateIds = new Set(
+        Object.entries(selectedFilterTargets)
+          .filter(([, checked]) => checked)
+          .map(([id]) => String(id))
+      );
+
+      const rowsToUse =
+        (selectedFilterRows && selectedFilterRows.length
+          ? selectedFilterRows
+          : null) ||
+        (() => {
+          if (api && typeof api.getSelectedRows === "function") {
+            const rows = api.getSelectedRows();
+            if (Array.isArray(rows) && rows.length) return rows;
+          }
+          if (gridNodes.length) {
+            const rows = gridNodes.map((n) => n?.data).filter(Boolean);
+            if (rows.length) return rows;
+          }
+          if (api && typeof api.forEachNode === "function") {
+            const rows = [];
+            api.forEachNode((node) => {
+              if (node && node.isSelected && node.isSelected()) {
+                rows.push(node.data);
+              }
+            });
+            if (rows.length) return rows;
+          }
+          return [];
+        })();
+
+      rowsToUse.forEach((row) => {
+        const parsedId = Number(row?.id ?? row?.filter_id);
+        if (!Number.isFinite(parsedId)) return;
+        additions.push({
+          kind: "filter",
+          filter_id: parsedId,
+          name: row?.name || `Filter #${parsedId}`,
+          site_scope: row?.scopeKey || row?.scope || "global",
+          site: null,
+          deviceCount: row?.deviceCount,
+        });
+      });
+
+      if (!additions.length && fromStateIds.size) {
+        fromStateIds.forEach((id) => {
+          const catalog =
+            filterCatalogMapRef.current[id] || filterCatalogMapRef.current[String(id)] || null;
+          const source = catalog || null;
+          const parsedId = Number(source?.id ?? source?.filter_id ?? id);
+          if (!Number.isFinite(parsedId)) return;
+          additions.push({
+            kind: "filter",
+            filter_id: parsedId,
+            name: source?.name || `Filter #${parsedId}`,
+            site_scope: source?.site_scope || source?.scope || source?.type || "global",
+            site: null,
+            deviceCount: source?.deviceCount ?? source?.devices_targeted ?? source?.matching_device_count,
+          });
+        });
+      }
+      if (!additions.length && filterPickerRows.length === 1) {
+        const row = filterPickerRows[0];
+        const parsedId = Number(row?.id ?? row?.filter_id);
+        if (Number.isFinite(parsedId)) {
+          additions.push({
+            kind: "filter",
+            filter_id: parsedId,
+            name: row?.name || `Filter #${parsedId}`,
+            site_scope: row?.scopeKey || row?.scope || "global",
+            site: null,
+            deviceCount: row?.deviceCount,
+          });
+        }
+      }
+      if (additions.length) {
+        addTargets(additions);
+      } else {
+        alert("Select at least one filter to add.");
+        return;
+      }
+    } else {
+      const chosenDevices = Object.keys(selectedDeviceTargets)
+        .filter((deviceKey) => selectedDeviceTargets[deviceKey])
+        .map((deviceKey) => {
+          const lookup = availableDeviceMap.get(deviceKey);
+          if (lookup) {
+            return {
+              kind: "device",
+              hostname: lookup.hostname,
+              os: lookup.os,
+              site: lookup.site,
+              site_name: lookup.site_name || lookup.site,
+              site_id: lookup.site_id ?? lookup.siteId ?? null,
+              device_guid: lookup.device_guid || lookup.deviceGuid || "",
+            };
+          }
+          return null;
+        })
+        .filter(Boolean);
+
+      if (!chosenDevices.length) {
+        return;
+      }
+
+      addTargets(chosenDevices);
+    }
+
+    setAddTargetOpen(false);
+  }, [
+    addTargets,
+    availableDeviceMap,
+    filterPickerRows,
+    selectedDeviceTargets,
+    selectedFilterRows,
+    selectedFilterTargets,
+    targetPickerTab,
+  ]);
 
   useEffect(() => {
     setTargets((prev) => {
@@ -2171,136 +2705,6 @@ export default function CreateJob() {
     () => `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     []
   );
-
-  const getDefaultFilterValue = useCallback((key) => (["online", "job_status", "output"].includes(key) ? "all" : ""), []);
-
-  const isColumnFiltered = useCallback((key) => {
-    if (!deviceFilters || typeof deviceFilters !== "object") return false;
-    const value = deviceFilters[key];
-    if (value == null) return false;
-    if (typeof value === "string") {
-      const trimmed = value.trim();
-      if (!trimmed || trimmed === "all") return false;
-      return true;
-    }
-    return true;
-  }, [deviceFilters]);
-
-  const openFilterMenu = useCallback((event, columnKey) => {
-    setActiveFilterColumn(columnKey);
-    setPendingFilterValue(deviceFilters[columnKey] ?? getDefaultFilterValue(columnKey));
-    setFilterAnchorEl(event.currentTarget);
-  }, [deviceFilters, getDefaultFilterValue]);
-
-  const closeFilterMenu = useCallback(() => {
-    setFilterAnchorEl(null);
-    setActiveFilterColumn(null);
-  }, []);
-
-  const applyFilter = useCallback(() => {
-    if (!activeFilterColumn) {
-      closeFilterMenu();
-      return;
-    }
-    const value = pendingFilterValue;
-    setDeviceFilters((prev) => {
-      const next = { ...(prev || {}) };
-      if (!value || value === "all" || (typeof value === "string" && !value.trim())) {
-        delete next[activeFilterColumn];
-      } else {
-        next[activeFilterColumn] = value;
-      }
-      return next;
-    });
-    closeFilterMenu();
-  }, [activeFilterColumn, pendingFilterValue, closeFilterMenu]);
-
-  const clearFilter = useCallback(() => {
-    if (!activeFilterColumn) {
-      closeFilterMenu();
-      return;
-    }
-    setDeviceFilters((prev) => {
-      const next = { ...(prev || {}) };
-      delete next[activeFilterColumn];
-      return next;
-    });
-    setPendingFilterValue(getDefaultFilterValue(activeFilterColumn));
-    closeFilterMenu();
-  }, [activeFilterColumn, closeFilterMenu, getDefaultFilterValue]);
-
-  const renderFilterControl = () => {
-    const columnKey = activeFilterColumn;
-    if (!columnKey) return null;
-    if (columnKey === "online") {
-      return (
-        <Select
-          size="small"
-          fullWidth
-          value={typeof pendingFilterValue === "string" && pendingFilterValue ? pendingFilterValue : "all"}
-          onChange={(e) => setPendingFilterValue(e.target.value)}
-        >
-          <MenuItem value="all">All Statuses</MenuItem>
-          <MenuItem value="online">Online</MenuItem>
-          <MenuItem value="offline">Offline</MenuItem>
-        </Select>
-      );
-    }
-    if (columnKey === "job_status") {
-      const options = ["success", "warning", "failed", "running", "pending", "expired", "timed out"];
-      return (
-        <Select
-          size="small"
-          fullWidth
-          value={typeof pendingFilterValue === "string" && pendingFilterValue ? pendingFilterValue : "all"}
-          onChange={(e) => setPendingFilterValue(e.target.value)}
-        >
-          <MenuItem value="all">All Results</MenuItem>
-          {options.map((opt) => (
-            <MenuItem key={opt} value={opt}>{opt.replace(/\b\w/g, (m) => m.toUpperCase())}</MenuItem>
-          ))}
-        </Select>
-      );
-    }
-    if (columnKey === "output") {
-      return (
-        <Select
-          size="small"
-          fullWidth
-          value={typeof pendingFilterValue === "string" && pendingFilterValue ? pendingFilterValue : "all"}
-          onChange={(e) => setPendingFilterValue(e.target.value)}
-        >
-          <MenuItem value="all">All Output</MenuItem>
-          <MenuItem value="stdout">StdOut Only</MenuItem>
-          <MenuItem value="stderr">StdErr Only</MenuItem>
-          <MenuItem value="both">StdOut & StdErr</MenuItem>
-          <MenuItem value="none">No Output</MenuItem>
-        </Select>
-      );
-    }
-    const placeholders = {
-      hostname: "Filter hostname",
-      site: "Filter site",
-      ran_on: "Filter date/time"
-    };
-    const value = typeof pendingFilterValue === "string" ? pendingFilterValue : "";
-    return (
-      <TextField
-        size="small"
-        autoFocus
-        fullWidth
-        placeholder={placeholders[columnKey] || "Filter value"}
-        value={value}
-        onChange={(e) => setPendingFilterValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            applyFilter();
-          }
-        }}
-      />
-    );
-  };
 
   const fmtTs = useCallback((ts) => {
     if (!ts) return "";
@@ -2334,40 +2738,9 @@ export default function CreateJob() {
       if (deviceStatusFilter && !matchStatusFilter(normalizedStatus, deviceStatusFilter)) {
         return false;
       }
-      if (deviceFilters && typeof deviceFilters === "object") {
-        for (const [key, rawValue] of Object.entries(deviceFilters)) {
-          if (rawValue == null) continue;
-          if (typeof rawValue === "string") {
-            const trimmed = rawValue.trim();
-            if (!trimmed || trimmed === "all") continue;
-          }
-          if (key === "hostname") {
-            const expected = String(rawValue || "").toLowerCase();
-            if (!String(row?.hostname || "").toLowerCase().includes(expected)) return false;
-          } else if (key === "online") {
-            if (rawValue === "online" && !row?.online) return false;
-            if (rawValue === "offline" && row?.online) return false;
-          } else if (key === "site") {
-            const expected = String(rawValue || "").toLowerCase();
-            if (!String(row?.site || "").toLowerCase().includes(expected)) return false;
-          } else if (key === "ran_on") {
-            const expected = String(rawValue || "").toLowerCase();
-            const formatted = fmtTs(row?.ran_on).toLowerCase();
-            if (!formatted.includes(expected)) return false;
-          } else if (key === "job_status") {
-            const expected = normalizeJobStatusKey(rawValue || "");
-            if (expected !== "all" && normalizedStatus !== expected) return false;
-          } else if (key === "output") {
-            if (rawValue === "stdout" && !row?.has_stdout) return false;
-            if (rawValue === "stderr" && !row?.has_stderr) return false;
-            if (rawValue === "both" && (!row?.has_stdout || !row?.has_stderr)) return false;
-            if (rawValue === "none" && (row?.has_stdout || row?.has_stderr)) return false;
-          }
-        }
-      }
       return true;
     });
-  }, [deviceRows, deviceStatusFilter, deviceFilters, fmtTs]);
+  }, [deviceRows, deviceStatusFilter]);
 
   const jobHistoryGridRows = useMemo(
     () =>
@@ -2375,12 +2748,29 @@ export default function CreateJob() {
         id: `${row.hostname || "device"}-${index}`,
         hostname: row.hostname || "",
         online: Boolean(row.online),
+        onlineLabel: row?.online ? "Online" : "Offline",
         site: row.site || "",
         ranOn: row.ran_on,
         jobStatus: row.job_status || "",
-        hasStdOut: Boolean(row.has_stdout),
-        hasStdErr: Boolean(row.has_stderr),
+        jobStatusLabel: JOB_RESULT_THEME[normalizeJobStatusKey(row?.job_status || "")]?.label || (row.job_status || ""),
+        jobStatusSortRank: getJobStatusSortRank(row?.job_status || ""),
+        hasStdOut:
+          Boolean(row.has_stdout) ||
+          (Array.isArray(row.activities) && row.activities.some((activity) => Boolean(activity?.has_stdout))),
+        hasStdErr:
+          Boolean(row.has_stderr) ||
+          (Array.isArray(row.activities) && row.activities.some((activity) => Boolean(activity?.has_stderr))),
         raw: row,
+      })).map((row) => ({
+        ...row,
+        outputState:
+          row.hasStdOut && row.hasStdErr
+            ? "StdOut & StdErr"
+            : row.hasStdOut
+            ? "StdOut"
+            : row.hasStdErr
+            ? "StdErr"
+            : "None",
       })),
     [deviceFiltered]
   );
@@ -2611,6 +3001,7 @@ export default function CreateJob() {
   const [outputSections, setOutputSections] = useState([]);
   const [outputLoading, setOutputLoading] = useState(false);
   const [outputError, setOutputError] = useState("");
+  const [clearingHistory, setClearingHistory] = useState(false);
 
   const loadHistory = useCallback(async () => {
     if (!editing) return;
@@ -2665,6 +3056,19 @@ export default function CreateJob() {
     t = setInterval(loadHistory, 10000);
     return () => { if (t) clearInterval(t); };
   }, [editing, loadHistory]);
+
+  const clearJobHistory = useCallback(async () => {
+    if (!editing || !initialJob?.id || clearingHistory) return;
+    setClearingHistory(true);
+    try {
+      await fetch(`/api/scheduled_jobs/${initialJob.id}/runs`, { method: "DELETE" });
+      await loadHistory();
+    } catch {
+      // no-op; page poll will reconcile if the delete fails silently
+    } finally {
+      setClearingHistory(false);
+    }
+  }, [clearingHistory, editing, initialJob?.id, loadHistory]);
 
   const resultChip = useCallback((status) => {
     const key = normalizeJobStatusKey(status);
@@ -3005,7 +3409,7 @@ export default function CreateJob() {
   ], []);
 
   const JobStatusFlow = () => (
-    <GlassPanel sx={{ mb: 2, p: 0, overflow: "hidden" }}>
+    <Box sx={{ mb: 2 }}>
       <GlobalStyles
         styles={{
           "@keyframes statusFlowDash": {
@@ -3020,7 +3424,7 @@ export default function CreateJob() {
           },
         }}
       />
-      <Box sx={{ height: 380, p: { xs: 2, md: 3 }, background: "rgba(4,7,18,0.6)" }}>
+      <Box sx={{ height: 380, p: 0, background: "transparent" }}>
         <ReactFlow
           nodes={statusNodes}
           edges={statusEdges}
@@ -3045,7 +3449,7 @@ export default function CreateJob() {
         />
       </Box>
       {deviceStatusFilter ? (
-        <Box sx={{ px: { xs: 2, md: 3 }, pb: 2.5, display: "flex", alignItems: "center", gap: 1.5 }}>
+        <Box sx={{ pt: 1.25, display: "flex", alignItems: "center", gap: 1.5 }}>
           <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
             Showing devices with {STATUS_META[deviceStatusFilter]?.label || deviceStatusFilter} results
           </Typography>
@@ -3054,7 +3458,7 @@ export default function CreateJob() {
           </Button>
         </Box>
       ) : null}
-    </GlassPanel>
+    </Box>
   );
   const inferLanguage = useCallback((path = "") => {
     const lower = String(path || "").toLowerCase();
@@ -3066,10 +3470,14 @@ export default function CreateJob() {
   }, []);
 
   const highlightCode = useCallback((code, lang) => {
+    const raw = String(code || "");
     try {
-      return Prism.highlight(code ?? "", Prism.languages[lang] || Prism.languages.markup, lang);
+      return Prism.highlight(raw, Prism.languages[lang] || Prism.languages.markup, lang);
     } catch {
-      return String(code || "");
+      return raw
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
     }
   }, []);
 
@@ -3131,7 +3539,7 @@ export default function CreateJob() {
   const jobHistoryGridComponents = useMemo(
     () => ({
       DeviceStatusRenderer: (params) => {
-        const online = Boolean(params.value);
+        const online = Boolean(params.data?.online);
         const theme = online ? DEVICE_STATUS_THEME.online : DEVICE_STATUS_THEME.offline;
         return (
           <StatusPill
@@ -3140,31 +3548,31 @@ export default function CreateJob() {
           />
         );
       },
-      JobStatusRenderer: (params) => resultChip(params.value || ""),
+      JobStatusRenderer: (params) => resultChip(params.data?.jobStatus || ""),
       OutputActionsRenderer: (params) => {
-        const row = params.data?.raw;
+        const row = params.data;
         if (!row) return null;
         return (
-          <Box sx={{ display: "flex", gap: 1 }}>
-            {row.has_stdout ? (
+          <Box sx={{ display: "flex", gap: 1, justifyContent: "flex-start", width: "100%" }}>
+            {row.hasStdOut ? (
               <Button
                 size="small"
                 sx={{ color: MAGIC_UI.accentA, textTransform: "none", minWidth: 0, p: 0 }}
                 onClick={(e) => {
                   e.stopPropagation();
-                  params.context?.viewOutput?.(row, "stdout");
+                  params.context?.viewOutput?.(row.raw, "stdout");
                 }}
               >
                 StdOut
               </Button>
             ) : null}
-            {row.has_stderr ? (
+            {row.hasStdErr ? (
               <Button
                 size="small"
                 sx={{ color: "#fb7185", textTransform: "none", minWidth: 0, p: 0 }}
                 onClick={(e) => {
                   e.stopPropagation();
-                  params.context?.viewOutput?.(row, "stderr");
+                  params.context?.viewOutput?.(row.raw, "stderr");
                 }}
               >
                 StdErr
@@ -3178,40 +3586,48 @@ export default function CreateJob() {
   );
   const jobHistoryGridColumnDefs = useMemo(
     () => [
-      { field: "hostname", headerName: "Hostname", minWidth: 180 },
+      { field: "hostname", headerName: "Hostname", minWidth: 200, filter: "agTextColumnFilter" },
       {
-        field: "online",
+        field: "onlineLabel",
         headerName: "Status",
         minWidth: 140,
         cellRenderer: "DeviceStatusRenderer",
         cellClass: "status-pill-cell",
-        sortable: false,
-        suppressHeaderMenuButton: true,
+        filter: "agSetColumnFilter",
       },
-      { field: "site", headerName: "Site", minWidth: 160 },
+      { field: "site", headerName: "Site", minWidth: 180, filter: "agTextColumnFilter" },
       {
         field: "ranOn",
         headerName: "Ran On",
         minWidth: 200,
         valueFormatter: (params) => (params.value ? fmtTs(params.value) : ""),
         comparator: (a, b) => Number(a || 0) - Number(b || 0),
+        filter: "agTextColumnFilter",
       },
       {
-        field: "jobStatus",
+        field: "jobStatusLabel",
         headerName: "Job Status",
         minWidth: 150,
         cellRenderer: "JobStatusRenderer",
         cellClass: "status-pill-cell",
-        sortable: false,
-        suppressHeaderMenuButton: true,
+        filter: "agSetColumnFilter",
+        comparator: (valueA, valueB, nodeA, nodeB) => {
+          const rankA = nodeA?.data?.jobStatusSortRank ?? JOB_STATUS_SORT_RANK.default;
+          const rankB = nodeB?.data?.jobStatusSortRank ?? JOB_STATUS_SORT_RANK.default;
+          if (rankA !== rankB) {
+            return rankA - rankB;
+          }
+          return String(valueA || "").localeCompare(String(valueB || ""));
+        },
       },
       {
-        field: "output",
+        field: "outputState",
         headerName: "StdOut / StdErr",
-        minWidth: 210,
+        minWidth: 220,
+        flex: 1,
         cellRenderer: "OutputActionsRenderer",
-        sortable: false,
-        suppressHeaderMenuButton: true,
+        cellClass: "output-actions-cell",
+        filter: "agSetColumnFilter",
       },
     ],
     [fmtTs]
@@ -3220,13 +3636,13 @@ export default function CreateJob() {
     () => ({
       sortable: true,
       resizable: false,
-      flex: 1,
+      flex: 0,
       cellClass: "auto-col-tight",
     }),
     []
   );
   const jobHistoryGridApiRef = useRef(null);
-  const JOB_HISTORY_AUTO_COLS = useRef(["hostname", "online", "site", "ranOn", "jobStatus"]);
+  const JOB_HISTORY_AUTO_COLS = useRef(["hostname", "onlineLabel", "site", "ranOn", "jobStatusLabel"]);
   const handleJobHistoryGridReady = useCallback((params) => {
     jobHistoryGridApiRef.current = params.api;
     requestAnimationFrame(() => {
@@ -3240,6 +3656,14 @@ export default function CreateJob() {
     requestAnimationFrame(() => {
       try {
         jobHistoryGridApiRef.current.autoSizeColumns(JOB_HISTORY_AUTO_COLS.current, true);
+      } catch {}
+    });
+  }, [jobHistoryGridRows]);
+  useEffect(() => {
+    if (!jobHistoryGridApiRef.current) return;
+    requestAnimationFrame(() => {
+      try {
+        jobHistoryGridApiRef.current.refreshCells({ columns: ["outputState"], force: true });
       } catch {}
     });
   }, [jobHistoryGridRows]);
@@ -3267,8 +3691,7 @@ export default function CreateJob() {
               ? dayjs(resolvedInitialJob.schedule.start).second(0)
               : dayjs().add(5, "minute").second(0)
         );
-        setStopAfterEnabled(Boolean(resolvedInitialJob.duration_stop_enabled));
-        setExpiration(resolvedInitialJob.expiration || "no_expire");
+        setExpiration(resolvedInitialJob.expiration || "1h");
         setExecContext(resolvedInitialJob.execution_context || "system");
         setSelectedCredentialId(
           resolvedInitialJob.credential_id ? String(resolvedInitialJob.credential_id) : ""
@@ -3292,6 +3715,7 @@ export default function CreateJob() {
         setComponentVarErrors({});
         setSelectedCredentialId("");
         setUseSvcAccount(true);
+        setExpiration("1h");
       }
     };
     hydrate();
@@ -3303,6 +3727,9 @@ export default function CreateJob() {
   const openAddComponent = async () => {
     setAddCompOpen(true);
     setSelectedNodeId("");
+    setAssemblyFilterText("");
+    setAssemblyTypeFilterMode("");
+    setAssemblyOsFilterMode("");
     if (!assembliesPayload.items.length && !assembliesLoading) {
       loadAssemblies();
     }
@@ -3316,7 +3743,7 @@ export default function CreateJob() {
       const parsed = parseAssemblyExport(exportDoc);
       const nextKind = isWorkflowComponentRecord(parsed)
         ? "workflow"
-        : isAnsibleComponentRecord(parsed) || record.kind === "ansible" || record.type === "ansible" || compTab === "ansible"
+        : isAnsibleComponentRecord(parsed) || record.kind === "ansible" || record.type === "ansible"
           ? "ansible"
           : record.kind === "workflow"
             ? "workflow"
@@ -3390,7 +3817,7 @@ export default function CreateJob() {
       alert(err?.message || "Failed to load assembly details.");
       return false;
     }
-  }, [selectedAssemblyRecord, components, compTab, loadAssemblyExport, mergeComponentVariables, normalizeAssemblyPath, generateLocalId]);
+  }, [selectedAssemblyRecord, components, loadAssemblyExport, mergeComponentVariables, normalizeAssemblyPath, generateLocalId]);
 
   const handleAssemblyRowClick = useCallback((event) => {
     const record = event?.data?.record;
@@ -3538,7 +3965,7 @@ export default function CreateJob() {
       components: payloadComponents,
       targets: workflowMode ? [] : serializeTargetsForSave(targets),
       schedule: { type: scheduleType, start: scheduleType !== "immediately" ? (() => { try { const d = startDateTime?.toDate?.() || new Date(startDateTime); d.setSeconds(0,0); return d.toISOString(); } catch { return startDateTime; } })() : null },
-      duration: { stopAfterEnabled, expiration },
+      duration: { stopAfterEnabled: expiration !== "no_expire", expiration },
       execution_context: workflowMode ? "system" : execContext,
       credential_id: workflowMode ? null : (remoteExec && !useSvcAccount && selectedCredentialId ? Number(selectedCredentialId) : null),
       use_service_account: workflowMode ? false : (isWinRMExecContext(execContext) ? Boolean(useSvcAccount) : false)
@@ -3577,7 +4004,6 @@ export default function CreateJob() {
     if (editing) base.push({ key: "history", label: "Job History", icon: HistoryRoundedIcon });
     return base;
   }, [editing, isWorkflowJob]);
-  const historyTabIndex = useMemo(() => tabDefs.findIndex((t) => t.key === "history"), [tabDefs]);
   const { activeKey: activeTabUrlKey, setActiveKey: setActiveTabUrlKey } = useUrlTabState({
     param: "tab",
     defaultKey: tabDefs[0]?.key || "name",
@@ -3609,61 +4035,52 @@ export default function CreateJob() {
     },
     [activeTabKey, setActiveTabUrlKey, tabDefs]
   );
+  const { activeKey: historySubTabKey, setActiveKey: setHistorySubTabKey } = useUrlTabState({
+    param: "history_view",
+    defaultKey: "current",
+    allowedKeys: ["current", "historical"],
+    keyByUrl: JOB_HISTORY_SUBTAB_KEY_BY_URL,
+    urlByKey: JOB_HISTORY_SUBTAB_URL_BY_KEY,
+  });
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "scheduled-job-cancel",
+        label: "Cancel",
+        tone: "secondary",
+        onClick: () => navigate(APP_PATHS.jobs),
+      },
+      {
+        id: "scheduled-job-clear-history",
+        label: "Clear Job History",
+        icon: <HistoryRoundedIcon />,
+        tone: "secondary",
+        disabled: !editing || clearingHistory,
+        loading: clearingHistory,
+        onClick: clearJobHistory,
+      },
+      {
+        id: "scheduled-job-save",
+        label: editing ? "Save Changes" : "Create Job",
+        icon: editing ? <CheckIcon /> : <AddIcon />,
+        tone: "primary",
+        disabled: !isValid,
+        onClick: () => {
+          if (isValid) {
+            setConfirmOpen(true);
+          }
+        },
+      },
+    ],
+    [clearJobHistory, clearingHistory, editing, isValid, navigate]
+  );
 
-  const scheduleSummary = useMemo(() => {
-    const base = SCHEDULE_LABELS[scheduleType] || "Scheduled run";
-    if (scheduleType === "immediately") {
-      return "Runs as soon as the job is created";
-    }
-    const dt = startDateTime ? dayjs(startDateTime) : null;
-    if (dt && dt.isValid()) {
-      return `${base} • ${dt.format("MMM D, YYYY h:mm A")}`;
-    }
-    return base;
-  }, [scheduleType, startDateTime]);
-
-  const targetSummary = useMemo(() => {
-    if (isWorkflowJob) return "Defined inside workflow";
-    if (!targets.length) return "No targets selected";
-    let deviceCount = 0;
-    let filterCount = 0;
-    targets.forEach((target) => {
-      if (target?.kind === "filter") filterCount += 1;
-      else deviceCount += 1;
-    });
-    const segments = [];
-    if (deviceCount) segments.push(`${deviceCount} device${deviceCount === 1 ? "" : "s"}`);
-    if (filterCount) segments.push(`${filterCount} filter${filterCount === 1 ? "" : "s"}`);
-    return segments.join(" • ") || `${targets.length} target${targets.length === 1 ? "" : "s"}`;
-  }, [isWorkflowJob, targets]);
-
-const heroTiles = useMemo(() => {
-    const execMeta = isWorkflowJob
-      ? { title: "Workflow-defined" }
-      : (EXEC_CONTEXT_COPY[execContext] || EXEC_CONTEXT_COPY.system);
-    return [
-      {
-        key: "assemblies",
-        label: "Assemblies",
-        value: components.length ? components.length.toString() : "0",
-      },
-      {
-        key: "targets",
-        label: "Targets",
-        value: isWorkflowJob ? "Inside workflow" : (targets.length ? targets.length.toString() : "0"),
-      },
-      {
-        key: "schedule",
-        label: "Schedule",
-        value: SCHEDULE_LABELS[scheduleType] || "Schedule",
-      },
-      {
-        key: "context",
-        label: "Execution",
-        value: execMeta.title,
-      },
-    ];
-  }, [components.length, isWorkflowJob, targets.length, scheduleType, execContext]);
+  useRoutePageChrome({
+    title: resolvedPageTitle,
+    subtitle: resolvedPageSubtitle,
+    Icon: PAGE_ICON,
+    actions: pageHeaderActions,
+  });
 
   useEffect(() => {
     if (editing) return;
@@ -3735,78 +4152,6 @@ const heroTiles = useMemo(() => {
         boxShadow: "none",
       }}
     >
-      <Box
-        sx={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 2,
-          alignItems: "center",
-          justifyContent: "flex-end",
-        }}
-      >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
-          <Button onClick={() => navigate(APP_PATHS.jobs)} sx={OUTLINE_BUTTON_SX}>
-            Cancel
-          </Button>
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={() => (isValid ? setConfirmOpen(true) : null)}
-            disabled={!isValid}
-            sx={{
-              ...PRIMARY_CTA_SX,
-              color: isValid ? "#041317" : "#ffffff",
-              backgroundImage: isValid
-                ? PRIMARY_CTA_SX.backgroundImage
-                : "linear-gradient(135deg, rgba(148,163,184,0.35), rgba(51,65,85,0.45))",
-              boxShadow: isValid ? PRIMARY_CTA_SX.boxShadow : "none",
-              opacity: 1,
-            }}
-          >
-            {initialJob && initialJob.id ? "Save Changes" : "Create Job"}
-          </Button>
-        </Box>
-      </Box>
-
-      <Box
-        sx={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 1.5,
-          justifyContent: { xs: "flex-start", md: "flex-end" },
-        }}
-      >
-        {heroTiles.map((tile) => {
-          let mainValue = tile.value || "";
-          let qualifier = "";
-          if (tile.key === "context") {
-            const match = mainValue.match(/^(.*?)\s*\((.+)\)$/);
-            if (match) {
-              mainValue = match[1].trim();
-              qualifier = match[2];
-            }
-          }
-          return (
-            <Box key={tile.key} sx={HERO_CARD_SX}>
-              <Typography
-                variant="caption"
-                sx={{ color: MAGIC_UI.textMuted, textTransform: "uppercase", fontWeight: 600, letterSpacing: 0.6 }}
-              >
-                {tile.label}
-              </Typography>
-              <Typography variant="h5" sx={{ color: MAGIC_UI.textBright, display: "flex", gap: 0.4, alignItems: "baseline" }}>
-                <Box component="span">{mainValue}</Box>
-                {qualifier ? (
-                  <Box component="span" sx={{ color: "rgba(226,232,240,0.65)", fontSize: "0.9rem" }}>
-                    ({qualifier})
-                  </Box>
-                ) : null}
-              </Typography>
-            </Box>
-          );
-        })}
-      </Box>
-
       <Tabs
         value={tab}
         onChange={(_, v) => selectTabKey(tabDefs[v]?.key || tabDefs[0]?.key || "name")}
@@ -3856,11 +4201,9 @@ const heroTiles = useMemo(() => {
               title="Assemblies"
               action={
                 <Button
-                  size="small"
                   startIcon={<AddIcon />}
                   onClick={openAddComponent}
-                  variant="outlined"
-                  sx={{ ...OUTLINE_BUTTON_SX, borderColor: MAGIC_UI.accentB, color: MAGIC_UI.accentB }}
+                  sx={PRIMARY_CTA_FLAT_SX}
                 >
                   Add Assembly
                 </Button>
@@ -3902,8 +4245,7 @@ const heroTiles = useMemo(() => {
                   size="small"
                   startIcon={<AddIcon />}
                   onClick={openAddTargets}
-                  variant="outlined"
-                  sx={{ ...OUTLINE_BUTTON_SX, borderColor: MAGIC_UI.accentA, color: MAGIC_UI.accentA }}
+                  sx={PRIMARY_CTA_FLAT_SX}
                 >
                   Add Target
                 </Button>
@@ -3953,7 +4295,8 @@ const heroTiles = useMemo(() => {
                 label="Recurrence"
                 value={scheduleType}
                 onChange={(e) => setScheduleType(e.target.value)}
-                sx={{ minWidth: 240, flex: "1 1 260px", ...INPUT_FIELD_SX }}
+                sx={{ minWidth: 240, flex: "1 1 260px", ...SELECT_FIELD_SX }}
+                SelectProps={{ MenuProps: SELECT_MENU_PROPS }}
               >
                 <MenuItem value="immediately">Immediately</MenuItem>
                 <MenuItem value="once">At selected date and time</MenuItem>
@@ -3984,45 +4327,36 @@ const heroTiles = useMemo(() => {
                 </LocalizationProvider>
               )}
             </Box>
-
-            <Divider sx={{ my: 2, borderColor: MAGIC_UI.panelBorder, opacity: 0.6 }} />
-            <SectionHeader title="Duration" />
-            <FormControlLabel
-              sx={{
-                color: MAGIC_UI.textBright,
-                alignItems: "center",
-                "& .MuiTypography-root": { color: MAGIC_UI.textBright, fontSize: 13 },
-              }}
-              control={
-                <Checkbox
-                  checked={stopAfterEnabled}
-                  onChange={(e) => setStopAfterEnabled(e.target.checked)}
-                  sx={{
-                    color: MAGIC_UI.accentA,
-                    "&.Mui-checked": { color: MAGIC_UI.accentB },
-                  }}
-                />
-              }
-              label="Stop running this job after"
-            />
-            <TextField
-              select
-              size="small"
-              label="Expiration"
-              value={expiration}
-              onChange={(e) => setExpiration(e.target.value)}
-              sx={{ mt: 1, maxWidth: 260, ...INPUT_FIELD_SX }}
-            >
-              <MenuItem value="no_expire">Does not Expire</MenuItem>
-              <MenuItem value="30m">30 Minutes</MenuItem>
-              <MenuItem value="1h">1 Hour</MenuItem>
-              <MenuItem value="2h">2 Hours</MenuItem>
-              <MenuItem value="6h">6 Hours</MenuItem>
-              <MenuItem value="12h">12 Hours</MenuItem>
-              <MenuItem value="1d">1 Day</MenuItem>
-              <MenuItem value="2d">2 Days</MenuItem>
-              <MenuItem value="3d">3 Days</MenuItem>
-            </TextField>
+            <Box sx={{ mt: 1.5, display: "flex", flexDirection: "column", gap: 1, maxWidth: 560 }}>
+              <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
+                Jobs expire after one hour by default. Choose a different expiration window here, or select
+                {" "}
+                <Box component="span" sx={{ color: MAGIC_UI.textBright }}>
+                  Does not Expire
+                </Box>
+                {" "}
+                to let the job run indefinitely.
+              </Typography>
+              <TextField
+                select
+                size="small"
+                label="Expiration"
+                value={expiration}
+                onChange={(e) => setExpiration(e.target.value)}
+                sx={{ maxWidth: 260, ...SELECT_FIELD_SX }}
+                SelectProps={{ MenuProps: SELECT_MENU_PROPS }}
+              >
+                <MenuItem value="no_expire">Does not Expire</MenuItem>
+                <MenuItem value="30m">30 Minutes</MenuItem>
+                <MenuItem value="1h">1 Hour</MenuItem>
+                <MenuItem value="2h">2 Hours</MenuItem>
+                <MenuItem value="6h">6 Hours</MenuItem>
+                <MenuItem value="12h">12 Hours</MenuItem>
+                <MenuItem value="1d">1 Day</MenuItem>
+                <MenuItem value="2d">2 Days</MenuItem>
+                <MenuItem value="3d">3 Days</MenuItem>
+              </TextField>
+            </Box>
           </Box>
         )}
 
@@ -4045,7 +4379,8 @@ const heroTiles = useMemo(() => {
                   label="Context"
                   value={execContext}
                   onChange={(e) => handleExecContextChange(e.target.value)}
-                  sx={{ minWidth: 320, ...INPUT_FIELD_SX }}
+                  sx={{ minWidth: 320, ...SELECT_FIELD_SX }}
+                  SelectProps={{ MenuProps: SELECT_MENU_PROPS }}
                 >
                   {availableExecContextOptions.map((option) => (
                     <MenuItem key={option.value} value={option.value}>
@@ -4092,7 +4427,8 @@ const heroTiles = useMemo(() => {
                   label="Credential"
                   value={selectedCredentialId}
                   onChange={(e) => setSelectedCredentialId(e.target.value)}
-                  sx={{ minWidth: 280, ...INPUT_FIELD_SX }}
+                  sx={{ minWidth: 280, ...SELECT_FIELD_SX }}
+                  SelectProps={{ MenuProps: SELECT_MENU_PROPS }}
                   disabled={credentialLoading || !filteredCredentials.length || (isWinRMExecContext(execContext) && useSvcAccount)}
                 >
                   {filteredCredentials.map((cred) => (
@@ -4108,7 +4444,7 @@ const heroTiles = useMemo(() => {
                   startIcon={<RefreshIcon fontSize="small" />}
                   onClick={loadCredentials}
                   disabled={credentialLoading}
-                  sx={{ ...OUTLINE_BUTTON_SX, borderColor: MAGIC_UI.accentA, color: MAGIC_UI.accentA }}
+                  sx={OUTLINE_BUTTON_SX}
                 >
                   Refresh
                 </Button>
@@ -4147,132 +4483,101 @@ const heroTiles = useMemo(() => {
         )}
 
         {editing && activeTabKey === "history" && (
-          <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
-            <GlassPanel>
-              <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <Typography variant="h6" sx={{ color: MAGIC_UI.textBright }}>
-                  Job History
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5, flexGrow: 1, minHeight: 0 }}>
+            <Tabs
+              value={historySubTabKey}
+              onChange={(_, value) => setHistorySubTabKey(value)}
+              variant="scrollable"
+              scrollButtons="auto"
+              TabIndicatorProps={{
+                style: {
+                  height: 3,
+                  borderRadius: 3,
+                  background: NAV_TAB_COLORS.iconActive,
+                },
+              }}
+              sx={buildNavTabsSx(NAV_TAB_HEIGHT_COMPACT)}
+            >
+              <Tab label="Current Run" value="current" />
+              <Tab label="Historical Runs" value="historical" />
+            </Tabs>
+
+            {historySubTabKey === "current" ? (
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5, flexGrow: 1, minHeight: 0 }}>
+                <GlassPanel>
+                  <Typography variant="subtitle1" sx={{ color: MAGIC_UI.textBright, mb: 0.5 }}>
+                    Devices
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
+                    Devices targeted by this scheduled job. Use the built-in AG Grid column filters from each header to narrow the current run.
+                  </Typography>
+                  <Box
+                    className={gridThemeClass}
+                    sx={{
+                      ...GRID_PANEL_SX,
+                      mt: 1.5,
+                      height: { xs: 520, md: 680 },
+                    }}
+                  >
+                    <AgGridReact
+                      rowData={jobHistoryGridRows}
+                      columnDefs={jobHistoryGridColumnDefs}
+                      defaultColDef={jobHistoryGridDefaultColDef}
+                      components={jobHistoryGridComponents}
+                      context={{ viewOutput: handleViewDeviceOutput }}
+                      suppressCellFocus
+                      headerHeight={44}
+                      rowHeight={50}
+                      pagination
+                      paginationPageSize={100}
+                      paginationPageSizeSelector={[20, 50, 100]}
+                      overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No targets found for this job.</span>"
+                      getRowId={(params) => params.data?.id || params.rowIndex}
+                      onGridReady={handleJobHistoryGridReady}
+                      theme={gridTheme}
+                    />
+                  </Box>
+                </GlassPanel>
+
+                <JobStatusFlow />
+              </Box>
+            ) : (
+              <GlassPanel sx={{ flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                <Typography variant="subtitle1" sx={{ color: MAGIC_UI.textBright, mb: 0.5 }}>
+                  Historical Runs
                 </Typography>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  sx={{ ...OUTLINE_BUTTON_SX, borderColor: "#fb7185", color: "#fb7185" }}
-                  onClick={async () => {
-                    try {
-                      await fetch(`/api/scheduled_jobs/${initialJob.id}/runs`, { method: "DELETE" });
-                      await loadHistory();
-                    } catch {}
+                <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
+                  Historical job history summaries from the last 30 days.
+                </Typography>
+                <Box
+                  className={gridThemeClass}
+                  sx={{
+                    ...GRID_PANEL_SX,
+                    mt: 1.5,
+                    flexGrow: 1,
+                    minHeight: { xs: 420, md: 640 },
+                    height: "100%",
                   }}
                 >
-                  Clear Job History
-                </Button>
-              </Box>
-              <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
-                Showing the last 30 days of runs.
-              </Typography>
-            </GlassPanel>
-
-            <JobStatusFlow />
-
-            <GlassPanel>
-              <Typography variant="subtitle1" sx={{ color: MAGIC_UI.textBright, mb: 0.5 }}>
-                Devices
-              </Typography>
-              <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
-                Devices targeted by this scheduled job. Individual job history is listed here.
-              </Typography>
-              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, justifyContent: "flex-end", mt: 1 }}>
-                {DEVICE_COLUMNS.map((col) => (
-                  <Button
-                    key={col.key}
-                    size="small"
-                    startIcon={<FilterListIcon fontSize="inherit" />}
-                    onClick={(event) => openFilterMenu(event, col.key)}
-                    sx={{
-                      textTransform: "none",
-                      borderRadius: 999,
-                      borderColor: isColumnFiltered(col.key) ? MAGIC_UI.accentA : "rgba(148,163,184,0.3)",
-                      color: isColumnFiltered(col.key) ? MAGIC_UI.accentA : MAGIC_UI.textMuted,
-                    }}
-                    variant="outlined"
-                  >
-                    {col.label}
-                  </Button>
-                ))}
-              </Box>
-              <Box className={gridThemeClass} sx={{ ...GRID_PANEL_SX, height: 360 }}>
-                <AgGridReact
-                  rowData={jobHistoryGridRows}
-                  columnDefs={jobHistoryGridColumnDefs}
-                  defaultColDef={jobHistoryGridDefaultColDef}
-                  components={jobHistoryGridComponents}
-                  context={{ viewOutput: handleViewDeviceOutput }}
-                  suppressCellFocus
-                  headerHeight={44}
-                  rowHeight={50}
-                  pagination
-                  paginationPageSize={20}
-                  paginationPageSizeSelector={[20, 50, 100]}
-                  overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No targets found for this job.</span>"
-                  getRowId={(params) => params.data?.id || params.rowIndex}
-                  onGridReady={handleJobHistoryGridReady}
-                  theme={gridTheme}
-                />
-              </Box>
-              <Menu
-                anchorEl={filterAnchorEl}
-                open={Boolean(filterAnchorEl)}
-                onClose={closeFilterMenu}
-                disableAutoFocusItem
-                PaperProps={{
-                  sx: {
-                    bgcolor: "rgba(8,12,24,0.96)",
-                    color: MAGIC_UI.textBright,
-                    minWidth: 240,
-                    border: `1px solid ${MAGIC_UI.panelBorder}`,
-                  },
-                }}
-              >
-                <Box sx={{ p: 1.5, display: "flex", flexDirection: "column", gap: 1 }}>
-                  {renderFilterControl()}
-                  <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1 }}>
-                    <Button size="small" sx={{ color: "#fb7185", textTransform: "none" }} onClick={clearFilter}>
-                      Clear
-                    </Button>
-                    <Button size="small" sx={{ color: MAGIC_UI.accentA, textTransform: "none" }} onClick={applyFilter}>
-                      Apply
-                    </Button>
-                  </Box>
+                  <AgGridReact
+                    rowData={sortedHistory}
+                    columnDefs={historySummaryColumnDefs}
+                    defaultColDef={historySummaryDefaultColDef}
+                    components={historySummaryComponents}
+                    suppressCellFocus
+                    headerHeight={44}
+                    rowHeight={48}
+                    pagination
+                    paginationPageSize={20}
+                    paginationPageSizeSelector={[20, 50, 100]}
+                    overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No runs in the last 30 days.</span>"
+                    getRowId={(params) => params.data?.key || params.rowIndex}
+                    onGridReady={handleHistorySummaryGridReady}
+                    theme={gridTheme}
+                  />
                 </Box>
-              </Menu>
-            </GlassPanel>
-
-            <GlassPanel>
-              <Typography variant="subtitle1" sx={{ color: MAGIC_UI.textBright, mb: 0.5 }}>
-                Past Job History
-              </Typography>
-              <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
-                Historical job history summaries. Detailed job history is not recorded.
-              </Typography>
-              <Box className={gridThemeClass} sx={{ ...GRID_PANEL_SX, mt: 1, height: 300 }}>
-                <AgGridReact
-                  rowData={sortedHistory}
-                  columnDefs={historySummaryColumnDefs}
-                  defaultColDef={historySummaryDefaultColDef}
-                  components={historySummaryComponents}
-                  suppressCellFocus
-                  headerHeight={44}
-                  rowHeight={48}
-                  pagination
-                  paginationPageSize={20}
-                  paginationPageSizeSelector={[20, 50, 100]}
-                  overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No runs in the last 30 days.</span>"
-                  getRowId={(params) => params.data?.key || params.rowIndex}
-                  onGridReady={handleHistorySummaryGridReady}
-                  theme={gridTheme}
-                />
-              </Box>
-            </GlassPanel>
+              </GlassPanel>
+            )}
           </Box>
         )}
       </Box>
@@ -4281,13 +4586,47 @@ const heroTiles = useMemo(() => {
         open={outputOpen}
         onClose={() => setOutputOpen(false)}
         fullWidth
-        maxWidth="md"
-        PaperProps={{ sx: DIALOG_PAPER_SX }}
+        maxWidth={false}
+        PaperProps={{
+          sx: {
+            ...DIALOG_PAPER_SX,
+            display: "flex",
+            flexDirection: "column",
+            width: "95vw",
+            maxWidth: "95vw",
+            height: "95vh",
+            maxHeight: "95vh",
+          },
+        }}
       >
         <DialogTitle sx={DIALOG_TITLE_SX}>
-          <DialogHeaderBlock title={outputTitle} subtitle="Review generated output, logs, and command results." />
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              gap: 2,
+              flexWrap: "wrap",
+            }}
+          >
+            <DialogHeaderBlock title={outputTitle} subtitle="Review generated output, logs, and command results." />
+            <Button onClick={() => setOutputOpen(false)} sx={PRIMARY_CTA_FLAT_SX}>
+              Close
+            </Button>
+          </Box>
         </DialogTitle>
-        <DialogContent sx={DIALOG_CONTENT_SX}>
+        <DialogContent
+          sx={{
+            ...DIALOG_CONTENT_SX,
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            flex: 1,
+            minHeight: 0,
+            pb: 3,
+            overflow: "hidden",
+          }}
+        >
           {outputLoading ? (
             <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
               Loading output…
@@ -4300,7 +4639,17 @@ const heroTiles = useMemo(() => {
           ) : null}
           {!outputLoading && !outputError
             ? outputSections.map((section) => (
-                <Box key={section.key} sx={{ mb: 2 }}>
+                <Box
+                  key={section.key}
+                  sx={{
+                    mb: 2,
+                    "&:last-of-type": { mb: 0 },
+                    display: "flex",
+                    flexDirection: "column",
+                    minHeight: 0,
+                    flex: outputSections.length === 1 ? 1 : "0 0 auto",
+                  }}
+                >
                   <Typography variant="subtitle2" sx={{ color: MAGIC_UI.textBright }}>
                     {section.title}
                   </Typography>
@@ -4314,7 +4663,11 @@ const heroTiles = useMemo(() => {
                       border: `1px solid ${MAGIC_UI.panelBorder}`,
                       borderRadius: 2,
                       bgcolor: "rgba(4,7,17,0.65)",
-                      maxHeight: "56vh",
+                      display: "flex",
+                      flexDirection: "column",
+                      flex: outputSections.length === 1 ? 1 : "0 0 auto",
+                      minHeight: 0,
+                      maxHeight: outputSections.length === 1 ? "none" : "calc(95vh - 230px)",
                       overflowY: "auto",
                       overflowX: "auto",
                       overscrollBehavior: "contain",
@@ -4334,37 +4687,54 @@ const heroTiles = useMemo(() => {
                       },
                     }}
                   >
-                    <Editor
-                      value={section.content ?? ""}
-                      onValueChange={() => {}}
-                      highlight={(code) => highlightCode(code, section.lang)}
-                      padding={12}
-                      style={{
-                        fontFamily:
-                          'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-                        fontSize: 12,
-                        color: "#e6edf3",
-                        minHeight: 160,
+                    <Box
+                      component="pre"
+                      className={`language-${section.lang || "markup"}`}
+                      sx={{
+                        m: 0,
+                        p: 1.5,
+                        minHeight: outputSections.length === 1 ? "100%" : 160,
+                        backgroundColor: "transparent !important",
+                        background: "transparent !important",
                         whiteSpace: "pre",
                         overflowWrap: "normal",
                         wordBreak: "normal",
+                        color: "#e6edf3",
+                        fontSize: 12,
+                        lineHeight: 1.45,
+                        fontFamily:
+                          'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                        "& code": {
+                          display: "block",
+                          fontFamily: "inherit",
+                          fontSize: "inherit",
+                          lineHeight: "inherit",
+                          color: "inherit",
+                          whiteSpace: "inherit",
+                          backgroundColor: "transparent !important",
+                          background: "transparent !important",
+                        },
+                        "&[class*='language-']": {
+                          backgroundColor: "transparent !important",
+                          background: "transparent !important",
+                        },
+                        "& code[class*='language-']": {
+                          backgroundColor: "transparent !important",
+                          background: "transparent !important",
+                        },
                       }}
-                      textareaProps={{ readOnly: true, wrap: "off", spellCheck: false }}
-                    />
+                    >
+                      <Box
+                        component="code"
+                        dangerouslySetInnerHTML={{ __html: highlightCode(section.content ?? "", section.lang) }}
+                      />
+                    </Box>
                   </Box>
                 </Box>
               ))
             : null}
         </DialogContent>
-        <DialogActions sx={DIALOG_ACTIONS_SX}>
-          <Button onClick={() => setOutputOpen(false)} sx={DIALOG_BUTTON_SX}>
-            Close
-          </Button>
-        </DialogActions>
       </Dialog>
-
-      {/* Bottom actions removed per design; actions live next to tabs. */}
-
       {/* Add Component Dialog */}
       <Dialog
         open={addCompOpen}
@@ -4377,6 +4747,8 @@ const heroTiles = useMemo(() => {
         PaperProps={{
           sx: {
             ...DIALOG_PAPER_SX,
+            display: "flex",
+            flexDirection: "column",
             width: "95vw",
             maxWidth: "95vw",
             height: "95vh",
@@ -4385,61 +4757,152 @@ const heroTiles = useMemo(() => {
         }}
       >
         <DialogTitle sx={DIALOG_TITLE_SX}>
-          <DialogHeaderBlock title="Select an Assembly" subtitle="Choose the script, playbook, or workflow to add to this job." />
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              gap: 2,
+              flexWrap: "wrap",
+            }}
+          >
+            <DialogHeaderBlock title="Select an Assembly" subtitle="Choose the script, playbook, or workflow to add to this job." />
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, ml: "auto" }}>
+              <Button onClick={() => setAddCompOpen(false)} sx={OUTLINE_BUTTON_SX}>
+                Cancel
+              </Button>
+              <Button
+                onClick={async () => {
+                  const ok = await addSelectedComponent();
+                  if (ok) setAddCompOpen(false);
+                }}
+                sx={PRIMARY_CTA_SX}
+                disabled={!selectedAssemblyRecord}
+              >
+                Add Assembly
+              </Button>
+            </Box>
+          </Box>
         </DialogTitle>
-        <DialogContent sx={{ ...DIALOG_CONTENT_SX, display: "flex", flexDirection: "column", gap: 2, height: "100%", pb: 0.5, pt: 1.5 }}>
+        <DialogContent
+          sx={{
+            ...DIALOG_CONTENT_SX,
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            flex: 1,
+            minHeight: 0,
+            pb: 3,
+            pt: 3.5,
+            overflow: "hidden",
+          }}
+        >
           <Box
             sx={{
               display: "flex",
               flexWrap: "wrap",
               gap: 2,
               mb: 2,
-              alignItems: "center",
+              alignItems: "flex-start",
               justifyContent: "space-between",
             }}
           >
-            <Tabs
-              value={compTab}
-              onChange={(_, value) => setCompTab(value)}
-              TabIndicatorProps={{
-                style: {
-                  height: 3,
-                  borderRadius: 3,
-                  background: NAV_TAB_COLORS.iconActive,
-                },
-              }}
+            <Box
               sx={{
-                minHeight: 0,
-                ...buildNavTabsSx(NAV_TAB_HEIGHT_COMPACT),
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "flex-start",
+                columnGap: 1,
+                rowGap: 1.2,
               }}
             >
-              <Tab
-                label="Scripts"
-                value="scripts"
-                icon={<TerminalRoundedIcon sx={{ fontSize: 16 }} />}
-                iconPosition="start"
-              />
-              <Tab
-                label="Ansible Playbooks"
-                value="ansible"
-                icon={<MenuBookRoundedIcon sx={{ fontSize: 16 }} />}
-                iconPosition="start"
-              />
-              <Tab
-                label="Workflows"
-                value="workflows"
-                icon={<AccountTreeRoundedIcon sx={{ fontSize: 16 }} />}
-                iconPosition="start"
-              />
-            </Tabs>
-            <Box sx={{ display: "flex", gap: 1, alignItems: "center", ml: "auto" }}>
-              <TextField
-                size="small"
-                placeholder="Search assemblies…"
-                value={assemblyFilterText}
-                onChange={(e) => setAssemblyFilterText(e.target.value)}
-                sx={{ minWidth: 352, maxWidth: 520, ...INPUT_FIELD_SX }}
-              />
+              <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "8px" }}>
+                <Typography
+                  component="span"
+                  sx={{
+                    color: "#58a6ff",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    lineHeight: 1.1,
+                    pl: 1,
+                  }}
+                >
+                  Assembly Type
+                </Typography>
+                <CountSliderGroup
+                  options={ASSEMBLY_TYPE_FILTER_OPTIONS}
+                  activeKey={assemblyTypeFilterMode}
+                  counts={assemblyTypeCounts}
+                  onChange={setAssemblyTypeFilterMode}
+                />
+              </Box>
+              <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "8px" }}>
+                <Typography
+                  component="span"
+                  sx={{
+                    color: "#58a6ff",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    lineHeight: 1.1,
+                    pl: 1,
+                  }}
+                >
+                  Operating System
+                </Typography>
+                <CountSliderGroup
+                  options={ASSEMBLY_OS_FILTER_OPTIONS}
+                  activeKey={assemblyOsFilterMode}
+                  counts={assemblyOsCounts}
+                  onChange={setAssemblyOsFilterMode}
+                />
+              </Box>
+            </Box>
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 1, minWidth: { xs: "100%", md: 360 }, ml: "auto" }}>
+              <Box
+                sx={{
+                  position: "relative",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 1.2,
+                  width: "100%",
+                  minWidth: 0,
+                  height: 42,
+                  px: 1.6,
+                  borderRadius: "999px",
+                  border: `1px solid ${MAGIC_UI.panelBorder}`,
+                  background:
+                    "linear-gradient(135deg, rgba(10, 16, 31, 0.94) 0%, rgba(8, 13, 28, 0.92) 60%, rgba(20, 8, 33, 0.92) 100%)",
+                  boxShadow: "0 10px 28px rgba(4, 8, 24, 0.38)",
+                  backdropFilter: "blur(16px) saturate(145%)",
+                  transition: "border-color 160ms ease, box-shadow 180ms ease, transform 120ms ease",
+                  "&:hover": {
+                    borderColor: "rgba(125, 183, 255, 0.34)",
+                  },
+                  "&:focus-within": {
+                    borderColor: "rgba(125, 183, 255, 0.34)",
+                    transform: "translateY(-0.5px)",
+                  },
+                }}
+              >
+                <SearchIcon sx={{ color: MAGIC_UI.accentA, fontSize: 19, flexShrink: 0 }} />
+                <InputBase
+                  value={assemblyFilterText}
+                  onChange={(e) => setAssemblyFilterText(e.target.value)}
+                  placeholder="Search Assemblies..."
+                  inputProps={{ "aria-label": "Search assemblies" }}
+                  sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    color: MAGIC_UI.textBright,
+                    fontSize: "0.95rem",
+                    fontWeight: 500,
+                    "& input::placeholder": {
+                      color: "rgba(148, 163, 184, 0.92)",
+                      opacity: 1,
+                    },
+                  }}
+                />
+              </Box>
             </Box>
           </Box>
           {assembliesError ? (
@@ -4458,8 +4921,7 @@ const heroTiles = useMemo(() => {
             sx={{
               ...GRID_PANEL_SX,
               flexGrow: 1,
-              minHeight: 520,
-              maxHeight: "calc(95vh - 210px)",
+              minHeight: 0,
               height: "100%",
             }}
           >
@@ -4471,10 +4933,10 @@ const heroTiles = useMemo(() => {
               headerHeight={44}
               rowHeight={48}
               domLayout="normal"
-              overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No assemblies available.</span>"
+              overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No assemblies match the current filters.</span>"
               pagination
-              paginationPageSize={20}
-              paginationPageSizeSelector={[20, 50, 100]}
+              paginationPageSize={100}
+              paginationPageSizeSelector={[25, 50, 100]}
               theme={gridTheme}
               rowSelection={SINGLE_ROW_SELECTION}
               animateRows
@@ -4487,21 +4949,6 @@ const heroTiles = useMemo(() => {
             />
           </Box>
         </DialogContent>
-        <DialogActions sx={DIALOG_ACTIONS_SX}>
-          <Button onClick={() => setAddCompOpen(false)} sx={DIALOG_BUTTON_SX}>
-            Close
-          </Button>
-          <Button
-            onClick={async () => {
-              const ok = await addSelectedComponent();
-              if (ok) setAddCompOpen(false);
-            }}
-            sx={DIALOG_PRIMARY_BUTTON_SX}
-            disabled={!selectedAssemblyRecord}
-          >
-            Add
-          </Button>
-        </DialogActions>
       </Dialog>
 
       {/* Add Targets Dialog */}
@@ -4510,12 +4957,36 @@ const heroTiles = useMemo(() => {
         onClose={() => setAddTargetOpen(false)}
         fullWidth
         maxWidth="md"
-        PaperProps={{ sx: DIALOG_PAPER_SX }}
+        PaperProps={{
+          sx: {
+            ...DIALOG_PAPER_SX,
+            display: "flex",
+            flexDirection: "column",
+          },
+        }}
       >
         <DialogTitle sx={DIALOG_TITLE_SX}>
-          <DialogHeaderBlock title="Select Targets" subtitle="Pick devices or filters that this scheduled job should run against." />
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              gap: 2,
+              flexWrap: "wrap",
+            }}
+          >
+            <DialogHeaderBlock title="Select Targets" subtitle="Pick devices or filters that this scheduled job should run against." />
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, ml: "auto" }}>
+              <Button onClick={() => setAddTargetOpen(false)} sx={OUTLINE_BUTTON_SX}>
+                Cancel
+              </Button>
+              <Button onClick={handleAddSelectedTargets} sx={PRIMARY_CTA_SX}>
+                Add Selected
+              </Button>
+            </Box>
+          </Box>
         </DialogTitle>
-        <DialogContent sx={DIALOG_CONTENT_SX}>
+        <DialogContent sx={{ ...DIALOG_CONTENT_SX, pb: 3 }}>
           <Tabs
             value={targetPickerTab}
             onChange={(_, value) => setTargetPickerTab(value)}
@@ -4629,126 +5100,6 @@ const heroTiles = useMemo(() => {
             </>
           )}
         </DialogContent>
-        <DialogActions sx={DIALOG_ACTIONS_SX}>
-          <Button onClick={() => setAddTargetOpen(false)} sx={DIALOG_BUTTON_SX}>
-            Cancel
-          </Button>
-          <Button
-            onClick={() => {
-              if (targetPickerTab === "filters") {
-                const gridNodes =
-                  (filterPickerGridApiRef.current &&
-                    filterPickerGridApiRef.current.getSelectedNodes()) ||
-                  [];
-                const additions = [];
-                const api = filterPickerGridApiRef.current;
-                const fromStateIds = new Set(
-                  Object.entries(selectedFilterTargets)
-                    .filter(([, checked]) => checked)
-                    .map(([id]) => String(id))
-                );
-
-                const rowsToUse =
-                  (selectedFilterRows && selectedFilterRows.length
-                    ? selectedFilterRows
-                    : null) ||
-                  (() => {
-                    if (api && typeof api.getSelectedRows === "function") {
-                      const rows = api.getSelectedRows();
-                      if (Array.isArray(rows) && rows.length) return rows;
-                    }
-                    if (gridNodes.length) {
-                      const rows = gridNodes.map((n) => n?.data).filter(Boolean);
-                      if (rows.length) return rows;
-                    }
-                    if (api && typeof api.forEachNode === "function") {
-                      const rows = [];
-                      api.forEachNode((node) => {
-                        if (node && node.isSelected && node.isSelected()) {
-                          rows.push(node.data);
-                        }
-                      });
-                      if (rows.length) return rows;
-                    }
-                    return [];
-                  })();
-
-                rowsToUse.forEach((row) => {
-                  const parsedId = Number(row?.id ?? row?.filter_id);
-                  if (!Number.isFinite(parsedId)) return;
-                  additions.push({
-                    kind: "filter",
-                    filter_id: parsedId,
-                    name: row?.name || `Filter #${parsedId}`,
-                    site_scope: row?.scopeKey || row?.scope || "global",
-                    site: null,
-                    deviceCount: row?.deviceCount,
-                  });
-                });
-
-                if (!additions.length && fromStateIds.size) {
-                  fromStateIds.forEach((id) => {
-                    const catalog =
-                      filterCatalogMapRef.current[id] || filterCatalogMapRef.current[String(id)] || null;
-                    const source = catalog || null;
-                    const parsedId = Number(source?.id ?? source?.filter_id ?? id);
-                    if (!Number.isFinite(parsedId)) return;
-                    additions.push({
-                      kind: "filter",
-                      filter_id: parsedId,
-                      name: source?.name || `Filter #${parsedId}`,
-                      site_scope: source?.site_scope || source?.scope || source?.type || "global",
-                      site: null,
-                      deviceCount: source?.deviceCount ?? source?.devices_targeted ?? source?.matching_device_count,
-                    });
-                  });
-                }
-                if (!additions.length && filterPickerRows.length === 1) {
-                  const row = filterPickerRows[0];
-                  const parsedId = Number(row?.id ?? row?.filter_id);
-                  if (Number.isFinite(parsedId)) {
-                    additions.push({
-                      kind: "filter",
-                      filter_id: parsedId,
-                      name: row?.name || `Filter #${parsedId}`,
-                      site_scope: row?.scopeKey || row?.scope || "global",
-                      site: null,
-                      deviceCount: row?.deviceCount,
-                    });
-                  }
-                }
-                if (additions.length) {
-                  addTargets(additions);
-                } else {
-                  alert("Select at least one filter to add.");
-                }
-              } else {
-                const chosenDevices = Object.keys(selectedDeviceTargets)
-                  .filter((deviceKey) => selectedDeviceTargets[deviceKey])
-                  .map((deviceKey) => {
-                    const lookup = availableDeviceMap.get(deviceKey);
-                    if (lookup) {
-                      return {
-                        kind: "device",
-                        hostname: lookup.hostname,
-                        os: lookup.os,
-                        site: lookup.site,
-                        site_name: lookup.site_name || lookup.site,
-                        site_id: lookup.site_id ?? lookup.siteId ?? null,
-                        device_guid: lookup.device_guid || lookup.deviceGuid || "",
-                      };
-                    }
-                    return null;
-                  });
-                if (chosenDevices.filter(Boolean).length) addTargets(chosenDevices.filter(Boolean));
-              }
-              setAddTargetOpen(false);
-            }}
-            sx={DIALOG_PRIMARY_BUTTON_SX}
-          >
-            Add Selected
-          </Button>
-        </DialogActions>
       </Dialog>
 
       {/* Confirm Create Dialog */}
