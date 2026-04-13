@@ -34,10 +34,6 @@ RUN_STATUS_RUNNING = "Running"
 RUN_STATUS_TIMED_OUT = "Timed Out"
 _SHARED_ANSIBLE_RUN_TIMEOUT_ENV = "BOREALIS_SHARED_ANSIBLE_RUN_TIMEOUT_SECONDS"
 _DEFAULT_SHARED_ANSIBLE_RUN_TIMEOUT_SECONDS = 900
-_SHARED_ANSIBLE_SSH_KEX_ALGORITHMS_ENV = "BOREALIS_SHARED_ANSIBLE_SSH_KEX_ALGORITHMS"
-_DEFAULT_SHARED_ANSIBLE_SSH_KEX_ALGORITHMS = (
-    "curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256"
-)
 _SHARED_ANSIBLE_TIMEOUT_TERMINATION_GRACE_SECONDS = 5
 
 
@@ -66,13 +62,6 @@ def _env_positive_int(name: str, default: int) -> int:
         return max(1, int(raw_value))
     except Exception:
         return default
-
-
-def _env_non_empty_string(name: str, default: str) -> str:
-    raw_value = str(os.getenv(name, "") or "").strip()
-    if not raw_value:
-        return default
-    return raw_value
 
 
 def _safe_host_alias(hostname: Any) -> str:
@@ -495,14 +484,6 @@ class EngineAnsibleRunner:
             "-o StrictHostKeyChecking=no",
             "-o UpdateHostKeys=no",
         ]
-        ssh_kex_algorithms = _env_non_empty_string(
-            _SHARED_ANSIBLE_SSH_KEX_ALGORITHMS_ENV,
-            _DEFAULT_SHARED_ANSIBLE_SSH_KEX_ALGORITHMS,
-        )
-        if ssh_kex_algorithms:
-            # Some OpenSSH 9.x peers stall during sntrup KEX over the managed
-            # WireGuard path. Prefer a smaller classical KEX set for Ansible.
-            ssh_common_args_parts.append(f"-o KexAlgorithms={ssh_kex_algorithms}")
         cfg_path.write_text(
             "\n".join(
                 [

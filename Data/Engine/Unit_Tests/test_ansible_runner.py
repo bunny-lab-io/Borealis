@@ -270,7 +270,7 @@ def test_runner_normalizes_eventlet_wrapped_timeout_exceptions(
     assert recap_payload["timeout_seconds"] == 900
 
 
-def test_runner_writes_curve25519_ssh_kex_args(
+def test_runner_writes_isolated_ssh_control_path_dir(
     engine_harness: EngineTestHarness,
     monkeypatch,
 ) -> None:
@@ -291,7 +291,7 @@ def test_runner_writes_curve25519_ssh_kex_args(
         playbook_abs_path="",
         playbook_content="---\n- hosts: all\n  gather_facts: false\n  tasks: []\n",
         playbook_rel_path="Ansible_Playbooks/test-kex.yml",
-        playbook_name="KEX Test",
+        playbook_name="Control Path Test",
         payload_files=[],
         runtime_files=[],
         target_specifications=[
@@ -309,10 +309,7 @@ def test_runner_writes_curve25519_ssh_kex_args(
     )
 
     cfg_text = workspace["cfg_path"].read_text(encoding="utf-8")
-    assert (
-        "-o KexAlgorithms=curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256"
-        in cfg_text
-    )
+    assert "-o KexAlgorithms=" not in cfg_text
     expected_control_dir = Path(tempfile.gettempdir()) / "ansible_controlplane" / "run-kex-1"
     assert f"control_path_dir = {expected_control_dir}" in cfg_text
 
