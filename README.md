@@ -1,8 +1,8 @@
 ![Borealis Logo](Data/Engine/web-interface/public/Borealis_Logo_Full.png)
 
-Borealis is a cross-platform remote management and automation platform with a visual workflow layer, enabling operators to execute scripts, orchestrate infrastructure tasks, and manage distributed systems through a unified interface.
+Borealis is a remote management and automation platform built around a Linux-hosted Engine (*server*), Windows and Linux agent (*client*) runtimes, and a visual workflow layer. Operators can execute scripts, schedule jobs, orchestrate infrastructure tasks, and manage distributed systems through a unified interface.
 
-The project was originally created to consolidate the functionality of multiple standalone tools used in my homelab and real-world environments (TacticalRMM, Ansible AWX, SemaphoreUI, etc.) into a single, cohesive platform.
+The project was originally created to consolidate the functionality of multiple standalone tools used in and outside my homelab and real-world environments (Various RMM platforms, Ansible/AWX, SemaphoreUI, etc.) into a single, cohesive platform.
 
 ## A Note on Development Pace
 I'm the sole maintainer and still learning as I go while working a full-time IT job. Progress is iterative, and parts of the system are occasionally reworked as better architectural approaches emerge.
@@ -13,6 +13,7 @@ I'm the sole maintainer and still learning as I go while working a full-time IT 
 - Human-friendly docs live in `Docs/` with a top-level index at `Docs/index.md`
 - The same files also include **Codex Agent** sections with deeper implementation details
 - Start with:
+  - `Docs/index.md`
   - `Docs/getting-started.md`
   - `Docs/architecture-overview.md`
 
@@ -20,7 +21,7 @@ I'm the sole maintainer and still learning as I go while working a full-time IT 
 
 # System Requirements
 
-Borealis currently runs as a single-node Engine deployment that bundles the Python API/runtime, PostgreSQL, Traefik, WebSockets, scheduling, and automation services onto one host. Because of that, the Engine will use the resources you give it in a few predictable ways:
+Borealis currently runs as a single-node Linux Engine deployment that bundles the Python API/runtime, PostgreSQL, Traefik, WebSockets, scheduling, and automation services onto one host. Because of that, the Engine will use the resources you give it in a few predictable ways:
 
 - **CPU**:
   - operator-driven activity such as Web UI requests, AG Grid-backed searches, filtering, and live socket updates
@@ -42,11 +43,11 @@ During Engine deployment and re-deployment, `Borealis.sh` profiles the host CPU 
 
 | Profile | Typical Use | Endpoints | Active Operators | vCPU | RAM | NVMe Storage |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Homelab | Personal labs, testing, feature development, and very small sites | Up to 250 | 1-3 | 4-8 | 8-16 GiB | 80-150 GiB |
-| Small Business | Smaller production environments with light-to-moderate operator activity | Up to 1,000 | 2-4 | 8-12 | 16-24 GiB | 150-250 GiB |
-| MSP / Production | The main Borealis target for real-world SMB and managed-service usage | Up to 2,000 | 4-8 | 16 | 32 GiB | 500 GiB |
-| Enterprise | Larger single-node environments on the current Borealis architecture | Up to 10,000 | 10-20 | 16-24 | 32-64 GiB | 500 GiB-1 TiB |
-| Enterprise Clustered (Not Implemented Yet) | Much larger multi-node clustered environments | 10,000+ | 20+ per node | 16-24 per node | 32-64 GiB per node | 500 GiB-1 TiB per node |
+| Homelab | Personal labs, testing, feature development, and very small sites | Up to 250 | 1-3 | < 8 | < 16 GiB | 80-150 GiB |
+| Small Business | Smaller production environments with light-to-moderate operator activity | Up to 1,000 | 2-4 | 8-15 | 16-31 GiB | 150-250 GiB |
+| MSP / Production | The main Borealis target for real-world SMB and managed-service usage | Up to 2,000 | 4-8 | 16-23 | 32-63 GiB | 500 GiB |
+| Enterprise | Larger single-node environments on the current Borealis architecture | Up to 10,000 | 10-20 | 24+ | 64 GiB+ | 500 GiB-1 TiB |
+| Enterprise Clustered (Not Implemented Yet) | Much larger multi-node clustered environments | 10,000+ | 20+ per node | 24+ per node | 64 GiB+ per node | 500 GiB-1 TiB per node |
 
 ## Practical Guidance
 
@@ -77,7 +78,7 @@ Borealis uses **WireGuard-based tunnels** as its primary transport layer between
 - Strict isolation (`/32` addressing, no lateral movement)
 - Port-level allowlists enforced by the Engine
 - Ed25519-signed, short-lived tunnel tokens
-- Pinned TLS for orchestration channel security
+- Public CA + hostname validation on the HTTPS control plane
 
 ---
 
@@ -91,12 +92,13 @@ Borealis now runs on **PostgreSQL**, replacing SQLite that was used in older ver
 ---
 
 ## Assembly & Automation Model
-- Assemblies are stored directly in the database
+- Assemblies are stored in PostgreSQL `assemblies.*` tables
 - Jobs resolve assemblies by GUID
 - Supports:
   - Quick Jobs
   - Scheduled Jobs
-  - Workflow-based Automation (Experimental)
+  - Watchdog-triggered remediation
+  - Workflow authoring and execution
 
 ---
 
@@ -113,51 +115,48 @@ Borealis integrates with the **[Aurora Repository](https://github.com/bunny-lab-
 # Features
 
 ## Device Management
-- Device inventory (OS, hardware, status)
-- Site-based organization and filtering
-- Approval workflows
-- Global hostname search (RBAC-aware)
+- Device inventory (OS, hardware, software, services, and status)
+- Site-based organization, approvals, and RBAC-aware targeting
+- Saved filters and device list views
+- Global hostname search scoped by operator access
+- Device-level watchdog and alerts surfaces
 
 ## Remote Execution
 - PowerShell (Windows)
 - Batch (Windows)
-- Bash (Linux)
+- Bash (when the target agent runtime provides it)
 - SYSTEM-level execution support
 - CURRENTUSER-level execution support
 
 ## Remote Access
 - WireGuard-backed secure connectivity
-- Remote Shell (cross-platform)
-- Web-based VNC remote desktop (UltraVNC for Windows)
-- Future support for WinRM and other protocols
+- Remote Shell over WireGuard
+- Same-origin VNC remote desktop for Windows (UltraVNC + noVNC)
+- Engine-side automation can reach SSH and WinRM targets over managed WireGuard sessions
 
 ## Automation & Workflows
-- Quick Jobs for immediate execution
-- Scheduled Jobs with improved reliability and real failure reporting
-- Visual node-based workflow editor (Experimental)
+- Quick Jobs for immediate agent-side script execution
+- Scheduled Jobs for scripts, workflows, and Engine-side Ansible runs
+- Visual workflow editor and runtime
+- Watchdogs with preview, incident tracking, and assembly-based remediation
 - Assembly-driven execution model
 
 ## Ansible Integration
-- Engine-side Ansible playbook execution
-- Supports:
+- Engine-side Ansible playbook execution on the Linux Engine
+- Scheduled-job execution contexts:
   - `ssh`
+  - `ssh_individual`
   - `winrm`
-- Routed over Borealis WireGuard tunnels
-- Integrated credential selection
-- Recap/output surfaced in job history StdOut / StdErr
+  - `winrm_individual`
+- Routed over Borealis-managed WireGuard sessions
+- Integrated credential selection and runner-budget controls
+- Per-run output and recap data are persisted, with richer recap/reporting UX still expanding
 
 ## Credential Management (Aegis Cipher)
-- Encrypted secret storage (AES-256-GCM)
-- Engine-wide unlock mechanism
-- Supports:
-  - Passwords
-  - Private keys
-  - Tokens (including GitHub API)
-- Features:
-  - Setup
-  - Rotation
-  - Reset (destructive recovery)
-- Secrets decrypted only in-memory when needed
+- Engine-global Aegis bootstrap and unlock gate
+- `scrypt` + `AES-256-GCM` protection for reusable credentials, operator password hashes, TOTP secrets, passkey material, and the GitHub API token
+- Rotation and destructive force-reset flows
+- Secrets decrypted only in memory after Aegis unlock
 
 ## Role-Based Access Control (RBAC)
 - Site-scoped access restrictions
@@ -168,15 +167,20 @@ Borealis integrates with the **[Aurora Repository](https://github.com/bunny-lab-
   - Remote access APIs
 
 ## Authentication & Security
+- Aegis bootstrap is required before the normal login UI is available
 - MFA required by default
+- WebAuthn passkeys for direct browser sign-in
 - Persistent Engine session secret
 - Strict session validation and invalidation
+- Code-signed script delivery to agents
 
 ## Agent Capabilities
-- Cross-platform (Windows + Linux)
+- Windows and Linux agent support
 - Automatic self-updating:
   - Windows Scheduled Task
   - Linux systemd service/timer
+- Inventory collection, service telemetry, and health reporting
+- WireGuard tunnel management and remote shell access
 - Agent Health telemetry:
   - Roles/services status
   - Recovery state visibility
@@ -191,17 +195,19 @@ Borealis is actively evolving into a unified automation and remote management pl
 ### Stable / Functional Areas
 - WireGuard-based connectivity
 - PostgreSQL-backed data model
-- Cross-platform script execution
-- Ansible Playbook execution (via WireGuard tunnels)
-- Credential management with encryption
-- RBAC and MFA enforcement
+- Windows and Linux agent inventory + telemetry
+- Windows and Linux remote shell access
+- Agent-side script execution (`SYSTEM` / `CURRENTUSER`)
+- Watchdogs, alerts, and device-scoped monitoring
+- Ansible playbook execution via WireGuard tunnels
+- Aegis bootstrap/unlock, passkeys, RBAC, and MFA enforcement
 - VNC remote desktop (Windows)
 
 ### In Progress / Expanding Areas
-- Secure-at-rest credential hardening (continued improvements)
-- Additional remote protocols (RDP, SSH, WinRM expansion)
+- Broader cross-platform feature parity and polish
+- Additional remote protocols beyond the current shell/VNC surfaces
 - Aurora repository workflows (export/import tooling)
-- UX improvements and reporting enhancements
+- Richer Ansible recap/reporting UX and broader UI polish
 
 ---
 
@@ -290,26 +296,8 @@ Credential Management Editor:
 
 # Getting Started
 
-## Engine Installation
+## Deploy the Engine
 
 ```sh
-# Production
-curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --engine-production
-
-# Development (Vite Dev File Hot-loading)
-curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --engine-dev
-````
-
-## Agent Installation
-
-### Windows
-
-```powershell
-$env:BOREALIS_SERVER_URL="https://borealis.bunny-lab.io"; $env:BOREALIS_ENROLLMENT_CODE="044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"; irm https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1 | iex
-```
-
-### Linux
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --agent --serverurl "https://borealis.bunny-lab.io" --enrollmentcode "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"
+curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s --
 ```
