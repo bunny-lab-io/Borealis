@@ -12,6 +12,7 @@ import json
 import time
 
 from Data.Engine.db import dbapi as sqlite3
+from Data.Engine.services.API.watchdogs import runtime as watchdog_runtime_module
 
 from .conftest import EngineTestHarness
 
@@ -101,6 +102,107 @@ def _set_device_last_seen(harness: EngineTestHarness, *, hostname: str, last_see
              WHERE hostname = ?
             """,
             (int(last_seen), hostname),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _set_device_uptime(harness: EngineTestHarness, *, hostname: str, uptime: int) -> None:
+    conn = sqlite3.connect(str(harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE devices
+               SET uptime = ?
+             WHERE hostname = ?
+            """,
+            (int(uptime), hostname),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _set_device_metrics(
+    harness: EngineTestHarness,
+    *,
+    hostname: str,
+    cpu_percent: float | None = None,
+    memory_percent: float | None = None,
+) -> None:
+    assignments: list[str] = []
+    params: list[object] = []
+    if cpu_percent is not None:
+        assignments.append("cpu_percent = ?")
+        params.append(float(cpu_percent))
+    if memory_percent is not None:
+        assignments.append("memory_percent = ?")
+        params.append(float(memory_percent))
+    if not assignments:
+        return
+    params.append(hostname)
+    conn = sqlite3.connect(str(harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            UPDATE devices
+               SET {", ".join(assignments)}
+             WHERE hostname = ?
+            """,
+            tuple(params),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _seed_sessions(harness: EngineTestHarness, *, hostname: str, sessions: list[dict], reported_at: int | None = None) -> None:
+    conn = sqlite3.connect(str(harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE devices
+               SET sessions = ?
+             WHERE hostname = ?
+            """,
+            (
+                json.dumps(
+                    {
+                        "reported_at": int(reported_at or time.time()),
+                        "sessions": sessions,
+                    }
+                ),
+                hostname,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _seed_processes(harness: EngineTestHarness, *, hostname: str, processes: list[dict], reported_at: int | None = None) -> None:
+    conn = sqlite3.connect(str(harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE devices
+               SET processes = ?
+             WHERE hostname = ?
+            """,
+            (
+                json.dumps(
+                    {
+                        "reported_at": int(reported_at or time.time()),
+                        "processes": processes,
+                    }
+                ),
+                hostname,
+            ),
         )
         conn.commit()
     finally:
@@ -679,3 +781,283 @@ def test_startup_cleanup_purges_resolved_offline_watchdog_incidents(
     after_payload = after_response.get_json()
     assert after_payload["items"] == []
     assert after_payload["counts"]["resolved"] == 0
+
+
+def test_watchdog_user_session_match_normalized_blocklist_preview(engine_harness: EngineTestHarness) -> None:
+    _seed_sessions(
+        engine_harness,
+        hostname="test-device",
+        sessions=[
+            {
+                "username": "EXAMPLE\\alice",
+                "session_id": 1,
+                "session_name": "console",
+                "state": "active",
+                "protocol": "console",
+            }
+        ],
+    )
+    client = _client_with_admin_session(engine_harness)
+
+    response = client.post(
+        "/api/watchdogs/preview",
+        json={
+            "name": "Blocked User Watchdog",
+            "description": "Alerts on blocked logins.",
+            "enabled": True,
+            "severity": "warning",
+            "site_mode": "global",
+            "criteria": {
+                "match_mode": "all",
+                "rules": [
+                    {
+                        "id": "rule-user-session",
+                        "type": "user_session_match",
+                        "match_mode": "blocklist",
+                        "pattern_mode": "normalized",
+                        "patterns": ["alice"],
+                    }
+                ],
+            },
+            "actions": {"actions": []},
+            "targets": [
+                {
+                    "kind": "device",
+                    "device_guid": "GUID-TEST-0001",
+                    "hostname": "test-device",
+                    "site_id": 1,
+                    "site_name": "Main Lab",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["matched_count"] == 1
+    rule = body["devices"][0]["sample"]["results"][0]
+    assert rule["matched"] is True
+    assert rule["sample"]["violating_users"][0]["username"] == "EXAMPLE\\alice"
+
+
+def test_watchdog_process_presence_preview_matches_normalized_executable_name(engine_harness: EngineTestHarness) -> None:
+    _seed_processes(
+        engine_harness,
+        hostname="test-device",
+        processes=[
+            {
+                "name": "explorer.exe",
+                "count": 2,
+            }
+        ],
+    )
+    client = _client_with_admin_session(engine_harness)
+
+    response = client.post(
+        "/api/watchdogs/preview",
+        json={
+            "name": "Explorer Presence",
+            "description": "Alerts if explorer is running.",
+            "enabled": True,
+            "severity": "info",
+            "site_mode": "global",
+            "criteria": {
+                "match_mode": "all",
+                "rules": [
+                    {
+                        "id": "rule-process",
+                        "type": "process_presence",
+                        "process_name": "explorer",
+                        "expectation": "present",
+                    }
+                ],
+            },
+            "actions": {"actions": []},
+            "targets": [
+                {
+                    "kind": "device",
+                    "device_guid": "GUID-TEST-0001",
+                    "hostname": "test-device",
+                    "site_id": 1,
+                    "site_name": "Main Lab",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["matched_count"] == 1
+    rule = body["devices"][0]["sample"]["results"][0]
+    assert rule["sample"]["present"] is True
+    assert rule["sample"]["count"] == 2
+
+
+def test_watchdog_reboot_detected_uses_saved_baseline(engine_harness: EngineTestHarness) -> None:
+    client = _client_with_admin_session(engine_harness)
+
+    create_response = client.post(
+        "/api/watchdogs",
+        json={
+            "name": "Reboot Watchdog",
+            "description": "Alerts when uptime drops.",
+            "enabled": True,
+            "severity": "warning",
+            "site_mode": "global",
+            "criteria": {
+                "match_mode": "all",
+                "rules": [{"id": "rule-reboot", "type": "reboot_detected"}],
+            },
+            "actions": {"actions": []},
+            "targets": [
+                {
+                    "kind": "device",
+                    "device_guid": "GUID-TEST-0001",
+                    "hostname": "test-device",
+                    "site_id": 1,
+                    "site_name": "Main Lab",
+                }
+            ],
+        },
+    )
+    assert create_response.status_code == 201
+    created = create_response.get_json()
+    assert created["open_incident_count"] == 0
+
+    _set_device_uptime(engine_harness, hostname="test-device", uptime=120)
+    runtime = engine_harness.context.watchdog_runtime
+    assert runtime is not None
+    runtime.evaluate_watchdog(created["id"])
+
+    incidents_response = client.get("/api/watchdogs/incidents?state=open")
+    assert incidents_response.status_code == 200
+    incidents = incidents_response.get_json()["items"]
+    assert len(incidents) == 1
+    assert "reboot detected" in incidents[0]["message"].lower()
+
+
+def test_watchdog_cpu_usage_duration_requires_elapsed_time(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    fixed_now = 2_000_000_000
+    _set_device_last_seen(engine_harness, hostname="test-device", last_seen=fixed_now)
+    _set_device_metrics(engine_harness, hostname="test-device", cpu_percent=95.0)
+    monkeypatch.setattr(watchdog_runtime_module, "_now_ts", lambda: fixed_now)
+    client = _client_with_admin_session(engine_harness)
+
+    create_response = client.post(
+        "/api/watchdogs",
+        json={
+            "name": "CPU Watchdog",
+            "description": "Alerts on sustained CPU pressure.",
+            "enabled": True,
+            "severity": "warning",
+            "site_mode": "global",
+            "criteria": {
+                "match_mode": "all",
+                "rules": [
+                    {
+                        "id": "rule-cpu",
+                        "type": "cpu_usage_percent",
+                        "threshold": 90,
+                        "duration_seconds": 300,
+                    }
+                ],
+            },
+            "actions": {"actions": []},
+            "targets": [
+                {
+                    "kind": "device",
+                    "device_guid": "GUID-TEST-0001",
+                    "hostname": "test-device",
+                    "site_id": 1,
+                    "site_name": "Main Lab",
+                }
+            ],
+        },
+    )
+    assert create_response.status_code == 201
+    created = create_response.get_json()
+    assert created["open_incident_count"] == 0
+
+    monkeypatch.setattr(watchdog_runtime_module, "_now_ts", lambda: fixed_now + 301)
+    runtime = engine_harness.context.watchdog_runtime
+    assert runtime is not None
+    runtime.evaluate_watchdog(created["id"])
+
+    incidents_response = client.get("/api/watchdogs/incidents?state=open")
+    assert incidents_response.status_code == 200
+    incidents = incidents_response.get_json()["items"]
+    assert len(incidents) == 1
+    assert "cpu usage is 95.0%" in incidents[0]["message"].lower()
+
+
+def test_watchdog_drive_presence_specific_detects_missing_and_unexpected_drives_preview(
+    engine_harness: EngineTestHarness,
+) -> None:
+    _seed_storage_usage(
+        engine_harness,
+        entries=[
+            {
+                "drive": "C:",
+                "total": 1000,
+                "used": 400,
+                "free": 600,
+                "usage": 40,
+                "disk_type": "Fixed Disk",
+            },
+            {
+                "drive": "F:",
+                "total": 512,
+                "used": 20,
+                "free": 492,
+                "usage": 4,
+                "disk_type": "Removable",
+            },
+        ],
+    )
+    client = _client_with_admin_session(engine_harness)
+
+    response = client.post(
+        "/api/watchdogs/preview",
+        json={
+            "name": "Drive Presence Watchdog",
+            "description": "Alerts on drive topology mismatches.",
+            "enabled": True,
+            "severity": "warning",
+            "site_mode": "global",
+            "criteria": {
+                "match_mode": "all",
+                "rules": [
+                    {
+                        "id": "rule-drive-presence",
+                        "type": "drive_presence_change",
+                        "storage_scope": "all",
+                        "watch_mode": "specific",
+                        "change_types": ["added", "removed"],
+                        "drive_list": ["C:", "E:"],
+                    }
+                ],
+            },
+            "actions": {"actions": []},
+            "targets": [
+                {
+                    "kind": "device",
+                    "device_guid": "GUID-TEST-0001",
+                    "hostname": "test-device",
+                    "site_id": 1,
+                    "site_name": "Main Lab",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["matched_count"] == 1
+    rule = body["devices"][0]["sample"]["results"][0]
+    detected_changes = rule["sample"]["detected_changes"]
+    assert {entry["change_type"] for entry in detected_changes} == {"added", "removed"}
+    assert any(entry.get("drive") == "E:" for entry in detected_changes)
+    assert any(entry.get("drive") == "F:" for entry in detected_changes)

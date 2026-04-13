@@ -34,15 +34,26 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
 - The Watchdog editor uses 3-character minimum search inputs for explicit device targeting and saved filter targeting so operators can type to find matches instead of working through long dropdown menus.
 
 ### Rules
-- v1 rules only use telemetry Borealis already stores:
+- Watchdog v1 now spans both existing device inventory and a small set of Engine-persisted snapshot telemetry from the Agent:
   - `device_offline`
   - `storage_usage_percent` with either a specific drive or all drives on the device
   - `service_state`
   - `agent_role_health`
+  - `cpu_usage_percent`
+  - `memory_usage_percent`
+  - `uptime_above_seconds`
+  - `reboot_detected`
+  - `service_pending_timeout`
+  - `user_session_match`
+  - `process_presence`
+  - `session_state`
+  - `network_interface_change`
+  - `drive_presence_change`
   - `software_presence_or_version`
   - `agent_version_status`
 - Rule combination is `all` or `any`. Nested boolean trees are not part of v1.
 - Rule evaluation treats stale telemetry as its own outcome. Borealis surfaces `stale_data` instead of converting stale inventory into a false incident.
+- Change-detection rules such as reboot, drive topology, interface topology, and session transitions establish a baseline snapshot first instead of alerting on the first evaluation.
 
 ### Anti-noise Controls
 - Watchdogs include:
@@ -55,7 +66,7 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
 
 ### Actions
 - v1 actions are:
-  - `No Nothing` for incident-only tracking with no notification or remediation
+  - `Do Nothing` for incident-only tracking with no notification or remediation
   - Engine Toast Notification
   - control a Windows service
   - run an assembly remediation
@@ -118,7 +129,10 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
 
 ### Device data sources used by v1
 - Device heartbeat age from `devices.last_seen`
+- Heartbeat performance metrics from `devices.cpu_percent` and `devices.memory_percent`
 - Storage JSON from `devices.storage`
+- Cached session snapshots from `devices.sessions`
+- Cached process snapshots from `devices.processes`
 - Cached service inventory from `devices.services`
 - Agent role telemetry from `devices.agent_role_health`
 - Normalized software inventory from `device_software_inventory`

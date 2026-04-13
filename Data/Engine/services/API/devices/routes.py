@@ -195,6 +195,16 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                 updates["uptime"] = int(metrics["uptime"])
             except Exception:
                 pass
+        if metrics.get("cpu_percent") is not None:
+            try:
+                updates["cpu_percent"] = float(metrics["cpu_percent"])
+            except Exception:
+                pass
+        if metrics.get("memory_percent") is not None:
+            try:
+                updates["memory_percent"] = float(metrics["memory_percent"])
+            except Exception:
+                pass
 
         for field in ("external_ip", "internal_ip", "device_type"):
             if payload.get(field):

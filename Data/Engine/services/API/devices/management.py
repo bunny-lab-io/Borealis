@@ -57,6 +57,8 @@ from .agent_role_health import (
     normalize_agent_role_health,
     serialize_agent_role_health,
 )
+from .process_inventory import normalize_device_processes, serialize_device_processes
+from .session_inventory import normalize_device_sessions, serialize_device_sessions
 from .service_inventory import (
     merge_device_services,
     normalize_device_services,
@@ -165,7 +167,11 @@ _DEVICE_JSON_LIST_FIELDS: Dict[str, Any] = {
     "services": [],
     "storage": [],
 }
-_DEVICE_JSON_OBJECT_FIELDS: Dict[str, Any] = {"cpu": {}}
+_DEVICE_JSON_OBJECT_FIELDS: Dict[str, Any] = {
+    "cpu": {},
+    "sessions": {"sessions": [], "reported_at": 0},
+    "processes": {"processes": [], "reported_at": 0},
+}
 _SOFTWARE_SOURCE_ALIASES: Dict[str, str] = {
     "local": "local_installed",
     "installed": "local_installed",
@@ -336,7 +342,11 @@ def _extract_device_columns(details: Dict[str, Any]) -> Dict[str, Any]:
 
     for field, default in _DEVICE_JSON_LIST_FIELDS.items():
         payload[field] = _serialize_device_json(details.get(field), default)
-    payload["cpu"] = _serialize_device_json(summary.get("cpu") or details.get("cpu"), _DEVICE_JSON_OBJECT_FIELDS["cpu"])
+    for field, default in _DEVICE_JSON_OBJECT_FIELDS.items():
+        if field == "cpu":
+            payload[field] = _serialize_device_json(summary.get("cpu") or details.get("cpu"), default)
+        else:
+            payload[field] = _serialize_device_json(details.get(field), default)
 
     payload["device_type"] = _clean_device_str(summary.get("device_type") or summary.get("type"))
     payload["domain"] = _clean_device_str(summary.get("domain"))
@@ -344,6 +354,16 @@ def _extract_device_columns(details: Dict[str, Any]) -> Dict[str, Any]:
     payload["internal_ip"] = _clean_device_str(summary.get("internal_ip") or summary.get("private_ip"))
     payload["last_reboot"] = _clean_device_str(summary.get("last_reboot") or summary.get("last_boot"))
     payload["last_seen"] = _coerce_int(summary.get("last_seen"))
+    cpu_percent_value = summary.get("cpu_percent")
+    memory_percent_value = summary.get("memory_percent")
+    try:
+        payload["cpu_percent"] = None if cpu_percent_value in (None, "") else float(cpu_percent_value)
+    except (ValueError, TypeError):
+        payload["cpu_percent"] = None
+    try:
+        payload["memory_percent"] = None if memory_percent_value in (None, "") else float(memory_percent_value)
+    except (ValueError, TypeError):
+        payload["memory_percent"] = None
     payload["last_user"] = _clean_device_str(
         summary.get("last_user") or summary.get("last_user_name") or summary.get("username")
     )
@@ -412,19 +432,23 @@ def _device_upsert(
             services,
             storage,
             cpu,
+            sessions,
+            processes,
             device_type,
             domain,
             external_ip,
             internal_ip,
             last_reboot,
             last_seen,
+            cpu_percent,
+            memory_percent,
             last_user,
             operating_system,
             uptime,
             agent_id,
             connection_type,
             connection_endpoint
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(hostname) DO UPDATE SET
             description=excluded.description,
             created_at=COALESCE({DEVICE_TABLE}.created_at, excluded.created_at),
@@ -437,12 +461,16 @@ def _device_upsert(
             services=excluded.services,
             storage=excluded.storage,
             cpu=excluded.cpu,
+            sessions=excluded.sessions,
+            processes=excluded.processes,
             device_type=COALESCE(NULLIF(excluded.device_type, ''), {DEVICE_TABLE}.device_type),
             domain=COALESCE(NULLIF(excluded.domain, ''), {DEVICE_TABLE}.domain),
             external_ip=COALESCE(NULLIF(excluded.external_ip, ''), {DEVICE_TABLE}.external_ip),
             internal_ip=COALESCE(NULLIF(excluded.internal_ip, ''), {DEVICE_TABLE}.internal_ip),
             last_reboot=COALESCE(NULLIF(excluded.last_reboot, ''), {DEVICE_TABLE}.last_reboot),
             last_seen=COALESCE(NULLIF(excluded.last_seen, 0), {DEVICE_TABLE}.last_seen),
+            cpu_percent=COALESCE(excluded.cpu_percent, {DEVICE_TABLE}.cpu_percent),
+            memory_percent=COALESCE(excluded.memory_percent, {DEVICE_TABLE}.memory_percent),
             last_user=COALESCE(NULLIF(excluded.last_user, ''), {DEVICE_TABLE}.last_user),
             operating_system=COALESCE(NULLIF(excluded.operating_system, ''), {DEVICE_TABLE}.operating_system),
             uptime=COALESCE(NULLIF(excluded.uptime, 0), {DEVICE_TABLE}.uptime),
@@ -464,12 +492,16 @@ def _device_upsert(
         column_values.get("services"),
         column_values.get("storage"),
         column_values.get("cpu"),
+        column_values.get("sessions"),
+        column_values.get("processes"),
         column_values.get("device_type"),
         column_values.get("domain"),
         column_values.get("external_ip"),
         column_values.get("internal_ip"),
         column_values.get("last_reboot"),
         column_values.get("last_seen"),
+        column_values.get("cpu_percent"),
+        column_values.get("memory_percent"),
         column_values.get("last_user"),
         column_values.get("operating_system"),
         column_values.get("uptime"),
@@ -497,12 +529,16 @@ class DeviceManagementService:
         "services",
         "storage",
         "cpu",
+        "sessions",
+        "processes",
         "device_type",
         "domain",
         "external_ip",
         "internal_ip",
         "last_reboot",
         "last_seen",
+        "cpu_percent",
+        "memory_percent",
         "last_user",
         "operating_system",
         "uptime",
@@ -685,6 +721,8 @@ class DeviceManagementService:
         last_seen = mapping.get("last_seen") or 0
         role_health = normalize_agent_role_health(mapping.get("agent_role_health"))
         services_payload = normalize_device_services(mapping.get("services"))
+        sessions_payload = normalize_device_sessions(mapping.get("sessions"))
+        processes_payload = normalize_device_processes(mapping.get("processes"))
         summary = {
             "hostname": mapping.get("hostname") or "",
             "description": mapping.get("description") or "",
@@ -699,6 +737,8 @@ class DeviceManagementService:
             "internal_ip": mapping.get("internal_ip") or "",
             "last_reboot": mapping.get("last_reboot") or "",
             "last_seen": last_seen or 0,
+            "cpu_percent": mapping.get("cpu_percent"),
+            "memory_percent": mapping.get("memory_percent"),
             "last_user": mapping.get("last_user") or "",
             "operating_system": mapping.get("operating_system") or "",
             "uptime": mapping.get("uptime") or 0,
@@ -715,6 +755,8 @@ class DeviceManagementService:
             "services": services_payload.get("services") or [],
             "storage": _safe_json(mapping.get("storage"), []),
             "cpu": _safe_json(mapping.get("cpu"), {}),
+            "sessions": sessions_payload.get("sessions") or [],
+            "processes": processes_payload.get("processes") or [],
         }
         site_id, site_name, site_description = site_row
         payload = {
@@ -738,6 +780,10 @@ class DeviceManagementService:
             "services_reported_at": services_payload.get("reported_at") or 0,
             "storage": details["storage"],
             "cpu": details["cpu"],
+            "sessions": details["sessions"],
+            "sessions_reported_at": sessions_payload.get("reported_at") or 0,
+            "processes": details["processes"],
+            "processes_reported_at": processes_payload.get("reported_at") or 0,
             "device_type": summary["device_type"],
             "domain": summary["domain"],
             "external_ip": summary["external_ip"],
@@ -745,6 +791,8 @@ class DeviceManagementService:
             "last_reboot": summary["last_reboot"],
             "last_seen": last_seen or 0,
             "last_seen_iso": _ts_to_iso(last_seen),
+            "cpu_percent": summary["cpu_percent"],
+            "memory_percent": summary["memory_percent"],
             "last_user": summary["last_user"],
             "operating_system": summary["operating_system"],
             "uptime": summary["uptime"],
@@ -1024,6 +1072,10 @@ class DeviceManagementService:
         if "services" in details:
             incoming_services_raw = normalize_device_services(details.get("services"))
             details["services"] = incoming_services_raw.get("services") or []
+        if "sessions" in details:
+            details["sessions"] = normalize_device_sessions(details.get("sessions"))
+        if "processes" in details:
+            details["processes"] = normalize_device_processes(details.get("processes"))
 
         hostname = _clean_device_str(payload.get("hostname"))
         if not hostname:

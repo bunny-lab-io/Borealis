@@ -1485,6 +1485,202 @@ if ($combined.Count -eq 0) { 'No Users Logged In' } else { $combined -join ', ' 
         return ''
 
 
+def _normalize_process_name(value) -> str:
+    try:
+        name = str(value or '').strip()
+    except Exception:
+        return ''
+    if not name:
+        return ''
+    return name
+
+
+def collect_processes() -> dict:
+    reported_at = int(time.time())
+    counts = {}
+    if psutil:
+        try:
+            for proc in psutil.process_iter(['name']):
+                try:
+                    name = _normalize_process_name((proc.info or {}).get('name'))
+                except Exception:
+                    name = ''
+                if not name:
+                    continue
+                key = name.lower()
+                counts[key] = {
+                    'name': name,
+                    'count': int(counts.get(key, {}).get('count') or 0) + 1,
+                }
+        except Exception:
+            counts = {}
+    if not counts:
+        try:
+            if IS_WINDOWS:
+                out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=30)
+                for line in (out.stdout or '').splitlines():
+                    raw = line.strip().strip('"')
+                    if not raw:
+                        continue
+                    name = _normalize_process_name(raw.split('","', 1)[0])
+                    if not name:
+                        continue
+                    key = name.lower()
+                    counts[key] = {
+                        'name': name,
+                        'count': int(counts.get(key, {}).get('count') or 0) + 1,
+                    }
+            else:
+                out = subprocess.run(["ps", "-e", "-o", "comm="], capture_output=True, text=True, timeout=30)
+                for raw in (out.stdout or '').splitlines():
+                    name = _normalize_process_name(raw)
+                    if not name:
+                        continue
+                    key = name.lower()
+                    counts[key] = {
+                        'name': name,
+                        'count': int(counts.get(key, {}).get('count') or 0) + 1,
+                    }
+        except Exception:
+            counts = {}
+    return {
+        'reported_at': reported_at,
+        'processes': sorted(counts.values(), key=lambda item: str(item.get('name') or '').lower()),
+    }
+
+
+def collect_sessions() -> dict:
+    reported_at = int(time.time())
+    if not IS_WINDOWS:
+        return {'reported_at': reported_at, 'sessions': []}
+    try:
+        ps = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+
+function Normalize-State([string]$state, [bool]$locked) {
+  $raw = ('' + $state).Trim().ToLowerInvariant()
+  if ($locked -and $raw -eq 'active') { return 'locked' }
+  if ($raw -in @('active','act','running')) { return 'active' }
+  if ($raw -in @('disc','disconnected')) { return 'disconnected' }
+  if ($raw -eq 'idle') { return 'idle' }
+  if ($raw -eq 'locked') { return 'locked' }
+  return 'unknown'
+}
+
+$lockedSessionIds = @()
+try {
+  $lockedSessionIds = Get-Process -Name LogonUI -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SessionId -Unique
+} catch {}
+
+$rows = @()
+try {
+  $lines = @(quser 2>$null)
+  foreach ($line in $lines) {
+    if (-not $line) { continue }
+    if ($line -match '^\s*USERNAME\s+') { continue }
+    $clean = ($line -replace '^\s*>', '').Trim()
+    if (-not $clean) { continue }
+    $parts = $clean -split '\s+'
+    if ($parts.Length -lt 3) { continue }
+
+    $username = [string]$parts[0]
+    if (-not $username) { continue }
+    if ($username -match '\$$' -or $username -like 'DWM-*' -or $username -like 'UMFD-*') { continue }
+
+    $sessionName = ''
+    $sessionId = 0
+    $stateRaw = ''
+    if ($parts[1] -match '^\d+$') {
+      $sessionId = [int]$parts[1]
+      if ($parts.Length -ge 3) { $stateRaw = [string]$parts[2] }
+    } else {
+      $sessionName = [string]$parts[1]
+      if ($parts.Length -ge 3 -and $parts[2] -match '^\d+$') { $sessionId = [int]$parts[2] }
+      if ($parts.Length -ge 4) { $stateRaw = [string]$parts[3] }
+    }
+
+    $locked = $false
+    if ($sessionId -gt 0) {
+      try { $locked = $lockedSessionIds -contains $sessionId } catch {}
+    }
+    $protocol = if ($sessionName -match '^(rdp|ica)-') { 'rdp' } elseif ($sessionName -eq 'console') { 'console' } else { 'other' }
+
+    $rows += [pscustomobject]@{
+      username = $username
+      session_id = $sessionId
+      session_name = $sessionName
+      state = (Normalize-State $stateRaw $locked)
+      state_code = (Normalize-State $stateRaw $locked)
+      protocol = $protocol
+      is_rdp = ($protocol -eq 'rdp')
+    }
+  }
+} catch {}
+
+if ($rows.Count -eq 0) {
+  try {
+    $fallbackUsers = Get-CimInstance Win32_LogonSession | Where-Object { $_.LogonType -in 2,10 } | ForEach-Object {
+      $sess = $_
+      Get-CimAssociatedInstance -InputObject $sess -Association Win32_LoggedOnUser -ResultClassName Win32_Account | ForEach-Object {
+        if (-not $_ -or -not $_.Name) { return }
+        if ($_.Name -match '\$$' -or $_.Name -like 'DWM-*' -or $_.Name -like 'UMFD-*') { return }
+        $user = if ($_.Domain) { ('{0}\{1}' -f $_.Domain, $_.Name) } else { [string]$_.Name }
+        [pscustomobject]@{
+          username = $user
+          session_id = 0
+          session_name = ''
+          state = 'active'
+          state_code = 'active'
+          protocol = 'other'
+          is_rdp = $false
+        }
+      }
+    }
+    if ($fallbackUsers) {
+      $rows = @($fallbackUsers | Sort-Object username -Unique)
+    }
+  } catch {}
+}
+
+$rows | ConvertTo-Json -Compress
+"""
+        data = _ps_json(ps, timeout=45)
+        if isinstance(data, dict):
+            data = [data]
+        sessions = []
+        for item in (data or []):
+            if not isinstance(item, dict):
+                continue
+            sessions.append(
+                {
+                    'username': str(item.get('username') or '').strip(),
+                    'session_id': int(item.get('session_id') or 0),
+                    'session_name': str(item.get('session_name') or '').strip(),
+                    'state': str(item.get('state_code') or item.get('state') or 'unknown').strip().lower(),
+                    'state_code': str(item.get('state_code') or item.get('state') or 'unknown').strip().lower(),
+                    'protocol': str(item.get('protocol') or '').strip().lower(),
+                    'is_rdp': bool(item.get('is_rdp')),
+                }
+            )
+        deduped = {}
+        for item in sessions:
+            key = f"{int(item.get('session_id') or 0)}:{str(item.get('username') or '').lower()}:{str(item.get('session_name') or '').lower()}"
+            deduped[key] = item
+        return {
+            'reported_at': reported_at,
+            'sessions': sorted(
+                deduped.values(),
+                key=lambda item: (
+                    str(item.get('username') or '').lower(),
+                    int(item.get('session_id') or 0),
+                    str(item.get('session_name') or '').lower(),
+                ),
+            ),
+        }
+    except Exception:
+        return {'reported_at': reported_at, 'sessions': []}
+
+
 def _build_details_fallback() -> dict:
     # Construct a details object similar to Ansible playbook output
     try:
@@ -1646,6 +1842,8 @@ def _build_details_fallback() -> dict:
         'memory': collect_memory(),
         'storage': collect_storage(),
         'network': network,
+        'sessions': collect_sessions(),
+        'processes': collect_processes(),
     }
     return details
 

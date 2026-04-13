@@ -63,12 +63,22 @@ const RULE_TYPE_OPTIONS = [
   { value: "storage_usage_percent", label: "Storage Usage" },
   { value: "service_state", label: "Service State" },
   { value: "agent_role_health", label: "Agent Role Health" },
+  { value: "cpu_usage_percent", label: "CPU Usage" },
+  { value: "memory_usage_percent", label: "Memory Usage" },
+  { value: "uptime_above_seconds", label: "Uptime" },
+  { value: "reboot_detected", label: "Reboot Detected" },
+  { value: "service_pending_timeout", label: "Service Pending Timeout" },
+  { value: "user_session_match", label: "Logged-In User Match" },
+  { value: "process_presence", label: "Process Presence" },
+  { value: "session_state", label: "Session State" },
+  { value: "network_interface_change", label: "Network Interface Change" },
+  { value: "drive_presence_change", label: "Drive Presence Change" },
   { value: "software_presence_or_version", label: "Software Presence / Version" },
   { value: "agent_version_status", label: "Agent Version Status" },
 ];
 
 const ACTION_TYPE_OPTIONS = [
-  { value: "do_nothing", label: "No Nothing" },
+  { value: "do_nothing", label: "Do Nothing" },
   { value: "notification", label: "Engine Toast Notification" },
   { value: "service_control", label: "Control Service" },
   { value: "assembly", label: "Run Assembly" },
@@ -82,6 +92,23 @@ const ROLE_STATUS_OPTIONS = [
   "unsupported",
   "unknown",
 ];
+const USER_MATCH_MODE_OPTIONS = ["allowlist", "blocklist"];
+const PATTERN_MODE_OPTIONS = ["normalized", "wildcard", "regex"];
+const PROCESS_EXPECTATION_OPTIONS = ["present", "missing"];
+const SESSION_MODE_OPTIONS = ["current", "transition"];
+const SESSION_STATE_OPTIONS = ["active", "locked", "disconnected", "idle", "unknown"];
+const SESSION_EVENT_OPTIONS = ["started", "ended", "locked", "unlocked", "rdp_started", "rdp_ended"];
+const INTERFACE_CHANGE_OPTIONS = ["added", "removed", "mac_changed"];
+const DRIVE_CHANGE_OPTIONS = ["added", "removed"];
+const DRIVE_STORAGE_SCOPE_OPTIONS = [
+  { value: "all", label: "All Storage" },
+  { value: "fixed", label: "Fixed Storage" },
+  { value: "removable", label: "Removable Storage" },
+];
+const DRIVE_WATCH_MODE_OPTIONS = [
+  { value: "any", label: "Any Topology Change" },
+  { value: "specific", label: "Specific Drives" },
+];
 
 const PREVIEW_AUTO_SIZE_COLUMNS = ["hostname", "site_name", "state", "status"];
 const TARGET_SEARCH_MIN_CHARS = 3;
@@ -93,6 +120,20 @@ function makeId(prefix) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function normalizeTextList(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+      .filter((item, index, all) => all.findIndex((candidate) => candidate.toLowerCase() === item.toLowerCase()) === index);
+  }
+  return String(value || "")
+    .split(/[\r\n,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((item, index, all) => all.findIndex((candidate) => candidate.toLowerCase() === item.toLowerCase()) === index);
+}
+
 function makeRule(type = "device_offline") {
   if (type === "storage_usage_percent") {
     return { id: makeId("rule"), type, threshold: 90, drive_mode: "all", drive: "" };
@@ -101,7 +142,41 @@ function makeRule(type = "device_offline") {
     return { id: makeId("rule"), type, service_name: "", expected_status: "running" };
   }
   if (type === "agent_role_health") {
-    return { id: makeId("rule"), type, role_name: "", trigger_statuses: ["unhealthy"] };
+    return { id: makeId("rule"), type, role_name: "", trigger_statuses: ["unhealthy"], min_duration_seconds: 0 };
+  }
+  if (type === "cpu_usage_percent" || type === "memory_usage_percent") {
+    return { id: makeId("rule"), type, threshold: 90, duration_seconds: 300 };
+  }
+  if (type === "uptime_above_seconds") {
+    return { id: makeId("rule"), type, threshold_seconds: 2592000 };
+  }
+  if (type === "reboot_detected") {
+    return { id: makeId("rule"), type };
+  }
+  if (type === "service_pending_timeout") {
+    return { id: makeId("rule"), type, service_name: "", pending_action: "", timeout_seconds: 600 };
+  }
+  if (type === "user_session_match") {
+    return { id: makeId("rule"), type, match_mode: "blocklist", pattern_mode: "normalized", patterns: [] };
+  }
+  if (type === "process_presence") {
+    return { id: makeId("rule"), type, process_name: "", expectation: "present" };
+  }
+  if (type === "session_state") {
+    return { id: makeId("rule"), type, session_mode: "current", rdp_only: false, states: ["active"], events: ["started"] };
+  }
+  if (type === "network_interface_change") {
+    return { id: makeId("rule"), type, change_types: ["added", "removed", "mac_changed"] };
+  }
+  if (type === "drive_presence_change") {
+    return {
+      id: makeId("rule"),
+      type,
+      storage_scope: "all",
+      watch_mode: "any",
+      change_types: ["added", "removed"],
+      drive_list: [],
+    };
   }
   if (type === "software_presence_or_version") {
     return {
@@ -349,6 +424,45 @@ function normalizeRules(rules = []) {
     if (next.type === "agent_role_health") {
       next.trigger_statuses = normalizeArray(next.trigger_statuses).map((item) => String(item).toLowerCase());
       if (!next.trigger_statuses.length) next.trigger_statuses = ["unhealthy"];
+      next.min_duration_seconds = Math.max(0, Number(next.min_duration_seconds || 0));
+    }
+    if (next.type === "cpu_usage_percent" || next.type === "memory_usage_percent") {
+      next.threshold = Math.max(1, Math.min(100, Number(next.threshold || 90)));
+      next.duration_seconds = Math.max(0, Number(next.duration_seconds || 300));
+    }
+    if (next.type === "uptime_above_seconds") {
+      next.threshold_seconds = Math.max(60, Number(next.threshold_seconds || 2592000));
+    }
+    if (next.type === "service_pending_timeout") {
+      next.pending_action = String(next.pending_action || "").trim().toLowerCase();
+      next.timeout_seconds = Math.max(0, Number(next.timeout_seconds || 600));
+    }
+    if (next.type === "user_session_match") {
+      next.match_mode = String(next.match_mode || "blocklist").trim().toLowerCase() || "blocklist";
+      next.pattern_mode = String(next.pattern_mode || "normalized").trim().toLowerCase() || "normalized";
+      next.patterns = normalizeTextList(next.patterns);
+    }
+    if (next.type === "process_presence") {
+      next.expectation = String(next.expectation || "present").trim().toLowerCase() || "present";
+    }
+    if (next.type === "session_state") {
+      next.session_mode = String(next.session_mode || "current").trim().toLowerCase() || "current";
+      next.rdp_only = Boolean(next.rdp_only);
+      next.states = normalizeTextList(next.states).map((item) => item.toLowerCase());
+      if (!next.states.length) next.states = ["active"];
+      next.events = normalizeTextList(next.events).map((item) => item.toLowerCase());
+      if (!next.events.length) next.events = ["started"];
+    }
+    if (next.type === "network_interface_change") {
+      next.change_types = normalizeTextList(next.change_types).map((item) => item.toLowerCase());
+      if (!next.change_types.length) next.change_types = [...INTERFACE_CHANGE_OPTIONS];
+    }
+    if (next.type === "drive_presence_change") {
+      next.storage_scope = String(next.storage_scope || "all").trim().toLowerCase() || "all";
+      next.watch_mode = String(next.watch_mode || "any").trim().toLowerCase() || "any";
+      next.change_types = normalizeTextList(next.change_types).map((item) => item.toLowerCase());
+      if (!next.change_types.length) next.change_types = [...DRIVE_CHANGE_OPTIONS];
+      next.drive_list = normalizeTextList(next.drive_list);
     }
     return next;
   });
@@ -603,6 +717,269 @@ function RuleCard({ rule, onChange, onRemove }) {
             onChange={(_event, nextValue) => onChange({ ...rule, trigger_statuses: nextValue })}
             renderInput={(params) => <TextField {...params} label="Trigger Statuses" />}
           />
+          <TextField
+            type="number"
+            label="Minimum Duration (Seconds)"
+            value={rule.min_duration_seconds ?? 0}
+            onChange={(event) =>
+              onChange({ ...rule, min_duration_seconds: Math.max(0, Number(event.target.value || 0)) })
+            }
+            helperText="Wait this long before the role issue triggers an alert."
+          />
+        </Stack>
+      ) : null}
+      {type === "cpu_usage_percent" || type === "memory_usage_percent" ? (
+        <Stack direction={{ xs: "column", md: "row" }} spacing={1.25}>
+          <TextField
+            type="number"
+            label="Threshold (%)"
+            value={rule.threshold ?? 90}
+            onChange={(event) =>
+              onChange({ ...rule, threshold: Math.max(1, Math.min(100, Number(event.target.value || 90))) })
+            }
+            sx={{ flex: 1 }}
+          />
+          <TextField
+            type="number"
+            label="Duration (Seconds)"
+            value={rule.duration_seconds ?? 300}
+            onChange={(event) =>
+              onChange({ ...rule, duration_seconds: Math.max(0, Number(event.target.value || 300)) })
+            }
+            sx={{ flex: 1 }}
+          />
+        </Stack>
+      ) : null}
+      {type === "uptime_above_seconds" ? (
+        <TextField
+          type="number"
+          label="Uptime Threshold (Seconds)"
+          value={rule.threshold_seconds ?? 2592000}
+          onChange={(event) =>
+            onChange({ ...rule, threshold_seconds: Math.max(60, Number(event.target.value || 2592000)) })
+          }
+        />
+      ) : null}
+      {type === "reboot_detected" ? (
+        <Alert severity="info" sx={{ alignItems: "center" }}>
+          Borealis will establish a baseline snapshot first, then alert when the device uptime drops on a later
+          evaluation.
+        </Alert>
+      ) : null}
+      {type === "service_pending_timeout" ? (
+        <Stack spacing={1.25}>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={1.25}>
+            <TextField
+              label="Service Name"
+              value={rule.service_name || ""}
+              onChange={(event) => onChange({ ...rule, service_name: event.target.value })}
+              helperText="Optional. Leave blank to watch any pending service action."
+              sx={{ flex: 1 }}
+            />
+            <TextField
+              select
+              label="Pending Action"
+              value={rule.pending_action || ""}
+              onChange={(event) => onChange({ ...rule, pending_action: event.target.value })}
+              sx={{ width: { xs: "100%", md: 220 } }}
+            >
+              <MenuItem value="">Any Pending Action</MenuItem>
+              <MenuItem value="start">Start</MenuItem>
+              <MenuItem value="stop">Stop</MenuItem>
+              <MenuItem value="restart">Restart</MenuItem>
+            </TextField>
+          </Stack>
+          <TextField
+            type="number"
+            label="Timeout (Seconds)"
+            value={rule.timeout_seconds ?? 600}
+            onChange={(event) =>
+              onChange({ ...rule, timeout_seconds: Math.max(0, Number(event.target.value || 600)) })
+            }
+            sx={{ maxWidth: 240 }}
+          />
+        </Stack>
+      ) : null}
+      {type === "user_session_match" ? (
+        <Stack spacing={1.25}>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={1.25}>
+            <TextField
+              select
+              label="Mode"
+              value={rule.match_mode || "blocklist"}
+              onChange={(event) => onChange({ ...rule, match_mode: event.target.value })}
+              sx={{ flex: 1 }}
+            >
+              {USER_MATCH_MODE_OPTIONS.map((option) => (
+                <MenuItem key={option} value={option}>
+                  {option === "allowlist" ? "Allowlist" : "Blocklist"}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              select
+              label="Pattern Mode"
+              value={rule.pattern_mode || "normalized"}
+              onChange={(event) => onChange({ ...rule, pattern_mode: event.target.value })}
+              sx={{ flex: 1 }}
+            >
+              {PATTERN_MODE_OPTIONS.map((option) => (
+                <MenuItem key={option} value={option}>
+                  {option === "normalized" ? "Normalized" : option === "wildcard" ? "Wildcard" : "Regex"}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Stack>
+          <TextField
+            label="User Patterns"
+            value={normalizeTextList(rule.patterns).join("\n")}
+            onChange={(event) => onChange({ ...rule, patterns: normalizeTextList(event.target.value) })}
+            multiline
+            minRows={3}
+            helperText="Enter one pattern per line. Normalized mode expands usernames like alice into common domain forms."
+          />
+        </Stack>
+      ) : null}
+      {type === "process_presence" ? (
+        <Stack direction={{ xs: "column", md: "row" }} spacing={1.25}>
+          <TextField
+            label="Executable Name"
+            value={rule.process_name || ""}
+            onChange={(event) => onChange({ ...rule, process_name: event.target.value })}
+            helperText="Examples: explorer.exe, python.exe"
+            sx={{ flex: 1 }}
+          />
+          <TextField
+            select
+            label="Expectation"
+            value={rule.expectation || "present"}
+            onChange={(event) => onChange({ ...rule, expectation: event.target.value })}
+            sx={{ width: { xs: "100%", md: 200 } }}
+          >
+            {PROCESS_EXPECTATION_OPTIONS.map((option) => (
+              <MenuItem key={option} value={option}>
+                {option === "present" ? "Must Be Running" : "Must Be Missing"}
+              </MenuItem>
+            ))}
+          </TextField>
+        </Stack>
+      ) : null}
+      {type === "session_state" ? (
+        <Stack spacing={1.25}>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={1.25}>
+            <TextField
+              select
+              label="Session Mode"
+              value={rule.session_mode || "current"}
+              onChange={(event) => {
+                const nextMode = event.target.value;
+                const normalizedStates = normalizeTextList(rule.states);
+                const normalizedEvents = normalizeTextList(rule.events);
+                onChange({
+                  ...rule,
+                  session_mode: nextMode,
+                  states: nextMode === "current" ? (normalizedStates.length ? normalizedStates : ["active"]) : normalizedStates,
+                  events: nextMode === "transition" ? (normalizedEvents.length ? normalizedEvents : ["started"]) : normalizedEvents,
+                });
+              }}
+              sx={{ flex: 1 }}
+            >
+              {SESSION_MODE_OPTIONS.map((option) => (
+                <MenuItem key={option} value={option}>
+                  {option === "current" ? "Current Session State" : "Session Transition"}
+                </MenuItem>
+              ))}
+            </TextField>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={Boolean(rule.rdp_only)}
+                  onChange={(event) => onChange({ ...rule, rdp_only: event.target.checked })}
+                />
+              }
+              label="RDP Only"
+              sx={{ alignSelf: "center", ml: 0.25 }}
+            />
+          </Stack>
+          {String(rule.session_mode || "current") === "current" ? (
+            <Autocomplete
+              multiple
+              options={SESSION_STATE_OPTIONS}
+              value={normalizeTextList(rule.states)}
+              onChange={(_event, nextValue) => onChange({ ...rule, states: nextValue })}
+              renderInput={(params) => <TextField {...params} label="Trigger States" />}
+            />
+          ) : (
+            <Autocomplete
+              multiple
+              options={SESSION_EVENT_OPTIONS}
+              value={normalizeTextList(rule.events)}
+              onChange={(_event, nextValue) => onChange({ ...rule, events: nextValue })}
+              renderInput={(params) => <TextField {...params} label="Trigger Events" />}
+            />
+          )}
+        </Stack>
+      ) : null}
+      {type === "network_interface_change" ? (
+        <Autocomplete
+          multiple
+          options={INTERFACE_CHANGE_OPTIONS}
+          value={normalizeTextList(rule.change_types)}
+          onChange={(_event, nextValue) => onChange({ ...rule, change_types: nextValue })}
+          renderInput={(params) => <TextField {...params} label="Change Types" />}
+        />
+      ) : null}
+      {type === "drive_presence_change" ? (
+        <Stack spacing={1.25}>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={1.25}>
+            <TextField
+              select
+              label="Storage Scope"
+              value={rule.storage_scope || "all"}
+              onChange={(event) => onChange({ ...rule, storage_scope: event.target.value })}
+              sx={{ flex: 1 }}
+            >
+              {DRIVE_STORAGE_SCOPE_OPTIONS.map((option) => (
+                <MenuItem key={option.value} value={option.value}>
+                  {option.label}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              select
+              label="Watch Mode"
+              value={rule.watch_mode || "any"}
+              onChange={(event) => onChange({ ...rule, watch_mode: event.target.value })}
+              sx={{ flex: 1 }}
+            >
+              {DRIVE_WATCH_MODE_OPTIONS.map((option) => (
+                <MenuItem key={option.value} value={option.value}>
+                  {option.label}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Stack>
+          <Autocomplete
+            multiple
+            options={DRIVE_CHANGE_OPTIONS}
+            value={normalizeTextList(rule.change_types)}
+            onChange={(_event, nextValue) => onChange({ ...rule, change_types: nextValue })}
+            renderInput={(params) => <TextField {...params} label="Change Types" />}
+          />
+          {String(rule.watch_mode || "any") === "specific" ? (
+            <TextField
+              label="Expected Drives"
+              value={normalizeTextList(rule.drive_list).join("\n")}
+              onChange={(event) => onChange({ ...rule, drive_list: normalizeTextList(event.target.value) })}
+              multiline
+              minRows={3}
+              helperText="Enter one drive per line, like C:, D:, /mnt/backup, or E: for removable media."
+            />
+          ) : (
+            <Alert severity="info" sx={{ alignItems: "center" }}>
+              Borealis will establish a baseline snapshot first, then alert when drives are added or removed.
+            </Alert>
+          )}
         </Stack>
       ) : null}
       {type === "software_presence_or_version" ? (

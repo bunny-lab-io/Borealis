@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import base64
+import fnmatch
 import json
 import logging
 import os
@@ -34,6 +35,8 @@ from ..assemblies.execution import (
     prepare_variable_context,
 )
 from ..devices.agent_role_health import normalize_agent_role_health
+from ..devices.process_inventory import normalize_device_processes
+from ..devices.session_inventory import normalize_device_sessions
 from ..devices.service_inventory import (
     mark_service_control_pending,
     normalize_device_services,
@@ -53,6 +56,16 @@ VALID_WATCHDOG_RULE_TYPES = {
     "agent_role_health",
     "software_presence_or_version",
     "agent_version_status",
+    "cpu_usage_percent",
+    "memory_usage_percent",
+    "uptime_above_seconds",
+    "reboot_detected",
+    "service_pending_timeout",
+    "user_session_match",
+    "process_presence",
+    "session_state",
+    "network_interface_change",
+    "drive_presence_change",
 }
 VALID_WATCHDOG_ACTION_TYPES = {"notification", "service_control", "assembly", "do_nothing"}
 VALID_INCIDENT_STATES = {"open", "suppressed", "resolved"}
@@ -61,8 +74,18 @@ VALID_DEVICE_OVERRIDE_STATES = {"suppressed", "disabled"}
 VALID_AGENT_VERSION_STATES = {"Up-to-Date", "Needs Updated"}
 VALID_RULE_STATUSES = {"healthy", "recovering", "unhealthy", "pending", "unsupported", "unknown"}
 VALID_SERVICE_EXPECTED_STATUSES = {"running", "stopped"}
+VALID_SERVICE_PENDING_ACTIONS = {"", "start", "stop", "restart"}
 VALID_SCRIPT_RUN_MODES = {"system", "currentuser"}
 VALID_STORAGE_DRIVE_MODES = {"all", "specific"}
+VALID_USER_MATCH_MODES = {"allowlist", "blocklist"}
+VALID_PATTERN_MODES = {"normalized", "wildcard", "regex"}
+VALID_PROCESS_EXPECTATIONS = {"present", "missing"}
+VALID_SESSION_RULE_MODES = {"current", "transition"}
+VALID_SESSION_STATES = {"active", "locked", "disconnected", "idle", "unknown"}
+VALID_SESSION_TRANSITIONS = {"started", "ended", "locked", "unlocked", "rdp_started", "rdp_ended"}
+VALID_INTERFACE_CHANGE_TYPES = {"added", "removed", "mac_changed"}
+VALID_DRIVE_STORAGE_SCOPES = {"all", "fixed", "removable"}
+VALID_DRIVE_WATCH_MODES = {"any", "specific"}
 
 DEFAULT_WATCHDOG_CRITERIA = {"rules": [], "match_mode": "all"}
 DEFAULT_WATCHDOG_ACTIONS = {"actions": []}
@@ -74,6 +97,10 @@ DEFAULT_WATCHDOG_BOOT_GRACE_SECONDS = 0
 DEFAULT_DEVICE_OFFLINE_SECONDS = 300
 DEFAULT_TELEMETRY_STALE_SECONDS = 900
 DEFAULT_DEVICE_SNAPSHOT_CACHE_SECONDS = 15
+DEFAULT_RESOURCE_THRESHOLD_PERCENT = 90.0
+DEFAULT_RESOURCE_DURATION_SECONDS = 300
+DEFAULT_UPTIME_THRESHOLD_SECONDS = 2_592_000
+DEFAULT_SERVICE_PENDING_TIMEOUT_SECONDS = 600
 MAX_RULES_PER_WATCHDOG = 24
 EVALUATION_LOOP_INTERVAL_SECONDS = 30
 ENGINE_LOCAL_ALIAS = "borealis-engine-01"
@@ -317,6 +344,183 @@ def _normalize_storage_drive_key(value: Any) -> str:
     return text
 
 
+def _normalize_string_list(raw: Any) -> List[str]:
+    if isinstance(raw, list):
+        values = raw
+    elif raw in (None, ""):
+        values = []
+    else:
+        values = re.split(r"[\r\n,]+", str(raw))
+    results: List[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = _clean_single_line(item)
+        lowered = text.lower()
+        if not text or lowered in seen:
+            continue
+        seen.add(lowered)
+        results.append(text)
+    return results
+
+
+def _normalize_choice_list(raw: Any, *, valid_values: set[str], default_values: Sequence[str]) -> List[str]:
+    values = _normalize_string_list(raw if raw is not None else list(default_values))
+    normalized: List[str] = []
+    for item in values:
+        lowered = item.lower()
+        if lowered in valid_values and lowered not in normalized:
+            normalized.append(lowered)
+    if normalized:
+        return normalized
+    return [item for item in default_values if item in valid_values]
+
+
+def _normalize_process_name_for_match(value: Any) -> str:
+    text = _clean_text(value).lower()
+    if not text:
+        return ""
+    return text[:-4] if text.endswith(".exe") else text
+
+
+def _heartbeat_metrics_stale(device: Mapping[str, Any], now_ts: int) -> bool:
+    last_seen = _coerce_int(device.get("last_seen"), 0)
+    return last_seen <= 0 or (now_ts - last_seen) > DEFAULT_TELEMETRY_STALE_SECONDS
+
+
+def _process_inventory_stale(payload: Mapping[str, Any], now_ts: int) -> bool:
+    reported_at = _coerce_int(payload.get("reported_at"), 0)
+    return reported_at <= 0 or (now_ts - reported_at) > DEFAULT_TELEMETRY_STALE_SECONDS
+
+
+def _session_inventory_stale(payload: Mapping[str, Any], now_ts: int) -> bool:
+    reported_at = _coerce_int(payload.get("reported_at"), 0)
+    return reported_at <= 0 or (now_ts - reported_at) > DEFAULT_TELEMETRY_STALE_SECONDS
+
+
+def _normalize_username_aliases(raw_user: Any, *, device_domain: str = "") -> set[str]:
+    text = _clean_text(raw_user).lower()
+    if not text or text == "no users logged in":
+        return set()
+    aliases = {text}
+    domain_text = _clean_text(device_domain).lower()
+    domain_short = domain_text.split(".", 1)[0] if domain_text else ""
+    user_only = text
+    observed_domain = ""
+    if "\\" in text:
+        observed_domain, user_only = text.split("\\", 1)
+    elif "@" in text:
+        user_only, observed_domain = text.split("@", 1)
+    user_only = user_only.strip()
+    if user_only:
+        aliases.add(user_only)
+        if observed_domain:
+            observed_short = observed_domain.split(".", 1)[0]
+            aliases.add(f"{observed_short}\\{user_only}")
+            aliases.add(f"{user_only}@{observed_domain}")
+        if domain_short:
+            aliases.add(f"{domain_short}\\{user_only}")
+        if domain_text:
+            aliases.add(f"{user_only}@{domain_text}")
+    return {alias for alias in aliases if alias}
+
+
+def _user_matches_pattern(pattern: str, alias_set: set[str], *, pattern_mode: str, device_domain: str = "") -> bool:
+    if not pattern or not alias_set:
+        return False
+    normalized_pattern = _clean_text(pattern)
+    if not normalized_pattern:
+        return False
+    if pattern_mode == "regex":
+        try:
+            regex = re.compile(normalized_pattern, re.IGNORECASE)
+        except re.error:
+            return False
+        return any(bool(regex.search(alias)) for alias in alias_set)
+    if pattern_mode == "wildcard":
+        lowered = normalized_pattern.lower()
+        return any(fnmatch.fnmatch(alias, lowered) for alias in alias_set)
+    pattern_aliases = _normalize_username_aliases(normalized_pattern, device_domain=device_domain)
+    return bool(pattern_aliases.intersection(alias_set))
+
+
+def _normalize_network_entries(raw: Any) -> List[Dict[str, Any]]:
+    entries = raw if isinstance(raw, list) else []
+    rows: List[Dict[str, Any]] = []
+    for index, item in enumerate(entries):
+        if not isinstance(item, dict):
+            continue
+        adapter = _clean_text(item.get("adapter") or item.get("name") or item.get("interface"))
+        mac = _clean_text(item.get("mac")).lower()
+        ips = []
+        for ip in item.get("ips") or []:
+            if _clean_text(ip):
+                ips.append(_clean_text(ip))
+        rows.append(
+            {
+                "id": f"{adapter.lower() or 'adapter'}-{index}",
+                "adapter": adapter or f"Adapter {index + 1}",
+                "adapter_key": (adapter or f"adapter-{index + 1}").lower(),
+                "mac": mac,
+                "ips": ips,
+            }
+        )
+    return rows
+
+
+def _storage_entry_in_scope(entry: Mapping[str, Any], storage_scope: str) -> bool:
+    if storage_scope == "all":
+        return True
+    disk_type = _clean_text(entry.get("disk_type")).lower()
+    is_removable = "removable" in disk_type or "usb" in disk_type
+    if storage_scope == "removable":
+        return is_removable
+    if storage_scope == "fixed":
+        return not is_removable
+    return True
+
+
+def _normalize_rule_state_lookup(prior_state: Mapping[str, Any], rule_id: Any) -> Dict[str, Any]:
+    if not isinstance(prior_state, dict):
+        return {}
+    last_sample = prior_state.get("last_sample")
+    if not isinstance(last_sample, dict):
+        return {}
+    results = last_sample.get("results")
+    if not isinstance(results, list):
+        return {}
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        if _clean_text(result.get("rule_id")) == _clean_text(rule_id):
+            return result
+    return {}
+
+
+def _prior_rule_sample(prior_result: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(prior_result, Mapping):
+        return {}
+    sample = prior_result.get("sample")
+    return dict(sample) if isinstance(sample, Mapping) else {}
+
+
+def _normalize_session_identity(entry: Mapping[str, Any]) -> str:
+    session_id = _coerce_int(entry.get("session_id"), 0)
+    username = _clean_text(entry.get("username")).lower()
+    session_name = _clean_text(entry.get("session_name")).lower()
+    protocol = _clean_text(entry.get("protocol")).lower()
+    if session_id > 0:
+        return f"id:{session_id}"
+    return f"{username}|{session_name}|{protocol}"
+
+
+def _describe_session(entry: Mapping[str, Any]) -> str:
+    username = _clean_text(entry.get("username")) or "Unknown User"
+    session_name = _clean_text(entry.get("session_name"))
+    if session_name:
+        return f"{username} ({session_name})"
+    return username
+
+
 def _normalize_rule(index: int, raw_rule: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(raw_rule, dict):
         return None
@@ -348,16 +552,113 @@ def _normalize_rule(index: int, raw_rule: Any) -> Optional[Dict[str, Any]]:
         base["expected_status"] = expected_status
         return base
     if rule_type == "agent_role_health":
-        statuses_raw = raw_rule.get("trigger_statuses") or raw_rule.get("statuses") or ["unhealthy"]
-        statuses = []
-        for item in statuses_raw if isinstance(statuses_raw, list) else [statuses_raw]:
-            normalized = _clean_text(item).lower()
-            if normalized in VALID_RULE_STATUSES and normalized not in statuses:
-                statuses.append(normalized)
-        if not statuses:
-            statuses = ["unhealthy"]
+        statuses = _normalize_choice_list(
+            raw_rule.get("trigger_statuses") or raw_rule.get("statuses") or ["unhealthy"],
+            valid_values=VALID_RULE_STATUSES,
+            default_values=["unhealthy"],
+        )
         base["role_name"] = _clean_single_line(raw_rule.get("role_name") or raw_rule.get("role"))
         base["trigger_statuses"] = statuses
+        base["min_duration_seconds"] = max(0, _coerce_int(raw_rule.get("min_duration_seconds"), 0))
+        return base
+    if rule_type == "cpu_usage_percent":
+        threshold = _coerce_float(raw_rule.get("threshold"))
+        base["threshold"] = DEFAULT_RESOURCE_THRESHOLD_PERCENT if threshold is None else max(1.0, min(100.0, threshold))
+        base["duration_seconds"] = max(
+            0,
+            _coerce_int(raw_rule.get("duration_seconds"), DEFAULT_RESOURCE_DURATION_SECONDS),
+        )
+        return base
+    if rule_type == "memory_usage_percent":
+        threshold = _coerce_float(raw_rule.get("threshold"))
+        base["threshold"] = DEFAULT_RESOURCE_THRESHOLD_PERCENT if threshold is None else max(1.0, min(100.0, threshold))
+        base["duration_seconds"] = max(
+            0,
+            _coerce_int(raw_rule.get("duration_seconds"), DEFAULT_RESOURCE_DURATION_SECONDS),
+        )
+        return base
+    if rule_type == "uptime_above_seconds":
+        base["threshold_seconds"] = max(
+            60,
+            _coerce_int(raw_rule.get("threshold_seconds"), DEFAULT_UPTIME_THRESHOLD_SECONDS),
+        )
+        return base
+    if rule_type == "reboot_detected":
+        return base
+    if rule_type == "service_pending_timeout":
+        action_filter = _clean_text(raw_rule.get("pending_action") or raw_rule.get("action_filter")).lower()
+        if action_filter not in VALID_SERVICE_PENDING_ACTIONS:
+            action_filter = ""
+        base["service_name"] = _clean_single_line(raw_rule.get("service_name") or raw_rule.get("name"))
+        base["pending_action"] = action_filter
+        base["timeout_seconds"] = max(
+            0,
+            _coerce_int(raw_rule.get("timeout_seconds"), DEFAULT_SERVICE_PENDING_TIMEOUT_SECONDS),
+        )
+        return base
+    if rule_type == "user_session_match":
+        patterns = _normalize_string_list(raw_rule.get("patterns") or raw_rule.get("user_patterns"))
+        if not patterns:
+            return None
+        match_mode = _clean_text(raw_rule.get("match_mode") or raw_rule.get("mode") or "blocklist").lower()
+        if match_mode not in VALID_USER_MATCH_MODES:
+            match_mode = "blocklist"
+        pattern_mode = _clean_text(raw_rule.get("pattern_mode") or "normalized").lower()
+        if pattern_mode not in VALID_PATTERN_MODES:
+            pattern_mode = "normalized"
+        base["match_mode"] = match_mode
+        base["pattern_mode"] = pattern_mode
+        base["patterns"] = patterns
+        return base
+    if rule_type == "process_presence":
+        process_name = _clean_single_line(raw_rule.get("process_name") or raw_rule.get("name"))
+        if not process_name:
+            return None
+        expectation = _clean_text(raw_rule.get("expectation") or raw_rule.get("presence") or "present").lower()
+        if expectation not in VALID_PROCESS_EXPECTATIONS:
+            expectation = "present"
+        base["process_name"] = process_name
+        base["expectation"] = expectation
+        return base
+    if rule_type == "session_state":
+        session_mode = _clean_text(raw_rule.get("session_mode") or raw_rule.get("mode") or "current").lower()
+        if session_mode not in VALID_SESSION_RULE_MODES:
+            session_mode = "current"
+        base["session_mode"] = session_mode
+        base["rdp_only"] = _coerce_bool(raw_rule.get("rdp_only"), False)
+        base["states"] = _normalize_choice_list(
+            raw_rule.get("states") or raw_rule.get("trigger_states") or ["active"],
+            valid_values=VALID_SESSION_STATES,
+            default_values=["active"],
+        )
+        base["events"] = _normalize_choice_list(
+            raw_rule.get("events") or raw_rule.get("trigger_events") or ["started"],
+            valid_values=VALID_SESSION_TRANSITIONS,
+            default_values=["started"],
+        )
+        return base
+    if rule_type == "network_interface_change":
+        base["change_types"] = _normalize_choice_list(
+            raw_rule.get("change_types") or ["added", "removed", "mac_changed"],
+            valid_values=VALID_INTERFACE_CHANGE_TYPES,
+            default_values=["added", "removed", "mac_changed"],
+        )
+        return base
+    if rule_type == "drive_presence_change":
+        storage_scope = _clean_text(raw_rule.get("storage_scope") or "all").lower()
+        if storage_scope not in VALID_DRIVE_STORAGE_SCOPES:
+            storage_scope = "all"
+        watch_mode = _clean_text(raw_rule.get("watch_mode") or "any").lower()
+        if watch_mode not in VALID_DRIVE_WATCH_MODES:
+            watch_mode = "any"
+        base["storage_scope"] = storage_scope
+        base["watch_mode"] = watch_mode
+        base["change_types"] = _normalize_choice_list(
+            raw_rule.get("change_types") or ["added", "removed"],
+            valid_values={"added", "removed"},
+            default_values=["added", "removed"],
+        )
+        base["drive_list"] = _normalize_string_list(raw_rule.get("drive_list") or raw_rule.get("drives"))
         return base
     if rule_type == "software_presence_or_version":
         software_name = _clean_single_line(raw_rule.get("software_name") or raw_rule.get("name"))
@@ -447,7 +748,50 @@ def summarize_rule(rule: Mapping[str, Any]) -> str:
     if rule_type == "agent_role_health":
         role_name = _clean_text(rule.get("role_name")) or "Any role"
         statuses = ", ".join(rule.get("trigger_statuses") or ["unhealthy"])
+        min_duration = _coerce_int(rule.get("min_duration_seconds"), 0)
+        if min_duration > 0:
+            return f"{role_name} health enters {statuses} for at least {max(1, min_duration // 60)} minute(s)"
         return f"{role_name} health enters {statuses}"
+    if rule_type == "cpu_usage_percent":
+        return (
+            f"CPU usage at or above {int(_coerce_float(rule.get('threshold')) or DEFAULT_RESOURCE_THRESHOLD_PERCENT)}% "
+            f"for {max(0, _coerce_int(rule.get('duration_seconds'), DEFAULT_RESOURCE_DURATION_SECONDS))} second(s)"
+        )
+    if rule_type == "memory_usage_percent":
+        return (
+            f"Memory usage at or above {int(_coerce_float(rule.get('threshold')) or DEFAULT_RESOURCE_THRESHOLD_PERCENT)}% "
+            f"for {max(0, _coerce_int(rule.get('duration_seconds'), DEFAULT_RESOURCE_DURATION_SECONDS))} second(s)"
+        )
+    if rule_type == "uptime_above_seconds":
+        return f"Device uptime above {max(60, _coerce_int(rule.get('threshold_seconds'), DEFAULT_UPTIME_THRESHOLD_SECONDS))} second(s)"
+    if rule_type == "reboot_detected":
+        return "Device reboot detected"
+    if rule_type == "service_pending_timeout":
+        service_name = _clean_text(rule.get("service_name")) or "Any service"
+        action = _clean_text(rule.get("pending_action"))
+        timeout_seconds = max(0, _coerce_int(rule.get("timeout_seconds"), DEFAULT_SERVICE_PENDING_TIMEOUT_SECONDS))
+        if action:
+            return f"{service_name} pending {action} for at least {timeout_seconds} second(s)"
+        return f"{service_name} pending action for at least {timeout_seconds} second(s)"
+    if rule_type == "user_session_match":
+        mode = _clean_text(rule.get("match_mode") or "blocklist")
+        pattern_mode = _clean_text(rule.get("pattern_mode") or "normalized")
+        return f"Logged-in user {mode} match ({pattern_mode})"
+    if rule_type == "process_presence":
+        expectation = _clean_text(rule.get("expectation") or "present")
+        if expectation == "missing":
+            return f"Process {_clean_text(rule.get('process_name'))} missing"
+        return f"Process {_clean_text(rule.get('process_name'))} present"
+    if rule_type == "session_state":
+        session_mode = _clean_text(rule.get("session_mode") or "current")
+        if session_mode == "transition":
+            return "Session transition detected"
+        return "Session state detected"
+    if rule_type == "network_interface_change":
+        return "Network interface topology changed"
+    if rule_type == "drive_presence_change":
+        storage_scope = _clean_text(rule.get("storage_scope") or "all")
+        return f"{storage_scope.capitalize()} storage topology changed"
     if rule_type == "software_presence_or_version":
         software_name = _clean_text(rule.get("software_name")) or "Software"
         version_operator = _clean_text(rule.get("version_operator"))
@@ -615,7 +959,21 @@ class WatchdogRuntimeService:
             cur = conn.cursor()
             cur.execute(
                 """
-                SELECT guid, hostname, services, agent_role_health, last_seen, uptime, agent_hash, connection_type, connection_endpoint, agent_id
+                SELECT
+                    guid,
+                    hostname,
+                    services,
+                    agent_role_health,
+                    last_seen,
+                    uptime,
+                    agent_hash,
+                    connection_type,
+                    connection_endpoint,
+                    agent_id,
+                    sessions,
+                    processes,
+                    cpu_percent,
+                    memory_percent
                   FROM devices
                 """
             )
@@ -633,6 +991,8 @@ class WatchdogRuntimeService:
             role_health_payload = normalize_agent_role_health(row[3])
             installed_hash = _clean_text(row[6]).lower()
             agent_version_status = "Up-to-Date" if installed_hash and repo_hash and installed_hash == repo_hash else "Needs Updated"
+            sessions_payload = normalize_device_sessions(row[10], default_reported_at=_coerce_int(row[4], 0))
+            processes_payload = normalize_device_processes(row[11], default_reported_at=_coerce_int(row[4], 0))
             device["services_payload"] = services_payload
             device["services"] = services_payload.get("services") or []
             device["agent_role_health_payload"] = role_health_payload
@@ -643,6 +1003,12 @@ class WatchdogRuntimeService:
             device["connection_type"] = _clean_text(row[7]).lower() or _clean_text(device.get("connection_type")).lower()
             device["connection_endpoint"] = _clean_text(row[8]) or _clean_text(device.get("connection_endpoint"))
             device["agent_id"] = _clean_text(row[9]) or _clean_text(device.get("agent_id"))
+            device["sessions_payload"] = sessions_payload
+            device["sessions"] = sessions_payload.get("sessions") or []
+            device["processes_payload"] = processes_payload
+            device["processes"] = processes_payload.get("processes") or []
+            device["cpu_percent"] = _coerce_float(row[12])
+            device["memory_percent"] = _coerce_float(row[13])
         return devices
 
     def _get_watchdog_device_snapshot(self, *, force_refresh: bool = False) -> List[Dict[str, Any]]:
@@ -1017,6 +1383,10 @@ class WatchdogRuntimeService:
                 drive_mode = _normalize_storage_drive_mode(rule.get("drive_mode"), rule.get("drive"))
                 if drive_mode == "specific" and not _clean_text(rule.get("drive")):
                     errors.append("Storage usage rules using Specific Drive must include a drive letter or mount path.")
+            if _clean_text(rule.get("type")).lower() == "drive_presence_change":
+                watch_mode = _clean_text(rule.get("watch_mode") or "any").lower()
+                if watch_mode == "specific" and not _normalize_string_list(rule.get("drive_list")):
+                    errors.append("Drive presence rules using Specific Drives must include at least one expected drive.")
         targets = record.get("targets") if isinstance(record.get("targets"), list) else []
         if not targets:
             errors.append("At least one target device or filter is required.")
@@ -1542,7 +1912,14 @@ class WatchdogRuntimeService:
         reported_at = _coerce_int(payload.get("reported_at"), 0)
         return reported_at <= 0 or (now_ts - reported_at) > DEFAULT_TELEMETRY_STALE_SECONDS
 
-    def _evaluate_rule(self, rule: Mapping[str, Any], device: Mapping[str, Any], *, now_ts: int) -> Dict[str, Any]:
+    def _evaluate_rule(
+        self,
+        rule: Mapping[str, Any],
+        device: Mapping[str, Any],
+        *,
+        now_ts: int,
+        prior_result: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
         rule_type = _clean_text(rule.get("type")).lower()
         if rule_type == "device_offline":
             offline_after_seconds = _coerce_int(rule.get("offline_after_seconds"), DEFAULT_DEVICE_OFFLINE_SECONDS)
@@ -1716,40 +2093,734 @@ class WatchdogRuntimeService:
                 }
             role_name = _clean_text(rule.get("role_name")).lower()
             trigger_statuses = {str(item).lower() for item in (rule.get("trigger_statuses") or ["unhealthy"])}
-            matched_role = None
             roles = role_payload.get("roles") if isinstance(role_payload.get("roles"), list) else []
+            matched_role = None
+            fallback_role = None
             for entry in roles:
                 candidate_name = _clean_text(entry.get("role_name")).lower()
                 candidate_label = _clean_text(entry.get("role_label")).lower()
-                if not role_name or role_name in {candidate_name, candidate_label}:
+                if role_name and role_name not in {candidate_name, candidate_label}:
+                    continue
+                if fallback_role is None:
+                    fallback_role = entry
+                if _clean_text(entry.get("status_code")).lower() in trigger_statuses:
                     matched_role = entry
                     break
             if matched_role is None:
+                matched_role = fallback_role
+            min_duration_seconds = max(0, _coerce_int(rule.get("min_duration_seconds"), 0))
+            prior_sample = _prior_rule_sample(prior_result)
+            if matched_role is None:
+                tracked_role_name = _clean_text(rule.get("role_name")) or "role"
+                status_code = "missing"
+                active = True
+                detail = ""
+            else:
+                tracked_role_name = _clean_text(matched_role.get("role_name") or matched_role.get("role_label")) or "role"
+                status_code = _clean_text(matched_role.get("status_code")).lower() or "unknown"
+                active = status_code in trigger_statuses
+                detail = _clean_text(matched_role.get("detail"))
+            previous_started_at = _coerce_optional_int(prior_sample.get("active_started_at"))
+            previous_active = _coerce_bool(prior_sample.get("active"), False)
+            previous_role = _clean_text(prior_sample.get("tracked_role_name")).lower()
+            if active:
+                if previous_active and previous_started_at and previous_role == tracked_role_name.lower():
+                    active_started_at = previous_started_at
+                else:
+                    active_started_at = now_ts
+                active_duration_seconds = max(0, now_ts - int(active_started_at))
+            else:
+                active_started_at = None
+                active_duration_seconds = 0
+            matched = active and (min_duration_seconds <= 0 or active_duration_seconds >= min_duration_seconds)
+            if matched_role is None:
+                summary = f"Role {_clean_text(rule.get('role_name')) or 'target role'} is not reporting health telemetry"
                 return {
                     "rule_id": rule.get("id"),
                     "type": rule_type,
-                    "matched": True,
+                    "matched": matched,
                     "stale": False,
-                    "summary": f"Role {_clean_text(rule.get('role_name')) or 'target role'} is not reporting health telemetry",
+                    "summary": summary,
                     "sample": {
                         "role_name": _clean_text(rule.get("role_name")),
+                        "tracked_role_name": tracked_role_name,
                         "status_code": "missing",
                         "trigger_statuses": sorted(trigger_statuses),
+                        "active": active,
+                        "active_started_at": active_started_at,
+                        "active_duration_seconds": active_duration_seconds,
+                        "min_duration_seconds": min_duration_seconds,
                     },
                 }
-            status_code = _clean_text(matched_role.get("status_code")).lower() or "unknown"
+            if min_duration_seconds > 0 and active and not matched:
+                summary = (
+                    f"{matched_role.get('role_label') or matched_role.get('role_name')} health is {status_code} "
+                    f"for {active_duration_seconds} second(s)"
+                )
+            else:
+                summary = f"{matched_role.get('role_label') or matched_role.get('role_name') if matched_role else tracked_role_name} health is {status_code}"
             return {
                 "rule_id": rule.get("id"),
                 "type": rule_type,
-                "matched": status_code in trigger_statuses,
+                "matched": matched,
                 "stale": False,
-                "summary": f"{matched_role.get('role_label') or matched_role.get('role_name')} health is {status_code}",
+                "summary": summary,
                 "sample": {
                     "role_name": matched_role.get("role_name"),
                     "role_label": matched_role.get("role_label"),
+                    "tracked_role_name": tracked_role_name,
                     "status_code": status_code,
                     "trigger_statuses": sorted(trigger_statuses),
-                    "detail": _clean_text(matched_role.get("detail")),
+                    "detail": detail,
+                    "active": active,
+                    "active_started_at": active_started_at,
+                    "active_duration_seconds": active_duration_seconds,
+                    "min_duration_seconds": min_duration_seconds,
+                },
+            }
+        if rule_type == "cpu_usage_percent":
+            cpu_percent = _coerce_float(device.get("cpu_percent"))
+            if cpu_percent is None or _heartbeat_metrics_stale(device, now_ts):
+                return {
+                    "rule_id": rule.get("id"),
+                    "type": rule_type,
+                    "matched": False,
+                    "stale": True,
+                    "summary": "CPU telemetry is stale",
+                    "sample": {},
+                }
+            threshold = float(_coerce_float(rule.get("threshold")) or DEFAULT_RESOURCE_THRESHOLD_PERCENT)
+            duration_seconds = max(0, _coerce_int(rule.get("duration_seconds"), DEFAULT_RESOURCE_DURATION_SECONDS))
+            prior_sample = _prior_rule_sample(prior_result)
+            over_threshold = cpu_percent >= threshold
+            previous_started_at = _coerce_optional_int(prior_sample.get("threshold_started_at"))
+            previous_over_threshold = _coerce_bool(prior_sample.get("over_threshold"), False)
+            if over_threshold:
+                threshold_started_at = previous_started_at if previous_over_threshold and previous_started_at else now_ts
+                elapsed_seconds = max(0, now_ts - int(threshold_started_at))
+            else:
+                threshold_started_at = None
+                elapsed_seconds = 0
+            matched = over_threshold and (duration_seconds <= 0 or elapsed_seconds >= duration_seconds)
+            if matched:
+                summary = f"CPU usage is {cpu_percent:.1f}% (threshold {threshold:.1f}%)"
+            elif over_threshold:
+                summary = (
+                    f"CPU usage is {cpu_percent:.1f}% and has been above {threshold:.1f}% "
+                    f"for {elapsed_seconds} second(s)"
+                )
+            else:
+                summary = f"CPU usage is {cpu_percent:.1f}% (threshold {threshold:.1f}%)"
+            return {
+                "rule_id": rule.get("id"),
+                "type": rule_type,
+                "matched": matched,
+                "stale": False,
+                "summary": summary,
+                "sample": {
+                    "usage_percent": round(cpu_percent, 2),
+                    "threshold": round(threshold, 2),
+                    "duration_seconds": duration_seconds,
+                    "over_threshold": over_threshold,
+                    "threshold_started_at": threshold_started_at,
+                    "elapsed_seconds": elapsed_seconds,
+                },
+            }
+        if rule_type == "memory_usage_percent":
+            memory_percent = _coerce_float(device.get("memory_percent"))
+            if memory_percent is None or _heartbeat_metrics_stale(device, now_ts):
+                return {
+                    "rule_id": rule.get("id"),
+                    "type": rule_type,
+                    "matched": False,
+                    "stale": True,
+                    "summary": "Memory telemetry is stale",
+                    "sample": {},
+                }
+            threshold = float(_coerce_float(rule.get("threshold")) or DEFAULT_RESOURCE_THRESHOLD_PERCENT)
+            duration_seconds = max(0, _coerce_int(rule.get("duration_seconds"), DEFAULT_RESOURCE_DURATION_SECONDS))
+            prior_sample = _prior_rule_sample(prior_result)
+            over_threshold = memory_percent >= threshold
+            previous_started_at = _coerce_optional_int(prior_sample.get("threshold_started_at"))
+            previous_over_threshold = _coerce_bool(prior_sample.get("over_threshold"), False)
+            if over_threshold:
+                threshold_started_at = previous_started_at if previous_over_threshold and previous_started_at else now_ts
+                elapsed_seconds = max(0, now_ts - int(threshold_started_at))
+            else:
+                threshold_started_at = None
+                elapsed_seconds = 0
+            matched = over_threshold and (duration_seconds <= 0 or elapsed_seconds >= duration_seconds)
+            if matched:
+                summary = f"Memory usage is {memory_percent:.1f}% (threshold {threshold:.1f}%)"
+            elif over_threshold:
+                summary = (
+                    f"Memory usage is {memory_percent:.1f}% and has been above {threshold:.1f}% "
+                    f"for {elapsed_seconds} second(s)"
+                )
+            else:
+                summary = f"Memory usage is {memory_percent:.1f}% (threshold {threshold:.1f}%)"
+            return {
+                "rule_id": rule.get("id"),
+                "type": rule_type,
+                "matched": matched,
+                "stale": False,
+                "summary": summary,
+                "sample": {
+                    "usage_percent": round(memory_percent, 2),
+                    "threshold": round(threshold, 2),
+                    "duration_seconds": duration_seconds,
+                    "over_threshold": over_threshold,
+                    "threshold_started_at": threshold_started_at,
+                    "elapsed_seconds": elapsed_seconds,
+                },
+            }
+        if rule_type == "uptime_above_seconds":
+            uptime_seconds = _coerce_int(device.get("uptime"), 0)
+            if uptime_seconds <= 0:
+                return {
+                    "rule_id": rule.get("id"),
+                    "type": rule_type,
+                    "matched": False,
+                    "stale": True,
+                    "summary": "Uptime telemetry is unavailable",
+                    "sample": {},
+                }
+            threshold_seconds = max(60, _coerce_int(rule.get("threshold_seconds"), DEFAULT_UPTIME_THRESHOLD_SECONDS))
+            matched = uptime_seconds >= threshold_seconds
+            return {
+                "rule_id": rule.get("id"),
+                "type": rule_type,
+                "matched": matched,
+                "stale": False,
+                "summary": f"Device uptime is {uptime_seconds} second(s) (threshold {threshold_seconds})",
+                "sample": {
+                    "uptime_seconds": uptime_seconds,
+                    "threshold_seconds": threshold_seconds,
+                    "last_reboot": _clean_text(device.get("last_reboot")),
+                },
+            }
+        if rule_type == "reboot_detected":
+            uptime_seconds = _coerce_int(device.get("uptime"), 0)
+            if uptime_seconds <= 0:
+                return {
+                    "rule_id": rule.get("id"),
+                    "type": rule_type,
+                    "matched": False,
+                    "stale": True,
+                    "summary": "Uptime telemetry is unavailable",
+                    "sample": {},
+                }
+            prior_sample = _prior_rule_sample(prior_result)
+            previous_uptime_seconds = _coerce_int(prior_sample.get("current_uptime_seconds"), 0)
+            baseline_established = _coerce_bool(prior_sample.get("baseline_established"), False) or previous_uptime_seconds > 0
+            if not baseline_established:
+                return {
+                    "rule_id": rule.get("id"),
+                    "type": rule_type,
+                    "matched": False,
+                    "stale": False,
+                    "summary": "Waiting for reboot baseline snapshot",
+                    "sample": {
+                        "baseline_established": True,
+                        "previous_uptime_seconds": 0,
+                        "current_uptime_seconds": uptime_seconds,
+                        "last_reboot": _clean_text(device.get("last_reboot")),
+                    },
+                }
+            matched = uptime_seconds < previous_uptime_seconds
+            return {
+                "rule_id": rule.get("id"),
+                "type": rule_type,
+                "matched": matched,
+                "stale": False,
+                "summary": (
+                    f"Device reboot detected: uptime moved from {previous_uptime_seconds} to {uptime_seconds} second(s)"
+                    if matched
+                    else f"Device uptime increased from {previous_uptime_seconds} to {uptime_seconds} second(s)"
+                ),
+                "sample": {
+                    "baseline_established": True,
+                    "previous_uptime_seconds": previous_uptime_seconds,
+                    "current_uptime_seconds": uptime_seconds,
+                    "last_reboot": _clean_text(device.get("last_reboot")),
+                },
+            }
+        if rule_type == "service_pending_timeout":
+            services_payload = device.get("services_payload") if isinstance(device.get("services_payload"), dict) else {}
+            if self._services_stale(services_payload, now_ts):
+                return {
+                    "rule_id": rule.get("id"),
+                    "type": rule_type,
+                    "matched": False,
+                    "stale": True,
+                    "summary": "Service inventory is stale",
+                    "sample": {},
+                }
+            service_name = _clean_text(rule.get("service_name")).lower()
+            pending_action = _clean_text(rule.get("pending_action")).lower()
+            timeout_seconds = max(0, _coerce_int(rule.get("timeout_seconds"), DEFAULT_SERVICE_PENDING_TIMEOUT_SECONDS))
+            pending_rows: List[Dict[str, Any]] = []
+            timed_out_rows: List[Dict[str, Any]] = []
+            for entry in services_payload.get("services") or []:
+                entry_name = _clean_text(entry.get("name"))
+                entry_action = _clean_text(entry.get("pending_action")).lower()
+                if not entry_action:
+                    continue
+                if service_name and entry_name.lower() != service_name:
+                    continue
+                if pending_action and entry_action != pending_action:
+                    continue
+                requested_at = max(
+                    _coerce_int(entry.get("pending_requested_at"), 0),
+                    _coerce_int(entry.get("captured_at"), 0),
+                )
+                age_seconds = max(0, now_ts - requested_at) if requested_at > 0 else 0
+                row = {
+                    "service_name": entry_name,
+                    "pending_action": entry_action,
+                    "requested_at": requested_at,
+                    "age_seconds": age_seconds,
+                    "desired_status": _clean_text(entry.get("desired_status")).lower(),
+                    "status_code": _clean_text(entry.get("status_code")).lower(),
+                }
+                pending_rows.append(row)
+                if age_seconds >= timeout_seconds:
+                    timed_out_rows.append(row)
+            if not pending_rows:
+                summary = (
+                    f"Service {_clean_text(rule.get('service_name'))} has no pending action"
+                    if service_name
+                    else "No matching pending service actions were found"
+                )
+                return {
+                    "rule_id": rule.get("id"),
+                    "type": rule_type,
+                    "matched": False,
+                    "stale": False,
+                    "summary": summary,
+                    "sample": {
+                        "service_name": _clean_text(rule.get("service_name")),
+                        "pending_action": pending_action,
+                        "timeout_seconds": timeout_seconds,
+                        "pending_services": [],
+                    },
+                }
+            matched = bool(timed_out_rows)
+            if matched and len(timed_out_rows) == 1:
+                timed_out = timed_out_rows[0]
+                summary = (
+                    f"{timed_out.get('service_name')} has been pending {timed_out.get('pending_action')} "
+                    f"for {timed_out.get('age_seconds')} second(s)"
+                )
+            elif matched:
+                summary = f"{len(timed_out_rows)} service action(s) exceeded the pending timeout"
+            else:
+                youngest = max(pending_rows, key=lambda row: row.get("age_seconds") or 0)
+                summary = (
+                    f"{youngest.get('service_name')} pending {youngest.get('pending_action')} "
+                    f"for {youngest.get('age_seconds')} second(s)"
+                )
+            return {
+                "rule_id": rule.get("id"),
+                "type": rule_type,
+                "matched": matched,
+                "stale": False,
+                "summary": summary,
+                "sample": {
+                    "service_name": _clean_text(rule.get("service_name")),
+                    "pending_action": pending_action,
+                    "timeout_seconds": timeout_seconds,
+                    "pending_services": pending_rows,
+                    "timed_out_services": timed_out_rows,
+                },
+            }
+        if rule_type == "user_session_match":
+            sessions_payload = device.get("sessions_payload") if isinstance(device.get("sessions_payload"), dict) else {}
+            if _session_inventory_stale(sessions_payload, now_ts):
+                return {
+                    "rule_id": rule.get("id"),
+                    "type": rule_type,
+                    "matched": False,
+                    "stale": True,
+                    "summary": "Session inventory is stale",
+                    "sample": {},
+                }
+            match_mode = _clean_text(rule.get("match_mode") or "blocklist").lower()
+            pattern_mode = _clean_text(rule.get("pattern_mode") or "normalized").lower()
+            patterns = [pattern for pattern in (rule.get("patterns") or []) if _clean_text(pattern)]
+            device_domain = _clean_text(device.get("domain"))
+            deduped_users: Dict[str, Dict[str, Any]] = {}
+            for entry in sessions_payload.get("sessions") or []:
+                username = _clean_text(entry.get("username"))
+                if not username:
+                    continue
+                key = username.lower()
+                if key in deduped_users:
+                    continue
+                aliases = _normalize_username_aliases(username, device_domain=device_domain)
+                matched_patterns = [
+                    pattern for pattern in patterns if _user_matches_pattern(pattern, aliases, pattern_mode=pattern_mode, device_domain=device_domain)
+                ]
+                deduped_users[key] = {
+                    "username": username,
+                    "aliases": sorted(aliases),
+                    "matched_patterns": matched_patterns,
+                    "sessions": [
+                        _describe_session(candidate)
+                        for candidate in sessions_payload.get("sessions") or []
+                        if _clean_text(candidate.get("username")).lower() == key
+                    ],
+                }
+            user_rows = list(deduped_users.values())
+            if match_mode == "allowlist":
+                violating_users = [row for row in user_rows if not row.get("matched_patterns")]
+                matched = bool(violating_users)
+                summary = (
+                    "Non-allowlisted users detected: {0}".format(", ".join(row.get("username") or "Unknown" for row in violating_users))
+                    if violating_users
+                    else ("No active user sessions found" if not user_rows else "All logged-in users match the allowlist")
+                )
+            else:
+                violating_users = [row for row in user_rows if row.get("matched_patterns")]
+                matched = bool(violating_users)
+                summary = (
+                    "Blocked users detected: {0}".format(", ".join(row.get("username") or "Unknown" for row in violating_users))
+                    if violating_users
+                    else ("No active user sessions found" if not user_rows else "No logged-in users match the blocklist")
+                )
+            return {
+                "rule_id": rule.get("id"),
+                "type": rule_type,
+                "matched": matched,
+                "stale": False,
+                "summary": summary,
+                "sample": {
+                    "match_mode": match_mode,
+                    "pattern_mode": pattern_mode,
+                    "patterns": patterns,
+                    "users": user_rows,
+                    "violating_users": violating_users,
+                },
+            }
+        if rule_type == "process_presence":
+            processes_payload = device.get("processes_payload") if isinstance(device.get("processes_payload"), dict) else {}
+            if _process_inventory_stale(processes_payload, now_ts):
+                return {
+                    "rule_id": rule.get("id"),
+                    "type": rule_type,
+                    "matched": False,
+                    "stale": True,
+                    "summary": "Process inventory is stale",
+                    "sample": {},
+                }
+            process_name = _clean_text(rule.get("process_name"))
+            expectation = _clean_text(rule.get("expectation") or "present").lower()
+            requested_key = _normalize_process_name_for_match(process_name)
+            match_entry = None
+            for entry in processes_payload.get("processes") or []:
+                if _normalize_process_name_for_match(entry.get("name")) == requested_key:
+                    match_entry = entry
+                    break
+            is_present = match_entry is not None
+            matched = is_present if expectation == "present" else not is_present
+            count = _coerce_int((match_entry or {}).get("count"), 0)
+            summary = (
+                f"Process {process_name} is running ({count} instance(s))"
+                if is_present
+                else f"Process {process_name} is not running"
+            )
+            return {
+                "rule_id": rule.get("id"),
+                "type": rule_type,
+                "matched": matched,
+                "stale": False,
+                "summary": summary,
+                "sample": {
+                    "process_name": process_name,
+                    "expectation": expectation,
+                    "present": is_present,
+                    "count": count,
+                },
+            }
+        if rule_type == "session_state":
+            sessions_payload = device.get("sessions_payload") if isinstance(device.get("sessions_payload"), dict) else {}
+            if _session_inventory_stale(sessions_payload, now_ts):
+                return {
+                    "rule_id": rule.get("id"),
+                    "type": rule_type,
+                    "matched": False,
+                    "stale": True,
+                    "summary": "Session inventory is stale",
+                    "sample": {},
+                }
+            session_mode = _clean_text(rule.get("session_mode") or "current").lower()
+            rdp_only = _coerce_bool(rule.get("rdp_only"), False)
+            current_sessions = [
+                dict(entry)
+                for entry in (sessions_payload.get("sessions") or [])
+                if isinstance(entry, dict) and (not rdp_only or _coerce_bool(entry.get("is_rdp"), False))
+            ]
+            if session_mode == "current":
+                states = {str(item).lower() for item in (rule.get("states") or ["active"])}
+                matching_sessions = [
+                    entry for entry in current_sessions if _clean_text(entry.get("state_code")).lower() in states
+                ]
+                matched = bool(matching_sessions)
+                summary = (
+                    f"{len(matching_sessions)} matching session(s) detected"
+                    if matched
+                    else ("No matching sessions found" if current_sessions else "No sessions found")
+                )
+                return {
+                    "rule_id": rule.get("id"),
+                    "type": rule_type,
+                    "matched": matched,
+                    "stale": False,
+                    "summary": summary,
+                    "sample": {
+                        "session_mode": session_mode,
+                        "rdp_only": rdp_only,
+                        "states": sorted(states),
+                        "sessions": current_sessions,
+                        "matching_sessions": matching_sessions,
+                    },
+                }
+            prior_sample = _prior_rule_sample(prior_result)
+            prior_sessions_payload = normalize_device_sessions(
+                {"sessions": prior_sample.get("sessions") or [], "reported_at": prior_sample.get("reported_at") or 0}
+            )
+            prior_sessions = [
+                dict(entry)
+                for entry in (prior_sessions_payload.get("sessions") or [])
+                if isinstance(entry, dict) and (not rdp_only or _coerce_bool(entry.get("is_rdp"), False))
+            ]
+            baseline_established = _coerce_bool(prior_sample.get("baseline_established"), False) or bool(prior_sessions)
+            if not baseline_established:
+                return {
+                    "rule_id": rule.get("id"),
+                    "type": rule_type,
+                    "matched": False,
+                    "stale": False,
+                    "summary": "Waiting for session baseline snapshot",
+                    "sample": {
+                        "session_mode": session_mode,
+                        "rdp_only": rdp_only,
+                        "baseline_established": True,
+                        "sessions": current_sessions,
+                        "detected_events": [],
+                    },
+                }
+            events = {str(item).lower() for item in (rule.get("events") or ["started"])}
+            prior_lookup = {_normalize_session_identity(entry): entry for entry in prior_sessions}
+            current_lookup = {_normalize_session_identity(entry): entry for entry in current_sessions}
+            detected_events: List[Dict[str, Any]] = []
+            for identity, current_entry in current_lookup.items():
+                previous_entry = prior_lookup.get(identity)
+                current_label = _describe_session(current_entry)
+                if previous_entry is None:
+                    detected_events.append({"event": "started", "session": current_label, **current_entry})
+                    if _coerce_bool(current_entry.get("is_rdp"), False):
+                        detected_events.append({"event": "rdp_started", "session": current_label, **current_entry})
+                    continue
+                previous_state = _clean_text(previous_entry.get("state_code")).lower()
+                current_state = _clean_text(current_entry.get("state_code")).lower()
+                if current_state == "locked" and previous_state != "locked":
+                    detected_events.append({"event": "locked", "session": current_label, **current_entry})
+                if previous_state == "locked" and current_state == "active":
+                    detected_events.append({"event": "unlocked", "session": current_label, **current_entry})
+            for identity, previous_entry in prior_lookup.items():
+                if identity in current_lookup:
+                    continue
+                previous_label = _describe_session(previous_entry)
+                detected_events.append({"event": "ended", "session": previous_label, **previous_entry})
+                if _coerce_bool(previous_entry.get("is_rdp"), False):
+                    detected_events.append({"event": "rdp_ended", "session": previous_label, **previous_entry})
+            matching_events = [entry for entry in detected_events if _clean_text(entry.get("event")).lower() in events]
+            matched = bool(matching_events)
+            summary = (
+                f"{len(matching_events)} session transition(s) detected"
+                if matched
+                else "No matching session transitions detected"
+            )
+            return {
+                "rule_id": rule.get("id"),
+                "type": rule_type,
+                "matched": matched,
+                "stale": False,
+                "summary": summary,
+                "sample": {
+                    "session_mode": session_mode,
+                    "rdp_only": rdp_only,
+                    "baseline_established": True,
+                    "events": sorted(events),
+                    "sessions": current_sessions,
+                    "detected_events": matching_events,
+                },
+            }
+        if rule_type == "network_interface_change":
+            prior_sample = _prior_rule_sample(prior_result)
+            current_entries = _normalize_network_entries(device.get("network"))
+            prior_entries = _normalize_network_entries(prior_sample.get("interfaces") or prior_sample.get("network"))
+            baseline_established = _coerce_bool(prior_sample.get("baseline_established"), False) or bool(prior_entries)
+            if not baseline_established:
+                return {
+                    "rule_id": rule.get("id"),
+                    "type": rule_type,
+                    "matched": False,
+                    "stale": False,
+                    "summary": "Waiting for network interface baseline snapshot",
+                    "sample": {
+                        "baseline_established": True,
+                        "interfaces": current_entries,
+                        "detected_changes": [],
+                    },
+                }
+            change_types = {str(item).lower() for item in (rule.get("change_types") or [])}
+            previous_by_key = {str(entry.get("adapter_key") or ""): entry for entry in prior_entries}
+            current_by_key = {str(entry.get("adapter_key") or ""): entry for entry in current_entries}
+            detected_changes: List[Dict[str, Any]] = []
+            for key, current_entry in current_by_key.items():
+                previous_entry = previous_by_key.get(key)
+                if previous_entry is None and "added" in change_types:
+                    detected_changes.append({"change_type": "added", **current_entry})
+                    continue
+                if previous_entry is not None and "mac_changed" in change_types:
+                    current_mac = _clean_text(current_entry.get("mac")).lower()
+                    previous_mac = _clean_text(previous_entry.get("mac")).lower()
+                    if current_mac and previous_mac and current_mac != previous_mac:
+                        detected_changes.append(
+                            {
+                                "change_type": "mac_changed",
+                                "adapter": current_entry.get("adapter"),
+                                "adapter_key": current_entry.get("adapter_key"),
+                                "previous_mac": previous_mac,
+                                "current_mac": current_mac,
+                                "ips": current_entry.get("ips") or [],
+                            }
+                        )
+            if "removed" in change_types:
+                for key, previous_entry in previous_by_key.items():
+                    if key not in current_by_key:
+                        detected_changes.append({"change_type": "removed", **previous_entry})
+            matched = bool(detected_changes)
+            summary = (
+                f"{len(detected_changes)} network interface change(s) detected"
+                if matched
+                else "No matching network interface changes detected"
+            )
+            return {
+                "rule_id": rule.get("id"),
+                "type": rule_type,
+                "matched": matched,
+                "stale": False,
+                "summary": summary,
+                "sample": {
+                    "baseline_established": True,
+                    "change_types": sorted(change_types),
+                    "interfaces": current_entries,
+                    "detected_changes": detected_changes,
+                },
+            }
+        if rule_type == "drive_presence_change":
+            storage_scope = _clean_text(rule.get("storage_scope") or "all").lower()
+            watch_mode = _clean_text(rule.get("watch_mode") or "any").lower()
+            change_types = {str(item).lower() for item in (rule.get("change_types") or ["added", "removed"])}
+            scoped_entries = []
+            for entry in _normalize_storage_entries(device.get("storage")):
+                if not _storage_entry_in_scope(entry, storage_scope):
+                    continue
+                drive_key = _normalize_storage_drive_key(entry.get("drive"))
+                if not drive_key:
+                    continue
+                scoped_entries.append({**entry, "drive_key": drive_key})
+            current_by_key = {str(entry.get("drive_key") or ""): entry for entry in scoped_entries}
+            if watch_mode == "specific":
+                drive_list = [item for item in (_normalize_string_list(rule.get("drive_list")) or []) if _normalize_storage_drive_key(item)]
+                expected_lookup = {_normalize_storage_drive_key(item): item for item in drive_list}
+                missing_drives = []
+                unexpected_drives = []
+                if "removed" in change_types:
+                    for drive_key, original_value in expected_lookup.items():
+                        if drive_key not in current_by_key:
+                            missing_drives.append({"change_type": "removed", "drive": original_value, "drive_key": drive_key})
+                if "added" in change_types:
+                    for drive_key, entry in current_by_key.items():
+                        if drive_key not in expected_lookup:
+                            unexpected_drives.append({"change_type": "added", **entry})
+                detected_changes = missing_drives + unexpected_drives
+                matched = bool(detected_changes)
+                summary = (
+                    f"{len(detected_changes)} drive presence change(s) detected"
+                    if matched
+                    else "Drive topology matches the expected set"
+                )
+                return {
+                    "rule_id": rule.get("id"),
+                    "type": rule_type,
+                    "matched": matched,
+                    "stale": False,
+                    "summary": summary,
+                    "sample": {
+                        "storage_scope": storage_scope,
+                        "watch_mode": watch_mode,
+                        "drive_list": drive_list,
+                        "current_drives": scoped_entries,
+                        "detected_changes": detected_changes,
+                    },
+                }
+            prior_sample = _prior_rule_sample(prior_result)
+            prior_entries = []
+            for entry in _normalize_storage_entries(prior_sample.get("drives")):
+                if not _storage_entry_in_scope(entry, storage_scope):
+                    continue
+                drive_key = _normalize_storage_drive_key(entry.get("drive"))
+                if not drive_key:
+                    continue
+                prior_entries.append({**entry, "drive_key": drive_key})
+            baseline_established = _coerce_bool(prior_sample.get("baseline_established"), False) or bool(prior_entries)
+            if not baseline_established:
+                return {
+                    "rule_id": rule.get("id"),
+                    "type": rule_type,
+                    "matched": False,
+                    "stale": False,
+                    "summary": "Waiting for drive baseline snapshot",
+                    "sample": {
+                        "baseline_established": True,
+                        "storage_scope": storage_scope,
+                        "watch_mode": watch_mode,
+                        "drives": scoped_entries,
+                        "detected_changes": [],
+                    },
+                }
+            prior_by_key = {str(entry.get("drive_key") or ""): entry for entry in prior_entries}
+            detected_changes = []
+            if "added" in change_types:
+                for drive_key, entry in current_by_key.items():
+                    if drive_key not in prior_by_key:
+                        detected_changes.append({"change_type": "added", **entry})
+            if "removed" in change_types:
+                for drive_key, entry in prior_by_key.items():
+                    if drive_key not in current_by_key:
+                        detected_changes.append({"change_type": "removed", **entry})
+            matched = bool(detected_changes)
+            summary = (
+                f"{len(detected_changes)} drive change(s) detected"
+                if matched
+                else "No matching drive changes detected"
+            )
+            return {
+                "rule_id": rule.get("id"),
+                "type": rule_type,
+                "matched": matched,
+                "stale": False,
+                "summary": summary,
+                "sample": {
+                    "baseline_established": True,
+                    "storage_scope": storage_scope,
+                    "watch_mode": watch_mode,
+                    "drives": scoped_entries,
+                    "detected_changes": detected_changes,
                 },
             }
         if rule_type == "software_presence_or_version":
@@ -1841,12 +2912,13 @@ class WatchdogRuntimeService:
         device_snapshot = self._get_watchdog_device_snapshot()
         targets = self.resolve_targets(record, devices=device_snapshot)
         overrides = self._load_active_overrides(int(record["id"])) if record.get("id") else {}
+        current_state = self._load_watchdog_state(int(record["id"])) if record.get("id") else {}
         results = []
         matched_count = 0
         for device in targets:
             hostname = _clean_text(device.get("hostname"))
             override = overrides.get(hostname.lower())
-            evaluation = self._evaluate_device(record, device)
+            evaluation = self._evaluate_device(record, device, prior_state=current_state.get(hostname.lower()) or {})
             if override:
                 evaluation["state"] = _clean_text(override.get("state")).lower() or "suppressed"
                 evaluation["message"] = override.get("reason") or "Watchdog is overridden for this device."
@@ -1874,7 +2946,13 @@ class WatchdogRuntimeService:
             "matched_count": matched_count,
         }
 
-    def _evaluate_device(self, record: Mapping[str, Any], device: Mapping[str, Any]) -> Dict[str, Any]:
+    def _evaluate_device(
+        self,
+        record: Mapping[str, Any],
+        device: Mapping[str, Any],
+        *,
+        prior_state: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
         now_ts = _now_ts()
         if _coerce_int(device.get("uptime"), 0) > 0 and _coerce_int(device.get("uptime"), 0) < _coerce_int(record.get("boot_grace_seconds"), 0):
             return {
@@ -1889,7 +2967,17 @@ class WatchdogRuntimeService:
             }
         criteria = record.get("criteria") if isinstance(record.get("criteria"), dict) else {}
         rules = criteria.get("rules") if isinstance(criteria.get("rules"), list) else []
-        rule_results = [self._evaluate_rule(rule, device, now_ts=now_ts) for rule in rules if isinstance(rule, dict)]
+        normalized_prior_state = dict(prior_state or {})
+        rule_results = [
+            self._evaluate_rule(
+                rule,
+                device,
+                now_ts=now_ts,
+                prior_result=_normalize_rule_state_lookup(normalized_prior_state, rule.get("id")),
+            )
+            for rule in rules
+            if isinstance(rule, dict)
+        ]
         if not rule_results:
             return {
                 "matched": False,
@@ -2607,7 +3695,7 @@ class WatchdogRuntimeService:
                         last_action_at=_coerce_optional_int(prior_state.get("last_action_at")),
                     )
                     continue
-                evaluation = self._evaluate_device(record, device)
+                evaluation = self._evaluate_device(record, device, prior_state=prior_state)
                 matched = bool(evaluation.get("matched"))
                 stale_state = _clean_text(evaluation.get("state")).lower() == "stale_data"
                 consecutive_matches = _coerce_int(prior_state.get("consecutive_matches"), 0)
