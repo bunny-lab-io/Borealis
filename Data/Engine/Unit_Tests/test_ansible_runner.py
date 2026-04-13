@@ -6,6 +6,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import signal
+import subprocess
+import tempfile
 
 from Data.Engine.db import dbapi as sqlite3
 import Data.Engine.services.ansible.runner as ansible_runner_module
@@ -28,6 +32,48 @@ class TimeoutExpired(Exception):
         self.timeout = 1
         self.stdout = None
         self.stderr = None
+
+
+class _FakeProcess:
+    def __init__(
+        self,
+        *,
+        exception_to_raise: Exception | None = None,
+        stdout: str = "",
+        stderr: str = "",
+        returncode: int | None = 0,
+    ) -> None:
+        self.pid = 4321
+        self._exception_to_raise = exception_to_raise
+        self._stdout = stdout
+        self._stderr = stderr
+        self.returncode = returncode
+        self._communicate_calls = 0
+        self.wait_calls: list[float | None] = []
+        self.terminated = False
+        self.killed = False
+
+    def communicate(self, timeout: float | None = None) -> tuple[str, str]:
+        self._communicate_calls += 1
+        if self._communicate_calls == 1 and self._exception_to_raise is not None:
+            raise self._exception_to_raise
+        return self._stdout, self._stderr
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.wait_calls.append(timeout)
+        self.returncode = self.returncode if self.returncode is not None else -signal.SIGTERM
+        return int(self.returncode)
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self.returncode = -signal.SIGTERM
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -signal.SIGKILL
 
 
 def _ensure_ansible_runner_tables(engine_harness: EngineTestHarness) -> None:
@@ -168,9 +214,10 @@ def test_runner_normalizes_eventlet_wrapped_timeout_exceptions(
     )
     monkeypatch.setattr(
         ansible_runner_module.subprocess,
-        "run",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutExpired()),
+        "Popen",
+        lambda *_args, **_kwargs: _FakeProcess(exception_to_raise=TimeoutExpired(), returncode=None),
     )
+    monkeypatch.setattr(ansible_runner_module.os, "killpg", lambda *_args, **_kwargs: None)
 
     runner._run_playbook(
         run_id="run-timeout-1",
@@ -266,3 +313,113 @@ def test_runner_writes_curve25519_ssh_kex_args(
         "-o KexAlgorithms=curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256"
         in cfg_text
     )
+    expected_control_dir = Path(tempfile.gettempdir()) / "ansible_controlplane" / "run-kex-1"
+    assert f"control_path_dir = {expected_control_dir}" in cfg_text
+
+
+def test_runner_kills_process_group_on_timeout(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _ensure_ansible_runner_tables(engine_harness)
+
+    runner = EngineAnsibleRunner(
+        socketio=_DummySocketIO(),
+        db_conn_factory=lambda: sqlite3.connect(str(engine_harness.db_path)),
+    )
+
+    workspace_root = engine_harness.db_path.parent / "ansible-timeout-cleanup-workspace"
+    project_dir = workspace_root / "project"
+    runtime_dir = workspace_root / "runtime"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    playbook_path = project_dir / "playbook.yml"
+    inventory_path = workspace_root / "inventory.yml"
+    cfg_path = workspace_root / "ansible.cfg"
+    ssh_known_hosts_path = workspace_root / "ssh_known_hosts"
+    extra_vars_path = workspace_root / "extra_vars.json"
+    playbook_path.write_text("---\n- hosts: all\n  gather_facts: false\n  tasks: []\n", encoding="utf-8")
+    inventory_path.write_text("{}", encoding="utf-8")
+    cfg_path.write_text("[defaults]\n", encoding="utf-8")
+    ssh_known_hosts_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        runner,
+        "_prepare_workspace",
+        lambda **_kwargs: {
+            "root": workspace_root,
+            "project_dir": project_dir,
+            "playbook_path": playbook_path,
+            "inventory_path": inventory_path,
+            "cfg_path": cfg_path,
+            "ssh_known_hosts_path": ssh_known_hosts_path,
+            "extra_vars_path": extra_vars_path,
+            "runtime_dir": runtime_dir,
+            "limit_name": "borealis_targets",
+            "inventory_hosts": ["example-host"],
+        },
+    )
+
+    fake_timeout = subprocess.TimeoutExpired(
+        cmd=["ansible-playbook"],
+        timeout=900,
+        output="partial stdout",
+        stderr="partial stderr",
+    )
+    fake_process = _FakeProcess(exception_to_raise=fake_timeout, returncode=None)
+    popen_kwargs: dict[str, object] = {}
+    killpg_calls: list[tuple[int, signal.Signals]] = []
+
+    def _fake_popen(*_args, **kwargs):
+        popen_kwargs.update(kwargs)
+        return fake_process
+
+    monkeypatch.setattr(ansible_runner_module.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(
+        ansible_runner_module.os,
+        "killpg",
+        lambda pid, sig: killpg_calls.append((pid, sig)),
+    )
+
+    runner._run_playbook(
+        run_id="run-timeout-cleanup-1",
+        hostname="example-host",
+        playbook_abs_path="",
+        playbook_content="---\n- hosts: all\n  gather_facts: false\n  tasks: []\n",
+        playbook_rel_path="Ansible_Playbooks/test-timeout-cleanup.yml",
+        playbook_name="Timeout Cleanup Test",
+        credential_id=None,
+        variable_values={},
+        payload_files=[],
+        target_specifications=[
+            {
+                "hostname": "example-host",
+                "inventory_hostname": "example-host",
+                "site_group": "site_remote",
+                "host_vars": {
+                    "ansible_connection": "ssh",
+                    "ansible_host": "10.255.0.10",
+                },
+            }
+        ],
+        runtime_files=[],
+        source="scheduled_job",
+        activity_id=700,
+        scheduled_job_id=7,
+        scheduled_run_id=70,
+        scheduled_job_run_row_id=70,
+        connection="ssh",
+    )
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT status, error FROM scheduled_job_runs WHERE id=?", (70,))
+        run_row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert popen_kwargs["start_new_session"] is True
+    assert killpg_calls == [(fake_process.pid, signal.SIGTERM)]
+    assert run_row[0] == RUN_STATUS_TIMED_OUT
+    assert run_row[1].startswith("Ansible playbook execution exceeded 900 seconds and was terminated.")

@@ -75,6 +75,8 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - `GET /api/server/timezones` (Operator Admin Session) - returns the current engine host timezone and the selectable timezone inventory for the Server Info timezone picker.
 - `POST /api/server/timezone` (Operator Admin Session) - changes the timezone used by the engine host from the WebUI.
 - `GET /api/server/overview` (Operator Admin Session) - returns the Server Info dashboard snapshot including service state, host runtime details, WireGuard runtime status, public-edge certificate health, and live operator presence.
+- `GET /api/server/ansible-runner-settings` (Operator Admin Session) - returns the persisted scheduled-Ansible per-job and global runner limits shown in Server Info.
+- `PUT /api/server/ansible-runner-settings` (Operator Admin Session) - updates the persisted scheduled-Ansible per-job and global runner limits from Server Info.
 - `POST /api/server/services/<service_key>/restart` (Operator Admin Session) - queues a safe detached restart for `borealis_engine`, `borealis_traefik`, or a specific `postgresql_cluster` instance.
 - `POST /api/server/wireguard/recover` (Operator Admin Session) - triggers Borealis WireGuard listener recovery when active tunnels exist.
 - `GET /api/watchdogs` (Token Authenticated) - list watchdog policies for the Watchdogs page.
@@ -121,6 +123,7 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - `AppShell.jsx` plus `PageChromeProvider` own the title, subtitle, icon, and header action rail. `PageBodyFrame` owns the body inset, rounded outer shell, shell chrome, and variant-specific structure.
 - Supported variants: `grid`, `grid_with_stack`, `split_tool`, `content_panel`.
 - Informational admin dashboards such as Server Info should prefer `content_panel`, start with a hero strip of high-signal stat cards, and then stack glass sections beneath it rather than recreating toolbar chrome inside the body.
+- Server Info now includes a runtime row for scheduled Ansible concurrency so operators can adjust the per-job and global Engine-side runner budget without restarting the engine or editing env files.
 - Default body inset is `px: 2`, `pt: 2.5`, and `pb: 2`. The `pt: 2.5` token adds 20px of shared spacing between the page subtitle and the body frame.
 - The body shell keeps that outer inset, but the main page content should bleed to the inside edge of the shell rather than sitting inside a second shared padding layer.
 - Do not add manual `mt: "10px"` drops or top-level `p: 3` wrappers to compensate for the header or to recreate internal shell padding.

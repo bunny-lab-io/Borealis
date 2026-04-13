@@ -124,12 +124,11 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/assemblies/<assembly_guid>/official-update` (Admin) - update one official Aurora assembly from the active catalog.
 - `POST /api/assemblies/official/update-all` (Admin) - sync all official Aurora assemblies, including newly added catalog entries.
 - `POST /api/scripts/quick_run` (Token Authenticated) - quick agent-side script job (`powershell`, `batch`, or `bash`, depending on the target agent platform/runtime) for in-scope devices only.
-- `POST /api/ansible/quick_run` (Token Authenticated) - placeholder (not implemented).
 - `GET /api/device/activity/<hostname>` (Token Authenticated) - device activity history for an in-scope device.
 - `DELETE /api/device/activity/<hostname>` (Token Authenticated) - clear activity history.
 - `GET /api/device/activity/job/<int:job_id>` (Token Authenticated) - activity record details for an in-scope device activity.
 
-Playbook execution currently happens through scheduled jobs with `execution_context` set to `local`, `ssh`, or `winrm`; the dedicated Ansible quick-run endpoint is still pending.
+Playbook execution currently happens through scheduled jobs with `execution_context` set to `local`, `ssh`, `ssh_individual`, `winrm`, or `winrm_individual`.
 
 ### Scheduled Jobs
 - `GET /api/scheduled_jobs` (Token Authenticated) - list scheduled jobs visible within the current operator's site scope.
@@ -165,6 +164,8 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 - `GET /api/server/timezones` (Admin) - list the current engine host timezone and the selectable timezone inventory for WebUI timezone management.
 - `POST /api/server/timezone` (Admin) - change the timezone used by the entire engine host.
 - `GET /api/server/overview` (Admin) - consolidated Engine host overview used by the Server Info dashboard, including service state, public cert status, live operator sessions, WireGuard runtime state, Aegis state, and host resource basics.
+- `GET /api/server/ansible-runner-settings` (Admin) - read the persisted per-job and global scheduled-Ansible runner limits used by the Engine scheduler.
+- `PUT /api/server/ansible-runner-settings` (Admin) - update the persisted per-job and global scheduled-Ansible runner limits used by the Engine scheduler.
 - `POST /api/server/services/<service_key>/restart` (Admin) - queue a detached `systemd-run` restart for `borealis_engine`, `borealis_traefik`, or a `postgresql_cluster` instance.
 - `POST /api/server/wireguard/recover` (Admin) - force a Borealis WireGuard listener recovery attempt when active VPN sessions exist.
 - `GET /api/server/logs` (Admin) - list logs and retention.

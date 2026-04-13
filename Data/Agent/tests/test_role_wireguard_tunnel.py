@@ -115,6 +115,26 @@ def test_linux_client_force_restart_skips_same_session_reuse() -> None:
     assert calls == ["write_config", "bring_down", "bring_up"]
 
 
+def test_linux_client_reuses_same_session_and_reapplies_mtu() -> None:
+    client = LinuxWireGuardClient.__new__(LinuxWireGuardClient)
+    client._session_lock = threading.Lock()
+    client.session = _build_session()
+    client.conf_path = None
+    client._client_keys = {"private": "client-private"}
+    calls: list[str] = []
+
+    client._service_state = lambda: "RUNNING"
+    client._validate_token = lambda token, signing_client=None: None
+    client._write_config = lambda text: calls.append("write_config") or True
+    client._bring_down = lambda: calls.append("bring_down")
+    client._bring_up = lambda: calls.append("bring_up") or True
+    client._ensure_interface_mtu = lambda: calls.append("ensure_mtu")
+
+    client.start_session(_build_session(), signing_client=None)
+
+    assert calls == ["ensure_mtu"]
+
+
 def test_linux_client_refreshes_session_metadata_without_restart_for_tunnel_rotation() -> None:
     client = LinuxWireGuardClient.__new__(LinuxWireGuardClient)
     client._session_lock = threading.Lock()
@@ -128,6 +148,7 @@ def test_linux_client_refreshes_session_metadata_without_restart_for_tunnel_rota
     client._write_config = lambda text: calls.append("write_config") or True
     client._bring_down = lambda: calls.append("bring_down")
     client._bring_up = lambda: calls.append("bring_up") or True
+    client._ensure_interface_mtu = lambda: calls.append("ensure_mtu")
 
     refreshed = _build_session()
     refreshed.tunnel_id = "tunnel-2"
@@ -136,8 +157,33 @@ def test_linux_client_refreshes_session_metadata_without_restart_for_tunnel_rota
 
     client.start_session(refreshed, signing_client=None)
 
-    assert calls == ["validate"]
+    assert calls == ["validate", "ensure_mtu"]
     assert client.session is refreshed
+
+
+def test_windows_client_render_config_includes_explicit_mtu() -> None:
+    client = _build_windows_client()
+
+    rendered = client._render_config(_build_session())
+
+    assert "MTU = 1420" in rendered
+
+
+def test_windows_client_idle_config_includes_explicit_mtu() -> None:
+    client = _build_windows_client()
+
+    rendered = client._render_idle_config()
+
+    assert "MTU = 1420" in rendered
+
+
+def test_linux_client_render_config_includes_explicit_mtu() -> None:
+    client = LinuxWireGuardClient.__new__(LinuxWireGuardClient)
+    client._client_keys = {"private": "client-private"}
+
+    rendered = client._render_config(_build_session())
+
+    assert "MTU = 1420" in rendered
 
 
 def _build_windows_client() -> WireGuardClient:

@@ -83,6 +83,7 @@ def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int = 36
 KEEPALIVE_SECONDS = _env_int("BOREALIS_WIREGUARD_KEEPALIVE_SECONDS", 30, min_value=10, max_value=600)
 ENSURE_INITIAL_DELAY_SECONDS = _env_int("BOREALIS_WIREGUARD_ENSURE_DELAY", 10, min_value=0, max_value=300)
 ENSURE_INTERVAL_SECONDS = _env_int("BOREALIS_WIREGUARD_ENSURE_INTERVAL", 60, min_value=15, max_value=3600)
+WIREGUARD_INTERFACE_MTU = _env_int("BOREALIS_WIREGUARD_MTU", 1420, min_value=1280, max_value=65535)
 
 
 def _log_path() -> Path:
@@ -398,12 +399,14 @@ class WireGuardClient:
 
     def _render_idle_config(self) -> str:
         private_key = self._client_keys["private"]
+        mtu = getattr(self, "_interface_mtu", WIREGUARD_INTERFACE_MTU)
         return "\n".join(
             [
                 "[Interface]",
                 f"PrivateKey = {private_key}",
                 f"Address = {TUNNEL_IDLE_ADDRESS}",
                 "ListenPort = 0",
+                f"MTU = {mtu}",
             ]
         )
 
@@ -689,10 +692,12 @@ class WireGuardClient:
 
     def _render_config(self, session: SessionConfig) -> str:
         private_key = session.client_private_key or self._client_keys["private"]
+        mtu = getattr(self, "_interface_mtu", WIREGUARD_INTERFACE_MTU)
         lines = [
             "[Interface]",
             f"PrivateKey = {private_key}",
             f"Address = {session.virtual_ip}",
+            f"MTU = {mtu}",
             "",
             "[Peer]",
             f"PublicKey = {session.server_public_key}",
@@ -940,6 +945,7 @@ class LinuxWireGuardClient:
         self.session: Optional[SessionConfig] = None
         self._session_lock = threading.Lock()
         self._client_keys = _generate_client_keys(self.cert_root)
+        self._interface_mtu = WIREGUARD_INTERFACE_MTU
         self._wg_quick = shutil.which("wg-quick") or ""
         self._wg = shutil.which("wg") or ""
         self._ip = shutil.which("ip") or ""
@@ -1002,10 +1008,12 @@ class LinuxWireGuardClient:
 
     def _render_config(self, session: SessionConfig) -> str:
         private_key = session.client_private_key or self._client_keys["private"]
+        mtu = getattr(self, "_interface_mtu", WIREGUARD_INTERFACE_MTU)
         lines = [
             "[Interface]",
             f"PrivateKey = {private_key}",
             f"Address = {session.virtual_ip}",
+            f"MTU = {mtu}",
             "",
             "[Peer]",
             f"PublicKey = {session.server_public_key}",
@@ -1040,6 +1048,23 @@ class LinuxWireGuardClient:
         if self._interface_exists():
             return "RUNNING"
         return None
+
+    def _ensure_interface_mtu(self) -> None:
+        ip_cmd = getattr(self, "_ip", "") or ""
+        interface_name = str(getattr(self, "interface_name", "") or "").strip()
+        mtu = int(getattr(self, "_interface_mtu", WIREGUARD_INTERFACE_MTU))
+        if not ip_cmd or not interface_name:
+            return
+        try:
+            if not self._interface_exists():
+                return
+            code, out, err = self._run([ip_cmd, "link", "set", "dev", interface_name, "mtu", str(mtu)])
+        except Exception as exc:
+            _write_log(f"Failed to reapply WireGuard Linux MTU on {interface_name}: {exc}")
+            return
+        if code != 0:
+            detail = (err or out or "unknown error").strip()
+            _write_log(f"Failed to reapply WireGuard Linux MTU on {interface_name}: {detail}")
 
     def _bring_down(self) -> None:
         if self._wg_quick and self.conf_path.is_file():
@@ -1079,6 +1104,7 @@ class LinuxWireGuardClient:
             if self.session and self.session.tunnel_id == session.tunnel_id:
                 same_config = _session_config_equivalent(self.session, session)
                 if self._service_state() == "RUNNING" and same_config and not session.force_restart:
+                    self._ensure_interface_mtu()
                     _write_log("WireGuard Linux session already active; reusing existing session.")
                     return
                 if session.force_restart:
@@ -1104,6 +1130,7 @@ class LinuxWireGuardClient:
                 return
 
             if metadata_refresh_only:
+                self._ensure_interface_mtu()
                 _write_log(
                     "WireGuard Linux session metadata refresh: existing_tunnel_id={0} new_tunnel_id={1}".format(
                         previous_tunnel_id or "-",
@@ -1130,6 +1157,7 @@ class LinuxWireGuardClient:
             self._bring_down()
             if not self._bring_up():
                 return
+            self._ensure_interface_mtu()
 
             self.session = session
             _write_log("WireGuard Linux session started (persistent mode).")

@@ -127,6 +127,15 @@ def test_start_listener_rejects_duplicate_allowed_ips(tmp_path: Path, monkeypatc
         )
 
 
+def test_render_listener_base_config_includes_explicit_mtu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wireguard_server.engine_config, "PROJECT_ROOT", tmp_path)
+    manager = WireGuardServerManager(_build_config(tmp_path))
+
+    rendered = manager.render_listener_base_config()
+
+    assert "MTU = 1420" in rendered
+
+
 @pytest.mark.skipif(os.name == "nt", reason="Linux listener lifecycle checks do not apply on Windows.")
 def test_ensure_listener_bootstraps_interface_when_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wireguard_server.engine_config, "PROJECT_ROOT", tmp_path)
@@ -266,3 +275,43 @@ def test_ensure_linux_peer_route_replaces_peer_network_route(tmp_path: Path, mon
     manager._ensure_linux_peer_route()
 
     assert commands == [["ip", "route", "replace", "10.255.0.0/24", "dev", manager._interface_name]]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Linux interface mutation checks do not apply on Windows.")
+def test_linux_apply_interface_runtime_sets_explicit_mtu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wireguard_server.engine_config, "PROJECT_ROOT", tmp_path)
+    manager = WireGuardServerManager(_build_config(tmp_path))
+    manager._wg = "wg"
+    manager._ip = "ip"
+
+    commands: list[list[str]] = []
+
+    def _fake_run(args):
+        commands.append(list(args))
+        return 0, "", ""
+
+    monkeypatch.setattr(manager, "_run_command", _fake_run)
+
+    manager._linux_apply_interface_runtime()
+
+    assert commands == [
+        [
+            "wg",
+            "set",
+            manager._interface_name,
+            "listen-port",
+            str(manager.config.port),
+            "private-key",
+            str(manager.config.private_key_path),
+        ],
+        [
+            "ip",
+            "address",
+            "replace",
+            str(manager.config.engine_interface()),
+            "dev",
+            manager._interface_name,
+        ],
+        ["ip", "link", "set", "dev", manager._interface_name, "mtu", "1420"],
+        ["ip", "link", "set", "up", "dev", manager._interface_name],
+    ]

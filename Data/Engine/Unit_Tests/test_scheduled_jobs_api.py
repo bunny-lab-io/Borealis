@@ -807,6 +807,51 @@ def test_scheduled_job_create_rejects_ansible_components_for_agent_context(
     assert "must contain only script assemblies" in payload["error"]
 
 
+@pytest.mark.parametrize(
+    ("execution_context", "credential_id", "use_service_account"),
+    (
+        ("ssh_individual", 5, False),
+        ("winrm_individual", None, True),
+    ),
+)
+def test_scheduled_job_create_accepts_individual_ansible_contexts(
+    engine_harness: EngineTestHarness,
+    execution_context: str,
+    credential_id: int | None,
+    use_service_account: bool,
+) -> None:
+    client, _scheduler = _scheduled_jobs_client(engine_harness)
+
+    response = client.post(
+        "/api/scheduled_jobs",
+        json={
+            "name": f"Individual {execution_context}",
+            "components": [
+                {"type": "ansible", "name": "Playbook A"},
+            ],
+            "targets": [
+                {
+                    "kind": "device",
+                    "device_guid": "GUID-TEST-0001",
+                    "hostname": "test-device",
+                    "site_id": 1,
+                    "site_name": "Main Lab",
+                }
+            ],
+            "schedule": {"type": "immediately"},
+            "execution_context": execution_context,
+            "credential_id": credential_id,
+            "use_service_account": use_service_account,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()["job"]
+    assert payload["execution_context"] == execution_context
+    assert payload["credential_id"] == credential_id
+    assert payload["use_service_account"] is bool(use_service_account if "winrm" in execution_context else False)
+
+
 def test_scheduled_job_update_rejects_mixed_script_and_ansible_components(
     engine_harness: EngineTestHarness,
 ) -> None:
@@ -1243,6 +1288,8 @@ def test_shared_ansible_dispatch_uses_execution_context_for_remote_transport(
     assert target_specifications[0]["host_vars"]["ansible_host"] == "10.77.0.15"
     assert target_specifications[0]["host_vars"]["ansible_ssh_retries"] == 3
     assert target_specifications[0]["host_vars"]["ansible_ssh_timeout"] == 20
+    assert target_specifications[0]["host_vars"]["ansible_ssh_transfer_method"] == "scp"
+    assert target_specifications[0]["host_vars"]["ansible_scp_extra_args"] == "-O"
     assert target_specifications[0]["host_vars"]["ansible_user"] == "ubuntu"
 
     conn = sqlite3.connect(str(engine_harness.db_path))
@@ -2689,6 +2736,860 @@ def test_tick_persists_activity_links_for_shared_ansible_runs(
     assert activity_link[3] == "ansible"
     assert activity_link[4] == "Playbook A"
     assert "kwargs" in captured
+
+
+def test_tick_persists_activity_links_for_individual_ansible_runs(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    scheduler._running = False
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS activity_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hostname TEXT,
+                script_path TEXT,
+                script_name TEXT,
+                script_type TEXT,
+                ran_at INTEGER,
+                status TEXT,
+                stdout TEXT,
+                stderr TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_jobs(
+                id,
+                name,
+                components_json,
+                targets_json,
+                schedule_type,
+                execution_context,
+                credential_id,
+                use_service_account,
+                created_at,
+                updated_at,
+                enabled
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                70,
+                "Individual SSH Job",
+                json.dumps(
+                    [
+                        {"type": "ansible", "name": "Playbook A", "path": "playbook_a.yml"},
+                        {"type": "ansible", "name": "Playbook B", "path": "playbook_b.yml"},
+                    ]
+                ),
+                json.dumps(
+                    [
+                        {
+                            "kind": "device",
+                            "device_guid": "GUID-TEST-0001",
+                            "hostname": "test-device",
+                            "site_id": 1,
+                            "site_name": "Main Lab",
+                        },
+                        {
+                            "kind": "device",
+                            "device_guid": "GUID-TEST-0002",
+                            "hostname": "test-device-02",
+                            "site_id": 1,
+                            "site_name": "Main Lab",
+                        },
+                    ]
+                ),
+                "immediately",
+                "ssh_individual",
+                5,
+                0,
+                1_773_780_000,
+                1_773_780_000,
+                1,
+            ),
+        )
+        cur.execute(
+            """
+            UPDATE devices
+               SET operating_system=?,
+                   agent_id=?,
+                   connection_endpoint=''
+             WHERE guid=?
+            """,
+            ("Ubuntu 24.04 LTS", "test-device-agent", "GUID-TEST-0001"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(scheduler, "_resolve_occurrence_for_tick", lambda **_kwargs: 1_773_782_700)
+    monkeypatch.setattr(scheduled_job_module, "load_ansible_runner_settings", lambda: {"job_concurrency_limit": 20, "global_concurrency_limit": 50})
+    monkeypatch.setattr(scheduler, "_online_lookup", lambda: ["test-device", "test-device-02"])
+    monkeypatch.setattr(
+        scheduler._filter_matcher,
+        "resolve_target_entries",
+        lambda raw_targets, devices=None: (
+            ["test-device", "test-device-02"],
+            {
+                "resolved_targets": [
+                    {
+                        "device_guid": "guid-test-0001",
+                        "hostname": "test-device",
+                        "site_id": 1,
+                        "site_name": "Main Lab",
+                        "resolved_from_filter_ids": [],
+                    },
+                    {
+                        "device_guid": "guid-test-0002",
+                        "hostname": "test-device-02",
+                        "site_id": 1,
+                        "site_name": "Main Lab",
+                        "resolved_from_filter_ids": [],
+                    },
+                ]
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler._filter_matcher,
+        "fetch_devices",
+        lambda: [
+            {
+                "device_guid": "guid-test-0001",
+                "hostname": "test-device",
+                "site_id": 1,
+                "site_name": "Main Lab",
+                "agent_id": "test-device-agent",
+                "operating_system": "Ubuntu 24.04 LTS",
+                "connection_endpoint": "",
+            },
+            {
+                "device_guid": "guid-test-0002",
+                "hostname": "test-device-02",
+                "site_id": 1,
+                "site_name": "Main Lab",
+                "agent_id": "test-device-agent-02",
+                "operating_system": "Rocky Linux 9.7",
+                "connection_endpoint": "",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_prepare_vpn_sessions",
+        lambda _agent_ids, required_ports=None: {
+            "test-device-agent": {"virtual_ip": "10.77.0.15/32"},
+            "test-device-agent-02": {"virtual_ip": "10.77.0.16/32"},
+        },
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_load_credential",
+        lambda _credential_id: {
+            "id": 5,
+            "name": "SSH Test Credential",
+            "connection_type": "ssh",
+            "username": "ubuntu",
+            "password": "secret",
+            "private_key": "",
+            "become_method": "",
+            "become_username": "",
+            "become_password": "",
+        },
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_resolve_runtime_document",
+        lambda rel_path, _default_type, assembly_guid=None: (
+            {
+                "name": "Playbook B" if str(rel_path).endswith("playbook_b.yml") else "Playbook A",
+                "script": "---\n- hosts: all\n  gather_facts: false\n  tasks:\n    - ansible.builtin.ping:\n",
+                "variables": [],
+                "files": [],
+            },
+            {
+                "assembly_guid": assembly_guid or f"guid-{rel_path}",
+                "virtual_path": rel_path or "Ansible_Playbooks/playbook_a.yml",
+            },
+        ),
+    )
+
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        scheduler,
+        "_server_ansible_runner",
+        lambda **kwargs: captured.append(kwargs) or f"runner-{len(captured)}",
+    )
+
+    scheduler._tick_once()
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT target_hostname, status, shared_execution, component_index, component_name
+              FROM scheduled_job_runs
+             WHERE job_id=?
+          ORDER BY target_hostname ASC, component_index ASC
+            """,
+            (70,),
+        )
+        run_rows = cur.fetchall()
+        cur.execute(
+            """
+            SELECT run_id, hostname, resolution_status, resolved_connection, wireguard_peer_ip
+              FROM scheduled_job_run_targets
+             WHERE run_id IN (SELECT id FROM scheduled_job_runs WHERE job_id=?)
+          ORDER BY run_id ASC
+            """,
+            (70,),
+        )
+        target_rows = cur.fetchall()
+        cur.execute(
+            """
+            SELECT run_id, component_kind, script_type, component_name
+              FROM scheduled_job_run_activity
+             WHERE run_id IN (SELECT id FROM scheduled_job_runs WHERE job_id=?)
+          ORDER BY run_id ASC
+            """,
+            (70,),
+        )
+        activity_rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    assert len(run_rows) == 4
+    assert all(row[1] == "Running" for row in run_rows)
+    assert all(bool(row[2]) is False for row in run_rows)
+    assert {(row[0], row[3], row[4]) for row in run_rows} == {
+        ("test-device", 0, "Playbook A"),
+        ("test-device", 1, "Playbook B"),
+        ("test-device-02", 0, "Playbook A"),
+        ("test-device-02", 1, "Playbook B"),
+    }
+    assert len(target_rows) == 4
+    assert all(row[2] == "eligible" for row in target_rows)
+    assert all(row[3] == "ssh" for row in target_rows)
+    assert {row[4] for row in target_rows} == {"10.77.0.15", "10.77.0.16"}
+    assert len(activity_rows) == 4
+    assert all(row[1] == "ansible" for row in activity_rows)
+    assert all(row[2] == "ansible" for row in activity_rows)
+
+    assert len(captured) == 4
+    assert all(call["connection"] == "ssh" for call in captured)
+    assert all(len(call["target_specifications"]) == 1 for call in captured)
+    assert all(call["target_specifications"][0]["host_vars"]["ansible_ssh_transfer_method"] == "scp" for call in captured)
+    assert all(call["target_specifications"][0]["host_vars"]["ansible_scp_extra_args"] == "-O" for call in captured)
+    assert {(call["hostname"], call["playbook_name"]) for call in captured} == {
+        ("test-device", "Playbook A"),
+        ("test-device", "Playbook B"),
+        ("test-device-02", "Playbook A"),
+        ("test-device-02", "Playbook B"),
+    }
+
+
+def test_shared_ansible_dispatch_uses_configured_scp_transfer_method(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS activity_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hostname TEXT,
+                script_path TEXT,
+                script_name TEXT,
+                script_type TEXT,
+                ran_at INTEGER,
+                status TEXT,
+                stdout TEXT,
+                stderr TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            UPDATE devices
+               SET operating_system=?,
+                   agent_id=?,
+                   connection_endpoint=''
+             WHERE guid=?
+            """,
+            ("Ubuntu 24.04 LTS", "test-device-agent", "GUID-TEST-0001"),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_runs(
+                id,
+                job_id,
+                scheduled_ts,
+                status,
+                created_at,
+                updated_at,
+                skip_reason,
+                shared_execution,
+                component_index,
+                component_kind,
+                component_name
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                62,
+                17,
+                1_773_782_702,
+                "Pending",
+                1_773_782_702,
+                1_773_782_702,
+                "",
+                1,
+                0,
+                "ansible",
+                "Playbook SCP",
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_run_targets(
+                run_id,
+                device_guid,
+                hostname,
+                site_id,
+                resolved_from_filter_id,
+                inventory_hostname,
+                wireguard_peer_ip,
+                resolved_connection,
+                resolution_status,
+                resolution_reason,
+                resolved_from_filter_ids_json,
+                created_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                62,
+                "GUID-TEST-0001",
+                "test-device",
+                1,
+                None,
+                "main_lab__test_device",
+                "",
+                "ssh",
+                "pending",
+                "",
+                json.dumps([]),
+                1_773_782_702,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("BOREALIS_SHARED_ANSIBLE_SSH_TRANSFER_METHOD", "scp")
+    monkeypatch.setenv("BOREALIS_SHARED_ANSIBLE_SCP_EXTRA_ARGS", "-O")
+    monkeypatch.setattr(
+        scheduler,
+        "_prepare_vpn_sessions",
+        lambda _agent_ids, required_ports=None: {"test-device-agent": {"virtual_ip": "10.77.0.15/32"}},
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_load_credential",
+        lambda _credential_id: {
+            "id": 5,
+            "name": "SSH Test Credential",
+            "connection_type": "ssh",
+            "username": "ubuntu",
+            "password": "secret",
+            "private_key": "",
+            "become_method": "",
+            "become_username": "",
+            "become_password": "",
+        },
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_resolve_runtime_document",
+        lambda rel_path, _default_type, assembly_guid=None: (
+            {
+                "name": "Playbook SCP",
+                "script": "---\n- hosts: all\n  gather_facts: false\n  tasks:\n    - ansible.builtin.ping:\n",
+                "variables": [],
+                "files": [],
+            },
+            {
+                "assembly_guid": assembly_guid or "guid-test-scp",
+                "virtual_path": rel_path or "Ansible_Playbooks/playbook_scp.yml",
+            },
+        ),
+    )
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        scheduler,
+        "_server_ansible_runner",
+        lambda **kwargs: captured.setdefault("kwargs", kwargs),
+    )
+
+    result = scheduler._dispatch_shared_ansible(
+        job_id=17,
+        run_row_id=62,
+        scheduled_ts=1_773_782_702,
+        run_mode="ssh",
+        component={"name": "Playbook SCP", "path": "playbook_scp.yml"},
+        credential_id=5,
+        use_service_account=False,
+    )
+
+    assert result is not None
+    target_specifications = captured["kwargs"]["target_specifications"]
+    assert target_specifications[0]["host_vars"]["ansible_ssh_transfer_method"] == "scp"
+    assert target_specifications[0]["host_vars"]["ansible_scp_extra_args"] == "-O"
+
+
+def test_tick_respects_individual_ansible_job_concurrency_limit(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    scheduler._running = False
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS activity_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hostname TEXT,
+                script_path TEXT,
+                script_name TEXT,
+                script_type TEXT,
+                ran_at INTEGER,
+                status TEXT,
+                stdout TEXT,
+                stderr TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_jobs(
+                id,
+                name,
+                components_json,
+                targets_json,
+                schedule_type,
+                execution_context,
+                credential_id,
+                use_service_account,
+                created_at,
+                updated_at,
+                enabled
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                71,
+                "Limited Individual SSH Job",
+                json.dumps([{"type": "ansible", "name": "Playbook A", "path": "playbook_a.yml"}]),
+                json.dumps(
+                    [
+                        {
+                            "kind": "device",
+                            "device_guid": "GUID-TEST-0001",
+                            "hostname": "test-device",
+                            "site_id": 1,
+                            "site_name": "Main Lab",
+                        },
+                        {
+                            "kind": "device",
+                            "device_guid": "GUID-TEST-0002",
+                            "hostname": "test-device-02",
+                            "site_id": 1,
+                            "site_name": "Main Lab",
+                        },
+                    ]
+                ),
+                "immediately",
+                "ssh_individual",
+                5,
+                0,
+                1_773_780_000,
+                1_773_780_000,
+                1,
+            ),
+        )
+        cur.execute(
+            """
+            UPDATE devices
+               SET operating_system=?,
+                   agent_id=?,
+                   connection_endpoint=''
+             WHERE guid=?
+            """,
+            ("Ubuntu 24.04 LTS", "test-device-agent", "GUID-TEST-0001"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(scheduler, "_resolve_occurrence_for_tick", lambda **_kwargs: 1_773_782_701)
+    monkeypatch.setattr(scheduled_job_module, "load_ansible_runner_settings", lambda: {"job_concurrency_limit": 1, "global_concurrency_limit": 50})
+    monkeypatch.setattr(scheduler, "_online_lookup", lambda: ["test-device", "test-device-02"])
+    monkeypatch.setattr(
+        scheduler._filter_matcher,
+        "resolve_target_entries",
+        lambda raw_targets, devices=None: (
+            ["test-device", "test-device-02"],
+            {
+                "resolved_targets": [
+                    {
+                        "device_guid": "guid-test-0001",
+                        "hostname": "test-device",
+                        "site_id": 1,
+                        "site_name": "Main Lab",
+                        "resolved_from_filter_ids": [],
+                    },
+                    {
+                        "device_guid": "guid-test-0002",
+                        "hostname": "test-device-02",
+                        "site_id": 1,
+                        "site_name": "Main Lab",
+                        "resolved_from_filter_ids": [],
+                    },
+                ]
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler._filter_matcher,
+        "fetch_devices",
+        lambda: [
+            {
+                "device_guid": "guid-test-0001",
+                "hostname": "test-device",
+                "site_id": 1,
+                "site_name": "Main Lab",
+                "agent_id": "test-device-agent",
+                "operating_system": "Ubuntu 24.04 LTS",
+                "connection_endpoint": "",
+            },
+            {
+                "device_guid": "guid-test-0002",
+                "hostname": "test-device-02",
+                "site_id": 1,
+                "site_name": "Main Lab",
+                "agent_id": "test-device-agent-02",
+                "operating_system": "Rocky Linux 9.7",
+                "connection_endpoint": "",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_prepare_vpn_sessions",
+        lambda _agent_ids, required_ports=None: {
+            "test-device-agent": {"virtual_ip": "10.77.0.15/32"},
+            "test-device-agent-02": {"virtual_ip": "10.77.0.16/32"},
+        },
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_load_credential",
+        lambda _credential_id: {
+            "id": 5,
+            "name": "SSH Test Credential",
+            "connection_type": "ssh",
+            "username": "ubuntu",
+            "password": "secret",
+            "private_key": "",
+            "become_method": "",
+            "become_username": "",
+            "become_password": "",
+        },
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_resolve_runtime_document",
+        lambda rel_path, _default_type, assembly_guid=None: (
+            {
+                "name": "Playbook A",
+                "script": "---\n- hosts: all\n  gather_facts: false\n  tasks:\n    - ansible.builtin.ping:\n",
+                "variables": [],
+                "files": [],
+            },
+            {
+                "assembly_guid": assembly_guid or "guid-playbook-a",
+                "virtual_path": rel_path or "Ansible_Playbooks/playbook_a.yml",
+            },
+        ),
+    )
+
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        scheduler,
+        "_server_ansible_runner",
+        lambda **kwargs: captured.append(kwargs) or "runner-1",
+    )
+
+    scheduler._tick_once()
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT target_hostname, status
+              FROM scheduled_job_runs
+             WHERE job_id=?
+          ORDER BY id ASC
+            """,
+            (71,),
+        )
+        run_rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    assert run_rows == [
+        ("test-device", "Running"),
+        ("test-device-02", "Pending"),
+    ]
+    assert captured
+    assert all(call["hostname"] == "test-device" for call in captured)
+
+
+def test_tick_respects_individual_ansible_global_concurrency_limit(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    scheduler._running = False
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS activity_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hostname TEXT,
+                script_path TEXT,
+                script_name TEXT,
+                script_type TEXT,
+                ran_at INTEGER,
+                status TEXT,
+                stdout TEXT,
+                stderr TEXT
+            )
+            """
+        )
+        cur.executemany(
+            """
+            INSERT INTO scheduled_jobs(
+                id,
+                name,
+                components_json,
+                targets_json,
+                schedule_type,
+                execution_context,
+                credential_id,
+                use_service_account,
+                created_at,
+                updated_at,
+                enabled
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                (
+                    72,
+                    "Global Limit Job A",
+                    json.dumps([{"type": "ansible", "name": "Playbook A", "path": "playbook_a.yml"}]),
+                    json.dumps(
+                        [
+                            {
+                                "kind": "device",
+                                "device_guid": "GUID-TEST-0001",
+                                "hostname": "test-device",
+                                "site_id": 1,
+                                "site_name": "Main Lab",
+                            }
+                        ]
+                    ),
+                    "immediately",
+                    "ssh_individual",
+                    5,
+                    0,
+                    1_773_780_000,
+                    1_773_780_000,
+                    1,
+                ),
+                (
+                    73,
+                    "Global Limit Job B",
+                    json.dumps([{"type": "ansible", "name": "Playbook A", "path": "playbook_a.yml"}]),
+                    json.dumps(
+                        [
+                            {
+                                "kind": "device",
+                                "device_guid": "GUID-TEST-0002",
+                                "hostname": "test-device-02",
+                                "site_id": 1,
+                                "site_name": "Main Lab",
+                            }
+                        ]
+                    ),
+                    "immediately",
+                    "ssh_individual",
+                    5,
+                    0,
+                    1_773_780_000,
+                    1_773_780_000,
+                    1,
+                ),
+            ),
+        )
+        cur.execute(
+            """
+            UPDATE devices
+               SET operating_system=?,
+                   agent_id=?,
+                   connection_endpoint=''
+             WHERE guid=?
+            """,
+            ("Ubuntu 24.04 LTS", "test-device-agent", "GUID-TEST-0001"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(scheduler, "_resolve_occurrence_for_tick", lambda **kwargs: 1_773_782_702)
+    monkeypatch.setattr(scheduled_job_module, "load_ansible_runner_settings", lambda: {"job_concurrency_limit": 20, "global_concurrency_limit": 1})
+    monkeypatch.setattr(scheduler, "_online_lookup", lambda: ["test-device", "test-device-02"])
+    monkeypatch.setattr(
+        scheduler._filter_matcher,
+        "resolve_target_entries",
+        lambda raw_targets, devices=None: (
+            [target.get("hostname") for target in raw_targets],
+            {
+                "resolved_targets": [
+                    {
+                        "device_guid": str(target.get("device_guid") or "").strip().lower(),
+                        "hostname": target.get("hostname"),
+                        "site_id": target.get("site_id"),
+                        "site_name": target.get("site_name"),
+                        "resolved_from_filter_ids": [],
+                    }
+                    for target in raw_targets
+                ]
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler._filter_matcher,
+        "fetch_devices",
+        lambda: [
+            {
+                "device_guid": "guid-test-0001",
+                "hostname": "test-device",
+                "site_id": 1,
+                "site_name": "Main Lab",
+                "agent_id": "test-device-agent",
+                "operating_system": "Ubuntu 24.04 LTS",
+                "connection_endpoint": "",
+            },
+            {
+                "device_guid": "guid-test-0002",
+                "hostname": "test-device-02",
+                "site_id": 1,
+                "site_name": "Main Lab",
+                "agent_id": "test-device-agent-02",
+                "operating_system": "Rocky Linux 9.7",
+                "connection_endpoint": "",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_prepare_vpn_sessions",
+        lambda _agent_ids, required_ports=None: {
+            "test-device-agent": {"virtual_ip": "10.77.0.15/32"},
+            "test-device-agent-02": {"virtual_ip": "10.77.0.16/32"},
+        },
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_load_credential",
+        lambda _credential_id: {
+            "id": 5,
+            "name": "SSH Test Credential",
+            "connection_type": "ssh",
+            "username": "ubuntu",
+            "password": "secret",
+            "private_key": "",
+            "become_method": "",
+            "become_username": "",
+            "become_password": "",
+        },
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_resolve_runtime_document",
+        lambda rel_path, _default_type, assembly_guid=None: (
+            {
+                "name": "Playbook A",
+                "script": "---\n- hosts: all\n  gather_facts: false\n  tasks:\n    - ansible.builtin.ping:\n",
+                "variables": [],
+                "files": [],
+            },
+            {
+                "assembly_guid": assembly_guid or "guid-playbook-a",
+                "virtual_path": rel_path or "Ansible_Playbooks/playbook_a.yml",
+            },
+        ),
+    )
+
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        scheduler,
+        "_server_ansible_runner",
+        lambda **kwargs: captured.append(kwargs) or f"runner-{len(captured)}",
+    )
+
+    scheduler._tick_once()
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT job_id, target_hostname, status
+              FROM scheduled_job_runs
+             WHERE job_id IN (?, ?)
+          ORDER BY job_id ASC, id ASC
+            """,
+            (72, 73),
+        )
+        run_rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    assert run_rows == [
+        (72, "test-device", "Running"),
+        (73, "test-device-02", "Pending"),
+    ]
+    assert captured
+    assert all(call["hostname"] == "test-device" for call in captured)
 
 
 class _FakeSigner:

@@ -13,10 +13,12 @@ import base64
 import json
 import logging
 import os
+import signal
 import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -36,6 +38,7 @@ _SHARED_ANSIBLE_SSH_KEX_ALGORITHMS_ENV = "BOREALIS_SHARED_ANSIBLE_SSH_KEX_ALGORI
 _DEFAULT_SHARED_ANSIBLE_SSH_KEX_ALGORITHMS = (
     "curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256"
 )
+_SHARED_ANSIBLE_TIMEOUT_TERMINATION_GRACE_SECONDS = 5
 
 
 def _now_ts() -> int:
@@ -283,6 +286,55 @@ class EngineAnsibleRunner:
         )
         return RUN_STATUS_TIMED_OUT, stdout_text, stderr_text
 
+    def _terminate_process_group(self, process: Optional[subprocess.Popen[str]], *, hostname: str) -> None:
+        if process is None or process.poll() is not None:
+            return
+        try:
+            if hasattr(os, "killpg") and getattr(process, "pid", None):
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=_SHARED_ANSIBLE_TIMEOUT_TERMINATION_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=_SHARED_ANSIBLE_TIMEOUT_TERMINATION_GRACE_SECONDS)
+                return
+            process.terminate()
+            try:
+                process.wait(timeout=_SHARED_ANSIBLE_TIMEOUT_TERMINATION_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=_SHARED_ANSIBLE_TIMEOUT_TERMINATION_GRACE_SECONDS)
+        except ProcessLookupError:
+            return
+        except Exception:
+            self._logger.debug(
+                "Failed to terminate timed-out Ansible process tree for host=%s",
+                hostname,
+                exc_info=True,
+            )
+
+    def _collect_timeout_process_output(self, process: Optional[subprocess.Popen[str]], exc: Any) -> None:
+        if process is None:
+            return
+        try:
+            trailing_stdout, trailing_stderr = process.communicate(timeout=1)
+        except Exception:
+            return
+        existing_stdout = _coerce_subprocess_output(getattr(exc, "stdout", None))
+        existing_stderr = _coerce_subprocess_output(getattr(exc, "stderr", None))
+        trailing_stdout = _coerce_subprocess_output(trailing_stdout)
+        trailing_stderr = _coerce_subprocess_output(trailing_stderr)
+        if trailing_stdout:
+            combined_stdout = existing_stdout or ""
+            if trailing_stdout not in combined_stdout:
+                combined_stdout += trailing_stdout
+            setattr(exc, "stdout", combined_stdout)
+        if trailing_stderr:
+            combined_stderr = existing_stderr or ""
+            if trailing_stderr not in combined_stderr:
+                combined_stderr += trailing_stderr
+            setattr(exc, "stderr", combined_stderr)
+
     # ------------------------------------------------------------------
     # Runtime staging helpers
     # ------------------------------------------------------------------
@@ -424,11 +476,13 @@ class EngineAnsibleRunner:
         *,
         inventory_path: Path,
         tmp_root: Path,
+        control_path_dir: Path,
         ssh_known_hosts_path: Path,
     ) -> None:
         collections_root = self._collections_root().resolve()
         local_tmp = tmp_root / "local_tmp"
         local_tmp.mkdir(parents=True, exist_ok=True)
+        control_path_dir.mkdir(parents=True, exist_ok=True)
         ssh_known_hosts_path.parent.mkdir(parents=True, exist_ok=True)
         ssh_known_hosts_path.touch(exist_ok=True)
         try:
@@ -466,6 +520,7 @@ class EngineAnsibleRunner:
                     "remote_tmp = /tmp/.ansible-borealis",
                     "",
                     "[ssh_connection]",
+                    f"control_path_dir = {control_path_dir}",
                     "ssh_common_args = " + " ".join(ssh_common_args_parts),
                     "",
                 ]
@@ -494,6 +549,7 @@ class EngineAnsibleRunner:
         ssh_known_hosts_path = root / "ssh_known_hosts"
         extra_vars_path = root / "extra_vars.json"
         runtime_dir = root / "runtime"
+        control_path_dir = Path(tempfile.gettempdir()) / "ansible_controlplane" / run_id[:12]
         root.mkdir(parents=True, exist_ok=True)
         project_dir.mkdir(parents=True, exist_ok=True)
         runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -546,6 +602,7 @@ class EngineAnsibleRunner:
             cfg_path,
             inventory_path=inventory_path,
             tmp_root=root / "tmp",
+            control_path_dir=control_path_dir,
             ssh_known_hosts_path=ssh_known_hosts_path,
         )
 
@@ -558,6 +615,7 @@ class EngineAnsibleRunner:
             "ssh_known_hosts_path": ssh_known_hosts_path,
             "extra_vars_path": extra_vars_path,
             "runtime_dir": runtime_dir,
+            "control_path_dir": control_path_dir,
             "limit_name": inventory_details["limit_name"],
             "inventory_hosts": inventory_details["inventory_hosts"],
         }
@@ -762,6 +820,7 @@ class EngineAnsibleRunner:
             "target_count": len(list(target_specifications or [])),
         }
         workspace: Optional[Dict[str, Any]] = None
+        process: Optional[subprocess.Popen[str]] = None
 
         try:
             workspace = self._prepare_workspace(
@@ -813,22 +872,24 @@ class EngineAnsibleRunner:
                 ),
                 host=hostname,
             )
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 command,
                 cwd=str(workspace["project_dir"]),
                 env=env,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 errors="replace",
-                check=False,
-                timeout=run_timeout_seconds,
+                start_new_session=True,
             )
-            stdout_text = (completed.stdout or "").strip()
-            stderr_text = (completed.stderr or "").strip()
-            status = RUN_STATUS_SUCCESS if completed.returncode == 0 else RUN_STATUS_FAILED
+            stdout_raw, stderr_raw = process.communicate(timeout=run_timeout_seconds)
+            stdout_text = (stdout_raw or "").strip()
+            stderr_text = (stderr_raw or "").strip()
+            returncode = int(process.returncode or 0)
+            status = RUN_STATUS_SUCCESS if returncode == 0 else RUN_STATUS_FAILED
             recap_payload.update(
                 {
-                    "returncode": int(completed.returncode),
+                    "returncode": returncode,
                     "inventory_group": workspace["limit_name"],
                     "inventory_hosts": list(workspace.get("inventory_hosts") or []),
                     "timeout_seconds": int(run_timeout_seconds),
@@ -837,7 +898,7 @@ class EngineAnsibleRunner:
             )
             if status == RUN_STATUS_SUCCESS:
                 self._log(
-                    f"run complete run_id={run_id} host={hostname} rc={completed.returncode}",
+                    f"run complete run_id={run_id} host={hostname} rc={returncode}",
                     host=hostname,
                 )
             else:
@@ -850,11 +911,13 @@ class EngineAnsibleRunner:
                     preview_bits.append(f"stderr_preview={stderr_preview}")
                 preview_suffix = f" {' '.join(preview_bits)}" if preview_bits else ""
                 self._log(
-                    f"run failed run_id={run_id} host={hostname} rc={completed.returncode}{preview_suffix}",
+                    f"run failed run_id={run_id} host={hostname} rc={returncode}{preview_suffix}",
                     level="ERROR",
                     host=hostname,
                 )
         except subprocess.TimeoutExpired as exc:
+            self._terminate_process_group(process, hostname=hostname)
+            self._collect_timeout_process_output(process, exc)
             status, stdout_text, stderr_text = self._handle_timeout_exception(
                 run_id=run_id,
                 hostname=hostname,
@@ -865,6 +928,8 @@ class EngineAnsibleRunner:
         except Exception as exc:
             timeout_exc = _coerce_timeout_expired_exception(exc)
             if timeout_exc is not None:
+                self._terminate_process_group(process, hostname=hostname)
+                self._collect_timeout_process_output(process, timeout_exc)
                 status, stdout_text, stderr_text = self._handle_timeout_exception(
                     run_id=run_id,
                     hostname=hostname,
@@ -898,3 +963,12 @@ class EngineAnsibleRunner:
                     shutil.rmtree(str(workspace["root"]), ignore_errors=True)
                 except Exception:
                     self._logger.debug("Failed to clean Ansible workspace %s", workspace.get("root"), exc_info=True)
+            if workspace and workspace.get("control_path_dir"):
+                try:
+                    shutil.rmtree(str(workspace["control_path_dir"]), ignore_errors=True)
+                except Exception:
+                    self._logger.debug(
+                        "Failed to clean Ansible control-path workspace %s",
+                        workspace.get("control_path_dir"),
+                        exc_info=True,
+                    )

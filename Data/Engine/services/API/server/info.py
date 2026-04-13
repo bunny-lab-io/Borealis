@@ -39,6 +39,12 @@ from ....public_endpoints import public_hostname as resolve_public_hostname
 from ....public_endpoints import public_vnc_path as resolve_public_vnc_path
 from ....public_endpoints import wireguard_endpoint
 from ....security import signing
+from ...ansible.runtime_settings import (
+    DEFAULT_ANSIBLE_RUNNER_GLOBAL_CONCURRENCY_LIMIT,
+    DEFAULT_ANSIBLE_RUNNER_JOB_CONCURRENCY_LIMIT,
+    load_ansible_runner_settings,
+    save_ansible_runner_settings,
+)
 from ...VPN import WireGuardServerConfig, WireGuardServerManager, VpnTunnelService
 from ...auth import RequestAuthContext
 
@@ -946,6 +952,32 @@ def _collect_security_payload(adapters: "EngineServiceAdapters") -> Dict[str, An
     return {"aegis": aegis_payload}
 
 
+def _collect_ansible_runner_payload() -> Dict[str, Any]:
+    try:
+        settings = load_ansible_runner_settings()
+    except Exception:
+        settings = {
+            "job_concurrency_limit": DEFAULT_ANSIBLE_RUNNER_JOB_CONCURRENCY_LIMIT,
+            "global_concurrency_limit": DEFAULT_ANSIBLE_RUNNER_GLOBAL_CONCURRENCY_LIMIT,
+        }
+    return {
+        "job_concurrency_limit": max(
+            1,
+            _safe_int(
+                settings.get("job_concurrency_limit"),
+                DEFAULT_ANSIBLE_RUNNER_JOB_CONCURRENCY_LIMIT,
+            ),
+        ),
+        "global_concurrency_limit": max(
+            1,
+            _safe_int(
+                settings.get("global_concurrency_limit"),
+                DEFAULT_ANSIBLE_RUNNER_GLOBAL_CONCURRENCY_LIMIT,
+            ),
+        ),
+    }
+
+
 def _build_overview_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]:
     return {
         "collected_at": datetime.now(timezone.utc).isoformat(),
@@ -955,6 +987,7 @@ def _build_overview_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]
         "wireguard": _collect_wireguard_payload(adapters),
         "public_edge": _collect_public_edge_payload(adapters.context),
         "security": _collect_security_payload(adapters),
+        "ansible_runner": _collect_ansible_runner_payload(),
         "operator_session_count": _collect_operator_session_count(adapters),
     }
 
@@ -1090,6 +1123,51 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if admin_error:
             return jsonify(admin_error[0]), admin_error[1]
         return jsonify(_build_overview_payload(adapters))
+
+    @blueprint.route("/api/server/ansible-runner-settings", methods=["GET"])
+    def get_ansible_runner_settings() -> Any:
+        admin_error = auth.require_admin()
+        if admin_error:
+            return jsonify(admin_error[0]), admin_error[1]
+        return jsonify(_collect_ansible_runner_payload())
+
+    @blueprint.route("/api/server/ansible-runner-settings", methods=["PUT"])
+    def update_ansible_runner_settings() -> Any:
+        admin_error = auth.require_admin()
+        if admin_error:
+            return jsonify(admin_error[0]), admin_error[1]
+        body = request.get_json(silent=True) or {}
+        normalized: Dict[str, int] = {}
+        for field_name, label in (
+            ("job_concurrency_limit", "Per-job concurrency"),
+            ("global_concurrency_limit", "Global concurrency"),
+        ):
+            raw_value = body.get(field_name)
+            if raw_value in {None, ""}:
+                return _error_response(
+                    "invalid_ansible_runner_settings",
+                    f"{label} is required.",
+                    400,
+                )
+            try:
+                parsed_value = int(raw_value)
+            except Exception:
+                return _error_response(
+                    "invalid_ansible_runner_settings",
+                    f"{label} must be a whole number greater than 0.",
+                    400,
+                )
+            if parsed_value < 1:
+                return _error_response(
+                    "invalid_ansible_runner_settings",
+                    f"{label} must be a whole number greater than 0.",
+                    400,
+                )
+            normalized[field_name] = parsed_value
+        save_ansible_runner_settings(
+            normalized
+        )
+        return jsonify({"status": "ok", "ansible_runner": _collect_ansible_runner_payload()})
 
     @blueprint.route("/api/server/services/<service_key>/restart", methods=["POST"])
     def restart_service(service_key: str) -> Any:

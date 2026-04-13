@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.serialization import Encoding
 from cryptography.x509.oid import NameOID
 
 from Data.Engine.services.API.server import info as server_info_api
+from Data.Engine.services.ansible import runtime_settings as ansible_runtime_settings
 from Data.Engine.services.WebSocket.__init__ import OperatorPresenceRegistry
 
 from .conftest import EngineTestHarness
@@ -207,6 +208,60 @@ def test_server_overview_includes_operator_session_count(engine_harness: EngineT
     assert payload["operator_session_count"] == 1
     assert payload["security"]["aegis"]["unlock_scope"] == "engine_global"
     assert payload["services"][0]["unit_name"] == "borealis-engine.service"
+
+
+def test_server_ansible_runner_settings_round_trip(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _admin_client(engine_harness)
+    settings_path = tmp_path / "ansible_runner_settings.json"
+
+    monkeypatch.setattr(
+        server_info_api,
+        "load_ansible_runner_settings",
+        lambda: ansible_runtime_settings.load_ansible_runner_settings(settings_path),
+    )
+    monkeypatch.setattr(
+        server_info_api,
+        "save_ansible_runner_settings",
+        lambda mapping: ansible_runtime_settings.save_ansible_runner_settings(mapping, settings_path),
+    )
+
+    initial_response = client.get("/api/server/ansible-runner-settings")
+    assert initial_response.status_code == 200
+    assert initial_response.get_json() == {
+        "job_concurrency_limit": 20,
+        "global_concurrency_limit": 50,
+    }
+
+    invalid_response = client.put(
+        "/api/server/ansible-runner-settings",
+        json={"job_concurrency_limit": 0, "global_concurrency_limit": 50},
+    )
+    assert invalid_response.status_code == 400
+    invalid_payload = invalid_response.get_json()
+    assert invalid_payload["error"] == "invalid_ansible_runner_settings"
+
+    update_response = client.put(
+        "/api/server/ansible-runner-settings",
+        json={"job_concurrency_limit": 12, "global_concurrency_limit": 37},
+    )
+    assert update_response.status_code == 200
+    update_payload = update_response.get_json()
+    assert update_payload["ansible_runner"] == {
+        "job_concurrency_limit": 12,
+        "global_concurrency_limit": 37,
+    }
+
+    overview_response = client.get("/api/server/overview")
+    assert overview_response.status_code == 200
+    overview_payload = overview_response.get_json()
+    assert overview_payload["ansible_runner"] == {
+        "job_concurrency_limit": 12,
+        "global_concurrency_limit": 37,
+    }
 
 
 def test_discover_postgresql_cluster_units_ignores_template(monkeypatch) -> None:

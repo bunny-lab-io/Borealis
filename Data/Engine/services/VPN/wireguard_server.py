@@ -35,6 +35,24 @@ from cryptography.hazmat.primitives.asymmetric import x25519
 
 from ... import config as engine_config
 
+
+def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int = 65535) -> int:
+    raw = os.environ.get(name)
+    try:
+        value = int(raw) if raw is not None else default
+    except Exception:
+        value = default
+    if value < min_value:
+        return min_value
+    if value > max_value:
+        return max_value
+    return value
+
+
+def _resolve_wireguard_mtu() -> int:
+    return _env_int("BOREALIS_WIREGUARD_MTU", 1420, min_value=1280, max_value=65535)
+
+
 def _build_logger(log_path: Path) -> logging.Logger:
     logger = logging.getLogger("borealis.engine.wireguard")
     if not logger.handlers:
@@ -80,6 +98,7 @@ class WireGuardServerManager:
         self._service_display_name = "Borealis - WireGuard - Engine"
         self._config_dir = self._resolve_config_dir()
         self._interface_name = self._resolve_interface_name()
+        self._interface_mtu = _resolve_wireguard_mtu()
         self._wireguard_exe = self._resolve_wireguard_exe()
         self._wg_quick = shutil.which("wg-quick") or ""
         self._wg = shutil.which("wg") or ""
@@ -470,6 +489,21 @@ class WireGuardServerManager:
         if code != 0:
             detail = (err or out or "unknown error").strip()
             raise RuntimeError(f"WireGuard Linux address configuration failed: {detail}")
+
+        code, out, err = self._run_command(
+            [
+                self._ip,
+                "link",
+                "set",
+                "dev",
+                self._interface_name,
+                "mtu",
+                str(int(self._interface_mtu)),
+            ]
+        )
+        if code != 0:
+            detail = (err or out or "unknown error").strip()
+            raise RuntimeError(f"WireGuard Linux MTU configuration failed: {detail}")
 
         code, out, err = self._run_command([self._ip, "link", "set", "up", "dev", self._interface_name])
         if code != 0:
@@ -1147,6 +1181,7 @@ class WireGuardServerManager:
                 f"PrivateKey = {self.server_private_key}",
                 f"ListenPort = {self.config.port}",
                 f"Address = {iface}",
+                f"MTU = {self._interface_mtu}",
                 "",
             ]
         )

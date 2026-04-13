@@ -622,6 +622,11 @@ export default function ServerInfo() {
   const [timezoneSaving, setTimezoneSaving] = useState(false);
   const [timezoneError, setTimezoneError] = useState("");
   const [selectedTimezone, setSelectedTimezone] = useState("");
+  const [ansibleRunnerDialogOpen, setAnsibleRunnerDialogOpen] = useState(false);
+  const [ansibleRunnerSaving, setAnsibleRunnerSaving] = useState(false);
+  const [ansibleRunnerError, setAnsibleRunnerError] = useState("");
+  const [ansibleRunnerJobLimit, setAnsibleRunnerJobLimit] = useState("20");
+  const [ansibleRunnerGlobalLimit, setAnsibleRunnerGlobalLimit] = useState("50");
   const [timezoneMeta, setTimezoneMeta] = useState({
     currentTimezone: "",
     changeSupported: null,
@@ -858,6 +863,73 @@ export default function ServerInfo() {
     setTimezoneError("");
   }, [timezoneSaving]);
 
+  const openAnsibleRunnerDialog = useCallback(() => {
+    const currentSettings = overview?.ansible_runner || {};
+    setAnsibleRunnerJobLimit(String(Number(currentSettings?.job_concurrency_limit || 20)));
+    setAnsibleRunnerGlobalLimit(String(Number(currentSettings?.global_concurrency_limit || 50)));
+    setAnsibleRunnerError("");
+    setAnsibleRunnerDialogOpen(true);
+  }, [overview]);
+
+  const closeAnsibleRunnerDialog = useCallback(() => {
+    if (ansibleRunnerSaving) return;
+    setAnsibleRunnerDialogOpen(false);
+    setAnsibleRunnerError("");
+  }, [ansibleRunnerSaving]);
+
+  const applyAnsibleRunnerSettings = useCallback(async () => {
+    const jobLimit = Number(ansibleRunnerJobLimit);
+    const globalLimit = Number(ansibleRunnerGlobalLimit);
+    if (!Number.isFinite(jobLimit) || jobLimit < 1 || !Number.isInteger(jobLimit)) {
+      setAnsibleRunnerError("Per-job concurrency must be a whole number greater than 0.");
+      return;
+    }
+    if (!Number.isFinite(globalLimit) || globalLimit < 1 || !Number.isInteger(globalLimit)) {
+      setAnsibleRunnerError("Global concurrency must be a whole number greater than 0.");
+      return;
+    }
+    setAnsibleRunnerSaving(true);
+    setAnsibleRunnerError("");
+    try {
+      const response = await fetch("/api/server/ansible-runner-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          job_concurrency_limit: jobLimit,
+          global_concurrency_limit: globalLimit,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
+      }
+      setAnsibleRunnerDialogOpen(false);
+      await sendScopedNotification({
+        title: "Ansible Limits Updated",
+        message: `Scheduled Ansible concurrency updated to ${jobLimit} per job and ${globalLimit} globally.`,
+        icon: "settings",
+        variant: "info",
+      });
+      setBoostPollingUntil(Date.now() + BOOSTED_POLL_DURATION_MS);
+      await fetchOverview({ background: false });
+    } catch (requestError) {
+      const message =
+        requestError instanceof Error && requestError.message
+          ? requestError.message
+          : "Borealis could not update Ansible runner settings.";
+      setAnsibleRunnerError(message);
+      await sendScopedNotification({
+        title: "Ansible Limits Update Failed",
+        message,
+        icon: "warning",
+        variant: "error",
+      });
+    } finally {
+      setAnsibleRunnerSaving(false);
+    }
+  }, [ansibleRunnerGlobalLimit, ansibleRunnerJobLimit, fetchOverview, sendScopedNotification]);
+
   const applyTimezoneChange = useCallback(async () => {
     const timezoneId = String(selectedTimezone || "").trim();
     if (!timezoneId) {
@@ -976,6 +1048,7 @@ export default function ServerInfo() {
   const operatorSessionCount = Math.max(0, Number(overview?.operator_session_count || 0));
   const wireguard = overview?.wireguard || {};
   const publicEdge = overview?.public_edge || {};
+  const ansibleRunner = overview?.ansible_runner || {};
   const certificates = Array.isArray(publicEdge?.certificates) ? publicEdge.certificates : [];
   const worstCert = getWorstCertificate(certificates);
   const aegis = overview?.security?.aegis || {};
@@ -1104,6 +1177,20 @@ export default function ServerInfo() {
         actions: [],
       },
       {
+        id: "ansible_runner_limits",
+        name: "Scheduled Ansible Runner",
+        value: `${Number(ansibleRunner?.job_concurrency_limit || 20)} / ${Number(ansibleRunner?.global_concurrency_limit || 50)}`,
+        details: "Per-job / global runner limits for scheduled Ansible execution on this engine",
+        actions: [
+          {
+            id: "edit_ansible_runner_limits",
+            label: ansibleRunnerSaving ? "Saving..." : "Edit Limits",
+            disabled: ansibleRunnerSaving,
+            onClick: openAnsibleRunnerDialog,
+          },
+        ],
+      },
+      {
         id: "system_time",
         name: "System Time",
         value: clockValue,
@@ -1132,7 +1219,7 @@ export default function ServerInfo() {
         actions: [],
       },
     ],
-    [clockValue, timezoneDisplayValue, loadAverageCaption, loadAverageValue, openTimezoneDialog, timezoneChangeSupported, timezoneSaving, host]
+    [ansibleRunner, ansibleRunnerSaving, clockValue, timezoneDisplayValue, loadAverageCaption, loadAverageValue, openAnsibleRunnerDialog, openTimezoneDialog, timezoneChangeSupported, timezoneSaving, host]
   );
 
   const resourceRows = useMemo(
@@ -1485,6 +1572,59 @@ export default function ServerInfo() {
           </Button>
           <Button onClick={applyTimezoneChange} sx={DIALOG_PRIMARY_BUTTON_SX} disabled={timezoneSaving || timezoneLoading}>
             {timezoneSaving ? "Applying..." : "Apply Timezone"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={ansibleRunnerDialogOpen} onClose={closeAnsibleRunnerDialog} PaperProps={{ sx: DIALOG_PAPER_SX }}>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="Scheduled Ansible Concurrency"
+            subtitle="Tune how many scheduled Ansible runners Borealis can execute at once."
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
+          <Typography sx={DIALOG_BODY_TEXT_SX}>
+            Borealis enforces both the per-job cap and the shared global cap whenever scheduled Ansible jobs dispatch Engine-side runners. Individual modes fan out across targets, while shared modes still consume runner slots per playbook component.
+          </Typography>
+          <Stack spacing={2} sx={{ mt: 2 }}>
+            <TextField
+              label="Ansible_Runner_Job_Concurrency_Limit"
+              type="number"
+              value={ansibleRunnerJobLimit}
+              onChange={(event) => {
+                setAnsibleRunnerJobLimit(event.target.value);
+                if (ansibleRunnerError) setAnsibleRunnerError("");
+              }}
+              inputProps={{ min: 1, step: 1 }}
+              sx={DIALOG_INPUT_SX}
+              helperText="Maximum concurrent scheduled Ansible runners allowed per job occurrence."
+            />
+            <TextField
+              label="Ansible_Runner_Global_Concurrency_Limit"
+              type="number"
+              value={ansibleRunnerGlobalLimit}
+              onChange={(event) => {
+                setAnsibleRunnerGlobalLimit(event.target.value);
+                if (ansibleRunnerError) setAnsibleRunnerError("");
+              }}
+              inputProps={{ min: 1, step: 1 }}
+              sx={DIALOG_INPUT_SX}
+              helperText="Maximum concurrent scheduled Ansible runners allowed across all scheduled jobs on this engine."
+            />
+          </Stack>
+          {ansibleRunnerError ? (
+            <Typography sx={{ mt: 1.4, color: "#ffb7b7", fontSize: "0.84rem", lineHeight: 1.45 }}>
+              {ansibleRunnerError}
+            </Typography>
+          ) : null}
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={closeAnsibleRunnerDialog} sx={DIALOG_BUTTON_SX} disabled={ansibleRunnerSaving}>
+            Cancel
+          </Button>
+          <Button onClick={applyAnsibleRunnerSettings} sx={DIALOG_PRIMARY_BUTTON_SX} disabled={ansibleRunnerSaving}>
+            {ansibleRunnerSaving ? "Saving..." : "Save Limits"}
           </Button>
         </DialogActions>
       </Dialog>

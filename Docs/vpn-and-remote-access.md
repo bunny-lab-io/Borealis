@@ -10,6 +10,7 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - One persistent tunnel per agent, established at agent boot and shared across operators.
 - Host-only routing: each agent gets a /32; no client-to-client routes.
 - Keepalive: `PersistentKeepalive = 30` seconds on the agent.
+- Borealis now renders an explicit WireGuard `MTU = 1420` on both the Engine listener and Agent client configs by default, configurable through `BOREALIS_WIREGUARD_MTU`, so jumbo-frame auto-detection cannot stall larger SSH/Ansible transfers on mixed-MTU paths.
 - No idle teardown while the agent service is running.
 - Agent recovery: if the Windows agent receives the same `tunnel_id` again and its WireGuard service is stopped or unhealthy, it rerenders the config and attempts an in-place service recovery instead of assuming the tunnel is still healthy.
 - Engine recovery: in persistent mode the Engine keeps one Linux WireGuard interface online, updates peers live one at a time during normal connect/disconnect activity, and only falls back to full peer reconciliation when the listener is unhealthy. A watchdog validates listener health every 15 seconds, uses an effective probe grace aligned with WireGuard keepalive timing before declaring `stale_handshake`, and rate-limits full recovery attempts to one every 30 seconds while active sessions exist.
@@ -130,6 +131,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - Confirm the agent successfully calls `/api/agent/vpn/ensure` after boot.
 - Confirm `/api/tunnel/status` returns `status=up` and `agent_socket=true` for a healthy tunnel, and inspect `listener_healthy` / `recovery_in_progress` when the transport is degraded.
 - On the Engine, verify peer-subnet routing lands on the WireGuard interface: `ip route get <agent_vpn_ip>` should resolve to `dev borealis-wg`, not the default LAN gateway.
+- Verify the WireGuard interface MTU is clamped to the expected value on both ends: `ip -d link show borealis-wg` (Engine) and `ip -d link show borealis` (Linux Agent) should normally report `mtu 1420` unless `BOREALIS_WIREGUARD_MTU` has been intentionally overridden.
 - Verify `Agent/Borealis/Settings/WireGuard/Borealis.conf` during an active session.
 - Test TCP shell reachability: `Test-NetConnection <agent_vpn_ip> -Port 47002`.
 
@@ -145,6 +147,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - Transport: WireGuard/UDP on port 30000.
 - Sessions: one persistent VPN tunnel per agent; multiple operators share it.
 - Routing: host-only /32 per agent; AllowedIPs restricted to the agent /32 and engine /32; no client-to-client.
+- MTU: Borealis sets an explicit WireGuard MTU of `1420` by default on both sides (override with `BOREALIS_WIREGUARD_MTU`) instead of relying on host/path auto-discovery, because oversized PMTU values can let interactive SSH succeed while larger staged payloads stall indefinitely.
 - Keepalive: `PersistentKeepalive = 30` seconds; tunnels stay up while agents run.
 - Keys: WireGuard server keys under `Engine/Certificates/VPN_Server`; client keys under `Agent/Borealis/Certificates/VPN_Client`.
 

@@ -1,10 +1,9 @@
 # ======================================================
 # Data\Engine\services\API\assemblies\execution.py
-# Description: Quick job dispatch and activity history endpoints for script and playbook assemblies.
+# Description: Quick job dispatch and activity history endpoints for script assemblies.
 #
 # API Endpoints (if applicable):
 # - POST /api/scripts/quick_run (Token Authenticated) - Queues a script assembly for execution on agents.
-# - POST /api/ansible/quick_run (Token Authenticated) - (Not Yet Implemented) Placeholder for Ansible assemblies.
 # - GET/DELETE /api/device/activity/<hostname> (Token Authenticated) - Retrieves or clears device activity history.
 # - GET /api/device/activity/job/<int:job_id> (Token Authenticated) - Retrieves a specific activity record.
 # ======================================================
@@ -702,13 +701,6 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": str(exc)}), 500
 
         return jsonify({"results": results})
-
-    @blueprint.route("/api/ansible/quick_run", methods=["POST"])
-    def ansible_quick_run():
-        _, error = auth.require_user()
-        if error:
-            return jsonify(error[0]), error[1]
-        return jsonify({"error": "Ansible quick run is not yet available in the Engine runtime."}), 501
 
     @blueprint.route("/api/device/activity/<hostname>", methods=["GET", "DELETE"])
     def device_activity(hostname: str):

@@ -675,9 +675,21 @@ const EXEC_CONTEXT_OPTIONS = Object.freeze([
     domain: "script",
   },
   {
+    value: "ssh_individual",
+    title: "Ansible Playbook via SSH (Run Individually)",
+    detail: "Runs the selected playbook assemblies from the Engine one target at a time with bounded concurrency.",
+    domain: "ansible",
+  },
+  {
     value: "ssh",
     title: "Ansible Playbook via SSH (Run Together)",
     detail: "Runs the selected playbook assemblies from the Engine in one shared SSH batch.",
+    domain: "ansible",
+  },
+  {
+    value: "winrm_individual",
+    title: "Ansible Playbook via WinRM (Run Individually)",
+    detail: "Runs the selected playbook assemblies from the Engine one target at a time with bounded concurrency.",
     domain: "ansible",
   },
   {
@@ -707,7 +719,16 @@ const EXEC_CONTEXT_COPY = Object.freeze(
 );
 
 const SCRIPT_EXEC_CONTEXTS = Object.freeze(["system", "current_user"]);
-const ANSIBLE_EXEC_CONTEXTS = Object.freeze(["ssh", "winrm"]);
+const ANSIBLE_EXEC_CONTEXTS = Object.freeze(["ssh", "ssh_individual", "winrm", "winrm_individual"]);
+
+const normalizeRemoteTransport = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "winrm" || normalized === "winrm_individual") return "winrm";
+  if (normalized === "ssh" || normalized === "ssh_individual") return "ssh";
+  return "";
+};
+
+const isWinRMExecContext = (value) => normalizeRemoteTransport(value) === "winrm";
 
 const SCHEDULE_LABELS = {
   immediately: "Immediate",
@@ -1491,7 +1512,7 @@ export default function CreateJob() {
   }, [componentDomainSummary, execContext]);
 
   const defaultExecContext = useMemo(() => {
-    if (componentDomainSummary.kind === "ansible") return "ssh";
+    if (componentDomainSummary.kind === "ansible") return "ssh_individual";
     if (componentDomainSummary.kind === "script") return "system";
     return "system";
   }, [componentDomainSummary]);
@@ -1503,7 +1524,7 @@ export default function CreateJob() {
   const handleExecContextChange = useCallback((value) => {
     const normalized = String(value || "system").toLowerCase();
     setExecContext(normalized);
-    if (normalized === "winrm") {
+    if (isWinRMExecContext(normalized)) {
       setUseSvcAccount(true);
       setSelectedCredentialId("");
     } else {
@@ -1512,7 +1533,7 @@ export default function CreateJob() {
   }, []);
   const filteredCredentials = useMemo(() => {
     if (!remoteExec) return credentials;
-    const target = execContext === "winrm" ? "winrm" : "ssh";
+    const target = normalizeRemoteTransport(execContext) || "ssh";
     return credentials.filter((cred) => String(cred.connection_type || "").toLowerCase() === target);
   }, [credentials, remoteExec, execContext]);
   const credentialNeedsReset = useCallback((credential) => {
@@ -1536,7 +1557,7 @@ export default function CreateJob() {
     if (!remoteExec) {
       return;
     }
-    if (execContext === "winrm" && useSvcAccount) {
+    if (isWinRMExecContext(execContext) && useSvcAccount) {
       setSelectedCredentialId("");
       return;
     }
@@ -2552,7 +2573,7 @@ export default function CreateJob() {
     const hasRequiredTargets = isWorkflowJob ? true : targets.length > 0;
     const base = jobName.trim().length > 0 && components.length > 0 && hasRequiredTargets;
     if (!base) return false;
-    const needsCredential = !isWorkflowJob && remoteExec && !(execContext === "winrm" && useSvcAccount);
+    const needsCredential = !isWorkflowJob && remoteExec && !(isWinRMExecContext(execContext) && useSvcAccount);
     if (needsCredential && !selectedCredentialId) return false;
     if (scheduleType !== "immediately") {
       return !!startDateTime;
@@ -3252,7 +3273,7 @@ export default function CreateJob() {
         setSelectedCredentialId(
           resolvedInitialJob.credential_id ? String(resolvedInitialJob.credential_id) : ""
         );
-        if ((resolvedInitialJob.execution_context || "").toLowerCase() === "winrm") {
+        if (isWinRMExecContext(resolvedInitialJob.execution_context || "")) {
           setUseSvcAccount(resolvedInitialJob.use_service_account !== false);
         } else {
           setUseSvcAccount(false);
@@ -3487,7 +3508,7 @@ export default function CreateJob() {
         return;
       }
     }
-    if (!workflowMode && remoteExec && !(execContext === "winrm" && useSvcAccount) && !selectedCredentialId) {
+    if (!workflowMode && remoteExec && !(isWinRMExecContext(execContext) && useSvcAccount) && !selectedCredentialId) {
       alert("Please select a credential for this execution context.");
       return;
     }
@@ -3520,7 +3541,7 @@ export default function CreateJob() {
       duration: { stopAfterEnabled, expiration },
       execution_context: workflowMode ? "system" : execContext,
       credential_id: workflowMode ? null : (remoteExec && !useSvcAccount && selectedCredentialId ? Number(selectedCredentialId) : null),
-      use_service_account: workflowMode ? false : (execContext === "winrm" ? Boolean(useSvcAccount) : false)
+      use_service_account: workflowMode ? false : (isWinRMExecContext(execContext) ? Boolean(useSvcAccount) : false)
     };
     try {
       const resp = await fetch(initialJob && initialJob.id ? `/api/scheduled_jobs/${initialJob.id}` : "/api/scheduled_jobs", {
@@ -4041,7 +4062,7 @@ const heroTiles = useMemo(() => {
             )}
             {!isWorkflowJob && !mixedDomainWarning && remoteExec && (
               <Box sx={{ mt: 2, display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
-                {execContext === "winrm" && (
+                {isWinRMExecContext(execContext) && (
                   <FormControlLabel
                     sx={{ color: MAGIC_UI.textBright, "& .MuiTypography-root": { color: MAGIC_UI.textBright } }}
                     control={
@@ -4072,7 +4093,7 @@ const heroTiles = useMemo(() => {
                   value={selectedCredentialId}
                   onChange={(e) => setSelectedCredentialId(e.target.value)}
                   sx={{ minWidth: 280, ...INPUT_FIELD_SX }}
-                  disabled={credentialLoading || !filteredCredentials.length || (execContext === "winrm" && useSvcAccount)}
+                  disabled={credentialLoading || !filteredCredentials.length || (isWinRMExecContext(execContext) && useSvcAccount)}
                 >
                   {filteredCredentials.map((cred) => (
                     <MenuItem key={cred.id} value={String(cred.id)}>
@@ -4097,17 +4118,17 @@ const heroTiles = useMemo(() => {
                     {credentialError}
                   </Typography>
                 )}
-                {execContext === "winrm" && useSvcAccount && (
+                {isWinRMExecContext(execContext) && useSvcAccount && (
                   <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
                     Runs with the agent&apos;s svcBorealis account.
                   </Typography>
                 )}
-                {aegisLocked && remoteExec && !(execContext === "winrm" && useSvcAccount) && (
+                {aegisLocked && remoteExec && !(isWinRMExecContext(execContext) && useSvcAccount) && (
                   <Typography variant="body2" sx={{ color: "#f0c36d" }}>
                     Aegis Cipher is locked. Remote jobs can still be saved, but credential-backed execution will remain disabled until the cipher is entered from Access Management &gt; Credentials.
                   </Typography>
                 )}
-                {!aegisLocked && remoteExec && !(execContext === "winrm" && useSvcAccount) && selectedCredentialResetRequired && (
+                {!aegisLocked && remoteExec && !(isWinRMExecContext(execContext) && useSvcAccount) && selectedCredentialResetRequired && (
                   <Typography variant="body2" sx={{ color: "#f0c36d" }}>
                     {selectedCredentialResetMessage}
                   </Typography>
@@ -4115,9 +4136,9 @@ const heroTiles = useMemo(() => {
                 {!credentialLoading &&
                   !credentialError &&
                   !filteredCredentials.length &&
-                  !(execContext === "winrm" && useSvcAccount) && (
+                  !(isWinRMExecContext(execContext) && useSvcAccount) && (
                     <Typography variant="body2" sx={{ color: "#f87171" }}>
-                      No {execContext === "winrm" ? "WinRM" : "SSH"} credentials available. Create one under Access Management &gt; Credentials.
+                      No {normalizeRemoteTransport(execContext) === "winrm" ? "WinRM" : "SSH"} credentials available. Create one under Access Management &gt; Credentials.
                     </Typography>
                   )}
               </Box>
