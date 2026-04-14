@@ -324,7 +324,20 @@ def _write_ultravnc_config(path: Path, updates: dict[str, str]) -> bool:
         data[key] = value
     if not order:
         order = list(updates.keys())
-    lines = [f"{key}={data.get(key, '')}" for key in order]
+    ultra_lines: list[str] = ["[UltraVNC]"]
+    secure_value: Optional[str] = None
+    for key in order:
+        normalized_key = str(key or "").strip()
+        if not normalized_key:
+            continue
+        value = str(data.get(key, "") or "")
+        if normalized_key.lower() == "secure":
+            secure_value = value
+            continue
+        ultra_lines.append(f"{normalized_key}={value}")
+    lines = ultra_lines
+    if secure_value is not None:
+        lines.extend(["", "[admin]", f"Secure={secure_value}"])
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(lines) + "\n", encoding="ascii")
@@ -529,7 +542,7 @@ def _apply_ultravnc_password_hash(config_path: Path, password_hash: str, *, key:
             stripped = line.strip()
             if stripped.startswith("[") and stripped.endswith("]"):
                 if in_section and not passwd_written:
-                    out_lines.append(f"passwd={password_hash}")
+                    out_lines.append(f"{normalized_key}={password_hash}")
                     passwd_written = True
                 section_name = stripped[1:-1].strip()
                 in_section = section_name.lower() == "ultravnc"

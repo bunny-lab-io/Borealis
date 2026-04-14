@@ -149,3 +149,47 @@ def test_health_report_requires_listener_readiness_for_healthy_status(monkeypatc
     assert report["details"]["service_state"] == "RUNNING"
     assert report["details"]["listener_state"] == "not_listening"
     assert report["details"]["ready"] == "false"
+
+
+def test_write_ultravnc_config_preserves_both_password_keys_in_ultravnc_section(tmp_path) -> None:
+    config_path = tmp_path / "ultravnc.ini"
+
+    assert vnc_role._write_ultravnc_config(
+        config_path,
+        {
+            "UseRegistry": "0",
+            "AuthRequired": "1",
+            "passwd": "HASHONE",
+        },
+    )
+    assert vnc_role._write_ultravnc_config(
+        config_path,
+        {
+            "passwd2": "HASHTWO",
+        },
+    )
+
+    raw = config_path.read_text(encoding="ascii")
+
+    assert "[UltraVNC]" in raw
+    assert "UseRegistry=0" in raw
+    assert "AuthRequired=1" in raw
+    assert "passwd=HASHONE" in raw
+    assert "passwd2=HASHTWO" in raw
+    assert raw.count("[UltraVNC]") == 1
+
+
+def test_apply_ultravnc_password_hash_keeps_primary_password_when_setting_passwd2(tmp_path) -> None:
+    config_path = tmp_path / "ultravnc.ini"
+    config_path.write_text(
+        "[UltraVNC]\nUseRegistry=0\nAuthRequired=1\npasswd=HASHONE\n",
+        encoding="ascii",
+    )
+
+    assert vnc_role._apply_ultravnc_password_hash(config_path, "HASHTWO", key="passwd2")
+
+    raw = config_path.read_text(encoding="ascii")
+
+    assert "[UltraVNC]" in raw
+    assert "passwd=HASHONE" in raw
+    assert "passwd2=HASHTWO" in raw
