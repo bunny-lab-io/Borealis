@@ -28,12 +28,16 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - Shell port default: 47002 (configurable).
 
 ## VNC via noVNC
-- Engine issues VNC session info via `/api/vnc/establish` (`ws_url`, `ws_path`, one-time token, and password).
+- Engine issues VNC session info via `/api/vnc/establish` (`session_id`, participant role, session state, `ws_url`, `ws_path`, one-time token, and the session-scoped UltraVNC password for that participant role).
 - WebUI connects through the same public Borealis origin at `/remote-desktop/vnc` behind the Borealis-managed Traefik edge.
-- VNC authentication is handled by the UltraVNC password plus a Borealis one-time session token for the WebSocket proxy.
-- Agent runs UltraVNC as a Windows service; Borealis keeps the VNC firewall rule enabled for the Engine /32 and `/api/vnc/disconnect` only tears down the WebUI session.
+- Borealis keeps one collaboration session per device, with one controller and zero or more spectators. Control changes happen through explicit handoff or claim-control when the controller slot becomes vacant.
+- VNC authentication is handled by the UltraVNC controller/view-only password pair plus a Borealis one-time session token for the WebSocket proxy.
+- Engine collaboration state holds the active controller and spectator passwords in memory only, and the Windows agent keeps those passwords in memory only instead of persisting them into `vnc_state.json`.
+- Agent runs UltraVNC as a Windows service; Borealis keeps the VNC firewall rule enabled for the Engine /32 and `/api/vnc/disconnect` now makes the caller leave the collaboration session or closes it entirely when requested.
+- `POST /api/vnc/handoff` transfers control between connected participants, while `GET /api/vnc/sessions` exposes active-session inventory for the WebUI and admin/server overview.
+- `POST /api/agent/vnc/ensure` now returns readiness detail (`ready`, `service_state`, `listener_state`, `last_ready_at`, and session metadata) so the Engine can wait for the listener before minting browser bootstrap data.
 - Before the proxy connects, the Engine re-emits tunnel startup with `reason=vnc_bootstrap` so the agent refreshes VNC readiness over the existing persistent tunnel.
-- If the proxy still cannot open the backend VNC TCP session after a short delay, it escalates once with `reason=vnc_connect_retry`, and Borealis now applies an agent-level cooldown so closely spaced browser retries do not each force another shared transport recovery.
+- If the backend listener does not become reachable after the readiness wait, the proxy escalates once with `reason=vnc_connect_retry`, and Borealis now applies an agent-level cooldown so closely spaced browser retries do not each force another shared transport recovery.
 - When the backend VNC TCP socket finally opens, Borealis confirms transport success with `reason=vnc_backend_connect` so a successful noVNC bootstrap counts as real tunnel health.
 
 ## Public Edge Configuration
@@ -48,9 +52,11 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - `GET /api/tunnel/status` (Token Authenticated) - tunnel status by agent, including `listener_healthy`, `recovery_in_progress`, `last_recovery_attempt_at`, and `last_recovery_attempt_at_iso`.
 - `GET /api/tunnel/active` (Token Authenticated) - list active tunnels with the same listener-health fields.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - agent-side persistent tunnel bootstrap.
-- `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure always-on VNC credentials for the agent.
-- `POST /api/vnc/establish` (Token Authenticated) - establish VNC session.
-- `POST /api/vnc/disconnect` (Token Authenticated) - disconnect VNC session (revokes WebUI session).
+- `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure VNC readiness and session-scoped credentials for the agent.
+- `POST /api/vnc/establish` (Token Authenticated) - establish or join a VNC collaboration session.
+- `POST /api/vnc/disconnect` (Token Authenticated) - leave or close a VNC collaboration session.
+- `POST /api/vnc/handoff` (Token Authenticated) - hand off or claim VNC controller ownership inside a collaboration session.
+- `GET /api/vnc/sessions` (Token Authenticated) - list active VNC collaboration sessions.
 - `POST /api/shell/establish` (Token Authenticated) - establish remote shell session.
 - `POST /api/shell/disconnect` (Token Authenticated) - disconnect remote shell session.
 
@@ -68,6 +74,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - Tunnel API: `Data/Engine/services/API/devices/tunnel.py`.
 - Shell bridge: `Data/Engine/services/WebSocket/vpn_shell.py`.
 - VNC session API: `Data/Engine/services/API/devices/vnc.py`.
+- VNC collaboration manager: `Data/Engine/services/RemoteDesktop/vnc_sessions.py`.
 - VNC proxy: `Data/Engine/services/RemoteDesktop/vnc_proxy.py`.
 
 ### Core Agent files
@@ -169,10 +176,13 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - `GET /api/tunnel/status` -> returns up/down status for an agent plus `listener_healthy`, `recovery_in_progress`, `last_recovery_attempt_at`, and `last_recovery_attempt_at_iso`.
 - `GET /api/tunnel/active` -> lists active VPN tunnel sessions (tunnel_id, agent_id, virtual_ip, last_activity, etc.) plus the same shared listener-health fields.
 - `POST /api/agent/vpn/ensure` -> device-authenticated tunnel bootstrap for persistent mode.
+- `POST /api/agent/vnc/ensure` -> device-authenticated VNC readiness check and active session bootstrap for the Windows agent.
 - `POST /api/shell/establish` -> establish remote shell session.
 - `POST /api/shell/disconnect` -> disconnect remote shell session.
-- `POST /api/vnc/establish` -> establish VNC session.
-- `POST /api/vnc/disconnect` -> disconnect VNC session.
+- `POST /api/vnc/establish` -> establish or join a VNC collaboration session.
+- `POST /api/vnc/disconnect` -> leave or close a VNC collaboration session.
+- `POST /api/vnc/handoff` -> transfer or claim VNC controller ownership.
+- `GET /api/vnc/sessions` -> list active VNC collaboration sessions.
 
 #### 4) Agent components
 - Tunnel lifecycle: `Data/Agent/Roles/role_WireGuardTunnel.py`

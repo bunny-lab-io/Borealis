@@ -6,14 +6,13 @@
 # - POST /api/agent/heartbeat (Device Authenticated) - Updates device last-seen metadata and inventory snapshots.
 # - POST /api/agent/script/request (Device Authenticated) - Provides script execution payloads or idle signals to agents.
 # - POST /api/agent/vpn/ensure (Device Authenticated) - Ensures persistent WireGuard tunnel material.
-# - POST /api/agent/vnc/ensure (Device Authenticated) - Ensures VNC credentials for always-on agent VNC.
+# - POST /api/agent/vnc/ensure (Device Authenticated) - Ensures session-scoped VNC readiness and credentials for always-on agent VNC.
 # ======================================================
 
 """Device-affiliated agent endpoints for the Borealis Engine runtime."""
 from __future__ import annotations
 
 import json
-import secrets
 from Data.Engine.db import dbapi as sqlite3
 import time
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -23,7 +22,8 @@ from flask import Blueprint, jsonify, request, g
 from ....auth.device_auth import AGENT_CONTEXT_HEADER, require_device_auth
 from ....auth.guid_utils import normalize_guid
 from ....public_endpoints import wireguard_endpoint
-from .agent_role_health import merge_agent_role_health, serialize_agent_role_health
+from ...RemoteDesktop.vnc_sessions import ensure_vnc_collaboration_manager
+from .agent_role_health import merge_agent_role_health, normalize_agent_role_health, serialize_agent_role_health
 from .tunnel import _get_tunnel_service, _guid_from_agent_id, _load_device_agent_binding, _resolve_requested_agent_id
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
@@ -51,6 +51,11 @@ def _json_or_none(value: Any) -> Optional[str]:
 def _infer_endpoint_host(adapters: "EngineServiceAdapters", req) -> str:
     host, _port = wireguard_endpoint(adapters.context, req=req)
     return host
+
+
+def _text_bool(value: Any) -> bool:
+    normalized = str(value or "").strip().lower()
+    return normalized in {"1", "true", "yes", "y", "on", "healthy", "ready", "listening"}
 
 
 def register_agents(app, adapters: "EngineServiceAdapters") -> None:
@@ -114,46 +119,82 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             _repair_agent_id_binding(normalized, resolved_agent_id)
         return resolved_agent_id
 
-    def _load_vnc_password(agent_id: str) -> Optional[str]:
+    def _load_agent_vnc_health(agent_id: str) -> Dict[str, Any]:
+        normalized_agent_id = str(agent_id or "").strip()
+        default_payload = {
+            "status": "unknown",
+            "detail": "",
+            "ready": False,
+            "service_state": "",
+            "listener_state": "",
+            "last_ready_at": 0,
+            "details": {},
+        }
+        if not normalized_agent_id:
+            return dict(default_payload)
         conn = db_conn_factory()
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT agent_vnc_password FROM devices WHERE agent_id=? ORDER BY last_seen DESC LIMIT 1",
-                (agent_id,),
+                "SELECT agent_role_health FROM devices WHERE agent_id=? ORDER BY last_seen DESC LIMIT 1",
+                (normalized_agent_id,),
             )
             row = cur.fetchone()
-            if row and row[0]:
-                return str(row[0]).strip()
+            if not row or row[0] in (None, ""):
+                return dict(default_payload)
+            normalized = normalize_agent_role_health(row[0])
+            for role in normalized.get("roles") or []:
+                if str(role.get("role_name") or "").strip().lower() != "vnc":
+                    continue
+                details = role.get("details") if isinstance(role.get("details"), dict) else {}
+                service_state = str(
+                    details.get("service_state")
+                    or details.get("running_status")
+                    or ""
+                ).strip()
+                listener_state = str(
+                    details.get("listener_state")
+                    or ("listening" if _text_bool(details.get("listener_ready")) else "")
+                ).strip()
+                last_ready_at = 0
+                try:
+                    last_ready_at = int(float(details.get("last_ready_at") or 0))
+                except Exception:
+                    last_ready_at = 0
+                ready = _text_bool(details.get("ready")) or (
+                    str(role.get("status_code") or "").strip().lower() == "healthy"
+                    and _text_bool(details.get("listener_ready") or listener_state)
+                )
+                return {
+                    "status": str(role.get("status_code") or role.get("status") or "unknown").strip().lower() or "unknown",
+                    "detail": str(role.get("detail") or "").strip(),
+                    "ready": bool(ready),
+                    "service_state": service_state,
+                    "listener_state": listener_state,
+                    "last_ready_at": last_ready_at,
+                    "details": details,
+                }
         except Exception:
-            log("VNC", f"vnc_agent_password_load_failed agent_id={agent_id}", _context_hint())
+            log("VNC", f"vnc_agent_health_load_failed agent_id={normalized_agent_id}", _context_hint())
         finally:
             conn.close()
-        return None
+        return dict(default_payload)
 
-    def _store_vnc_password(agent_id: str, password: str) -> None:
-        conn = db_conn_factory()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                "UPDATE devices SET agent_vnc_password=? WHERE agent_id=?",
-                (password, agent_id),
-            )
-            conn.commit()
-        except Exception:
-            log("VNC", f"vnc_agent_password_store_failed agent_id={agent_id}", _context_hint())
-        finally:
-            conn.close()
-
-    def _ensure_vnc_password(agent_id: str) -> str:
-        vnc_password = _load_vnc_password(agent_id)
-        if not vnc_password:
-            vnc_password = secrets.token_hex(4)
-            _store_vnc_password(agent_id, vnc_password)
-        if len(vnc_password) > 8:
-            vnc_password = vnc_password[:8]
-            _store_vnc_password(agent_id, vnc_password)
-        return vnc_password
+    def _active_vnc_session_payload(agent_id: str) -> Optional[Dict[str, Any]]:
+        manager = ensure_vnc_collaboration_manager(adapters.context)
+        session = manager.get_session_for_agent(agent_id)
+        if session is None:
+            return None
+        return {
+            "session_id": session.session_id,
+            "session_state": session.state,
+            "controller_operator_id": session.controller_operator_id or "",
+            "controller_password": session.controller_password,
+            "view_only_password": session.spectator_password,
+            "credential_revision": int(session.credential_revision or 0),
+            "remove_wallpaper": bool(session.remove_wallpaper),
+            "session": manager.session_snapshot(session),
+        }
 
     @blueprint.route("/api/agent/heartbeat", methods=["POST"])
     @require_device_auth(auth_manager)
@@ -404,10 +445,29 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "tunnel_start_failed", "detail": str(exc)}), 500
 
         vnc_port = int(getattr(adapters.context, "vnc_port", 5900))
-        vnc_password = _ensure_vnc_password(resolved_agent)
+        active_vnc_session = _active_vnc_session_payload(resolved_agent)
         response_payload = dict(payload)
-        response_payload["vnc_password"] = vnc_password
         response_payload["vnc_port"] = vnc_port
+        response_payload["vnc_password"] = (
+            str(active_vnc_session.get("controller_password") or "").strip()
+            if isinstance(active_vnc_session, dict)
+            else ""
+        )
+        response_payload["view_only_password"] = (
+            str(active_vnc_session.get("view_only_password") or "").strip()
+            if isinstance(active_vnc_session, dict)
+            else ""
+        )
+        response_payload["vnc_session_id"] = (
+            str(active_vnc_session.get("session_id") or "").strip()
+            if isinstance(active_vnc_session, dict)
+            else ""
+        )
+        response_payload["vnc_credential_revision"] = (
+            int(active_vnc_session.get("credential_revision") or 0)
+            if isinstance(active_vnc_session, dict)
+            else 0
+        )
 
         log(
             "VPN_Tunnel/tunnel",
@@ -447,7 +507,9 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
 
         try:
             tunnel_service = _get_tunnel_service(adapters)
-            session_payload = tunnel_service.session_payload(resolved_agent, include_token=False)
+            session_payload = None
+            if hasattr(tunnel_service, "session_payload"):
+                session_payload = tunnel_service.session_payload(resolved_agent, include_token=False)
             if not session_payload:
                 session_payload = tunnel_service.connect(
                     agent_id=resolved_agent,
@@ -471,7 +533,12 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             allowed_ips = allowed_ips[0] if allowed_ips else ""
         allowed_ips = str(allowed_ips or "").strip()
 
-        vnc_password = _ensure_vnc_password(resolved_agent)
+        active_session = _active_vnc_session_payload(resolved_agent)
+        role_health = _load_agent_vnc_health(resolved_agent)
+        if isinstance(active_session, dict):
+            active_session_payload = dict(active_session)
+        else:
+            active_session_payload = {}
 
         log(
             "VNC",
@@ -484,11 +551,25 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                 {
                     "status": "ok",
                     "agent_id": resolved_agent,
-                    "vnc_password": vnc_password,
                     "vnc_port": vnc_port,
                     "allowed_ips": allowed_ips,
                     "tunnel_id": session_payload.get("tunnel_id"),
                     "engine_virtual_ip": session_payload.get("engine_virtual_ip"),
+                    "ready": bool(role_health.get("ready")),
+                    "service_state": str(role_health.get("service_state") or "").strip(),
+                    "listener_state": str(role_health.get("listener_state") or "").strip(),
+                    "last_ready_at": int(role_health.get("last_ready_at") or 0),
+                    "health_status": str(role_health.get("status") or "").strip(),
+                    "detail": str(role_health.get("detail") or "").strip(),
+                    "session_id": str(active_session_payload.get("session_id") or "").strip(),
+                    "session_state": str(active_session_payload.get("session_state") or "").strip(),
+                    "controller_operator_id": str(active_session_payload.get("controller_operator_id") or "").strip(),
+                    "controller_password": str(active_session_payload.get("controller_password") or "").strip(),
+                    "view_only_password": str(active_session_payload.get("view_only_password") or "").strip(),
+                    "vnc_password": str(active_session_payload.get("controller_password") or "").strip(),
+                    "credential_revision": int(active_session_payload.get("credential_revision") or 0),
+                    "remove_wallpaper": bool(active_session_payload.get("remove_wallpaper")),
+                    "session": active_session_payload.get("session") or None,
                 }
             ),
             200,

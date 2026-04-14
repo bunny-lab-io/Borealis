@@ -21,8 +21,6 @@ import {
   PowerSettingsNewRounded as PowerIcon,
   AspectRatioRounded as DisplayIcon,
   FolderRounded as FileIcon,
-  UploadRounded as UploadIcon,
-  DownloadRounded as DownloadIcon,
 } from "@mui/icons-material";
 import RFB from "@novnc/novnc/lib/rfb";
 
@@ -203,6 +201,26 @@ async function writeClipboardText(text) {
   }
 }
 
+function capabilityFlag(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  const text = normalizeText(value).toLowerCase();
+  if (!text) return false;
+  return ["1", "true", "yes", "on", "supported", "available"].includes(text);
+}
+
+function supportsPowerAction(capabilities, action) {
+  const power = capabilities?.power;
+  if (capabilityFlag(power)) return true;
+  if (!power || typeof power !== "object") return false;
+  const aliases = {
+    shutdown: ["shutdown", "machineShutdown"],
+    reboot: ["reboot", "restart", "machineReboot"],
+    reset: ["reset", "machineReset"],
+  };
+  return (aliases[action] || []).some((key) => capabilityFlag(power?.[key]));
+}
+
 export default function ReverseTunnelVnc({ device }) {
   const [sessionState, setSessionState] = useState("idle");
   const [vncStage, setVncStage] = useState("idle");
@@ -210,6 +228,11 @@ export default function ReverseTunnelVnc({ device }) {
   const [loading, setLoading] = useState(false);
   const [viewOnly, setViewOnly] = useState(false);
   const [clipboardSync, setClipboardSync] = useState(false);
+  const [sessionId, setSessionId] = useState("");
+  const [participantId, setParticipantId] = useState("");
+  const [participantRole, setParticipantRole] = useState("");
+  const [sessionDetails, setSessionDetails] = useState(null);
+  const [handoffLoading, setHandoffLoading] = useState(false);
   const performanceLevel = 2;
   const [scaleViewport, setScaleViewport] = useState(true);
   const [clipViewport, setClipViewport] = useState(true);
@@ -222,9 +245,11 @@ export default function ReverseTunnelVnc({ device }) {
   const displayRef = useRef(null);
   const rfbRef = useRef(null);
   const agentIdRef = useRef("");
+  const sessionIdRef = useRef("");
   const clipboardSyncRef = useRef(clipboardSync);
   const clipboardLastRef = useRef("");
   const connectAttemptRef = useRef(0);
+  const manualDisconnectRef = useRef(false);
 
   const agentId = useMemo(() => {
     return (
@@ -241,6 +266,18 @@ export default function ReverseTunnelVnc({ device }) {
   const qualityLevel = Math.min(8, Math.max(0, performanceLevel));
   const compressionLevel = Math.max(0, 8 - qualityLevel);
   const dragViewport = false;
+  const effectiveViewOnly = viewOnly || (participantRole && participantRole !== "controller");
+
+  const applySessionBootstrap = useCallback((data) => {
+    const nextSession = data?.session && typeof data.session === "object" ? data.session : null;
+    const nextSessionId = normalizeText(data?.session_id || nextSession?.session_id);
+    const nextParticipantId = normalizeText(data?.participant_id || nextSession?.current_participant_id);
+    const nextParticipantRole = normalizeText(data?.participant_role || nextSession?.current_operator_role);
+    setSessionId(nextSessionId);
+    setParticipantId(nextParticipantId);
+    setParticipantRole(nextParticipantRole);
+    setSessionDetails(nextSession);
+  }, []);
 
   useEffect(() => {
     agentIdRef.current = agentId;
@@ -249,6 +286,10 @@ export default function ReverseTunnelVnc({ device }) {
   useEffect(() => {
     clipboardSyncRef.current = clipboardSync;
   }, [clipboardSync]);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   const cancelPendingConnect = useCallback(() => {
     connectAttemptRef.current += 1;
@@ -303,7 +344,11 @@ export default function ReverseTunnelVnc({ device }) {
       await fetch("/api/vnc/disconnect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_id: currentAgentId, reason }),
+        body: JSON.stringify({
+          agent_id: currentAgentId,
+          session_id: sessionIdRef.current || undefined,
+          reason,
+        }),
       });
     } catch {
       // best-effort
@@ -312,6 +357,7 @@ export default function ReverseTunnelVnc({ device }) {
 
   const handleDisconnect = useCallback(async () => {
     cancelPendingConnect();
+    manualDisconnectRef.current = true;
     setVncStage("disconnecting");
     setLoading(true);
     setStatusMessage("");
@@ -320,6 +366,10 @@ export default function ReverseTunnelVnc({ device }) {
       await disconnectVnc("operator_disconnect");
     } finally {
       setSessionState("idle");
+      setSessionId("");
+      setParticipantId("");
+      setParticipantRole("");
+      setSessionDetails(null);
       clipboardLastRef.current = "";
       setLoading(false);
     }
@@ -337,7 +387,7 @@ export default function ReverseTunnelVnc({ device }) {
     const rfb = rfbRef.current;
     if (!rfb) return;
     rfb.showDotCursor = true;
-    rfb.viewOnly = viewOnly;
+    rfb.viewOnly = effectiveViewOnly;
     rfb.clipViewport = clipViewport;
     rfb.dragViewport = dragViewport;
     rfb.scaleViewport = scaleViewport;
@@ -345,7 +395,7 @@ export default function ReverseTunnelVnc({ device }) {
     rfb.qualityLevel = qualityLevel;
     rfb.compressionLevel = compressionLevel;
   }, [
-    viewOnly,
+    effectiveViewOnly,
     clipViewport,
     dragViewport,
     scaleViewport,
@@ -380,6 +430,7 @@ export default function ReverseTunnelVnc({ device }) {
           status >= 500 || status === 429 || status === 408
         );
       }
+      applySessionBootstrap(data);
       return data;
     } catch (err) {
       if (err?.retryable !== false) {
@@ -387,7 +438,7 @@ export default function ReverseTunnelVnc({ device }) {
       }
       throw err;
     }
-  }, [agentId, handleAgentOnboarding]);
+  }, [agentId, applySessionBootstrap, handleAgentOnboarding]);
 
   const openVncSession = useCallback(
     async (data, options = {}) => {
@@ -416,7 +467,7 @@ export default function ReverseTunnelVnc({ device }) {
       rfb.resizeSession = resizeSession;
       rfb.clipViewport = clipViewport;
       rfb.dragViewport = dragViewport;
-      rfb.viewOnly = viewOnly;
+      rfb.viewOnly = effectiveViewOnly;
       rfb.qualityLevel = qualityLevel;
       rfb.compressionLevel = compressionLevel;
 
@@ -487,10 +538,15 @@ export default function ReverseTunnelVnc({ device }) {
             finishReject("VNC proxy disconnected before the desktop became available.", true);
             return;
           }
+          const wasManual = manualDisconnectRef.current;
+          manualDisconnectRef.current = false;
           setSessionState("idle");
           setVncStage((prev) =>
             prev === "auth_failed" || prev === "error" ? prev : "disconnected"
           );
+          if (!wasManual && sessionIdRef.current) {
+            setStatusMessage("Desktop stream closed. Reconnect or claim control when the session is ready.");
+          }
         };
 
         const handleSecurityFailure = (evt) => {
@@ -552,7 +608,7 @@ export default function ReverseTunnelVnc({ device }) {
       qualityLevel,
       resizeSession,
       scaleViewport,
-      viewOnly,
+      effectiveViewOnly,
     ]
   );
 
@@ -560,9 +616,11 @@ export default function ReverseTunnelVnc({ device }) {
     if (sessionState === "connected" || loading) return;
     const connectToken = connectAttemptRef.current + 1;
     connectAttemptRef.current = connectToken;
+    manualDisconnectRef.current = false;
     setStatusMessage("");
     setLoading(true);
     setSessionState("connecting");
+    setCapabilities({});
     try {
       for (let attempt = 1; attempt <= VNC_AUTO_RETRY_ATTEMPTS; attempt += 1) {
         if (connectAttemptRef.current !== connectToken) return;
@@ -604,11 +662,99 @@ export default function ReverseTunnelVnc({ device }) {
     }
   }, [loading, openVncSession, requestTunnel, sessionState, teardownDisplay]);
 
-  const injectClipboardKeystrokes = useCallback(async () => {
+  const refreshSessionDetails = useCallback(async () => {
+    const currentSessionId = sessionIdRef.current;
+    if (!currentSessionId) return;
+    try {
+      const resp = await fetch(`/api/vnc/sessions?session_id=${encodeURIComponent(currentSessionId)}`, {
+        credentials: "include",
+      });
+      if (!resp.ok) return;
+      const data = await resp.json().catch(() => ({}));
+      const nextSession = Array.isArray(data?.sessions) ? data.sessions[0] || null : null;
+      if (!nextSession) {
+        teardownDisplay();
+        setSessionState("idle");
+        setVncStage("disconnected");
+        setSessionDetails(null);
+        setSessionId("");
+        setParticipantId("");
+        setParticipantRole("");
+        return;
+      }
+      setSessionDetails(nextSession);
+      setParticipantRole((previous) => normalizeText(nextSession.current_operator_role) || previous);
+      setParticipantId((previous) => normalizeText(nextSession.current_participant_id) || previous);
+    } catch {
+      // ignore background session refresh failures
+    }
+  }, [teardownDisplay]);
+
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    refreshSessionDetails();
+    const intervalId = window.setInterval(() => {
+      refreshSessionDetails();
+    }, 4000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [refreshSessionDetails, sessionId]);
+
+  const handoffControl = useCallback(
+    async (targetOperatorId = "") => {
+      if (!sessionIdRef.current) return;
+      setHandoffLoading(true);
+      setStatusMessage("");
+      try {
+        const resp = await fetch("/api/vnc/handoff", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            session_id: sessionIdRef.current,
+            target_operator_id: targetOperatorId || undefined,
+          }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          throw new Error(data?.error || `HTTP ${resp.status}`);
+        }
+        if (data?.session) {
+          setSessionDetails(data.session);
+          setParticipantRole(normalizeText(data?.participant_role || data?.session?.current_operator_role));
+          setParticipantId(normalizeText(data?.session?.current_participant_id));
+        }
+        setStatusMessage(
+          targetOperatorId
+            ? `Control handed to ${targetOperatorId}. Reconnecting...`
+            : "Claiming control. Reconnecting..."
+        );
+        if (data?.reconnect_required) {
+          teardownDisplay();
+          setSessionState("idle");
+          setVncStage("disconnected");
+          await sleep(300);
+          await handleConnect();
+        }
+      } catch (error) {
+        setStatusMessage(String(error?.message || error || "Failed to change control."));
+      } finally {
+        setHandoffLoading(false);
+      }
+    },
+    [handleConnect, teardownDisplay]
+  );
+
+  const injectClipboardKeystrokes = useCallback(async (prefilledText = "") => {
     const rfb = rfbRef.current;
     if (!rfb) return;
-    let text = "";
-    if (navigator?.clipboard?.readText) {
+    if (effectiveViewOnly) {
+      setStatusMessage("Clipboard input is disabled for spectators.");
+      return;
+    }
+    let text = prefilledText || "";
+    if (!text && navigator?.clipboard?.readText) {
       try {
         text = await navigator.clipboard.readText();
       } catch {
@@ -633,23 +779,62 @@ export default function ReverseTunnelVnc({ device }) {
     } catch {
       setStatusMessage("Failed to inject keystrokes.");
     }
-  }, []);
+  }, [effectiveViewOnly]);
+
+  const pasteClipboardText = useCallback(async () => {
+    const rfb = rfbRef.current;
+    if (!rfb) return;
+    if (effectiveViewOnly) {
+      setStatusMessage("Clipboard input is disabled for spectators.");
+      return;
+    }
+    let text = "";
+    if (navigator?.clipboard?.readText) {
+      try {
+        text = await navigator.clipboard.readText();
+      } catch {
+        text = "";
+      }
+    }
+    if (!text) {
+      setStatusMessage("Clipboard is empty or unavailable.");
+      return;
+    }
+    if (typeof rfb.clipboardPasteFrom === "function") {
+      try {
+        rfb.clipboardPasteFrom(text);
+        setStatusMessage("Clipboard pasted.");
+        return;
+      } catch {
+        // fall back to keystroke injection below
+      }
+    }
+    await injectClipboardKeystrokes(text);
+  }, [effectiveViewOnly, injectClipboardKeystrokes]);
 
   const handleCtrlAltDel = useCallback(() => {
     const rfb = rfbRef.current;
     if (!rfb) return;
+    if (effectiveViewOnly) {
+      setStatusMessage("Keyboard input is disabled for spectators.");
+      return;
+    }
     try {
       rfb.sendCtrlAltDel();
       setStatusMessage("Sent Ctrl+Alt+Del.");
     } catch {
       setStatusMessage("Failed to send Ctrl+Alt+Del.");
     }
-  }, []);
+  }, [effectiveViewOnly]);
 
   const handlePowerAction = useCallback(
     (action) => {
       const rfb = rfbRef.current;
       if (!rfb) return;
+      if (effectiveViewOnly) {
+        setStatusMessage("Power controls are disabled for spectators.");
+        return;
+      }
       const confirmed = window.confirm(`Send ${action} request to the remote machine?`);
       if (!confirmed) return;
       try {
@@ -665,7 +850,7 @@ export default function ReverseTunnelVnc({ device }) {
         setStatusMessage("Failed to send power command.");
       }
     },
-    []
+    [effectiveViewOnly]
   );
 
   const applyViewportPreset = useCallback((value) => {
@@ -729,6 +914,21 @@ export default function ReverseTunnelVnc({ device }) {
   }, []);
 
   const isConnected = sessionState === "connected";
+  const sessionParticipants = useMemo(
+    () => (Array.isArray(sessionDetails?.participants) ? sessionDetails.participants : []),
+    [sessionDetails]
+  );
+  const handoffTargets = useMemo(
+    () => sessionParticipants.filter((participant) => normalizeText(participant?.role) !== "controller"),
+    [sessionParticipants]
+  );
+  const canClaimControl = Boolean(sessionDetails?.can_claim_control);
+  const canHandoff = Boolean(sessionDetails?.can_handoff);
+  const sessionStateLabel = normalizeText(sessionDetails?.state || "idle") || "idle";
+  const controllerOperator = normalizeText(sessionDetails?.controller_operator_id) || "Unassigned";
+  const shutdownSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "shutdown");
+  const rebootSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "reboot");
+  const resetSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "reset");
   const vncStageInfo = useMemo(() => {
     const errorDetail = summarizeStatus(statusMessage) || "VNC session encountered an error.";
     switch (vncStage) {
@@ -756,7 +956,10 @@ export default function ReverseTunnelVnc({ device }) {
       case "connected":
         return {
           label: "Live",
-          detail: "Desktop stream active.",
+          detail:
+            participantRole === "spectator"
+              ? "Desktop stream active in spectator mode."
+              : "Desktop stream active.",
           accent: MAGIC_UI.accentC,
           detailTone: MAGIC_UI.textMuted,
         };
@@ -872,11 +1075,62 @@ export default function ReverseTunnelVnc({ device }) {
             startIcon={isConnected ? <StopIcon /> : <PlayIcon />}
             variant="outlined"
             sx={{ ...simpleButtonSx, width: "100%", minHeight: 40, py: 1 }}
-            disabled={loading || (!isConnected && !agentId)}
+            disabled={loading || handoffLoading || (!isConnected && !agentId)}
             onClick={isConnected ? handleDisconnect : handleConnect}
           >
-            {isConnected ? "Disconnect" : "Connect"}
+            {isConnected ? "Disconnect" : sessionId ? "Reconnect" : "Connect"}
           </Button>
+
+          <Stack spacing={1}>
+            <Box sx={sectionHeaderSx}>
+              <LinkIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />
+              <span>Session</span>
+            </Box>
+            <Stack spacing={0.6}>
+              <Typography variant="body2" sx={{ color: SIDEBAR_THEME.text }}>
+                Role: {participantRole ? participantRole : "Disconnected"}
+              </Typography>
+              <Typography variant="body2" sx={{ color: SIDEBAR_THEME.text }}>
+                State: {sessionStateLabel}
+              </Typography>
+              <Typography variant="body2" sx={{ color: SIDEBAR_THEME.text }}>
+                Controller: {controllerOperator}
+              </Typography>
+              {sessionId ? (
+                <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
+                  Session ID: {sessionId}
+                </Typography>
+              ) : null}
+              {canClaimControl ? (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  sx={simpleButtonSx}
+                  disabled={handoffLoading || loading}
+                  onClick={() => handoffControl()}
+                >
+                  Claim Control
+                </Button>
+              ) : null}
+              {canHandoff && handoffTargets.length ? (
+                <Stack spacing={1}>
+                  {handoffTargets.map((participant) => (
+                    <Button
+                      key={participant.participant_id || participant.operator_id}
+                      size="small"
+                      variant="outlined"
+                      sx={simpleButtonSx}
+                      disabled={handoffLoading || loading}
+                      onClick={() => handoffControl(normalizeText(participant.operator_id))}
+                    >
+                      Hand Off to {normalizeText(participant.operator_id) || "Spectator"}
+                    </Button>
+                  ))}
+                </Stack>
+              ) : null}
+            </Stack>
+          </Stack>
+
           <Stack spacing={1}>
             <Box sx={sectionHeaderSx}>
               <DisplayIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />
@@ -900,19 +1154,24 @@ export default function ReverseTunnelVnc({ device }) {
               <FormControlLabel
                 control={
                   <Switch
-                    checked={viewOnly}
+                    checked={effectiveViewOnly}
                     onChange={(event) => setViewOnly(event.target.checked)}
+                    disabled={participantRole === "spectator"}
                     size="small"
                     color="info"
                   />
                 }
-                label={<Typography variant="body2">View only</Typography>}
+                label={
+                  <Typography variant="body2">
+                    {participantRole === "spectator" ? "View only (spectator enforced)" : "View only"}
+                  </Typography>
+                }
               />
 
               <Divider sx={{ borderColor: "rgba(148,163,184,0.15)" }} />
 
               <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                Monitor focus
+                Viewport crop
               </Typography>
               <ToggleButtonGroup
                 exclusive
@@ -958,9 +1217,20 @@ export default function ReverseTunnelVnc({ device }) {
               <Button
                 size="small"
                 variant="outlined"
+                startIcon={<ClipboardIcon />}
+                sx={simpleButtonSx}
+                disabled={!isConnected || effectiveViewOnly}
+                onClick={pasteClipboardText}
+              >
+                Paste Clipboard
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
                 startIcon={<KeyboardIcon />}
                 sx={simpleButtonSx}
-                onClick={injectClipboardKeystrokes}
+                disabled={!isConnected || effectiveViewOnly}
+                onClick={() => injectClipboardKeystrokes()}
               >
                 Inject Keystrokes
               </Button>
@@ -972,28 +1242,9 @@ export default function ReverseTunnelVnc({ device }) {
               <FileIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />
               <span>File Transfer</span>
             </Box>
-            <Stack spacing={1} direction={{ xs: "column", sm: "row" }}>
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<UploadIcon />}
-                sx={{ ...simpleButtonSx, flex: 1 }}
-                disabled
-              >
-                Upload
-              </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<DownloadIcon />}
-                sx={{ ...simpleButtonSx, flex: 1 }}
-                disabled
-              >
-                Download
-              </Button>
-            </Stack>
             <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-              File transfer support is coming soon.
+              Protocol-level VNC file transfer stays disabled. Borealis-native transfer will be added separately so
+              uploads and downloads can be audited and policy-gated.
             </Typography>
           </Stack>
 
@@ -1008,6 +1259,7 @@ export default function ReverseTunnelVnc({ device }) {
                 variant="outlined"
                 startIcon={<KeyboardIcon />}
                 sx={simpleButtonSx}
+                disabled={!isConnected || effectiveViewOnly}
                 onClick={handleCtrlAltDel}
               >
                 Send Ctrl+Alt+Del
@@ -1026,6 +1278,7 @@ export default function ReverseTunnelVnc({ device }) {
                   size="small"
                   variant="outlined"
                   sx={purgeButtonSx}
+                  disabled={!shutdownSupported}
                   onClick={() => handlePowerAction("shutdown")}
                 >
                   Shutdown
@@ -1034,11 +1287,26 @@ export default function ReverseTunnelVnc({ device }) {
                   size="small"
                   variant="outlined"
                   sx={deleteButtonSx}
+                  disabled={!rebootSupported}
                   onClick={() => handlePowerAction("reboot")}
                 >
                   Restart
                 </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  sx={simpleButtonSx}
+                  disabled={!resetSupported}
+                  onClick={() => handlePowerAction("reset")}
+                >
+                  Reset
+                </Button>
               </Stack>
+              {!isConnected ? (
+                <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
+                  Connect to detect power capabilities.
+                </Typography>
+              ) : null}
             </Stack>
           </Stack>
 
@@ -1072,6 +1340,11 @@ export default function ReverseTunnelVnc({ device }) {
                 >
                   {vncStageInfo.detail}
                 </Typography>
+                {sessionId ? (
+                  <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
+                    Participant: {participantId || "pending"} {participantRole ? `(${participantRole})` : ""}
+                  </Typography>
+                ) : null}
                 {statusMessage && vncStage !== "error" && vncStage !== "auth_failed" ? (
                   <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
                     {statusMessage}

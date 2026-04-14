@@ -11,6 +11,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import socket
 import subprocess
 import threading
 import time
@@ -507,9 +508,13 @@ def _read_ultravnc_password_hash(
     return hash_value, secure_value
 
 
-def _apply_ultravnc_password_hash(config_path: Path, password_hash: str) -> bool:
+def _apply_ultravnc_password_hash(config_path: Path, password_hash: str, *, key: str = "passwd") -> bool:
+    normalized_key = str(key or "").strip().lower()
+    if normalized_key not in {"passwd", "passwd2"}:
+        _write_log(f"Unsupported UltraVNC password key requested: {key}")
+        return False
     try:
-        if not _write_ultravnc_config(config_path, {"passwd": password_hash}):
+        if not _write_ultravnc_config(config_path, {normalized_key: password_hash}):
             return False
         try:
             raw = config_path.read_text(encoding="utf-8", errors="ignore")
@@ -532,19 +537,19 @@ def _apply_ultravnc_password_hash(config_path: Path, password_hash: str) -> bool
                     section_found = True
                 out_lines.append(line)
                 continue
-            if in_section and stripped.lower().startswith("passwd="):
-                out_lines.append(f"passwd={password_hash}")
+            if in_section and stripped.lower().startswith(f"{normalized_key}="):
+                out_lines.append(f"{normalized_key}={password_hash}")
                 passwd_written = True
             else:
                 out_lines.append(line)
         if section_found:
             if in_section and not passwd_written:
-                out_lines.append(f"passwd={password_hash}")
+                out_lines.append(f"{normalized_key}={password_hash}")
         else:
             if out_lines and out_lines[-1].strip():
                 out_lines.append("")
             out_lines.append("[UltraVNC]")
-            out_lines.append(f"passwd={password_hash}")
+            out_lines.append(f"{normalized_key}={password_hash}")
         config_path.write_text("\n".join(out_lines) + "\n", encoding="ascii")
         return True
     except Exception as exc:
@@ -643,7 +648,7 @@ def _same_path(a: Path, b: Path) -> bool:
 
 def _write_ultravnc_password_file(
     target_dir: Path,
-    password_hash: str,
+    password_hashes: dict[str, str],
     secure_value: Optional[str],
     *,
     config_dir: Optional[Path] = None,
@@ -651,7 +656,11 @@ def _write_ultravnc_password_file(
     if config_dir and _same_path(target_dir, config_dir):
         return
     ini_path = target_dir / "UltraVNC.ini"
-    lines = ["[UltraVNC]", f"passwd={password_hash}"]
+    lines = ["[UltraVNC]"]
+    for key in ("passwd", "passwd2"):
+        value = str(password_hashes.get(key) or "").strip()
+        if value:
+            lines.append(f"{key}={value}")
     if secure_value is not None:
         lines.extend(["", "[admin]", f"Secure={secure_value}"])
     try:
@@ -674,7 +683,8 @@ class VncManager:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._last_port: Optional[int] = None
-        self._last_password: Optional[str] = None
+        self._last_controller_password: Optional[str] = None
+        self._last_view_only_password: Optional[str] = None
         self._vnc_exe = _resolve_vnc_exe()
         self._vnc_root = _resolve_vnc_root()
         self._password_tool: Optional[str] = None
@@ -707,6 +717,16 @@ class VncManager:
         if not service_name:
             return False
         return self._service_state_by_name(service_name) == "RUNNING"
+
+    def is_listener_ready(self, port: Optional[int] = None) -> bool:
+        if os.name != "nt":
+            return False
+        target_port = _resolve_vnc_port(port if port is not None else self._last_port)
+        try:
+            with socket.create_connection(("127.0.0.1", target_port), timeout=0.75):
+                return True
+        except Exception:
+            return False
 
     def ensure_firewall(self, allowed_ips: Optional[str], port: int) -> None:
         self._ensure_firewall(allowed_ips, port)
@@ -1063,13 +1083,22 @@ class VncManager:
         except Exception:
             pass
 
-    def _apply_password(self, config_dir: Path, config_path: Path, password: str) -> Optional[str]:
-        if not password:
-            _write_log("VNC password missing; refusing to start without auth.")
-            return None
-        trimmed = str(password)[:8]
-        if trimmed != password:
-            _write_log("VNC password trimmed to 8 characters for UltraVNC compatibility.")
+    def _apply_passwords(
+        self,
+        config_dir: Path,
+        config_path: Path,
+        controller_password: str,
+        view_only_password: Optional[str],
+    ) -> tuple[Optional[str], Optional[str]]:
+        if not controller_password:
+            _write_log("VNC controller password missing; refusing to start without auth.")
+            return None, None
+        trimmed_controller = str(controller_password)[:8]
+        if trimmed_controller != controller_password:
+            _write_log("VNC controller password trimmed to 8 characters for UltraVNC compatibility.")
+        trimmed_view_only = str(view_only_password or "")[:8] if view_only_password else ""
+        if view_only_password and trimmed_view_only != str(view_only_password):
+            _write_log("VNC view-only password trimmed to 8 characters for UltraVNC compatibility.")
         if not self._password_tool:
             self._password_tool = _resolve_vnc_password_tool(config_dir)
             if self._password_tool and not self._password_tool_logged:
@@ -1080,14 +1109,30 @@ class VncManager:
                 "VNC password tool not found; expected createpassword.exe under "
                 "Agent/Borealis/Tools/UltraVNC or Dependencies/UltraVNC_Server/tools."
             )
-            return None
-        password_hash, secure_value = _read_ultravnc_password_hash(
-            self._password_tool, trimmed, config_dir
+            return None, None
+        controller_hash, secure_value = _read_ultravnc_password_hash(
+            self._password_tool, trimmed_controller, config_dir
         )
-        if not password_hash:
-            return None
-        if not _apply_ultravnc_password_hash(config_path, password_hash):
-            return None
+        if not controller_hash:
+            return None, None
+        if not _apply_ultravnc_password_hash(config_path, controller_hash, key="passwd"):
+            return None, None
+        password_hashes = {"passwd": controller_hash}
+        if trimmed_view_only:
+            view_only_hash, secondary_secure_value = _read_ultravnc_password_hash(
+                self._password_tool,
+                trimmed_view_only,
+                config_dir,
+            )
+            if not view_only_hash:
+                return None, None
+            if not _apply_ultravnc_password_hash(config_path, view_only_hash, key="passwd2"):
+                return None, None
+            password_hashes["passwd2"] = view_only_hash
+            if secure_value is None:
+                secure_value = secondary_secure_value
+        else:
+            _write_ultravnc_config(config_path, {"passwd2": ""})
         if secure_value is not None:
             _apply_ultravnc_secure_flag(config_path, secure_value)
         else:
@@ -1096,18 +1141,19 @@ class VncManager:
             tool_dir = Path(self._password_tool).parent
             _write_ultravnc_password_file(
                 tool_dir,
-                password_hash,
+                password_hashes,
                 secure_value,
                 config_dir=config_dir,
             )
-        return trimmed
+        return trimmed_controller, trimmed_view_only or None
 
     def start(
         self,
         *,
         port: Optional[int],
         allowed_ips: Optional[str],
-        password: Optional[str],
+        controller_password: Optional[str],
+        view_only_password: Optional[str],
         remove_wallpaper: Optional[bool] = None,
         reason: str = "start",
     ) -> None:
@@ -1137,8 +1183,13 @@ class VncManager:
             )
             if not ini_path:
                 return
-            applied_password = self._apply_password(config_dir, config_path, password or "")
-            if not applied_password:
+            applied_controller_password, applied_view_only_password = self._apply_passwords(
+                config_dir,
+                config_path,
+                controller_password or "",
+                view_only_password,
+            )
+            if not applied_controller_password:
                 return
 
             service_name = self._resolve_service_name()
@@ -1151,16 +1202,21 @@ class VncManager:
                 return
 
             if service_was_running and (
-                self._last_port != port_value or self._last_password != applied_password
+                self._last_port != port_value
+                or self._last_controller_password != applied_controller_password
+                or self._last_view_only_password != applied_view_only_password
             ):
                 self._restart_service()
             self._last_port = port_value
-            self._last_password = applied_password
+            self._last_controller_password = applied_controller_password
+            self._last_view_only_password = applied_view_only_password
             _write_log(f"VNC service running port={port_value} reason={reason}.")
 
     def stop(self, *, reason: str = "stop") -> None:
+        self.ensure_standby(reason=reason)
         with self._lock:
-            _write_log(f"VNC stop ignored (always_on) reason={reason}.")
+            self._last_controller_password = None
+            self._last_view_only_password = None
 
 
 class Role:
@@ -1175,8 +1231,17 @@ class Role:
         self._missing_password_logged = False
         self._engine_ready_for_vnc = not VNC_REQUIRE_ENGINE_READY
         self._engine_wait_logged = False
+        self._last_ready_at = 0
         self._state = _load_vnc_state()
+        self._sanitize_state()
         self._last_allowed_ips = _parse_allowed_ips(self._state.get("allowed_ips"))
+        self._runtime_session: dict[str, Any] = {
+            "session_id": "",
+            "controller_password": None,
+            "view_only_password": None,
+            "credential_revision": 0,
+            "remove_wallpaper": bool(self._state.get("remove_wallpaper", True)),
+        }
         self._session_busy_lease = None
         self.vnc = VncManager()
         try:
@@ -1247,28 +1312,86 @@ class Role:
             pass
         self._session_busy_lease = None
 
-    def _state_password(self) -> Optional[str]:
-        value = self._state.get("password")
+    def _sanitize_state(self) -> None:
+        dirty = False
+        for key in ("password", "controller_password", "view_only_password", "session_id", "credential_revision"):
+            if key in self._state:
+                self._state.pop(key, None)
+                dirty = True
+        if dirty:
+            _save_vnc_state(self._state)
+
+    def _controller_password(self) -> Optional[str]:
+        value = self._runtime_session.get("controller_password")
         if isinstance(value, str) and value.strip():
             return value.strip()[:8]
         return None
 
+    def _view_only_password(self) -> Optional[str]:
+        value = self._runtime_session.get("view_only_password")
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:8]
+        return None
+
+    def _active_session_id(self) -> str:
+        return str(self._runtime_session.get("session_id") or "").strip()
+
+    def _credential_revision(self) -> int:
+        try:
+            return int(self._runtime_session.get("credential_revision") or 0)
+        except Exception:
+            return 0
+
     def _state_port(self) -> int:
         return _resolve_vnc_port(self._state.get("port"))
+
+    def _remove_wallpaper_enabled(self) -> bool:
+        runtime_value = self._runtime_session.get("remove_wallpaper")
+        if isinstance(runtime_value, bool):
+            return runtime_value
+        return bool(self._state.get("remove_wallpaper", True))
+
+    def _clear_runtime_session(self) -> None:
+        self._runtime_session = {
+            "session_id": "",
+            "controller_password": None,
+            "view_only_password": None,
+            "credential_revision": 0,
+            "remove_wallpaper": self._remove_wallpaper_enabled(),
+        }
+
+    def _update_runtime_session(
+        self,
+        *,
+        session_id: Optional[str],
+        controller_password: Optional[str],
+        view_only_password: Optional[str],
+        credential_revision: Any = None,
+        remove_wallpaper: Optional[bool] = None,
+    ) -> None:
+        normalized_session_id = str(session_id or "").strip()
+        normalized_controller = str(controller_password or "").strip()[:8] if controller_password else None
+        normalized_view_only = str(view_only_password or "").strip()[:8] if view_only_password else None
+        try:
+            revision_value = int(credential_revision) if credential_revision is not None else 0
+        except Exception:
+            revision_value = 0
+        self._runtime_session = {
+            "session_id": normalized_session_id,
+            "controller_password": normalized_controller,
+            "view_only_password": normalized_view_only,
+            "credential_revision": revision_value,
+            "remove_wallpaper": self._remove_wallpaper_enabled() if remove_wallpaper is None else bool(remove_wallpaper),
+        }
 
     def _update_state(
         self,
         *,
-        password: Optional[str] = None,
         allowed_ips: Optional[str] = None,
         port: Optional[int] = None,
+        remove_wallpaper: Optional[bool] = None,
     ) -> None:
         updated = False
-        if password:
-            trimmed = str(password).strip()[:8]
-            if trimmed:
-                self._state["password"] = trimmed
-                updated = True
         if allowed_ips:
             normalized = _parse_allowed_ips(allowed_ips)
             if normalized:
@@ -1279,37 +1402,46 @@ class Role:
             port_value = _resolve_vnc_port(port)
             self._state["port"] = port_value
             updated = True
+        if remove_wallpaper is not None:
+            self._state["remove_wallpaper"] = bool(remove_wallpaper)
+            updated = True
         if updated:
             _save_vnc_state(self._state)
 
     def _apply_bootstrap_payload(self, payload: Any) -> None:
         if not isinstance(payload, dict):
             return
-        password = payload.get("vnc_password") or payload.get("password")
+        controller_password = (
+            payload.get("controller_password")
+            or payload.get("vnc_password")
+            or payload.get("password")
+        )
+        view_only_password = payload.get("view_only_password") or payload.get("spectator_password")
         port = payload.get("vnc_port") or payload.get("port")
         allowed_ips = payload.get("allowed_ips") or payload.get("engine_virtual_ip")
+        remove_wallpaper = payload.get("remove_wallpaper")
         self._update_state(
-            password=str(password) if password else None,
             allowed_ips=allowed_ips if allowed_ips else None,
             port=port if port is not None else None,
+            remove_wallpaper=remove_wallpaper if isinstance(remove_wallpaper, bool) else None,
         )
+        if controller_password:
+            self._update_runtime_session(
+                session_id=payload.get("session_id"),
+                controller_password=str(controller_password),
+                view_only_password=str(view_only_password) if view_only_password else None,
+                credential_revision=payload.get("credential_revision"),
+                remove_wallpaper=remove_wallpaper if isinstance(remove_wallpaper, bool) else None,
+            )
+            self._acquire_session_busy(str(payload.get("reason") or payload.get("session_state") or "bootstrap_restore"))
+        else:
+            self._clear_runtime_session()
+            self._release_session_busy()
 
     def _request_vnc_bootstrap(self, reason: str) -> Optional[dict]:
         client = self._http_client()
         if client is None:
             return None
-        try:
-            payload = client.post_json(
-                "/api/agent/vpn/ensure",
-                {"agent_id": self.ctx.agent_id, "reason": reason},
-                require_auth=True,
-            )
-            if isinstance(payload, dict):
-                if payload.get("vnc_password") or payload.get("vnc_port"):
-                    return payload
-        except Exception as exc:
-            self._log(f"VNC bootstrap via vpn/ensure failed: {exc}", error=True)
-
         try:
             payload = client.post_json(
                 "/api/agent/vnc/ensure",
@@ -1331,31 +1463,40 @@ class Role:
             self.vnc.ensure_standby(reason="waiting_for_engine_ready")
             return
         self._engine_wait_logged = False
-        password = self._state_password()
-        if not password:
+        controller_password = self._controller_password()
+        if not controller_password:
             if not self._missing_password_logged:
                 self._missing_password_logged = True
-                self._log("VNC always-on pending: password not set yet.")
+                self._log("VNC always-on pending: no active collaboration session.")
+            self.vnc.ensure_standby(reason="no_active_session")
             return
         self._missing_password_logged = False
         port_value = self._state_port()
         allowed_ips = self._last_allowed_ips or _parse_allowed_ips(self._state.get("allowed_ips"))
-        if self.vnc.is_running():
-            self.vnc.ensure_firewall(allowed_ips, port_value)
+        if not allowed_ips:
+            self.vnc.ensure_standby(reason="missing_allowed_ips")
             return
         self.vnc.start(
             port=port_value,
             allowed_ips=allowed_ips,
-            password=password,
-            remove_wallpaper=True,
+            controller_password=controller_password,
+            view_only_password=self._view_only_password(),
+            remove_wallpaper=self._remove_wallpaper_enabled(),
             reason=reason,
         )
+        if self.vnc.is_listener_ready(port_value):
+            self._last_ready_at = int(time.time())
 
     def _always_on_loop(self) -> None:
         interval = _coerce_int(VNC_ALWAYS_ON_INTERVAL_SECONDS, 30, min_value=5)
         while not self._always_on_stop.is_set():
             try:
-                if (not self._engine_ready_for_vnc) or not self._state_password() or not self._last_allowed_ips:
+                if (
+                    (not self._engine_ready_for_vnc)
+                    or not self._controller_password()
+                    or not self._last_allowed_ips
+                    or not self.vnc.is_listener_ready(self._state_port())
+                ):
                     payload = self._request_vnc_bootstrap(reason="agent_boot")
                     if payload:
                         self._apply_bootstrap_payload(payload)
@@ -1378,17 +1519,33 @@ class Role:
         service_name = self.vnc._resolve_service_name()
         service_state = self.vnc._service_state_by_name(service_name) if service_name else None
         loop_alive = bool(self._always_on_thread and self._always_on_thread.is_alive())
+        port_value = self._state_port()
+        active_session_id = self._active_session_id()
+        listener_ready = self.vnc.is_listener_ready(port_value)
+        if listener_ready:
+            self._last_ready_at = max(self._last_ready_at, int(time.time()))
         details = {
             "running_status": str(service_state or "Stopped"),
+            "service_state": str(service_state or "Stopped"),
             "listener_ip": "0.0.0.0",
-            "listener_port": str(self._state_port()),
+            "listener_port": str(port_value),
             "service_name": service_name or ULTRAVNC_SERVICE_NAME,
+            "listener_state": (
+                "listening"
+                if listener_ready
+                else ("standby" if not active_session_id else "not_listening")
+            ),
+            "listener_ready": "true" if listener_ready else "false",
+            "ready": "true" if (active_session_id and listener_ready and service_state == "RUNNING") else "false",
+            "last_ready_at": str(int(self._last_ready_at or 0)),
+            "active_session_id": active_session_id,
+            "credential_revision": str(self._credential_revision()),
         }
-        if service_state in {"RUNNING", "START_PENDING"}:
+        if service_state in {"RUNNING", "START_PENDING"} and listener_ready and active_session_id:
             return {
                 "status": "healthy",
                 "role_label": self.role_health_label,
-                "detail": f"{service_name or ULTRAVNC_SERVICE_NAME} is {service_state.lower()}.",
+                "detail": f"{service_name or ULTRAVNC_SERVICE_NAME} listener is ready for session {active_session_id}.",
                 "details": details,
             }
         if not loop_alive:
@@ -1405,11 +1562,18 @@ class Role:
                 "detail": "Waiting for engine readiness before enabling UltraVNC.",
                 "details": details,
             }
-        if not self._state_password():
+        if not active_session_id or not self._controller_password():
+            return {
+                "status": "pending",
+                "role_label": self.role_health_label,
+                "detail": "No active collaboration session; UltraVNC is standing by.",
+                "details": details,
+            }
+        if service_state in {"RUNNING", "START_PENDING"} and not listener_ready:
             return {
                 "status": "recovering",
                 "role_label": self.role_health_label,
-                "detail": "Waiting for VNC credentials from the Engine.",
+                "detail": "UltraVNC service is running but the VNC listener is not ready yet.",
                 "details": details,
             }
         return {
@@ -1453,20 +1617,38 @@ class Role:
                     return
                 port = payload.get("port")
                 allowed_ips = payload.get("allowed_ips") or self._last_allowed_ips
-                password = payload.get("password") or ""
+                controller_password = (
+                    payload.get("controller_password")
+                    or payload.get("vnc_password")
+                    or payload.get("password")
+                    or ""
+                )
+                view_only_password = payload.get("view_only_password") or payload.get("spectator_password") or ""
                 remove_wallpaper = payload.get("remove_wallpaper")
+                session_id = payload.get("session_id")
+                credential_revision = payload.get("credential_revision")
                 reason = payload.get("reason") or "vnc_session_start"
             else:
                 port = None
                 allowed_ips = self._last_allowed_ips
-                password = ""
+                controller_password = ""
+                view_only_password = ""
                 remove_wallpaper = None
+                session_id = ""
+                credential_revision = 0
                 reason = "vnc_session_start"
             self._log(f"VNC start request received (reason={reason}).")
             self._update_state(
-                password=password or None,
                 allowed_ips=allowed_ips if allowed_ips else None,
                 port=port if port is not None else None,
+                remove_wallpaper=remove_wallpaper if isinstance(remove_wallpaper, bool) else None,
+            )
+            self._update_runtime_session(
+                session_id=session_id,
+                controller_password=controller_password or None,
+                view_only_password=view_only_password or None,
+                credential_revision=credential_revision,
+                remove_wallpaper=remove_wallpaper if isinstance(remove_wallpaper, bool) else None,
             )
             self._acquire_session_busy(str(reason))
             self._mark_engine_ready("vnc_start_event")
@@ -1481,6 +1663,7 @@ class Role:
                     return
                 reason = payload.get("reason") or reason
             self._log(f"VNC stop requested (reason={reason}).")
+            self._clear_runtime_session()
             self._release_session_busy()
             self.vnc.stop(reason=str(reason))
 

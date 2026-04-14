@@ -98,9 +98,11 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 ### WireGuard and VNC wiring
 - WireGuard server manager: `Data/Engine/services/VPN/wireguard_server.py`.
 - Tunnel orchestration: `Data/Engine/services/VPN/vpn_tunnel_service.py`.
+- VNC collaboration state: `Data/Engine/services/RemoteDesktop/vnc_sessions.py`.
 - VNC proxy: `Data/Engine/services/RemoteDesktop/vnc_proxy.py`.
-- API entrypoints: `/api/vnc/establish`, `/api/vnc/disconnect`, `/api/shell/establish`, `/api/shell/disconnect`.
+- API entrypoints: `/api/vnc/establish`, `/api/vnc/disconnect`, `/api/vnc/handoff`, `/api/vnc/sessions`, `/api/shell/establish`, `/api/shell/disconnect`.
 - Persistent tunnels are established by agents via `POST /api/agent/vpn/ensure` and kept online.
+- The Engine keeps VNC controller and spectator credentials in collaboration-session memory, waits for agent listener readiness before returning browser bootstrap data, and exposes active remote desktop session inventory in `GET /api/server/overview`.
 
 ### Assembly runtime
 - Assembly cache is initialized in `Data/Engine/assembly_management` and attached to `context.assembly_cache`.

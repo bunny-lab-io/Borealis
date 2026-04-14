@@ -599,6 +599,146 @@ function Invoke-BorealisDownload {
     throw "$LogPrefix Failed to download '$Url'."
 }
 
+function Get-BorealisFileSha256 {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path $Path -PathType Leaf)) {
+        throw "Cannot hash missing file '$Path'."
+    }
+    $hashInfo = Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop
+    return ($hashInfo.Hash | ForEach-Object { $_.ToLowerInvariant() })
+}
+
+function Assert-BorealisFileSha256 {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedSha256,
+
+        [Parameter()]
+        [string]$LogName = 'Install.log',
+
+        [Parameter()]
+        [string]$LogPrefix = '[Verify]'
+    )
+
+    $expected = ($ExpectedSha256 | ForEach-Object { $_.Trim().ToLowerInvariant() })
+    if ([string]::IsNullOrWhiteSpace($expected)) {
+        throw "$LogPrefix Expected SHA256 cannot be empty."
+    }
+    $actual = Get-BorealisFileSha256 -Path $Path
+    if ($actual -ne $expected) {
+        throw "$LogPrefix SHA256 mismatch for '$Path'. Expected $expected but found $actual."
+    }
+    Write-AgentLog -FileName $LogName -Message ("{0} SHA256 verified for {1}" -f $LogPrefix, $Path)
+}
+
+function Assert-BorealisAuthenticode {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [Parameter()]
+        [string[]]$PublisherPatterns = @(),
+
+        [Parameter()]
+        [string]$LogName = 'Install.log',
+
+        [Parameter()]
+        [string]$LogPrefix = '[Verify]'
+    )
+
+    if (-not (Test-Path $Path -PathType Leaf)) {
+        throw "$LogPrefix Cannot verify missing file '$Path'."
+    }
+
+    $signature = Get-AuthenticodeSignature -FilePath $Path -ErrorAction Stop
+    if ($signature.Status -ne 'Valid') {
+        throw "$LogPrefix Authenticode validation failed for '$Path' (status=$($signature.Status))."
+    }
+
+    $subject = ''
+    $issuer = ''
+    if ($signature.SignerCertificate) {
+        $subject = [string]$signature.SignerCertificate.Subject
+        $issuer = [string]$signature.SignerCertificate.Issuer
+    }
+    if ($PublisherPatterns -and $PublisherPatterns.Count -gt 0) {
+        $matched = $false
+        foreach ($pattern in $PublisherPatterns) {
+            if ([string]::IsNullOrWhiteSpace($pattern)) { continue }
+            $escaped = [regex]::Escape($pattern)
+            if ($subject -match $escaped -or $issuer -match $escaped) {
+                $matched = $true
+                break
+            }
+        }
+        if (-not $matched) {
+            throw "$LogPrefix Authenticode publisher mismatch for '$Path' (subject='$subject', issuer='$issuer')."
+        }
+    }
+
+    Write-AgentLog -FileName $LogName -Message (
+        "{0} Authenticode verified for {1} (subject={2})" -f $LogPrefix, $Path, ($subject -replace '\s+', ' ').Trim()
+    )
+}
+
+function Invoke-BorealisVerifiedDownload {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Url,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationPath,
+
+        [Parameter()]
+        [string]$ExpectedSha256 = '',
+
+        [Parameter()]
+        [switch]$RequireAuthenticode,
+
+        [Parameter()]
+        [string[]]$PublisherPatterns = @(),
+
+        [Parameter()]
+        [string]$LogName = 'Install.log',
+
+        [Parameter()]
+        [string]$LogPrefix = '[Download]'
+    )
+
+    $verified = $false
+    if (Test-Path $DestinationPath -PathType Leaf) {
+        try {
+            if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
+                Assert-BorealisFileSha256 -Path $DestinationPath -ExpectedSha256 $ExpectedSha256 -LogName $LogName -LogPrefix $LogPrefix
+            }
+            if ($RequireAuthenticode) {
+                Assert-BorealisAuthenticode -Path $DestinationPath -PublisherPatterns $PublisherPatterns -LogName $LogName -LogPrefix $LogPrefix
+            }
+            $verified = $true
+        } catch {
+            Write-AgentLog -FileName $LogName -Message ("{0} Cached artifact failed verification and will be re-downloaded: {1}" -f $LogPrefix, $_.Exception.Message)
+            Remove-Item -LiteralPath $DestinationPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    if (-not $verified) {
+        Invoke-BorealisDownload -Url $Url -DestinationPath $DestinationPath -LogName $LogName -LogPrefix $LogPrefix
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
+            Assert-BorealisFileSha256 -Path $DestinationPath -ExpectedSha256 $ExpectedSha256 -LogName $LogName -LogPrefix $LogPrefix
+        }
+        if ($RequireAuthenticode) {
+            Assert-BorealisAuthenticode -Path $DestinationPath -PublisherPatterns $PublisherPatterns -LogName $LogName -LogPrefix $LogPrefix
+        }
+    }
+}
+
 # ---------------------- Bundle Executables Setup ----------------------
 $scriptDir  = Split-Path $MyInvocation.MyCommand.Path -Parent
 $depsRoot   = Join-Path $scriptDir 'Dependencies'
@@ -1526,14 +1666,43 @@ ListenPort = 0
         if (-not $uvncZipUrl) {
             $uvncZipUrl = "https://uvnc.eu/download/1640/UltraVNC_1640.zip"
         }
+        $uvncZipSha256 = $env:BOREALIS_ULTRAVNC_ZIP_SHA256
+        if (-not $uvncZipSha256) {
+            $uvncZipSha256 = "910ab4df4441c4f415c59007501e23ea2db331aa5dfa6ecbd5e583f34362d975"
+        }
         $uvncMsiUrl = $env:BOREALIS_ULTRAVNC_MSI_URL
         if (-not $uvncMsiUrl) {
             $uvncMsiUrl = "https://uvnc.eu/download/1640/UltraVNC_1640_x64_Setup.msi"
+        }
+        $uvncMsiSha256 = $env:BOREALIS_ULTRAVNC_MSI_SHA256
+        if (-not $uvncMsiSha256) {
+            $uvncMsiSha256 = "3a052b8b73dfc0b740cbeac95e550bba5c4e2cd3083693f4b40cb6a4c8d1974b"
         }
         $uvncInstallerUrl = $env:BOREALIS_ULTRAVNC_URL
         if (-not $uvncInstallerUrl) {
             $uvncInstallerUrl = "https://uvnc.eu/download/1640/UltraVNC_1640_x64_Setup.exe"
         }
+        $uvncInstallerSha256 = $env:BOREALIS_ULTRAVNC_SETUP_SHA256
+        if (-not $uvncInstallerSha256) {
+            $uvncInstallerSha256 = "434853e116eeb132cfdf47fdf6ba489d30c67a38147aff6b9bd0ec2f4d0f1919"
+        }
+        $uvncX64WinvncSha256 = $env:BOREALIS_ULTRAVNC_X64_WINVNC_SHA256
+        if (-not $uvncX64WinvncSha256) {
+            $uvncX64WinvncSha256 = "f24c4fbe8f0a85995e46d0202cd12f6eef61a2250da94fa8ddb26115929a0cb9"
+        }
+        $uvncX86WinvncSha256 = $env:BOREALIS_ULTRAVNC_X86_WINVNC_SHA256
+        if (-not $uvncX86WinvncSha256) {
+            $uvncX86WinvncSha256 = "60151cac9101d97bc1d6bbe878238ce4fce8835ba773b4d129fe7f61bea8e2b2"
+        }
+        $passwordToolZipSha256 = $env:BOREALIS_VNC_PASSWORD_TOOL_SHA256
+        if (-not $passwordToolZipSha256) {
+            $passwordToolZipSha256 = "19cde023e7b97171a9b30f7954dd3b1d9eda07cb60d604526d6588abbb7a8410"
+        }
+        $passwordToolExeSha256 = $env:BOREALIS_VNC_PASSWORD_TOOL_EXE_SHA256
+        if (-not $passwordToolExeSha256) {
+            $passwordToolExeSha256 = "c3369fd7b1be499a3e7b3a8a6922f745c6ef723add6cc67c751c57f8e17ae4bc"
+        }
+        $uvncPublisherPatterns = @('UltraVNC', 'uvnc')
         $uvncRoot = Join-Path $depsRoot "UltraVNC_Server"
         $uvncPayloadRoot = Join-Path $uvncRoot "payload"
         $uvncZipPath = Join-Path $uvncRoot "UltraVNC_1640.zip"
@@ -1549,10 +1718,21 @@ ListenPort = 0
 
         if (-not $uvncExe) {
             try {
-                if (-not (Test-Path $uvncZipPath)) {
-                    Invoke-BorealisDownload -Url $uvncZipUrl -DestinationPath $uvncZipPath -LogName 'Install.log' -LogPrefix '[UltraVNC]'
-                }
+                Invoke-BorealisVerifiedDownload `
+                    -Url $uvncZipUrl `
+                    -DestinationPath $uvncZipPath `
+                    -ExpectedSha256 $uvncZipSha256 `
+                    -LogName 'Install.log' `
+                    -LogPrefix '[UltraVNC]'
                 Expand-ZipArchiveWithFallback -ArchivePath $uvncZipPath -DestinationPath $uvncPayloadRoot -SevenZipPath $sevenZipExe -ClearDestination
+                $uvncX64Exe = Join-Path $uvncPayloadRoot 'x64\winvnc.exe'
+                if (Test-Path $uvncX64Exe -PathType Leaf) {
+                    Assert-BorealisFileSha256 -Path $uvncX64Exe -ExpectedSha256 $uvncX64WinvncSha256 -LogName 'Install.log' -LogPrefix '[UltraVNC]'
+                }
+                $uvncX86Exe = Join-Path $uvncPayloadRoot 'x86\winvnc.exe'
+                if (Test-Path $uvncX86Exe -PathType Leaf) {
+                    Assert-BorealisFileSha256 -Path $uvncX86Exe -ExpectedSha256 $uvncX86WinvncSha256 -LogName 'Install.log' -LogPrefix '[UltraVNC]'
+                }
             } catch {
                 Write-Host "UltraVNC zip download/extract failed. Trying MSI fallback." -ForegroundColor Yellow
             }
@@ -1562,9 +1742,14 @@ ListenPort = 0
 
         if (-not $uvncExe) {
             try {
-                if (-not (Test-Path $uvncMsiPath)) {
-                    Invoke-BorealisDownload -Url $uvncMsiUrl -DestinationPath $uvncMsiPath -LogName 'Install.log' -LogPrefix '[UltraVNC]'
-                }
+                Invoke-BorealisVerifiedDownload `
+                    -Url $uvncMsiUrl `
+                    -DestinationPath $uvncMsiPath `
+                    -ExpectedSha256 $uvncMsiSha256 `
+                    -RequireAuthenticode `
+                    -PublisherPatterns $uvncPublisherPatterns `
+                    -LogName 'Install.log' `
+                    -LogPrefix '[UltraVNC]'
                 $msiExtractRoot = Join-Path $uvncPayloadRoot "msi_extract"
                 if (Test-Path $msiExtractRoot) {
                     Remove-Item $msiExtractRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -1588,9 +1773,14 @@ ListenPort = 0
         }
 
         if (-not $uvncExe) {
-            if (-not (Test-Path $uvncInstallerPath)) {
-                Invoke-BorealisDownload -Url $uvncInstallerUrl -DestinationPath $uvncInstallerPath -LogName 'Install.log' -LogPrefix '[UltraVNC]'
-            }
+            Invoke-BorealisVerifiedDownload `
+                -Url $uvncInstallerUrl `
+                -DestinationPath $uvncInstallerPath `
+                -ExpectedSha256 $uvncInstallerSha256 `
+                -RequireAuthenticode `
+                -PublisherPatterns $uvncPublisherPatterns `
+                -LogName 'Install.log' `
+                -LogPrefix '[UltraVNC]'
             if (Test-Path $sevenZipExe -PathType Leaf) {
                 try {
                     if (-not (Test-Path $uvncPayloadRoot)) {
@@ -1619,11 +1809,18 @@ ListenPort = 0
             }
             $passwordToolZip = Join-Path $uvncRoot "createpassword.zip"
             try {
-                if (-not (Test-Path $passwordToolZip)) {
-                    Invoke-BorealisDownload -Url $passwordToolUrl -DestinationPath $passwordToolZip -LogName 'Install.log' -LogPrefix '[UltraVNC]'
-                }
+                Invoke-BorealisVerifiedDownload `
+                    -Url $passwordToolUrl `
+                    -DestinationPath $passwordToolZip `
+                    -ExpectedSha256 $passwordToolZipSha256 `
+                    -LogName 'Install.log' `
+                    -LogPrefix '[UltraVNC]'
                 $toolDir = Join-Path $uvncRoot "tools"
                 Expand-ZipArchiveWithFallback -ArchivePath $passwordToolZip -DestinationPath $toolDir -SevenZipPath $sevenZipExe -ClearDestination
+                $passwordToolExe = Join-Path $toolDir 'createpassword.exe'
+                if (Test-Path $passwordToolExe -PathType Leaf) {
+                    Assert-BorealisFileSha256 -Path $passwordToolExe -ExpectedSha256 $passwordToolExeSha256 -LogName 'Install.log' -LogPrefix '[UltraVNC]'
+                }
             } catch {
                 Write-Host "UltraVNC createpassword tool download failed. Set BOREALIS_VNC_PASSWORD_TOOL_URL to override." -ForegroundColor Yellow
             }

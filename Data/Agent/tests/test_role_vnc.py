@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import Data.Agent.Roles.role_VNC as vnc_role
 
 
@@ -49,3 +51,101 @@ def test_ensure_firewall_failure_still_logs(monkeypatch) -> None:
     manager._ensure_firewall("10.255.0.1/32", 5900)
 
     assert logs == ["Failed to ensure VNC firewall rule: boom"]
+
+
+def test_sanitize_state_removes_legacy_password_fields(monkeypatch) -> None:
+    saved_states: list[dict] = []
+    role = vnc_role.Role.__new__(vnc_role.Role)
+    role._state = {
+        "password": "secret123",
+        "controller_password": "secret456",
+        "view_only_password": "secret789",
+        "session_id": "session-1",
+        "credential_revision": 3,
+        "allowed_ips": "10.255.0.1/32",
+    }
+
+    monkeypatch.setattr(vnc_role, "_save_vnc_state", lambda state: saved_states.append(dict(state)))
+
+    role._sanitize_state()
+
+    assert "password" not in role._state
+    assert "controller_password" not in role._state
+    assert "view_only_password" not in role._state
+    assert "session_id" not in role._state
+    assert "credential_revision" not in role._state
+    assert role._state["allowed_ips"] == "10.255.0.1/32"
+    assert saved_states == [{"allowed_ips": "10.255.0.1/32"}]
+
+
+def test_apply_bootstrap_payload_keeps_credentials_in_memory_only(monkeypatch) -> None:
+    saved_states: list[dict] = []
+    acquired: list[str] = []
+    role = vnc_role.Role.__new__(vnc_role.Role)
+    role._state = {}
+    role._last_allowed_ips = None
+    role._runtime_session = {
+        "session_id": "",
+        "controller_password": None,
+        "view_only_password": None,
+        "credential_revision": 0,
+        "remove_wallpaper": True,
+    }
+    role._session_busy_lease = None
+
+    monkeypatch.setattr(vnc_role, "_save_vnc_state", lambda state: saved_states.append(dict(state)))
+    monkeypatch.setattr(role, "_acquire_session_busy", lambda reason: acquired.append(reason))
+    monkeypatch.setattr(role, "_release_session_busy", lambda: None)
+
+    role._apply_bootstrap_payload(
+        {
+            "session_id": "session-2",
+            "controller_password": "abc12345",
+            "view_only_password": "def67890",
+            "credential_revision": 4,
+            "allowed_ips": "10.255.0.1/32",
+            "vnc_port": 5900,
+            "remove_wallpaper": False,
+            "reason": "bootstrap_restore",
+        }
+    )
+
+    assert role._state == {
+        "allowed_ips": "10.255.0.1/32",
+        "port": 5900,
+        "remove_wallpaper": False,
+    }
+    assert role._runtime_session["session_id"] == "session-2"
+    assert role._runtime_session["controller_password"] == "abc12345"
+    assert role._runtime_session["view_only_password"] == "def67890"
+    assert acquired == ["bootstrap_restore"]
+    assert all("password" not in snapshot for snapshot in saved_states)
+
+
+def test_health_report_requires_listener_readiness_for_healthy_status(monkeypatch) -> None:
+    role = vnc_role.Role.__new__(vnc_role.Role)
+    role.role_health_label = "UltraVNC Service"
+    role._always_on_thread = SimpleNamespace(is_alive=lambda: True)
+    role._engine_ready_for_vnc = True
+    role._state = {"port": 5900, "remove_wallpaper": True}
+    role._runtime_session = {
+        "session_id": "session-3",
+        "controller_password": "abc12345",
+        "view_only_password": "def67890",
+        "credential_revision": 5,
+        "remove_wallpaper": True,
+    }
+    role._last_ready_at = 0
+    role.vnc = SimpleNamespace(
+        _resolve_service_name=lambda: "uvnc_service",
+        _service_state_by_name=lambda _service_name: "RUNNING",
+        is_listener_ready=lambda _port: False,
+    )
+    monkeypatch.setattr(vnc_role.os, "name", "nt", raising=False)
+
+    report = role.health_report()
+
+    assert report["status"] == "recovering"
+    assert report["details"]["service_state"] == "RUNNING"
+    assert report["details"]["listener_state"] == "not_listening"
+    assert report["details"]["ready"] == "false"

@@ -73,6 +73,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - WireGuard tunnels are ensured via `POST /api/agent/vpn/ensure` on boot and refreshed periodically.
 - The ensure loop re-establishes the tunnel automatically after network hiccups.
 - Heartbeats/details also carry per-role health snapshots so the Device Details `Agent Roles Health` section can show current role/service status with last-checked timestamps.
+- The VNC role keeps controller and view-only passwords in memory only, reconciles UltraVNC against the active collaboration session, and reports `ready`, `service_state`, `listener_state`, and `last_ready_at` through agent role health and `POST /api/agent/vnc/ensure`.
 
 ### Token storage
 - Refresh tokens are stored encrypted (DPAPI on Windows) in `refresh.token`.
@@ -99,6 +100,10 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - If VPN fails:
   - Check agent WireGuard role logs and confirm `/api/agent/vpn/ensure` succeeds.
   - Ensure the Engine has an active tunnel session and the WireGuard service is running.
+- If VNC fails:
+  - Check `Agent/Logs/VPN_Tunnel/tunnel.log` for `vnc_start` / `vnc_stop` reconciliation events.
+  - Call `POST /api/agent/vnc/ensure` and inspect `ready`, `service_state`, `listener_state`, `detail`, and `last_ready_at`.
+  - Confirm the active collaboration session still exists from the Engine side with `GET /api/vnc/sessions`.
 
 ### Borealis Agent Codex (Full)
 Use this section for agent-only work (Borealis agent runtime under `Data/Agent` -> `/Agent`). Shared guidance is consolidated in `ui-and-notifications.md` and the Engine runtime notes.

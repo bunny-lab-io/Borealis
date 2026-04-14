@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.serialization import Encoding
 from cryptography.x509.oid import NameOID
 
 from Data.Engine.services.API.server import info as server_info_api
+from Data.Engine.services.RemoteDesktop.vnc_sessions import ensure_vnc_collaboration_manager
 from Data.Engine.services.ansible import runtime_settings as ansible_runtime_settings
 from Data.Engine.services.WebSocket.__init__ import OperatorPresenceRegistry
 
@@ -208,6 +209,66 @@ def test_server_overview_includes_operator_session_count(engine_harness: EngineT
     assert payload["operator_session_count"] == 1
     assert payload["security"]["aegis"]["unlock_scope"] == "engine_global"
     assert payload["services"][0]["unit_name"] == "borealis-engine.service"
+
+
+def test_server_overview_includes_active_vnc_sessions(engine_harness: EngineTestHarness, monkeypatch) -> None:
+    client = _admin_client(engine_harness)
+    manager = ensure_vnc_collaboration_manager(engine_harness.context, logger=engine_harness.context.logger)
+    session, _participant, _created = manager.ensure_session(
+        agent_id="agent-1",
+        operator_id="admin",
+        remove_wallpaper=True,
+    )
+    manager.record_backend_ready(
+        session.session_id,
+        tunnel_id="tun-vnc-1",
+        allowed_ips="10.255.0.1/32",
+        engine_virtual_ip="10.255.0.1/32",
+    )
+
+    monkeypatch.setattr(server_info_api, "_collect_service_rows", lambda _context: [])
+    monkeypatch.setattr(
+        server_info_api,
+        "_collect_wireguard_payload",
+        lambda _adapters: {
+            "interface_name": "borealis-wg",
+            "interface_present": True,
+            "interface_up": True,
+            "active_tunnel_count": 1,
+            "listener_healthy": True,
+            "listener_reason": "",
+            "listener_service_state": "RUNNING",
+            "recovery_in_progress": False,
+            "last_recovery_attempt_at": None,
+            "last_recovery_attempt_at_iso": "",
+            "shell_port": 47002,
+            "vnc_port": 5900,
+            "vnc_ws_port": 4823,
+            "wireguard_endpoint": {"host": "borealis.example.com", "port": 30000, "display": "borealis.example.com:30000"},
+            "recover_supported": True,
+            "active_tunnels": [],
+        },
+    )
+    monkeypatch.setattr(
+        server_info_api,
+        "_collect_public_edge_payload",
+        lambda _context: {
+            "enabled": True,
+            "fqdn": "borealis.example.com",
+            "acme_email": "ops@example.com",
+            "public_base_url": "https://borealis.example.com",
+            "public_vnc_path": "/remote-desktop/vnc",
+            "wireguard_endpoint": "borealis.example.com:30000",
+            "certificates": [],
+        },
+    )
+
+    response = client.get("/api/server/overview")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["remote_desktop"]["active_session_count"] == 1
+    assert payload["remote_desktop"]["active_sessions"][0]["session_id"] == session.session_id
+    assert payload["remote_desktop"]["active_sessions"][0]["controller_operator_id"] == "admin"
 
 
 def test_server_ansible_runner_settings_round_trip(

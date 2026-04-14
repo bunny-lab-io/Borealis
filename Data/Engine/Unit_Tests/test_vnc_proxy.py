@@ -171,3 +171,41 @@ def test_connect_vnc_suppresses_duplicate_recovery_for_same_agent_within_cooldow
 
     assert restart_reasons_one == ["vnc_connect_retry"]
     assert restart_reasons_two == []
+
+
+def test_spectator_input_filter_strips_keyboard_pointer_and_clipboard_messages() -> None:
+    spectator_filter = vnc_proxy.SpectatorClientInputFilter()
+
+    version = b"RFB 003.008\n"
+    security_type = b"\x02"
+    auth_response = b"a" * 16
+    client_init = b"\x01"
+    set_pixel_format = bytes([0]) + (b"\x00" * 19)
+    framebuffer_update = bytes([3, 0, 0, 0, 0, 0, 0, 10, 0, 10])
+    key_event = bytes([4, 1, 0, 0, 0, 0, 0, 65])
+    pointer_event = bytes([5, 0, 0, 5, 0, 5])
+    client_cut_text = bytes([6, 0, 0, 0, 0, 0, 0, 4]) + b"test"
+
+    first_pass = spectator_filter.filter(version[:8])
+    second_pass = spectator_filter.filter(
+        version[8:]
+        + security_type
+        + auth_response
+        + client_init
+        + set_pixel_format
+        + key_event
+        + framebuffer_update
+        + pointer_event
+        + client_cut_text
+    )
+
+    filtered = first_pass + second_pass
+    assert version in filtered
+    assert security_type in filtered
+    assert auth_response in filtered
+    assert client_init in filtered
+    assert set_pixel_format in filtered
+    assert framebuffer_update in filtered
+    assert key_event not in filtered
+    assert pointer_event not in filtered
+    assert client_cut_text not in filtered
