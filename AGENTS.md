@@ -4,11 +4,14 @@ Use this file as the entrypoint for Codex instructions. The full knowledgebase n
 
 ## Where to Read
 - Start here: `Docs/index.md` (table of contents and documentation rules).
+- Orientation: `Docs/getting-started.md` (bootstrap and launch flow) and `Docs/architecture-overview.md` (system shape and component relationships).
 - Agent runtime: `Docs/agent-runtime.md` (runtime paths, logging, security, roles, platform parity, Ansible status).
 - Engine runtime: `Docs/engine-runtime.md` (architecture, logging, security/API parity, platform parity, migration notes).
 - Database reference: `Docs/db-reference.md` (schema ownership, connection-lifecycle rules, troubleshooting queries, and DB hygiene guardrails for implementation work).
-- UI and notifications: `Docs/ui-and-notifications.md` (MagicUI styling, AG Grid rules, toast notifications, UI handoffs).
-- VPN and remote access: `Docs/vpn-and-remote-access.md` (WireGuard tunnels, remote shell, VNC, troubleshooting context).
+- Automation and execution: `Docs/assemblies.md`, `Docs/flow-editor-and-nodes.md`, `Docs/scheduled-jobs.md`, and `Docs/watchdogs.md`.
+- Device operations: `Docs/device-management.md`, `Docs/device-alerts.md`, `Docs/logging-and-operations.md`, and `Docs/vpn-and-remote-access.md`.
+- UI and notifications: `Docs/ui-and-notifications.md` (MagicUI styling, AG Grid rules, toast notifications, UI handoffs) and `Docs/migrating-pages-to-react-router.md` (route migration runbook).
+- API and integrations: `Docs/api-reference.md` and `Docs/integrations.md`.
 - Security and trust: `Docs/security-and-trust.md` (enrollment, tokens, code signing, sequence diagrams).
 - Technical debt: `Docs/technical-debt.md` (patches, workarounds, dev/prod mismatches).
 

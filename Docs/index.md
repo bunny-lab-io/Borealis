@@ -40,13 +40,6 @@ This page is the navigation hub for the Borealis documentation set. The knowledg
 ### Integrations
 - [Integrations](integrations.md)
 
-### Features To Implement
-- [Aegis Cipher](features_to_implement/aegis_cipher.md)
-- [Assembly Repository Redesign](features_to_implement/assembly_repo_redesign.md)
-- [Ansible Playbooks](features_to_implement/ansible_playbooks.md)
-- [Device Filtering Overhaul](features_to_implement/device_filtering_overhaul.md)
-- [Reverse Proxy Functionality](features_to_implement/reverse_proxy_functionality.md)
-
 ### Key Repo References
 - [README](../README.md)
 - [AGENTS.md](../AGENTS.md)
@@ -63,12 +56,13 @@ None. This index only links to other pages.
 - Read `getting-started.md` and `architecture-overview.md` to build the global model.
 - Use `engine-runtime.md` and `agent-runtime.md` for implementation-level details.
 - Use `db-reference.md` for PostgreSQL table ownership, relationships, and legacy migration notes.
-- Use `watchdogs.md` for watchdog authoring, evaluation, and remediation behavior.
-- Use `device-alerts.md` for the operational incident queue and device-level watchdog handling.
+- Use `assemblies.md`, `flow-editor-and-nodes.md`, `scheduled-jobs.md`, and `watchdogs.md` for automation authoring and execution behavior.
+- Use `device-management.md`, `device-alerts.md`, `logging-and-operations.md`, and `vpn-and-remote-access.md` for operational workflows, incident handling, and remote access behavior.
 - Use `ui-and-notifications.md` for MagicUI, AG Grid, and toast notification rules.
 - Use `migrating-pages-to-react-router.md` when moving legacy WebUI pages onto the shared router and app shell.
-- Use `vpn-and-remote-access.md` for WireGuard and remote shell/VNC details.
+- Use `api-reference.md` and `integrations.md` for public API surfaces and external service behavior.
 - Use `security-and-trust.md` for enrollment, tokens, and code-signing behavior.
+- Use `technical-debt.md` when documenting workarounds, non-standard build steps, or dev/prod drift.
 
 ### Where the truth lives in code
 - Engine source code: `Data/Engine/` (edit here).
