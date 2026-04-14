@@ -11,8 +11,10 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import shutil
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -483,42 +485,41 @@ def _read_ultravnc_password_hash(
     password_tool: str, password: str, config_dir: Path
 ) -> tuple[Optional[str], Optional[str]]:
     tool_path = Path(password_tool)
-    tool_dir = tool_path.parent
-    ini_path = tool_dir / "UltraVNC.ini"
+    _ = config_dir
     try:
-        ini_path.write_text("[UltraVNC]\npasswd=\n", encoding="utf-8")
-    except Exception as exc:
-        _write_log(f"Failed to prepare UltraVNC.ini for password tool: {exc}")
-        return None, None
-    try:
-        result = subprocess.run(
-            [password_tool, password],
-            cwd=str(tool_dir),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            detail = (result.stderr or result.stdout or "").strip()
-            _write_log(f"Failed to generate VNC password hash: {detail or 'exit ' + str(result.returncode)}")
-            return None, None
+        with tempfile.TemporaryDirectory(prefix="borealis-vnc-hash-") as temp_root:
+            scratch_dir = Path(temp_root)
+            scratch_tool = scratch_dir / tool_path.name
+            shutil.copy2(tool_path, scratch_tool)
+            ini_path = scratch_dir / "UltraVNC.ini"
+            ini_path.write_text("[UltraVNC]\npasswd=\n", encoding="utf-8")
+            result = subprocess.run(
+                [str(scratch_tool), password],
+                cwd=str(scratch_dir),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                _write_log(f"Failed to generate VNC password hash: {detail or 'exit ' + str(result.returncode)}")
+                return None, None
+            candidates = [
+                ini_path,
+                scratch_dir / "ultravnc.ini",
+            ]
+            hash_value, secure_value = _find_password_hash_in_paths(candidates)
+            if not hash_value:
+                _write_log(
+                    "VNC password hash missing after password tool run (tool={0}, ini={1}).".format(
+                        tool_path, ini_path
+                    )
+                )
+                return None, secure_value
+            return hash_value, secure_value
     except Exception as exc:
         _write_log(f"Failed to generate VNC password hash: {exc}")
         return None, None
-    candidates = [
-        ini_path,
-        tool_dir / "ultravnc.ini",
-        config_dir / "UltraVNC.ini",
-    ]
-    hash_value, secure_value = _find_password_hash_in_paths(candidates)
-    if not hash_value:
-        _write_log(
-            "VNC password hash missing after password tool run (tool={0}, ini={1}).".format(
-                tool_path, ini_path
-            )
-        )
-        return None, secure_value
-    return hash_value, secure_value
 
 
 def _apply_ultravnc_password_hash(config_path: Path, password_hash: str, *, key: str = "passwd") -> bool:

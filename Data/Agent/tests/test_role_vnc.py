@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from pathlib import Path
 
 import Data.Agent.Roles.role_VNC as vnc_role
 
@@ -193,3 +194,34 @@ def test_apply_ultravnc_password_hash_keeps_primary_password_when_setting_passwd
     assert "[UltraVNC]" in raw
     assert "passwd=HASHONE" in raw
     assert "passwd2=HASHTWO" in raw
+
+
+def test_read_ultravnc_password_hash_uses_temp_scratch_not_live_config(monkeypatch, tmp_path) -> None:
+    config_dir = tmp_path / "server"
+    config_dir.mkdir()
+    live_config = config_dir / "ultravnc.ini"
+    live_config.write_text("[UltraVNC]\npasswd=LIVEHASH\n", encoding="ascii")
+    tool_path = config_dir / "createpassword.exe"
+    tool_path.write_text("stub", encoding="ascii")
+
+    class _CompletedProcess:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _fake_run(command, cwd, capture_output, text, check):
+        scratch_dir = Path(cwd)
+        (scratch_dir / "UltraVNC.ini").write_text("[UltraVNC]\npasswd=NEWHASH\n", encoding="ascii")
+        return _CompletedProcess()
+
+    monkeypatch.setattr(vnc_role.subprocess, "run", _fake_run)
+
+    hash_value, secure_value = vnc_role._read_ultravnc_password_hash(
+        str(tool_path),
+        "abc12345",
+        config_dir,
+    )
+
+    assert hash_value == "NEWHASH"
+    assert secure_value is None
+    assert live_config.read_text(encoding="ascii") == "[UltraVNC]\npasswd=LIVEHASH\n"
