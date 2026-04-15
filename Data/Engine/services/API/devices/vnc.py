@@ -315,8 +315,8 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         def _confirm_transport(reason: str) -> None:
             tunnel_service.confirm_transport_success(agent_id, reason=reason)
 
-        def _emit_vnc_start(reason: str) -> None:
-            _context_emit_agent_event(
+        def _emit_vnc_start(reason: str) -> bool:
+            return _context_emit_agent_event(
                 adapters.context,
                 agent_id,
                 "vnc_start",
@@ -374,7 +374,16 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             )
             try:
                 _restart_tunnel("vnc_bootstrap")
-                _emit_vnc_start("vnc_bootstrap")
+                emitted = _emit_vnc_start("vnc_bootstrap")
+                if not emitted:
+                    _service_log_event(
+                        "vnc_backend_bootstrap_blocked agent_id={0} session_id={1} reason=agent_socket_missing".format(
+                            agent_id,
+                            collaboration_session.session_id,
+                        ),
+                        level="WARNING",
+                    )
+                    return {"error": "agent_socket_missing"}, 409
                 settle_seconds = _coerce_nonnegative_timeout(
                     os.environ.get("BOREALIS_VNC_BOOTSTRAP_SETTLE_SECONDS"),
                     0.0,
@@ -399,7 +408,16 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         if not initial_ready:
             try:
                 _restart_tunnel("vnc_connect_retry")
-                _emit_vnc_start("vnc_connect_retry")
+                emitted = _emit_vnc_start("vnc_connect_retry")
+                if not emitted:
+                    _service_log_event(
+                        "vnc_backend_retry_blocked agent_id={0} session_id={1} reason=agent_socket_missing".format(
+                            agent_id,
+                            collaboration_session.session_id,
+                        ),
+                        level="WARNING",
+                    )
+                    return {"error": "agent_socket_missing"}, 409
             except Exception:
                 logger.debug("Failed to request VNC connect retry agent_id=%s", agent_id, exc_info=True)
             initial_ready = _wait_for_backend_ready(

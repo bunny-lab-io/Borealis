@@ -243,6 +243,7 @@ def test_vnc_establish_uses_longer_initial_wait_and_shorter_retry_wait(
     engine_harness.context.agent_socket_registry = SimpleNamespace(
         is_registered=lambda agent_id: True
     )
+    engine_harness.context.emit_agent_event = lambda agent_id, event, payload: True
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
     monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
@@ -561,3 +562,35 @@ def test_vnc_establish_returns_agent_socket_missing_when_backend_needs_bootstrap
     assert response.get_json()["error"] == "agent_socket_missing"
     assert fake_tunnel.transport_marks == []
     assert fake_tunnel.start_calls == []
+
+
+def test_vnc_establish_returns_agent_socket_missing_when_vnc_start_emit_fails(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    _register_agent_credential(engine_harness)
+    engine_harness.context.agent_socket_registry = SimpleNamespace(
+        is_registered=lambda agent_id: True
+    )
+    engine_harness.context.emit_agent_event = lambda agent_id, event, payload: False
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+
+    wait_calls: list[float] = []
+
+    def _fake_wait(*_args, **kwargs):
+        wait_calls.append(float(kwargs["timeout_seconds"]))
+        return False
+
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", _fake_wait)
+
+    response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+
+    assert response.status_code == 409
+    assert response.get_json()["error"] == "agent_socket_missing"
+    assert wait_calls == [0.75]
+    assert fake_tunnel.transport_marks == [("test-device-agent", "vnc_bootstrap")]
+    assert fake_tunnel.start_calls == [("test-device-agent", False, "vnc_bootstrap")]
