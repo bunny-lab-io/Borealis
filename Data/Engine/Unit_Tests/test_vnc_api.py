@@ -174,6 +174,55 @@ def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestH
     ]
 
 
+def test_vnc_establish_uses_longer_initial_wait_and_shorter_retry_wait(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    wait_calls: list[float] = []
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+
+    def _fake_wait(*_args, **kwargs):
+        wait_calls.append(float(kwargs["timeout_seconds"]))
+        return len(wait_calls) > 1
+
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", _fake_wait)
+    monkeypatch.setattr(vnc_api.time, "sleep", lambda _seconds: None)
+
+    response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+
+    assert response.status_code == 200
+    assert wait_calls == [12.0, 8.0]
+    assert fake_tunnel.transport_recovers == [
+        ("test-device-agent", "vnc_connect", "vnc_connect_retry")
+    ]
+
+
+def test_vnc_establish_applies_bootstrap_settle_only_for_new_sessions(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    admin_client = _client_with_session(engine_harness, username="admin")
+    spectator_client = _client_with_session(engine_harness, username="alice")
+    fake_tunnel = _FakeTunnelService()
+    sleep_calls: list[float] = []
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(vnc_api.time, "sleep", lambda seconds: sleep_calls.append(float(seconds)))
+
+    controller_response = admin_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+    spectator_response = spectator_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+
+    assert controller_response.status_code == 200
+    assert spectator_response.status_code == 200
+    assert sleep_calls == [1.25]
+
+
 def test_vnc_handoff_updates_controller_and_forces_reconnect(
     engine_harness: EngineTestHarness,
     monkeypatch,

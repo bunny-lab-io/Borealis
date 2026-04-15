@@ -225,3 +225,83 @@ def test_read_ultravnc_password_hash_uses_temp_scratch_not_live_config(monkeypat
     assert hash_value == "NEWHASH"
     assert secure_value is None
     assert live_config.read_text(encoding="ascii") == "[UltraVNC]\npasswd=LIVEHASH\n"
+
+
+def _role_for_disconnect_grace() -> vnc_role.Role:
+    role = vnc_role.Role.__new__(vnc_role.Role)
+    role.role_health_label = "UltraVNC Service"
+    role._log = lambda *_args, **_kwargs: None
+    role._state = {"allowed_ips": "10.255.0.1/32", "port": 5900, "remove_wallpaper": False}
+    role._last_allowed_ips = "10.255.0.1/32"
+    role._engine_ready_for_vnc = True
+    role._engine_wait_logged = False
+    role._missing_password_logged = False
+    role._last_ready_at = 0
+    role._always_on_thread = SimpleNamespace(is_alive=lambda: True)
+    role._session_busy_lease = None
+    role._runtime_session = {
+        "session_id": "session-1",
+        "controller_password": "abc12345",
+        "view_only_password": "def67890",
+        "credential_revision": 1,
+        "remove_wallpaper": False,
+    }
+    role._disconnect_grace = {
+        "deadline": 0.0,
+        "controller_password": None,
+        "view_only_password": None,
+        "allowed_ips": None,
+        "port": 5900,
+        "remove_wallpaper": False,
+        "reason": "",
+    }
+    return role
+
+
+def test_ensure_always_on_uses_disconnect_grace_credentials_after_soft_disconnect(monkeypatch) -> None:
+    start_calls: list[dict] = []
+    standby_calls: list[str] = []
+    role = _role_for_disconnect_grace()
+    role.vnc = SimpleNamespace(
+        start=lambda **kwargs: start_calls.append(dict(kwargs)),
+        ensure_standby=lambda *, reason="standby": standby_calls.append(reason),
+        is_listener_ready=lambda _port: True,
+    )
+
+    monkeypatch.setattr(vnc_role.time, "time", lambda: 100.0)
+
+    assert role._schedule_disconnect_grace("operator_disconnect") is True
+
+    role._clear_runtime_session()
+    role._ensure_always_on(reason="disconnect_grace")
+
+    assert standby_calls == []
+    assert len(start_calls) == 1
+    assert start_calls[0]["controller_password"] == "abc12345"
+    assert start_calls[0]["view_only_password"] == "def67890"
+    assert start_calls[0]["allowed_ips"] == "10.255.0.1/32"
+    assert start_calls[0]["remove_wallpaper"] is False
+    assert start_calls[0]["reason"] == "disconnect_grace"
+
+
+def test_disconnect_grace_expires_back_to_standby(monkeypatch) -> None:
+    start_calls: list[dict] = []
+    standby_calls: list[str] = []
+    role = _role_for_disconnect_grace()
+    role.vnc = SimpleNamespace(
+        start=lambda **kwargs: start_calls.append(dict(kwargs)),
+        ensure_standby=lambda *, reason="standby": standby_calls.append(reason),
+        is_listener_ready=lambda _port: False,
+    )
+
+    monkeypatch.setattr(vnc_role.time, "time", lambda: 100.0)
+    assert role._schedule_disconnect_grace("operator_disconnect") is True
+
+    role._clear_runtime_session()
+
+    monkeypatch.setattr(vnc_role.time, "time", lambda: 200.0)
+    role._ensure_always_on(reason="always_on_check")
+
+    assert start_calls == []
+    assert standby_calls == ["no_active_session"]
+    assert role._disconnect_grace_active(now=200.0) is False

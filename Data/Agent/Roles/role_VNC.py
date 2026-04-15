@@ -102,6 +102,14 @@ def _coerce_int(value: Any, default: int, *, min_value: int = 1, max_value: Opti
     return parsed
 
 
+VNC_DISCONNECT_GRACE_SECONDS = _coerce_int(
+    os.environ.get("BOREALIS_VNC_DISCONNECT_GRACE_SECONDS"),
+    45,
+    min_value=0,
+    max_value=600,
+)
+
+
 def _vnc_state_path() -> Path:
     root = agent_borealis_root(__file__) / "Settings" / "UltraVNC"
     root.mkdir(parents=True, exist_ok=True)
@@ -1249,6 +1257,15 @@ class Role:
         self._state = _load_vnc_state()
         self._sanitize_state()
         self._last_allowed_ips = _parse_allowed_ips(self._state.get("allowed_ips"))
+        self._disconnect_grace: dict[str, Any] = {
+            "deadline": 0.0,
+            "controller_password": None,
+            "view_only_password": None,
+            "allowed_ips": None,
+            "port": self._state.get("port"),
+            "remove_wallpaper": bool(self._state.get("remove_wallpaper", True)),
+            "reason": "",
+        }
         self._runtime_session: dict[str, Any] = {
             "session_id": "",
             "controller_password": None,
@@ -1365,6 +1382,73 @@ class Role:
             return runtime_value
         return bool(self._state.get("remove_wallpaper", True))
 
+    def _clear_disconnect_grace(self) -> None:
+        self._disconnect_grace = {
+            "deadline": 0.0,
+            "controller_password": None,
+            "view_only_password": None,
+            "allowed_ips": None,
+            "port": self._state.get("port"),
+            "remove_wallpaper": self._remove_wallpaper_enabled(),
+            "reason": "",
+        }
+
+    def _disconnect_grace_snapshot(self, *, now: Optional[float] = None) -> Optional[dict[str, Any]]:
+        current_time = time.time() if now is None else float(now)
+        grace_state = getattr(self, "_disconnect_grace", None)
+        if not isinstance(grace_state, dict):
+            return None
+        deadline = float(grace_state.get("deadline") or 0.0)
+        controller_password = grace_state.get("controller_password")
+        if deadline <= current_time or not controller_password:
+            if deadline > 0:
+                self._clear_disconnect_grace()
+            return None
+        return {
+            "deadline": deadline,
+            "controller_password": str(controller_password),
+            "view_only_password": grace_state.get("view_only_password"),
+            "allowed_ips": grace_state.get("allowed_ips") or self._last_allowed_ips,
+            "port": _resolve_vnc_port(grace_state.get("port")),
+            "remove_wallpaper": bool(grace_state.get("remove_wallpaper", True)),
+            "reason": str(grace_state.get("reason") or "").strip(),
+            "remaining_seconds": max(0, int(round(deadline - current_time))),
+        }
+
+    def _disconnect_grace_active(self, *, now: Optional[float] = None) -> bool:
+        return self._disconnect_grace_snapshot(now=now) is not None
+
+    def _schedule_disconnect_grace(self, reason: str) -> bool:
+        normalized_reason = str(reason or "").strip().lower()
+        if normalized_reason not in {"operator_disconnect", "component_unmount"}:
+            self._clear_disconnect_grace()
+            return False
+        if VNC_DISCONNECT_GRACE_SECONDS <= 0:
+            self._clear_disconnect_grace()
+            return False
+        controller_password = self._controller_password()
+        allowed_ips = self._last_allowed_ips or _parse_allowed_ips(self._state.get("allowed_ips"))
+        if not controller_password or not allowed_ips:
+            self._clear_disconnect_grace()
+            return False
+        deadline = time.time() + float(VNC_DISCONNECT_GRACE_SECONDS)
+        self._disconnect_grace = {
+            "deadline": deadline,
+            "controller_password": controller_password,
+            "view_only_password": self._view_only_password(),
+            "allowed_ips": allowed_ips,
+            "port": self._state_port(),
+            "remove_wallpaper": self._remove_wallpaper_enabled(),
+            "reason": normalized_reason,
+        }
+        self._log(
+            "VNC reconnect grace active for {0}s after {1}.".format(
+                int(VNC_DISCONNECT_GRACE_SECONDS),
+                normalized_reason,
+            )
+        )
+        return True
+
     def _clear_runtime_session(self) -> None:
         self._runtime_session = {
             "session_id": "",
@@ -1440,6 +1524,7 @@ class Role:
             remove_wallpaper=remove_wallpaper if isinstance(remove_wallpaper, bool) else None,
         )
         if controller_password:
+            self._clear_disconnect_grace()
             self._update_runtime_session(
                 session_id=payload.get("session_id"),
                 controller_password=str(controller_password),
@@ -1478,24 +1563,37 @@ class Role:
             return
         self._engine_wait_logged = False
         controller_password = self._controller_password()
+        grace_snapshot = None
         if not controller_password:
-            if not self._missing_password_logged:
-                self._missing_password_logged = True
-                self._log("VNC always-on pending: no active collaboration session.")
-            self.vnc.ensure_standby(reason="no_active_session")
-            return
+            grace_snapshot = self._disconnect_grace_snapshot()
+            if grace_snapshot is None:
+                if not self._missing_password_logged:
+                    self._missing_password_logged = True
+                    self._log("VNC always-on pending: no active collaboration session.")
+                self.vnc.ensure_standby(reason="no_active_session")
+                return
         self._missing_password_logged = False
-        port_value = self._state_port()
-        allowed_ips = self._last_allowed_ips or _parse_allowed_ips(self._state.get("allowed_ips"))
+        port_value = grace_snapshot["port"] if grace_snapshot else self._state_port()
+        allowed_ips = (
+            str(grace_snapshot.get("allowed_ips") or "").strip()
+            if grace_snapshot
+            else (self._last_allowed_ips or _parse_allowed_ips(self._state.get("allowed_ips")))
+        )
         if not allowed_ips:
             self.vnc.ensure_standby(reason="missing_allowed_ips")
             return
         self.vnc.start(
             port=port_value,
             allowed_ips=allowed_ips,
-            controller_password=controller_password,
-            view_only_password=self._view_only_password(),
-            remove_wallpaper=self._remove_wallpaper_enabled(),
+            controller_password=controller_password or str(grace_snapshot.get("controller_password") or ""),
+            view_only_password=(
+                grace_snapshot.get("view_only_password") if grace_snapshot else self._view_only_password()
+            ),
+            remove_wallpaper=(
+                bool(grace_snapshot.get("remove_wallpaper", True))
+                if grace_snapshot
+                else self._remove_wallpaper_enabled()
+            ),
             reason=reason,
         )
         if self.vnc.is_listener_ready(port_value):
@@ -1505,11 +1603,16 @@ class Role:
         interval = _coerce_int(VNC_ALWAYS_ON_INTERVAL_SECONDS, 30, min_value=5)
         while not self._always_on_stop.is_set():
             try:
+                grace_active = self._disconnect_grace_active()
+                has_allowed_ips = bool(
+                    self._last_allowed_ips
+                    or (self._disconnect_grace_snapshot() or {}).get("allowed_ips")
+                )
                 if (
                     (not self._engine_ready_for_vnc)
-                    or not self._controller_password()
-                    or not self._last_allowed_ips
-                    or not self.vnc.is_listener_ready(self._state_port())
+                    or (not self._controller_password() and not grace_active)
+                    or not has_allowed_ips
+                    or (not self.vnc.is_listener_ready(self._state_port()) and not grace_active)
                 ):
                     payload = self._request_vnc_bootstrap(reason="agent_boot")
                     if payload:
@@ -1536,6 +1639,7 @@ class Role:
         port_value = self._state_port()
         active_session_id = self._active_session_id()
         listener_ready = self.vnc.is_listener_ready(port_value)
+        grace_snapshot = self._disconnect_grace_snapshot()
         if listener_ready:
             self._last_ready_at = max(self._last_ready_at, int(time.time()))
         details = {
@@ -1554,6 +1658,8 @@ class Role:
             "last_ready_at": str(int(self._last_ready_at or 0)),
             "active_session_id": active_session_id,
             "credential_revision": str(self._credential_revision()),
+            "disconnect_grace_active": "true" if grace_snapshot else "false",
+            "disconnect_grace_until": str(int(grace_snapshot["deadline"])) if grace_snapshot else "0",
         }
         if service_state in {"RUNNING", "START_PENDING"} and listener_ready and active_session_id:
             return {
@@ -1577,6 +1683,13 @@ class Role:
                 "details": details,
             }
         if not active_session_id or not self._controller_password():
+            if grace_snapshot:
+                return {
+                    "status": "pending",
+                    "role_label": self.role_health_label,
+                    "detail": "No active collaboration session; UltraVNC warm reconnect grace is active.",
+                    "details": details,
+                }
             return {
                 "status": "pending",
                 "role_label": self.role_health_label,
@@ -1620,6 +1733,7 @@ class Role:
                     return
                 reason = payload.get("reason") or reason
             self._log(f"VNC stop requested (reason={reason}).")
+            self._clear_disconnect_grace()
             self._release_session_busy()
             self.vnc.stop(reason=str(reason))
 
@@ -1664,6 +1778,7 @@ class Role:
                 credential_revision=credential_revision,
                 remove_wallpaper=remove_wallpaper if isinstance(remove_wallpaper, bool) else None,
             )
+            self._clear_disconnect_grace()
             self._acquire_session_busy(str(reason))
             self._mark_engine_ready("vnc_start_event")
             self._ensure_always_on(reason=str(reason))
@@ -1677,13 +1792,18 @@ class Role:
                     return
                 reason = payload.get("reason") or reason
             self._log(f"VNC stop requested (reason={reason}).")
+            grace_scheduled = self._schedule_disconnect_grace(str(reason))
             self._clear_runtime_session()
             self._release_session_busy()
-            self.vnc.stop(reason=str(reason))
+            if grace_scheduled:
+                self._ensure_always_on(reason="disconnect_grace")
+            else:
+                self.vnc.stop(reason=str(reason))
 
     def stop_all(self) -> None:
         try:
             self._always_on_stop.set()
         except Exception:
             pass
+        self._clear_disconnect_grace()
         self._release_session_busy()

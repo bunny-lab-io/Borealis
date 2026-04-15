@@ -37,7 +37,10 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - `POST /api/vnc/handoff` transfers control between connected participants, while `GET /api/vnc/sessions` exposes active-session inventory for the WebUI and admin/server overview.
 - `POST /api/agent/vnc/ensure` now returns readiness detail (`ready`, `service_state`, `listener_state`, `last_ready_at`, and session metadata) so the Engine can wait for the listener before minting browser bootstrap data.
 - Before the proxy connects, the Engine re-emits tunnel startup with `reason=vnc_bootstrap` so the agent refreshes VNC readiness over the existing persistent tunnel.
+- After soft browser disconnects (`operator_disconnect` and `component_unmount`), the Windows VNC role now keeps UltraVNC warm for a short reconnect grace window (default 45 seconds via `BOREALIS_VNC_DISCONNECT_GRACE_SECONDS`) instead of dropping straight to standby, which avoids repeated cold-starts on quick reconnects.
+- New-session VNC bootstrap now applies a short settle delay (`BOREALIS_VNC_BOOTSTRAP_SETTLE_SECONDS`, default 1.25 seconds) before probing the backend so a warm listener has time to rotate to the new session credentials before noVNC attaches.
 - If the backend listener does not become reachable after the readiness wait, the proxy escalates once with `reason=vnc_connect_retry`, and Borealis now applies an agent-level cooldown so closely spaced browser retries do not each force another shared transport recovery.
+- The initial backend readiness window now defaults to 12 seconds (`BOREALIS_VNC_READY_WAIT_SECONDS`) and the post-recovery retry window defaults to 8 seconds (`BOREALIS_VNC_RETRY_READY_WAIT_SECONDS`), which makes normal UltraVNC startup less likely to be mistaken for a WireGuard failure.
 - When the backend VNC TCP socket finally opens, Borealis confirms transport success with `reason=vnc_backend_connect` so a successful noVNC bootstrap counts as real tunnel health.
 
 ## Public Edge Configuration
@@ -123,7 +126,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - On Windows agents, same-session ensure calls also recover a stopped `WireGuardTunnel$Borealis` service instead of returning early when the `tunnel_id` matches.
 - The Engine listener watchdog keeps shared listener state honest for all sessions, mutates peers live on the persistent interface during routine changes, uses an effective probe grace aligned with the WireGuard keepalive window before declaring `stale_handshake`, and marks status APIs as recovering while full peer reconciliation is underway.
 - Quiet shell sessions no longer depend on operator traffic alone; shell keepalive pongs and shell output can confirm transport health between commands.
-- VNC still shares the same listener recovery path, but `vnc_connect_retry` is now delayed, bounded to one forced recovery request per browser session, and rate-limited across closely spaced retries for the same agent so the shared listener is less likely to churn.
+- VNC still shares the same listener recovery path, but Borealis now keeps UltraVNC warm across soft disconnects, adds a short new-session bootstrap settle, and uses a longer default readiness wait before `vnc_connect_retry`, so the shared listener is less likely to churn during normal reconnects.
 
 ### Logs to inspect
 - Engine tunnel log: `Engine/Logs/VPN_Tunnel/tunnel.log`.
@@ -146,7 +149,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - Legacy WebSocket tunnels are retired; only WireGuard is supported.
 - VNC requires UltraVNC running on the agent.
 - The Engine still uses one shared WireGuard listener/interface, so a true interface-level failure remains a shared outage until the watchdog or operator recovery path restores it.
-- On weaker agents, VNC can still expose residual transport issues, but the proxy now delays `vnc_connect_retry`, confirms successful backend connects as transport success, and avoids repeated forced recovery churn per browser session; see `Docs/technical-debt.md` for any remaining field issues.
+- On weaker agents, VNC can still expose residual transport issues, but the proxy now keeps UltraVNC warm across soft disconnects, delays first-probe bootstrap slightly for fresh sessions, confirms successful backend connects as transport success, and avoids repeated forced recovery churn per browser session; see `Docs/technical-debt.md` for any remaining field issues.
 
 ### Reverse VPN Tunnels (WireGuard) - Full Reference
 #### 1) High-level model

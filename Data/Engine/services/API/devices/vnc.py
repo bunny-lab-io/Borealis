@@ -100,6 +100,16 @@ def _coerce_timeout(value: Any, default: float) -> float:
     return parsed
 
 
+def _coerce_nonnegative_timeout(value: Any, default: float) -> float:
+    try:
+        parsed = float(value)
+    except Exception:
+        return default
+    if parsed < 0:
+        return default
+    return parsed
+
+
 def _probe_tcp_listener(host: str, port: int, timeout_seconds: float) -> bool:
     host_value = _normalize_text(host)
     try:
@@ -253,6 +263,12 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         try:
             _restart_tunnel("vnc_bootstrap")
             _emit_vnc_start("vnc_bootstrap")
+            settle_seconds = _coerce_nonnegative_timeout(
+                os.environ.get("BOREALIS_VNC_BOOTSTRAP_SETTLE_SECONDS"),
+                1.25,
+            )
+            if _created and settle_seconds > 0:
+                time.sleep(settle_seconds)
         except Exception:
             logger.debug("Failed to re-emit vpn_tunnel_start before VNC bootstrap", exc_info=True)
 
@@ -268,7 +284,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             vnc_port,
             timeout_seconds=_coerce_timeout(
                 os.environ.get("BOREALIS_VNC_READY_WAIT_SECONDS"),
-                6.0,
+                12.0,
             ),
             poll_interval_seconds=_coerce_timeout(
                 os.environ.get("BOREALIS_VNC_READY_POLL_INTERVAL_SECONDS"),
@@ -286,7 +302,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 vnc_port,
                 timeout_seconds=_coerce_timeout(
                     os.environ.get("BOREALIS_VNC_RETRY_READY_WAIT_SECONDS"),
-                    6.0,
+                    8.0,
                 ),
                 poll_interval_seconds=_coerce_timeout(
                     os.environ.get("BOREALIS_VNC_READY_POLL_INTERVAL_SECONDS"),
