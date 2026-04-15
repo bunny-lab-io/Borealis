@@ -32,6 +32,10 @@ const MAGIC_UI = {
   accentD: "#f472b6",
 };
 
+const VNC_STAGE_BACKGROUND = "#0b1325";
+const VNC_CANVAS_BOX_SHADOW =
+  "0 0 0 1px rgba(125, 183, 255, 0.18), 0 18px 42px rgba(2, 6, 23, 0.4)";
+
 const SIDEBAR_THEME = {
   panel:
     "linear-gradient(135deg, rgba(10, 16, 31, 0.98) 0%, rgba(6, 10, 24, 0.95) 60%, rgba(15, 6, 26, 0.97) 100%)",
@@ -503,6 +507,7 @@ export default function ReverseTunnelVnc({ device }) {
       });
       // Always show a local dot cursor so we never lose pointer visibility.
       rfb.showDotCursor = true;
+      rfb.background = VNC_STAGE_BACKGROUND;
       rfb.scaleViewport = scaleViewport;
       rfb.resizeSession = resizeSession;
       rfb.clipViewport = clipViewport;
@@ -510,6 +515,22 @@ export default function ReverseTunnelVnc({ device }) {
       rfb.viewOnly = effectiveViewOnly;
       rfb.qualityLevel = qualityLevel;
       rfb.compressionLevel = compressionLevel;
+
+      const screen = rfb._screen || null;
+      if (screen?.style) {
+        screen.style.alignItems = "center";
+        screen.style.justifyContent = "center";
+        screen.style.overflow = "hidden";
+      }
+      const canvas = rfb._canvas || null;
+      if (canvas?.style) {
+        canvas.style.display = "block";
+        canvas.style.flex = "0 0 auto";
+        canvas.style.maxWidth = "none";
+        canvas.style.maxHeight = "none";
+        canvas.style.margin = "auto";
+        canvas.style.boxShadow = VNC_CANVAS_BOX_SHADOW;
+      }
 
       rfbRef.current = rfb;
       setStatusMessage(
@@ -862,13 +883,19 @@ export default function ReverseTunnelVnc({ device }) {
       setViewportHint("Framebuffer size unavailable.");
       return;
     }
+    const canvas = rfb?._canvas || null;
     if (screen?.style) {
-      screen.style.display = "flex";
-      screen.style.width = "100%";
-      screen.style.height = "100%";
       screen.style.alignItems = "center";
       screen.style.justifyContent = "center";
       screen.style.overflow = value === "all" ? "hidden" : "auto";
+    }
+    if (canvas?.style) {
+      canvas.style.display = "block";
+      canvas.style.flex = "0 0 auto";
+      canvas.style.maxWidth = "none";
+      canvas.style.maxHeight = "none";
+      canvas.style.margin = "auto";
+      canvas.style.boxShadow = VNC_CANVAS_BOX_SHADOW;
     }
 
     if (value === "all") {
@@ -881,12 +908,10 @@ export default function ReverseTunnelVnc({ device }) {
             host.scrollLeft = 0;
             host.scrollTop = 0;
           }
-          if (scaleViewport && typeof display.autoscale === "function" && host) {
-            display.autoscale(host.clientWidth, host.clientHeight);
-          } else if (typeof display.scale !== "undefined") {
+          rfb.scaleViewport = scaleViewport;
+          if (!scaleViewport && typeof display.scale !== "undefined") {
             display.scale = 1.0;
           }
-          rfb.scaleViewport = scaleViewport;
           setViewportHint("");
         } catch {
           setViewportHint("Viewport controls not available.");
@@ -1124,10 +1149,20 @@ export default function ReverseTunnelVnc({ device }) {
                 sx={{
                   width: "100%",
                   height: "100%",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
+                  display: "block",
+                  position: "relative",
                   overflow: "hidden",
+                  "& > div": {
+                    width: "100%",
+                    height: "100%",
+                  },
+                  "& canvas": {
+                    display: "block",
+                    flex: "0 0 auto",
+                    maxWidth: "none",
+                    maxHeight: "none",
+                    boxShadow: VNC_CANVAS_BOX_SHADOW,
+                  },
                 }}
               />
               {!isConnected ? (
