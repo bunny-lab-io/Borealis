@@ -356,65 +356,28 @@ function estimateActiveDisplayBounds(display) {
       );
     };
 
-    const columnIsActive = (x) => {
-      let activePixels = 0;
-      let variation = 0;
-      let previousLuma = null;
-      let samples = 0;
-      for (let y = 0; y < height; y += yStep) {
-        const pixel = samplePixel(data, width, x, y);
-        const diff = colorDistance(pixel, background);
-        if (diff >= VNC_ACTIVE_BOUNDS_COLOR_THRESHOLD) {
-          activePixels += 1;
-        }
-        const currentLuma = luminance(pixel);
-        if (previousLuma != null) {
-          variation += Math.abs(currentLuma - previousLuma);
-        }
-        previousLuma = currentLuma;
-        samples += 1;
-      }
-      return (
-        activePixels >= Math.max(3, Math.floor(samples * 0.08)) ||
-        variation >= samples * VNC_ACTIVE_BOUNDS_VARIANCE_THRESHOLD
-      );
-    };
-
     let top = 0;
     while (top < height && !rowIsActive(top)) top += yStep;
 
     let bottom = height - 1;
     while (bottom > top && !rowIsActive(bottom)) bottom -= yStep;
 
-    let left = 0;
-    while (left < width && !columnIsActive(left)) left += xStep;
-
-    let right = width - 1;
-    while (right > left && !columnIsActive(right)) right -= xStep;
-
-    if (top >= bottom || left >= right) return null;
+    if (top >= bottom) return null;
 
     top = clampNumber(top - yStep, 0, height - 1);
     bottom = clampNumber(bottom + yStep, 0, height - 1);
-    left = clampNumber(left - xStep, 0, width - 1);
-    right = clampNumber(right + xStep, 0, width - 1);
 
-    const boundsWidth = right - left + 1;
     const boundsHeight = bottom - top + 1;
-    const horizontalMargin = (width - boundsWidth) / width;
     const verticalMargin = (height - boundsHeight) / height;
 
-    if (
-      horizontalMargin < VNC_ACTIVE_BOUNDS_MARGIN_RATIO &&
-      verticalMargin < VNC_ACTIVE_BOUNDS_MARGIN_RATIO
-    ) {
+    if (verticalMargin < VNC_ACTIVE_BOUNDS_MARGIN_RATIO) {
       return null;
     }
 
     return {
-      x: left,
+      x: 0,
       y: top,
-      w: Math.max(1, boundsWidth),
+      w: Math.max(1, width),
       h: Math.max(1, boundsHeight),
     };
   } catch {
