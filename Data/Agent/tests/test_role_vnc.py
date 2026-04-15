@@ -161,6 +161,48 @@ def test_health_report_requires_listener_readiness_for_healthy_status(monkeypatc
     assert report["details"]["ready"] == "false"
 
 
+def test_health_report_is_healthy_without_active_session_when_listener_is_ready(monkeypatch) -> None:
+    role = vnc_role.Role.__new__(vnc_role.Role)
+    role.role_health_label = "UltraVNC Service"
+    role._always_on_thread = SimpleNamespace(is_alive=lambda: True)
+    role._engine_ready_for_vnc = True
+    role._state = {"port": 5900, "remove_wallpaper": True}
+    role._agent_runtime_credentials = {
+        "controller_password": "bootpass",
+        "credential_revision": 88,
+    }
+    role._runtime_session = {
+        "session_id": "",
+        "controller_password": "bootpass",
+        "view_only_password": None,
+        "credential_revision": 88,
+        "remove_wallpaper": True,
+    }
+    role._last_ready_at = 0
+    role._disconnect_grace = {
+        "deadline": 0.0,
+        "controller_password": None,
+        "view_only_password": None,
+        "allowed_ips": None,
+        "port": 5900,
+        "remove_wallpaper": True,
+        "reason": "",
+    }
+    role.vnc = SimpleNamespace(
+        _resolve_service_name=lambda: "uvnc_service",
+        _service_state_by_name=lambda _service_name: "RUNNING",
+        is_listener_ready=lambda _port: True,
+    )
+    monkeypatch.setattr(vnc_role.os, "name", "nt", raising=False)
+
+    report = role.health_report()
+
+    assert report["status"] == "healthy"
+    assert report["details"]["listener_state"] == "listening"
+    assert report["details"]["ready"] == "true"
+    assert report["detail"] == "uvnc_service listener is ready for always-on access."
+
+
 def test_write_ultravnc_config_preserves_both_password_keys_in_ultravnc_section(tmp_path) -> None:
     config_path = tmp_path / "ultravnc.ini"
 
@@ -297,7 +339,7 @@ def test_ensure_always_on_uses_disconnect_grace_credentials_after_soft_disconnec
     assert start_calls[0]["reason"] == "disconnect_grace"
 
 
-def test_disconnect_grace_expires_back_to_standby(monkeypatch) -> None:
+def test_disconnect_grace_expiry_keeps_listener_running(monkeypatch) -> None:
     start_calls: list[dict] = []
     standby_calls: list[str] = []
     role = _role_for_disconnect_grace()
@@ -315,9 +357,40 @@ def test_disconnect_grace_expires_back_to_standby(monkeypatch) -> None:
     monkeypatch.setattr(vnc_role.time, "time", lambda: 200.0)
     role._ensure_always_on(reason="always_on_check")
 
-    assert start_calls == []
-    assert standby_calls == ["no_active_session"]
+    assert len(start_calls) == 1
+    assert start_calls[0]["controller_password"] == "bootpass"
+    assert start_calls[0]["allowed_ips"] == "10.255.0.1/32"
+    assert start_calls[0]["reason"] == "always_on_check"
+    assert standby_calls == []
     assert role._disconnect_grace_active(now=200.0) is False
+
+
+def test_ensure_always_on_keeps_listener_running_without_active_session(monkeypatch) -> None:
+    start_calls: list[dict] = []
+    standby_calls: list[str] = []
+    role = _role_for_disconnect_grace()
+    role._runtime_session = {
+        "session_id": "",
+        "controller_password": "bootpass",
+        "view_only_password": None,
+        "credential_revision": 88,
+        "remove_wallpaper": False,
+    }
+    role.vnc = SimpleNamespace(
+        start=lambda **kwargs: start_calls.append(dict(kwargs)),
+        ensure_standby=lambda *, reason="standby": standby_calls.append(reason),
+        is_listener_ready=lambda _port: True,
+    )
+
+    monkeypatch.setattr(vnc_role.time, "time", lambda: 100.0)
+
+    role._ensure_always_on(reason="always_on_check")
+
+    assert len(start_calls) == 1
+    assert start_calls[0]["controller_password"] == "bootpass"
+    assert start_calls[0]["allowed_ips"] == "10.255.0.1/32"
+    assert start_calls[0]["reason"] == "always_on_check"
+    assert standby_calls == []
 
 
 def test_request_vnc_bootstrap_advertises_runtime_credential() -> None:

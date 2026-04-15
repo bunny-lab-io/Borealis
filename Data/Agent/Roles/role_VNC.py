@@ -1310,8 +1310,6 @@ class Role:
             )
         except Exception:
             pass
-        if os.name == "nt":
-            self.vnc.ensure_standby(reason="startup_policy")
         try:
             config_dir = _resolve_vnc_config_dir()
             if config_dir:
@@ -1642,24 +1640,13 @@ class Role:
         return None
 
     def _ensure_always_on(self, *, reason: str) -> None:
-        if not self._engine_ready_for_vnc:
-            if not self._engine_wait_logged:
-                self._engine_wait_logged = True
-                self._log("VNC always-on standby: waiting for engine readiness.")
-            self.vnc.ensure_standby(reason="waiting_for_engine_ready")
-            return
-        self._engine_wait_logged = False
-        active_session_id = self._active_session_id()
         controller_password = self._controller_password()
         grace_snapshot = self._disconnect_grace_snapshot()
-        if not active_session_id and grace_snapshot is None:
+        if not controller_password and grace_snapshot is None:
             if not self._missing_password_logged:
                 self._missing_password_logged = True
-                self._log("VNC always-on pending: no active collaboration session.")
+                self._log("VNC always-on pending: runtime credential unavailable.")
             self.vnc.ensure_standby(reason="no_active_session")
-            return
-        if not controller_password and grace_snapshot is None:
-            self.vnc.ensure_standby(reason="missing_controller_password")
             return
         self._missing_password_logged = False
         port_value = grace_snapshot["port"] if grace_snapshot else self._state_port()
@@ -1669,8 +1656,12 @@ class Role:
             else (self._last_allowed_ips or _parse_allowed_ips(self._state.get("allowed_ips")))
         )
         if not allowed_ips:
+            if not self._engine_wait_logged:
+                self._engine_wait_logged = True
+                self._log("VNC always-on pending: waiting for tunnel firewall scope.")
             self.vnc.ensure_standby(reason="missing_allowed_ips")
             return
+        self._engine_wait_logged = False
         self.vnc.start(
             port=port_value,
             allowed_ips=allowed_ips,
@@ -1693,23 +1684,12 @@ class Role:
         while not self._always_on_stop.is_set():
             try:
                 rotated = self._ensure_runtime_credential_fresh(reason="scheduled_rotation")
-                grace_active = self._disconnect_grace_active()
-                active_session_id = self._active_session_id()
                 has_allowed_ips = bool(
                     self._last_allowed_ips
                     or (self._disconnect_grace_snapshot() or {}).get("allowed_ips")
                 )
-                if (
-                    rotated
-                    or (not self._engine_ready_for_vnc)
-                    or not active_session_id
-                    or not has_allowed_ips
-                    or (
-                        active_session_id
-                        and not self.vnc.is_listener_ready(self._state_port())
-                        and not grace_active
-                    )
-                ):
+                listener_ready = self.vnc.is_listener_ready(self._state_port())
+                if rotated or not has_allowed_ips or not listener_ready:
                     bootstrap_reason = "credential_rotation" if rotated else "agent_boot"
                     payload = self._request_vnc_bootstrap(reason=bootstrap_reason)
                     if payload:
@@ -1748,21 +1728,29 @@ class Role:
             "listener_state": (
                 "listening"
                 if listener_ready
-                else ("standby" if not active_session_id else "not_listening")
+                else "not_listening"
             ),
             "listener_ready": "true" if listener_ready else "false",
-            "ready": "true" if (active_session_id and listener_ready and service_state == "RUNNING") else "false",
+            "ready": (
+                "true"
+                if listener_ready and service_state in {"RUNNING", "START_PENDING"}
+                else "false"
+            ),
             "last_ready_at": str(int(self._last_ready_at or 0)),
             "active_session_id": active_session_id,
             "credential_revision": str(self._credential_revision()),
             "disconnect_grace_active": "true" if grace_snapshot else "false",
             "disconnect_grace_until": str(int(grace_snapshot["deadline"])) if grace_snapshot else "0",
         }
-        if service_state in {"RUNNING", "START_PENDING"} and listener_ready and active_session_id:
+        if service_state in {"RUNNING", "START_PENDING"} and listener_ready:
             return {
                 "status": "healthy",
                 "role_label": self.role_health_label,
-                "detail": f"{service_name or ULTRAVNC_SERVICE_NAME} listener is ready for session {active_session_id}.",
+                "detail": (
+                    f"{service_name or ULTRAVNC_SERVICE_NAME} listener is ready for session {active_session_id}."
+                    if active_session_id
+                    else f"{service_name or ULTRAVNC_SERVICE_NAME} listener is ready for always-on access."
+                ),
                 "details": details,
             }
         if not loop_alive:
@@ -1779,18 +1767,18 @@ class Role:
                 "detail": "Waiting for engine readiness before enabling UltraVNC.",
                 "details": details,
             }
-        if not active_session_id or not self._controller_password():
+        if not self._controller_password():
             if grace_snapshot:
                 return {
                     "status": "pending",
                     "role_label": self.role_health_label,
-                    "detail": "No active collaboration session; UltraVNC warm reconnect grace is active.",
+                    "detail": "UltraVNC warm reconnect grace is active.",
                     "details": details,
                 }
             return {
                 "status": "pending",
                 "role_label": self.role_health_label,
-                "detail": "No active collaboration session; UltraVNC is standing by.",
+                "detail": "UltraVNC is waiting for a controller credential.",
                 "details": details,
             }
         if service_state in {"RUNNING", "START_PENDING"} and not listener_ready:
@@ -1895,7 +1883,7 @@ class Role:
             if grace_scheduled:
                 self._ensure_always_on(reason="disconnect_grace")
             else:
-                self.vnc.stop(reason=str(reason))
+                self._ensure_always_on(reason="session_idle")
 
     def stop_all(self) -> None:
         try:
