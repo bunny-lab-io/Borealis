@@ -228,6 +228,11 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 return {"error": "tunnel_down"}, 409
         allowed_ips = _resolve_allowed_ips(session_payload=session_payload)
         engine_virtual_ip = _normalize_text(session_payload.get("engine_virtual_ip"))
+        vnc_port = int(getattr(adapters.context, "vnc_port", 5900))
+        virtual_ip = _normalize_text(session_payload.get("virtual_ip"))
+        host = virtual_ip.split("/")[0] if virtual_ip else ""
+        if not host:
+            return {"error": "virtual_ip_missing"}, 500
 
         def _restart_tunnel(reason: str) -> None:
             force_restart = str(reason or "").strip().lower() == "vnc_connect_retry"
@@ -265,37 +270,59 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 },
             )
 
-        try:
-            _restart_tunnel("vnc_bootstrap")
-            _emit_vnc_start("vnc_bootstrap")
-            settle_seconds = _coerce_nonnegative_timeout(
-                os.environ.get("BOREALIS_VNC_BOOTSTRAP_SETTLE_SECONDS"),
-                1.25,
-            )
-            if _created and settle_seconds > 0:
-                time.sleep(settle_seconds)
-        except Exception:
-            logger.debug("Failed to re-emit vpn_tunnel_start before VNC bootstrap", exc_info=True)
-
-        vnc_port = int(getattr(adapters.context, "vnc_port", 5900))
-
-        virtual_ip = _normalize_text(session_payload.get("virtual_ip"))
-        host = virtual_ip.split("/")[0] if virtual_ip else ""
-        if not host:
-            return {"error": "virtual_ip_missing"}, 500
-
-        initial_ready = _wait_for_backend_ready(
+        fast_ready = _wait_for_backend_ready(
             host,
             vnc_port,
             timeout_seconds=_coerce_timeout(
-                os.environ.get("BOREALIS_VNC_READY_WAIT_SECONDS"),
-                12.0,
+                os.environ.get("BOREALIS_VNC_FAST_READY_WAIT_SECONDS"),
+                0.75,
             ),
             poll_interval_seconds=_coerce_timeout(
-                os.environ.get("BOREALIS_VNC_READY_POLL_INTERVAL_SECONDS"),
-                0.35,
+                os.environ.get("BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS"),
+                0.15,
             ),
         )
+        initial_ready = fast_ready
+        if fast_ready:
+            _service_log_event(
+                "vnc_backend_fast_ready agent_id={0} session_id={1} credential_revision={2}".format(
+                    agent_id,
+                    collaboration_session.session_id,
+                    collaboration_session.credential_revision,
+                )
+            )
+        else:
+            _service_log_event(
+                "vnc_backend_bootstrap_required agent_id={0} session_id={1} credential_revision={2}".format(
+                    agent_id,
+                    collaboration_session.session_id,
+                    collaboration_session.credential_revision,
+                )
+            )
+            try:
+                _restart_tunnel("vnc_bootstrap")
+                _emit_vnc_start("vnc_bootstrap")
+                settle_seconds = _coerce_nonnegative_timeout(
+                    os.environ.get("BOREALIS_VNC_BOOTSTRAP_SETTLE_SECONDS"),
+                    0.0,
+                )
+                if _created and settle_seconds > 0:
+                    time.sleep(settle_seconds)
+            except Exception:
+                logger.debug("Failed to re-emit vpn_tunnel_start before VNC bootstrap", exc_info=True)
+
+            initial_ready = _wait_for_backend_ready(
+                host,
+                vnc_port,
+                timeout_seconds=_coerce_timeout(
+                    os.environ.get("BOREALIS_VNC_READY_WAIT_SECONDS"),
+                    12.0,
+                ),
+                poll_interval_seconds=_coerce_timeout(
+                    os.environ.get("BOREALIS_VNC_READY_POLL_INTERVAL_SECONDS"),
+                    0.35,
+                ),
+            )
         if not initial_ready:
             try:
                 _restart_tunnel("vnc_connect_retry")

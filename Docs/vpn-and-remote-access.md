@@ -37,10 +37,11 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - Agent runs UltraVNC as a Windows service; Borealis keeps the VNC firewall rule enabled for the Engine /32 and `/api/vnc/disconnect` now makes the caller leave the collaboration session or closes it entirely when requested.
 - `POST /api/vnc/handoff` remains available only to reassign the session owner metadata; it no longer forces reconnects or changes who can interact. `GET /api/vnc/sessions` exposes active-session inventory for the WebUI and admin/server overview.
 - `POST /api/agent/vnc/ensure` now returns readiness detail (`ready`, `service_state`, `listener_state`, `last_ready_at`, and session metadata) so the Engine can wait for the listener before minting browser bootstrap data.
-- Before the proxy connects, the Engine re-emits tunnel startup with `reason=vnc_bootstrap` so the agent refreshes VNC readiness over the existing persistent tunnel.
+- Before the proxy connects, the Engine first fast-probes the agent's advertised UltraVNC listener; it only re-emits tunnel startup with `reason=vnc_bootstrap` when that probe misses and the backend likely still needs a refresh.
 - After soft browser disconnects (`operator_disconnect` and `component_unmount`), the Windows VNC role now keeps UltraVNC warm for a short reconnect grace window (default 45 seconds via `BOREALIS_VNC_DISCONNECT_GRACE_SECONDS`) instead of dropping straight to standby, which avoids repeated cold-starts on quick reconnects.
 - When the last participant disconnects without explicitly closing the session, the Engine now retains that collaboration session briefly so a quick reconnect can reuse the same VNC password instead of forcing a brand-new UltraVNC restart.
-- New-session VNC bootstrap now applies a short settle delay (`BOREALIS_VNC_BOOTSTRAP_SETTLE_SECONDS`, default 1.25 seconds) before probing the backend so a warm listener has time to attach the already-advertised agent credential before noVNC connects.
+- Fast-path VNC establish now uses a short optimistic probe window (`BOREALIS_VNC_FAST_READY_WAIT_SECONDS`, default 0.75 seconds, with `BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS`, default 0.15 seconds) so healthy listeners connect without restarting WireGuard or UltraVNC.
+- If the Engine does have to fall back to `reason=vnc_bootstrap`, the optional settle delay (`BOREALIS_VNC_BOOTSTRAP_SETTLE_SECONDS`) now defaults to `0.0` seconds instead of pausing every new session by default.
 - If the backend listener does not become reachable after the readiness wait, the proxy escalates once with `reason=vnc_connect_retry`, and Borealis now applies an agent-level cooldown so closely spaced browser retries do not each force another shared transport recovery.
 - The initial backend readiness window now defaults to 12 seconds (`BOREALIS_VNC_READY_WAIT_SECONDS`) and the post-recovery retry window defaults to 8 seconds (`BOREALIS_VNC_RETRY_READY_WAIT_SECONDS`), which makes normal UltraVNC startup less likely to be mistaken for a WireGuard failure.
 - When the backend VNC TCP socket finally opens, Borealis confirms transport success with `reason=vnc_backend_connect` so a successful noVNC bootstrap counts as real tunnel health.
@@ -128,7 +129,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - On Windows agents, same-session ensure calls also recover a stopped `WireGuardTunnel$Borealis` service instead of returning early when the `tunnel_id` matches.
 - The Engine listener watchdog keeps shared listener state honest for all sessions, mutates peers live on the persistent interface during routine changes, uses an effective probe grace aligned with the WireGuard keepalive window before declaring `stale_handshake`, and marks status APIs as recovering while full peer reconciliation is underway.
 - Quiet shell sessions no longer depend on operator traffic alone; shell keepalive pongs and shell output can confirm transport health between commands.
-- VNC still shares the same listener recovery path, but Borealis now keeps UltraVNC warm across soft disconnects, adds a short new-session bootstrap settle, and uses a longer default readiness wait before `vnc_connect_retry`, so the shared listener is less likely to churn during normal reconnects.
+- VNC still shares the same listener recovery path, but Borealis now keeps UltraVNC warm across soft disconnects, fast-probes the backend before reissuing bootstrap events, and uses a longer default readiness wait before `vnc_connect_retry`, so the shared listener is less likely to churn during normal reconnects.
 
 ### Logs to inspect
 - Engine tunnel log: `Engine/Logs/VPN_Tunnel/tunnel.log`.
@@ -270,7 +271,7 @@ This section consolidates the troubleshooting context and environment notes for 
   - Logs readiness pongs and idle keepalive pongs separately and throttles idle keepalive log spam on the agent.
   - Closes superseded shell TCP sessions when a newer shell for the same agent connects.
 - Data/Engine/services/API/devices/vnc.py and Data/Engine/services/RemoteDesktop/vnc_proxy.py
-  - VNC bootstrap re-emits tunnel startup with `reason=vnc_bootstrap`.
+  - VNC establish first fast-probes the backend listener and only re-emits tunnel startup with `reason=vnc_bootstrap` when the listener is not already reachable.
   - Backend VNC connect retries only escalate with `reason=vnc_connect_retry` after the connect has been stalled for several seconds, the proxy bounds that forced recovery to one request per browser session, and an agent-level cooldown suppresses stacked recoveries from overlapping browser retries.
   - Successful backend VNC TCP connects confirm transport with `reason=vnc_backend_connect`.
   - The VNC backend writer socket enables `TCP_NODELAY`.

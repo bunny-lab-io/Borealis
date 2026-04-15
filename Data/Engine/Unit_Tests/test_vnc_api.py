@@ -176,8 +176,8 @@ def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestH
     assert payload["view_only"] is False
     assert payload["session"]["controller_operator_id"] == "admin"
     assert fake_tunnel.connect_calls == [("test-device-agent", "admin", "borealis.example.com")]
-    assert fake_tunnel.transport_marks == [("test-device-agent", "vnc_bootstrap")]
-    assert fake_tunnel.start_calls == [("test-device-agent", False, "vnc_bootstrap")]
+    assert fake_tunnel.transport_marks == []
+    assert fake_tunnel.start_calls == []
     assert fake_tunnel.transport_recovers == []
     assert callable(fake_registry.restart_callbacks[0])
     assert callable(fake_registry.confirm_callbacks[0])
@@ -204,7 +204,7 @@ def test_vnc_establish_uses_longer_initial_wait_and_shorter_retry_wait(
 
     def _fake_wait(*_args, **kwargs):
         wait_calls.append(float(kwargs["timeout_seconds"]))
-        return len(wait_calls) > 1
+        return len(wait_calls) > 2
 
     monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", _fake_wait)
     monkeypatch.setattr(vnc_api.time, "sleep", lambda _seconds: None)
@@ -212,13 +212,18 @@ def test_vnc_establish_uses_longer_initial_wait_and_shorter_retry_wait(
     response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
 
     assert response.status_code == 200
-    assert wait_calls == [12.0, 8.0]
+    assert wait_calls == [0.75, 12.0, 8.0]
+    assert fake_tunnel.transport_marks == [("test-device-agent", "vnc_bootstrap"), ("test-device-agent", "vnc_connect_retry")]
+    assert fake_tunnel.start_calls == [
+        ("test-device-agent", False, "vnc_bootstrap"),
+        ("test-device-agent", True, "vnc_connect_retry"),
+    ]
     assert fake_tunnel.transport_recovers == [
         ("test-device-agent", "vnc_connect", "vnc_connect_retry")
     ]
 
 
-def test_vnc_establish_applies_bootstrap_settle_only_for_new_sessions(
+def test_vnc_establish_skips_bootstrap_settle_when_fast_probe_succeeds(
     engine_harness: EngineTestHarness,
     monkeypatch,
 ) -> None:
@@ -239,7 +244,7 @@ def test_vnc_establish_applies_bootstrap_settle_only_for_new_sessions(
     assert controller_response.status_code == 200
     assert peer_response.status_code == 200
     assert peer_response.get_json()["participant_role"] == "controller"
-    assert sleep_calls == [1.25]
+    assert sleep_calls == []
 
 
 def test_vnc_handoff_updates_session_owner_without_forcing_reconnect(
