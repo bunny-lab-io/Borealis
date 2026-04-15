@@ -278,10 +278,9 @@ export default function ReverseTunnelVnc({ device }) {
   const [clipboardSync, setClipboardSync] = useState(false);
   const [sessionId, setSessionId] = useState("");
   const [, setParticipantId] = useState("");
-  const [sessionDetails, setSessionDetails] = useState(null);
   const performanceLevel = 2;
   const [scaleViewport, setScaleViewport] = useState(true);
-  const [clipViewport, setClipViewport] = useState(true);
+  const [clipViewport, setClipViewport] = useState(false);
   const [resizeSession, setResizeSession] = useState(true);
   const [capabilities, setCapabilities] = useState({});
   const [viewportPreset, setViewportPreset] = useState("all");
@@ -320,7 +319,6 @@ export default function ReverseTunnelVnc({ device }) {
     const nextParticipantId = normalizeText(data?.participant_id || nextSession?.current_participant_id);
     setSessionId(nextSessionId);
     setParticipantId(nextParticipantId);
-    setSessionDetails(nextSession);
   }, []);
 
   useEffect(() => {
@@ -412,7 +410,6 @@ export default function ReverseTunnelVnc({ device }) {
       setSessionState("idle");
       setSessionId("");
       setParticipantId("");
-      setSessionDetails(null);
       clipboardLastRef.current = "";
       setLoading(false);
     }
@@ -719,12 +716,10 @@ export default function ReverseTunnelVnc({ device }) {
         teardownDisplay();
         setSessionState("idle");
         setVncStage("disconnected");
-        setSessionDetails(null);
         setSessionId("");
         setParticipantId("");
         return;
       }
-      setSessionDetails(nextSession);
       setParticipantId((previous) => normalizeText(nextSession.current_participant_id) || previous);
     } catch {
       // ignore background session refresh failures
@@ -849,24 +844,58 @@ export default function ReverseTunnelVnc({ device }) {
     [effectiveViewOnly]
   );
 
-  const applyViewportPreset = useCallback((value) => {
-    setViewportPreset(value);
+  const syncViewportPreset = useCallback((value, options = {}) => {
+    if (options.updateState !== false) {
+      setViewportPreset(value);
+    }
     const rfb = rfbRef.current;
     const display = rfb?._display;
     if (!display) {
       setViewportHint("Viewport controls unavailable.");
       return;
     }
-    if (rfb) {
-      rfb.clipViewport = true;
-      rfb.dragViewport = false;
-    }
     const fbWidth = display?._fb_width || display?._fbWidth || rfb?._fbWidth || 0;
     const fbHeight = display?._fb_height || display?._fbHeight || rfb?._fbHeight || 0;
-    const viewportLoc = display?._viewportLoc || { x: 0, y: 0 };
     if (!fbWidth || !fbHeight) {
       setViewportHint("Framebuffer size unavailable.");
       return;
+    }
+
+    if (value === "all") {
+      const resetViewport = () => {
+        try {
+          setClipViewport(false);
+          rfb.clipViewport = false;
+          rfb.dragViewport = false;
+          if (typeof display.viewportChangeSize === "function") {
+            display.viewportChangeSize(fbWidth, fbHeight);
+          }
+          const currentViewport = display?._viewportLoc || { x: 0, y: 0 };
+          if (typeof display.viewportChangePos === "function") {
+            display.viewportChangePos(-currentViewport.x, -currentViewport.y);
+          } else if (displayRef.current) {
+            displayRef.current.scrollLeft = 0;
+            displayRef.current.scrollTop = 0;
+          }
+          rfb.scaleViewport = scaleViewport;
+          setViewportHint("");
+        } catch {
+          setViewportHint("Viewport controls not available.");
+        }
+      };
+
+      if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(resetViewport);
+      } else {
+        resetViewport();
+      }
+      return;
+    }
+
+    if (rfb) {
+      setClipViewport(true);
+      rfb.clipViewport = true;
+      rfb.dragViewport = false;
     }
     let target = { x: 0, y: 0, w: fbWidth, h: fbHeight };
     switch (value) {
@@ -881,13 +910,12 @@ export default function ReverseTunnelVnc({ device }) {
         break;
     }
 
-    setClipViewport(true);
-
     const applyViewport = () => {
       try {
         if (typeof display.viewportChangeSize === "function") {
           display.viewportChangeSize(target.w, target.h);
         }
+        const viewportLoc = display?._viewportLoc || { x: 0, y: 0 };
         if (typeof display.viewportChangePos === "function") {
           display.viewportChangePos(target.x - viewportLoc.x, target.y - viewportLoc.y);
         } else if (typeof display.viewportChange === "function") {
@@ -896,6 +924,7 @@ export default function ReverseTunnelVnc({ device }) {
           displayRef.current.scrollLeft = target.x;
           displayRef.current.scrollTop = target.y;
         }
+        rfb.scaleViewport = scaleViewport;
         setViewportHint("");
       } catch {
         setViewportHint("Viewport controls not available.");
@@ -907,9 +936,41 @@ export default function ReverseTunnelVnc({ device }) {
     } else {
       applyViewport();
     }
-  }, []);
+  }, [scaleViewport]);
+
+  const applyViewportPreset = useCallback((value) => {
+    syncViewportPreset(value, { updateState: true });
+  }, [syncViewportPreset]);
 
   const isConnected = sessionState === "connected";
+
+  useEffect(() => {
+    if (!isConnected) return;
+    syncViewportPreset(viewportPreset, { updateState: false });
+  }, [isConnected, scaleViewport, syncViewportPreset, viewportPreset]);
+
+  useEffect(() => {
+    if (!isConnected) return undefined;
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const host = containerRef.current;
+    if (!host) return undefined;
+    let frameId = 0;
+    const observer = new ResizeObserver(() => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      frameId = window.requestAnimationFrame(() => {
+        syncViewportPreset(viewportPreset, { updateState: false });
+      });
+    });
+    observer.observe(host);
+    return () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      observer.disconnect();
+    };
+  }, [isConnected, syncViewportPreset, viewportPreset]);
   const shutdownSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "shutdown");
   const rebootSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "reboot");
   const resetSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "reset");
