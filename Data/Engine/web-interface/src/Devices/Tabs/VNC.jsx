@@ -15,7 +15,6 @@ import {
   DesktopWindowsRounded as DesktopIcon,
   PlayArrowRounded as PlayIcon,
   StopRounded as StopIcon,
-  LinkRounded as LinkIcon,
   KeyboardRounded as KeyboardIcon,
   ContentPasteRounded as ClipboardIcon,
   PowerSettingsNewRounded as PowerIcon,
@@ -152,6 +151,9 @@ const pillActionSx = {
 const primaryHeroActionSx = {
   ...pillActionSx,
   color: "#08111f",
+  "&, & .MuiButton-startIcon": {
+    color: "#08111f",
+  },
   borderColor: "transparent",
   backgroundImage: "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)",
   boxShadow: "0 10px 30px rgba(91,126,255,0.25)",
@@ -1011,7 +1013,6 @@ export default function ReverseTunnelVnc({ device }) {
     }
   }, [statusMessage, vncStage]);
 
-  const accessLabel = isConnected ? (effectiveViewOnly ? "View only" : "Interactive") : "Disconnected";
   const showClipboardActions = isConnected;
   const showPowerButtons = isConnected;
   const showHeaderStatus =
@@ -1104,8 +1105,19 @@ export default function ReverseTunnelVnc({ device }) {
                 >
                   <DesktopIcon sx={{ color: MAGIC_UI.accentA, fontSize: 40 }} />
                   <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
-                    Ready to connect
+                    Ready to Connect
                   </Typography>
+                  {statusMessage ? (
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: vncStageInfo.detailTone || MAGIC_UI.textMuted,
+                        maxWidth: 320,
+                      }}
+                    >
+                      {statusMessage}
+                    </Typography>
+                  ) : null}
                   <Button
                     size="medium"
                     startIcon={<PlayIcon />}
@@ -1124,26 +1136,6 @@ export default function ReverseTunnelVnc({ device }) {
         </Box>
 
         <Box sx={sidebarSx}>
-          <Box sx={compactSidebarCardSx}>
-            <Box sx={sectionHeaderSx}>
-              <LinkIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />
-              <span>Session</span>
-            </Box>
-            <Stack spacing={0.9}>
-              <Stack spacing={0.7}>
-                <Typography variant="body2" sx={{ color: SIDEBAR_THEME.text }}>
-                  Access: {accessLabel}
-                </Typography>
-                <Typography variant="body2" sx={{ color: SIDEBAR_THEME.text }}>
-                  State: {sessionStateLabel}
-                </Typography>
-                <Typography variant="body2" sx={{ color: SIDEBAR_THEME.text }}>
-                  Owner: {controllerOperator}
-                </Typography>
-              </Stack>
-            </Stack>
-          </Box>
-
           <Box sx={compactSidebarCardSx}>
             <Box sx={sectionHeaderSx}>
               <DisplayIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />
