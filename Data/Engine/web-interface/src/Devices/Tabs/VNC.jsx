@@ -850,6 +850,8 @@ export default function ReverseTunnelVnc({ device }) {
     }
     const rfb = rfbRef.current;
     const display = rfb?._display;
+    const host = displayRef.current;
+    const screen = rfb?._screen || host?.firstElementChild || null;
     if (!display) {
       setViewportHint("Viewport controls unavailable.");
       return;
@@ -861,21 +863,29 @@ export default function ReverseTunnelVnc({ device }) {
       return;
     }
 
+    if (screen?.style) {
+      screen.style.display = "flex";
+      screen.style.width = "100%";
+      screen.style.height = "100%";
+      screen.style.alignItems = "center";
+      screen.style.justifyContent = "center";
+      screen.style.overflow = value === "all" ? "hidden" : "auto";
+    }
+
     if (value === "all") {
       const resetViewport = () => {
         try {
           setClipViewport(false);
           rfb.clipViewport = false;
           rfb.dragViewport = false;
-          if (typeof display.viewportChangeSize === "function") {
-            display.viewportChangeSize(fbWidth, fbHeight);
+          if (host) {
+            host.scrollLeft = 0;
+            host.scrollTop = 0;
           }
-          const currentViewport = display?._viewportLoc || { x: 0, y: 0 };
-          if (typeof display.viewportChangePos === "function") {
-            display.viewportChangePos(-currentViewport.x, -currentViewport.y);
-          } else if (displayRef.current) {
-            displayRef.current.scrollLeft = 0;
-            displayRef.current.scrollTop = 0;
+          if (scaleViewport && typeof display.autoscale === "function" && host) {
+            display.autoscale(host.clientWidth, host.clientHeight);
+          } else if (typeof display.scale !== "undefined") {
+            display.scale = 1.0;
           }
           rfb.scaleViewport = scaleViewport;
           setViewportHint("");
@@ -924,7 +934,11 @@ export default function ReverseTunnelVnc({ device }) {
           displayRef.current.scrollLeft = target.x;
           displayRef.current.scrollTop = target.y;
         }
-        rfb.scaleViewport = scaleViewport;
+        if (scaleViewport && typeof display.autoscale === "function" && host) {
+          display.autoscale(host.clientWidth, host.clientHeight);
+        } else {
+          rfb.scaleViewport = scaleViewport;
+        }
         setViewportHint("");
       } catch {
         setViewportHint("Viewport controls not available.");
@@ -1096,7 +1110,17 @@ export default function ReverseTunnelVnc({ device }) {
                 overflow: "hidden",
               }}
             >
-              <Box ref={displayRef} sx={{ width: "100%", height: "100%" }} />
+              <Box
+                ref={displayRef}
+                sx={{
+                  width: "100%",
+                  height: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  overflow: "hidden",
+                }}
+              />
               {!isConnected ? (
                 <Stack
                   spacing={1.5}
