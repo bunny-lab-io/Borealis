@@ -243,6 +243,9 @@ function buildRetryableError(message, retryable = true) {
 const VNC_AUTO_RETRY_ATTEMPTS = 3;
 const VNC_AUTO_RETRY_DELAY_MS = 1500;
 const VNC_OPEN_TIMEOUT_MS = 12000;
+const VNC_ACTIVE_BOUNDS_COLOR_THRESHOLD = 18;
+const VNC_ACTIVE_BOUNDS_VARIANCE_THRESHOLD = 42;
+const VNC_ACTIVE_BOUNDS_MARGIN_RATIO = 0.08;
 
 async function writeClipboardText(text) {
   if (!navigator?.clipboard?.writeText) return;
@@ -273,6 +276,152 @@ function supportsPowerAction(capabilities, action) {
   return (aliases[action] || []).some((key) => capabilityFlag(power?.[key]));
 }
 
+function clampNumber(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function samplePixel(data, width, x, y) {
+  const index = (y * width + x) * 4;
+  return [data[index] || 0, data[index + 1] || 0, data[index + 2] || 0];
+}
+
+function colorDistance(left, right) {
+  return (
+    Math.abs((left?.[0] || 0) - (right?.[0] || 0)) +
+    Math.abs((left?.[1] || 0) - (right?.[1] || 0)) +
+    Math.abs((left?.[2] || 0) - (right?.[2] || 0))
+  );
+}
+
+function luminance(pixel) {
+  return ((pixel?.[0] || 0) * 0.2126) + ((pixel?.[1] || 0) * 0.7152) + ((pixel?.[2] || 0) * 0.0722);
+}
+
+function estimateActiveDisplayBounds(display) {
+  try {
+    if (!display || typeof display.getImageData !== "function") return null;
+    const width = Number(display.width || 0);
+    const height = Number(display.height || 0);
+    if (width < 2 || height < 2) return null;
+
+    const image = display.getImageData();
+    const data = image?.data;
+    if (!data || !data.length) return null;
+
+    const xStep = Math.max(1, Math.floor(width / 180));
+    const yStep = Math.max(1, Math.floor(height / 120));
+
+    const edgeSamples = [];
+    for (let x = 0; x < width; x += xStep) {
+      edgeSamples.push(samplePixel(data, width, x, 0));
+      edgeSamples.push(samplePixel(data, width, x, height - 1));
+    }
+    for (let y = 0; y < height; y += yStep) {
+      edgeSamples.push(samplePixel(data, width, 0, y));
+      edgeSamples.push(samplePixel(data, width, width - 1, y));
+    }
+    if (!edgeSamples.length) return null;
+
+    const background = edgeSamples.reduce(
+      (acc, pixel) => {
+        acc[0] += pixel[0];
+        acc[1] += pixel[1];
+        acc[2] += pixel[2];
+        return acc;
+      },
+      [0, 0, 0]
+    ).map((value) => Math.round(value / edgeSamples.length));
+
+    const rowIsActive = (y) => {
+      let activePixels = 0;
+      let variation = 0;
+      let previousLuma = null;
+      let samples = 0;
+      for (let x = 0; x < width; x += xStep) {
+        const pixel = samplePixel(data, width, x, y);
+        const diff = colorDistance(pixel, background);
+        if (diff >= VNC_ACTIVE_BOUNDS_COLOR_THRESHOLD) {
+          activePixels += 1;
+        }
+        const currentLuma = luminance(pixel);
+        if (previousLuma != null) {
+          variation += Math.abs(currentLuma - previousLuma);
+        }
+        previousLuma = currentLuma;
+        samples += 1;
+      }
+      return (
+        activePixels >= Math.max(3, Math.floor(samples * 0.08)) ||
+        variation >= samples * VNC_ACTIVE_BOUNDS_VARIANCE_THRESHOLD
+      );
+    };
+
+    const columnIsActive = (x) => {
+      let activePixels = 0;
+      let variation = 0;
+      let previousLuma = null;
+      let samples = 0;
+      for (let y = 0; y < height; y += yStep) {
+        const pixel = samplePixel(data, width, x, y);
+        const diff = colorDistance(pixel, background);
+        if (diff >= VNC_ACTIVE_BOUNDS_COLOR_THRESHOLD) {
+          activePixels += 1;
+        }
+        const currentLuma = luminance(pixel);
+        if (previousLuma != null) {
+          variation += Math.abs(currentLuma - previousLuma);
+        }
+        previousLuma = currentLuma;
+        samples += 1;
+      }
+      return (
+        activePixels >= Math.max(3, Math.floor(samples * 0.08)) ||
+        variation >= samples * VNC_ACTIVE_BOUNDS_VARIANCE_THRESHOLD
+      );
+    };
+
+    let top = 0;
+    while (top < height && !rowIsActive(top)) top += yStep;
+
+    let bottom = height - 1;
+    while (bottom > top && !rowIsActive(bottom)) bottom -= yStep;
+
+    let left = 0;
+    while (left < width && !columnIsActive(left)) left += xStep;
+
+    let right = width - 1;
+    while (right > left && !columnIsActive(right)) right -= xStep;
+
+    if (top >= bottom || left >= right) return null;
+
+    top = clampNumber(top - yStep, 0, height - 1);
+    bottom = clampNumber(bottom + yStep, 0, height - 1);
+    left = clampNumber(left - xStep, 0, width - 1);
+    right = clampNumber(right + xStep, 0, width - 1);
+
+    const boundsWidth = right - left + 1;
+    const boundsHeight = bottom - top + 1;
+    const horizontalMargin = (width - boundsWidth) / width;
+    const verticalMargin = (height - boundsHeight) / height;
+
+    if (
+      horizontalMargin < VNC_ACTIVE_BOUNDS_MARGIN_RATIO &&
+      verticalMargin < VNC_ACTIVE_BOUNDS_MARGIN_RATIO
+    ) {
+      return null;
+    }
+
+    return {
+      x: left,
+      y: top,
+      w: Math.max(1, boundsWidth),
+      h: Math.max(1, boundsHeight),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export default function ReverseTunnelVnc({ device }) {
   const [sessionState, setSessionState] = useState("idle");
   const [vncStage, setVncStage] = useState("idle");
@@ -284,7 +433,6 @@ export default function ReverseTunnelVnc({ device }) {
   const [, setParticipantId] = useState("");
   const performanceLevel = 2;
   const [scaleViewport, setScaleViewport] = useState(true);
-  const [clipViewport, setClipViewport] = useState(false);
   const [resizeSession, setResizeSession] = useState(true);
   const [capabilities, setCapabilities] = useState({});
   const [viewportPreset, setViewportPreset] = useState("all");
@@ -432,17 +580,13 @@ export default function ReverseTunnelVnc({ device }) {
     if (!rfb) return;
     rfb.showDotCursor = true;
     rfb.viewOnly = effectiveViewOnly;
-    rfb.clipViewport = clipViewport;
     rfb.dragViewport = dragViewport;
-    rfb.scaleViewport = scaleViewport;
     rfb.resizeSession = resizeSession;
     rfb.qualityLevel = qualityLevel;
     rfb.compressionLevel = compressionLevel;
   }, [
     effectiveViewOnly,
-    clipViewport,
     dragViewport,
-    scaleViewport,
     resizeSession,
     qualityLevel,
     compressionLevel,
@@ -508,9 +652,7 @@ export default function ReverseTunnelVnc({ device }) {
       // Always show a local dot cursor so we never lose pointer visibility.
       rfb.showDotCursor = true;
       rfb.background = VNC_STAGE_BACKGROUND;
-      rfb.scaleViewport = scaleViewport;
       rfb.resizeSession = resizeSession;
-      rfb.clipViewport = clipViewport;
       rfb.dragViewport = dragViewport;
       rfb.viewOnly = effectiveViewOnly;
       rfb.qualityLevel = qualityLevel;
@@ -663,12 +805,10 @@ export default function ReverseTunnelVnc({ device }) {
       });
     },
     [
-      clipViewport,
       compressionLevel,
       dragViewport,
       qualityLevel,
       resizeSession,
-      scaleViewport,
       effectiveViewOnly,
     ]
   );
@@ -898,21 +1038,44 @@ export default function ReverseTunnelVnc({ device }) {
       canvas.style.boxShadow = VNC_CANVAS_BOX_SHADOW;
     }
 
+    const applyDisplayViewport = (target) => {
+      try {
+        display.clipViewport = true;
+        display.viewportChangeSize(target.w, target.h);
+        const viewportLoc = display?._viewportLoc || { x: 0, y: 0 };
+        if (typeof display.viewportChangePos === "function") {
+          display.viewportChangePos(target.x - viewportLoc.x, target.y - viewportLoc.y);
+        } else if (typeof display.viewportChange === "function") {
+          display.viewportChange(target.x - viewportLoc.x, target.y - viewportLoc.y, target.w, target.h);
+        }
+        if (scaleViewport && host && typeof display.autoscale === "function") {
+          display.autoscale(host.clientWidth, host.clientHeight);
+        } else if (typeof display.scale !== "undefined") {
+          display.scale = 1.0;
+        }
+        rfb.dragViewport = false;
+        setViewportHint("");
+      } catch {
+        setViewportHint("Viewport controls not available.");
+      }
+    };
+
     if (value === "all") {
       const resetViewport = () => {
         try {
-          setClipViewport(false);
-          rfb.clipViewport = false;
-          rfb.dragViewport = false;
           if (host) {
             host.scrollLeft = 0;
             host.scrollTop = 0;
           }
-          rfb.scaleViewport = scaleViewport;
-          if (!scaleViewport && typeof display.scale !== "undefined") {
-            display.scale = 1.0;
-          }
-          setViewportHint("");
+          const activeBounds = estimateActiveDisplayBounds(display);
+          applyDisplayViewport(
+            activeBounds || {
+              x: 0,
+              y: 0,
+              w: fbWidth,
+              h: fbHeight,
+            }
+          );
         } catch {
           setViewportHint("Viewport controls not available.");
         }
@@ -926,11 +1089,6 @@ export default function ReverseTunnelVnc({ device }) {
       return;
     }
 
-    if (rfb) {
-      setClipViewport(true);
-      rfb.clipViewport = true;
-      rfb.dragViewport = false;
-    }
     let target = { x: 0, y: 0, w: fbWidth, h: fbHeight };
     switch (value) {
       case "left":
@@ -945,28 +1103,7 @@ export default function ReverseTunnelVnc({ device }) {
     }
 
     const applyViewport = () => {
-      try {
-        if (typeof display.viewportChangeSize === "function") {
-          display.viewportChangeSize(target.w, target.h);
-        }
-        const viewportLoc = display?._viewportLoc || { x: 0, y: 0 };
-        if (typeof display.viewportChangePos === "function") {
-          display.viewportChangePos(target.x - viewportLoc.x, target.y - viewportLoc.y);
-        } else if (typeof display.viewportChange === "function") {
-          display.viewportChange(target.x - viewportLoc.x, target.y - viewportLoc.y, target.w, target.h);
-        } else if (displayRef.current) {
-          displayRef.current.scrollLeft = target.x;
-          displayRef.current.scrollTop = target.y;
-        }
-        if (scaleViewport && typeof display.autoscale === "function" && host) {
-          display.autoscale(host.clientWidth, host.clientHeight);
-        } else {
-          rfb.scaleViewport = scaleViewport;
-        }
-        setViewportHint("");
-      } catch {
-        setViewportHint("Viewport controls not available.");
-      }
+      applyDisplayViewport(target);
     };
 
     if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
@@ -986,6 +1123,21 @@ export default function ReverseTunnelVnc({ device }) {
     if (!isConnected) return;
     syncViewportPreset(viewportPreset, { updateState: false });
   }, [isConnected, scaleViewport, syncViewportPreset, viewportPreset]);
+
+  useEffect(() => {
+    if (!isConnected || viewportPreset !== "all") return undefined;
+    const timers = [
+      window.setTimeout(() => {
+        syncViewportPreset("all", { updateState: false });
+      }, 250),
+      window.setTimeout(() => {
+        syncViewportPreset("all", { updateState: false });
+      }, 1200),
+    ];
+    return () => {
+      timers.forEach((timerId) => window.clearTimeout(timerId));
+    };
+  }, [isConnected, syncViewportPreset, viewportPreset]);
 
   useEffect(() => {
     if (!isConnected) return undefined;
