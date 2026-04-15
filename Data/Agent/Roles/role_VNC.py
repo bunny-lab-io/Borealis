@@ -1344,6 +1344,20 @@ class VncManager:
     ) -> None:
         with self._lock:
             port_value = _resolve_vnc_port(port)
+            service_name = self._resolve_service_name()
+            prior_service_state = self._service_state_by_name(service_name) if service_name else None
+            _write_log(
+                "vnc_trace step=AM01 port={0} allowed_ips={1} controller_password={2} view_only_password={3} "
+                "service_name={4} service_state={5} reason={6}".format(
+                    port_value,
+                    str(allowed_ips or "").strip() or "-",
+                    "true" if bool(controller_password) else "false",
+                    "true" if bool(view_only_password) else "false",
+                    service_name or "-",
+                    prior_service_state or "-",
+                    str(reason or "-").strip() or "-",
+                )
+            )
             self._ensure_firewall(allowed_ips, port_value)
 
             if not self._vnc_exe:
@@ -1395,6 +1409,18 @@ class VncManager:
             self._last_port = port_value
             self._last_controller_password = applied_controller_password
             self._last_view_only_password = applied_view_only_password
+            listener_ready = self.is_listener_ready(port_value)
+            _write_log(
+                "vnc_trace step=AM02 port={0} listener_ready={1} service_name={2} service_state={3} "
+                "service_was_running={4} reason={5}".format(
+                    port_value,
+                    "true" if listener_ready else "false",
+                    service_name or "-",
+                    self._service_state_by_name(service_name) if service_name else "-",
+                    "true" if service_was_running else "false",
+                    str(reason or "-").strip() or "-",
+                )
+            )
             _write_log(f"VNC service running port={port_value} reason={reason}.")
 
     def stop(self, *, reason: str = "stop") -> None:
@@ -1455,6 +1481,13 @@ class Role:
                 _ensure_ultravnc_ini(config_dir / "ultravnc.ini", DEFAULT_VNC_PORT, remove_wallpaper=True)
         except Exception:
             self._log("Failed to ensure UltraVNC config present.", error=True)
+        self._trace(
+            "A01",
+            agent_id=getattr(self.ctx, "agent_id", "") or "-",
+            credential_revision=self._credential_revision(),
+            session_id=self._active_session_id() or "-",
+            port=self._state_port(),
+        )
         self._ensure_always_on(reason="agent_startup")
         self._always_on_thread = threading.Thread(target=self._always_on_loop, daemon=True)
         self._always_on_thread.start()
@@ -1465,6 +1498,26 @@ class Role:
                 self._log_hook(message, fname="VPN_Tunnel/vnc.log")
                 if error:
                     self._log_hook(message, fname="agent.error.log")
+            except Exception:
+                pass
+        _write_log(message)
+
+    def _trace(self, step: str, **fields: Any) -> None:
+        parts = [f"vnc_trace step={str(step or '-').strip() or '-'}"]
+        for key, value in fields.items():
+            if isinstance(value, bool):
+                normalized = "true" if value else "false"
+            elif value is None:
+                normalized = "-"
+            else:
+                normalized = str(value).strip() or "-"
+            normalized = normalized.replace(" ", "_")
+            parts.append(f"{key}={normalized}")
+        message = " ".join(parts)
+        log_hook = getattr(self, "_log_hook", None)
+        if callable(log_hook):
+            try:
+                log_hook(message, fname="VPN_Tunnel/vnc.log")
             except Exception:
                 pass
         _write_log(message)
@@ -1575,6 +1628,12 @@ class Role:
         self._clear_disconnect_grace()
         self._sync_runtime_session_credentials()
         self._log(f"VNC runtime credential rotated (reason={reason}).")
+        self._trace(
+            "A02",
+            reason=reason or "-",
+            credential_revision=self._credential_revision(),
+            issued_at=int(self._runtime_credential_issued_at() or 0),
+        )
 
     def _ensure_runtime_credential_fresh(self, *, reason: str, now: Optional[float] = None) -> bool:
         if not self._runtime_credential_due(now=now):
@@ -1736,6 +1795,16 @@ class Role:
         port = payload.get("vnc_port") or payload.get("port")
         allowed_ips = payload.get("allowed_ips") or payload.get("engine_virtual_ip")
         remove_wallpaper = payload.get("remove_wallpaper")
+        self._trace(
+            "A10",
+            session_id=payload.get("session_id") or "-",
+            session_state=payload.get("session_state") or "-",
+            password_present=bool(controller_password),
+            credential_revision=payload.get("credential_revision") or 0,
+            allowed_ips=allowed_ips or "-",
+            port=port if port is not None else "-",
+            display_count=len(payload.get("display_topology") or []),
+        )
         self._update_state(
             allowed_ips=allowed_ips if allowed_ips else None,
             port=port if port is not None else None,
@@ -1758,10 +1827,19 @@ class Role:
     def _request_vnc_bootstrap(self, reason: str) -> Optional[dict]:
         client = self._http_client()
         if client is None:
+            self._trace("A11F", reason=reason or "-", result="http_client_unavailable")
             return None
         credential = getattr(self, "_agent_runtime_credentials", {}) or {}
         display_topology = _collect_windows_display_topology()
         display_virtual_bounds = _display_virtual_bounds(display_topology)
+        self._trace(
+            "A11",
+            reason=reason or "-",
+            credential_revision=int(credential.get("credential_revision") or 0),
+            display_count=len(display_topology),
+            virtual_width=display_virtual_bounds.get("width", 0),
+            virtual_height=display_virtual_bounds.get("height", 0),
+        )
         try:
             payload = client.post_json(
                 "/api/agent/vnc/ensure",
@@ -1777,22 +1855,47 @@ class Role:
             )
         except Exception as exc:
             self._log(f"VNC ensure request failed: {exc}", error=True)
+            self._trace("A12F", reason=reason or "-", result="ensure_request_failed", error=str(exc))
             return None
         if isinstance(payload, dict):
+            self._trace(
+                "A12",
+                reason=reason or "-",
+                ready=bool(payload.get("ready")),
+                service_state=payload.get("service_state") or "-",
+                listener_state=payload.get("listener_state") or "-",
+                session_id=payload.get("session_id") or "-",
+                session_state=payload.get("session_state") or "-",
+                credential_revision=payload.get("credential_revision") or 0,
+                display_count=len(payload.get("display_topology") or []),
+            )
             return payload
+        self._trace("A12X", reason=reason or "-", result="non_dict_payload")
         return None
 
     def _ensure_always_on(self, *, reason: str) -> None:
         controller_password = self._controller_password()
         grace_snapshot = self._disconnect_grace_snapshot()
+        port_value = grace_snapshot["port"] if grace_snapshot else self._state_port()
+        listener_ready = self.vnc.is_listener_ready(port_value)
+        self._trace(
+            "A20",
+            reason=reason or "-",
+            session_id=self._active_session_id() or "-",
+            credential_revision=self._credential_revision(),
+            controller_password=bool(controller_password),
+            grace_active=grace_snapshot is not None,
+            port=port_value,
+            listener_ready=listener_ready,
+        )
         if not controller_password and grace_snapshot is None:
             if not self._missing_password_logged:
                 self._missing_password_logged = True
                 self._log("VNC always-on pending: runtime credential unavailable.")
+                self._trace("A21", reason=reason or "-", result="runtime_credential_unavailable")
             self.vnc.ensure_standby(reason="no_active_session")
             return
         self._missing_password_logged = False
-        port_value = grace_snapshot["port"] if grace_snapshot else self._state_port()
         allowed_ips = (
             str(grace_snapshot.get("allowed_ips") or "").strip()
             if grace_snapshot
@@ -1802,9 +1905,19 @@ class Role:
             if not self._engine_wait_logged:
                 self._engine_wait_logged = True
                 self._log("VNC always-on pending: waiting for tunnel firewall scope.")
+                self._trace("A22", reason=reason or "-", result="missing_allowed_ips", port=port_value)
             self.vnc.ensure_standby(reason="missing_allowed_ips")
             return
         self._engine_wait_logged = False
+        self._trace(
+            "A23",
+            reason=reason or "-",
+            session_id=self._active_session_id() or "-",
+            credential_revision=self._credential_revision(),
+            port=port_value,
+            allowed_ips=allowed_ips or "-",
+            grace_active=grace_snapshot is not None,
+        )
         self.vnc.start(
             port=port_value,
             allowed_ips=allowed_ips,
@@ -1819,7 +1932,22 @@ class Role:
             ),
             reason=reason,
         )
-        if self.vnc.is_listener_ready(port_value):
+        listener_ready = self.vnc.is_listener_ready(port_value)
+        service_name = self.vnc._resolve_service_name() if hasattr(self.vnc, "_resolve_service_name") else None
+        service_state_lookup = getattr(self.vnc, "_service_state_by_name", None)
+        service_state = (
+            service_state_lookup(service_name)
+            if callable(service_state_lookup)
+            else "-"
+        )
+        self._trace(
+            "A24",
+            reason=reason or "-",
+            port=port_value,
+            listener_ready=listener_ready,
+            service_state=service_state or "-",
+        )
+        if listener_ready:
             self._last_ready_at = int(time.time())
 
     def _always_on_loop(self) -> None:
@@ -1832,15 +1960,27 @@ class Role:
                     or (self._disconnect_grace_snapshot() or {}).get("allowed_ips")
                 )
                 listener_ready = self.vnc.is_listener_ready(self._state_port())
+                self._trace(
+                    "A30",
+                    rotated=rotated,
+                    has_allowed_ips=has_allowed_ips,
+                    listener_ready=listener_ready,
+                    port=self._state_port(),
+                    session_id=self._active_session_id() or "-",
+                    credential_revision=self._credential_revision(),
+                )
                 if rotated or not has_allowed_ips or not listener_ready:
                     bootstrap_reason = "credential_rotation" if rotated else "agent_boot"
                     payload = self._request_vnc_bootstrap(reason=bootstrap_reason)
                     if payload:
                         self._apply_bootstrap_payload(payload)
                         self._mark_engine_ready("bootstrap_api")
+                    else:
+                        self._trace("A31", reason=bootstrap_reason, result="bootstrap_payload_missing")
                 self._ensure_always_on(reason="credential_rotation" if rotated else "always_on_check")
             except Exception as exc:
                 self._log(f"VNC always-on loop error: {exc}", error=True)
+                self._trace("A32F", result="always_on_loop_error", error=str(exc))
             self._always_on_stop.wait(interval)
 
     def health_report(self) -> dict:
@@ -1953,6 +2093,12 @@ class Role:
                 if target_agent and str(target_agent).strip() != str(self.ctx.agent_id).strip():
                     return
                 allowed_ips = payload.get("allowed_ips") or payload.get("engine_virtual_ip")
+                self._trace(
+                    "A40",
+                    event="vpn_tunnel_start",
+                    allowed_ips=allowed_ips or "-",
+                    reason=payload.get("reason") or "-",
+                )
                 self._update_state(allowed_ips=allowed_ips if allowed_ips else None)
                 self._mark_engine_ready("vpn_tunnel_start")
                 self._ensure_always_on(reason="vpn_tunnel_start")
@@ -1999,6 +2145,17 @@ class Role:
                 credential_revision = 0
                 reason = "vnc_session_start"
             self._log(f"VNC start request received (reason={reason}).")
+            self._trace(
+                "A41",
+                event="vnc_start",
+                reason=reason or "-",
+                session_id=session_id or "-",
+                credential_revision=credential_revision or 0,
+                port=port if port is not None else "-",
+                allowed_ips=allowed_ips or "-",
+                password_present=bool(controller_password),
+                view_only_present=bool(view_only_password),
+            )
             self._update_state(
                 allowed_ips=allowed_ips if allowed_ips else None,
                 port=port if port is not None else None,
@@ -2025,11 +2182,14 @@ class Role:
                     return
                 reason = payload.get("reason") or reason
             self._log(f"VNC credential refresh requested (reason={reason}).")
+            self._trace("A42", event="vnc_refresh", reason=reason or "-")
             bootstrap_payload = self._request_vnc_bootstrap(str(reason))
             if bootstrap_payload:
                 self._apply_bootstrap_payload(bootstrap_payload)
                 self._mark_engine_ready("vnc_refresh_event")
                 self._ensure_always_on(reason=str(reason))
+            else:
+                self._trace("A43", event="vnc_refresh", reason=reason or "-", result="bootstrap_payload_missing")
 
         @sio.on("vnc_stop")
         async def _vnc_stop(payload):
@@ -2041,6 +2201,13 @@ class Role:
                 reason = payload.get("reason") or reason
             self._log(f"VNC stop requested (reason={reason}).")
             grace_scheduled = self._schedule_disconnect_grace(str(reason))
+            self._trace(
+                "A44",
+                event="vnc_stop",
+                reason=reason or "-",
+                grace_scheduled=grace_scheduled,
+                session_id=self._active_session_id() or "-",
+            )
             self._clear_runtime_session()
             self._release_session_busy()
             if grace_scheduled:

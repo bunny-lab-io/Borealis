@@ -132,6 +132,13 @@ def _probe_tcp_listener(host: str, port: int, timeout_seconds: float) -> bool:
         port_value = int(port)
     except Exception:
         return False
+    if not host_value or port_value < 1 or port_value > 65535:
+        return False
+    try:
+        with socket.create_connection((host_value, port_value), timeout=max(0.1, timeout_seconds)):
+            return True
+    except Exception:
+        return False
 
 
 def _wait_for_agent_credential(
@@ -151,13 +158,6 @@ def _wait_for_agent_credential(
             break
         time.sleep(min(max(0.05, poll_interval_seconds), remaining))
     return None
-    if not host_value or port_value < 1 or port_value > 65535:
-        return False
-    try:
-        with socket.create_connection((host_value, port_value), timeout=max(0.1, timeout_seconds)):
-            return True
-    except Exception:
-        return False
 
 
 def _wait_for_backend_ready(
@@ -216,6 +216,19 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         except Exception:
             logger.debug("vnc service log write failed", exc_info=True)
 
+    def _trace(step: str, *, level: str = "INFO", **fields: Any) -> None:
+        parts = [f"vnc_trace step={_normalize_text(step) or '-'}"]
+        for key, value in fields.items():
+            if isinstance(value, bool):
+                normalized = "true" if value else "false"
+            elif value is None:
+                normalized = "-"
+            else:
+                normalized = _normalize_text(value) or "-"
+            normalized = normalized.replace(" ", "_")
+            parts.append(f"{key}={normalized}")
+        _service_log_event(" ".join(parts), level=level)
+
     def _request_remote() -> str:
         forwarded = (request.headers.get("X-Forwarded-For") or "").strip()
         if forwarded:
@@ -248,24 +261,53 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         remove_wallpaper: bool,
     ) -> Tuple[Dict[str, Any], int]:
         manager = ensure_vnc_collaboration_manager(adapters.context, logger=logger)
+        _trace(
+            "E01",
+            agent_id=agent_id,
+            operator_id=operator_id or "-",
+            remote=_request_remote() or "-",
+            remove_wallpaper=remove_wallpaper,
+        )
         agent_credential = manager.get_agent_credential(agent_id)
+        _trace(
+            "E02",
+            agent_id=agent_id,
+            credential_cached=agent_credential is not None,
+            credential_revision=(getattr(agent_credential, "credential_revision", 0) if agent_credential else 0),
+            topology_count=(len(getattr(agent_credential, "display_topology", []) or []) if agent_credential else 0),
+        )
         if agent_credential is None or not _normalize_text(agent_credential.controller_password):
+            refresh_wait_seconds = _coerce_nonnegative_timeout(
+                os.environ.get("BOREALIS_VNC_CREDENTIAL_REFRESH_WAIT_SECONDS"),
+                4.0,
+            )
             refresh_requested = _context_emit_agent_event(
                 adapters.context,
                 agent_id,
                 "vnc_refresh",
                 {"agent_id": agent_id, "reason": "engine_credential_refresh"},
             )
+            _trace(
+                "E03",
+                agent_id=agent_id,
+                refresh_emit=refresh_requested,
+                wait_seconds=refresh_wait_seconds,
+            )
             if refresh_requested:
                 agent_credential = _wait_for_agent_credential(
                     manager,
                     agent_id,
-                    timeout_seconds=_coerce_nonnegative_timeout(
-                        os.environ.get("BOREALIS_VNC_CREDENTIAL_REFRESH_WAIT_SECONDS"),
-                        4.0,
-                    ),
+                    timeout_seconds=refresh_wait_seconds,
                 )
+            _trace(
+                "E04",
+                agent_id=agent_id,
+                credential_after_refresh=agent_credential is not None,
+                credential_revision=(getattr(agent_credential, "credential_revision", 0) if agent_credential else 0),
+                topology_count=(len(getattr(agent_credential, "display_topology", []) or []) if agent_credential else 0),
+            )
             if agent_credential is None or not _normalize_text(agent_credential.controller_password):
+                _trace("E04F", agent_id=agent_id, result="vnc_agent_credentials_unavailable", level="WARNING")
                 return {"error": "vnc_agent_credentials_unavailable"}, 503
         try:
             collaboration_session, participant, _created = manager.ensure_session(
@@ -276,10 +318,21 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 remove_wallpaper=remove_wallpaper,
             )
         except ValueError:
+            _trace("E05F", agent_id=agent_id, result="operator_required", level="WARNING")
             return {"error": "operator_required"}, 401
+        _trace(
+            "E05",
+            agent_id=agent_id,
+            session_id=collaboration_session.session_id,
+            participant_id=participant.participant_id,
+            created=_created,
+            session_state=collaboration_session.state,
+            credential_revision=collaboration_session.credential_revision,
+        )
         _ = remove_wallpaper
         tunnel_service = _get_tunnel_service(adapters)
         session_payload = tunnel_service.session_payload(agent_id, include_token=False)
+        had_tunnel_payload = bool(session_payload)
         if not session_payload:
             try:
                 session_payload = tunnel_service.connect(
@@ -288,13 +341,27 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                     endpoint_host=wireguard_endpoint(adapters.context, req=request)[0],
                 )
             except Exception:
+                _trace("E06F", agent_id=agent_id, result="tunnel_down", level="WARNING")
                 return {"error": "tunnel_down"}, 409
         allowed_ips = _resolve_allowed_ips(session_payload=session_payload)
         engine_virtual_ip = _normalize_text(session_payload.get("engine_virtual_ip"))
         vnc_port = int(getattr(adapters.context, "vnc_port", 5900))
         virtual_ip = _normalize_text(session_payload.get("virtual_ip"))
         host = virtual_ip.split("/")[0] if virtual_ip else ""
+        _trace(
+            "E06",
+            agent_id=agent_id,
+            session_id=collaboration_session.session_id,
+            tunnel_payload_cached=had_tunnel_payload,
+            tunnel_id=session_payload.get("tunnel_id"),
+            virtual_ip=virtual_ip or "-",
+            backend_host=host or "-",
+            engine_virtual_ip=engine_virtual_ip or "-",
+            allowed_ips=allowed_ips or "-",
+            vnc_port=vnc_port,
+        )
         if not host:
+            _trace("E06X", agent_id=agent_id, session_id=collaboration_session.session_id, result="virtual_ip_missing", level="WARNING")
             return {"error": "virtual_ip_missing"}, 500
 
         def _restart_tunnel(reason: str) -> None:
@@ -333,19 +400,36 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 },
             )
 
+        fast_ready_wait = _coerce_timeout(
+            os.environ.get("BOREALIS_VNC_FAST_READY_WAIT_SECONDS"),
+            0.75,
+        )
+        fast_ready_poll = _coerce_timeout(
+            os.environ.get("BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS"),
+            0.15,
+        )
+        _trace(
+            "E07",
+            agent_id=agent_id,
+            session_id=collaboration_session.session_id,
+            backend_host=host,
+            vnc_port=vnc_port,
+            fast_wait_seconds=fast_ready_wait,
+            fast_poll_seconds=fast_ready_poll,
+        )
         fast_ready = _wait_for_backend_ready(
             host,
             vnc_port,
-            timeout_seconds=_coerce_timeout(
-                os.environ.get("BOREALIS_VNC_FAST_READY_WAIT_SECONDS"),
-                0.75,
-            ),
-            poll_interval_seconds=_coerce_timeout(
-                os.environ.get("BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS"),
-                0.15,
-            ),
+            timeout_seconds=fast_ready_wait,
+            poll_interval_seconds=fast_ready_poll,
         )
         initial_ready = fast_ready
+        _trace(
+            "E08",
+            agent_id=agent_id,
+            session_id=collaboration_session.session_id,
+            fast_ready=fast_ready,
+        )
         if fast_ready:
             _service_log_event(
                 "vnc_backend_fast_ready agent_id={0} session_id={1} credential_revision={2}".format(
@@ -356,6 +440,12 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             )
         else:
             socket_registered = _agent_socket_registered(adapters.context, agent_id)
+            _trace(
+                "E09",
+                agent_id=agent_id,
+                session_id=collaboration_session.session_id,
+                socket_registered=socket_registered if socket_registered is not None else "unknown",
+            )
             if socket_registered is False:
                 _service_log_event(
                     "vnc_backend_bootstrap_blocked agent_id={0} session_id={1} reason=agent_socket_missing".format(
@@ -364,6 +454,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                     ),
                     level="WARNING",
                 )
+                _trace("E09F", agent_id=agent_id, session_id=collaboration_session.session_id, result="agent_socket_missing", level="WARNING")
                 return {"error": "agent_socket_missing"}, 409
             _service_log_event(
                 "vnc_backend_bootstrap_required agent_id={0} session_id={1} credential_revision={2}".format(
@@ -372,9 +463,31 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                     collaboration_session.credential_revision,
                 )
             )
+            ready_wait_seconds = _coerce_timeout(
+                os.environ.get("BOREALIS_VNC_READY_WAIT_SECONDS"),
+                12.0,
+            )
+            ready_poll_seconds = _coerce_timeout(
+                os.environ.get("BOREALIS_VNC_READY_POLL_INTERVAL_SECONDS"),
+                0.35,
+            )
             try:
+                _trace("E10", agent_id=agent_id, session_id=collaboration_session.session_id, reason="vnc_bootstrap")
                 _restart_tunnel("vnc_bootstrap")
                 emitted = _emit_vnc_start("vnc_bootstrap")
+                settle_seconds = _coerce_nonnegative_timeout(
+                    os.environ.get("BOREALIS_VNC_BOOTSTRAP_SETTLE_SECONDS"),
+                    0.0,
+                )
+                _trace(
+                    "E11",
+                    agent_id=agent_id,
+                    session_id=collaboration_session.session_id,
+                    reason="vnc_bootstrap",
+                    emit_ok=emitted,
+                    settle_seconds=settle_seconds,
+                    created=_created,
+                )
                 if not emitted:
                     _service_log_event(
                         "vnc_backend_bootstrap_blocked agent_id={0} session_id={1} reason=agent_socket_missing".format(
@@ -383,11 +496,8 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                         ),
                         level="WARNING",
                     )
+                    _trace("E11F", agent_id=agent_id, session_id=collaboration_session.session_id, result="agent_socket_missing", level="WARNING")
                     return {"error": "agent_socket_missing"}, 409
-                settle_seconds = _coerce_nonnegative_timeout(
-                    os.environ.get("BOREALIS_VNC_BOOTSTRAP_SETTLE_SECONDS"),
-                    0.0,
-                )
                 if _created and settle_seconds > 0:
                     time.sleep(settle_seconds)
             except Exception:
@@ -396,19 +506,37 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             initial_ready = _wait_for_backend_ready(
                 host,
                 vnc_port,
-                timeout_seconds=_coerce_timeout(
-                    os.environ.get("BOREALIS_VNC_READY_WAIT_SECONDS"),
-                    12.0,
-                ),
-                poll_interval_seconds=_coerce_timeout(
-                    os.environ.get("BOREALIS_VNC_READY_POLL_INTERVAL_SECONDS"),
-                    0.35,
-                ),
+                timeout_seconds=ready_wait_seconds,
+                poll_interval_seconds=ready_poll_seconds,
+            )
+            _trace(
+                "E12",
+                agent_id=agent_id,
+                session_id=collaboration_session.session_id,
+                ready=initial_ready,
+                wait_seconds=ready_wait_seconds,
+                poll_seconds=ready_poll_seconds,
             )
         if not initial_ready:
+            retry_wait_seconds = _coerce_timeout(
+                os.environ.get("BOREALIS_VNC_RETRY_READY_WAIT_SECONDS"),
+                8.0,
+            )
+            retry_poll_seconds = _coerce_timeout(
+                os.environ.get("BOREALIS_VNC_READY_POLL_INTERVAL_SECONDS"),
+                0.35,
+            )
             try:
+                _trace("E13", agent_id=agent_id, session_id=collaboration_session.session_id, reason="vnc_connect_retry")
                 _restart_tunnel("vnc_connect_retry")
                 emitted = _emit_vnc_start("vnc_connect_retry")
+                _trace(
+                    "E14",
+                    agent_id=agent_id,
+                    session_id=collaboration_session.session_id,
+                    reason="vnc_connect_retry",
+                    emit_ok=emitted,
+                )
                 if not emitted:
                     _service_log_event(
                         "vnc_backend_retry_blocked agent_id={0} session_id={1} reason=agent_socket_missing".format(
@@ -417,29 +545,47 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                         ),
                         level="WARNING",
                     )
+                    _trace("E14F", agent_id=agent_id, session_id=collaboration_session.session_id, result="agent_socket_missing", level="WARNING")
                     return {"error": "agent_socket_missing"}, 409
             except Exception:
                 logger.debug("Failed to request VNC connect retry agent_id=%s", agent_id, exc_info=True)
             initial_ready = _wait_for_backend_ready(
                 host,
                 vnc_port,
-                timeout_seconds=_coerce_timeout(
-                    os.environ.get("BOREALIS_VNC_RETRY_READY_WAIT_SECONDS"),
-                    8.0,
-                ),
-                poll_interval_seconds=_coerce_timeout(
-                    os.environ.get("BOREALIS_VNC_READY_POLL_INTERVAL_SECONDS"),
-                    0.35,
-                ),
+                timeout_seconds=retry_wait_seconds,
+                poll_interval_seconds=retry_poll_seconds,
+            )
+            _trace(
+                "E15",
+                agent_id=agent_id,
+                session_id=collaboration_session.session_id,
+                ready=initial_ready,
+                wait_seconds=retry_wait_seconds,
+                poll_seconds=retry_poll_seconds,
             )
         if not initial_ready:
             manager.record_error(collaboration_session.session_id, "backend_not_ready")
+            _trace(
+                "E16",
+                agent_id=agent_id,
+                session_id=collaboration_session.session_id,
+                result="vnc_backend_unavailable",
+                level="WARNING",
+            )
             return {"error": "vnc_backend_unavailable"}, 503
         manager.record_backend_ready(
             collaboration_session.session_id,
             tunnel_id=_normalize_text(session_payload.get("tunnel_id")),
             allowed_ips=allowed_ips,
             engine_virtual_ip=engine_virtual_ip,
+        )
+        _trace(
+            "E17",
+            agent_id=agent_id,
+            session_id=collaboration_session.session_id,
+            tunnel_id=session_payload.get("tunnel_id"),
+            allowed_ips=allowed_ips or "-",
+            engine_virtual_ip=engine_virtual_ip or "-",
         )
         try:
             _confirm_transport("vnc_backend_ready")
@@ -504,6 +650,16 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         session_snapshot["display_topology"] = _clone_display_topology(agent_credential.display_topology)
         session_snapshot["display_virtual_bounds"] = _clone_display_virtual_bounds(
             agent_credential.display_virtual_bounds
+        )
+        _trace(
+            "E18",
+            agent_id=agent_id,
+            session_id=collaboration_session.session_id,
+            participant_id=participant.participant_id,
+            participant_role=participant.role,
+            display_count=len(session_snapshot["display_topology"] or []),
+            session_state=collaboration_session.state,
+            ws_path=ws_path,
         )
         vnc_password = collaboration_session.controller_password
 
