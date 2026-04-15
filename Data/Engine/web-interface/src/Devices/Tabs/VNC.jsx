@@ -269,6 +269,14 @@ function supportsPowerAction(capabilities, action) {
   return (aliases[action] || []).some((key) => capabilityFlag(power?.[key]));
 }
 
+function getFramebufferSize(rfb) {
+  const display = rfb?._display;
+  const width = display?._fb_width || display?._fbWidth || rfb?._fbWidth || 0;
+  const height = display?._fb_height || display?._fbHeight || rfb?._fbHeight || 0;
+  if (!width || !height) return null;
+  return { width, height };
+}
+
 export default function ReverseTunnelVnc({ device }) {
   const [sessionState, setSessionState] = useState("idle");
   const [vncStage, setVncStage] = useState("idle");
@@ -285,6 +293,7 @@ export default function ReverseTunnelVnc({ device }) {
   const [capabilities, setCapabilities] = useState({});
   const [viewportPreset, setViewportPreset] = useState("all");
   const [viewportHint, setViewportHint] = useState("");
+  const [framebufferSize, setFramebufferSize] = useState(null);
 
   const containerRef = useRef(null);
   const displayRef = useRef(null);
@@ -411,6 +420,7 @@ export default function ReverseTunnelVnc({ device }) {
       setSessionId("");
       setParticipantId("");
       clipboardLastRef.current = "";
+      setFramebufferSize(null);
       setLoading(false);
     }
   }, [cancelPendingConnect, disconnectVnc, teardownDisplay]);
@@ -566,6 +576,7 @@ export default function ReverseTunnelVnc({ device }) {
           setSessionState("connected");
           setVncStage("connected");
           setStatusMessage("");
+          setFramebufferSize(getFramebufferSize(rfbRef.current) || getFramebufferSize(rfb));
           finishResolve();
         };
 
@@ -612,6 +623,7 @@ export default function ReverseTunnelVnc({ device }) {
           if (isStaleAttempt()) return;
           const caps = evt?.detail?.capabilities || rfb.capabilities || {};
           setCapabilities(caps || {});
+          setFramebufferSize(getFramebufferSize(rfbRef.current) || getFramebufferSize(rfb));
         };
 
         const handleClipboard = (evt) => {
@@ -718,6 +730,7 @@ export default function ReverseTunnelVnc({ device }) {
         setVncStage("disconnected");
         setSessionId("");
         setParticipantId("");
+        setFramebufferSize(null);
         return;
       }
       setParticipantId((previous) => normalizeText(nextSession.current_participant_id) || previous);
@@ -862,6 +875,7 @@ export default function ReverseTunnelVnc({ device }) {
       setViewportHint("Framebuffer size unavailable.");
       return;
     }
+    setFramebufferSize({ width: fbWidth, height: fbHeight });
 
     if (screen?.style) {
       screen.style.display = "flex";
@@ -957,6 +971,12 @@ export default function ReverseTunnelVnc({ device }) {
   }, [syncViewportPreset]);
 
   const isConnected = sessionState === "connected";
+  const useContentSizedViewport =
+    isConnected &&
+    scaleViewport &&
+    viewportPreset === "all" &&
+    Number(framebufferSize?.width) > 0 &&
+    Number(framebufferSize?.height) > 0;
 
   useEffect(() => {
     if (!isConnected) return;
@@ -1089,8 +1109,8 @@ export default function ReverseTunnelVnc({ device }) {
           <Box
             ref={containerRef}
             sx={{
-              flexGrow: 1,
-              minHeight: 420,
+              flexGrow: useContentSizedViewport ? 0 : 1,
+              minHeight: useContentSizedViewport ? 0 : 420,
               display: "flex",
               flexDirection: "column",
               ...glassCardSx,
@@ -1101,7 +1121,12 @@ export default function ReverseTunnelVnc({ device }) {
             {loading ? <LinearProgress color="info" sx={{ height: 3 }} /> : null}
             <Box
               sx={{
-                flexGrow: 1,
+                flexGrow: useContentSizedViewport ? 0 : 1,
+                width: "100%",
+                height: useContentSizedViewport ? "auto" : "100%",
+                aspectRatio: useContentSizedViewport
+                  ? `${framebufferSize.width} / ${framebufferSize.height}`
+                  : undefined,
                 position: "relative",
                 backgroundColor: "rgba(2,6,20,0.9)",
                 display: "flex",
