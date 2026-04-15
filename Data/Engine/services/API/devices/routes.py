@@ -48,6 +48,30 @@ def _json_or_none(value: Any) -> Optional[str]:
         return None
 
 
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if not value:
+        return []
+    try:
+        parsed = json.loads(str(value))
+    except Exception:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _json_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(str(value))
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _infer_endpoint_host(adapters: "EngineServiceAdapters", req) -> str:
     host, _port = wireguard_endpoint(adapters.context, req=req)
     return host
@@ -172,6 +196,8 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                     "service_state": service_state,
                     "listener_state": listener_state,
                     "last_ready_at": last_ready_at,
+                    "display_topology": _json_list(details.get("display_topology_json")),
+                    "display_virtual_bounds": _json_dict(details.get("display_virtual_bounds_json")),
                     "details": details,
                 }
         except Exception:
@@ -542,12 +568,16 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         advertised_revision = body.get("credential_revision")
         if advertised_revision in (None, ""):
             advertised_revision = body.get("vnc_credential_revision")
+        advertised_display_topology = body.get("display_topology")
+        if advertised_display_topology in (None, ""):
+            advertised_display_topology = _json_list(body.get("display_topology_json"))
         if advertised_password:
             try:
                 manager.upsert_agent_credential(
                     agent_id=resolved_agent,
                     controller_password=advertised_password,
                     credential_revision=advertised_revision,
+                    display_topology=advertised_display_topology,
                 )
             except ValueError:
                 log(
@@ -559,10 +589,20 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
 
         active_session = _active_vnc_session_payload(resolved_agent)
         role_health = _load_agent_vnc_health(resolved_agent)
+        agent_credential = manager.get_agent_credential(resolved_agent)
         if isinstance(active_session, dict):
             active_session_payload = dict(active_session)
         else:
             active_session_payload = {}
+        display_topology = []
+        display_virtual_bounds: Dict[str, Any] = {}
+        if agent_credential is not None:
+            display_topology = [dict(item) for item in agent_credential.display_topology]
+            display_virtual_bounds = dict(agent_credential.display_virtual_bounds)
+        if not display_topology:
+            display_topology = list(role_health.get("display_topology") or [])
+        if not display_virtual_bounds:
+            display_virtual_bounds = dict(role_health.get("display_virtual_bounds") or {})
 
         log(
             "VNC",
@@ -593,6 +633,8 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                     "vnc_password": str(active_session_payload.get("controller_password") or "").strip(),
                     "credential_revision": int(active_session_payload.get("credential_revision") or 0),
                     "remove_wallpaper": bool(active_session_payload.get("remove_wallpaper")),
+                    "display_topology": display_topology,
+                    "display_virtual_bounds": display_virtual_bounds,
                     "session": active_session_payload.get("session") or None,
                 }
             ),

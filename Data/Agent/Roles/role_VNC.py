@@ -18,8 +18,15 @@ import subprocess
 import tempfile
 import threading
 import time
+import ctypes
+import re
 from pathlib import Path
 from typing import Any, Optional
+
+try:
+    from ctypes import wintypes
+except Exception:  # pragma: no cover - non-Windows fallback
+    wintypes = None
 
 try:
     from runtime_paths import agent_borealis_root, agent_logs_root, find_project_root
@@ -115,6 +122,138 @@ VNC_CREDENTIAL_ROTATION_SECONDS = _coerce_int(
     min_value=60,
     max_value=30 * 24 * 60 * 60,
 )
+
+
+def _display_virtual_bounds(topology: Any) -> dict[str, int]:
+    if not isinstance(topology, list) or not topology:
+        return {}
+    left = None
+    top = None
+    right = None
+    bottom = None
+    for item in topology:
+        if not isinstance(item, dict):
+            continue
+        item_left = _coerce_int(item.get("left"), 0, min_value=-1_000_000, max_value=1_000_000)
+        item_top = _coerce_int(item.get("top"), 0, min_value=-1_000_000, max_value=1_000_000)
+        item_width = _coerce_int(item.get("width"), 0, min_value=0, max_value=1_000_000)
+        item_height = _coerce_int(item.get("height"), 0, min_value=0, max_value=1_000_000)
+        item_right = _coerce_int(item.get("right"), item_left + item_width, min_value=-1_000_000, max_value=1_000_000)
+        item_bottom = _coerce_int(item.get("bottom"), item_top + item_height, min_value=-1_000_000, max_value=1_000_000)
+        left = item_left if left is None else min(left, item_left)
+        top = item_top if top is None else min(top, item_top)
+        right = item_right if right is None else max(right, item_right)
+        bottom = item_bottom if bottom is None else max(bottom, item_bottom)
+    if left is None or top is None or right is None or bottom is None:
+        return {}
+    return {
+        "left": int(left),
+        "top": int(top),
+        "right": int(right),
+        "bottom": int(bottom),
+        "width": max(0, int(right - left)),
+        "height": max(0, int(bottom - top)),
+    }
+
+
+def _display_index_from_device_name(device_name: str, fallback_index: int) -> int:
+    match = re.search(r"DISPLAY(\d+)", str(device_name or "").upper())
+    if match:
+        try:
+            return max(1, int(match.group(1)))
+        except Exception:
+            pass
+    return max(1, int(fallback_index or 1))
+
+
+def _collect_windows_display_topology() -> list[dict[str, Any]]:
+    if os.name != "nt" or wintypes is None:
+        return []
+    try:
+        user32 = ctypes.windll.user32
+    except Exception:
+        return []
+
+    class RECT(ctypes.Structure):
+        _fields_ = [
+            ("left", wintypes.LONG),
+            ("top", wintypes.LONG),
+            ("right", wintypes.LONG),
+            ("bottom", wintypes.LONG),
+        ]
+
+    class MONITORINFOEXW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("rcMonitor", RECT),
+            ("rcWork", RECT),
+            ("dwFlags", wintypes.DWORD),
+            ("szDevice", wintypes.WCHAR * 32),
+        ]
+
+    MONITORINFOF_PRIMARY = 0x00000001
+    callback_type = ctypes.WINFUNCTYPE(
+        ctypes.c_int,
+        wintypes.HMONITOR,
+        wintypes.HDC,
+        ctypes.POINTER(RECT),
+        wintypes.LPARAM,
+    )
+    topology: list[dict[str, Any]] = []
+
+    @callback_type
+    def _enum_monitors(hmonitor, _hdc, _lprect, _lparam):
+        info = MONITORINFOEXW()
+        info.cbSize = ctypes.sizeof(MONITORINFOEXW)
+        if not user32.GetMonitorInfoW(hmonitor, ctypes.byref(info)):
+            return 1
+        device_name = str(info.szDevice or "").strip()
+        left = int(info.rcMonitor.left)
+        top = int(info.rcMonitor.top)
+        right = int(info.rcMonitor.right)
+        bottom = int(info.rcMonitor.bottom)
+        work_left = int(info.rcWork.left)
+        work_top = int(info.rcWork.top)
+        work_right = int(info.rcWork.right)
+        work_bottom = int(info.rcWork.bottom)
+        display_index = _display_index_from_device_name(device_name, len(topology) + 1)
+        topology.append(
+            {
+                "id": str(display_index),
+                "display_index": int(display_index),
+                "label": str(display_index),
+                "device_name": device_name,
+                "left": left,
+                "top": top,
+                "right": right,
+                "bottom": bottom,
+                "width": max(0, right - left),
+                "height": max(0, bottom - top),
+                "work_left": work_left,
+                "work_top": work_top,
+                "work_right": work_right,
+                "work_bottom": work_bottom,
+                "work_width": max(0, work_right - work_left),
+                "work_height": max(0, work_bottom - work_top),
+                "primary": bool(info.dwFlags & MONITORINFOF_PRIMARY),
+            }
+        )
+        return 1
+
+    try:
+        user32.EnumDisplayMonitors(0, 0, _enum_monitors, 0)
+    except Exception:
+        return []
+
+    return sorted(
+        topology,
+        key=lambda item: (
+            int(item.get("display_index") or 0),
+            0 if item.get("primary") else 1,
+            int(item.get("top") or 0),
+            int(item.get("left") or 0),
+        ),
+    )
 
 
 def _generate_runtime_vnc_password() -> str:
@@ -1621,6 +1760,8 @@ class Role:
         if client is None:
             return None
         credential = getattr(self, "_agent_runtime_credentials", {}) or {}
+        display_topology = _collect_windows_display_topology()
+        display_virtual_bounds = _display_virtual_bounds(display_topology)
         try:
             payload = client.post_json(
                 "/api/agent/vnc/ensure",
@@ -1629,6 +1770,8 @@ class Role:
                     "reason": reason,
                     "controller_password": credential.get("controller_password") or "",
                     "credential_revision": int(credential.get("credential_revision") or 0),
+                    "display_topology": display_topology,
+                    "display_virtual_bounds": display_virtual_bounds,
                 },
                 require_auth=True,
             )
@@ -1717,6 +1860,8 @@ class Role:
         active_session_id = self._active_session_id()
         listener_ready = self.vnc.is_listener_ready(port_value)
         grace_snapshot = self._disconnect_grace_snapshot()
+        display_topology = _collect_windows_display_topology()
+        display_virtual_bounds = _display_virtual_bounds(display_topology)
         if listener_ready:
             self._last_ready_at = max(self._last_ready_at, int(time.time()))
         details = {
@@ -1741,6 +1886,9 @@ class Role:
             "credential_revision": str(self._credential_revision()),
             "disconnect_grace_active": "true" if grace_snapshot else "false",
             "disconnect_grace_until": str(int(grace_snapshot["deadline"])) if grace_snapshot else "0",
+            "display_topology_json": json.dumps(display_topology, ensure_ascii=True, sort_keys=True),
+            "display_virtual_bounds_json": json.dumps(display_virtual_bounds, ensure_ascii=True, sort_keys=True),
+            "display_count": str(len(display_topology)),
         }
         if service_state in {"RUNNING", "START_PENDING"} and listener_ready:
             return {

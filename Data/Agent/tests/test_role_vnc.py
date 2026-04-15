@@ -194,6 +194,31 @@ def test_health_report_is_healthy_without_active_session_when_listener_is_ready(
         is_listener_ready=lambda _port: True,
     )
     monkeypatch.setattr(vnc_role.os, "name", "nt", raising=False)
+    monkeypatch.setattr(
+        vnc_role,
+        "_collect_windows_display_topology",
+        lambda: [
+            {
+                "id": "1",
+                "display_index": 1,
+                "label": "1",
+                "device_name": "\\\\.\\DISPLAY1",
+                "left": 0,
+                "top": 0,
+                "right": 1920,
+                "bottom": 1080,
+                "width": 1920,
+                "height": 1080,
+                "work_left": 0,
+                "work_top": 0,
+                "work_right": 1920,
+                "work_bottom": 1040,
+                "work_width": 1920,
+                "work_height": 1040,
+                "primary": True,
+            }
+        ],
+    )
 
     report = role.health_report()
 
@@ -201,6 +226,8 @@ def test_health_report_is_healthy_without_active_session_when_listener_is_ready(
     assert report["details"]["listener_state"] == "listening"
     assert report["details"]["ready"] == "true"
     assert report["detail"] == "uvnc_service listener is ready for always-on access."
+    assert "\"display_index\": 1" in report["details"]["display_topology_json"]
+    assert "\"width\": 1920" in report["details"]["display_virtual_bounds_json"]
 
 
 def test_write_ultravnc_config_preserves_both_password_keys_in_ultravnc_section(tmp_path) -> None:
@@ -393,7 +420,7 @@ def test_ensure_always_on_keeps_listener_running_without_active_session(monkeypa
     assert standby_calls == []
 
 
-def test_request_vnc_bootstrap_advertises_runtime_credential() -> None:
+def test_request_vnc_bootstrap_advertises_runtime_credential(monkeypatch) -> None:
     requests: list[tuple[str, dict, bool]] = []
 
     class _Client:
@@ -409,6 +436,31 @@ def test_request_vnc_bootstrap_advertises_runtime_credential() -> None:
         "credential_revision": 12345,
     }
     role._http_client = lambda: _Client()
+    monkeypatch.setattr(
+        vnc_role,
+        "_collect_windows_display_topology",
+        lambda: [
+            {
+                "id": "1",
+                "display_index": 1,
+                "label": "1",
+                "device_name": "\\\\.\\DISPLAY1",
+                "left": 0,
+                "top": 0,
+                "right": 1920,
+                "bottom": 1080,
+                "width": 1920,
+                "height": 1080,
+                "work_left": 0,
+                "work_top": 0,
+                "work_right": 1920,
+                "work_bottom": 1040,
+                "work_width": 1920,
+                "work_height": 1040,
+                "primary": True,
+            }
+        ],
+    )
 
     payload = role._request_vnc_bootstrap("agent_boot")
 
@@ -421,6 +473,35 @@ def test_request_vnc_bootstrap_advertises_runtime_credential() -> None:
                 "reason": "agent_boot",
                 "controller_password": "bootpass",
                 "credential_revision": 12345,
+                "display_topology": [
+                    {
+                        "id": "1",
+                        "display_index": 1,
+                        "label": "1",
+                        "device_name": "\\\\.\\DISPLAY1",
+                        "left": 0,
+                        "top": 0,
+                        "right": 1920,
+                        "bottom": 1080,
+                        "width": 1920,
+                        "height": 1080,
+                        "work_left": 0,
+                        "work_top": 0,
+                        "work_right": 1920,
+                        "work_bottom": 1040,
+                        "work_width": 1920,
+                        "work_height": 1040,
+                        "primary": True,
+                    }
+                ],
+                "display_virtual_bounds": {
+                    "left": 0,
+                    "top": 0,
+                    "right": 1920,
+                    "bottom": 1080,
+                    "width": 1920,
+                    "height": 1080,
+                },
             },
             True,
         )

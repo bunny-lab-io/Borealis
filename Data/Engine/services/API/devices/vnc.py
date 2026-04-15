@@ -90,6 +90,22 @@ def _normalize_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
+def _clone_display_topology(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    cloned: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict):
+            cloned.append(dict(item))
+    return cloned
+
+
+def _clone_display_virtual_bounds(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return dict(value)
+
+
 def _coerce_timeout(value: Any, default: float) -> float:
     try:
         parsed = float(value)
@@ -410,6 +426,10 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             collaboration_session,
             current_operator_id=operator_id or "",
         )
+        session_snapshot["display_topology"] = _clone_display_topology(agent_credential.display_topology)
+        session_snapshot["display_virtual_bounds"] = _clone_display_virtual_bounds(
+            agent_credential.display_virtual_bounds
+        )
         vnc_password = collaboration_session.controller_password
 
         return (
@@ -425,6 +445,10 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 "controller_operator_id": collaboration_session.controller_operator_id or "",
                 "credential_revision": collaboration_session.credential_revision,
                 "session": session_snapshot,
+                "display_topology": _clone_display_topology(agent_credential.display_topology),
+                "display_virtual_bounds": _clone_display_virtual_bounds(
+                    agent_credential.display_virtual_bounds
+                ),
                 "virtual_ip": host,
                 "tunnel_id": session_payload.get("tunnel_id"),
                 "engine_virtual_ip": session_payload.get("engine_virtual_ip"),
@@ -627,10 +651,18 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         if not bool(result.get("closed")):
             refreshed_session = manager.get_session_by_id(collaboration_session.session_id)
             if refreshed_session is not None:
+                refreshed_credential = manager.get_agent_credential(refreshed_session.agent_id)
                 response_payload["session"] = manager.session_snapshot(
                     refreshed_session,
                     current_operator_id=operator_id or "",
                 )
+                if refreshed_credential is not None:
+                    response_payload["session"]["display_topology"] = _clone_display_topology(
+                        refreshed_credential.display_topology
+                    )
+                    response_payload["session"]["display_virtual_bounds"] = _clone_display_virtual_bounds(
+                        refreshed_credential.display_virtual_bounds
+                    )
         return jsonify(response_payload), 200
 
     @blueprint.route("/api/vnc/handoff", methods=["POST"])
@@ -687,21 +719,32 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 refreshed_session.controller_operator_id or "-",
             )
         )
+        refreshed_credential = manager.get_agent_credential(refreshed_session.agent_id)
+        refreshed_snapshot = manager.session_snapshot(
+            refreshed_session,
+            current_operator_id=operator_id or "",
+        )
+        if refreshed_credential is not None:
+            refreshed_snapshot["display_topology"] = _clone_display_topology(
+                refreshed_credential.display_topology
+            )
+            refreshed_snapshot["display_virtual_bounds"] = _clone_display_virtual_bounds(
+                refreshed_credential.display_virtual_bounds
+            )
         return (
             jsonify(
                 {
                     "status": "ok",
-                    "participant_role": manager.session_snapshot(
-                        refreshed_session,
-                        current_operator_id=operator_id or "",
-                    ).get("current_operator_role")
-                    or "",
-                    "session": manager.session_snapshot(
-                        refreshed_session,
-                        current_operator_id=operator_id or "",
-                    ),
+                    "participant_role": refreshed_snapshot.get("current_operator_role") or "",
+                    "session": refreshed_snapshot,
                     "reconnect_required": False,
                     "allowed_ips": allowed_ips,
+                    "display_topology": _clone_display_topology(
+                        refreshed_credential.display_topology if refreshed_credential is not None else []
+                    ),
+                    "display_virtual_bounds": _clone_display_virtual_bounds(
+                        refreshed_credential.display_virtual_bounds if refreshed_credential is not None else {}
+                    ),
                 }
             ),
             200,
@@ -727,11 +770,18 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             if not site_access.user_can_access_agent_id(user, resolved_agent_id):
                 return jsonify({"error": "not found"}), 404
             sessions = [session for session in sessions if session.agent_id == resolved_agent_id]
-        visible_sessions = [
-            manager.session_snapshot(session, current_operator_id=operator_id)
-            for session in sessions
-            if site_access.user_can_access_agent_id(user, session.agent_id)
-        ]
+        visible_sessions = []
+        for active_session in sessions:
+            if not site_access.user_can_access_agent_id(user, active_session.agent_id):
+                continue
+            snapshot = manager.session_snapshot(active_session, current_operator_id=operator_id)
+            credential = manager.get_agent_credential(active_session.agent_id)
+            if credential is not None:
+                snapshot["display_topology"] = _clone_display_topology(credential.display_topology)
+                snapshot["display_virtual_bounds"] = _clone_display_virtual_bounds(
+                    credential.display_virtual_bounds
+                )
+            visible_sessions.append(snapshot)
         return jsonify({"sessions": visible_sessions, "count": len(visible_sessions)}), 200
 
     app.register_blueprint(blueprint)

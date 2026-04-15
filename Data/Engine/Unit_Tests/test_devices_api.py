@@ -1410,13 +1410,35 @@ def test_agent_vnc_ensure_creates_passive_tunnel_when_missing(
     response = client.post(
         "/api/agent/vnc/ensure",
         headers=_device_headers_for_guid(valid_guid),
-        json={"agent_id": live_agent_id},
+        json={
+            "agent_id": live_agent_id,
+            "controller_password": "bootpass",
+            "credential_revision": 42,
+            "display_topology": [
+                {
+                    "id": "1",
+                    "display_index": 1,
+                    "label": "1",
+                    "device_name": "\\\\.\\DISPLAY1",
+                    "left": 0,
+                    "top": 0,
+                    "right": 1920,
+                    "bottom": 1080,
+                    "width": 1920,
+                    "height": 1080,
+                    "primary": True,
+                }
+            ],
+        },
     )
 
     assert response.status_code == 200
+    payload = response.get_json()
     expected_host = getattr(engine_harness.context, "public_wireguard_host", None) or "localhost"
     assert fake_service.connect_calls == [(live_agent_id, None, expected_host)]
     assert fake_service.connect_mark_activity_calls == [False]
+    assert payload["display_topology"][0]["label"] == "1"
+    assert payload["display_virtual_bounds"]["width"] == 1920
 
 
 def test_tunnel_status_endpoint_returns_down_health_defaults(

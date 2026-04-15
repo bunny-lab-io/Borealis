@@ -185,7 +185,7 @@ const compactSidebarCardSx = {
   gap: 0.85,
 };
 
-const viewportPresets = [
+const fallbackViewportPresets = [
   { value: "all", label: "All" },
   { value: "left", label: "Left" },
   { value: "right", label: "Right" },
@@ -280,6 +280,11 @@ function clampNumber(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function coerceInteger(value, defaultValue = 0) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : defaultValue;
+}
+
 function samplePixel(data, width, x, y) {
   const index = (y * width + x) * 4;
   return [data[index] || 0, data[index + 1] || 0, data[index + 2] || 0];
@@ -295,6 +300,86 @@ function colorDistance(left, right) {
 
 function luminance(pixel) {
   return ((pixel?.[0] || 0) * 0.2126) + ((pixel?.[1] || 0) * 0.7152) + ((pixel?.[2] || 0) * 0.0722);
+}
+
+function normalizeDisplayTopology(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item) => item && typeof item === "object")
+    .map((item, index) => {
+      const left = coerceInteger(item.left, 0);
+      const top = coerceInteger(item.top, 0);
+      const right = coerceInteger(item.right, left + coerceInteger(item.width, 0));
+      const bottom = coerceInteger(item.bottom, top + coerceInteger(item.height, 0));
+      const width = Math.max(0, coerceInteger(item.width, right - left));
+      const height = Math.max(0, coerceInteger(item.height, bottom - top));
+      const displayIndex = Math.max(
+        1,
+        coerceInteger(item.display_index ?? item.id ?? item.label, index + 1)
+      );
+      return {
+        id: normalizeText(item.id || displayIndex) || String(displayIndex),
+        displayIndex,
+        label: normalizeText(item.label || displayIndex) || String(displayIndex),
+        deviceName: normalizeText(item.device_name),
+        left,
+        top,
+        right: right > left ? right : left + width,
+        bottom: bottom > top ? bottom : top + height,
+        width,
+        height,
+        primary: capabilityFlag(item.primary),
+      };
+    })
+    .filter((item) => item.width > 0 && item.height > 0)
+    .sort((left, right) => {
+      if (left.displayIndex !== right.displayIndex) return left.displayIndex - right.displayIndex;
+      if (left.primary !== right.primary) return left.primary ? -1 : 1;
+      if (left.top !== right.top) return left.top - right.top;
+      return left.left - right.left;
+    });
+}
+
+function displayTopologyBounds(topology) {
+  if (!Array.isArray(topology) || !topology.length) return null;
+  const left = Math.min(...topology.map((item) => item.left));
+  const top = Math.min(...topology.map((item) => item.top));
+  const right = Math.max(...topology.map((item) => item.right));
+  const bottom = Math.max(...topology.map((item) => item.bottom));
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top),
+  };
+}
+
+function monitorPresetValue(monitor) {
+  return `display:${normalizeText(monitor?.id || monitor?.displayIndex || "")}`;
+}
+
+function preferredViewportPreset(topology) {
+  if (!Array.isArray(topology) || !topology.length) return "all";
+  const primary = topology.find((item) => item.primary) || topology[0];
+  return monitorPresetValue(primary);
+}
+
+function viewportOptionsForTopology(topology) {
+  if (!Array.isArray(topology) || !topology.length) {
+    return fallbackViewportPresets;
+  }
+  if (topology.length === 1) {
+    return [{ value: "all", label: "All" }];
+  }
+  return [
+    { value: "all", label: "All" },
+    ...topology.map((item) => ({
+      value: monitorPresetValue(item),
+      label: item.label || String(item.displayIndex || ""),
+    })),
+  ];
 }
 
 function estimateActiveDisplayBounds(display) {
@@ -400,6 +485,7 @@ export default function ReverseTunnelVnc({ device }) {
   const [capabilities, setCapabilities] = useState({});
   const [viewportPreset, setViewportPreset] = useState("all");
   const [viewportHint, setViewportHint] = useState("");
+  const [displayTopology, setDisplayTopology] = useState([]);
 
   const containerRef = useRef(null);
   const displayRef = useRef(null);
@@ -427,13 +513,36 @@ export default function ReverseTunnelVnc({ device }) {
   const compressionLevel = Math.max(0, 8 - qualityLevel);
   const dragViewport = false;
   const effectiveViewOnly = viewOnly;
+  const normalizedDisplayTopology = useMemo(
+    () => normalizeDisplayTopology(displayTopology),
+    [displayTopology]
+  );
+  const viewportOptions = useMemo(
+    () => viewportOptionsForTopology(normalizedDisplayTopology),
+    [normalizedDisplayTopology]
+  );
 
   const applySessionBootstrap = useCallback((data) => {
     const nextSession = data?.session && typeof data.session === "object" ? data.session : null;
     const nextSessionId = normalizeText(data?.session_id || nextSession?.session_id);
     const nextParticipantId = normalizeText(data?.participant_id || nextSession?.current_participant_id);
+    const nextDisplayTopology = normalizeDisplayTopology(
+      data?.display_topology || nextSession?.display_topology
+    );
     setSessionId(nextSessionId);
     setParticipantId(nextParticipantId);
+    setDisplayTopology(nextDisplayTopology);
+    setViewportPreset((previous) => {
+      const nextOptions = viewportOptionsForTopology(nextDisplayTopology);
+      const previousStillValid = nextOptions.some((item) => item.value === previous);
+      if (nextDisplayTopology.length > 1 && (!previousStillValid || previous === "all")) {
+        return preferredViewportPreset(nextDisplayTopology);
+      }
+      if (!previousStillValid) {
+        return nextOptions[0]?.value || "all";
+      }
+      return previous;
+    });
   }, []);
 
   useEffect(() => {
@@ -842,7 +951,18 @@ export default function ReverseTunnelVnc({ device }) {
         setVncStage("disconnected");
         setSessionId("");
         setParticipantId("");
+        setDisplayTopology([]);
         return;
+      }
+      const nextDisplayTopology = normalizeDisplayTopology(nextSession.display_topology);
+      if (nextDisplayTopology.length) {
+        setDisplayTopology(nextDisplayTopology);
+        setViewportPreset((previous) => {
+          const nextOptions = viewportOptionsForTopology(nextDisplayTopology);
+          return nextOptions.some((item) => item.value === previous)
+            ? previous
+            : (nextOptions[0]?.value || "all");
+        });
       }
       setParticipantId((previous) => normalizeText(nextSession.current_participant_id) || previous);
     } catch {
@@ -982,6 +1102,7 @@ export default function ReverseTunnelVnc({ device }) {
     }
     const fbWidth = display?._fb_width || display?._fbWidth || rfb?._fbWidth || 0;
     const fbHeight = display?._fb_height || display?._fbHeight || rfb?._fbHeight || 0;
+    const topologyBounds = displayTopologyBounds(normalizedDisplayTopology);
     if (!fbWidth || !fbHeight) {
       setViewportHint("Framebuffer size unavailable.");
       return;
@@ -1023,6 +1144,29 @@ export default function ReverseTunnelVnc({ device }) {
       }
     };
 
+    const displayTarget = normalizeText(value).startsWith("display:")
+      ? normalizedDisplayTopology.find(
+          (item) => monitorPresetValue(item) === normalizeText(value)
+        ) || null
+      : null;
+
+    if (displayTarget && topologyBounds) {
+      const applyMonitorViewport = () => {
+        applyDisplayViewport({
+          x: displayTarget.left - topologyBounds.left,
+          y: displayTarget.top - topologyBounds.top,
+          w: displayTarget.width,
+          h: displayTarget.height,
+        });
+      };
+      if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(applyMonitorViewport);
+      } else {
+        applyMonitorViewport();
+      }
+      return;
+    }
+
     if (value === "all") {
       const resetViewport = () => {
         try {
@@ -1030,7 +1174,15 @@ export default function ReverseTunnelVnc({ device }) {
             host.scrollLeft = 0;
             host.scrollTop = 0;
           }
-          const activeBounds = estimateActiveDisplayBounds(display);
+          const activeBounds =
+            topologyBounds && topologyBounds.width > 0 && topologyBounds.height > 0
+              ? {
+                  x: 0,
+                  y: 0,
+                  w: topologyBounds.width,
+                  h: topologyBounds.height,
+                }
+              : estimateActiveDisplayBounds(display);
           applyDisplayViewport(
             activeBounds || {
               x: 0,
@@ -1074,7 +1226,7 @@ export default function ReverseTunnelVnc({ device }) {
     } else {
       applyViewport();
     }
-  }, [scaleViewport]);
+  }, [normalizedDisplayTopology, scaleViewport]);
 
   const applyViewportPreset = useCallback((value) => {
     syncViewportPreset(value, { updateState: true });
@@ -1088,13 +1240,18 @@ export default function ReverseTunnelVnc({ device }) {
   }, [isConnected, scaleViewport, syncViewportPreset, viewportPreset]);
 
   useEffect(() => {
-    if (!isConnected || viewportPreset !== "all") return undefined;
+    if (
+      !isConnected ||
+      (viewportPreset !== "all" && !normalizeText(viewportPreset).startsWith("display:"))
+    ) {
+      return undefined;
+    }
     const timers = [
       window.setTimeout(() => {
-        syncViewportPreset("all", { updateState: false });
+        syncViewportPreset(viewportPreset, { updateState: false });
       }, 250),
       window.setTimeout(() => {
-        syncViewportPreset("all", { updateState: false });
+        syncViewportPreset(viewportPreset, { updateState: false });
       }, 1200),
     ];
     return () => {
@@ -1385,7 +1542,7 @@ export default function ReverseTunnelVnc({ device }) {
                 }}
                 sx={splitToggleSx}
               >
-                {viewportPresets.map((preset) => (
+                {viewportOptions.map((preset) => (
                   <ToggleButton key={preset.value} value={preset.value}>
                     {preset.label}
                   </ToggleButton>

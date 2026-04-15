@@ -33,12 +33,14 @@ def _register_agent_credential(
     agent_id: str = "test-device-agent",
     password: str = "bootpass",
     revision: int = 42,
+    display_topology: Any = None,
 ) -> None:
     manager = vnc_api.ensure_vnc_collaboration_manager(harness.context, logger=harness.context.logger)
     manager.upsert_agent_credential(
         agent_id=agent_id,
         controller_password=password,
         credential_revision=revision,
+        display_topology=display_topology,
     )
 
 
@@ -151,7 +153,37 @@ def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestH
     engine_harness.context.public_base_url = "https://borealis.example.com"
     engine_harness.context.public_hostname = "borealis.example.com"
     engine_harness.context.public_wireguard_host = "borealis.example.com"
-    _register_agent_credential(engine_harness)
+    _register_agent_credential(
+        engine_harness,
+        display_topology=[
+            {
+                "id": "1",
+                "display_index": 1,
+                "label": "1",
+                "device_name": "\\\\.\\DISPLAY1",
+                "left": 0,
+                "top": 0,
+                "right": 1920,
+                "bottom": 1080,
+                "width": 1920,
+                "height": 1080,
+                "primary": True,
+            },
+            {
+                "id": "2",
+                "display_index": 2,
+                "label": "2",
+                "device_name": "\\\\.\\DISPLAY2",
+                "left": -1024,
+                "top": -300,
+                "right": 0,
+                "bottom": 468,
+                "width": 1024,
+                "height": 768,
+                "primary": False,
+            },
+        ],
+    )
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
     monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: fake_registry)
@@ -175,6 +207,16 @@ def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestH
     assert payload["participant_role"] == "controller"
     assert payload["view_only"] is False
     assert payload["session"]["controller_operator_id"] == "admin"
+    assert len(payload["display_topology"]) == 2
+    assert payload["display_virtual_bounds"] == {
+        "left": -1024,
+        "top": -300,
+        "right": 1920,
+        "bottom": 1080,
+        "width": 2944,
+        "height": 1380,
+    }
+    assert payload["session"]["display_topology"][0]["label"] == "1"
     assert fake_tunnel.connect_calls == [("test-device-agent", "admin", "borealis.example.com")]
     assert fake_tunnel.transport_marks == []
     assert fake_tunnel.start_calls == []
@@ -221,6 +263,26 @@ def test_vnc_establish_uses_longer_initial_wait_and_shorter_retry_wait(
     assert fake_tunnel.transport_recovers == [
         ("test-device-agent", "vnc_connect", "vnc_connect_retry")
     ]
+
+
+def test_vnc_establish_defaults_without_display_topology(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    _register_agent_credential(engine_harness)
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+
+    response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["display_topology"] == []
+    assert payload["display_virtual_bounds"] == {}
 
 
 def test_vnc_establish_skips_bootstrap_settle_when_fast_probe_succeeds(

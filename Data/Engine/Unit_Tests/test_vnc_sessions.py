@@ -207,3 +207,49 @@ def test_upsert_agent_credential_updates_existing_session_password() -> None:
     assert refreshed is not None
     assert refreshed.controller_password == "newpass1"
     assert refreshed.credential_revision == 99
+
+
+def test_upsert_agent_credential_tracks_display_topology() -> None:
+    manager = _build_manager()
+
+    credential = manager.upsert_agent_credential(
+        agent_id="agent-display",
+        controller_password="bootpass",
+        credential_revision=42,
+        display_topology=[
+            {
+                "id": "2",
+                "display_index": 2,
+                "label": "2",
+                "left": -1024,
+                "top": -300,
+                "right": 0,
+                "bottom": 468,
+                "width": 1024,
+                "height": 768,
+                "primary": False,
+            },
+            {
+                "id": "1",
+                "display_index": 1,
+                "label": "1",
+                "left": 0,
+                "top": 0,
+                "right": 1920,
+                "bottom": 1080,
+                "width": 1920,
+                "height": 1080,
+                "primary": True,
+            },
+        ],
+    )
+
+    assert [entry["label"] for entry in credential.display_topology] == ["1", "2"]
+    assert credential.display_virtual_bounds == {
+        "left": -1024,
+        "top": -300,
+        "right": 1920,
+        "bottom": 1080,
+        "width": 2944,
+        "height": 1380,
+    }

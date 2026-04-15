@@ -33,6 +33,78 @@ def _clean_text(value: Any) -> str:
         return ""
 
 
+def _clean_int(value: Any, default: int = 0) -> int:
+    try:
+        if value in (None, ""):
+            raise ValueError
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def _display_virtual_bounds(topology: List[Dict[str, Any]]) -> Dict[str, int]:
+    if not topology:
+        return {}
+    left = min(int(item.get("left") or 0) for item in topology)
+    top = min(int(item.get("top") or 0) for item in topology)
+    right = max(int(item.get("right") or (int(item.get("left") or 0) + int(item.get("width") or 0))) for item in topology)
+    bottom = max(int(item.get("bottom") or (int(item.get("top") or 0) + int(item.get("height") or 0))) for item in topology)
+    return {
+        "left": int(left),
+        "top": int(top),
+        "right": int(right),
+        "bottom": int(bottom),
+        "width": max(0, int(right - left)),
+        "height": max(0, int(bottom - top)),
+    }
+
+
+def _sanitize_display_topology(value: Any) -> List[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    sanitized: List[Dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        left = _clean_int(item.get("left"), 0)
+        top = _clean_int(item.get("top"), 0)
+        right = _clean_int(item.get("right"), left + _clean_int(item.get("width"), 0))
+        bottom = _clean_int(item.get("bottom"), top + _clean_int(item.get("height"), 0))
+        width = max(0, _clean_int(item.get("width"), right - left))
+        height = max(0, _clean_int(item.get("height"), bottom - top))
+        display_index = max(1, _clean_int(item.get("display_index") or item.get("id"), len(sanitized) + 1))
+        sanitized.append(
+            {
+                "id": _clean_text(item.get("id") or display_index) or str(display_index),
+                "display_index": display_index,
+                "label": _clean_text(item.get("label") or display_index) or str(display_index),
+                "device_name": _clean_text(item.get("device_name")),
+                "left": left,
+                "top": top,
+                "right": left + width if right <= left else right,
+                "bottom": top + height if bottom <= top else bottom,
+                "width": width,
+                "height": height,
+                "work_left": _clean_int(item.get("work_left"), left),
+                "work_top": _clean_int(item.get("work_top"), top),
+                "work_right": _clean_int(item.get("work_right"), right),
+                "work_bottom": _clean_int(item.get("work_bottom"), bottom),
+                "work_width": max(0, _clean_int(item.get("work_width"), width)),
+                "work_height": max(0, _clean_int(item.get("work_height"), height)),
+                "primary": bool(item.get("primary")),
+            }
+        )
+    return sorted(
+        sanitized,
+        key=lambda entry: (
+            int(entry.get("display_index") or 0),
+            0 if entry.get("primary") else 1,
+            int(entry.get("top") or 0),
+            int(entry.get("left") or 0),
+        ),
+    )
+
+
 @dataclass
 class VncParticipant:
     participant_id: str
@@ -109,6 +181,8 @@ class AgentVncCredential:
     controller_password: str
     credential_revision: int
     updated_at: float
+    display_topology: List[Dict[str, Any]] = field(default_factory=list)
+    display_virtual_bounds: Dict[str, int] = field(default_factory=dict)
 
     def touch(self) -> None:
         self.updated_at = _now_ts()
@@ -130,6 +204,7 @@ class VncCollaborationManager:
         agent_id: str,
         controller_password: str,
         credential_revision: Any = None,
+        display_topology: Any = None,
     ) -> AgentVncCredential:
         normalized_agent_id = _clean_text(agent_id)
         normalized_password = _clean_text(controller_password)[:8]
@@ -142,6 +217,8 @@ class VncCollaborationManager:
         if revision_value <= 0:
             revision_value = int(_now_ts() * 1000)
         with self._lock:
+            sanitized_topology = _sanitize_display_topology(display_topology)
+            virtual_bounds = _display_virtual_bounds(sanitized_topology)
             credential = self._credentials_by_agent.get(normalized_agent_id)
             if credential is None:
                 credential = AgentVncCredential(
@@ -149,11 +226,16 @@ class VncCollaborationManager:
                     controller_password=normalized_password,
                     credential_revision=revision_value,
                     updated_at=_now_ts(),
+                    display_topology=sanitized_topology,
+                    display_virtual_bounds=virtual_bounds,
                 )
                 self._credentials_by_agent[normalized_agent_id] = credential
             else:
                 credential.controller_password = normalized_password
                 credential.credential_revision = revision_value
+                if display_topology is not None:
+                    credential.display_topology = sanitized_topology
+                    credential.display_virtual_bounds = virtual_bounds
                 credential.touch()
             session_id = self._session_ids_by_agent.get(normalized_agent_id)
             session = self._sessions_by_id.get(session_id or "")
@@ -166,6 +248,8 @@ class VncCollaborationManager:
                 controller_password=credential.controller_password,
                 credential_revision=credential.credential_revision,
                 updated_at=credential.updated_at,
+                display_topology=[dict(item) for item in credential.display_topology],
+                display_virtual_bounds=dict(credential.display_virtual_bounds),
             )
 
     def get_agent_credential(self, agent_id: str) -> Optional[AgentVncCredential]:
@@ -181,6 +265,8 @@ class VncCollaborationManager:
                 controller_password=credential.controller_password,
                 credential_revision=credential.credential_revision,
                 updated_at=credential.updated_at,
+                display_topology=[dict(item) for item in credential.display_topology],
+                display_virtual_bounds=dict(credential.display_virtual_bounds),
             )
 
     def _assign_owner_locked(
