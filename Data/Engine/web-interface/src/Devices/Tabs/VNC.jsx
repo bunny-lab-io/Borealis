@@ -1072,6 +1072,14 @@ export default function ReverseTunnelVnc({ device }) {
 
   const showClipboardActions = isConnected;
   const showPowerButtons = isConnected;
+  const showLaunchButton = !loading;
+  const showConnectingStatus =
+    !isConnected &&
+    (loading ||
+      vncStage === "requesting_tunnel" ||
+      vncStage === "connecting_ws" ||
+      vncStage === "handshaking" ||
+      vncStage === "retrying");
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, flexGrow: 1, minHeight: 0 }}>
@@ -1137,7 +1145,19 @@ export default function ReverseTunnelVnc({ device }) {
                   <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
                     Ready to Connect
                   </Typography>
-                  {statusMessage ? (
+                  {showConnectingStatus ? (
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: MAGIC_UI.accentA,
+                        fontWeight: 600,
+                        maxWidth: 320,
+                      }}
+                    >
+                      Connecting...
+                    </Typography>
+                  ) : null}
+                  {!showConnectingStatus && statusMessage ? (
                     <Typography
                       variant="body2"
                       sx={{
@@ -1148,16 +1168,18 @@ export default function ReverseTunnelVnc({ device }) {
                       {statusMessage}
                     </Typography>
                   ) : null}
-                  <Button
-                    size="medium"
-                    startIcon={<PlayIcon />}
-                    variant="outlined"
-                    sx={primaryHeroActionSx}
-                    disabled={loading || !agentId}
-                    onClick={handleConnect}
-                  >
-                    {loading ? "Preparing Desktop" : sessionId ? "Reconnect Remote Desktop" : "Launch Remote Desktop"}
-                  </Button>
+                  {showLaunchButton ? (
+                    <Button
+                      size="medium"
+                      startIcon={<PlayIcon />}
+                      variant="outlined"
+                      sx={primaryHeroActionSx}
+                      disabled={!agentId}
+                      onClick={handleConnect}
+                    >
+                      {sessionId ? "Reconnect Remote Desktop" : "Launch Remote Desktop"}
+                    </Button>
+                  ) : null}
                 </Stack>
               ) : null}
             </Box>
