@@ -35,7 +35,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `POST /api/agent/details` (Device Authenticated) - hardware, inventory, and cached service payloads.
 - `POST /api/agent/script/request` (Device Authenticated) - request work or receive idle signal.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
-- `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure always-on VNC credentials for the agent.
+- `POST /api/agent/vnc/ensure` (Device Authenticated) - advertise the current boot-scoped VNC credential and reconcile always-on VNC readiness.
 
 ## Related Documentation
 - [Security and Trust](security-and-trust.md)
@@ -73,7 +73,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - WireGuard tunnels are ensured via `POST /api/agent/vpn/ensure` on boot and refreshed periodically.
 - The ensure loop re-establishes the tunnel automatically after network hiccups.
 - Heartbeats/details also carry per-role health snapshots so the Device Details `Agent Roles Health` section can show current role/service status with last-checked timestamps.
-- The VNC role keeps the shared session password in memory only, keeps UltraVNC warm briefly after soft browser disconnects (`BOREALIS_VNC_DISCONNECT_GRACE_SECONDS`, default 45 seconds), reconciles UltraVNC against the active collaboration session, and reports `ready`, `service_state`, `listener_state`, and `last_ready_at` through agent role health and `POST /api/agent/vnc/ensure`.
+- The VNC role generates one shared UltraVNC password each time the role starts, keeps it in memory only, re-advertises it to the Engine through `POST /api/agent/vnc/ensure`, keeps UltraVNC warm briefly after soft browser disconnects (`BOREALIS_VNC_DISCONNECT_GRACE_SECONDS`, default 45 seconds), reconciles UltraVNC against the active collaboration session, and reports `ready`, `service_state`, `listener_state`, and `last_ready_at` through agent role health.
 
 ### Token storage
 - Refresh tokens are stored encrypted (DPAPI on Windows) in `refresh.token`.

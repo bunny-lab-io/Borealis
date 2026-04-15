@@ -102,7 +102,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - VNC proxy: `Data/Engine/services/RemoteDesktop/vnc_proxy.py`.
 - API entrypoints: `/api/vnc/establish`, `/api/vnc/disconnect`, `/api/vnc/handoff`, `/api/vnc/sessions`, `/api/shell/establish`, `/api/shell/disconnect`.
 - Persistent tunnels are established by agents via `POST /api/agent/vpn/ensure` and kept online.
-- The Engine keeps one shared VNC session password in collaboration-session memory, waits for agent listener readiness before returning browser bootstrap data, applies a short bootstrap settle for newly created VNC sessions, and exposes active remote desktop session inventory in `GET /api/server/overview`.
+- The Engine caches each agent's currently advertised VNC password in memory, reuses that boot-scoped credential across collaboration sessions until the agent restarts, waits for agent listener readiness before returning browser bootstrap data, applies a short bootstrap settle for newly created VNC sessions, and exposes active remote desktop session inventory in `GET /api/server/overview`.
 
 ### Assembly runtime
 - Assembly cache is initialized in `Data/Engine/assembly_management` and attached to `context.assembly_cache`.

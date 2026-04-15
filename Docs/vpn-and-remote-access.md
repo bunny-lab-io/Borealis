@@ -28,18 +28,19 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - Shell port default: 47002 (configurable).
 
 ## VNC via noVNC
-- Engine issues VNC session info via `/api/vnc/establish` (`session_id`, participant role, session state, `ws_url`, `ws_path`, one-time token, and the session-scoped UltraVNC password for that participant role).
+- Engine issues VNC session info via `/api/vnc/establish` (`session_id`, participant role, session state, `ws_url`, `ws_path`, one-time token, and the current agent-advertised UltraVNC password).
 - WebUI connects through the same public Borealis origin at `/remote-desktop/vnc` behind the Borealis-managed Traefik edge.
 - Borealis keeps one shared interactive collaboration session per device. Everyone who joins the session can type, click, and interact concurrently.
-- VNC authentication is handled by a single shared UltraVNC session password plus a Borealis one-time session token for the WebSocket proxy.
-- Engine collaboration state holds the active shared VNC password in memory only, and the Windows agent keeps that password in memory only instead of persisting it into `vnc_state.json`.
+- VNC authentication is handled by a single shared UltraVNC password plus a Borealis one-time session token for the WebSocket proxy.
+- The Windows agent generates that UltraVNC password once each time the VNC role starts, keeps it in memory only instead of persisting it into `vnc_state.json`, and re-advertises it to the Engine through `POST /api/agent/vnc/ensure`.
+- Engine collaboration state reuses the currently advertised agent password across VNC sessions until the agent restarts or reboots.
 - Agent runs UltraVNC as a Windows service; Borealis keeps the VNC firewall rule enabled for the Engine /32 and `/api/vnc/disconnect` now makes the caller leave the collaboration session or closes it entirely when requested.
 - `POST /api/vnc/handoff` remains available only to reassign the session owner metadata; it no longer forces reconnects or changes who can interact. `GET /api/vnc/sessions` exposes active-session inventory for the WebUI and admin/server overview.
 - `POST /api/agent/vnc/ensure` now returns readiness detail (`ready`, `service_state`, `listener_state`, `last_ready_at`, and session metadata) so the Engine can wait for the listener before minting browser bootstrap data.
 - Before the proxy connects, the Engine re-emits tunnel startup with `reason=vnc_bootstrap` so the agent refreshes VNC readiness over the existing persistent tunnel.
 - After soft browser disconnects (`operator_disconnect` and `component_unmount`), the Windows VNC role now keeps UltraVNC warm for a short reconnect grace window (default 45 seconds via `BOREALIS_VNC_DISCONNECT_GRACE_SECONDS`) instead of dropping straight to standby, which avoids repeated cold-starts on quick reconnects.
-- When the last participant disconnects without explicitly closing the session, the Engine now retains that collaboration session and its shared credentials briefly so a quick reconnect can reuse the same VNC password instead of forcing a brand-new UltraVNC restart.
-- New-session VNC bootstrap now applies a short settle delay (`BOREALIS_VNC_BOOTSTRAP_SETTLE_SECONDS`, default 1.25 seconds) before probing the backend so a warm listener has time to rotate to the new session credentials before noVNC attaches.
+- When the last participant disconnects without explicitly closing the session, the Engine now retains that collaboration session briefly so a quick reconnect can reuse the same VNC password instead of forcing a brand-new UltraVNC restart.
+- New-session VNC bootstrap now applies a short settle delay (`BOREALIS_VNC_BOOTSTRAP_SETTLE_SECONDS`, default 1.25 seconds) before probing the backend so a warm listener has time to attach the already-advertised agent credential before noVNC connects.
 - If the backend listener does not become reachable after the readiness wait, the proxy escalates once with `reason=vnc_connect_retry`, and Borealis now applies an agent-level cooldown so closely spaced browser retries do not each force another shared transport recovery.
 - The initial backend readiness window now defaults to 12 seconds (`BOREALIS_VNC_READY_WAIT_SECONDS`) and the post-recovery retry window defaults to 8 seconds (`BOREALIS_VNC_RETRY_READY_WAIT_SECONDS`), which makes normal UltraVNC startup less likely to be mistaken for a WireGuard failure.
 - When the backend VNC TCP socket finally opens, Borealis confirms transport success with `reason=vnc_backend_connect` so a successful noVNC bootstrap counts as real tunnel health.
@@ -56,7 +57,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - `GET /api/tunnel/status` (Token Authenticated) - tunnel status by agent, including `listener_healthy`, `recovery_in_progress`, `last_recovery_attempt_at`, and `last_recovery_attempt_at_iso`.
 - `GET /api/tunnel/active` (Token Authenticated) - list active tunnels with the same listener-health fields.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - agent-side persistent tunnel bootstrap.
-- `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure VNC readiness and session-scoped credentials for the agent.
+- `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure VNC readiness, advertise the agent's current boot-scoped UltraVNC credential, and return active session metadata.
 - `POST /api/vnc/establish` (Token Authenticated) - establish or join a VNC collaboration session.
 - `POST /api/vnc/disconnect` (Token Authenticated) - leave or close a VNC collaboration session.
 - `POST /api/vnc/handoff` (Token Authenticated) - reassign session-owner metadata inside a shared VNC collaboration session.
@@ -180,7 +181,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - `GET /api/tunnel/status` -> returns up/down status for an agent plus `listener_healthy`, `recovery_in_progress`, `last_recovery_attempt_at`, and `last_recovery_attempt_at_iso`.
 - `GET /api/tunnel/active` -> lists active VPN tunnel sessions (tunnel_id, agent_id, virtual_ip, last_activity, etc.) plus the same shared listener-health fields.
 - `POST /api/agent/vpn/ensure` -> device-authenticated tunnel bootstrap for persistent mode.
-- `POST /api/agent/vnc/ensure` -> device-authenticated VNC readiness check and active session bootstrap for the Windows agent.
+- `POST /api/agent/vnc/ensure` -> device-authenticated VNC readiness check, active session bootstrap, and agent credential advertisement for the Windows agent.
 - `POST /api/shell/establish` -> establish remote shell session.
 - `POST /api/shell/disconnect` -> disconnect remote shell session.
 - `POST /api/vnc/establish` -> establish or join a VNC collaboration session.

@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import logging
-import secrets
 import threading
 import time
 import uuid
@@ -32,10 +31,6 @@ def _clean_text(value: Any) -> str:
         return str(value).strip()
     except Exception:
         return ""
-
-
-def _generate_password() -> str:
-    return secrets.token_hex(4)
 
 
 @dataclass
@@ -108,6 +103,17 @@ class VncCollaborationSession:
         return len(self.participants)
 
 
+@dataclass
+class AgentVncCredential:
+    agent_id: str
+    controller_password: str
+    credential_revision: int
+    updated_at: float
+
+    def touch(self) -> None:
+        self.updated_at = _now_ts()
+
+
 class VncCollaborationManager:
     """Tracks operator collaboration state for one active VNC session per device."""
 
@@ -116,6 +122,66 @@ class VncCollaborationManager:
         self._lock = threading.Lock()
         self._sessions_by_id: Dict[str, VncCollaborationSession] = {}
         self._session_ids_by_agent: Dict[str, str] = {}
+        self._credentials_by_agent: Dict[str, AgentVncCredential] = {}
+
+    def upsert_agent_credential(
+        self,
+        *,
+        agent_id: str,
+        controller_password: str,
+        credential_revision: Any = None,
+    ) -> AgentVncCredential:
+        normalized_agent_id = _clean_text(agent_id)
+        normalized_password = _clean_text(controller_password)[:8]
+        if not normalized_agent_id or not normalized_password:
+            raise ValueError("agent_id and controller_password are required")
+        try:
+            revision_value = int(credential_revision)
+        except Exception:
+            revision_value = int(_now_ts() * 1000)
+        if revision_value <= 0:
+            revision_value = int(_now_ts() * 1000)
+        with self._lock:
+            credential = self._credentials_by_agent.get(normalized_agent_id)
+            if credential is None:
+                credential = AgentVncCredential(
+                    agent_id=normalized_agent_id,
+                    controller_password=normalized_password,
+                    credential_revision=revision_value,
+                    updated_at=_now_ts(),
+                )
+                self._credentials_by_agent[normalized_agent_id] = credential
+            else:
+                credential.controller_password = normalized_password
+                credential.credential_revision = revision_value
+                credential.touch()
+            session_id = self._session_ids_by_agent.get(normalized_agent_id)
+            session = self._sessions_by_id.get(session_id or "")
+            if session is not None:
+                session.controller_password = normalized_password
+                session.credential_revision = revision_value
+                session.touch()
+            return AgentVncCredential(
+                agent_id=credential.agent_id,
+                controller_password=credential.controller_password,
+                credential_revision=credential.credential_revision,
+                updated_at=credential.updated_at,
+            )
+
+    def get_agent_credential(self, agent_id: str) -> Optional[AgentVncCredential]:
+        normalized_agent_id = _clean_text(agent_id)
+        if not normalized_agent_id:
+            return None
+        with self._lock:
+            credential = self._credentials_by_agent.get(normalized_agent_id)
+            if credential is None:
+                return None
+            return AgentVncCredential(
+                agent_id=credential.agent_id,
+                controller_password=credential.controller_password,
+                credential_revision=credential.credential_revision,
+                updated_at=credential.updated_at,
+            )
 
     def _assign_owner_locked(
         self,
@@ -171,7 +237,15 @@ class VncCollaborationManager:
             if session is not None:
                 self._session_ids_by_agent.pop(session.agent_id, None)
 
-    def _new_session(self, agent_id: str, operator_id: str, *, remove_wallpaper: bool) -> Tuple[VncCollaborationSession, VncParticipant]:
+    def _new_session(
+        self,
+        agent_id: str,
+        operator_id: str,
+        *,
+        controller_password: str,
+        credential_revision: int,
+        remove_wallpaper: bool,
+    ) -> Tuple[VncCollaborationSession, VncParticipant]:
         now = _now_ts()
         participant = VncParticipant(
             participant_id=uuid.uuid4().hex,
@@ -188,7 +262,8 @@ class VncCollaborationManager:
             state="active",
             controller_operator_id=operator_id,
             controller_participant_id=participant.participant_id,
-            controller_password=_generate_password(),
+            controller_password=controller_password,
+            credential_revision=max(1, int(credential_revision or 1)),
             remove_wallpaper=bool(remove_wallpaper),
             participants={participant.participant_id: participant},
         )
@@ -201,24 +276,51 @@ class VncCollaborationManager:
         *,
         agent_id: str,
         operator_id: str,
+        controller_password: str,
+        credential_revision: Any = None,
         remove_wallpaper: bool,
     ) -> Tuple[VncCollaborationSession, VncParticipant, bool]:
         normalized_agent_id = _clean_text(agent_id)
         normalized_operator_id = _clean_text(operator_id)
-        if not normalized_agent_id or not normalized_operator_id:
-            raise ValueError("agent_id and operator_id are required")
+        normalized_password = _clean_text(controller_password)[:8]
+        if not normalized_agent_id or not normalized_operator_id or not normalized_password:
+            raise ValueError("agent_id, operator_id, and controller_password are required")
+        try:
+            revision_value = int(credential_revision)
+        except Exception:
+            revision_value = 1
+        if revision_value <= 0:
+            revision_value = 1
         with self._lock:
             self._cleanup_stale_locked()
+            credential = self._credentials_by_agent.get(normalized_agent_id)
+            if credential is None:
+                self._credentials_by_agent[normalized_agent_id] = AgentVncCredential(
+                    agent_id=normalized_agent_id,
+                    controller_password=normalized_password,
+                    credential_revision=revision_value,
+                    updated_at=_now_ts(),
+                )
+            else:
+                credential.controller_password = normalized_password
+                credential.credential_revision = revision_value
+                credential.touch()
             existing_session_id = self._session_ids_by_agent.get(normalized_agent_id)
             session = self._sessions_by_id.get(existing_session_id or "")
             if session is None:
                 session, participant = self._new_session(
                     normalized_agent_id,
                     normalized_operator_id,
+                    controller_password=normalized_password,
+                    credential_revision=revision_value,
                     remove_wallpaper=remove_wallpaper,
                 )
                 return session, participant, True
             session.remove_wallpaper = bool(remove_wallpaper)
+            if session.controller_password != normalized_password or session.credential_revision != revision_value:
+                session.controller_password = normalized_password
+                session.credential_revision = revision_value
+                session.touch()
             participant = session.participant_for_operator(normalized_operator_id)
             if participant is None:
                 now = _now_ts()
@@ -415,6 +517,7 @@ class VncCollaborationManager:
         if not normalized_agent_id:
             return None
         with self._lock:
+            self._credentials_by_agent.pop(normalized_agent_id, None)
             session_id = self._session_ids_by_agent.pop(normalized_agent_id, None)
             if not session_id:
                 return None
@@ -525,6 +628,7 @@ def ensure_vnc_collaboration_manager(context: Any, *, logger: Optional[logging.L
 
 
 __all__ = [
+    "AgentVncCredential",
     "VncCollaborationManager",
     "VncCollaborationSession",
     "VncParticipant",

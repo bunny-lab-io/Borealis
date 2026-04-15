@@ -150,7 +150,7 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 - `GET /api/tunnel/active` (Token Authenticated) - list active tunnels visible in the current operator's site scope.
 
 ### VNC
-- `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure always-on VNC tunnel/readiness state and return active session-scoped credentials for the agent.
+- `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure always-on VNC tunnel/readiness state, refresh the Engine's cached agent VNC credential, and return active session metadata for the agent.
 - `POST /api/vnc/establish` (Token Authenticated) - establish or join a VNC collaboration session for an in-scope device.
 - `POST /api/vnc/disconnect` (Token Authenticated) - leave or close a VNC collaboration session for an in-scope device.
 - `POST /api/vnc/handoff` (Token Authenticated) - reassign session-owner metadata inside an active shared VNC collaboration session.

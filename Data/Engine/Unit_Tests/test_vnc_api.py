@@ -27,6 +27,21 @@ def _client_with_session(harness: EngineTestHarness, *, username: str, role: str
     return client
 
 
+def _register_agent_credential(
+    harness: EngineTestHarness,
+    *,
+    agent_id: str = "test-device-agent",
+    password: str = "bootpass",
+    revision: int = 42,
+) -> None:
+    manager = vnc_api.ensure_vnc_collaboration_manager(harness.context, logger=harness.context.logger)
+    manager.upsert_agent_credential(
+        agent_id=agent_id,
+        controller_password=password,
+        credential_revision=revision,
+    )
+
+
 class _FakeTunnelService:
     def __init__(self) -> None:
         self.connect_calls: list[tuple[str, Any, Any]] = []
@@ -136,6 +151,7 @@ def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestH
     engine_harness.context.public_base_url = "https://borealis.example.com"
     engine_harness.context.public_hostname = "borealis.example.com"
     engine_harness.context.public_wireguard_host = "borealis.example.com"
+    _register_agent_credential(engine_harness)
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
     monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: fake_registry)
@@ -181,6 +197,7 @@ def test_vnc_establish_uses_longer_initial_wait_and_shorter_retry_wait(
     client = _client_with_admin_session(engine_harness)
     fake_tunnel = _FakeTunnelService()
     wait_calls: list[float] = []
+    _register_agent_credential(engine_harness)
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
     monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
@@ -209,6 +226,7 @@ def test_vnc_establish_applies_bootstrap_settle_only_for_new_sessions(
     peer_client = _client_with_session(engine_harness, username="alice")
     fake_tunnel = _FakeTunnelService()
     sleep_calls: list[float] = []
+    _register_agent_credential(engine_harness)
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
     monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
@@ -233,6 +251,7 @@ def test_vnc_handoff_updates_session_owner_without_forcing_reconnect(
     fake_tunnel = _FakeTunnelService()
     fake_proxy = _FakeProxy()
     emitted_events: list[tuple[str, str, dict[str, Any]]] = []
+    _register_agent_credential(engine_harness)
 
     engine_harness.context.vnc_proxy = fake_proxy
     engine_harness.context.emit_agent_event = (
@@ -267,7 +286,7 @@ def test_vnc_handoff_updates_session_owner_without_forcing_reconnect(
     assert payload["reconnect_required"] is False
     assert payload["participant_role"] == "controller"
     assert payload["session"]["controller_operator_id"] == "alice"
-    assert payload["session"]["credential_revision"] == 1
+    assert payload["session"]["credential_revision"] == 42
     assert fake_proxy.disconnect_session_calls == []
     assert len(emitted_events) == baseline_event_count
 
@@ -281,6 +300,7 @@ def test_vnc_disconnect_keeps_shared_session_active_for_remaining_participants(
     fake_tunnel = _FakeTunnelService()
     fake_proxy = _FakeProxy()
     emitted_events: list[tuple[str, str, dict[str, Any]]] = []
+    _register_agent_credential(engine_harness)
 
     engine_harness.context.vnc_proxy = fake_proxy
     engine_harness.context.emit_agent_event = (
@@ -335,6 +355,7 @@ def test_vnc_disconnect_retains_last_controller_session_for_warm_reconnect(
     fake_tunnel = _FakeTunnelService()
     fake_proxy = _FakeProxy()
     emitted_events: list[tuple[str, str, dict[str, Any]]] = []
+    _register_agent_credential(engine_harness)
 
     engine_harness.context.vnc_proxy = fake_proxy
     engine_harness.context.emit_agent_event = (
@@ -375,3 +396,20 @@ def test_vnc_disconnect_retains_last_controller_session_for_warm_reconnect(
     assert reconnect_payload["credential_revision"] == establish_payload["credential_revision"]
     assert reconnect_payload["vnc_password"] == establish_payload["vnc_password"]
     assert reconnect_payload["session"]["state"] == "active"
+
+
+def test_vnc_establish_requires_advertised_agent_credential(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+
+    response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+
+    assert response.status_code == 503
+    assert response.get_json()["error"] == "vnc_agent_credentials_unavailable"

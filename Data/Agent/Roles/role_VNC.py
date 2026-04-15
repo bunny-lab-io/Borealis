@@ -11,6 +11,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import secrets
 import shutil
 import socket
 import subprocess
@@ -108,6 +109,14 @@ VNC_DISCONNECT_GRACE_SECONDS = _coerce_int(
     min_value=0,
     max_value=600,
 )
+
+
+def _generate_runtime_vnc_password() -> str:
+    return secrets.token_hex(4)
+
+
+def _generate_runtime_credential_revision() -> int:
+    return int(time.time_ns() // 1_000_000)
 
 
 def _vnc_state_path() -> Path:
@@ -1257,6 +1266,10 @@ class Role:
         self._state = _load_vnc_state()
         self._sanitize_state()
         self._last_allowed_ips = _parse_allowed_ips(self._state.get("allowed_ips"))
+        self._agent_runtime_credentials = {
+            "controller_password": _generate_runtime_vnc_password(),
+            "credential_revision": _generate_runtime_credential_revision(),
+        }
         self._disconnect_grace: dict[str, Any] = {
             "deadline": 0.0,
             "controller_password": None,
@@ -1268,9 +1281,9 @@ class Role:
         }
         self._runtime_session: dict[str, Any] = {
             "session_id": "",
-            "controller_password": None,
+            "controller_password": self._agent_runtime_credentials["controller_password"],
             "view_only_password": None,
-            "credential_revision": 0,
+            "credential_revision": self._agent_runtime_credentials["credential_revision"],
             "remove_wallpaper": bool(self._state.get("remove_wallpaper", True)),
         }
         self._session_busy_lease = None
@@ -1354,6 +1367,8 @@ class Role:
 
     def _controller_password(self) -> Optional[str]:
         value = self._runtime_session.get("controller_password")
+        if not value:
+            value = (getattr(self, "_agent_runtime_credentials", {}) or {}).get("controller_password")
         if isinstance(value, str) and value.strip():
             return value.strip()[:8]
         return None
@@ -1369,7 +1384,10 @@ class Role:
 
     def _credential_revision(self) -> int:
         try:
-            return int(self._runtime_session.get("credential_revision") or 0)
+            value = self._runtime_session.get("credential_revision")
+            if value in (None, ""):
+                value = (getattr(self, "_agent_runtime_credentials", {}) or {}).get("credential_revision")
+            return int(value or 0)
         except Exception:
             return 0
 
@@ -1450,11 +1468,12 @@ class Role:
         return True
 
     def _clear_runtime_session(self) -> None:
+        credential = getattr(self, "_agent_runtime_credentials", {}) or {}
         self._runtime_session = {
             "session_id": "",
-            "controller_password": None,
+            "controller_password": credential.get("controller_password"),
             "view_only_password": None,
-            "credential_revision": 0,
+            "credential_revision": credential.get("credential_revision") or 0,
             "remove_wallpaper": self._remove_wallpaper_enabled(),
         }
 
@@ -1467,13 +1486,21 @@ class Role:
         credential_revision: Any = None,
         remove_wallpaper: Optional[bool] = None,
     ) -> None:
+        credential = getattr(self, "_agent_runtime_credentials", {}) or {}
         normalized_session_id = str(session_id or "").strip()
-        normalized_controller = str(controller_password or "").strip()[:8] if controller_password else None
+        normalized_controller = (
+            str(controller_password or credential.get("controller_password") or "").strip()[:8]
+            or None
+        )
         normalized_view_only = str(view_only_password or "").strip()[:8] if view_only_password else None
         try:
-            revision_value = int(credential_revision) if credential_revision is not None else 0
+            revision_value = (
+                int(credential_revision)
+                if credential_revision is not None
+                else int(credential.get("credential_revision") or 0)
+            )
         except Exception:
-            revision_value = 0
+            revision_value = int(credential.get("credential_revision") or 0)
         self._runtime_session = {
             "session_id": normalized_session_id,
             "controller_password": normalized_controller,
@@ -1527,9 +1554,9 @@ class Role:
             self._clear_disconnect_grace()
             self._update_runtime_session(
                 session_id=payload.get("session_id"),
-                controller_password=str(controller_password),
-                view_only_password=str(view_only_password) if view_only_password else None,
-                credential_revision=payload.get("credential_revision"),
+                controller_password=None,
+                view_only_password=None,
+                credential_revision=None,
                 remove_wallpaper=remove_wallpaper if isinstance(remove_wallpaper, bool) else None,
             )
             self._acquire_session_busy(str(payload.get("reason") or payload.get("session_state") or "bootstrap_restore"))
@@ -1541,10 +1568,16 @@ class Role:
         client = self._http_client()
         if client is None:
             return None
+        credential = getattr(self, "_agent_runtime_credentials", {}) or {}
         try:
             payload = client.post_json(
                 "/api/agent/vnc/ensure",
-                {"agent_id": self.ctx.agent_id, "reason": reason},
+                {
+                    "agent_id": self.ctx.agent_id,
+                    "reason": reason,
+                    "controller_password": credential.get("controller_password") or "",
+                    "credential_revision": int(credential.get("credential_revision") or 0),
+                },
                 require_auth=True,
             )
         except Exception as exc:
@@ -1562,16 +1595,18 @@ class Role:
             self.vnc.ensure_standby(reason="waiting_for_engine_ready")
             return
         self._engine_wait_logged = False
+        active_session_id = self._active_session_id()
         controller_password = self._controller_password()
-        grace_snapshot = None
-        if not controller_password:
-            grace_snapshot = self._disconnect_grace_snapshot()
-            if grace_snapshot is None:
-                if not self._missing_password_logged:
-                    self._missing_password_logged = True
-                    self._log("VNC always-on pending: no active collaboration session.")
-                self.vnc.ensure_standby(reason="no_active_session")
-                return
+        grace_snapshot = self._disconnect_grace_snapshot()
+        if not active_session_id and grace_snapshot is None:
+            if not self._missing_password_logged:
+                self._missing_password_logged = True
+                self._log("VNC always-on pending: no active collaboration session.")
+            self.vnc.ensure_standby(reason="no_active_session")
+            return
+        if not controller_password and grace_snapshot is None:
+            self.vnc.ensure_standby(reason="missing_controller_password")
+            return
         self._missing_password_logged = False
         port_value = grace_snapshot["port"] if grace_snapshot else self._state_port()
         allowed_ips = (
@@ -1604,15 +1639,20 @@ class Role:
         while not self._always_on_stop.is_set():
             try:
                 grace_active = self._disconnect_grace_active()
+                active_session_id = self._active_session_id()
                 has_allowed_ips = bool(
                     self._last_allowed_ips
                     or (self._disconnect_grace_snapshot() or {}).get("allowed_ips")
                 )
                 if (
                     (not self._engine_ready_for_vnc)
-                    or (not self._controller_password() and not grace_active)
+                    or not active_session_id
                     or not has_allowed_ips
-                    or (not self.vnc.is_listener_ready(self._state_port()) and not grace_active)
+                    or (
+                        active_session_id
+                        and not self.vnc.is_listener_ready(self._state_port())
+                        and not grace_active
+                    )
                 ):
                     payload = self._request_vnc_bootstrap(reason="agent_boot")
                     if payload:
@@ -1773,9 +1813,9 @@ class Role:
             )
             self._update_runtime_session(
                 session_id=session_id,
-                controller_password=controller_password or None,
-                view_only_password=view_only_password or None,
-                credential_revision=credential_revision,
+                controller_password=None,
+                view_only_password=None,
+                credential_revision=None,
                 remove_wallpaper=remove_wallpaper if isinstance(remove_wallpaper, bool) else None,
             )
             self._clear_disconnect_grace()

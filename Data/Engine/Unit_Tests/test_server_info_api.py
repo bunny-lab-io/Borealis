@@ -217,6 +217,8 @@ def test_server_overview_includes_active_vnc_sessions(engine_harness: EngineTest
     session, _participant, _created = manager.ensure_session(
         agent_id="agent-1",
         operator_id="admin",
+        controller_password="bootpass",
+        credential_revision=42,
         remove_wallpaper=True,
     )
     manager.record_backend_ready(

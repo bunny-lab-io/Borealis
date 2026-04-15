@@ -16,10 +16,21 @@ def _build_manager() -> VncCollaborationManager:
     return VncCollaborationManager(logger=logging.getLogger("test.vnc.sessions"))
 
 
+def _ensure_session(manager: VncCollaborationManager, *, agent_id: str, operator_id: str, remove_wallpaper: bool):
+    return manager.ensure_session(
+        agent_id=agent_id,
+        operator_id=operator_id,
+        controller_password="bootpass",
+        credential_revision=42,
+        remove_wallpaper=remove_wallpaper,
+    )
+
+
 def test_collaboration_session_tracks_shared_interactive_participants() -> None:
     manager = _build_manager()
 
-    session, alice, created = manager.ensure_session(
+    session, alice, created = _ensure_session(
+        manager,
         agent_id="agent-1",
         operator_id="alice",
         remove_wallpaper=True,
@@ -27,7 +38,8 @@ def test_collaboration_session_tracks_shared_interactive_participants() -> None:
     assert created is True
     assert alice.role == "controller"
 
-    _, bob, created = manager.ensure_session(
+    _, bob, created = _ensure_session(
+        manager,
         agent_id="agent-1",
         operator_id="bob",
         remove_wallpaper=True,
@@ -57,18 +69,20 @@ def test_collaboration_session_tracks_shared_interactive_participants() -> None:
     handed_snapshot = manager.session_snapshot(handed_session, current_operator_id="bob")
     assert handed_snapshot["controller_operator_id"] == "bob"
     assert handed_snapshot["current_operator_role"] == "controller"
-    assert handed_snapshot["credential_revision"] == 1
+    assert handed_snapshot["credential_revision"] == 42
 
 
 def test_owner_leave_keeps_shared_interactive_session_active_for_remaining_participants() -> None:
     manager = _build_manager()
 
-    session, _, _ = manager.ensure_session(
+    session, _, _ = _ensure_session(
+        manager,
         agent_id="agent-2",
         operator_id="alice",
         remove_wallpaper=True,
     )
-    manager.ensure_session(
+    _ensure_session(
+        manager,
         agent_id="agent-2",
         operator_id="bob",
         remove_wallpaper=True,
@@ -96,7 +110,8 @@ def test_owner_leave_keeps_shared_interactive_session_active_for_remaining_parti
 def test_last_controller_disconnect_keeps_session_warm_for_reconnect() -> None:
     manager = _build_manager()
 
-    session, alice, _ = manager.ensure_session(
+    session, alice, _ = _ensure_session(
+        manager,
         agent_id="agent-keepalive",
         operator_id="alice",
         remove_wallpaper=True,
@@ -123,7 +138,8 @@ def test_last_controller_disconnect_keeps_session_warm_for_reconnect() -> None:
     assert retained_session.controller_password == original_password
     assert retained_session.credential_revision == original_revision
 
-    rejoined_session, rejoined_participant, created = manager.ensure_session(
+    rejoined_session, rejoined_participant, created = _ensure_session(
+        manager,
         agent_id="agent-keepalive",
         operator_id="alice",
         remove_wallpaper=True,
@@ -140,12 +156,14 @@ def test_last_controller_disconnect_keeps_session_warm_for_reconnect() -> None:
 def test_close_session_and_revoke_agent_remove_active_collaboration_session() -> None:
     manager = _build_manager()
 
-    session, _, _ = manager.ensure_session(
+    session, _, _ = _ensure_session(
+        manager,
         agent_id="agent-3",
         operator_id="alice",
         remove_wallpaper=False,
     )
-    manager.ensure_session(
+    _ensure_session(
+        manager,
         agent_id="agent-3",
         operator_id="bob",
         remove_wallpaper=False,
@@ -155,7 +173,8 @@ def test_close_session_and_revoke_agent_remove_active_collaboration_session() ->
     assert close_result["session"].last_error == "admin_close"
     assert manager.get_session_by_id(session.session_id) is None
 
-    session_two, _, _ = manager.ensure_session(
+    session_two, _, _ = _ensure_session(
+        manager,
         agent_id="agent-4",
         operator_id="carol",
         remove_wallpaper=True,
@@ -164,3 +183,27 @@ def test_close_session_and_revoke_agent_remove_active_collaboration_session() ->
     assert revoke_result is not None
     assert revoke_result["session"].session_id == session_two.session_id
     assert manager.get_session_for_agent("agent-4") is None
+
+
+def test_upsert_agent_credential_updates_existing_session_password() -> None:
+    manager = _build_manager()
+
+    session, _participant, _created = _ensure_session(
+        manager,
+        agent_id="agent-credential",
+        operator_id="alice",
+        remove_wallpaper=True,
+    )
+
+    credential = manager.upsert_agent_credential(
+        agent_id="agent-credential",
+        controller_password="newpass1",
+        credential_revision=99,
+    )
+
+    refreshed = manager.get_session_by_id(session.session_id)
+    assert credential.controller_password == "newpass1"
+    assert credential.credential_revision == 99
+    assert refreshed is not None
+    assert refreshed.controller_password == "newpass1"
+    assert refreshed.credential_revision == 99

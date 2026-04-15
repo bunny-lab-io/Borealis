@@ -6,7 +6,7 @@
 # - POST /api/agent/heartbeat (Device Authenticated) - Updates device last-seen metadata and inventory snapshots.
 # - POST /api/agent/script/request (Device Authenticated) - Provides script execution payloads or idle signals to agents.
 # - POST /api/agent/vpn/ensure (Device Authenticated) - Ensures persistent WireGuard tunnel material.
-# - POST /api/agent/vnc/ensure (Device Authenticated) - Ensures session-scoped VNC readiness and credentials for always-on agent VNC.
+# - POST /api/agent/vnc/ensure (Device Authenticated) - Ensures VNC readiness and refreshes the Engine's cached agent VNC credential.
 # ======================================================
 
 """Device-affiliated agent endpoints for the Borealis Engine runtime."""
@@ -532,6 +532,30 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         if isinstance(allowed_ips, list):
             allowed_ips = allowed_ips[0] if allowed_ips else ""
         allowed_ips = str(allowed_ips or "").strip()
+
+        manager = ensure_vnc_collaboration_manager(adapters.context)
+        advertised_password = str(
+            body.get("controller_password")
+            or body.get("vnc_password")
+            or ""
+        ).strip()
+        advertised_revision = body.get("credential_revision")
+        if advertised_revision in (None, ""):
+            advertised_revision = body.get("vnc_credential_revision")
+        if advertised_password:
+            try:
+                manager.upsert_agent_credential(
+                    agent_id=resolved_agent,
+                    controller_password=advertised_password,
+                    credential_revision=advertised_revision,
+                )
+            except ValueError:
+                log(
+                    "VNC",
+                    "vnc_agent_ensure_rejected_credential agent_id={0}".format(resolved_agent),
+                    _context_hint(ctx),
+                    level="WARNING",
+                )
 
         active_session = _active_vnc_session_payload(resolved_agent)
         role_health = _load_agent_vnc_health(resolved_agent)

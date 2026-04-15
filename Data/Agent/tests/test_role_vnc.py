@@ -85,11 +85,15 @@ def test_apply_bootstrap_payload_keeps_credentials_in_memory_only(monkeypatch) -
     role = vnc_role.Role.__new__(vnc_role.Role)
     role._state = {}
     role._last_allowed_ips = None
+    role._agent_runtime_credentials = {
+        "controller_password": "bootpass",
+        "credential_revision": 88,
+    }
     role._runtime_session = {
         "session_id": "",
-        "controller_password": None,
+        "controller_password": "bootpass",
         "view_only_password": None,
-        "credential_revision": 0,
+        "credential_revision": 88,
         "remove_wallpaper": True,
     }
     role._session_busy_lease = None
@@ -117,8 +121,9 @@ def test_apply_bootstrap_payload_keeps_credentials_in_memory_only(monkeypatch) -
         "remove_wallpaper": False,
     }
     assert role._runtime_session["session_id"] == "session-2"
-    assert role._runtime_session["controller_password"] == "abc12345"
-    assert role._runtime_session["view_only_password"] == "def67890"
+    assert role._runtime_session["controller_password"] == "bootpass"
+    assert role._runtime_session["view_only_password"] is None
+    assert role._runtime_session["credential_revision"] == 88
     assert acquired == ["bootstrap_restore"]
     assert all("password" not in snapshot for snapshot in saved_states)
 
@@ -129,11 +134,15 @@ def test_health_report_requires_listener_readiness_for_healthy_status(monkeypatc
     role._always_on_thread = SimpleNamespace(is_alive=lambda: True)
     role._engine_ready_for_vnc = True
     role._state = {"port": 5900, "remove_wallpaper": True}
+    role._agent_runtime_credentials = {
+        "controller_password": "bootpass",
+        "credential_revision": 88,
+    }
     role._runtime_session = {
         "session_id": "session-3",
-        "controller_password": "abc12345",
-        "view_only_password": "def67890",
-        "credential_revision": 5,
+        "controller_password": "bootpass",
+        "view_only_password": None,
+        "credential_revision": 88,
         "remove_wallpaper": True,
     }
     role._last_ready_at = 0
@@ -232,6 +241,10 @@ def _role_for_disconnect_grace() -> vnc_role.Role:
     role.role_health_label = "UltraVNC Service"
     role._log = lambda *_args, **_kwargs: None
     role._state = {"allowed_ips": "10.255.0.1/32", "port": 5900, "remove_wallpaper": False}
+    role._agent_runtime_credentials = {
+        "controller_password": "bootpass",
+        "credential_revision": 88,
+    }
     role._last_allowed_ips = "10.255.0.1/32"
     role._engine_ready_for_vnc = True
     role._engine_wait_logged = False
@@ -241,9 +254,9 @@ def _role_for_disconnect_grace() -> vnc_role.Role:
     role._session_busy_lease = None
     role._runtime_session = {
         "session_id": "session-1",
-        "controller_password": "abc12345",
-        "view_only_password": "def67890",
-        "credential_revision": 1,
+        "controller_password": "bootpass",
+        "view_only_password": None,
+        "credential_revision": 88,
         "remove_wallpaper": False,
     }
     role._disconnect_grace = {
@@ -277,8 +290,8 @@ def test_ensure_always_on_uses_disconnect_grace_credentials_after_soft_disconnec
 
     assert standby_calls == []
     assert len(start_calls) == 1
-    assert start_calls[0]["controller_password"] == "abc12345"
-    assert start_calls[0]["view_only_password"] == "def67890"
+    assert start_calls[0]["controller_password"] == "bootpass"
+    assert start_calls[0]["view_only_password"] is None
     assert start_calls[0]["allowed_ips"] == "10.255.0.1/32"
     assert start_calls[0]["remove_wallpaper"] is False
     assert start_calls[0]["reason"] == "disconnect_grace"
@@ -305,3 +318,37 @@ def test_disconnect_grace_expires_back_to_standby(monkeypatch) -> None:
     assert start_calls == []
     assert standby_calls == ["no_active_session"]
     assert role._disconnect_grace_active(now=200.0) is False
+
+
+def test_request_vnc_bootstrap_advertises_runtime_credential() -> None:
+    requests: list[tuple[str, dict, bool]] = []
+
+    class _Client:
+        def post_json(self, path, payload, require_auth):
+            requests.append((path, dict(payload), bool(require_auth)))
+            return {"status": "ok"}
+
+    role = vnc_role.Role.__new__(vnc_role.Role)
+    role.ctx = SimpleNamespace(agent_id="agent-1")
+    role._log = lambda *_args, **_kwargs: None
+    role._agent_runtime_credentials = {
+        "controller_password": "bootpass",
+        "credential_revision": 12345,
+    }
+    role._http_client = lambda: _Client()
+
+    payload = role._request_vnc_bootstrap("agent_boot")
+
+    assert payload == {"status": "ok"}
+    assert requests == [
+        (
+            "/api/agent/vnc/ensure",
+            {
+                "agent_id": "agent-1",
+                "reason": "agent_boot",
+                "controller_password": "bootpass",
+                "credential_revision": 12345,
+            },
+            True,
+        )
+    ]

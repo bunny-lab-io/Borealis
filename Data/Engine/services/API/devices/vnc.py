@@ -201,10 +201,15 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         remove_wallpaper: bool,
     ) -> Tuple[Dict[str, Any], int]:
         manager = ensure_vnc_collaboration_manager(adapters.context, logger=logger)
+        agent_credential = manager.get_agent_credential(agent_id)
+        if agent_credential is None or not _normalize_text(agent_credential.controller_password):
+            return {"error": "vnc_agent_credentials_unavailable"}, 503
         try:
             collaboration_session, participant, _created = manager.ensure_session(
                 agent_id=agent_id,
                 operator_id=operator_id or "",
+                controller_password=agent_credential.controller_password,
+                credential_revision=agent_credential.credential_revision,
                 remove_wallpaper=remove_wallpaper,
             )
         except ValueError:
