@@ -2016,6 +2016,21 @@ class Role:
             self._mark_engine_ready("vnc_start_event")
             self._ensure_always_on(reason=str(reason))
 
+        @sio.on("vnc_refresh")
+        async def _vnc_refresh(payload):
+            reason = "engine_credential_refresh"
+            if isinstance(payload, dict):
+                target_agent = payload.get("agent_id")
+                if target_agent and str(target_agent).strip() != str(self.ctx.agent_id).strip():
+                    return
+                reason = payload.get("reason") or reason
+            self._log(f"VNC credential refresh requested (reason={reason}).")
+            bootstrap_payload = self._request_vnc_bootstrap(str(reason))
+            if bootstrap_payload:
+                self._apply_bootstrap_payload(bootstrap_payload)
+                self._mark_engine_ready("vnc_refresh_event")
+                self._ensure_always_on(reason=str(reason))
+
         @sio.on("vnc_stop")
         async def _vnc_stop(payload):
             reason = "vnc_session_end"

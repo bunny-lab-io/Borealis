@@ -132,6 +132,25 @@ def _probe_tcp_listener(host: str, port: int, timeout_seconds: float) -> bool:
         port_value = int(port)
     except Exception:
         return False
+
+
+def _wait_for_agent_credential(
+    manager: Any,
+    agent_id: str,
+    *,
+    timeout_seconds: float,
+    poll_interval_seconds: float = 0.25,
+) -> Optional[Any]:
+    deadline = time.monotonic() + max(0.25, timeout_seconds)
+    while time.monotonic() < deadline:
+        credential = manager.get_agent_credential(agent_id)
+        if credential is not None and _normalize_text(getattr(credential, "controller_password", "")):
+            return credential
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(max(0.05, poll_interval_seconds), remaining))
+    return None
     if not host_value or port_value < 1 or port_value > 65535:
         return False
     try:
@@ -219,7 +238,23 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         manager = ensure_vnc_collaboration_manager(adapters.context, logger=logger)
         agent_credential = manager.get_agent_credential(agent_id)
         if agent_credential is None or not _normalize_text(agent_credential.controller_password):
-            return {"error": "vnc_agent_credentials_unavailable"}, 503
+            refresh_requested = _context_emit_agent_event(
+                adapters.context,
+                agent_id,
+                "vnc_refresh",
+                {"agent_id": agent_id, "reason": "engine_credential_refresh"},
+            )
+            if refresh_requested:
+                agent_credential = _wait_for_agent_credential(
+                    manager,
+                    agent_id,
+                    timeout_seconds=_coerce_nonnegative_timeout(
+                        os.environ.get("BOREALIS_VNC_CREDENTIAL_REFRESH_WAIT_SECONDS"),
+                        4.0,
+                    ),
+                )
+            if agent_credential is None or not _normalize_text(agent_credential.controller_password):
+                return {"error": "vnc_agent_credentials_unavailable"}, 503
         try:
             collaboration_session, participant, _created = manager.ensure_session(
                 agent_id=agent_id,

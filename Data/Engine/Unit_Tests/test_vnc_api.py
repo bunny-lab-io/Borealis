@@ -480,3 +480,58 @@ def test_vnc_establish_requires_advertised_agent_credential(
 
     assert response.status_code == 503
     assert response.get_json()["error"] == "vnc_agent_credentials_unavailable"
+
+
+def test_vnc_establish_requests_agent_credential_refresh_when_cache_is_empty(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    fake_registry = _FakeRegistry()
+    emitted_events: list[tuple[str, str, dict[str, Any]]] = []
+    manager = vnc_api.ensure_vnc_collaboration_manager(engine_harness.context, logger=engine_harness.context.logger)
+
+    def _emit(agent_id, event, payload):
+        emitted_events.append((agent_id, event, dict(payload)))
+        if event == "vnc_refresh":
+            manager.upsert_agent_credential(
+                agent_id=agent_id,
+                controller_password="bootpass",
+                credential_revision=42,
+                display_topology=[
+                    {
+                        "id": "1",
+                        "display_index": 1,
+                        "label": "1",
+                        "left": 0,
+                        "top": 0,
+                        "right": 1920,
+                        "bottom": 1080,
+                        "width": 1920,
+                        "height": 1080,
+                        "primary": True,
+                    }
+                ],
+            )
+        return True
+
+    engine_harness.context.emit_agent_event = _emit
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: fake_registry)
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+
+    response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert emitted_events == [
+        (
+            "test-device-agent",
+            "vnc_refresh",
+            {"agent_id": "test-device-agent", "reason": "engine_credential_refresh"},
+        )
+    ]
+    assert payload["display_topology"][0]["label"] == "1"
+    assert fake_registry.created[0]["agent_id"] == "test-device-agent"
