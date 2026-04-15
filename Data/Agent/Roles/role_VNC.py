@@ -109,6 +109,12 @@ VNC_DISCONNECT_GRACE_SECONDS = _coerce_int(
     min_value=0,
     max_value=600,
 )
+VNC_CREDENTIAL_ROTATION_SECONDS = _coerce_int(
+    os.environ.get("BOREALIS_VNC_CREDENTIAL_ROTATION_SECONDS"),
+    24 * 60 * 60,
+    min_value=60,
+    max_value=30 * 24 * 60 * 60,
+)
 
 
 def _generate_runtime_vnc_password() -> str:
@@ -117,6 +123,15 @@ def _generate_runtime_vnc_password() -> str:
 
 def _generate_runtime_credential_revision() -> int:
     return int(time.time_ns() // 1_000_000)
+
+
+def _new_runtime_vnc_credential(now: Optional[float] = None) -> dict[str, Any]:
+    issued_at = float(time.time() if now is None else now)
+    return {
+        "controller_password": _generate_runtime_vnc_password(),
+        "credential_revision": _generate_runtime_credential_revision(),
+        "issued_at": issued_at,
+    }
 
 
 def _vnc_state_path() -> Path:
@@ -1266,10 +1281,7 @@ class Role:
         self._state = _load_vnc_state()
         self._sanitize_state()
         self._last_allowed_ips = _parse_allowed_ips(self._state.get("allowed_ips"))
-        self._agent_runtime_credentials = {
-            "controller_password": _generate_runtime_vnc_password(),
-            "credential_revision": _generate_runtime_credential_revision(),
-        }
+        self._agent_runtime_credentials = _new_runtime_vnc_credential()
         self._disconnect_grace: dict[str, Any] = {
             "deadline": 0.0,
             "controller_password": None,
@@ -1390,6 +1402,48 @@ class Role:
             return int(value or 0)
         except Exception:
             return 0
+
+    def _runtime_credential_issued_at(self) -> float:
+        try:
+            value = (getattr(self, "_agent_runtime_credentials", {}) or {}).get("issued_at")
+            return float(value or 0.0)
+        except Exception:
+            return 0.0
+
+    def _sync_runtime_session_credentials(self) -> None:
+        credential = getattr(self, "_agent_runtime_credentials", {}) or {}
+        controller_password = str(credential.get("controller_password") or "").strip()[:8] or None
+        try:
+            credential_revision = int(credential.get("credential_revision") or 0)
+        except Exception:
+            credential_revision = 0
+        if not isinstance(getattr(self, "_runtime_session", None), dict):
+            self._runtime_session = {}
+        self._runtime_session["controller_password"] = controller_password
+        self._runtime_session["credential_revision"] = credential_revision
+        if "view_only_password" not in self._runtime_session:
+            self._runtime_session["view_only_password"] = None
+
+    def _runtime_credential_due(self, *, now: Optional[float] = None) -> bool:
+        if VNC_CREDENTIAL_ROTATION_SECONDS <= 0:
+            return False
+        current_time = time.time() if now is None else float(now)
+        issued_at = self._runtime_credential_issued_at()
+        if issued_at <= 0:
+            return True
+        return (current_time - issued_at) >= float(VNC_CREDENTIAL_ROTATION_SECONDS)
+
+    def _rotate_runtime_credential(self, *, reason: str, now: Optional[float] = None) -> None:
+        self._agent_runtime_credentials = _new_runtime_vnc_credential(now=now)
+        self._clear_disconnect_grace()
+        self._sync_runtime_session_credentials()
+        self._log(f"VNC runtime credential rotated (reason={reason}).")
+
+    def _ensure_runtime_credential_fresh(self, *, reason: str, now: Optional[float] = None) -> bool:
+        if not self._runtime_credential_due(now=now):
+            return False
+        self._rotate_runtime_credential(reason=reason, now=now)
+        return True
 
     def _state_port(self) -> int:
         return _resolve_vnc_port(self._state.get("port"))
@@ -1638,6 +1692,7 @@ class Role:
         interval = _coerce_int(VNC_ALWAYS_ON_INTERVAL_SECONDS, 30, min_value=5)
         while not self._always_on_stop.is_set():
             try:
+                rotated = self._ensure_runtime_credential_fresh(reason="scheduled_rotation")
                 grace_active = self._disconnect_grace_active()
                 active_session_id = self._active_session_id()
                 has_allowed_ips = bool(
@@ -1645,7 +1700,8 @@ class Role:
                     or (self._disconnect_grace_snapshot() or {}).get("allowed_ips")
                 )
                 if (
-                    (not self._engine_ready_for_vnc)
+                    rotated
+                    or (not self._engine_ready_for_vnc)
                     or not active_session_id
                     or not has_allowed_ips
                     or (
@@ -1654,11 +1710,12 @@ class Role:
                         and not grace_active
                     )
                 ):
-                    payload = self._request_vnc_bootstrap(reason="agent_boot")
+                    bootstrap_reason = "credential_rotation" if rotated else "agent_boot"
+                    payload = self._request_vnc_bootstrap(reason=bootstrap_reason)
                     if payload:
                         self._apply_bootstrap_payload(payload)
                         self._mark_engine_ready("bootstrap_api")
-                self._ensure_always_on(reason="always_on_check")
+                self._ensure_always_on(reason="credential_rotation" if rotated else "always_on_check")
             except Exception as exc:
                 self._log(f"VNC always-on loop error: {exc}", error=True)
             self._always_on_stop.wait(interval)

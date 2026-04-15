@@ -352,3 +352,51 @@ def test_request_vnc_bootstrap_advertises_runtime_credential() -> None:
             True,
         )
     ]
+
+
+def test_runtime_credential_due_after_rotation_window(monkeypatch) -> None:
+    role = vnc_role.Role.__new__(vnc_role.Role)
+    role._agent_runtime_credentials = {
+        "controller_password": "bootpass",
+        "credential_revision": 12345,
+        "issued_at": 100.0,
+    }
+
+    monkeypatch.setattr(vnc_role, "VNC_CREDENTIAL_ROTATION_SECONDS", 60)
+
+    assert role._runtime_credential_due(now=159.0) is False
+    assert role._runtime_credential_due(now=160.0) is True
+
+
+def test_rotate_runtime_credential_refreshes_password_revision_and_runtime_session(monkeypatch) -> None:
+    logs: list[str] = []
+    role = _role_for_disconnect_grace()
+    role._log = lambda message, **_kwargs: logs.append(message)
+    role._disconnect_grace = {
+        "deadline": 999.0,
+        "controller_password": "bootpass",
+        "view_only_password": None,
+        "allowed_ips": "10.255.0.1/32",
+        "port": 5900,
+        "remove_wallpaper": False,
+        "reason": "operator_disconnect",
+    }
+
+    monkeypatch.setattr(
+        vnc_role,
+        "_new_runtime_vnc_credential",
+        lambda now=None: {
+            "controller_password": "nextpass",
+            "credential_revision": 99999,
+            "issued_at": 500.0 if now is None else float(now),
+        },
+    )
+
+    role._rotate_runtime_credential(reason="scheduled_rotation", now=500.0)
+
+    assert role._agent_runtime_credentials["controller_password"] == "nextpass"
+    assert role._agent_runtime_credentials["credential_revision"] == 99999
+    assert role._runtime_session["controller_password"] == "nextpass"
+    assert role._runtime_session["credential_revision"] == 99999
+    assert role._disconnect_grace["deadline"] == 0.0
+    assert logs == ["VNC runtime credential rotated (reason=scheduled_rotation)."]

@@ -32,8 +32,8 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - WebUI connects through the same public Borealis origin at `/remote-desktop/vnc` behind the Borealis-managed Traefik edge.
 - Borealis keeps one shared interactive collaboration session per device. Everyone who joins the session can type, click, and interact concurrently.
 - VNC authentication is handled by a single shared UltraVNC password plus a Borealis one-time session token for the WebSocket proxy.
-- The Windows agent generates that UltraVNC password once each time the VNC role starts, keeps it in memory only instead of persisting it into `vnc_state.json`, and re-advertises it to the Engine through `POST /api/agent/vnc/ensure`.
-- Engine collaboration state reuses the currently advertised agent password across VNC sessions until the agent restarts or reboots.
+- The Windows agent generates that UltraVNC password when the VNC role starts, rotates it again every 24 hours by default (`BOREALIS_VNC_CREDENTIAL_ROTATION_SECONDS`), keeps it in memory only instead of persisting it into `vnc_state.json`, and re-advertises it to the Engine through `POST /api/agent/vnc/ensure`.
+- Engine collaboration state reuses the currently advertised agent password across VNC sessions until the agent restarts, reboots, or the next agent-side daily credential rotation publishes a new revision.
 - Agent runs UltraVNC as a Windows service; Borealis keeps the VNC firewall rule enabled for the Engine /32 and `/api/vnc/disconnect` now makes the caller leave the collaboration session or closes it entirely when requested.
 - `POST /api/vnc/handoff` remains available only to reassign the session owner metadata; it no longer forces reconnects or changes who can interact. `GET /api/vnc/sessions` exposes active-session inventory for the WebUI and admin/server overview.
 - `POST /api/agent/vnc/ensure` now returns readiness detail (`ready`, `service_state`, `listener_state`, `last_ready_at`, and session metadata) so the Engine can wait for the listener before minting browser bootstrap data.

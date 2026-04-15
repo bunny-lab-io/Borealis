@@ -73,7 +73,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - WireGuard tunnels are ensured via `POST /api/agent/vpn/ensure` on boot and refreshed periodically.
 - The ensure loop re-establishes the tunnel automatically after network hiccups.
 - Heartbeats/details also carry per-role health snapshots so the Device Details `Agent Roles Health` section can show current role/service status with last-checked timestamps.
-- The VNC role generates one shared UltraVNC password each time the role starts, keeps it in memory only, re-advertises it to the Engine through `POST /api/agent/vnc/ensure`, keeps UltraVNC warm briefly after soft browser disconnects (`BOREALIS_VNC_DISCONNECT_GRACE_SECONDS`, default 45 seconds), reconciles UltraVNC against the active collaboration session, and reports `ready`, `service_state`, `listener_state`, and `last_ready_at` through agent role health.
+- The VNC role generates one shared UltraVNC password when the role starts, rotates it again every 24 hours by default (`BOREALIS_VNC_CREDENTIAL_ROTATION_SECONDS`), keeps it in memory only, re-advertises it to the Engine through `POST /api/agent/vnc/ensure`, keeps UltraVNC warm briefly after soft browser disconnects (`BOREALIS_VNC_DISCONNECT_GRACE_SECONDS`, default 45 seconds), reconciles UltraVNC against the active collaboration session, and reports `ready`, `service_state`, `listener_state`, and `last_ready_at` through agent role health.
 
 ### Token storage
 - Refresh tokens are stored encrypted (DPAPI on Windows) in `refresh.token`.
