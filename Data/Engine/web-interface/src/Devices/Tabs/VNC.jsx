@@ -20,8 +20,6 @@ import {
   ContentPasteRounded as ClipboardIcon,
   PowerSettingsNewRounded as PowerIcon,
   AspectRatioRounded as DisplayIcon,
-  FullscreenRounded as FullscreenIcon,
-  FullscreenExitRounded as FullscreenExitIcon,
 } from "@mui/icons-material";
 import RFB from "@novnc/novnc/lib/rfb";
 
@@ -164,14 +162,6 @@ const primaryHeroActionSx = {
   },
 };
 
-const viewportToolbarButtonSx = {
-  ...pillActionSx,
-  minHeight: 34,
-  px: 1.4,
-  py: 0.7,
-  fontSize: "0.82rem",
-};
-
 const sidebarCardSx = {
   borderRadius: 2.5,
   border: `1px solid ${SIDEBAR_THEME.border}`,
@@ -205,7 +195,7 @@ const stageBadgeSx = (accent) => ({
 });
 
 const viewportPresets = [
-  { value: "all", label: "All Monitors" },
+  { value: "all", label: "All" },
   { value: "left", label: "Left" },
   { value: "right", label: "Right" },
 ];
@@ -309,7 +299,6 @@ export default function ReverseTunnelVnc({ device }) {
   const [capabilities, setCapabilities] = useState({});
   const [viewportPreset, setViewportPreset] = useState("all");
   const [viewportHint, setViewportHint] = useState("");
-  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const containerRef = useRef(null);
   const displayRef = useRef(null);
@@ -358,19 +347,6 @@ export default function ReverseTunnelVnc({ device }) {
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
-
-  useEffect(() => {
-    if (typeof document === "undefined") return undefined;
-    const syncFullscreenState = () => {
-      const element = document.fullscreenElement;
-      setIsFullscreen(Boolean(element && containerRef.current && element === containerRef.current));
-    };
-    syncFullscreenState();
-    document.addEventListener("fullscreenchange", syncFullscreenState);
-    return () => {
-      document.removeEventListener("fullscreenchange", syncFullscreenState);
-    };
-  }, []);
 
   const cancelPendingConnect = useCallback(() => {
     connectAttemptRef.current += 1;
@@ -454,21 +430,6 @@ export default function ReverseTunnelVnc({ device }) {
       setLoading(false);
     }
   }, [cancelPendingConnect, disconnectVnc, teardownDisplay]);
-
-  const handleFullscreenToggle = useCallback(async () => {
-    if (typeof document === "undefined") return;
-    const container = containerRef.current;
-    if (!container) return;
-    try {
-      if (document.fullscreenElement === container) {
-        await document.exitFullscreen();
-      } else {
-        await container.requestFullscreen();
-      }
-    } catch {
-      setStatusMessage("Fullscreen is unavailable in this browser.");
-    }
-  }, []);
 
   useEffect(() => {
     return () => {
@@ -1085,15 +1046,14 @@ export default function ReverseTunnelVnc({ device }) {
             <Box
               sx={{
                 display: "flex",
-                justifyContent: "space-between",
-                alignItems: { xs: "flex-start", md: "center" },
+                justifyContent: "flex-start",
+                alignItems: "center",
                 gap: 1,
                 px: 1.5,
                 py: 1.1,
                 borderBottom: "1px solid rgba(148,163,184,0.15)",
                 background:
                   "linear-gradient(180deg, rgba(12,18,33,0.94) 0%, rgba(9,14,26,0.88) 100%)",
-                flexWrap: "wrap",
               }}
             >
               <Stack spacing={showHeaderStatus ? 0.2 : 0}>
@@ -1117,42 +1077,6 @@ export default function ReverseTunnelVnc({ device }) {
                     {statusMessage}
                   </Typography>
                 ) : null}
-              </Stack>
-
-              <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center">
-                <Button
-                  size="small"
-                  startIcon={isConnected ? <StopIcon /> : <PlayIcon />}
-                  variant="outlined"
-                  sx={isConnected ? viewportToolbarButtonSx : primaryHeroActionSx}
-                  disabled={loading || (!isConnected && !agentId)}
-                  onClick={isConnected ? handleDisconnect : handleConnect}
-                >
-                  {isConnected ? "Disconnect" : sessionId ? "Reconnect" : "Connect"}
-                </Button>
-                <ToggleButtonGroup
-                  exclusive
-                  size="small"
-                  value={scaleViewport ? "fit" : "actual"}
-                  onChange={(_, value) => {
-                    if (!value) return;
-                    setScaleViewport(value === "fit");
-                  }}
-                  sx={{ ...splitToggleSx, width: "auto", minWidth: 220 }}
-                >
-                  <ToggleButton value="fit">Fit Screen</ToggleButton>
-                  <ToggleButton value="actual">Actual Size</ToggleButton>
-                </ToggleButtonGroup>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={isFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
-                  sx={viewportToolbarButtonSx}
-                  disabled={!isConnected}
-                  onClick={handleFullscreenToggle}
-                >
-                  {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
-                </Button>
               </Stack>
             </Box>
             <Box
@@ -1367,6 +1291,30 @@ export default function ReverseTunnelVnc({ device }) {
                 </Button>
               </Stack>
             </Stack>
+          </Box>
+
+          <Box
+            sx={{
+              mt: "auto",
+              display: "flex",
+              justifyContent: "flex-end",
+            }}
+          >
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<StopIcon />}
+              sx={{
+                ...simpleButtonSx,
+                minHeight: 36,
+                px: 1.8,
+                minWidth: 132,
+              }}
+              disabled={!isConnected}
+              onClick={handleDisconnect}
+            >
+              Disconnect
+            </Button>
           </Box>
 
         </Box>
