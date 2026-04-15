@@ -148,24 +148,24 @@ const glassCardSx = {
 
 const heroCardSx = {
   ...glassCardSx,
-  p: 2.2,
-  display: "grid",
-  gridTemplateColumns: { xs: "1fr", xl: "minmax(0, 1.35fr) minmax(260px, 0.9fr)" },
-  gap: 2,
+  p: 1.15,
+  display: "flex",
+  flexDirection: "column",
+  gap: 0.9,
   overflow: "hidden",
   position: "relative",
 };
 
-const statTileSx = {
+const summaryChipSx = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 0.7,
   minWidth: 0,
-  flex: "1 1 150px",
-  borderRadius: 2.5,
+  borderRadius: 999,
   border: `1px solid ${SIDEBAR_THEME.border}`,
-  background:
-    "linear-gradient(180deg, rgba(13,19,36,0.96) 0%, rgba(9,14,28,0.9) 100%)",
-  px: 1.4,
-  py: 1.2,
-  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
+  background: "rgba(9,14,25,0.72)",
+  px: 1,
+  py: 0.7,
 };
 
 const pillActionSx = {
@@ -210,6 +210,11 @@ const sidebarCardSx = {
   gap: 1.1,
 };
 
+const compactSidebarCardSx = {
+  ...sidebarCardSx,
+  gap: 0.85,
+};
+
 const miniBadgeSx = {
   display: "inline-flex",
   alignItems: "center",
@@ -221,6 +226,21 @@ const miniBadgeSx = {
   background: "rgba(8,14,26,0.76)",
   color: SIDEBAR_THEME.text,
 };
+
+const stageBadgeSx = (accent) => ({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 0.55,
+  borderRadius: 999,
+  px: 1,
+  py: 0.45,
+  border: `1px solid ${accent}`,
+  color: accent,
+  backgroundColor: "rgba(8,14,26,0.55)",
+  fontSize: "0.75rem",
+  fontWeight: 700,
+  lineHeight: 1,
+});
 
 const viewportPresets = [
   { value: "all", label: "All Monitors" },
@@ -319,7 +339,6 @@ export default function ReverseTunnelVnc({ device }) {
   const [clipboardSync, setClipboardSync] = useState(false);
   const [sessionId, setSessionId] = useState("");
   const [participantId, setParticipantId] = useState("");
-  const [participantRole, setParticipantRole] = useState("");
   const [sessionDetails, setSessionDetails] = useState(null);
   const performanceLevel = 2;
   const [scaleViewport, setScaleViewport] = useState(true);
@@ -361,10 +380,8 @@ export default function ReverseTunnelVnc({ device }) {
     const nextSession = data?.session && typeof data.session === "object" ? data.session : null;
     const nextSessionId = normalizeText(data?.session_id || nextSession?.session_id);
     const nextParticipantId = normalizeText(data?.participant_id || nextSession?.current_participant_id);
-    const nextParticipantRole = normalizeText(data?.participant_role || nextSession?.current_operator_role);
     setSessionId(nextSessionId);
     setParticipantId(nextParticipantId);
-    setParticipantRole(nextParticipantRole);
     setSessionDetails(nextSession);
   }, []);
 
@@ -470,7 +487,6 @@ export default function ReverseTunnelVnc({ device }) {
       setSessionState("idle");
       setSessionId("");
       setParticipantId("");
-      setParticipantRole("");
       setSessionDetails(null);
       clipboardLastRef.current = "";
       setLoading(false);
@@ -796,11 +812,9 @@ export default function ReverseTunnelVnc({ device }) {
         setSessionDetails(null);
         setSessionId("");
         setParticipantId("");
-        setParticipantRole("");
         return;
       }
       setSessionDetails(nextSession);
-      setParticipantRole((previous) => normalizeText(nextSession.current_operator_role) || previous);
       setParticipantId((previous) => normalizeText(nextSession.current_participant_id) || previous);
     } catch {
       // ignore background session refresh failures
@@ -986,7 +1000,6 @@ export default function ReverseTunnelVnc({ device }) {
   }, []);
 
   const isConnected = sessionState === "connected";
-  const canInteract = isConnected && !effectiveViewOnly;
   const sessionStateLabel = normalizeText(sessionDetails?.state || "idle") || "idle";
   const controllerOperator = normalizeText(sessionDetails?.controller_operator_id) || "Unassigned";
   const shutdownSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "shutdown");
@@ -1080,58 +1093,46 @@ export default function ReverseTunnelVnc({ device }) {
       ? "Remote desktop live"
       : loading
         ? "Preparing remote desktop"
-        : "Remote desktop ready";
+        : "Remote desktop";
   const connectionSummaryCopy =
     isConnected
-      ? "The secure noVNC stream is active. Use the inline controls to manage the session without leaving the viewport."
-      : "Borealis keeps the remote desktop flow warm, verifies the listener quickly, and keeps common actions close at hand when you connect.";
+      ? "Secure noVNC stream active."
+      : "Always-ready desktop path with fast listener checks and minimal reconnect churn.";
   const accessLabel = isConnected ? (effectiveViewOnly ? "View only" : "Interactive") : "Disconnected";
   const sessionPreviewId = sessionId ? `${sessionId.slice(0, 8)}${sessionId.length > 8 ? "..." : ""}` : "Pending";
-  const participantPreviewId = participantId
-    ? `${participantId.slice(0, 8)}${participantId.length > 8 ? "..." : ""}`
-    : "Waiting";
-  const sessionStatCards = [
+  const heroSummaryChips = [
     {
       label: "Access",
       value: accessLabel,
-      hint: isConnected ? "Input mode for this browser" : "Ready to launch from here",
     },
     {
       label: "Owner",
       value: controllerOperator,
-      hint: `State: ${sessionStateLabel}`,
     },
     {
       label: "Session",
       value: sessionPreviewId,
-      hint: sessionId ? "Shared Borealis desktop session" : "Created on connect",
-    },
-    {
-      label: "Participant",
-      value: participantPreviewId,
-      hint: participantRole ? `${participantRole} peer` : "Operator context assigned on connect",
     },
   ];
   const readinessBadges = [
     {
       icon: <SpeedIcon sx={{ fontSize: 16, color: MAGIC_UI.accentA }} />,
       label: "Fast listener probe",
-      detail: "Healthy agents connect without extra churn.",
     },
     {
       icon: <ShieldIcon sx={{ fontSize: 16, color: MAGIC_UI.accentB }} />,
       label: "Same-origin secure",
-      detail: "Borealis keeps the browser path on the primary HTTPS origin.",
     },
     {
       icon: <CollaborationIcon sx={{ fontSize: 16, color: MAGIC_UI.accentC }} />,
       label: "Shared desktop session",
-      detail: "Operators can collaborate without reconnect choreography.",
     },
   ];
   const showClipboardActions = isConnected;
-  const showKeyboardActions = isConnected;
   const showPowerButtons = isConnected;
+  const liveSessionSummary = isConnected
+    ? (effectiveViewOnly ? "View-only session is active." : "Interactive desktop stream is active.")
+    : "UltraVNC stays hot so the next launch can attach quickly.";
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, flexGrow: 1, minHeight: 0 }}>
@@ -1146,51 +1147,47 @@ export default function ReverseTunnelVnc({ device }) {
       >
         <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, minHeight: 0 }}>
           <Box sx={heroCardSx}>
-            <Stack spacing={1.6}>
-              <Stack
-                direction={{ xs: "column", md: "row" }}
-                spacing={1.4}
-                justifyContent="space-between"
-                alignItems={{ xs: "flex-start", md: "center" }}
-              >
-                <Stack spacing={0.6}>
-                  <Stack direction="row" spacing={1.1} alignItems="center" flexWrap="wrap">
-                    <Box
-                      sx={{
-                        width: 10,
-                        height: 10,
-                        borderRadius: "50%",
-                        backgroundColor: vncStageInfo.accent,
-                        boxShadow: `0 0 16px ${vncStageInfo.accent}`,
-                      }}
+            <Stack
+              direction={{ xs: "column", lg: "row" }}
+              spacing={1}
+              justifyContent="space-between"
+              alignItems={{ xs: "flex-start", lg: "center" }}
+            >
+              <Stack spacing={0.6} sx={{ minWidth: 0 }}>
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                  <Box
+                    sx={{
+                      width: 9,
+                      height: 9,
+                      borderRadius: "50%",
+                      backgroundColor: vncStageInfo.accent,
+                      boxShadow: `0 0 14px ${vncStageInfo.accent}`,
+                    }}
                     />
-                    <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
-                      {connectionSummaryTitle}
-                    </Typography>
-                    <Box
-                      sx={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        borderRadius: 999,
-                        px: 1.1,
-                        py: 0.5,
-                        border: `1px solid ${vncStageInfo.accent}`,
-                        color: vncStageInfo.accent,
-                        backgroundColor: "rgba(8,14,26,0.65)",
-                        fontSize: "0.78rem",
-                        fontWeight: 700,
-                        letterSpacing: "0.02em",
-                      }}
-                    >
-                      {vncStageInfo.label}
-                    </Box>
-                  </Stack>
-                  <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, maxWidth: 780 }}>
-                    {connectionSummaryCopy}
+                  <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700, lineHeight: 1.1 }}>
+                    {connectionSummaryTitle}
                   </Typography>
+                  <Box sx={stageBadgeSx(vncStageInfo.accent)}>{vncStageInfo.label}</Box>
                 </Stack>
+                <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, maxWidth: 760 }}>
+                  {connectionSummaryCopy}
+                </Typography>
+                <Stack direction="row" spacing={0.9} useFlexGap flexWrap="wrap">
+                  {heroSummaryChips.map((chip) => (
+                    <Box key={chip.label} sx={summaryChipSx}>
+                      <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
+                        {chip.label}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: SIDEBAR_THEME.text, fontWeight: 700 }}>
+                        {chip.value}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Stack>
+              </Stack>
 
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={1} flexWrap="wrap">
+              <Stack spacing={0.75} alignItems={{ xs: "stretch", lg: "flex-end" }}>
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={1} useFlexGap flexWrap="wrap">
                   <Button
                     size="small"
                     startIcon={isConnected ? <StopIcon /> : <PlayIcon />}
@@ -1201,89 +1198,33 @@ export default function ReverseTunnelVnc({ device }) {
                   >
                     {isConnected ? "Disconnect Session" : sessionId ? "Reconnect Session" : "Launch Remote Desktop"}
                   </Button>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    startIcon={isFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
-                    sx={pillActionSx}
-                    disabled={!isConnected}
-                    onClick={handleFullscreenToggle}
-                  >
-                    {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    startIcon={<KeyboardIcon />}
-                    sx={pillActionSx}
-                    disabled={!canInteract}
-                    onClick={handleCtrlAltDel}
-                  >
-                    Ctrl+Alt+Del
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    startIcon={<ClipboardIcon />}
-                    sx={pillActionSx}
-                    disabled={!canInteract}
-                    onClick={pasteClipboardText}
-                  >
-                    Paste Clipboard
-                  </Button>
+                </Stack>
+                <Stack
+                  direction="row"
+                  spacing={0.8}
+                  useFlexGap
+                  flexWrap="wrap"
+                  justifyContent={{ xs: "flex-start", lg: "flex-end" }}
+                >
+                  {readinessBadges.map((badge) => (
+                    <Box key={badge.label} sx={miniBadgeSx}>
+                      {badge.icon}
+                      <Typography variant="caption" sx={{ color: SIDEBAR_THEME.text }}>
+                        {badge.label}
+                      </Typography>
+                    </Box>
+                  ))}
                 </Stack>
               </Stack>
-
-              <Stack direction="row" spacing={1.1} useFlexGap flexWrap="wrap">
-                {sessionStatCards.map((card) => (
-                  <Box key={card.label} sx={statTileSx}>
-                    <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted, display: "block", mb: 0.45 }}>
-                      {card.label}
-                    </Typography>
-                    <Typography variant="body1" sx={{ color: SIDEBAR_THEME.text, fontWeight: 700, mb: 0.2 }}>
-                      {card.value}
-                    </Typography>
-                    <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
-                      {card.hint}
-                    </Typography>
-                  </Box>
-                ))}
-              </Stack>
             </Stack>
-
-            <Stack spacing={1.1}>
-              {readinessBadges.map((badge) => (
-                <Box key={badge.label} sx={miniBadgeSx}>
-                  {badge.icon}
-                  <Box sx={{ minWidth: 0 }}>
-                    <Typography variant="body2" sx={{ color: SIDEBAR_THEME.text, fontWeight: 700, lineHeight: 1.2 }}>
-                      {badge.label}
-                    </Typography>
-                    <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted, lineHeight: 1.2 }}>
-                      {badge.detail}
-                    </Typography>
-                  </Box>
-                </Box>
-              ))}
-              {statusMessage ? (
-                <Box
-                  sx={{
-                    borderRadius: 2,
-                    border: `1px solid ${vncStageInfo.accent}`,
-                    backgroundColor: "rgba(8,14,26,0.64)",
-                    px: 1.2,
-                    py: 1,
-                  }}
-                >
-                  <Typography
-                    variant="caption"
-                    sx={{ color: vncStageInfo.detailTone || MAGIC_UI.textMuted, display: "block" }}
-                  >
-                    {statusMessage}
-                  </Typography>
-                </Box>
-              ) : null}
-            </Stack>
+            {statusMessage ? (
+              <Typography
+                variant="caption"
+                sx={{ color: vncStageInfo.detailTone || MAGIC_UI.textMuted }}
+              >
+                {statusMessage}
+              </Typography>
+            ) : null}
           </Box>
 
           <Box
@@ -1373,23 +1314,32 @@ export default function ReverseTunnelVnc({ device }) {
               <Box ref={displayRef} sx={{ width: "100%", height: "100%" }} />
               {!isConnected ? (
                 <Stack
-                  spacing={1.25}
+                  spacing={1}
                   sx={{
                     position: "absolute",
                     alignItems: "center",
                     textAlign: "center",
                     px: 2,
-                    maxWidth: 420,
+                    maxWidth: 380,
                   }}
                 >
-                  <DesktopIcon sx={{ color: MAGIC_UI.accentA, fontSize: 44 }} />
+                  <DesktopIcon sx={{ color: MAGIC_UI.accentA, fontSize: 40 }} />
                   <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
                     Ready to start the desktop session
                   </Typography>
                   <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
-                    Launch the session to open the remote desktop stream. Borealis will use the hot UltraVNC listener
-                    when it is already ready and fall back to recovery only when needed.
+                    Launch the session to open the remote desktop stream.
                   </Typography>
+                  <Button
+                    size="medium"
+                    startIcon={<PlayIcon />}
+                    variant="outlined"
+                    sx={primaryHeroActionSx}
+                    disabled={loading || !agentId}
+                    onClick={handleConnect}
+                  >
+                    {loading ? "Preparing Desktop" : sessionId ? "Reconnect Remote Desktop" : "Launch Remote Desktop"}
+                  </Button>
                   <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" justifyContent="center">
                     <Box sx={miniBadgeSx}>
                       <SpeedIcon sx={{ fontSize: 16, color: MAGIC_UI.accentA }} />
@@ -1412,12 +1362,12 @@ export default function ReverseTunnelVnc({ device }) {
         </Box>
 
         <Box sx={sidebarSx}>
-          <Box sx={sidebarCardSx}>
+          <Box sx={compactSidebarCardSx}>
             <Box sx={sectionHeaderSx}>
               <LinkIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />
-              <span>Session Deck</span>
+              <span>Live Session</span>
             </Box>
-            <Stack spacing={1}>
+            <Stack spacing={0.9}>
               <Stack
                 direction="row"
                 alignItems="center"
@@ -1466,6 +1416,9 @@ export default function ReverseTunnelVnc({ device }) {
                 </Box>
               </Stack>
               <Stack spacing={0.7}>
+                <Typography variant="body2" sx={{ color: SIDEBAR_THEME.text, fontWeight: 600 }}>
+                  {liveSessionSummary}
+                </Typography>
                 <Typography variant="body2" sx={{ color: SIDEBAR_THEME.text }}>
                   State: {sessionStateLabel}
                 </Typography>
@@ -1480,14 +1433,25 @@ export default function ReverseTunnelVnc({ device }) {
                     Session ID: {sessionId}
                   </Typography>
                 ) : null}
-                <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                  Borealis keeps the desktop path streamlined by preferring the hot listener before escalation.
-                </Typography>
+                <Stack direction="row" spacing={0.8} useFlexGap flexWrap="wrap">
+                  <Box sx={miniBadgeSx}>
+                    <ShieldIcon sx={{ fontSize: 15, color: MAGIC_UI.accentB }} />
+                    <Typography variant="caption" sx={{ color: SIDEBAR_THEME.text }}>
+                      Same-origin
+                    </Typography>
+                  </Box>
+                  <Box sx={miniBadgeSx}>
+                    <SpeedIcon sx={{ fontSize: 15, color: MAGIC_UI.accentA }} />
+                    <Typography variant="caption" sx={{ color: SIDEBAR_THEME.text }}>
+                      Hot listener
+                    </Typography>
+                  </Box>
+                </Stack>
               </Stack>
             </Stack>
           </Box>
 
-          <Box sx={sidebarCardSx}>
+          <Box sx={compactSidebarCardSx}>
             <Box sx={sectionHeaderSx}>
               <DisplayIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />
               <span>Display & Focus</span>
@@ -1522,7 +1486,7 @@ export default function ReverseTunnelVnc({ device }) {
               <Divider sx={{ borderColor: "rgba(148,163,184,0.15)" }} />
 
               <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                Viewport crop
+                Desktop span
               </Typography>
               <ToggleButtonGroup
                 exclusive
@@ -1548,10 +1512,10 @@ export default function ReverseTunnelVnc({ device }) {
             </Stack>
           </Box>
 
-          <Box sx={sidebarCardSx}>
+          <Box sx={compactSidebarCardSx}>
             <Box sx={sectionHeaderSx}>
               <ClipboardIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />
-              <span>Clipboard & Input</span>
+              <span>Clipboard & Keys</span>
             </Box>
             <Stack spacing={1}>
               <FormControlLabel
@@ -1587,58 +1551,26 @@ export default function ReverseTunnelVnc({ device }) {
                   >
                     Inject Keystrokes
                   </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<KeyboardIcon />}
+                    sx={simpleButtonSx}
+                    disabled={effectiveViewOnly}
+                    onClick={handleCtrlAltDel}
+                  >
+                    Send Ctrl+Alt+Del
+                  </Button>
                 </>
               ) : (
                 <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                  Connect to enable clipboard sync, browser-to-remote paste, and keystroke injection.
+                  Connect to enable clipboard sync, browser-to-remote paste, and secure key commands.
                 </Typography>
               )}
             </Stack>
           </Box>
 
-          <Box sx={sidebarCardSx}>
-            <Box sx={sectionHeaderSx}>
-              <FileIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />
-              <span>Workflow Notes</span>
-            </Box>
-            <Stack spacing={0.8}>
-              <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                Protocol-level VNC file transfer stays disabled. Borealis-native transfer will be added separately so
-                uploads and downloads can be audited and policy-gated.
-              </Typography>
-              <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                Session owner metadata is still tracked for audit and handoff history even though all connected
-                operators are interactive peers.
-              </Typography>
-            </Stack>
-          </Box>
-
-          <Box sx={sidebarCardSx}>
-            <Box sx={sectionHeaderSx}>
-              <KeyboardIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />
-              <span>Keyboard Shortcuts</span>
-            </Box>
-            <Stack spacing={1}>
-              {showKeyboardActions ? (
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={<KeyboardIcon />}
-                  sx={simpleButtonSx}
-                  disabled={effectiveViewOnly}
-                  onClick={handleCtrlAltDel}
-                >
-                  Send Ctrl+Alt+Del
-                </Button>
-              ) : (
-                <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                  Connect to activate the secure key command lane for the remote desktop session.
-                </Typography>
-              )}
-            </Stack>
-          </Box>
-
-          <Box sx={sidebarCardSx}>
+          <Box sx={compactSidebarCardSx}>
             <Box sx={sectionHeaderSx}>
               <PowerIcon sx={{ fontSize: 18, color: "#f97316" }} />
               <span>Power</span>
@@ -1682,47 +1614,24 @@ export default function ReverseTunnelVnc({ device }) {
             </Stack>
           </Box>
 
-          <Box sx={sidebarCardSx}>
+          <Box sx={compactSidebarCardSx}>
             <Box sx={sectionHeaderSx}>
-              <LinkIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />
-              <span>Connection Info</span>
+              <FileIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />
+              <span>Security & Workflow</span>
             </Box>
-            <Stack spacing={0.6}>
-              <Stack spacing={0.6}>
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <Box
-                    sx={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: "50%",
-                      backgroundColor: vncStageInfo.accent,
-                      boxShadow: `0 0 10px ${vncStageInfo.accent}`,
-                    }}
-                  />
-                  <Typography
-                    variant="body2"
-                    sx={{ color: vncStageInfo.accent, fontWeight: 600 }}
-                  >
-                  {vncStageInfo.label}
+            <Stack spacing={0.75}>
+              <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
+                Protocol-level VNC file transfer stays disabled. Borealis-native transfer will land separately so
+                uploads and downloads stay auditable and policy-gated.
+              </Typography>
+              <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
+                Session owner metadata remains available for audit even though every connected operator is interactive.
+              </Typography>
+              {statusMessage && vncStage !== "error" && vncStage !== "auth_failed" ? (
+                <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
+                  {statusMessage}
                 </Typography>
-              </Stack>
-              <Typography
-                variant="body2"
-                  sx={{ color: vncStageInfo.detailTone || MAGIC_UI.textMuted }}
-                >
-                  {vncStageInfo.detail}
-                </Typography>
-                {sessionId ? (
-                  <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
-                    Participant: {participantId || "pending"} {participantRole ? "(interactive)" : ""}
-                  </Typography>
-                ) : null}
-                {statusMessage && vncStage !== "error" && vncStage !== "auth_failed" ? (
-                  <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
-                    {statusMessage}
-                  </Typography>
-                ) : null}
-              </Stack>
+              ) : null}
             </Stack>
           </Box>
 
