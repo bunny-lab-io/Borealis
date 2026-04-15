@@ -530,6 +530,13 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                         left_participant_id,
                         exc_info=True,
                     )
+            if bool(result.get("reconnect_pending")):
+                _context_emit_agent_event(
+                    adapters.context,
+                    resolved_agent_id,
+                    "vnc_stop",
+                    {"agent_id": resolved_agent_id, "reason": reason or "operator_disconnect"},
+                )
             if bool(result.get("controller_vacant")):
                 refreshed_session = manager.get_session_by_id(collaboration_session.session_id)
                 if refreshed_session is not None:
@@ -587,6 +594,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             "reason": reason,
             "session_id": collaboration_session.session_id,
             "controller_vacant": bool(result.get("controller_vacant")),
+            "reconnect_pending": bool(result.get("reconnect_pending")),
         }
         if not bool(result.get("closed")):
             refreshed_session = manager.get_session_by_id(collaboration_session.session_id)

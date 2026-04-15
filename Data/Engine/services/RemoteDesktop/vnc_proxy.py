@@ -383,6 +383,8 @@ class VncProxyServer:
                         if not data:
                             break
                         await websocket.send(data)
+                except websockets.exceptions.ConnectionClosed:
+                    pass
                 finally:
                     try:
                         await websocket.close()

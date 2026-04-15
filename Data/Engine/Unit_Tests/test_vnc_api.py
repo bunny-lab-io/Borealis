@@ -337,3 +337,53 @@ def test_vnc_disconnect_vacates_controller_and_claim_control_restores_session(
     assert claim_payload["session"]["controller_operator_id"] == "alice"
     assert claim_payload["session"]["state"] == "active"
     assert claim_payload["session"]["credential_revision"] == 3
+
+
+def test_vnc_disconnect_retains_last_controller_session_for_warm_reconnect(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    admin_client = _client_with_session(engine_harness, username="admin")
+    fake_tunnel = _FakeTunnelService()
+    fake_proxy = _FakeProxy()
+    emitted_events: list[tuple[str, str, dict[str, Any]]] = []
+
+    engine_harness.context.vnc_proxy = fake_proxy
+    engine_harness.context.emit_agent_event = (
+        lambda agent_id, event, payload: emitted_events.append((agent_id, event, dict(payload))) or True
+    )
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+
+    establish_response = admin_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+    assert establish_response.status_code == 200
+    establish_payload = establish_response.get_json()
+
+    disconnect_response = admin_client.post(
+        "/api/vnc/disconnect",
+        json={"session_id": establish_payload["session_id"]},
+    )
+
+    assert disconnect_response.status_code == 200
+    disconnect_payload = disconnect_response.get_json()
+    assert disconnect_payload["status"] == "left"
+    assert disconnect_payload["controller_vacant"] is False
+    assert disconnect_payload["reconnect_pending"] is True
+    assert disconnect_payload["session"]["state"] == "reconnect_pending"
+    assert fake_proxy.disconnect_participant_calls == [
+        (establish_payload["session_id"], establish_payload["participant_id"], "operator_disconnect")
+    ]
+    assert emitted_events[-1][1] == "vnc_stop"
+    assert emitted_events[-1][2]["reason"] == "operator_disconnect"
+
+    reconnect_response = admin_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+    assert reconnect_response.status_code == 200
+    reconnect_payload = reconnect_response.get_json()
+    assert reconnect_payload["session_id"] == establish_payload["session_id"]
+    assert reconnect_payload["participant_id"] == establish_payload["participant_id"]
+    assert reconnect_payload["participant_role"] == "controller"
+    assert reconnect_payload["credential_revision"] == establish_payload["credential_revision"]
+    assert reconnect_payload["vnc_password"] == establish_payload["vnc_password"]
+    assert reconnect_payload["session"]["state"] == "active"

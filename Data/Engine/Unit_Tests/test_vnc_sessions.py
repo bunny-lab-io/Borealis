@@ -99,6 +99,50 @@ def test_controller_leave_marks_session_vacant_and_remaining_spectator_can_claim
     assert claimed_snapshot["current_operator_role"] == "controller"
 
 
+def test_last_controller_disconnect_keeps_session_warm_for_reconnect() -> None:
+    manager = _build_manager()
+
+    session, alice, _ = manager.ensure_session(
+        agent_id="agent-keepalive",
+        operator_id="alice",
+        remove_wallpaper=True,
+    )
+    original_password = session.controller_password
+    original_revision = session.credential_revision
+
+    leave_result = manager.leave_or_close(
+        session_id=session.session_id,
+        operator_id="alice",
+        close_session=False,
+    )
+    assert leave_result["closed"] is False
+    assert leave_result["controller_vacant"] is False
+    assert leave_result["reconnect_pending"] is True
+
+    retained_session = manager.get_session_by_id(session.session_id)
+    assert retained_session is not None
+    retained_snapshot = manager.session_snapshot(retained_session, current_operator_id="alice")
+    assert retained_snapshot["state"] == "reconnect_pending"
+    assert retained_snapshot["reconnect_pending"] is True
+    assert retained_snapshot["controller_operator_id"] == "alice"
+    assert retained_snapshot["participant_count"] == 1
+    assert retained_session.controller_password == original_password
+    assert retained_session.credential_revision == original_revision
+
+    rejoined_session, rejoined_participant, created = manager.ensure_session(
+        agent_id="agent-keepalive",
+        operator_id="alice",
+        remove_wallpaper=True,
+    )
+    assert created is False
+    assert rejoined_session.session_id == session.session_id
+    assert rejoined_participant.participant_id == alice.participant_id
+    assert rejoined_participant.role == "controller"
+    assert rejoined_session.state == "active"
+    assert rejoined_session.controller_password == original_password
+    assert rejoined_session.credential_revision == original_revision
+
+
 def test_close_session_and_revoke_agent_remove_active_collaboration_session() -> None:
     manager = _build_manager()
 

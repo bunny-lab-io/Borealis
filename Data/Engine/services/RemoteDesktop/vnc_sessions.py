@@ -216,6 +216,8 @@ class VncCollaborationManager:
                 return session, participant, False
             if session.controller_operator_id == normalized_operator_id:
                 participant.role = "controller"
+                if session.state == "reconnect_pending":
+                    session.state = "active"
             elif participant.role != "spectator":
                 participant.role = "spectator"
             participant.touch()
@@ -340,27 +342,43 @@ class VncCollaborationManager:
             participant_ids = sorted(session.participants.keys())
             closed = bool(close_session)
             controller_vacant = False
+            reconnect_pending = False
             if close_session:
                 self._sessions_by_id.pop(session.session_id, None)
                 self._session_ids_by_agent.pop(session.agent_id, None)
             else:
-                session.participants.pop(participant.participant_id, None)
-                if participant.operator_id == session.controller_operator_id:
-                    session.controller_operator_id = None
-                    session.controller_participant_id = None
-                    session.controller_password = _generate_password()
-                    session.credential_revision += 1
-                    controller_vacant = bool(session.participants)
-                    session.state = "controller_vacant" if controller_vacant else "closed"
-                if not session.participants:
-                    closed = True
-                    self._sessions_by_id.pop(session.session_id, None)
-                    self._session_ids_by_agent.pop(session.agent_id, None)
-                else:
+                participant.mark_close()
+                remaining_participant_ids = [
+                    participant_id
+                    for participant_id in session.participants.keys()
+                    if participant_id != participant.participant_id
+                ]
+                if (
+                    participant.operator_id == session.controller_operator_id
+                    and not remaining_participant_ids
+                ):
+                    reconnect_pending = True
+                    session.state = "reconnect_pending"
                     session.touch()
+                else:
+                    session.participants.pop(participant.participant_id, None)
+                    if participant.operator_id == session.controller_operator_id:
+                        session.controller_operator_id = None
+                        session.controller_participant_id = None
+                        session.controller_password = _generate_password()
+                        session.credential_revision += 1
+                        controller_vacant = bool(session.participants)
+                        session.state = "controller_vacant" if controller_vacant else "closed"
+                    if not session.participants:
+                        closed = True
+                        self._sessions_by_id.pop(session.session_id, None)
+                        self._session_ids_by_agent.pop(session.agent_id, None)
+                    else:
+                        session.touch()
             return {
                 "closed": closed,
                 "controller_vacant": controller_vacant and not closed,
+                "reconnect_pending": reconnect_pending and not closed,
                 "participant_id": participant.participant_id,
                 "agent_id": session.agent_id,
                 "disconnect_participants": participant_ids if closed else [participant.participant_id],
@@ -478,6 +496,7 @@ class VncCollaborationManager:
             "current_operator_role": current_participant_role,
             "current_participant_id": current_participant_id,
             "controller_vacant": session.state == "controller_vacant",
+            "reconnect_pending": session.state == "reconnect_pending",
             "can_handoff": bool(current_operator and current_operator == session.controller_operator_id and len(participants) > 1),
             "can_claim_control": bool(
                 current_operator
