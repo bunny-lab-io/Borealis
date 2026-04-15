@@ -181,21 +181,6 @@ const compactSidebarCardSx = {
   gap: 0.85,
 };
 
-const stageBadgeSx = (accent) => ({
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 0.55,
-  borderRadius: 999,
-  px: 1,
-  py: 0.45,
-  border: `1px solid ${accent}`,
-  color: accent,
-  backgroundColor: "rgba(8,14,26,0.55)",
-  fontSize: "0.75rem",
-  fontWeight: 700,
-  lineHeight: 1,
-});
-
 const viewportPresets = [
   { value: "all", label: "All" },
   { value: "left", label: "Left" },
@@ -925,8 +910,6 @@ export default function ReverseTunnelVnc({ device }) {
   }, []);
 
   const isConnected = sessionState === "connected";
-  const sessionStateLabel = normalizeText(sessionDetails?.state || "idle") || "idle";
-  const controllerOperator = normalizeText(sessionDetails?.controller_operator_id) || "Unassigned";
   const shutdownSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "shutdown");
   const rebootSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "reboot");
   const resetSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "reset");
@@ -1015,9 +998,6 @@ export default function ReverseTunnelVnc({ device }) {
 
   const showClipboardActions = isConnected;
   const showPowerButtons = isConnected;
-  const showHeaderStatus =
-    Boolean(statusMessage) &&
-    (loading || vncStage === "retrying" || vncStage === "agent_onboarding" || vncStage === "error" || vncStage === "auth_failed");
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, flexGrow: 1, minHeight: 0 }}>
@@ -1044,42 +1024,6 @@ export default function ReverseTunnelVnc({ device }) {
             }}
           >
             {loading ? <LinearProgress color="info" sx={{ height: 3 }} /> : null}
-            <Box
-              sx={{
-                display: "flex",
-                justifyContent: "flex-start",
-                alignItems: "center",
-                gap: 1,
-                px: 1.5,
-                py: 1.1,
-                borderBottom: "1px solid rgba(148,163,184,0.15)",
-                background:
-                  "linear-gradient(180deg, rgba(12,18,33,0.94) 0%, rgba(9,14,26,0.88) 100%)",
-              }}
-            >
-              <Stack spacing={showHeaderStatus ? 0.2 : 0}>
-                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-                  <Box
-                    sx={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: "50%",
-                      backgroundColor: vncStageInfo.accent,
-                      boxShadow: `0 0 14px ${vncStageInfo.accent}`,
-                    }}
-                  />
-                  <Typography variant="body2" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
-                    Remote Desktop
-                  </Typography>
-                  <Box sx={stageBadgeSx(vncStageInfo.accent)}>{vncStageInfo.label}</Box>
-                </Stack>
-                {showHeaderStatus ? (
-                  <Typography variant="caption" sx={{ color: vncStageInfo.detailTone || MAGIC_UI.textMuted }}>
-                    {statusMessage}
-                  </Typography>
-                ) : null}
-              </Stack>
-            </Box>
             <Box
               sx={{
                 flexGrow: 1,
