@@ -190,6 +190,18 @@ def _context_emit_agent_event(context: Any, agent_id: str, event: str, payload: 
         return False
 
 
+def _agent_socket_registered(context: Any, agent_id: str) -> Optional[bool]:
+    registry = getattr(context, "agent_socket_registry", None)
+    if registry is None or not hasattr(registry, "is_registered"):
+        return None
+    try:
+        return bool(registry.is_registered(agent_id))
+    except Exception:
+        if hasattr(context, "logger"):
+            context.logger.debug("Failed to inspect agent socket registration for %s", agent_id, exc_info=True)
+        return None
+
+
 def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
     blueprint = Blueprint("vnc", __name__)
     logger = adapters.context.logger.getChild("vnc.api")
@@ -343,6 +355,16 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 )
             )
         else:
+            socket_registered = _agent_socket_registered(adapters.context, agent_id)
+            if socket_registered is False:
+                _service_log_event(
+                    "vnc_backend_bootstrap_blocked agent_id={0} session_id={1} reason=agent_socket_missing".format(
+                        agent_id,
+                        collaboration_session.session_id,
+                    ),
+                    level="WARNING",
+                )
+                return {"error": "agent_socket_missing"}, 409
             _service_log_event(
                 "vnc_backend_bootstrap_required agent_id={0} session_id={1} credential_revision={2}".format(
                     agent_id,

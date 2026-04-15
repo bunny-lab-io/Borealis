@@ -240,6 +240,9 @@ def test_vnc_establish_uses_longer_initial_wait_and_shorter_retry_wait(
     fake_tunnel = _FakeTunnelService()
     wait_calls: list[float] = []
     _register_agent_credential(engine_harness)
+    engine_harness.context.agent_socket_registry = SimpleNamespace(
+        is_registered=lambda agent_id: True
+    )
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
     monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
@@ -535,3 +538,26 @@ def test_vnc_establish_requests_agent_credential_refresh_when_cache_is_empty(
     ]
     assert payload["display_topology"][0]["label"] == "1"
     assert fake_registry.created[0]["agent_id"] == "test-device-agent"
+
+
+def test_vnc_establish_returns_agent_socket_missing_when_backend_needs_bootstrap_but_agent_is_offline(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    _register_agent_credential(engine_harness)
+    engine_harness.context.agent_socket_registry = SimpleNamespace(
+        is_registered=lambda agent_id: False
+    )
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: False)
+
+    response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+
+    assert response.status_code == 409
+    assert response.get_json()["error"] == "agent_socket_missing"
+    assert fake_tunnel.transport_marks == []
+    assert fake_tunnel.start_calls == []
