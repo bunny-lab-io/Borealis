@@ -5,7 +5,7 @@
 # API Endpoints (if applicable):
 # - POST /api/vnc/establish (Token Authenticated) - Establish or join a collaboration-aware VNC session for noVNC.
 # - POST /api/vnc/disconnect (Token Authenticated) - Leave or close a collaboration-aware VNC session.
-# - POST /api/vnc/handoff (Token Authenticated) - Transfer controller ownership to another session participant.
+# - POST /api/vnc/handoff (Token Authenticated) - Reassign session-owner metadata to another session participant.
 # - GET /api/vnc/sessions (Token Authenticated) - List active collaboration-aware VNC sessions.
 # - POST /api/vnc/session (Token Authenticated) - Legacy alias for establish.
 # ======================================================
@@ -251,7 +251,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                     "agent_id": agent_id,
                     "session_id": collaboration_session.session_id,
                     "controller_password": collaboration_session.controller_password,
-                    "view_only_password": collaboration_session.spectator_password,
+                    "view_only_password": "",
                     "port": int(getattr(adapters.context, "vnc_port", 5900)),
                     "allowed_ips": allowed_ips,
                     "remove_wallpaper": bool(remove_wallpaper),
@@ -378,11 +378,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             collaboration_session,
             current_operator_id=operator_id or "",
         )
-        vnc_password = (
-            collaboration_session.controller_password
-            if participant.role == "controller"
-            else collaboration_session.spectator_password
-        )
+        vnc_password = collaboration_session.controller_password
 
         return (
             {
@@ -392,7 +388,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 "session_id": collaboration_session.session_id,
                 "participant_id": participant.participant_id,
                 "participant_role": participant.role,
-                "view_only": participant.role != "controller",
+                "view_only": False,
                 "session_state": collaboration_session.state,
                 "controller_operator_id": collaboration_session.controller_operator_id or "",
                 "credential_revision": collaboration_session.credential_revision,
@@ -474,7 +470,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         user_is_admin = str(user.get("role") or "").strip().lower() == "admin"
         if close_session and not (
             user_is_admin
-            or current_snapshot.get("current_operator_role") == "controller"
+            or (_normalize_text(operator_id) and _normalize_text(operator_id) == _normalize_text(collaboration_session.controller_operator_id))
         ):
             return jsonify({"error": "controller_required"}), 403
 
@@ -555,7 +551,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                             "agent_id": resolved_agent_id,
                             "session_id": refreshed_session.session_id,
                             "controller_password": refreshed_session.controller_password,
-                            "view_only_password": refreshed_session.spectator_password,
+                            "view_only_password": "",
                             "port": int(getattr(adapters.context, "vnc_port", 5900)),
                             "allowed_ips": _resolve_allowed_ips(
                                 session_payload=refreshed_payload,
@@ -650,31 +646,6 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             session_payload=session_payload if isinstance(session_payload, dict) else None,
             collaboration_session=refreshed_session,
         )
-        _context_emit_agent_event(
-            adapters.context,
-            refreshed_session.agent_id,
-            "vnc_start",
-            {
-                "agent_id": refreshed_session.agent_id,
-                "session_id": refreshed_session.session_id,
-                "controller_password": refreshed_session.controller_password,
-                "view_only_password": refreshed_session.spectator_password,
-                "port": int(getattr(adapters.context, "vnc_port", 5900)),
-                "allowed_ips": allowed_ips,
-                "remove_wallpaper": bool(refreshed_session.remove_wallpaper),
-                "credential_revision": refreshed_session.credential_revision,
-                "reason": "controller_handoff",
-            },
-        )
-        proxy = getattr(adapters.context, "vnc_proxy", None)
-        if proxy is not None and hasattr(proxy, "disconnect_session"):
-            try:
-                proxy.disconnect_session(
-                    refreshed_session.session_id,
-                    reason="handoff_reconnect_required",
-                )
-            except Exception:
-                logger.debug("Failed to disconnect VNC session after handoff %s", refreshed_session.session_id, exc_info=True)
 
         _service_log_event(
             "vnc_handoff agent_id={0} session_id={1} from={2} to={3}".format(
@@ -697,7 +668,8 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                         refreshed_session,
                         current_operator_id=operator_id or "",
                     ),
-                    "reconnect_required": True,
+                    "reconnect_required": False,
+                    "allowed_ips": allowed_ips,
                 }
             ),
             200,

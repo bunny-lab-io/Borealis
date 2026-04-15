@@ -62,103 +62,6 @@ class ActiveVncConnection:
     role: str
 
 
-class SpectatorClientInputFilter:
-    """Allow the RFB handshake but strip spectator control messages afterward."""
-
-    def __init__(self) -> None:
-        self._buffer = bytearray()
-        self._phase = "version"
-        self._auth_remaining = 0
-
-    def filter(self, payload: bytes) -> bytes:
-        if not payload:
-            return b""
-        self._buffer.extend(payload)
-        output = bytearray()
-        while self._buffer:
-            if self._phase == "passthrough":
-                output.extend(self._buffer)
-                self._buffer.clear()
-                break
-            if self._phase == "version":
-                chunk = self._consume(12)
-                if chunk is None:
-                    break
-                output.extend(chunk)
-                self._phase = "security_type"
-                continue
-            if self._phase == "security_type":
-                chunk = self._consume(1)
-                if chunk is None:
-                    break
-                security_type = int(chunk[0])
-                output.extend(chunk)
-                if security_type == 2:
-                    self._auth_remaining = 16
-                    self._phase = "auth_response"
-                else:
-                    self._phase = "client_init"
-                continue
-            if self._phase == "auth_response":
-                chunk = self._consume(self._auth_remaining)
-                if chunk is None:
-                    break
-                output.extend(chunk)
-                self._phase = "client_init"
-                continue
-            if self._phase == "client_init":
-                chunk = self._consume(1)
-                if chunk is None:
-                    break
-                output.extend(chunk)
-                self._phase = "messages"
-                continue
-
-            message = self._consume_client_message()
-            if message is None:
-                break
-            message_type = int(message[0])
-            if message_type in {4, 5, 6}:
-                continue
-            output.extend(message)
-        return bytes(output)
-
-    def _consume(self, length: int) -> Optional[bytes]:
-        if len(self._buffer) < length:
-            return None
-        chunk = bytes(self._buffer[:length])
-        del self._buffer[:length]
-        return chunk
-
-    def _consume_client_message(self) -> Optional[bytes]:
-        if not self._buffer:
-            return None
-        message_type = int(self._buffer[0])
-        required_length: Optional[int]
-        if message_type == 0:
-            required_length = 20
-        elif message_type == 2:
-            if len(self._buffer) < 4:
-                return None
-            encoding_count = int.from_bytes(self._buffer[2:4], "big", signed=False)
-            required_length = 4 + (encoding_count * 4)
-        elif message_type == 3:
-            required_length = 10
-        elif message_type == 4:
-            required_length = 8
-        elif message_type == 5:
-            required_length = 6
-        elif message_type == 6:
-            if len(self._buffer) < 8:
-                return None
-            text_length = int.from_bytes(self._buffer[4:8], "big", signed=False)
-            required_length = 8 + text_length
-        else:
-            self._phase = "passthrough"
-            return self._consume(len(self._buffer))
-        return self._consume(required_length)
-
-
 class VncSessionRegistry:
     def __init__(self, ttl_seconds: int, logger: logging.Logger) -> None:
         self.ttl_seconds = max(30, int(ttl_seconds))
@@ -338,7 +241,6 @@ class VncProxyServer:
 
         connection_id = ""
         close_reason = "session_end"
-        spectator_filter = SpectatorClientInputFilter() if session.role == "spectator" else None
         try:
             try:
                 reader, writer = await self._connect_vnc(session)
@@ -364,10 +266,6 @@ class VncProxyServer:
                             data = message.encode("utf-8")
                         else:
                             data = bytes(message)
-                        if spectator_filter is not None:
-                            data = spectator_filter.filter(data)
-                            if not data:
-                                continue
                         writer.write(data)
                         await writer.drain()
                 finally:

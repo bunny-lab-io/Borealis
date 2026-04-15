@@ -206,7 +206,7 @@ def test_vnc_establish_applies_bootstrap_settle_only_for_new_sessions(
     monkeypatch,
 ) -> None:
     admin_client = _client_with_session(engine_harness, username="admin")
-    spectator_client = _client_with_session(engine_harness, username="alice")
+    peer_client = _client_with_session(engine_harness, username="alice")
     fake_tunnel = _FakeTunnelService()
     sleep_calls: list[float] = []
 
@@ -216,19 +216,20 @@ def test_vnc_establish_applies_bootstrap_settle_only_for_new_sessions(
     monkeypatch.setattr(vnc_api.time, "sleep", lambda seconds: sleep_calls.append(float(seconds)))
 
     controller_response = admin_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
-    spectator_response = spectator_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+    peer_response = peer_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
 
     assert controller_response.status_code == 200
-    assert spectator_response.status_code == 200
+    assert peer_response.status_code == 200
+    assert peer_response.get_json()["participant_role"] == "controller"
     assert sleep_calls == [1.25]
 
 
-def test_vnc_handoff_updates_controller_and_forces_reconnect(
+def test_vnc_handoff_updates_session_owner_without_forcing_reconnect(
     engine_harness: EngineTestHarness,
     monkeypatch,
 ) -> None:
     admin_client = _client_with_session(engine_harness, username="admin")
-    spectator_client = _client_with_session(engine_harness, username="alice")
+    peer_client = _client_with_session(engine_harness, username="alice")
     fake_tunnel = _FakeTunnelService()
     fake_proxy = _FakeProxy()
     emitted_events: list[tuple[str, str, dict[str, Any]]] = []
@@ -244,12 +245,13 @@ def test_vnc_handoff_updates_controller_and_forces_reconnect(
 
     controller_response = admin_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
     controller_payload = controller_response.get_json()
-    spectator_response = spectator_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
-    spectator_payload = spectator_response.get_json()
+    peer_response = peer_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+    peer_payload = peer_response.get_json()
+    baseline_event_count = len(emitted_events)
 
     assert controller_response.status_code == 200
-    assert spectator_response.status_code == 200
-    assert spectator_payload["participant_role"] == "spectator"
+    assert peer_response.status_code == 200
+    assert peer_payload["participant_role"] == "controller"
 
     handoff_response = admin_client.post(
         "/api/vnc/handoff",
@@ -262,25 +264,20 @@ def test_vnc_handoff_updates_controller_and_forces_reconnect(
     assert handoff_response.status_code == 200
     payload = handoff_response.get_json()
     assert payload["status"] == "ok"
-    assert payload["reconnect_required"] is True
-    assert payload["participant_role"] == "spectator"
+    assert payload["reconnect_required"] is False
+    assert payload["participant_role"] == "controller"
     assert payload["session"]["controller_operator_id"] == "alice"
-    assert payload["session"]["credential_revision"] == 2
-    assert fake_proxy.disconnect_session_calls == [
-        (controller_payload["session_id"], "handoff_reconnect_required")
-    ]
-    assert emitted_events[-1][0] == "test-device-agent"
-    assert emitted_events[-1][1] == "vnc_start"
-    assert emitted_events[-1][2]["reason"] == "controller_handoff"
-    assert emitted_events[-1][2]["credential_revision"] == 2
+    assert payload["session"]["credential_revision"] == 1
+    assert fake_proxy.disconnect_session_calls == []
+    assert len(emitted_events) == baseline_event_count
 
 
-def test_vnc_disconnect_vacates_controller_and_claim_control_restores_session(
+def test_vnc_disconnect_keeps_shared_session_active_for_remaining_participants(
     engine_harness: EngineTestHarness,
     monkeypatch,
 ) -> None:
     admin_client = _client_with_session(engine_harness, username="admin")
-    spectator_client = _client_with_session(engine_harness, username="alice")
+    peer_client = _client_with_session(engine_harness, username="alice")
     fake_tunnel = _FakeTunnelService()
     fake_proxy = _FakeProxy()
     emitted_events: list[tuple[str, str, dict[str, Any]]] = []
@@ -296,8 +293,11 @@ def test_vnc_disconnect_vacates_controller_and_claim_control_restores_session(
 
     controller_response = admin_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
     controller_payload = controller_response.get_json()
-    spectator_response = spectator_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
-    spectator_payload = spectator_response.get_json()
+    peer_response = peer_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+    peer_payload = peer_response.get_json()
+    baseline_event_count = len(emitted_events)
+    assert peer_response.status_code == 200
+    assert peer_payload["participant_role"] == "controller"
 
     disconnect_response = admin_client.post(
         "/api/vnc/disconnect",
@@ -307,36 +307,24 @@ def test_vnc_disconnect_vacates_controller_and_claim_control_restores_session(
     assert disconnect_response.status_code == 200
     disconnect_payload = disconnect_response.get_json()
     assert disconnect_payload["status"] == "left"
-    assert disconnect_payload["controller_vacant"] is True
-    assert disconnect_payload["session"]["state"] == "controller_vacant"
-    assert disconnect_payload["session"]["controller_operator_id"] == ""
+    assert disconnect_payload["controller_vacant"] is False
+    assert disconnect_payload["reconnect_pending"] is False
+    assert disconnect_payload["session"]["state"] == "active"
+    assert disconnect_payload["session"]["controller_operator_id"] == "alice"
     assert fake_proxy.disconnect_participant_calls == [
         (controller_payload["session_id"], controller_payload["participant_id"], "operator_disconnect")
     ]
-    assert fake_proxy.disconnect_session_calls == [
-        (controller_payload["session_id"], "controller_reconnect_required")
-    ]
-    assert emitted_events[-1][2]["reason"] == "controller_vacated"
+    assert fake_proxy.disconnect_session_calls == []
+    assert len(emitted_events) == baseline_event_count
 
-    sessions_response = spectator_client.get(
+    sessions_response = peer_client.get(
         f"/api/vnc/sessions?session_id={controller_payload['session_id']}"
     )
     assert sessions_response.status_code == 200
     sessions_payload = sessions_response.get_json()
     assert sessions_payload["count"] == 1
-    assert sessions_payload["sessions"][0]["controller_vacant"] is True
-    assert sessions_payload["sessions"][0]["current_operator_role"] == "spectator"
-
-    claim_response = spectator_client.post(
-        "/api/vnc/handoff",
-        json={"session_id": spectator_payload["session_id"]},
-    )
-    assert claim_response.status_code == 200
-    claim_payload = claim_response.get_json()
-    assert claim_payload["participant_role"] == "controller"
-    assert claim_payload["session"]["controller_operator_id"] == "alice"
-    assert claim_payload["session"]["state"] == "active"
-    assert claim_payload["session"]["credential_revision"] == 3
+    assert sessions_payload["sessions"][0]["controller_vacant"] is False
+    assert sessions_payload["sessions"][0]["current_operator_role"] == "controller"
 
 
 def test_vnc_disconnect_retains_last_controller_session_for_warm_reconnect(

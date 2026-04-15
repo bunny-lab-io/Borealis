@@ -16,7 +16,7 @@ def _build_manager() -> VncCollaborationManager:
     return VncCollaborationManager(logger=logging.getLogger("test.vnc.sessions"))
 
 
-def test_collaboration_session_tracks_controller_spectators_and_handoff() -> None:
+def test_collaboration_session_tracks_shared_interactive_participants() -> None:
     manager = _build_manager()
 
     session, alice, created = manager.ensure_session(
@@ -33,7 +33,7 @@ def test_collaboration_session_tracks_controller_spectators_and_handoff() -> Non
         remove_wallpaper=True,
     )
     assert created is False
-    assert bob.role == "spectator"
+    assert bob.role == "controller"
 
     manager.record_backend_ready(
         session.session_id,
@@ -44,7 +44,7 @@ def test_collaboration_session_tracks_controller_spectators_and_handoff() -> Non
     snapshot = manager.session_snapshot(session, current_operator_id="alice")
     assert snapshot["controller_operator_id"] == "alice"
     assert snapshot["participant_count"] == 2
-    assert snapshot["can_handoff"] is True
+    assert snapshot["can_handoff"] is False
     assert snapshot["allowed_ips"] == "10.255.0.1/32"
     assert snapshot["engine_virtual_ip"] == "10.255.0.1/32"
 
@@ -57,10 +57,10 @@ def test_collaboration_session_tracks_controller_spectators_and_handoff() -> Non
     handed_snapshot = manager.session_snapshot(handed_session, current_operator_id="bob")
     assert handed_snapshot["controller_operator_id"] == "bob"
     assert handed_snapshot["current_operator_role"] == "controller"
-    assert handed_snapshot["credential_revision"] == 2
+    assert handed_snapshot["credential_revision"] == 1
 
 
-def test_controller_leave_marks_session_vacant_and_remaining_spectator_can_claim_control() -> None:
+def test_owner_leave_keeps_shared_interactive_session_active_for_remaining_participants() -> None:
     manager = _build_manager()
 
     session, _, _ = manager.ensure_session(
@@ -80,23 +80,17 @@ def test_controller_leave_marks_session_vacant_and_remaining_spectator_can_claim
         close_session=False,
     )
     assert leave_result["closed"] is False
-    assert leave_result["controller_vacant"] is True
+    assert leave_result["controller_vacant"] is False
+    assert leave_result["reconnect_pending"] is False
 
-    vacant_session = manager.get_session_by_id(session.session_id)
-    assert vacant_session is not None
-    snapshot = manager.session_snapshot(vacant_session, current_operator_id="bob")
-    assert snapshot["controller_vacant"] is True
-    assert snapshot["can_claim_control"] is True
-
-    claim_result = manager.handoff(
-        session_id=session.session_id,
-        actor_operator_id="bob",
-        target_operator_id=None,
-    )
-    claimed_session = claim_result["session"]
-    claimed_snapshot = manager.session_snapshot(claimed_session, current_operator_id="bob")
-    assert claimed_snapshot["controller_operator_id"] == "bob"
-    assert claimed_snapshot["current_operator_role"] == "controller"
+    active_session = manager.get_session_by_id(session.session_id)
+    assert active_session is not None
+    snapshot = manager.session_snapshot(active_session, current_operator_id="bob")
+    assert snapshot["state"] == "active"
+    assert snapshot["controller_operator_id"] == "bob"
+    assert snapshot["current_operator_role"] == "controller"
+    assert snapshot["controller_vacant"] is False
+    assert snapshot["can_claim_control"] is False
 
 
 def test_last_controller_disconnect_keeps_session_warm_for_reconnect() -> None:

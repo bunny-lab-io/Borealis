@@ -80,7 +80,6 @@ class VncCollaborationSession:
     controller_operator_id: Optional[str]
     controller_participant_id: Optional[str]
     controller_password: str
-    spectator_password: str
     credential_revision: int = 1
     remove_wallpaper: bool = True
     last_error: str = ""
@@ -118,6 +117,35 @@ class VncCollaborationManager:
         self._sessions_by_id: Dict[str, VncCollaborationSession] = {}
         self._session_ids_by_agent: Dict[str, str] = {}
 
+    def _assign_owner_locked(
+        self,
+        session: VncCollaborationSession,
+        *,
+        preferred_participant_id: str = "",
+    ) -> Optional[VncParticipant]:
+        if not session.participants:
+            session.controller_operator_id = None
+            session.controller_participant_id = None
+            return None
+        normalized_preferred = _clean_text(preferred_participant_id)
+        participant: Optional[VncParticipant] = None
+        if normalized_preferred:
+            participant = session.participants.get(normalized_preferred)
+        if participant is None:
+            participant = sorted(
+                session.participants.values(),
+                key=lambda item: (
+                    str(item.operator_id or "").lower(),
+                    str(item.participant_id or ""),
+                ),
+            )[0]
+        for existing in session.participants.values():
+            existing.role = "controller"
+        session.controller_operator_id = participant.operator_id
+        session.controller_participant_id = participant.participant_id
+        session.state = "active"
+        return participant
+
     def _cleanup_stale_locked(self) -> None:
         now = _now_ts()
         stale_sessions: List[str] = []
@@ -134,11 +162,7 @@ class VncCollaborationManager:
             for participant_id in stale_participants:
                 participant = session.participants.pop(participant_id, None)
                 if participant is not None and participant.operator_id == session.controller_operator_id:
-                    session.controller_operator_id = None
-                    session.controller_participant_id = None
-                    session.state = "controller_vacant"
-                    session.controller_password = _generate_password()
-                    session.credential_revision += 1
+                    self._assign_owner_locked(session)
                     session.touch()
             if not session.participants:
                 stale_sessions.append(session_id)
@@ -165,7 +189,6 @@ class VncCollaborationManager:
             controller_operator_id=operator_id,
             controller_participant_id=participant.participant_id,
             controller_password=_generate_password(),
-            spectator_password=_generate_password(),
             remove_wallpaper=bool(remove_wallpaper),
             participants={participant.participant_id: participant},
         )
@@ -198,28 +221,28 @@ class VncCollaborationManager:
             session.remove_wallpaper = bool(remove_wallpaper)
             participant = session.participant_for_operator(normalized_operator_id)
             if participant is None:
-                role = "controller" if not session.controller_operator_id else "spectator"
                 now = _now_ts()
                 participant = VncParticipant(
                     participant_id=uuid.uuid4().hex,
                     operator_id=normalized_operator_id,
-                    role=role,
+                    role="controller",
                     joined_at=now,
                     last_activity_at=now,
                 )
                 session.participants[participant.participant_id] = participant
-                if role == "controller":
-                    session.controller_operator_id = normalized_operator_id
-                    session.controller_participant_id = participant.participant_id
-                    session.state = "active"
+                if not session.controller_operator_id:
+                    self._assign_owner_locked(session, preferred_participant_id=participant.participant_id)
+                else:
+                    participant.role = "controller"
+                    if session.state == "reconnect_pending":
+                        session.state = "active"
                 session.touch()
                 return session, participant, False
-            if session.controller_operator_id == normalized_operator_id:
-                participant.role = "controller"
-                if session.state == "reconnect_pending":
-                    session.state = "active"
-            elif participant.role != "spectator":
-                participant.role = "spectator"
+            participant.role = "controller"
+            if session.state == "reconnect_pending":
+                session.state = "active"
+            if not session.controller_operator_id:
+                self._assign_owner_locked(session, preferred_participant_id=participant.participant_id)
             participant.touch()
             session.touch()
             return session, participant, False
@@ -303,23 +326,13 @@ class VncCollaborationManager:
                 raise KeyError("target_not_found")
             if target_participant.operator_id == actor and session.controller_operator_id == actor:
                 raise ValueError("target_already_controller")
-            actor_participant.role = "spectator"
             target_participant.role = "controller"
-            session.controller_operator_id = target_participant.operator_id
-            session.controller_participant_id = target_participant.participant_id
-            session.controller_password = _generate_password()
-            session.state = "active"
-            session.credential_revision += 1
+            actor_participant.role = "controller"
+            self._assign_owner_locked(session, preferred_participant_id=target_participant.participant_id)
             session.touch()
-            reconnect_participants = sorted(
-                {
-                    actor_participant.participant_id,
-                    target_participant.participant_id,
-                }
-            )
             return {
                 "session": session,
-                "reconnect_participants": reconnect_participants,
+                "reconnect_participants": [],
             }
 
     def leave_or_close(
@@ -362,18 +375,17 @@ class VncCollaborationManager:
                     session.touch()
                 else:
                     session.participants.pop(participant.participant_id, None)
-                    if participant.operator_id == session.controller_operator_id:
-                        session.controller_operator_id = None
-                        session.controller_participant_id = None
-                        session.controller_password = _generate_password()
-                        session.credential_revision += 1
-                        controller_vacant = bool(session.participants)
-                        session.state = "controller_vacant" if controller_vacant else "closed"
                     if not session.participants:
                         closed = True
                         self._sessions_by_id.pop(session.session_id, None)
                         self._session_ids_by_agent.pop(session.agent_id, None)
                     else:
+                        if participant.operator_id == session.controller_operator_id:
+                            self._assign_owner_locked(session)
+                        else:
+                            for existing in session.participants.values():
+                                existing.role = "controller"
+                            session.state = "active"
                         session.touch()
             return {
                 "closed": closed,
@@ -497,12 +509,8 @@ class VncCollaborationManager:
             "current_participant_id": current_participant_id,
             "controller_vacant": session.state == "controller_vacant",
             "reconnect_pending": session.state == "reconnect_pending",
-            "can_handoff": bool(current_operator and current_operator == session.controller_operator_id and len(participants) > 1),
-            "can_claim_control": bool(
-                current_operator
-                and session.state == "controller_vacant"
-                and current_participant_role == "spectator"
-            ),
+            "can_handoff": False,
+            "can_claim_control": False,
         }
 
 

@@ -190,7 +190,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             "session_state": session.state,
             "controller_operator_id": session.controller_operator_id or "",
             "controller_password": session.controller_password,
-            "view_only_password": session.spectator_password,
+            "view_only_password": "",
             "credential_revision": int(session.credential_revision or 0),
             "remove_wallpaper": bool(session.remove_wallpaper),
             "session": manager.session_snapshot(session),

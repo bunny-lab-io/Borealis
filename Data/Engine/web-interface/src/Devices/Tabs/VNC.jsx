@@ -232,7 +232,6 @@ export default function ReverseTunnelVnc({ device }) {
   const [participantId, setParticipantId] = useState("");
   const [participantRole, setParticipantRole] = useState("");
   const [sessionDetails, setSessionDetails] = useState(null);
-  const [handoffLoading, setHandoffLoading] = useState(false);
   const performanceLevel = 2;
   const [scaleViewport, setScaleViewport] = useState(true);
   const [clipViewport, setClipViewport] = useState(true);
@@ -266,7 +265,7 @@ export default function ReverseTunnelVnc({ device }) {
   const qualityLevel = Math.min(8, Math.max(0, performanceLevel));
   const compressionLevel = Math.max(0, 8 - qualityLevel);
   const dragViewport = false;
-  const effectiveViewOnly = viewOnly || (participantRole && participantRole !== "controller");
+  const effectiveViewOnly = viewOnly;
 
   const applySessionBootstrap = useCallback((data) => {
     const nextSession = data?.session && typeof data.session === "object" ? data.session : null;
@@ -701,56 +700,11 @@ export default function ReverseTunnelVnc({ device }) {
     };
   }, [refreshSessionDetails, sessionId]);
 
-  const handoffControl = useCallback(
-    async (targetOperatorId = "") => {
-      if (!sessionIdRef.current) return;
-      setHandoffLoading(true);
-      setStatusMessage("");
-      try {
-        const resp = await fetch("/api/vnc/handoff", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({
-            session_id: sessionIdRef.current,
-            target_operator_id: targetOperatorId || undefined,
-          }),
-        });
-        const data = await resp.json().catch(() => ({}));
-        if (!resp.ok) {
-          throw new Error(data?.error || `HTTP ${resp.status}`);
-        }
-        if (data?.session) {
-          setSessionDetails(data.session);
-          setParticipantRole(normalizeText(data?.participant_role || data?.session?.current_operator_role));
-          setParticipantId(normalizeText(data?.session?.current_participant_id));
-        }
-        setStatusMessage(
-          targetOperatorId
-            ? `Control handed to ${targetOperatorId}. Reconnecting...`
-            : "Claiming control. Reconnecting..."
-        );
-        if (data?.reconnect_required) {
-          teardownDisplay();
-          setSessionState("idle");
-          setVncStage("disconnected");
-          await sleep(300);
-          await handleConnect();
-        }
-      } catch (error) {
-        setStatusMessage(String(error?.message || error || "Failed to change control."));
-      } finally {
-        setHandoffLoading(false);
-      }
-    },
-    [handleConnect, teardownDisplay]
-  );
-
   const injectClipboardKeystrokes = useCallback(async (prefilledText = "") => {
     const rfb = rfbRef.current;
     if (!rfb) return;
     if (effectiveViewOnly) {
-      setStatusMessage("Clipboard input is disabled for spectators.");
+      setStatusMessage("Clipboard input is disabled while view only is enabled.");
       return;
     }
     let text = prefilledText || "";
@@ -785,7 +739,7 @@ export default function ReverseTunnelVnc({ device }) {
     const rfb = rfbRef.current;
     if (!rfb) return;
     if (effectiveViewOnly) {
-      setStatusMessage("Clipboard input is disabled for spectators.");
+      setStatusMessage("Clipboard input is disabled while view only is enabled.");
       return;
     }
     let text = "";
@@ -816,7 +770,7 @@ export default function ReverseTunnelVnc({ device }) {
     const rfb = rfbRef.current;
     if (!rfb) return;
     if (effectiveViewOnly) {
-      setStatusMessage("Keyboard input is disabled for spectators.");
+      setStatusMessage("Keyboard input is disabled while view only is enabled.");
       return;
     }
     try {
@@ -832,7 +786,7 @@ export default function ReverseTunnelVnc({ device }) {
       const rfb = rfbRef.current;
       if (!rfb) return;
       if (effectiveViewOnly) {
-        setStatusMessage("Power controls are disabled for spectators.");
+        setStatusMessage("Power controls are disabled while view only is enabled.");
         return;
       }
       const confirmed = window.confirm(`Send ${action} request to the remote machine?`);
@@ -914,16 +868,6 @@ export default function ReverseTunnelVnc({ device }) {
   }, []);
 
   const isConnected = sessionState === "connected";
-  const sessionParticipants = useMemo(
-    () => (Array.isArray(sessionDetails?.participants) ? sessionDetails.participants : []),
-    [sessionDetails]
-  );
-  const handoffTargets = useMemo(
-    () => sessionParticipants.filter((participant) => normalizeText(participant?.role) !== "controller"),
-    [sessionParticipants]
-  );
-  const canClaimControl = Boolean(sessionDetails?.can_claim_control);
-  const canHandoff = Boolean(sessionDetails?.can_handoff);
   const sessionStateLabel = normalizeText(sessionDetails?.state || "idle") || "idle";
   const controllerOperator = normalizeText(sessionDetails?.controller_operator_id) || "Unassigned";
   const shutdownSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "shutdown");
@@ -956,10 +900,7 @@ export default function ReverseTunnelVnc({ device }) {
       case "connected":
         return {
           label: "Live",
-          detail:
-            participantRole === "spectator"
-              ? "Desktop stream active in spectator mode."
-              : "Desktop stream active.",
+          detail: "Desktop stream active.",
           accent: MAGIC_UI.accentC,
           detailTone: MAGIC_UI.textMuted,
         };
@@ -1075,7 +1016,7 @@ export default function ReverseTunnelVnc({ device }) {
             startIcon={isConnected ? <StopIcon /> : <PlayIcon />}
             variant="outlined"
             sx={{ ...simpleButtonSx, width: "100%", minHeight: 40, py: 1 }}
-            disabled={loading || handoffLoading || (!isConnected && !agentId)}
+            disabled={loading || (!isConnected && !agentId)}
             onClick={isConnected ? handleDisconnect : handleConnect}
           >
             {isConnected ? "Disconnect" : sessionId ? "Reconnect" : "Connect"}
@@ -1088,45 +1029,18 @@ export default function ReverseTunnelVnc({ device }) {
             </Box>
             <Stack spacing={0.6}>
               <Typography variant="body2" sx={{ color: SIDEBAR_THEME.text }}>
-                Role: {participantRole ? participantRole : "Disconnected"}
+                Access: {sessionId ? "Interactive" : "Disconnected"}
               </Typography>
               <Typography variant="body2" sx={{ color: SIDEBAR_THEME.text }}>
                 State: {sessionStateLabel}
               </Typography>
               <Typography variant="body2" sx={{ color: SIDEBAR_THEME.text }}>
-                Controller: {controllerOperator}
+                Owner: {controllerOperator}
               </Typography>
               {sessionId ? (
                 <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
                   Session ID: {sessionId}
                 </Typography>
-              ) : null}
-              {canClaimControl ? (
-                <Button
-                  size="small"
-                  variant="outlined"
-                  sx={simpleButtonSx}
-                  disabled={handoffLoading || loading}
-                  onClick={() => handoffControl()}
-                >
-                  Claim Control
-                </Button>
-              ) : null}
-              {canHandoff && handoffTargets.length ? (
-                <Stack spacing={1}>
-                  {handoffTargets.map((participant) => (
-                    <Button
-                      key={participant.participant_id || participant.operator_id}
-                      size="small"
-                      variant="outlined"
-                      sx={simpleButtonSx}
-                      disabled={handoffLoading || loading}
-                      onClick={() => handoffControl(normalizeText(participant.operator_id))}
-                    >
-                      Hand Off to {normalizeText(participant.operator_id) || "Spectator"}
-                    </Button>
-                  ))}
-                </Stack>
               ) : null}
             </Stack>
           </Stack>
@@ -1156,16 +1070,11 @@ export default function ReverseTunnelVnc({ device }) {
                   <Switch
                     checked={effectiveViewOnly}
                     onChange={(event) => setViewOnly(event.target.checked)}
-                    disabled={participantRole === "spectator"}
                     size="small"
                     color="info"
                   />
                 }
-                label={
-                  <Typography variant="body2">
-                    {participantRole === "spectator" ? "View only (spectator enforced)" : "View only"}
-                  </Typography>
-                }
+                label={<Typography variant="body2">View only</Typography>}
               />
 
               <Divider sx={{ borderColor: "rgba(148,163,184,0.15)" }} />
@@ -1342,7 +1251,7 @@ export default function ReverseTunnelVnc({ device }) {
                 </Typography>
                 {sessionId ? (
                   <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
-                    Participant: {participantId || "pending"} {participantRole ? `(${participantRole})` : ""}
+                    Participant: {participantId || "pending"} {participantRole ? "(interactive)" : ""}
                   </Typography>
                 ) : null}
                 {statusMessage && vncStage !== "error" && vncStage !== "auth_failed" ? (
