@@ -571,6 +571,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     display: true,
     clipboard: true,
     power: true,
+    session: true,
   });
   const [resizeSession, setResizeSession] = useState(true);
   const [capabilities, setCapabilities] = useState({});
@@ -2245,13 +2246,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
               <SidebarNavRow
                 icon={<ClipboardIcon fontSize="small" />}
                 label="Sync remote clipboard to browser"
-                active={clipboardSync}
+                active={showClipboardActions && clipboardSync}
+                disabled={!showClipboardActions}
                 onClick={() => setClipboardSync((previous) => !previous)}
                 trailing={
                   <Switch
                     checked={clipboardSync}
                     onClick={(event) => event.stopPropagation()}
                     onChange={(event) => setClipboardSync(event.target.checked)}
+                    disabled={!showClipboardActions}
                     size="small"
                     color="info"
                   />
@@ -2304,23 +2307,21 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
             </>
           </SidebarSection>
 
-          <Box
-            sx={{
-              mt: "auto",
-              display: "flex",
-              width: "100%",
-              pt: 0.75,
-            }}
-          >
-            <SidebarNavRow
-              icon={<StopIcon fontSize="small" />}
-              label="Disconnect"
-              disabled={!isConnected}
-              onClick={handleDisconnect}
-            />
+          <Box sx={{ mt: "auto" }}>
+            <SidebarSection
+              sectionId="session"
+              title="Session Control"
+            >
+              <SidebarNavRow
+                icon={<StopIcon fontSize="small" />}
+                label="Disconnect"
+                disabled={!isConnected}
+                onClick={handleDisconnect}
+              />
+            </SidebarSection>
           </Box>
 
-          <Box sx={{ px: 1, pb: 1, pt: 0.5 }}>
+          <Box sx={{ px: 1, pb: 1 }}>
             <Box
               component="button"
               type="button"
