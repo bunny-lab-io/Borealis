@@ -2256,11 +2256,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                     Showing the live framebuffer as a single display map.
                   </Typography>
                 ) : null}
-                {!displaySettingsEnabled ? (
-                  <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                    Connect to enable display controls.
-                  </Typography>
-                ) : null}
               </Box>
               </>
             </SidebarSection>
