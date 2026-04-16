@@ -271,6 +271,12 @@ function coerceInteger(value, defaultValue = 0) {
   return Number.isFinite(parsed) ? parsed : defaultValue;
 }
 
+function clampNumber(value, min, max) {
+  if (!Number.isFinite(value)) return min;
+  if (max < min) return min;
+  return Math.min(Math.max(value, min), max);
+}
+
 function normalizeDisplayTopology(value) {
   if (!Array.isArray(value)) return [];
   return value
@@ -402,13 +408,22 @@ function selectedDisplayBounds(topology, selectionIds) {
   return displayTopologyBounds(selected);
 }
 
-function buildDisplayLayoutFrames(
+function buildDisplayLayoutGeometry(
   topology,
   { frameWidth = 256, frameHeight = 126, padding = 10 } = {}
 ) {
   const bounds = displayTopologyBounds(topology);
   if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
-    return [];
+    return {
+      bounds: null,
+      frameWidth,
+      frameHeight,
+      offsetX: padding,
+      offsetY: padding,
+      padding,
+      scale: 1,
+      frames: [],
+    };
   }
   const innerWidth = Math.max(1, frameWidth - padding * 2);
   const innerHeight = Math.max(1, frameHeight - padding * 2);
@@ -417,13 +432,26 @@ function buildDisplayLayoutFrames(
   const layoutHeight = bounds.height * scale;
   const offsetX = padding + (innerWidth - layoutWidth) / 2;
   const offsetY = padding + (innerHeight - layoutHeight) / 2;
-  return topology.map((item) => ({
-    ...item,
-    x: offsetX + (item.left - bounds.left) * scale,
-    y: offsetY + (item.top - bounds.top) * scale,
-    widthPx: Math.max(28, item.width * scale),
-    heightPx: Math.max(24, item.height * scale),
-  }));
+  return {
+    bounds,
+    frameWidth,
+    frameHeight,
+    offsetX,
+    offsetY,
+    padding,
+    scale,
+    frames: topology.map((item) => ({
+      ...item,
+      x: offsetX + (item.left - bounds.left) * scale,
+      y: offsetY + (item.top - bounds.top) * scale,
+      widthPx: Math.max(28, item.width * scale),
+      heightPx: Math.max(24, item.height * scale),
+    })),
+  };
+}
+
+function buildDisplayLayoutFrames(topology, options) {
+  return buildDisplayLayoutGeometry(topology, options).frames;
 }
 
 function aspectRatioMatches(leftSize, rightSize, tolerance = 0.12) {
@@ -507,7 +535,7 @@ export default function ReverseTunnelVnc({ device }) {
   const [sessionId, setSessionId] = useState("");
   const [, setParticipantId] = useState("");
   const performanceLevel = 2;
-  const [displayMode, setDisplayMode] = useState("fit");
+  const [displayMode, setDisplayMode] = useState("scaled");
   const [resizeSession, setResizeSession] = useState(true);
   const [capabilities, setCapabilities] = useState({});
   const [selectedMonitorIds, setSelectedMonitorIds] = useState([]);
@@ -515,19 +543,21 @@ export default function ReverseTunnelVnc({ device }) {
   const [displayTopology, setDisplayTopology] = useState([]);
   const [framebufferSize, setFramebufferSize] = useState({ width: 0, height: 0 });
   const [renderedCanvasSize, setRenderedCanvasSize] = useState({ width: 0, height: 0 });
-  const [scrollMetrics, setScrollMetrics] = useState({
-    viewportWidth: 0,
-    viewportHeight: 0,
-    contentWidth: 0,
-    contentHeight: 0,
-    scrollLeft: 0,
-    scrollTop: 0,
+  const [viewportPreview, setViewportPreview] = useState({
+    left: 0,
+    top: 0,
+    width: 0,
+    height: 0,
+    targetLeft: 0,
+    targetTop: 0,
+    targetWidth: 0,
+    targetHeight: 0,
+    interactive: false,
+    mode: "scaled",
   });
 
   const containerRef = useRef(null);
   const displayScrollRef = useRef(null);
-  const horizontalScrollbarRef = useRef(null);
-  const verticalScrollbarRef = useRef(null);
   const displayRef = useRef(null);
   const rfbRef = useRef(null);
   const agentIdRef = useRef("");
@@ -538,9 +568,16 @@ export default function ReverseTunnelVnc({ device }) {
   const manualDisconnectRef = useRef(false);
   const viewportSignatureRef = useRef("");
   const forcedViewportKeyRef = useRef("");
-  const suppressViewportScrollSyncRef = useRef(false);
-  const suppressHorizontalScrollSyncRef = useRef(false);
-  const suppressVerticalScrollSyncRef = useRef(false);
+  const viewportStateRef = useRef({
+    mode: "scaled",
+    targetBounds: null,
+    targetPreviewBounds: null,
+    viewportX: 0,
+    viewportY: 0,
+    viewportWidth: 0,
+    viewportHeight: 0,
+    interactive: false,
+  });
 
   const agentId = useMemo(() => {
     return (
@@ -558,8 +595,6 @@ export default function ReverseTunnelVnc({ device }) {
   const compressionLevel = Math.max(0, 8 - qualityLevel);
   const dragViewport = false;
   const effectiveViewOnly = viewOnly;
-  const scaleViewport = displayMode === "fit";
-  const scaledViewport = displayMode === "scaled";
   const effectiveResizeSession = resizeSession && displayMode === "fit";
   const normalizedDisplayTopology = useMemo(
     () => normalizeDisplayTopology(displayTopology),
@@ -578,9 +613,13 @@ export default function ReverseTunnelVnc({ device }) {
     () => displayDiagramTopology(normalizedDisplayTopology, framebufferSize, renderedCanvasSize),
     [framebufferSize, normalizedDisplayTopology, renderedCanvasSize]
   );
-  const displayLayoutFrames = useMemo(
-    () => buildDisplayLayoutFrames(diagramTopology),
+  const displayLayoutGeometry = useMemo(
+    () => buildDisplayLayoutGeometry(diagramTopology),
     [diagramTopology]
+  );
+  const displayLayoutFrames = useMemo(
+    () => displayLayoutGeometry.frames,
+    [displayLayoutGeometry]
   );
   const effectiveSelectedMonitorIds = useMemo(
     () => normalizeMonitorSelection(selectedMonitorIds, normalizedDisplayTopology),
@@ -650,17 +689,31 @@ export default function ReverseTunnelVnc({ device }) {
   const resetDisconnectedViewState = useCallback(() => {
     viewportSignatureRef.current = "";
     forcedViewportKeyRef.current = "";
+    viewportStateRef.current = {
+      mode: "scaled",
+      targetBounds: null,
+      targetPreviewBounds: null,
+      viewportX: 0,
+      viewportY: 0,
+      viewportWidth: 0,
+      viewportHeight: 0,
+      interactive: false,
+    };
     setDisplayTopology([]);
     setSelectedMonitorIds([]);
     setViewportHint("");
     setCapabilities({});
-    setScrollMetrics({
-      viewportWidth: 0,
-      viewportHeight: 0,
-      contentWidth: 0,
-      contentHeight: 0,
-      scrollLeft: 0,
-      scrollTop: 0,
+    setViewportPreview({
+      left: 0,
+      top: 0,
+      width: 0,
+      height: 0,
+      targetLeft: 0,
+      targetTop: 0,
+      targetWidth: 0,
+      targetHeight: 0,
+      interactive: false,
+      mode: "scaled",
     });
   }, []);
 
@@ -680,15 +733,29 @@ export default function ReverseTunnelVnc({ device }) {
     }
     viewportSignatureRef.current = "";
     forcedViewportKeyRef.current = "";
-    setFramebufferSize({ width: 0, height: 0 });
-    setRenderedCanvasSize({ width: 0, height: 0 });
-    setScrollMetrics({
+    viewportStateRef.current = {
+      mode: "scaled",
+      targetBounds: null,
+      targetPreviewBounds: null,
+      viewportX: 0,
+      viewportY: 0,
       viewportWidth: 0,
       viewportHeight: 0,
-      contentWidth: 0,
-      contentHeight: 0,
-      scrollLeft: 0,
-      scrollTop: 0,
+      interactive: false,
+    };
+    setFramebufferSize({ width: 0, height: 0 });
+    setRenderedCanvasSize({ width: 0, height: 0 });
+    setViewportPreview({
+      left: 0,
+      top: 0,
+      width: 0,
+      height: 0,
+      targetLeft: 0,
+      targetTop: 0,
+      targetWidth: 0,
+      targetHeight: 0,
+      interactive: false,
+      mode: "scaled",
     });
   }, []);
 
@@ -714,83 +781,6 @@ export default function ReverseTunnelVnc({ device }) {
       canvas.style.boxShadow = VNC_CANVAS_BOX_SHADOW;
     }
   }, []);
-
-  const syncExternalScrollbars = useCallback((metrics) => {
-    const horizontal = horizontalScrollbarRef.current;
-    const vertical = verticalScrollbarRef.current;
-    if (horizontal && Math.abs(Number(horizontal.scrollLeft || 0) - Number(metrics.scrollLeft || 0)) > 1) {
-      suppressHorizontalScrollSyncRef.current = true;
-      horizontal.scrollLeft = Number(metrics.scrollLeft || 0);
-      window.requestAnimationFrame(() => {
-        suppressHorizontalScrollSyncRef.current = false;
-      });
-    }
-    if (vertical && Math.abs(Number(vertical.scrollTop || 0) - Number(metrics.scrollTop || 0)) > 1) {
-      suppressVerticalScrollSyncRef.current = true;
-      vertical.scrollTop = Number(metrics.scrollTop || 0);
-      window.requestAnimationFrame(() => {
-        suppressVerticalScrollSyncRef.current = false;
-      });
-    }
-  }, []);
-
-  const syncScrollMetrics = useCallback(() => {
-    const viewportHost = displayScrollRef.current;
-    if (!viewportHost) return;
-    const nextMetrics = {
-      viewportWidth: Math.max(0, Math.round(Number(viewportHost.clientWidth || 0))),
-      viewportHeight: Math.max(0, Math.round(Number(viewportHost.clientHeight || 0))),
-      contentWidth: Math.max(0, Math.round(Number(viewportHost.scrollWidth || 0))),
-      contentHeight: Math.max(0, Math.round(Number(viewportHost.scrollHeight || 0))),
-      scrollLeft: Math.max(0, Math.round(Number(viewportHost.scrollLeft || 0))),
-      scrollTop: Math.max(0, Math.round(Number(viewportHost.scrollTop || 0))),
-    };
-    setScrollMetrics((previous) => {
-      if (
-        previous.viewportWidth === nextMetrics.viewportWidth &&
-        previous.viewportHeight === nextMetrics.viewportHeight &&
-        previous.contentWidth === nextMetrics.contentWidth &&
-        previous.contentHeight === nextMetrics.contentHeight &&
-        previous.scrollLeft === nextMetrics.scrollLeft &&
-        previous.scrollTop === nextMetrics.scrollTop
-      ) {
-        return previous;
-      }
-      return nextMetrics;
-    });
-    syncExternalScrollbars(nextMetrics);
-  }, [syncExternalScrollbars]);
-
-  const handleViewportScroll = useCallback(() => {
-    if (suppressViewportScrollSyncRef.current) return;
-    syncScrollMetrics();
-  }, [syncScrollMetrics]);
-
-  const handleHorizontalScrollbarScroll = useCallback(() => {
-    if (suppressHorizontalScrollSyncRef.current) return;
-    const viewportHost = displayScrollRef.current;
-    const horizontal = horizontalScrollbarRef.current;
-    if (!viewportHost || !horizontal) return;
-    suppressViewportScrollSyncRef.current = true;
-    viewportHost.scrollLeft = Number(horizontal.scrollLeft || 0);
-    window.requestAnimationFrame(() => {
-      suppressViewportScrollSyncRef.current = false;
-      syncScrollMetrics();
-    });
-  }, [syncScrollMetrics]);
-
-  const handleVerticalScrollbarScroll = useCallback(() => {
-    if (suppressVerticalScrollSyncRef.current) return;
-    const viewportHost = displayScrollRef.current;
-    const vertical = verticalScrollbarRef.current;
-    if (!viewportHost || !vertical) return;
-    suppressViewportScrollSyncRef.current = true;
-    viewportHost.scrollTop = Number(vertical.scrollTop || 0);
-    window.requestAnimationFrame(() => {
-      suppressViewportScrollSyncRef.current = false;
-      syncScrollMetrics();
-    });
-  }, [syncScrollMetrics]);
 
   const syncFramebufferSize = useCallback((client) => {
     const display = client?._display;
@@ -838,6 +828,211 @@ export default function ReverseTunnelVnc({ device }) {
     });
     return { width, height };
   }, []);
+
+  const syncViewportPreview = useCallback(
+    ({
+      mode,
+      targetBounds,
+      targetPreviewBounds,
+      viewportX,
+      viewportY,
+      viewportWidth,
+      viewportHeight,
+      interactive,
+    }) => {
+      const nextPreview = {
+        left: targetPreviewBounds.left + (viewportX - targetBounds.x),
+        top: targetPreviewBounds.top + (viewportY - targetBounds.y),
+        width: viewportWidth,
+        height: viewportHeight,
+        targetLeft: targetPreviewBounds.left,
+        targetTop: targetPreviewBounds.top,
+        targetWidth: targetPreviewBounds.width,
+        targetHeight: targetPreviewBounds.height,
+        interactive,
+        mode,
+      };
+      viewportStateRef.current = {
+        mode,
+        targetBounds,
+        targetPreviewBounds,
+        viewportX,
+        viewportY,
+        viewportWidth,
+        viewportHeight,
+        interactive,
+      };
+      setViewportPreview((previous) => {
+        if (
+          previous.left === nextPreview.left &&
+          previous.top === nextPreview.top &&
+          previous.width === nextPreview.width &&
+          previous.height === nextPreview.height &&
+          previous.targetLeft === nextPreview.targetLeft &&
+          previous.targetTop === nextPreview.targetTop &&
+          previous.targetWidth === nextPreview.targetWidth &&
+          previous.targetHeight === nextPreview.targetHeight &&
+          previous.interactive === nextPreview.interactive &&
+          previous.mode === nextPreview.mode
+        ) {
+          return previous;
+        }
+        return nextPreview;
+      });
+    },
+    []
+  );
+
+  const applyViewportFrame = useCallback(
+    (
+      rfb,
+      {
+        mode,
+        targetBounds,
+        targetPreviewBounds,
+        forceReset = false,
+        requestedCenter = null,
+      }
+    ) => {
+      const display = rfb?._display;
+      const viewportHost = displayScrollRef.current || containerRef.current;
+      if (!display || !viewportHost || !targetBounds || !targetPreviewBounds) {
+        return null;
+      }
+
+      const hostWidth = Math.max(1, Math.round(Number(viewportHost.clientWidth || 0)));
+      const hostHeight = Math.max(1, Math.round(Number(viewportHost.clientHeight || 0)));
+      const previous = viewportStateRef.current;
+      const sameTarget =
+        previous.mode === mode &&
+        previous.targetBounds?.x === targetBounds.x &&
+        previous.targetBounds?.y === targetBounds.y &&
+        previous.targetBounds?.width === targetBounds.width &&
+        previous.targetBounds?.height === targetBounds.height &&
+        previous.targetPreviewBounds?.left === targetPreviewBounds.left &&
+        previous.targetPreviewBounds?.top === targetPreviewBounds.top &&
+        previous.targetPreviewBounds?.width === targetPreviewBounds.width &&
+        previous.targetPreviewBounds?.height === targetPreviewBounds.height;
+
+      if (mode === "fit") {
+        const viewportLoc = display?._viewportLoc || { x: 0, y: 0 };
+        if (
+          typeof display.viewportChangePos === "function" &&
+          (viewportLoc.x !== targetBounds.x || viewportLoc.y !== targetBounds.y)
+        ) {
+          display.viewportChangePos(targetBounds.x - viewportLoc.x, targetBounds.y - viewportLoc.y);
+        }
+        if (targetBounds.width > 0 && targetBounds.height > 0) {
+          display.clipViewport = true;
+          display.viewportChangeSize(targetBounds.width, targetBounds.height);
+        } else {
+          display.clipViewport = false;
+        }
+        if (typeof display.autoscale === "function") {
+          display.autoscale(hostWidth, hostHeight);
+        }
+        if (typeof display.scale !== "undefined") {
+          display.scale = 1.0;
+        }
+        syncViewportPreview({
+          mode,
+          targetBounds,
+          targetPreviewBounds,
+          viewportX: targetBounds.x,
+          viewportY: targetBounds.y,
+          viewportWidth: targetBounds.width,
+          viewportHeight: targetBounds.height,
+          interactive: false,
+        });
+        return {
+          x: targetBounds.x,
+          y: targetBounds.y,
+          width: targetBounds.width,
+          height: targetBounds.height,
+          interactive: false,
+        };
+      }
+
+      let viewportWidth = targetBounds.width;
+      let viewportHeight = targetBounds.height;
+      let scale = 1;
+      if (mode === "scaled") {
+        scale = hostHeight > 0 ? hostHeight / targetBounds.height : 1;
+        const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+        viewportWidth = Math.min(
+          targetBounds.width,
+          Math.max(1, Math.round(hostWidth / safeScale))
+        );
+        viewportHeight = targetBounds.height;
+        scale = safeScale;
+      } else {
+        viewportWidth = Math.min(targetBounds.width, hostWidth);
+        viewportHeight = Math.min(targetBounds.height, hostHeight);
+      }
+
+      let nextX = sameTarget && !forceReset ? previous.viewportX : targetBounds.x;
+      let nextY = sameTarget && !forceReset ? previous.viewportY : targetBounds.y;
+      if (requestedCenter) {
+        nextX =
+          targetBounds.x +
+          (requestedCenter.x - targetPreviewBounds.left) -
+          viewportWidth / 2;
+        nextY =
+          mode === "scaled"
+            ? targetBounds.y
+            : targetBounds.y +
+              (requestedCenter.y - targetPreviewBounds.top) -
+              viewportHeight / 2;
+      }
+      nextX = clampNumber(
+        Math.round(nextX),
+        targetBounds.x,
+        targetBounds.x + Math.max(0, targetBounds.width - viewportWidth)
+      );
+      nextY =
+        mode === "scaled"
+          ? targetBounds.y
+          : clampNumber(
+              Math.round(nextY),
+              targetBounds.y,
+              targetBounds.y + Math.max(0, targetBounds.height - viewportHeight)
+            );
+
+      display.clipViewport = true;
+      display.viewportChangeSize(viewportWidth, viewportHeight);
+      const viewportLoc = display?._viewportLoc || { x: 0, y: 0 };
+      if (typeof display.viewportChangePos === "function") {
+        display.viewportChangePos(nextX - viewportLoc.x, nextY - viewportLoc.y);
+      } else if (typeof display.viewportChange === "function") {
+        display.viewportChange(nextX - viewportLoc.x, nextY - viewportLoc.y, viewportWidth, viewportHeight);
+      }
+      if (typeof display.scale !== "undefined") {
+        display.scale = mode === "scaled" ? scale : 1.0;
+      }
+      const interactive =
+        mode === "scaled"
+          ? targetBounds.width > viewportWidth
+          : targetBounds.width > viewportWidth || targetBounds.height > viewportHeight;
+      syncViewportPreview({
+        mode,
+        targetBounds,
+        targetPreviewBounds,
+        viewportX: nextX,
+        viewportY: nextY,
+        viewportWidth,
+        viewportHeight,
+        interactive,
+      });
+      return {
+        x: nextX,
+        y: nextY,
+        width: viewportWidth,
+        height: viewportHeight,
+        interactive,
+      };
+    },
+    [syncViewportPreview]
+  );
 
   const disconnectVnc = useCallback(async (reason = "operator_disconnect") => {
     const currentAgentId = agentIdRef.current;
@@ -1025,11 +1220,9 @@ export default function ReverseTunnelVnc({ device }) {
           if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
             window.requestAnimationFrame(() => {
               syncRenderedCanvasSize(rfb);
-              syncScrollMetrics();
             });
           } else {
             syncRenderedCanvasSize(rfb);
-            syncScrollMetrics();
           }
           setSessionState("connected");
           setVncStage("connected");
@@ -1124,7 +1317,6 @@ export default function ReverseTunnelVnc({ device }) {
       effectiveViewOnly,
       syncFramebufferSize,
       syncRenderedCanvasSize,
-      syncScrollMetrics,
     ]
   );
 
@@ -1340,8 +1532,6 @@ export default function ReverseTunnelVnc({ device }) {
     }
     const rfb = rfbRef.current;
     const display = rfb?._display;
-    const host = displayRef.current;
-    const viewportHost = displayScrollRef.current || host;
     if (!display) {
       setViewportHint("Viewport controls unavailable.");
       return;
@@ -1355,85 +1545,32 @@ export default function ReverseTunnelVnc({ device }) {
       return;
     }
     configureDisplaySurface(rfb, displayMode);
-
-    const applyViewportScale = (targetWidth, targetHeight) => {
-      if (scaleViewport && viewportHost && typeof display.autoscale === "function") {
-        display.autoscale(viewportHost.clientWidth, viewportHost.clientHeight);
-        return;
-      }
-      if (scaledViewport && typeof display.scale !== "undefined") {
-        const nextScale =
-          viewportHost && targetHeight > 0
-            ? Number(viewportHost.clientHeight || 0) / Number(targetHeight)
-            : 1.0;
-        display.scale = Number.isFinite(nextScale) && nextScale > 0 ? nextScale : 1.0;
-        return;
-      }
-      if (typeof display.scale !== "undefined") {
-        display.scale = 1.0;
-      }
-    };
-
-    const applyDisplayViewport = (target) => {
-      try {
-        display.clipViewport = true;
-        display.viewportChangeSize(target.w, target.h);
-        const viewportLoc = display?._viewportLoc || { x: 0, y: 0 };
-        if (typeof display.viewportChangePos === "function") {
-          display.viewportChangePos(target.x - viewportLoc.x, target.y - viewportLoc.y);
-        } else if (typeof display.viewportChange === "function") {
-          display.viewportChange(target.x - viewportLoc.x, target.y - viewportLoc.y, target.w, target.h);
-        }
-        applyViewportScale(target.w, target.h);
-        rfb.dragViewport = false;
-        setViewportHint("");
-        if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
-          window.requestAnimationFrame(() => {
-            syncRenderedCanvasSize(rfb);
-            syncScrollMetrics();
-          });
-        } else {
-          syncRenderedCanvasSize(rfb);
-          syncScrollMetrics();
-        }
-      } catch {
-        setViewportHint("Viewport controls not available.");
-      }
-    };
-
-    const applyFullFramebuffer = () => {
-      try {
-        if (viewportHost) {
-          viewportHost.scrollLeft = 0;
-          viewportHost.scrollTop = 0;
-        }
-        const viewportLoc = display?._viewportLoc || { x: 0, y: 0 };
-        if (typeof display.viewportChangePos === "function" && (viewportLoc.x || viewportLoc.y)) {
-          display.viewportChangePos(-viewportLoc.x, -viewportLoc.y);
-        }
-        if (typeof display.viewportChangeSize === "function") {
-          display.viewportChangeSize(fbWidth, fbHeight);
-        }
-        display.clipViewport = false;
-        applyViewportScale(fbWidth, fbHeight);
-        rfb.dragViewport = false;
-        setViewportHint("");
-        if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
-          window.requestAnimationFrame(() => {
-            syncRenderedCanvasSize(rfb);
-            syncScrollMetrics();
-          });
-        } else {
-          syncRenderedCanvasSize(rfb);
-          syncScrollMetrics();
-        }
-      } catch {
-        setViewportHint("Viewport controls not available.");
-      }
-    };
-
     const selectionBounds =
-      trustedTopology ? selectedDisplayBounds(normalizedDisplayTopology, normalizedSelection) : null;
+      displayMode === "fit" && trustedTopology
+        ? selectedDisplayBounds(normalizedDisplayTopology, normalizedSelection)
+        : null;
+    const targetBounds = selectionBounds && trustedTopology
+      ? {
+          x: selectionBounds.left - trustedTopology.left,
+          y: selectionBounds.top - trustedTopology.top,
+          width: selectionBounds.width,
+          height: selectionBounds.height,
+        }
+      : {
+          x: 0,
+          y: 0,
+          width: fbWidth,
+          height: fbHeight,
+        };
+    const targetPreviewBounds = selectionBounds && trustedTopology
+      ? selectionBounds
+      : trustedTopology || {
+          left: 0,
+          top: 0,
+          width: fbWidth,
+          height: fbHeight,
+        };
+    const viewportHost = displayScrollRef.current || containerRef.current;
     const hostWidth = Math.round(Number(viewportHost?.clientWidth || 0));
     const hostHeight = Math.round(Number(viewportHost?.clientHeight || 0));
     const modeSizeSignature =
@@ -1442,62 +1579,64 @@ export default function ReverseTunnelVnc({ device }) {
         : displayMode === "scaled"
           ? `|hostH=${hostHeight}`
           : "";
-    const targetSignature = selectionBounds && trustedTopology
-      ? `selection:${selectionBounds.left},${selectionBounds.top},${selectionBounds.width},${selectionBounds.height}`
-      : `full:${fbWidth}x${fbHeight}`;
+    const targetSignature =
+      displayMode === "fit" && selectionBounds && trustedTopology
+        ? `selection:${selectionBounds.left},${selectionBounds.top},${selectionBounds.width},${selectionBounds.height}`
+        : `full:${fbWidth}x${fbHeight}`;
     const viewportSignature = `${displayMode}|${targetSignature}${modeSizeSignature}`;
     const shouldResetViewport =
       options.forceReset === true ||
       displayMode === "fit" ||
       viewportSignatureRef.current !== viewportSignature;
 
-    if (selectionBounds && trustedTopology) {
-      if (!shouldResetViewport) {
-        setViewportHint("");
-        return;
-      }
-      const applyMonitorViewport = () => {
-        applyDisplayViewport({
-          x: selectionBounds.left - trustedTopology.left,
-          y: selectionBounds.top - trustedTopology.top,
-          w: selectionBounds.width,
-          h: selectionBounds.height,
-        });
-        viewportSignatureRef.current = viewportSignature;
-      };
-      if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
-        window.requestAnimationFrame(applyMonitorViewport);
-      } else {
-        applyMonitorViewport();
-      }
-      return;
-    }
-
     if (!shouldResetViewport) {
       setViewportHint("");
       return;
     }
 
+    const applyViewport = () => {
+      try {
+        const result = applyViewportFrame(rfb, {
+          mode: displayMode,
+          targetBounds,
+          targetPreviewBounds,
+          forceReset: shouldResetViewport,
+        });
+        if (!result) {
+          setViewportHint("Viewport controls unavailable.");
+          return;
+        }
+        rfb.dragViewport = false;
+        setViewportHint("");
+        if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+          window.requestAnimationFrame(() => {
+            syncRenderedCanvasSize(rfb);
+          });
+        } else {
+          syncRenderedCanvasSize(rfb);
+        }
+        viewportSignatureRef.current = viewportSignature;
+      } catch {
+        setViewportHint("Viewport controls not available.");
+      }
+    };
+
     if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
       window.requestAnimationFrame(() => {
-        applyFullFramebuffer();
-        viewportSignatureRef.current = viewportSignature;
+        applyViewport();
       });
     } else {
-      applyFullFramebuffer();
-      viewportSignatureRef.current = viewportSignature;
+      applyViewport();
     }
   }, [
+    applyViewportFrame,
     configureDisplaySurface,
     displayMode,
     normalizedDisplayTopology,
-    scaleViewport,
-    scaledViewport,
     syncFramebufferSize,
     syncRenderedCanvasSize,
     topologyBounds,
     topologyTrusted,
-    syncScrollMetrics,
   ]);
 
   const toggleMonitorSelection = useCallback((monitorId) => {
@@ -1517,9 +1656,67 @@ export default function ReverseTunnelVnc({ device }) {
   }, [normalizedDisplayTopology]);
 
   const isConnected = sessionState === "connected";
+  const selectionModeEnabled = !isConnected || displayMode === "fit";
+  const previewNavigationEnabled = isConnected && displayMode !== "fit";
+
+  const handlePreviewNavigate = useCallback(
+    (event) => {
+      if (!isConnected || displayMode === "fit") return;
+      if (typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      const rfb = rfbRef.current;
+      const state = viewportStateRef.current;
+      const geometry = displayLayoutGeometry;
+      if (!rfb || !state?.interactive || !geometry?.bounds || !geometry.scale) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const localX = event.clientX - rect.left;
+      const localY = event.clientY - rect.top;
+      const previewX =
+        geometry.bounds.left + (localX - geometry.offsetX) / geometry.scale;
+      const previewY =
+        geometry.bounds.top + (localY - geometry.offsetY) / geometry.scale;
+      const clampedCenter = {
+        x: clampNumber(
+          previewX,
+          state.targetPreviewBounds.left,
+          state.targetPreviewBounds.left + state.targetPreviewBounds.width
+        ),
+        y: clampNumber(
+          previewY,
+          state.targetPreviewBounds.top,
+          state.targetPreviewBounds.top + state.targetPreviewBounds.height
+        ),
+      };
+      try {
+        const applied = applyViewportFrame(rfb, {
+          mode: displayMode,
+          targetBounds: state.targetBounds,
+          targetPreviewBounds: state.targetPreviewBounds,
+          requestedCenter: clampedCenter,
+        });
+        if (!applied) return;
+        setViewportHint("");
+        if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+          window.requestAnimationFrame(() => {
+            syncRenderedCanvasSize(rfb);
+          });
+        } else {
+          syncRenderedCanvasSize(rfb);
+        }
+      } catch {
+        setViewportHint("Viewport controls not available.");
+      }
+    },
+    [applyViewportFrame, displayLayoutGeometry, displayMode, isConnected, syncRenderedCanvasSize]
+  );
 
   const forcedViewportKey = useMemo(
-    () => (isConnected ? `${displayMode}|${effectiveSelectedMonitorIds.join(",") || "-"}` : ""),
+    () =>
+      isConnected
+        ? `${displayMode}|${displayMode === "fit" ? effectiveSelectedMonitorIds.join(",") || "-" : "full"}`
+        : "",
     [displayMode, effectiveSelectedMonitorIds, isConnected]
   );
 
@@ -1569,7 +1766,6 @@ export default function ReverseTunnelVnc({ device }) {
       }
       frameId = window.requestAnimationFrame(() => {
         syncViewportSelection(effectiveSelectedMonitorIds, { updateState: false });
-        syncScrollMetrics();
       });
     });
     observer.observe(host);
@@ -1579,41 +1775,48 @@ export default function ReverseTunnelVnc({ device }) {
       }
       observer.disconnect();
     };
-  }, [effectiveSelectedMonitorIds, isConnected, syncScrollMetrics, syncViewportSelection]);
-  useEffect(() => {
-    if (!isConnected || typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
-      return undefined;
-    }
-    const frameId = window.requestAnimationFrame(() => {
-      syncScrollMetrics();
-    });
-    return () => {
-      window.cancelAnimationFrame(frameId);
-    };
-  }, [
-    displayMode,
-    isConnected,
-    renderedCanvasSize.height,
-    renderedCanvasSize.width,
-    syncScrollMetrics,
-  ]);
+  }, [effectiveSelectedMonitorIds, isConnected, syncViewportSelection]);
   const shutdownSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "shutdown");
   const rebootSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "reboot");
   const resetSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "reset");
-  const showHorizontalRail = isConnected && displayMode !== "fit";
-  const showVerticalRail = isConnected && displayMode === "actual";
-  const externalScrollbarSize = 26;
-  const externalScrollbarGap = 8;
-  const horizontalRailWidth = Math.max(
-    scrollMetrics.contentWidth,
-    scrollMetrics.viewportWidth,
-    1
-  );
-  const verticalRailHeight = Math.max(
-    scrollMetrics.contentHeight,
-    scrollMetrics.viewportHeight,
-    1
-  );
+  const viewfinderViewportRect = useMemo(() => {
+    if (!isConnected || !displayLayoutGeometry.bounds || viewportPreview.width <= 0 || viewportPreview.height <= 0) {
+      return null;
+    }
+    const x =
+      displayLayoutGeometry.offsetX +
+      (viewportPreview.left - displayLayoutGeometry.bounds.left) * displayLayoutGeometry.scale;
+    const y =
+      displayLayoutGeometry.offsetY +
+      (viewportPreview.top - displayLayoutGeometry.bounds.top) * displayLayoutGeometry.scale;
+    const width = viewportPreview.width * displayLayoutGeometry.scale;
+    const height = viewportPreview.height * displayLayoutGeometry.scale;
+    return {
+      x,
+      y,
+      width,
+      height,
+      interactive: viewportPreview.interactive,
+    };
+  }, [
+    displayLayoutGeometry,
+    isConnected,
+    viewportPreview.height,
+    viewportPreview.interactive,
+    viewportPreview.left,
+    viewportPreview.top,
+    viewportPreview.width,
+  ]);
+  const viewfinderHelperText = previewNavigationEnabled
+    ? viewportPreview.interactive
+      ? "Tap anywhere on the preview to recenter the live viewport."
+      : "The full desktop already fits inside the current viewport."
+    : normalizedDisplayTopology.length > 1
+      ? "Click one or more displays to focus the viewport on that layout."
+      : "";
+  const highlightedMonitorIds = selectionModeEnabled ? effectiveSelectedMonitorIds : [];
+  const showViewportIndicator = Boolean(viewfinderViewportRect);
+  const showViewfinderHelper = Boolean(viewfinderHelperText);
   const vncStageInfo = useMemo(() => {
     const errorDetail = summarizeStatus(statusMessage) || "VNC session encountered an error.";
     switch (vncStage) {
@@ -1750,15 +1953,7 @@ export default function ReverseTunnelVnc({ device }) {
                 sx={{
                   width: "100%",
                   height: "100%",
-                  display: "grid",
-                  gridTemplateColumns: showVerticalRail
-                    ? `minmax(0, 1fr) ${externalScrollbarSize}px`
-                    : "minmax(0, 1fr)",
-                  gridTemplateRows: showHorizontalRail
-                    ? `minmax(0, 1fr) ${externalScrollbarSize}px`
-                    : "minmax(0, 1fr)",
-                  columnGap: showVerticalRail ? `${externalScrollbarGap}px` : 0,
-                  rowGap: showHorizontalRail ? `${externalScrollbarGap}px` : 0,
+                  display: "block",
                   position: "relative",
                   overflow: "hidden",
                   minWidth: 0,
@@ -1766,125 +1961,36 @@ export default function ReverseTunnelVnc({ device }) {
                 }}
               >
                 <Box
+                  ref={displayScrollRef}
                   sx={{
+                    width: "100%",
+                    height: "100%",
+                    position: "relative",
+                    overflow: "hidden",
                     minWidth: 0,
                     minHeight: 0,
-                    overflow: "hidden",
-                    position: "relative",
                   }}
                 >
                   <Box
-                    ref={displayScrollRef}
-                    onScroll={handleViewportScroll}
+                    ref={displayRef}
                     sx={{
                       width: "100%",
                       height: "100%",
+                      display: "block",
                       position: "relative",
-                      overflowX: displayMode === "fit" ? "hidden" : "auto",
-                      overflowY: displayMode === "actual" ? "auto" : "hidden",
-                      boxSizing: "border-box",
-                      scrollbarWidth: "none",
-                      msOverflowStyle: "none",
-                      "&::-webkit-scrollbar": {
-                        display: "none",
-                        width: 0,
-                        height: 0,
-                      },
-                    }}
-                  >
-                    <Box
-                      ref={displayRef}
-                      sx={{
-                        width: displayMode === "fit" ? "100%" : "max-content",
-                        height: displayMode === "fit" ? "100%" : "max-content",
-                        minWidth: displayMode === "fit" ? "100%" : "auto",
-                        minHeight: displayMode === "fit" ? "100%" : "auto",
-                        display: "block",
-                        position: "relative",
-                        overflow: "hidden",
-                        "& > div": {
-                          width: displayMode === "fit" ? "100%" : "max-content",
-                          height: displayMode === "fit" ? "100%" : "max-content",
-                        },
-                        "& canvas": {
-                          display: "block",
-                          flex: "0 0 auto",
-                          maxWidth: "none",
-                          maxHeight: "none",
-                          boxShadow: VNC_CANVAS_BOX_SHADOW,
-                        },
-                      }}
-                    />
-                  </Box>
-                </Box>
-                {showVerticalRail ? (
-                  <Box
-                    ref={verticalScrollbarRef}
-                    onScroll={handleVerticalScrollbarScroll}
-                    sx={{
-                      overflowX: "hidden",
-                      overflowY: "scroll",
-                      background: "rgba(7,12,23,0.96)",
-                      borderRadius: 2,
-                      minHeight: 0,
-                      scrollbarWidth: "auto",
-                      scrollbarColor: "#93b8ff rgba(7,12,23,0.96)",
-                      "&::-webkit-scrollbar": {
-                        width: externalScrollbarSize,
-                      },
-                      "&::-webkit-scrollbar-track": {
-                        background: "rgba(7,12,23,0.96)",
-                        borderRadius: 999,
-                      },
-                      "&::-webkit-scrollbar-thumb": {
-                        background:
-                          "linear-gradient(180deg, rgba(125,183,255,0.92), rgba(177,149,255,0.92))",
-                        borderRadius: 999,
-                        border: "4px solid rgba(7,12,23,0.96)",
-                      },
-                    }}
-                  >
-                    <Box sx={{ width: 1, height: `${verticalRailHeight}px` }} />
-                  </Box>
-                ) : null}
-                {showHorizontalRail ? (
-                  <Box
-                    ref={horizontalScrollbarRef}
-                    onScroll={handleHorizontalScrollbarScroll}
-                    sx={{
-                      overflowX: "scroll",
-                      overflowY: "hidden",
-                      background: "rgba(7,12,23,0.96)",
-                      borderRadius: 2,
+                      overflow: "hidden",
                       minWidth: 0,
-                      scrollbarWidth: "auto",
-                      scrollbarColor: "#93b8ff rgba(7,12,23,0.96)",
-                      "&::-webkit-scrollbar": {
-                        height: externalScrollbarSize,
+                      minHeight: 0,
+                      "& canvas": {
+                        display: "block",
+                        flex: "0 0 auto",
+                        maxWidth: "none",
+                        maxHeight: "none",
+                        boxShadow: VNC_CANVAS_BOX_SHADOW,
                       },
-                      "&::-webkit-scrollbar-track": {
-                        background: "rgba(7,12,23,0.96)",
-                        borderRadius: 999,
-                      },
-                      "&::-webkit-scrollbar-thumb": {
-                        background:
-                          "linear-gradient(180deg, rgba(125,183,255,0.92), rgba(177,149,255,0.92))",
-                        borderRadius: 999,
-                        border: "4px solid rgba(7,12,23,0.96)",
-                      },
-                    }}
-                  >
-                    <Box sx={{ width: `${horizontalRailWidth}px`, height: 1 }} />
-                  </Box>
-                ) : null}
-                {showHorizontalRail && showVerticalRail ? (
-                  <Box
-                    sx={{
-                      background: "rgba(7,12,23,0.96)",
-                      borderRadius: 2,
                     }}
                   />
-                ) : null}
+                </Box>
               </Box>
               {!isConnected ? (
                 <Stack
@@ -1984,6 +2090,7 @@ export default function ReverseTunnelVnc({ device }) {
               </Typography>
               {displayLayoutFrames.length ? (
                 <Box
+                  onPointerDown={previewNavigationEnabled ? handlePreviewNavigate : undefined}
                   sx={{
                     position: "relative",
                     height: 126,
@@ -1991,12 +2098,18 @@ export default function ReverseTunnelVnc({ device }) {
                     border: `1px solid ${SIDEBAR_THEME.border}`,
                     background: "rgba(7,12,23,0.82)",
                     overflow: "hidden",
+                    cursor: previewNavigationEnabled
+                      ? viewportPreview.interactive
+                        ? "crosshair"
+                        : "default"
+                      : "default",
+                    touchAction: previewNavigationEnabled ? "none" : "auto",
                   }}
                 >
                   {displayLayoutFrames.map((item) => {
                     const monitorId = monitorSelectionId(item);
-                    const selected = effectiveSelectedMonitorIds.includes(monitorId);
-                    const selectable = normalizedDisplayTopology.length > 1;
+                    const selected = highlightedMonitorIds.includes(monitorId);
+                    const selectable = selectionModeEnabled && normalizedDisplayTopology.length > 1;
                     return (
                       <Box
                         key={item.id}
@@ -2039,14 +2152,32 @@ export default function ReverseTunnelVnc({ device }) {
                       </Box>
                     );
                   })}
+                  {showViewportIndicator ? (
+                    <Box
+                      sx={{
+                        position: "absolute",
+                        left: viewfinderViewportRect.x,
+                        top: viewfinderViewportRect.y,
+                        width: viewfinderViewportRect.width,
+                        height: viewfinderViewportRect.height,
+                        borderRadius: 1.5,
+                        border: "2px solid rgba(125, 201, 255, 0.98)",
+                        background:
+                          "linear-gradient(135deg, rgba(125,201,255,0.18), rgba(177,149,255,0.14))",
+                        boxShadow:
+                          "0 0 0 1px rgba(8,17,31,0.62), inset 0 0 0 1px rgba(255,255,255,0.08)",
+                        pointerEvents: "none",
+                      }}
+                    />
+                  ) : null}
                 </Box>
               ) : null}
-              {normalizedDisplayTopology.length > 1 ? (
+              {showViewfinderHelper ? (
                 <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                  Click one or more displays to focus the viewport on that layout.
+                  {viewfinderHelperText}
                 </Typography>
               ) : null}
-              {!topologyTrusted && normalizedDisplayTopology.length > 1 ? (
+              {!previewNavigationEnabled && !topologyTrusted && normalizedDisplayTopology.length > 1 ? (
                 <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
                   Monitor layout shown from agent telemetry. Targeted monitor selection will unlock once it matches the live desktop geometry.
                 </Typography>
