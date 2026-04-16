@@ -362,6 +362,12 @@ function normalizeMonitorSelection(selectionIds, topology) {
   return preferredMonitorSelection(topology);
 }
 
+function equalStringArrays(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right)) return false;
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => item === right[index]);
+}
+
 function selectedDisplayBounds(topology, selectionIds) {
   if (!Array.isArray(topology) || !topology.length) return null;
   const normalizedSelection = new Set(
@@ -479,7 +485,7 @@ export default function ReverseTunnelVnc({ device }) {
   const [sessionId, setSessionId] = useState("");
   const [, setParticipantId] = useState("");
   const performanceLevel = 2;
-  const [scaleViewport, setScaleViewport] = useState(true);
+  const [displayMode, setDisplayMode] = useState("fit");
   const [resizeSession, setResizeSession] = useState(true);
   const [capabilities, setCapabilities] = useState({});
   const [selectedMonitorIds, setSelectedMonitorIds] = useState([]);
@@ -497,6 +503,7 @@ export default function ReverseTunnelVnc({ device }) {
   const clipboardLastRef = useRef("");
   const connectAttemptRef = useRef(0);
   const manualDisconnectRef = useRef(false);
+  const viewportSignatureRef = useRef("");
 
   const agentId = useMemo(() => {
     return (
@@ -514,6 +521,8 @@ export default function ReverseTunnelVnc({ device }) {
   const compressionLevel = Math.max(0, 8 - qualityLevel);
   const dragViewport = false;
   const effectiveViewOnly = viewOnly;
+  const scaleViewport = displayMode === "fit";
+  const scaledViewport = displayMode === "scaled";
   const normalizedDisplayTopology = useMemo(
     () => normalizeDisplayTopology(displayTopology),
     [displayTopology]
@@ -550,7 +559,10 @@ export default function ReverseTunnelVnc({ device }) {
     setSessionId(nextSessionId);
     setParticipantId(nextParticipantId);
     setDisplayTopology(nextDisplayTopology);
-    setSelectedMonitorIds((previous) => normalizeMonitorSelection(previous, nextDisplayTopology));
+    setSelectedMonitorIds((previous) => {
+      const nextSelection = normalizeMonitorSelection(previous, nextDisplayTopology);
+      return equalStringArrays(previous, nextSelection) ? previous : nextSelection;
+    });
   }, []);
 
   useEffect(() => {
@@ -596,6 +608,7 @@ export default function ReverseTunnelVnc({ device }) {
   }, [notifyAgentOnboarding]);
 
   const resetDisconnectedViewState = useCallback(() => {
+    viewportSignatureRef.current = "";
     setDisplayTopology([]);
     setSelectedMonitorIds([]);
     setViewportHint("");
@@ -616,11 +629,14 @@ export default function ReverseTunnelVnc({ device }) {
     if (host) {
       host.innerHTML = "";
     }
+    viewportSignatureRef.current = "";
     setFramebufferSize({ width: 0, height: 0 });
     setRenderedCanvasSize({ width: 0, height: 0 });
   }, []);
 
-  const configureDisplaySurface = useCallback((client, fitViewport) => {
+  const configureDisplaySurface = useCallback((client, mode) => {
+    const fitViewport = mode === "fit";
+    const scaledMode = mode === "scaled";
     const host = displayRef.current;
     const screen = client?._screen || host?.firstElementChild || null;
     const canvas = client?._canvas || null;
@@ -630,7 +646,8 @@ export default function ReverseTunnelVnc({ device }) {
       screen.style.height = "100%";
       screen.style.alignItems = fitViewport ? "center" : "flex-start";
       screen.style.justifyContent = fitViewport ? "center" : "flex-start";
-      screen.style.overflow = fitViewport ? "hidden" : "auto";
+      screen.style.overflowX = fitViewport ? "hidden" : "auto";
+      screen.style.overflowY = fitViewport || scaledMode ? "hidden" : "auto";
     }
     if (canvas?.style) {
       canvas.style.display = "block";
@@ -817,7 +834,7 @@ export default function ReverseTunnelVnc({ device }) {
       rfb.qualityLevel = qualityLevel;
       rfb.compressionLevel = compressionLevel;
 
-      configureDisplaySurface(rfb, scaleViewport);
+      configureDisplaySurface(rfb, displayMode);
 
       rfbRef.current = rfb;
       setStatusMessage(
@@ -964,12 +981,12 @@ export default function ReverseTunnelVnc({ device }) {
     [
       compressionLevel,
       configureDisplaySurface,
+      displayMode,
       dragViewport,
       qualityLevel,
       resetDisconnectedViewState,
       resizeSession,
       effectiveViewOnly,
-      scaleViewport,
       syncFramebufferSize,
       syncRenderedCanvasSize,
     ]
@@ -1047,7 +1064,10 @@ export default function ReverseTunnelVnc({ device }) {
       const nextDisplayTopology = normalizeDisplayTopology(nextSession.display_topology);
       if (nextDisplayTopology.length) {
         setDisplayTopology(nextDisplayTopology);
-        setSelectedMonitorIds((previous) => normalizeMonitorSelection(previous, nextDisplayTopology));
+        setSelectedMonitorIds((previous) => {
+          const nextSelection = normalizeMonitorSelection(previous, nextDisplayTopology);
+          return equalStringArrays(previous, nextSelection) ? previous : nextSelection;
+        });
       }
       setParticipantId((previous) => normalizeText(nextSession.current_participant_id) || previous);
     } catch {
@@ -1194,7 +1214,23 @@ export default function ReverseTunnelVnc({ device }) {
       setViewportHint("Framebuffer size unavailable.");
       return;
     }
-    configureDisplaySurface(rfb, scaleViewport);
+    configureDisplaySurface(rfb, displayMode);
+
+    const applyViewportScale = (targetWidth, targetHeight) => {
+      if (scaleViewport && host && typeof display.autoscale === "function") {
+        display.autoscale(host.clientWidth, host.clientHeight);
+        return;
+      }
+      if (scaledViewport && typeof display.scale !== "undefined") {
+        const nextScale =
+          host && targetHeight > 0 ? Number(host.clientHeight || 0) / Number(targetHeight) : 1.0;
+        display.scale = Number.isFinite(nextScale) && nextScale > 0 ? nextScale : 1.0;
+        return;
+      }
+      if (typeof display.scale !== "undefined") {
+        display.scale = 1.0;
+      }
+    };
 
     const applyDisplayViewport = (target) => {
       try {
@@ -1206,11 +1242,7 @@ export default function ReverseTunnelVnc({ device }) {
         } else if (typeof display.viewportChange === "function") {
           display.viewportChange(target.x - viewportLoc.x, target.y - viewportLoc.y, target.w, target.h);
         }
-        if (scaleViewport && host && typeof display.autoscale === "function") {
-          display.autoscale(host.clientWidth, host.clientHeight);
-        } else if (typeof display.scale !== "undefined") {
-          display.scale = 1.0;
-        }
+        applyViewportScale(target.w, target.h);
         rfb.dragViewport = false;
         setViewportHint("");
         if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
@@ -1243,11 +1275,7 @@ export default function ReverseTunnelVnc({ device }) {
           display.viewportChangeSize(fbWidth, fbHeight);
         }
         display.clipViewport = false;
-        if (scaleViewport && host && typeof display.autoscale === "function") {
-          display.autoscale(host.clientWidth, host.clientHeight);
-        } else if (typeof display.scale !== "undefined") {
-          display.scale = 1.0;
-        }
+        applyViewportScale(fbWidth, fbHeight);
         rfb.dragViewport = false;
         setViewportHint("");
         if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
@@ -1264,8 +1292,28 @@ export default function ReverseTunnelVnc({ device }) {
 
     const selectionBounds =
       trustedTopology ? selectedDisplayBounds(normalizedDisplayTopology, normalizedSelection) : null;
+    const hostWidth = Math.round(Number(host?.clientWidth || 0));
+    const hostHeight = Math.round(Number(host?.clientHeight || 0));
+    const modeSizeSignature =
+      displayMode === "fit"
+        ? `|host=${hostWidth}x${hostHeight}`
+        : displayMode === "scaled"
+          ? `|hostH=${hostHeight}`
+          : "";
+    const targetSignature = selectionBounds && trustedTopology
+      ? `selection:${selectionBounds.left},${selectionBounds.top},${selectionBounds.width},${selectionBounds.height}`
+      : `full:${fbWidth}x${fbHeight}`;
+    const viewportSignature = `${displayMode}|${targetSignature}${modeSizeSignature}`;
+    const shouldResetViewport =
+      options.forceReset === true ||
+      displayMode === "fit" ||
+      viewportSignatureRef.current !== viewportSignature;
 
     if (selectionBounds && trustedTopology) {
+      if (!shouldResetViewport) {
+        setViewportHint("");
+        return;
+      }
       const applyMonitorViewport = () => {
         applyDisplayViewport({
           x: selectionBounds.left - trustedTopology.left,
@@ -1273,6 +1321,7 @@ export default function ReverseTunnelVnc({ device }) {
           w: selectionBounds.width,
           h: selectionBounds.height,
         });
+        viewportSignatureRef.current = viewportSignature;
       };
       if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
         window.requestAnimationFrame(applyMonitorViewport);
@@ -1282,15 +1331,26 @@ export default function ReverseTunnelVnc({ device }) {
       return;
     }
 
+    if (!shouldResetViewport) {
+      setViewportHint("");
+      return;
+    }
+
     if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
-      window.requestAnimationFrame(applyFullFramebuffer);
+      window.requestAnimationFrame(() => {
+        applyFullFramebuffer();
+        viewportSignatureRef.current = viewportSignature;
+      });
     } else {
       applyFullFramebuffer();
+      viewportSignatureRef.current = viewportSignature;
     }
   }, [
     configureDisplaySurface,
+    displayMode,
     normalizedDisplayTopology,
     scaleViewport,
+    scaledViewport,
     syncFramebufferSize,
     syncRenderedCanvasSize,
     topologyBounds,
@@ -1317,8 +1377,8 @@ export default function ReverseTunnelVnc({ device }) {
 
   useEffect(() => {
     if (!isConnected) return;
-    syncViewportSelection(effectiveSelectedMonitorIds, { updateState: false });
-  }, [effectiveSelectedMonitorIds, isConnected, scaleViewport, syncViewportSelection]);
+    syncViewportSelection(effectiveSelectedMonitorIds, { updateState: false, forceReset: true });
+  }, [displayMode, effectiveSelectedMonitorIds, isConnected, syncViewportSelection]);
 
   useEffect(() => {
     const normalized = normalizeMonitorSelection(selectedMonitorIds, normalizedDisplayTopology);
@@ -1589,15 +1649,16 @@ export default function ReverseTunnelVnc({ device }) {
               <ToggleButtonGroup
                 exclusive
                 size="small"
-                value={scaleViewport ? "fit" : "actual"}
+                value={displayMode}
                 onChange={(_, value) => {
                   if (!value) return;
-                  setScaleViewport(value === "fit");
+                  setDisplayMode(value);
                 }}
                 sx={splitToggleSx}
               >
-                <ToggleButton value="fit">Fit Screen</ToggleButton>
-                <ToggleButton value="actual">Actual Size</ToggleButton>
+                <ToggleButton value="fit">Fit</ToggleButton>
+                <ToggleButton value="actual">Actual</ToggleButton>
+                <ToggleButton value="scaled">Scaled</ToggleButton>
               </ToggleButtonGroup>
 
               <FormControlLabel
