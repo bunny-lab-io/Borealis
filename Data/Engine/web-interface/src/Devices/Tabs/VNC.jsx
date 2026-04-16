@@ -495,6 +495,7 @@ export default function ReverseTunnelVnc({ device }) {
   const [renderedCanvasSize, setRenderedCanvasSize] = useState({ width: 0, height: 0 });
 
   const containerRef = useRef(null);
+  const displayScrollRef = useRef(null);
   const displayRef = useRef(null);
   const rfbRef = useRef(null);
   const agentIdRef = useRef("");
@@ -523,6 +524,7 @@ export default function ReverseTunnelVnc({ device }) {
   const effectiveViewOnly = viewOnly;
   const scaleViewport = displayMode === "fit";
   const scaledViewport = displayMode === "scaled";
+  const effectiveResizeSession = resizeSession && displayMode === "fit";
   const normalizedDisplayTopology = useMemo(
     () => normalizeDisplayTopology(displayTopology),
     [displayTopology]
@@ -636,18 +638,16 @@ export default function ReverseTunnelVnc({ device }) {
 
   const configureDisplaySurface = useCallback((client, mode) => {
     const fitViewport = mode === "fit";
-    const scaledMode = mode === "scaled";
     const host = displayRef.current;
     const screen = client?._screen || host?.firstElementChild || null;
     const canvas = client?._canvas || null;
     if (screen?.style) {
       screen.style.display = fitViewport ? "flex" : "block";
-      screen.style.width = "100%";
-      screen.style.height = "100%";
+      screen.style.width = fitViewport ? "100%" : "max-content";
+      screen.style.height = fitViewport ? "100%" : "max-content";
       screen.style.alignItems = fitViewport ? "center" : "flex-start";
       screen.style.justifyContent = fitViewport ? "center" : "flex-start";
-      screen.style.overflowX = fitViewport ? "hidden" : "auto";
-      screen.style.overflowY = fitViewport || scaledMode ? "hidden" : "auto";
+      screen.style.overflow = "hidden";
     }
     if (canvas?.style) {
       canvas.style.display = "block";
@@ -757,13 +757,13 @@ export default function ReverseTunnelVnc({ device }) {
     rfb.showDotCursor = true;
     rfb.viewOnly = effectiveViewOnly;
     rfb.dragViewport = dragViewport;
-    rfb.resizeSession = resizeSession;
+    rfb.resizeSession = effectiveResizeSession;
     rfb.qualityLevel = qualityLevel;
     rfb.compressionLevel = compressionLevel;
   }, [
     effectiveViewOnly,
     dragViewport,
-    resizeSession,
+    effectiveResizeSession,
     qualityLevel,
     compressionLevel,
   ]);
@@ -828,7 +828,7 @@ export default function ReverseTunnelVnc({ device }) {
       // Always show a local dot cursor so we never lose pointer visibility.
       rfb.showDotCursor = true;
       rfb.background = VNC_STAGE_BACKGROUND;
-      rfb.resizeSession = resizeSession;
+      rfb.resizeSession = effectiveResizeSession;
       rfb.dragViewport = dragViewport;
       rfb.viewOnly = effectiveViewOnly;
       rfb.qualityLevel = qualityLevel;
@@ -985,7 +985,7 @@ export default function ReverseTunnelVnc({ device }) {
       dragViewport,
       qualityLevel,
       resetDisconnectedViewState,
-      resizeSession,
+      effectiveResizeSession,
       effectiveViewOnly,
       syncFramebufferSize,
       syncRenderedCanvasSize,
@@ -1196,12 +1196,14 @@ export default function ReverseTunnelVnc({ device }) {
   const syncViewportSelection = useCallback((selectionIds, options = {}) => {
     const normalizedSelection = normalizeMonitorSelection(selectionIds, normalizedDisplayTopology);
     if (options.updateState !== false) {
-      setSelectedMonitorIds(normalizedSelection);
+      setSelectedMonitorIds((previous) =>
+        equalStringArrays(previous, normalizedSelection) ? previous : normalizedSelection
+      );
     }
     const rfb = rfbRef.current;
     const display = rfb?._display;
     const host = displayRef.current;
-    const screen = rfb?._screen || host?.firstElementChild || null;
+    const viewportHost = displayScrollRef.current || host;
     if (!display) {
       setViewportHint("Viewport controls unavailable.");
       return;
@@ -1217,13 +1219,15 @@ export default function ReverseTunnelVnc({ device }) {
     configureDisplaySurface(rfb, displayMode);
 
     const applyViewportScale = (targetWidth, targetHeight) => {
-      if (scaleViewport && host && typeof display.autoscale === "function") {
-        display.autoscale(host.clientWidth, host.clientHeight);
+      if (scaleViewport && viewportHost && typeof display.autoscale === "function") {
+        display.autoscale(viewportHost.clientWidth, viewportHost.clientHeight);
         return;
       }
       if (scaledViewport && typeof display.scale !== "undefined") {
         const nextScale =
-          host && targetHeight > 0 ? Number(host.clientHeight || 0) / Number(targetHeight) : 1.0;
+          viewportHost && targetHeight > 0
+            ? Number(viewportHost.clientHeight || 0) / Number(targetHeight)
+            : 1.0;
         display.scale = Number.isFinite(nextScale) && nextScale > 0 ? nextScale : 1.0;
         return;
       }
@@ -1259,13 +1263,9 @@ export default function ReverseTunnelVnc({ device }) {
 
     const applyFullFramebuffer = () => {
       try {
-        if (host) {
-          host.scrollLeft = 0;
-          host.scrollTop = 0;
-        }
-        if (screen) {
-          screen.scrollLeft = 0;
-          screen.scrollTop = 0;
+        if (viewportHost) {
+          viewportHost.scrollLeft = 0;
+          viewportHost.scrollTop = 0;
         }
         const viewportLoc = display?._viewportLoc || { x: 0, y: 0 };
         if (typeof display.viewportChangePos === "function" && (viewportLoc.x || viewportLoc.y)) {
@@ -1292,8 +1292,8 @@ export default function ReverseTunnelVnc({ device }) {
 
     const selectionBounds =
       trustedTopology ? selectedDisplayBounds(normalizedDisplayTopology, normalizedSelection) : null;
-    const hostWidth = Math.round(Number(host?.clientWidth || 0));
-    const hostHeight = Math.round(Number(host?.clientHeight || 0));
+    const hostWidth = Math.round(Number(viewportHost?.clientWidth || 0));
+    const hostHeight = Math.round(Number(viewportHost?.clientHeight || 0));
     const modeSizeSignature =
       displayMode === "fit"
         ? `|host=${hostWidth}x${hostHeight}`
@@ -1407,7 +1407,7 @@ export default function ReverseTunnelVnc({ device }) {
   useEffect(() => {
     if (!isConnected) return undefined;
     if (typeof ResizeObserver === "undefined") return undefined;
-    const host = containerRef.current;
+    const host = displayScrollRef.current || containerRef.current;
     if (!host) return undefined;
     let frameId = 0;
     const observer = new ResizeObserver(() => {
@@ -1562,26 +1562,67 @@ export default function ReverseTunnelVnc({ device }) {
               }}
             >
               <Box
-                ref={displayRef}
                 sx={{
                   width: "100%",
                   height: "100%",
                   display: "block",
                   position: "relative",
                   overflow: "hidden",
-                  "& > div": {
+                }}
+              >
+                <Box
+                  ref={displayScrollRef}
+                  sx={{
                     width: "100%",
                     height: "100%",
-                  },
-                  "& canvas": {
-                    display: "block",
-                    flex: "0 0 auto",
-                    maxWidth: "none",
-                    maxHeight: "none",
-                    boxShadow: VNC_CANVAS_BOX_SHADOW,
-                  },
-                }}
-              />
+                    position: "relative",
+                    overflowX: displayMode === "fit" ? "hidden" : "auto",
+                    overflowY: displayMode === "actual" ? "auto" : "hidden",
+                    scrollbarGutter: displayMode === "fit" ? "auto" : "stable both-edges",
+                    scrollbarWidth: displayMode === "fit" ? "none" : "auto",
+                    "&::-webkit-scrollbar": {
+                      width: displayMode === "fit" ? 0 : 18,
+                      height: displayMode === "fit" ? 0 : 18,
+                    },
+                    "&::-webkit-scrollbar-track": {
+                      background: "rgba(7,12,23,0.92)",
+                    },
+                    "&::-webkit-scrollbar-thumb": {
+                      background:
+                        "linear-gradient(180deg, rgba(125,183,255,0.9), rgba(177,149,255,0.9))",
+                      borderRadius: 999,
+                      border: "3px solid rgba(7,12,23,0.92)",
+                    },
+                    "&::-webkit-scrollbar-corner": {
+                      background: "rgba(7,12,23,0.92)",
+                    },
+                  }}
+                >
+                  <Box
+                    ref={displayRef}
+                    sx={{
+                      width: displayMode === "fit" ? "100%" : "max-content",
+                      height: displayMode === "fit" ? "100%" : "max-content",
+                      minWidth: "100%",
+                      minHeight: "100%",
+                      display: "block",
+                      position: "relative",
+                      overflow: "hidden",
+                      "& > div": {
+                        width: displayMode === "fit" ? "100%" : "max-content",
+                        height: displayMode === "fit" ? "100%" : "max-content",
+                      },
+                      "& canvas": {
+                        display: "block",
+                        flex: "0 0 auto",
+                        maxWidth: "none",
+                        maxHeight: "none",
+                        boxShadow: VNC_CANVAS_BOX_SHADOW,
+                      },
+                    }}
+                  />
+                </Box>
+              </Box>
               {!isConnected ? (
                 <Stack
                   spacing={1.5}
