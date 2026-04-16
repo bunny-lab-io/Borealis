@@ -9,6 +9,8 @@ import {
   Divider,
   ListItemButton,
   ListItemText,
+  Menu,
+  MenuItem,
   Switch,
   LinearProgress,
   Stack,
@@ -251,6 +253,8 @@ function buildRetryableError(message, retryable = true) {
 const VNC_AUTO_RETRY_ATTEMPTS = 3;
 const VNC_AUTO_RETRY_DELAY_MS = 1500;
 const VNC_OPEN_TIMEOUT_MS = 12000;
+const ALL_DISPLAYS_ID = "__all_displays__";
+
 async function writeClipboardText(text) {
   if (!navigator?.clipboard?.writeText) return;
   try {
@@ -357,35 +361,6 @@ function topologyMatchesFramebuffer(topologyBounds, framebufferSize) {
 
 function monitorSelectionId(monitor) {
   return normalizeText(monitor?.id || monitor?.displayIndex || "");
-}
-
-function preferredMonitorSelection(topology) {
-  if (!Array.isArray(topology) || !topology.length) return [];
-  const primary = topology.find((item) => item.primary) || topology[0];
-  const monitorId = monitorSelectionId(primary);
-  return monitorId ? [monitorId] : [];
-}
-
-function normalizeMonitorSelection(selectionIds, topology) {
-  const availableIds = new Set(
-    (Array.isArray(topology) ? topology : [])
-      .map((item) => monitorSelectionId(item))
-      .filter(Boolean)
-  );
-  if (!availableIds.size) return [];
-  const normalized = Array.isArray(selectionIds)
-    ? selectionIds.map((item) => normalizeText(item)).filter((item) => availableIds.has(item))
-    : [];
-  if (normalized.length) {
-    return Array.from(new Set(normalized));
-  }
-  return preferredMonitorSelection(topology);
-}
-
-function equalStringArrays(left, right) {
-  if (!Array.isArray(left) || !Array.isArray(right)) return false;
-  if (left.length !== right.length) return false;
-  return left.every((item, index) => item === right[index]);
 }
 
 function equalDisplayTopology(left, right) {
@@ -587,7 +562,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   });
   const [resizeSession, setResizeSession] = useState(true);
   const [capabilities, setCapabilities] = useState({});
-  const [selectedMonitorIds, setSelectedMonitorIds] = useState([]);
+  const [selectedDisplayId, setSelectedDisplayId] = useState(ALL_DISPLAYS_ID);
+  const [displayMenuAnchorEl, setDisplayMenuAnchorEl] = useState(null);
   const [viewportHint, setViewportHint] = useState("");
   const [displayTopology, setDisplayTopology] = useState([]);
   const [framebufferSize, setFramebufferSize] = useState({ width: 0, height: 0 });
@@ -678,17 +654,42 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     () => displayDiagramTopology(normalizedDisplayTopology, framebufferSize, renderedCanvasSize),
     [framebufferSize, normalizedDisplayTopology, renderedCanvasSize]
   );
+  const displaySelectorOptions = useMemo(
+    () => [
+      { id: ALL_DISPLAYS_ID, label: "All", shortLabel: "All" },
+      ...normalizedDisplayTopology.map((item) => ({
+        id: monitorSelectionId(item),
+        label: `Display ${item.label}`,
+        shortLabel: item.label,
+      })),
+    ],
+    [normalizedDisplayTopology]
+  );
+  const effectiveSelectedMonitorIds = useMemo(() => {
+    if (selectedDisplayId === ALL_DISPLAYS_ID) return [];
+    const availableIds = new Set(
+      normalizedDisplayTopology.map((item) => monitorSelectionId(item)).filter(Boolean)
+    );
+    return availableIds.has(selectedDisplayId) ? [selectedDisplayId] : [];
+  }, [normalizedDisplayTopology, selectedDisplayId]);
+  const displaySelectorLabel = useMemo(() => {
+    const selectedOption = displaySelectorOptions.find((item) => item.id === selectedDisplayId);
+    return `Display: ${selectedOption?.shortLabel || "All"}`;
+  }, [displaySelectorOptions, selectedDisplayId]);
+  const viewfinderTopology = useMemo(() => {
+    if (selectedDisplayId === ALL_DISPLAYS_ID) return diagramTopology;
+    const filtered = diagramTopology.filter(
+      (item) => monitorSelectionId(item) === selectedDisplayId
+    );
+    return filtered.length ? filtered : diagramTopology;
+  }, [diagramTopology, selectedDisplayId]);
   const displayLayoutGeometry = useMemo(
-    () => buildDisplayLayoutGeometry(diagramTopology),
-    [diagramTopology]
+    () => buildDisplayLayoutGeometry(viewfinderTopology),
+    [viewfinderTopology]
   );
   const displayLayoutFrames = useMemo(
     () => displayLayoutGeometry.frames,
     [displayLayoutGeometry]
-  );
-  const effectiveSelectedMonitorIds = useMemo(
-    () => normalizeMonitorSelection(selectedMonitorIds, normalizedDisplayTopology),
-    [normalizedDisplayTopology, selectedMonitorIds]
   );
 
   const applySessionBootstrap = useCallback((data) => {
@@ -703,10 +704,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     setDisplayTopology((previous) =>
       equalDisplayTopology(previous, nextDisplayTopology) ? previous : nextDisplayTopology
     );
-    setSelectedMonitorIds((previous) => {
-      const nextSelection = normalizeMonitorSelection(previous, nextDisplayTopology);
-      return equalStringArrays(previous, nextSelection) ? previous : nextSelection;
-    });
   }, []);
 
   useEffect(() => {
@@ -765,7 +762,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       interactive: false,
     };
     setDisplayTopology([]);
-    setSelectedMonitorIds([]);
+    setSelectedDisplayId(ALL_DISPLAYS_ID);
+    setDisplayMenuAnchorEl(null);
     setViewportHint("");
     setCapabilities({});
     setViewportPreview({
@@ -1481,10 +1479,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         setDisplayTopology((previous) =>
           equalDisplayTopology(previous, nextDisplayTopology) ? previous : nextDisplayTopology
         );
-        setSelectedMonitorIds((previous) => {
-          const nextSelection = normalizeMonitorSelection(previous, nextDisplayTopology);
-          return equalStringArrays(previous, nextSelection) ? previous : nextSelection;
-        });
       }
       setParticipantId((previous) => normalizeText(nextSession.current_participant_id) || previous);
     } catch {
@@ -1611,12 +1605,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   );
 
   const syncViewportSelection = useCallback((selectionIds, options = {}) => {
-    const normalizedSelection = normalizeMonitorSelection(selectionIds, normalizedDisplayTopology);
-    if (options.updateState !== false) {
-      setSelectedMonitorIds((previous) =>
-        equalStringArrays(previous, normalizedSelection) ? previous : normalizedSelection
-      );
-    }
     const rfb = rfbRef.current;
     const display = rfb?._display;
     if (!display) {
@@ -1633,8 +1621,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     }
     configureDisplaySurface(rfb, displayMode);
     const selectionBounds =
-      displayMode === "fit" && trustedTopology
-        ? selectedDisplayBounds(normalizedDisplayTopology, normalizedSelection)
+      trustedTopology && Array.isArray(selectionIds) && selectionIds.length
+        ? selectedDisplayBounds(normalizedDisplayTopology, selectionIds)
         : null;
     const targetBounds = selectionBounds && trustedTopology
       ? {
@@ -1667,7 +1655,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           ? `|hostH=${hostHeight}`
           : "";
     const targetSignature =
-      displayMode === "fit" && selectionBounds && trustedTopology
+      selectionBounds && trustedTopology
         ? `selection:${selectionBounds.left},${selectionBounds.top},${selectionBounds.width},${selectionBounds.height}`
         : `full:${fbWidth}x${fbHeight}`;
     const viewportSignature = `${displayMode}|${targetSignature}${modeSizeSignature}`;
@@ -1726,24 +1714,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     topologyTrusted,
   ]);
 
-  const toggleMonitorSelection = useCallback((monitorId) => {
-    const normalizedId = normalizeText(monitorId);
-    if (!normalizedId) return;
-    setSelectedMonitorIds((previous) => {
-      const current = normalizeMonitorSelection(previous, normalizedDisplayTopology);
-      const alreadySelected = current.includes(normalizedId);
-      if (alreadySelected) {
-        if (current.length === 1) {
-          return current;
-        }
-        return current.filter((item) => item !== normalizedId);
-      }
-      return [...current, normalizedId];
-    });
-  }, [normalizedDisplayTopology]);
-
   const isConnected = sessionState === "connected";
-  const selectionModeEnabled = !isConnected || displayMode === "fit";
   const previewNavigationEnabled = isConnected && displayMode !== "fit";
 
   const handlePreviewNavigate = useCallback(
@@ -1802,7 +1773,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const forcedViewportKey = useMemo(
     () =>
       isConnected
-        ? `${displayMode}|${displayMode === "fit" ? effectiveSelectedMonitorIds.join(",") || "-" : "full"}`
+        ? `${displayMode}|${effectiveSelectedMonitorIds.join(",") || ALL_DISPLAYS_ID}`
         : "",
     [displayMode, effectiveSelectedMonitorIds, isConnected]
   );
@@ -1818,13 +1789,13 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   }, [effectiveSelectedMonitorIds, forcedViewportKey, isConnected, syncViewportSelection]);
 
   useEffect(() => {
-    const normalized = normalizeMonitorSelection(selectedMonitorIds, normalizedDisplayTopology);
-    const same =
-      normalized.length === selectedMonitorIds.length &&
-      normalized.every((item, index) => item === selectedMonitorIds[index]);
-    if (same) return;
-    setSelectedMonitorIds(normalized);
-  }, [normalizedDisplayTopology, selectedMonitorIds]);
+    if (selectedDisplayId === ALL_DISPLAYS_ID) return;
+    const availableIds = new Set(
+      normalizedDisplayTopology.map((item) => monitorSelectionId(item)).filter(Boolean)
+    );
+    if (availableIds.has(selectedDisplayId)) return;
+    setSelectedDisplayId(ALL_DISPLAYS_ID);
+  }, [normalizedDisplayTopology, selectedDisplayId]);
 
   useEffect(() => {
     if (!isConnected) return undefined;
@@ -1898,10 +1869,9 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     ? viewportPreview.interactive
       ? "Tap anywhere on the preview to recenter the live viewport."
       : "The full desktop already fits inside the current viewport."
-    : normalizedDisplayTopology.length > 1
-      ? "Click one or more displays to focus the viewport on that layout."
-      : "";
-  const highlightedMonitorIds = selectionModeEnabled ? effectiveSelectedMonitorIds : [];
+    : "";
+  const highlightedMonitorIds =
+    selectedDisplayId === ALL_DISPLAYS_ID ? [] : effectiveSelectedMonitorIds;
   const showViewportIndicator = Boolean(viewfinderViewportRect);
   const showViewfinderHelper = Boolean(viewfinderHelperText);
   const SidebarSection = ({ sectionId, title, children }) => (
@@ -2124,6 +2094,23 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
               />
               <SidebarNavRow
                 icon={<DesktopIcon fontSize="small" />}
+                label={displaySelectorLabel}
+                active={displaySettingsEnabled && selectedDisplayId !== ALL_DISPLAYS_ID}
+                disabled={!displaySettingsEnabled}
+                onClick={(event) => setDisplayMenuAnchorEl(event.currentTarget)}
+                trailing={
+                  <ExpandMoreIcon
+                    sx={{
+                      color: displaySettingsEnabled ? NAV_COLORS.cyan : "rgba(143,191,255,0.35)",
+                      transform: displayMenuAnchorEl ? "rotate(180deg)" : "none",
+                      transition: "transform 140ms ease",
+                    }}
+                  />
+                }
+                ariaLabel="Choose display"
+              />
+              <SidebarNavRow
+                icon={<DesktopIcon fontSize="small" />}
                 label="View only"
                 active={displaySettingsEnabled && effectiveViewOnly}
                 disabled={!displaySettingsEnabled}
@@ -2139,6 +2126,41 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                   />
                 }
               />
+              <Menu
+                anchorEl={displayMenuAnchorEl}
+                open={Boolean(displayMenuAnchorEl)}
+                onClose={() => setDisplayMenuAnchorEl(null)}
+                anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+                transformOrigin={{ vertical: "top", horizontal: "left" }}
+                PaperProps={{
+                  sx: {
+                    mt: 0.5,
+                    minWidth: 180,
+                    borderRadius: 1.5,
+                    border: `1px solid ${SIDEBAR_THEME.border}`,
+                    background: "#141b27",
+                    color: SIDEBAR_THEME.text,
+                    boxShadow: "0 18px 40px rgba(2, 6, 23, 0.45)",
+                  },
+                }}
+              >
+                {displaySelectorOptions.map((option) => (
+                  <MenuItem
+                    key={option.id}
+                    selected={selectedDisplayId === option.id}
+                    onClick={() => {
+                      setSelectedDisplayId(option.id);
+                      setDisplayMenuAnchorEl(null);
+                    }}
+                    sx={{
+                      fontSize: "0.82rem",
+                      minHeight: 34,
+                    }}
+                  >
+                    {option.label}
+                  </MenuItem>
+                ))}
+              </Menu>
               <Divider sx={{ borderColor: NAV_COLORS.line, mx: 2 }} />
               <Box sx={{ px: 2, py: 1.25, display: "flex", flexDirection: "column", gap: 1 }}>
                 <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
@@ -2166,11 +2188,9 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                     {displayLayoutFrames.map((item) => {
                       const monitorId = monitorSelectionId(item);
                       const selected = highlightedMonitorIds.includes(monitorId);
-                      const selectable = selectionModeEnabled && normalizedDisplayTopology.length > 1;
                       return (
                         <Box
                           key={item.id}
-                          onClick={selectable ? () => toggleMonitorSelection(monitorId) : undefined}
                           sx={{
                             position: "absolute",
                             left: item.x,
@@ -2183,7 +2203,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                             justifyContent: "center",
                             fontSize: "1rem",
                             fontWeight: 700,
-                            cursor: selectable ? "pointer" : "default",
+                            cursor: "default",
                             color: selected ? "#08111f" : SIDEBAR_THEME.text,
                             border: selected
                               ? "1px solid transparent"
@@ -2197,12 +2217,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                               ? "0 10px 28px rgba(91,126,255,0.25)"
                               : "none",
                             transition: "all 140ms ease",
-                            "&:hover": {
-                              borderColor: selectable
-                                ? "rgba(125,183,255,0.58)"
-                                : undefined,
-                              transform: selectable ? "translateY(-1px)" : undefined,
-                            },
                           }}
                         >
                           {item.label}
