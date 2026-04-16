@@ -596,6 +596,56 @@ def test_vnc_establish_requests_agent_credential_refresh_when_cache_is_empty(
     assert fake_registry.created[0]["agent_id"] == "test-device-agent"
 
 
+def test_vnc_establish_uses_shorter_waits_after_fresh_credential_refresh(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    fake_registry = _FakeRegistry()
+    emitted_events: list[tuple[str, str, dict[str, Any]]] = []
+    wait_calls: list[float] = []
+    manager = vnc_api.ensure_vnc_collaboration_manager(engine_harness.context, logger=engine_harness.context.logger)
+
+    def _emit(agent_id, event, payload):
+        emitted_events.append((agent_id, event, dict(payload)))
+        if event == "vnc_refresh":
+            manager.upsert_agent_credential(
+                agent_id=agent_id,
+                controller_password="bootpass",
+                credential_revision=42,
+                display_topology=[],
+            )
+        return True
+
+    engine_harness.context.emit_agent_event = _emit
+    engine_harness.context.agent_socket_registry = SimpleNamespace(
+        is_registered=lambda agent_id: True
+    )
+    monkeypatch.setenv("BOREALIS_VNC_REFRESH_READY_WAIT_SECONDS", "2.5")
+    monkeypatch.setenv("BOREALIS_VNC_REFRESH_RETRY_READY_WAIT_SECONDS", "2.0")
+    monkeypatch.setenv("BOREALIS_VNC_REFRESH_READY_POLL_INTERVAL_SECONDS", "0.2")
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: fake_registry)
+
+    def _fake_wait(*_args, **kwargs):
+        wait_calls.append(float(kwargs["timeout_seconds"]))
+        return len(wait_calls) > 2
+
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", _fake_wait)
+    monkeypatch.setattr(vnc_api.time, "sleep", lambda _seconds: None)
+
+    response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+
+    assert response.status_code == 200
+    assert emitted_events[0] == (
+        "test-device-agent",
+        "vnc_refresh",
+        {"agent_id": "test-device-agent", "reason": "engine_credential_refresh"},
+    )
+    assert wait_calls == [0.75, 2.5, 2.0]
+
+
 def test_agent_socket_connect_prewarms_vnc_credential_when_cache_is_empty(
     engine_harness: EngineTestHarness,
 ) -> None:

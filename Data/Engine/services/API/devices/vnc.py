@@ -188,7 +188,12 @@ def _recent_backend_ready_age_seconds(collaboration_session: Any) -> Optional[fl
     return max(0.0, float(time.time()) - last_ready)
 
 
-def _ready_wait_profile(*, collaboration_session: Any, created: bool) -> Dict[str, Any]:
+def _ready_wait_profile(
+    *,
+    collaboration_session: Any,
+    created: bool,
+    recent_credential_refresh: bool = False,
+) -> Dict[str, Any]:
     cold_ready_wait_seconds = _coerce_timeout(
         os.environ.get("BOREALIS_VNC_READY_WAIT_SECONDS"),
         12.0,
@@ -230,6 +235,28 @@ def _ready_wait_profile(*, collaboration_session: Any, created: bool) -> Dict[st
             "retry_wait_seconds": warm_retry_wait_seconds,
             "poll_seconds": warm_poll_seconds,
             "recent_backend_ready": True,
+            "recent_backend_ready_age": recent_backend_ready_age,
+            "warm_session_window_seconds": warm_session_window_seconds,
+        }
+    if recent_credential_refresh:
+        refresh_ready_wait_seconds = _coerce_timeout(
+            os.environ.get("BOREALIS_VNC_REFRESH_READY_WAIT_SECONDS"),
+            min(cold_ready_wait_seconds, 3.0),
+        )
+        refresh_retry_wait_seconds = _coerce_timeout(
+            os.environ.get("BOREALIS_VNC_REFRESH_RETRY_READY_WAIT_SECONDS"),
+            min(cold_retry_wait_seconds, 3.0),
+        )
+        refresh_poll_seconds = _coerce_timeout(
+            os.environ.get("BOREALIS_VNC_REFRESH_READY_POLL_INTERVAL_SECONDS"),
+            min(cold_poll_seconds, 0.2),
+        )
+        return {
+            "mode": "fresh_refresh",
+            "initial_wait_seconds": refresh_ready_wait_seconds,
+            "retry_wait_seconds": refresh_retry_wait_seconds,
+            "poll_seconds": refresh_poll_seconds,
+            "recent_backend_ready": bool(recent_backend_ready),
             "recent_backend_ready_age": recent_backend_ready_age,
             "warm_session_window_seconds": warm_session_window_seconds,
         }
@@ -335,6 +362,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             remove_wallpaper=remove_wallpaper,
         )
         agent_credential = manager.get_agent_credential(agent_id)
+        recent_credential_refresh = False
         _trace(
             "E02",
             agent_id=agent_id,
@@ -365,6 +393,8 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                     agent_id,
                     timeout_seconds=refresh_wait_seconds,
                 )
+                if agent_credential is not None and _normalize_text(getattr(agent_credential, "controller_password", "")):
+                    recent_credential_refresh = True
             _trace(
                 "E04",
                 agent_id=agent_id,
@@ -469,6 +499,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         wait_profile = _ready_wait_profile(
             collaboration_session=collaboration_session,
             created=_created,
+            recent_credential_refresh=recent_credential_refresh,
         )
         fast_ready_wait = _coerce_timeout(
             os.environ.get("BOREALIS_VNC_FAST_READY_WAIT_SECONDS"),
