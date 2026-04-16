@@ -2128,77 +2128,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
               title="Display & Focus"
             >
               <>
-              <SidebarNavRow
-                icon={<FitScreenIcon fontSize="small" />}
-                label="Fit"
-                active={displaySettingsEnabled && displayMode === "fit"}
-                disabled={!displaySettingsEnabled}
-                onClick={() => setDisplayMode("fit")}
-              />
-              <SidebarNavRow
-                icon={<CropFreeIcon fontSize="small" />}
-                label="Actual"
-                active={displaySettingsEnabled && displayMode === "actual"}
-                disabled={!displaySettingsEnabled}
-                onClick={() => setDisplayMode("actual")}
-              />
-              <SidebarNavRow
-                icon={<SwapHorizIcon fontSize="small" />}
-                label="Scaled"
-                active={displaySettingsEnabled && displayMode === "scaled"}
-                disabled={!displaySettingsEnabled}
-                onClick={() => setDisplayMode("scaled")}
-              />
-              <SidebarNavRow
-                icon={<DesktopIcon fontSize="small" />}
-                label={displaySelectorLabel}
-                active={displaySettingsEnabled && selectedDisplayId !== ALL_DISPLAYS_ID}
-                disabled={!displaySettingsEnabled}
-                onClick={() => setDisplaySelectorExpanded((previous) => !previous)}
-                trailing={
-                  <ExpandMoreIcon
-                    sx={{
-                      color: displaySettingsEnabled ? NAV_COLORS.cyan : "rgba(143,191,255,0.35)",
-                      transform: displaySelectorExpanded ? "rotate(180deg)" : "none",
-                      transition: "transform 140ms ease",
-                    }}
-                  />
-                }
-                ariaLabel="Choose display"
-              />
-              {displaySelectorExpanded ? (
-                <Box sx={{ pb: 0.5, pl: 1.5 }}>
-                  {displaySelectorOptions.map((option) => (
-                    <SidebarNavRow
-                      key={option.id}
-                      icon={<DesktopIcon fontSize="small" />}
-                      label={option.label}
-                      active={displaySettingsEnabled && selectedDisplayId === option.id}
-                      disabled={!displaySettingsEnabled}
-                      onClick={() => setSelectedDisplayId(option.id)}
-                    />
-                  ))}
-                </Box>
-              ) : null}
-              <SidebarNavRow
-                icon={<DesktopIcon fontSize="small" />}
-                label="View only"
-                active={displaySettingsEnabled && effectiveViewOnly}
-                disabled={!displaySettingsEnabled}
-                onClick={() => setViewOnly((previous) => !previous)}
-                trailing={
-                  <Switch
-                    checked={effectiveViewOnly}
-                    onClick={(event) => event.stopPropagation()}
-                    onChange={(event) => setViewOnly(event.target.checked)}
-                    disabled={!displaySettingsEnabled}
-                    size="small"
-                    color="info"
-                  />
-                }
-              />
-              <Divider sx={{ borderColor: NAV_COLORS.line, mx: 2 }} />
-              <Box sx={{ px: 2, py: 1.25, display: "flex", flexDirection: "column", gap: 1 }}>
+                <Box sx={{ px: 2, py: 1.25, display: "flex", flexDirection: "column", gap: 1 }}>
                 <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
                   Viewfinder
                 </Typography>
@@ -2295,7 +2225,77 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                     Showing the live framebuffer as a single display map.
                   </Typography>
                 ) : null}
-              </Box>
+                </Box>
+                <Divider sx={{ borderColor: NAV_COLORS.line, mx: 2 }} />
+                <SidebarNavRow
+                  icon={<FitScreenIcon fontSize="small" />}
+                  label="Fit"
+                  active={displaySettingsEnabled && displayMode === "fit"}
+                  disabled={!displaySettingsEnabled}
+                  onClick={() => setDisplayMode("fit")}
+                />
+                <SidebarNavRow
+                  icon={<CropFreeIcon fontSize="small" />}
+                  label="Actual"
+                  active={displaySettingsEnabled && displayMode === "actual"}
+                  disabled={!displaySettingsEnabled}
+                  onClick={() => setDisplayMode("actual")}
+                />
+                <SidebarNavRow
+                  icon={<SwapHorizIcon fontSize="small" />}
+                  label="Scaled"
+                  active={displaySettingsEnabled && displayMode === "scaled"}
+                  disabled={!displaySettingsEnabled}
+                  onClick={() => setDisplayMode("scaled")}
+                />
+                <SidebarNavRow
+                  icon={<DesktopIcon fontSize="small" />}
+                  label={displaySelectorLabel}
+                  active={displaySettingsEnabled && selectedDisplayId !== ALL_DISPLAYS_ID}
+                  disabled={!displaySettingsEnabled}
+                  onClick={() => setDisplaySelectorExpanded((previous) => !previous)}
+                  trailing={
+                    <ExpandMoreIcon
+                      sx={{
+                        color: displaySettingsEnabled ? NAV_COLORS.cyan : "rgba(143,191,255,0.35)",
+                        transform: displaySelectorExpanded ? "rotate(180deg)" : "none",
+                        transition: "transform 140ms ease",
+                      }}
+                    />
+                  }
+                  ariaLabel="Choose display"
+                />
+                {displaySelectorExpanded ? (
+                  <Box sx={{ pb: 0.5, pl: 1.5 }}>
+                    {displaySelectorOptions.map((option) => (
+                      <SidebarNavRow
+                        key={option.id}
+                        icon={<DesktopIcon fontSize="small" />}
+                        label={option.label}
+                        active={displaySettingsEnabled && selectedDisplayId === option.id}
+                        disabled={!displaySettingsEnabled}
+                        onClick={() => setSelectedDisplayId(option.id)}
+                      />
+                    ))}
+                  </Box>
+                ) : null}
+                <SidebarNavRow
+                  icon={<DesktopIcon fontSize="small" />}
+                  label="View only"
+                  active={displaySettingsEnabled && effectiveViewOnly}
+                  disabled={!displaySettingsEnabled}
+                  onClick={() => setViewOnly((previous) => !previous)}
+                  trailing={
+                    <Switch
+                      checked={effectiveViewOnly}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={(event) => setViewOnly(event.target.checked)}
+                      disabled={!displaySettingsEnabled}
+                      size="small"
+                      color="info"
+                    />
+                  }
+                />
               </>
             </SidebarSection>
 
