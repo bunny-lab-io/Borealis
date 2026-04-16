@@ -46,7 +46,6 @@ import DeviceWatchdogsTab from "./Device_Watchdogs.jsx";
 import RemoteShellTab from "./RemoteShell.jsx";
 import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
 import ServiceList from "../Services/Service_List.jsx";
-import VncTab from "./VNC.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
 import { useUrlTabState } from "../../app/hooks/useUrlTabState.js";
@@ -106,7 +105,6 @@ const TOP_TABS = [
   { key: "watchdogs", label: "Watchdogs", icon: SmartToyRoundedIcon },
   { key: "activity", label: "Activity History", icon: ListAltRoundedIcon },
   { key: "shell", label: "Remote Shell", icon: TerminalRoundedIcon },
-  { key: "vnc", label: "Remote Desktop (VNC)", icon: DesktopWindowsRoundedIcon },
 ];
 const DEVICE_DETAILS_TAB_URL_BY_KEY = Object.freeze({
   summary: "device_summary",
@@ -115,7 +113,6 @@ const DEVICE_DETAILS_TAB_URL_BY_KEY = Object.freeze({
   watchdogs: "watchdogs",
   activity: "activity_history",
   shell: "remote_shell",
-  vnc: "remote_desktop",
 });
 const DEVICE_DETAILS_TAB_KEY_BY_URL = Object.freeze({
   device_summary: "summary",
@@ -128,8 +125,6 @@ const DEVICE_DETAILS_TAB_KEY_BY_URL = Object.freeze({
   activity: "activity",
   remote_shell: "shell",
   shell: "shell",
-  remote_desktop: "vnc",
-  vnc: "vnc",
 });
 
 const resolveDeviceId = (device) =>
@@ -757,6 +752,23 @@ export default function DeviceSummary() {
     const matchIndex = TOP_TABS.findIndex((tabDef) => tabDef.key === activeTabKey);
     return matchIndex >= 0 ? matchIndex : 0;
   }, [activeTabKey]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const legacyTab = String(params.get("tab") || "").trim().toLowerCase();
+    if (!deviceId || (legacyTab !== "remote_desktop" && legacyTab !== "vnc")) {
+      return;
+    }
+    params.delete("tab");
+    navigate(
+      {
+        pathname: APP_PATHS.deviceRemoteDesktop(deviceId),
+        search: params.toString() ? `?${params.toString()}` : "",
+      },
+      { replace: true, state: location.state }
+    );
+  }, [deviceId, location.search, location.state, navigate]);
+
   const [agent, setAgent] = useState(device || {});
   const [details, setDetails] = useState({});
   const [meta, setMeta] = useState({});
@@ -2163,19 +2175,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     </Box>
   );
 
-  const renderRemoteDesktopTab = () => (
-    <Box
-      sx={{
-        display: "flex",
-        flexDirection: "column",
-        flexGrow: 1,
-        minHeight: 0,
-      }}
-    >
-      <VncTab device={tunnelDevice} />
-    </Box>
-  );
-
   const memoryRows = useMemo(
     () =>
       (details.memory || []).map((m, idx) => ({
@@ -2751,8 +2750,21 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         disabled: !activityHostname,
         onClick: (event) => setMenuAnchor(event.currentTarget),
       },
+      {
+        id: "device-summary-remote-desktop",
+        label: "Remote Desktop",
+        icon: <DesktopWindowsRoundedIcon />,
+        tone: "secondary",
+        disabled: !deviceId,
+        onClick: () => {
+          if (!deviceId) return;
+          navigate(APP_PATHS.deviceRemoteDesktop(deviceId), {
+            state: { initialDevice: tunnelDevice },
+          });
+        },
+      },
     ],
-    [activityHostname]
+    [activityHostname, deviceId, navigate, tunnelDevice]
   );
 
   useRoutePageChrome({
@@ -2769,7 +2781,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     renderWatchdogsTab,
     renderHistory,
     renderRemoteShellTab,
-    renderRemoteDesktopTab,
   ];
   const tabContent = (topTabRenderers[tab] || renderDeviceSummaryTab)();
 

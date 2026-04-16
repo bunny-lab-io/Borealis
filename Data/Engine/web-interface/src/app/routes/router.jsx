@@ -81,16 +81,39 @@ export function buildAppRoutes() {
                 },
                 {
                   path: ":deviceId",
+                  element: <RootShell />,
                   handle: {
                     title: "Device Details",
                     breadcrumb: "Device",
                     navKey: "devices",
                     pageKey: "device",
                   },
-                  lazy: lazyNamed(
-                    () => import("../route-modules/inventoryRoutes.jsx"),
-                    "DeviceSummaryRoute"
-                  ),
+                  children: [
+                    {
+                      index: true,
+                      handle: {
+                        navKey: "devices",
+                        pageKey: "device",
+                      },
+                      lazy: lazyNamed(
+                        () => import("../route-modules/inventoryRoutes.jsx"),
+                        "DeviceSummaryRoute"
+                      ),
+                    },
+                    {
+                      path: "remote-desktop",
+                      handle: {
+                        title: "Remote Desktop",
+                        breadcrumb: "Remote Desktop",
+                        navKey: "devices",
+                        pageKey: "device-remote-desktop",
+                      },
+                      lazy: lazyNamed(
+                        () => import("../route-modules/inventoryRoutes.jsx"),
+                        "RemoteDesktopRoute"
+                      ),
+                    },
+                  ],
                 },
                 {
                   element: <RequireAdmin />,

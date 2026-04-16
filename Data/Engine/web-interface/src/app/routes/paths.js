@@ -16,6 +16,8 @@ export const APP_PATHS = {
   sshDevices: "/devices/ssh",
   winrmDevices: "/devices/winrm",
   device: (deviceId) => `/devices/${encodeURIComponent(normalizedString(deviceId))}`,
+  deviceRemoteDesktop: (deviceId) =>
+    `/devices/${encodeURIComponent(normalizedString(deviceId))}/remote-desktop`,
   filters: "/filters",
   filterNew: "/filters/new",
   filter: (filterId) => `/filters/${encodeURIComponent(normalizedString(filterId))}`,
