@@ -2157,7 +2157,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
               <Divider sx={{ borderColor: NAV_COLORS.line, mx: 2 }} />
               <Box sx={{ px: 2, py: 1.25, display: "flex", flexDirection: "column", gap: 1 }}>
                 <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                  Monitors
+                  Viewfinder
                 </Typography>
                 <Box
                   onPointerDown={previewNavigationEnabled ? handlePreviewNavigate : undefined}
