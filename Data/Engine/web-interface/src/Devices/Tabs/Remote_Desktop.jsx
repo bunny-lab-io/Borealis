@@ -9,8 +9,6 @@ import {
   Divider,
   ListItemButton,
   ListItemText,
-  Menu,
-  MenuItem,
   Switch,
   LinearProgress,
   Stack,
@@ -553,7 +551,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const [sessionId, setSessionId] = useState("");
   const [, setParticipantId] = useState("");
   const performanceLevel = 2;
-  const [displayMode, setDisplayMode] = useState("scaled");
+  const [displayMode, setDisplayMode] = useState("fit");
   const [expandedSidebarSections, setExpandedSidebarSections] = useState({
     display: true,
     clipboard: true,
@@ -563,7 +561,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const [resizeSession, setResizeSession] = useState(true);
   const [capabilities, setCapabilities] = useState({});
   const [selectedDisplayId, setSelectedDisplayId] = useState(ALL_DISPLAYS_ID);
-  const [displayMenuAnchorEl, setDisplayMenuAnchorEl] = useState(null);
+  const [displaySelectorExpanded, setDisplaySelectorExpanded] = useState(false);
   const [viewportHint, setViewportHint] = useState("");
   const [displayTopology, setDisplayTopology] = useState([]);
   const [framebufferSize, setFramebufferSize] = useState({ width: 0, height: 0 });
@@ -578,7 +576,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     targetWidth: 0,
     targetHeight: 0,
     interactive: false,
-    mode: "scaled",
+    mode: "fit",
   });
 
   const containerRef = useRef(null);
@@ -594,7 +592,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const viewportSignatureRef = useRef("");
   const forcedViewportKeyRef = useRef("");
   const viewportStateRef = useRef({
-    mode: "scaled",
+    mode: "fit",
     targetBounds: null,
     targetPreviewBounds: null,
     viewportX: 0,
@@ -752,7 +750,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     viewportSignatureRef.current = "";
     forcedViewportKeyRef.current = "";
     viewportStateRef.current = {
-      mode: "scaled",
+      mode: "fit",
       targetBounds: null,
       targetPreviewBounds: null,
       viewportX: 0,
@@ -763,7 +761,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     };
     setDisplayTopology([]);
     setSelectedDisplayId(ALL_DISPLAYS_ID);
-    setDisplayMenuAnchorEl(null);
+    setDisplaySelectorExpanded(false);
+    setDisplayMode("fit");
     setViewportHint("");
     setCapabilities({});
     setViewportPreview({
@@ -776,7 +775,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       targetWidth: 0,
       targetHeight: 0,
       interactive: false,
-      mode: "scaled",
+      mode: "fit",
     });
   }, []);
 
@@ -797,7 +796,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     viewportSignatureRef.current = "";
     forcedViewportKeyRef.current = "";
     viewportStateRef.current = {
-      mode: "scaled",
+      mode: "fit",
       targetBounds: null,
       targetPreviewBounds: null,
       viewportX: 0,
@@ -818,7 +817,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       targetWidth: 0,
       targetHeight: 0,
       interactive: false,
-      mode: "scaled",
+      mode: "fit",
     });
   }, []);
 
@@ -1806,6 +1805,9 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       window.setTimeout(() => {
         syncViewportSelection(effectiveSelectedMonitorIds, { updateState: false });
       }, 1200),
+      window.setTimeout(() => {
+        syncViewportSelection(effectiveSelectedMonitorIds, { updateState: false });
+      }, 2500),
     ];
     return () => {
       timers.forEach((timerId) => window.clearTimeout(timerId));
@@ -1841,14 +1843,24 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     if (!isConnected || !displayLayoutGeometry.bounds || viewportPreview.width <= 0 || viewportPreview.height <= 0) {
       return null;
     }
-    const x =
+    const rawX =
       displayLayoutGeometry.offsetX +
       (viewportPreview.left - displayLayoutGeometry.bounds.left) * displayLayoutGeometry.scale;
-    const y =
+    const rawY =
       displayLayoutGeometry.offsetY +
       (viewportPreview.top - displayLayoutGeometry.bounds.top) * displayLayoutGeometry.scale;
-    const width = viewportPreview.width * displayLayoutGeometry.scale;
-    const height = viewportPreview.height * displayLayoutGeometry.scale;
+    const maxRight = displayLayoutGeometry.frameWidth - displayLayoutGeometry.padding;
+    const maxBottom = displayLayoutGeometry.frameHeight - displayLayoutGeometry.padding;
+    const x = clampNumber(rawX, displayLayoutGeometry.padding, maxRight);
+    const y = clampNumber(rawY, displayLayoutGeometry.padding, maxBottom);
+    const width = Math.max(
+      2,
+      Math.min(viewportPreview.width * displayLayoutGeometry.scale, maxRight - x)
+    );
+    const height = Math.max(
+      2,
+      Math.min(viewportPreview.height * displayLayoutGeometry.scale, maxBottom - y)
+    );
     return {
       x,
       y,
@@ -2064,13 +2076,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
             borderRight: { xs: `1px solid ${NAV_COLORS.line}`, lg: "none" },
             boxShadow: "none",
             height: { xs: "auto", lg: "100%" },
+            overflow: "hidden",
           }}
         >
-          <SidebarSection
-            sectionId="display"
-            title="Display & Focus"
-          >
-            <>
+          <Box sx={{ flex: 1, overflowY: "auto" }}>
+            <SidebarSection
+              sectionId="display"
+              title="Display & Focus"
+            >
+              <>
               <SidebarNavRow
                 icon={<FitScreenIcon fontSize="small" />}
                 label="Fit"
@@ -2097,18 +2111,32 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                 label={displaySelectorLabel}
                 active={displaySettingsEnabled && selectedDisplayId !== ALL_DISPLAYS_ID}
                 disabled={!displaySettingsEnabled}
-                onClick={(event) => setDisplayMenuAnchorEl(event.currentTarget)}
+                onClick={() => setDisplaySelectorExpanded((previous) => !previous)}
                 trailing={
                   <ExpandMoreIcon
                     sx={{
                       color: displaySettingsEnabled ? NAV_COLORS.cyan : "rgba(143,191,255,0.35)",
-                      transform: displayMenuAnchorEl ? "rotate(180deg)" : "none",
+                      transform: displaySelectorExpanded ? "rotate(180deg)" : "none",
                       transition: "transform 140ms ease",
                     }}
                   />
                 }
                 ariaLabel="Choose display"
               />
+              {displaySelectorExpanded ? (
+                <Box sx={{ pb: 0.5, pl: 1.5 }}>
+                  {displaySelectorOptions.map((option) => (
+                    <SidebarNavRow
+                      key={option.id}
+                      icon={<DesktopIcon fontSize="small" />}
+                      label={option.label}
+                      active={displaySettingsEnabled && selectedDisplayId === option.id}
+                      disabled={!displaySettingsEnabled}
+                      onClick={() => setSelectedDisplayId(option.id)}
+                    />
+                  ))}
+                </Box>
+              ) : null}
               <SidebarNavRow
                 icon={<DesktopIcon fontSize="small" />}
                 label="View only"
@@ -2126,41 +2154,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                   />
                 }
               />
-              <Menu
-                anchorEl={displayMenuAnchorEl}
-                open={Boolean(displayMenuAnchorEl)}
-                onClose={() => setDisplayMenuAnchorEl(null)}
-                anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-                transformOrigin={{ vertical: "top", horizontal: "left" }}
-                PaperProps={{
-                  sx: {
-                    mt: 0.5,
-                    minWidth: 180,
-                    borderRadius: 1.5,
-                    border: `1px solid ${SIDEBAR_THEME.border}`,
-                    background: "#141b27",
-                    color: SIDEBAR_THEME.text,
-                    boxShadow: "0 18px 40px rgba(2, 6, 23, 0.45)",
-                  },
-                }}
-              >
-                {displaySelectorOptions.map((option) => (
-                  <MenuItem
-                    key={option.id}
-                    selected={selectedDisplayId === option.id}
-                    onClick={() => {
-                      setSelectedDisplayId(option.id);
-                      setDisplayMenuAnchorEl(null);
-                    }}
-                    sx={{
-                      fontSize: "0.82rem",
-                      minHeight: 34,
-                    }}
-                  >
-                    {option.label}
-                  </MenuItem>
-                ))}
-              </Menu>
               <Divider sx={{ borderColor: NAV_COLORS.line, mx: 2 }} />
               <Box sx={{ px: 2, py: 1.25, display: "flex", flexDirection: "column", gap: 1 }}>
                 <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
@@ -2269,14 +2262,14 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                   </Typography>
                 ) : null}
               </Box>
-            </>
-          </SidebarSection>
+              </>
+            </SidebarSection>
 
-          <SidebarSection
-            sectionId="clipboard"
-            title="Clipboard & Keys"
-          >
-            <>
+            <SidebarSection
+              sectionId="clipboard"
+              title="Clipboard & Keys"
+            >
+              <>
               <SidebarNavRow
                 icon={<ClipboardIcon fontSize="small" />}
                 label="Sync Clipboard"
@@ -2312,14 +2305,14 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                 disabled={!showClipboardActions || effectiveViewOnly}
                 onClick={handleCtrlAltDel}
               />
-            </>
-          </SidebarSection>
+              </>
+            </SidebarSection>
 
-          <SidebarSection
-            sectionId="power"
-            title="Power"
-          >
-            <>
+            <SidebarSection
+              sectionId="power"
+              title="Power"
+            >
+              <>
               <SidebarNavRow
                 icon={<PowerIcon fontSize="small" />}
                 label="Shutdown"
@@ -2338,22 +2331,23 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                 disabled={!showPowerButtons || !resetSupported}
                 onClick={() => handlePowerAction("reset")}
               />
-            </>
-          </SidebarSection>
+              </>
+            </SidebarSection>
 
-          <SidebarSection
-            sectionId="session"
-            title="Session Control"
-          >
-            <SidebarNavRow
-              icon={<StopIcon fontSize="small" />}
-              label="Disconnect"
-              disabled={!isConnected}
-              onClick={handleDisconnect}
-            />
-          </SidebarSection>
+            <SidebarSection
+              sectionId="session"
+              title="Session Control"
+            >
+              <SidebarNavRow
+                icon={<StopIcon fontSize="small" />}
+                label="Disconnect"
+                disabled={!isConnected}
+                onClick={handleDisconnect}
+              />
+            </SidebarSection>
+          </Box>
 
-          <Box sx={{ mt: "auto", px: 1, pb: 1 }}>
+          <Box sx={{ px: 1, pb: 1, pt: 0.5 }}>
             <Box
               component="button"
               type="button"
@@ -2498,20 +2492,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                 >
                   <DesktopIcon sx={{ color: MAGIC_UI.accentA, fontSize: 40 }} />
                   <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
-                    Ready to Connect
+                    {showConnectingStatus ? "Connecting..." : "Ready to Connect"}
                   </Typography>
-                  {showConnectingStatus ? (
-                    <Typography
-                      variant="body2"
-                      sx={{
-                        color: MAGIC_UI.accentA,
-                        fontWeight: 600,
-                        maxWidth: 320,
-                      }}
-                    >
-                      Connecting...
-                    </Typography>
-                  ) : null}
                   {!showConnectingStatus && statusMessage ? (
                     <Typography
                       variant="body2"
