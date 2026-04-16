@@ -2245,7 +2245,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
             <>
               <SidebarNavRow
                 icon={<ClipboardIcon fontSize="small" />}
-                label="Sync remote clipboard to browser"
+                label="Sync Clipboard"
                 active={showClipboardActions && clipboardSync}
                 disabled={!showClipboardActions}
                 onClick={() => setClipboardSync((previous) => !previous)}
