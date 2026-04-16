@@ -955,6 +955,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
 
       const hostWidth = Math.max(1, Math.round(Number(viewportHost.clientWidth || 0)));
       const hostHeight = Math.max(1, Math.round(Number(viewportHost.clientHeight || 0)));
+      const resolveViewportLoc = () => {
+        const viewportLoc = display?._viewportLoc || {};
+        return {
+          x: Number.isFinite(Number(viewportLoc.x)) ? Number(viewportLoc.x) : targetBounds.x,
+          y: Number.isFinite(Number(viewportLoc.y)) ? Number(viewportLoc.y) : targetBounds.y,
+          w: Number.isFinite(Number(viewportLoc.w)) ? Number(viewportLoc.w) : targetBounds.width,
+          h: Number.isFinite(Number(viewportLoc.h)) ? Number(viewportLoc.h) : targetBounds.height,
+        };
+      };
       const previous = viewportStateRef.current;
       const sameTarget =
         previous.mode === mode &&
@@ -984,24 +993,22 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         if (typeof display.autoscale === "function") {
           display.autoscale(hostWidth, hostHeight);
         }
-        if (typeof display.scale !== "undefined") {
-          display.scale = 1.0;
-        }
+        const actualViewport = resolveViewportLoc();
         syncViewportPreview({
           mode,
           targetBounds,
           targetPreviewBounds,
-          viewportX: targetBounds.x,
-          viewportY: targetBounds.y,
-          viewportWidth: targetBounds.width,
-          viewportHeight: targetBounds.height,
+          viewportX: actualViewport.x,
+          viewportY: actualViewport.y,
+          viewportWidth: actualViewport.w,
+          viewportHeight: actualViewport.h,
           interactive: false,
         });
         return {
-          x: targetBounds.x,
-          y: targetBounds.y,
-          width: targetBounds.width,
-          height: targetBounds.height,
+          x: actualViewport.x,
+          y: actualViewport.y,
+          width: actualViewport.w,
+          height: actualViewport.h,
           interactive: false,
         };
       }
@@ -1062,25 +1069,26 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       if (typeof display.scale !== "undefined") {
         display.scale = mode === "scaled" ? scale : 1.0;
       }
+      const actualViewport = resolveViewportLoc();
       const interactive =
         mode === "scaled"
-          ? targetBounds.width > viewportWidth
-          : targetBounds.width > viewportWidth || targetBounds.height > viewportHeight;
+          ? targetBounds.width > actualViewport.w
+          : targetBounds.width > actualViewport.w || targetBounds.height > actualViewport.h;
       syncViewportPreview({
         mode,
         targetBounds,
         targetPreviewBounds,
-        viewportX: nextX,
-        viewportY: nextY,
-        viewportWidth,
-        viewportHeight,
+        viewportX: actualViewport.x,
+        viewportY: actualViewport.y,
+        viewportWidth: actualViewport.w,
+        viewportHeight: actualViewport.h,
         interactive,
       });
       return {
-        x: nextX,
-        y: nextY,
-        width: viewportWidth,
-        height: viewportHeight,
+        x: actualViewport.x,
+        y: actualViewport.y,
+        width: actualViewport.w,
+        height: actualViewport.h,
         interactive,
       };
     },
