@@ -385,7 +385,29 @@ function buildDisplayLayoutFrames(
 }
 
 function displayDiagramTopology(topology, framebufferSize) {
-  if (Array.isArray(topology) && topology.length) {
+  if (Array.isArray(topology) && topology.length > 1) {
+    return topology;
+  }
+  if (Array.isArray(topology) && topology.length === 1) {
+    const [display] = topology;
+    if (framebufferSize?.width && framebufferSize?.height) {
+      const bounds = displayTopologyBounds(topology);
+      if (!topologyMatchesFramebuffer(bounds, framebufferSize)) {
+        return [
+          {
+            ...display,
+            left: 0,
+            top: 0,
+            right: framebufferSize.width,
+            bottom: framebufferSize.height,
+            width: framebufferSize.width,
+            height: framebufferSize.height,
+            primary: true,
+            synthetic: true,
+          },
+        ];
+      }
+    }
     return topology;
   }
   if (!framebufferSize?.width || !framebufferSize?.height) {
