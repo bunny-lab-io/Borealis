@@ -269,6 +269,61 @@ def test_vnc_establish_uses_longer_initial_wait_and_shorter_retry_wait(
     ]
 
 
+def test_vnc_establish_uses_shorter_waits_for_recently_healthy_reconnects(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    wait_calls: list[float] = []
+    manager = vnc_api.ensure_vnc_collaboration_manager(engine_harness.context, logger=engine_harness.context.logger)
+    manager.upsert_agent_credential(
+        agent_id="test-device-agent",
+        controller_password="bootpass",
+        credential_revision=42,
+    )
+    session, _participant, _created = manager.ensure_session(
+        agent_id="test-device-agent",
+        operator_id="admin",
+        controller_password="bootpass",
+        credential_revision=42,
+        remove_wallpaper=True,
+    )
+    manager.record_backend_ready(
+        session.session_id,
+        tunnel_id="tun-vnc-1",
+        allowed_ips="10.255.0.1/32",
+        engine_virtual_ip="10.255.0.1/32",
+    )
+    engine_harness.context.agent_socket_registry = SimpleNamespace(
+        is_registered=lambda agent_id: True
+    )
+    engine_harness.context.emit_agent_event = lambda agent_id, event, payload: True
+
+    monkeypatch.setenv("BOREALIS_VNC_WARM_READY_WAIT_SECONDS", "2.5")
+    monkeypatch.setenv("BOREALIS_VNC_WARM_RETRY_READY_WAIT_SECONDS", "2.0")
+    monkeypatch.setenv("BOREALIS_VNC_WARM_READY_POLL_INTERVAL_SECONDS", "0.2")
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+
+    def _fake_wait(*_args, **kwargs):
+        wait_calls.append(float(kwargs["timeout_seconds"]))
+        return len(wait_calls) > 2
+
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", _fake_wait)
+    monkeypatch.setattr(vnc_api.time, "sleep", lambda _seconds: None)
+
+    response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+
+    assert response.status_code == 200
+    assert wait_calls == [0.75, 2.5, 2.0]
+    assert fake_tunnel.transport_marks == [("test-device-agent", "vnc_bootstrap"), ("test-device-agent", "vnc_connect_retry")]
+    assert fake_tunnel.start_calls == [
+        ("test-device-agent", False, "vnc_bootstrap"),
+        ("test-device-agent", True, "vnc_connect_retry"),
+    ]
+
+
 def test_vnc_establish_defaults_without_display_topology(
     engine_harness: EngineTestHarness,
     monkeypatch,
@@ -539,6 +594,32 @@ def test_vnc_establish_requests_agent_credential_refresh_when_cache_is_empty(
     ]
     assert payload["display_topology"][0]["label"] == "1"
     assert fake_registry.created[0]["agent_id"] == "test-device-agent"
+
+
+def test_agent_socket_connect_prewarms_vnc_credential_when_cache_is_empty(
+    engine_harness: EngineTestHarness,
+) -> None:
+    engine_harness.context.vpn_tunnel_service = SimpleNamespace(
+        session_payload=lambda agent_id, include_token=True: None
+    )
+    socket_client = engine_harness.context.socketio.test_client(engine_harness.app)
+
+    assert socket_client.is_connected()
+
+    socket_client.emit(
+        "connect_agent",
+        {"agent_id": "test-device-agent", "hostname": "TEST-DEVICE", "service_mode": "system"},
+    )
+
+    received = socket_client.get_received()
+    refresh_events = [item for item in received if item["name"] == "vnc_refresh"]
+    assert len(refresh_events) == 1
+    assert refresh_events[0]["args"][0] == {
+        "agent_id": "test-device-agent",
+        "reason": "socket_register_prewarm",
+    }
+
+    socket_client.disconnect()
 
 
 def test_vnc_establish_returns_agent_socket_missing_when_backend_needs_bootstrap_but_agent_is_offline(

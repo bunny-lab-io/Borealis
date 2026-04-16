@@ -178,6 +178,72 @@ def _wait_for_backend_ready(
     return False
 
 
+def _recent_backend_ready_age_seconds(collaboration_session: Any) -> Optional[float]:
+    try:
+        last_ready = float(getattr(collaboration_session, "last_backend_ready_at", 0.0) or 0.0)
+    except Exception:
+        return None
+    if last_ready <= 0:
+        return None
+    return max(0.0, float(time.time()) - last_ready)
+
+
+def _ready_wait_profile(*, collaboration_session: Any, created: bool) -> Dict[str, Any]:
+    cold_ready_wait_seconds = _coerce_timeout(
+        os.environ.get("BOREALIS_VNC_READY_WAIT_SECONDS"),
+        12.0,
+    )
+    cold_retry_wait_seconds = _coerce_timeout(
+        os.environ.get("BOREALIS_VNC_RETRY_READY_WAIT_SECONDS"),
+        8.0,
+    )
+    cold_poll_seconds = _coerce_timeout(
+        os.environ.get("BOREALIS_VNC_READY_POLL_INTERVAL_SECONDS"),
+        0.35,
+    )
+    warm_session_window_seconds = _coerce_timeout(
+        os.environ.get("BOREALIS_VNC_WARM_SESSION_WINDOW_SECONDS"),
+        75.0,
+    )
+    recent_backend_ready_age = _recent_backend_ready_age_seconds(collaboration_session)
+    recent_backend_ready = (
+        recent_backend_ready_age is not None
+        and recent_backend_ready_age <= warm_session_window_seconds
+    )
+    warm_reconnect = bool((not created) and recent_backend_ready)
+    if warm_reconnect:
+        warm_ready_wait_seconds = _coerce_timeout(
+            os.environ.get("BOREALIS_VNC_WARM_READY_WAIT_SECONDS"),
+            min(cold_ready_wait_seconds, 3.0),
+        )
+        warm_retry_wait_seconds = _coerce_timeout(
+            os.environ.get("BOREALIS_VNC_WARM_RETRY_READY_WAIT_SECONDS"),
+            min(cold_retry_wait_seconds, 3.0),
+        )
+        warm_poll_seconds = _coerce_timeout(
+            os.environ.get("BOREALIS_VNC_WARM_READY_POLL_INTERVAL_SECONDS"),
+            min(cold_poll_seconds, 0.2),
+        )
+        return {
+            "mode": "warm_reconnect",
+            "initial_wait_seconds": warm_ready_wait_seconds,
+            "retry_wait_seconds": warm_retry_wait_seconds,
+            "poll_seconds": warm_poll_seconds,
+            "recent_backend_ready": True,
+            "recent_backend_ready_age": recent_backend_ready_age,
+            "warm_session_window_seconds": warm_session_window_seconds,
+        }
+    return {
+        "mode": "standard",
+        "initial_wait_seconds": cold_ready_wait_seconds,
+        "retry_wait_seconds": cold_retry_wait_seconds,
+        "poll_seconds": cold_poll_seconds,
+        "recent_backend_ready": bool(recent_backend_ready),
+        "recent_backend_ready_age": recent_backend_ready_age,
+        "warm_session_window_seconds": warm_session_window_seconds,
+    }
+
+
 def _context_emit_agent_event(context: Any, agent_id: str, event: str, payload: Dict[str, Any]) -> bool:
     emitter = getattr(context, "emit_agent_event", None)
     if not callable(emitter):
@@ -400,6 +466,10 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 },
             )
 
+        wait_profile = _ready_wait_profile(
+            collaboration_session=collaboration_session,
+            created=_created,
+        )
         fast_ready_wait = _coerce_timeout(
             os.environ.get("BOREALIS_VNC_FAST_READY_WAIT_SECONDS"),
             0.75,
@@ -416,6 +486,16 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             vnc_port=vnc_port,
             fast_wait_seconds=fast_ready_wait,
             fast_poll_seconds=fast_ready_poll,
+            ready_profile=wait_profile["mode"],
+            ready_wait_seconds=wait_profile["initial_wait_seconds"],
+            retry_wait_seconds=wait_profile["retry_wait_seconds"],
+            ready_poll_seconds=wait_profile["poll_seconds"],
+            recent_backend_ready=wait_profile["recent_backend_ready"],
+            recent_backend_ready_age=(
+                round(float(wait_profile["recent_backend_ready_age"]), 3)
+                if isinstance(wait_profile["recent_backend_ready_age"], (int, float))
+                else "-"
+            ),
         )
         fast_ready = _wait_for_backend_ready(
             host,
@@ -463,14 +543,8 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                     collaboration_session.credential_revision,
                 )
             )
-            ready_wait_seconds = _coerce_timeout(
-                os.environ.get("BOREALIS_VNC_READY_WAIT_SECONDS"),
-                12.0,
-            )
-            ready_poll_seconds = _coerce_timeout(
-                os.environ.get("BOREALIS_VNC_READY_POLL_INTERVAL_SECONDS"),
-                0.35,
-            )
+            ready_wait_seconds = float(wait_profile["initial_wait_seconds"])
+            ready_poll_seconds = float(wait_profile["poll_seconds"])
             try:
                 _trace("E10", agent_id=agent_id, session_id=collaboration_session.session_id, reason="vnc_bootstrap")
                 _restart_tunnel("vnc_bootstrap")
@@ -518,14 +592,8 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 poll_seconds=ready_poll_seconds,
             )
         if not initial_ready:
-            retry_wait_seconds = _coerce_timeout(
-                os.environ.get("BOREALIS_VNC_RETRY_READY_WAIT_SECONDS"),
-                8.0,
-            )
-            retry_poll_seconds = _coerce_timeout(
-                os.environ.get("BOREALIS_VNC_READY_POLL_INTERVAL_SECONDS"),
-                0.35,
-            )
+            retry_wait_seconds = float(wait_profile["retry_wait_seconds"])
+            retry_poll_seconds = float(wait_profile["poll_seconds"])
             try:
                 _trace("E13", agent_id=agent_id, session_id=collaboration_session.session_id, reason="vnc_connect_retry")
                 _restart_tunnel("vnc_connect_retry")
