@@ -257,10 +257,31 @@ const VNC_AUTO_RETRY_DELAY_MS = 1500;
 const VNC_OPEN_TIMEOUT_MS = 12000;
 const ALL_DISPLAYS_ID = "__all_displays__";
 const CONNECTION_FLOW_STEPS = Object.freeze([
-  { id: "wireguard", label: "WireGuard Tunnel" },
-  { id: "service", label: "VNC Service" },
-  { id: "socket", label: "VNC Socket" },
-  { id: "desktop", label: "Live Desktop" },
+  {
+    id: "tunnel",
+    label: "Securing Tunnel",
+    detail: "Requesting the WireGuard route to the remote device.",
+  },
+  {
+    id: "service",
+    label: "Checking VNC Service",
+    detail: "Confirming the remote desktop service is running.",
+  },
+  {
+    id: "socket",
+    label: "Opening Desktop Socket",
+    detail: "Connecting the browser to the live VNC socket.",
+  },
+  {
+    id: "auth",
+    label: "Authenticating Session",
+    detail: "Negotiating credentials and display settings.",
+  },
+  {
+    id: "ready",
+    label: "Desktop Ready",
+    detail: "Finalizing the live desktop stream for control.",
+  },
 ]);
 
 async function writeClipboardText(text) {
@@ -1954,88 +1975,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       {trailing ? <Box sx={{ ml: 1, flexShrink: 0 }}>{trailing}</Box> : null}
     </ListItemButton>
   );
-  const vncStageInfo = useMemo(() => {
-    const errorDetail = summarizeStatus(statusMessage) || "VNC session encountered an error.";
-    switch (vncStage) {
-      case "requesting_tunnel":
-        return {
-          label: "Requesting Tunnel",
-          detail: "Engine preparing WireGuard + VNC credentials.",
-          accent: MAGIC_UI.accentA,
-          detailTone: MAGIC_UI.textMuted,
-        };
-      case "connecting_ws":
-        return {
-          label: "Connecting noVNC",
-          detail: "Opening WebSocket to the VNC proxy.",
-          accent: MAGIC_UI.accentA,
-          detailTone: MAGIC_UI.textMuted,
-        };
-      case "handshaking":
-        return {
-          label: "Handshaking",
-          detail: "Authenticating with UltraVNC and negotiating display.",
-          accent: MAGIC_UI.accentB,
-          detailTone: MAGIC_UI.textMuted,
-        };
-      case "connected":
-        return {
-          label: "Live",
-          detail: "Desktop stream active.",
-          accent: MAGIC_UI.accentC,
-          detailTone: MAGIC_UI.textMuted,
-        };
-      case "disconnecting":
-        return {
-          label: "Disconnecting",
-          detail: "Closing the VNC session.",
-          accent: MAGIC_UI.accentD,
-          detailTone: MAGIC_UI.textMuted,
-        };
-      case "disconnected":
-        return {
-          label: "Disconnected",
-          detail: "Session closed. Ready to reconnect.",
-          accent: "rgba(148, 163, 184, 0.6)",
-          detailTone: MAGIC_UI.textMuted,
-        };
-      case "retrying":
-        return {
-          label: "Retrying",
-          detail: summarizeStatus(statusMessage) || "Retrying VNC after a transient tunnel or proxy failure.",
-          accent: MAGIC_UI.accentB,
-          detailTone: MAGIC_UI.textMuted,
-        };
-      case "agent_onboarding":
-        return {
-          label: "Agent Onboarding",
-          detail: "Waiting for the agent tunnel to finish onboarding.",
-          accent: MAGIC_UI.accentB,
-          detailTone: MAGIC_UI.textMuted,
-        };
-      case "auth_failed":
-        return {
-          label: "Authentication Failed",
-          detail: "UltraVNC rejected the credentials.",
-          accent: "#ff7b89",
-          detailTone: "#ff7b89",
-        };
-      case "error":
-        return {
-          label: "Error",
-          detail: errorDetail,
-          accent: "#ff7b89",
-          detailTone: "#ff7b89",
-        };
-      default:
-        return {
-          label: "Idle",
-          detail: "Waiting for operator to connect.",
-          accent: "rgba(148, 163, 184, 0.6)",
-          detailTone: MAGIC_UI.textMuted,
-        };
-    }
-  }, [statusMessage, vncStage]);
   const connectionFlowStages = useMemo(() => {
     const steps = CONNECTION_FLOW_STEPS.map((step) => ({ ...step, status: "pending" }));
     if (isConnected || vncStage === "connected") {
@@ -2051,16 +1990,22 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         steps[1].status = "complete";
         steps[2].status = "active";
         break;
-      case "handshaking":
       case "retrying":
         steps[0].status = "complete";
         steps[1].status = "complete";
         steps[2].status = "active";
         break;
+      case "handshaking":
+        steps[0].status = "complete";
+        steps[1].status = "complete";
+        steps[2].status = "complete";
+        steps[3].status = "active";
+        break;
       case "auth_failed":
         steps[0].status = "complete";
         steps[1].status = "complete";
-        steps[2].status = "failed";
+        steps[2].status = "complete";
+        steps[3].status = "failed";
         break;
       case "error":
         if (sessionId) {
@@ -2088,14 +2033,12 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       vncStage === "connecting_ws" ||
       vncStage === "handshaking" ||
       vncStage === "retrying");
-  const connectionFlowDetail = useMemo(() => {
-    if (showConnectingStatus) return vncStageInfo.detail;
-    if (vncStage === "error" || vncStage === "auth_failed") {
-      return summarizeStatus(statusMessage) || vncStageInfo.detail;
-    }
-    if (vncStage === "agent_onboarding") return vncStageInfo.detail;
-    return "";
-  }, [showConnectingStatus, statusMessage, vncStage, vncStageInfo.detail]);
+  const showConnectionFlow =
+    !isConnected &&
+    (showConnectingStatus ||
+      vncStage === "agent_onboarding" ||
+      vncStage === "auth_failed" ||
+      vncStage === "error");
 
   return (
     <Box
@@ -2562,118 +2505,154 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                   <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
                     {showConnectingStatus ? "Connecting..." : "Ready to Connect"}
                   </Typography>
-                  <Box
-                    sx={{
-                      width: "100%",
-                      borderRadius: 3,
-                      border: `1px solid ${MAGIC_UI.panelBorder}`,
-                      background:
-                        "linear-gradient(145deg, rgba(8,12,24,0.92), rgba(10,16,30,0.84))",
-                      px: 2,
-                      py: 1.75,
-                      textAlign: "left",
-                    }}
-                  >
-                    {connectionFlowStages.map((step, index) => {
-                      const isLast = index === connectionFlowStages.length - 1;
-                      const iconColor =
-                        step.status === "complete"
-                          ? MAGIC_UI.accentC
-                          : step.status === "active"
-                            ? MAGIC_UI.accentA
-                            : step.status === "failed"
-                              ? "#ff7b89"
-                              : "rgba(148, 163, 184, 0.58)";
-                      const labelColor =
-                        step.status === "pending" ? MAGIC_UI.textMuted : MAGIC_UI.textBright;
-                      const connectorColor =
-                        step.status === "complete"
-                          ? "linear-gradient(180deg, rgba(52,211,153,0.9), rgba(125,201,255,0.5))"
-                          : step.status === "active"
-                            ? "linear-gradient(180deg, rgba(125,201,255,0.95), rgba(125,201,255,0.18))"
-                            : step.status === "failed"
-                              ? "linear-gradient(180deg, rgba(255,123,137,0.9), rgba(255,123,137,0.18))"
-                              : "rgba(148,163,184,0.18)";
-                      return (
-                        <React.Fragment key={step.id}>
-                          <Box
-                            sx={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 1.25,
-                              minHeight: 28,
-                            }}
-                          >
-                            <Box
-                              sx={{
-                                width: 20,
-                                height: 20,
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                color: iconColor,
-                                borderRadius: "50%",
-                                ...(step.status === "active"
-                                  ? {
-                                      background: "rgba(125, 201, 255, 0.12)",
-                                      animation: "remoteDesktopFlowPulse 1.8s ease-out infinite",
-                                    }
-                                  : null),
-                              }}
-                            >
-                              {step.status === "complete" ? (
-                                <StageCompleteIcon sx={{ fontSize: 18 }} />
-                              ) : step.status === "active" ? (
-                                <StageActiveIcon
-                                  sx={{
-                                    fontSize: 18,
-                                    animation: "remoteDesktopFlowSpin 1.15s linear infinite",
-                                  }}
-                                />
-                              ) : step.status === "failed" ? (
-                                <StageErrorIcon sx={{ fontSize: 18 }} />
-                              ) : (
-                                <StagePendingIcon sx={{ fontSize: 18 }} />
-                              )}
-                            </Box>
-                            <Typography
-                              sx={{
-                                color: labelColor,
-                                fontSize: "0.84rem",
-                                fontWeight:
-                                  step.status === "active" || step.status === "complete" ? 600 : 500,
-                                letterSpacing: 0.2,
-                              }}
-                            >
-                              {step.label}
-                            </Typography>
-                          </Box>
-                          {!isLast ? (
-                            <Box
-                              sx={{
-                                ml: 1.2,
-                                my: 0.35,
-                                width: 2,
-                                height: 14,
-                                borderRadius: 999,
-                                background: connectorColor,
-                              }}
-                            />
-                          ) : null}
-                        </React.Fragment>
-                      );
-                    })}
-                  </Box>
-                  {connectionFlowDetail ? (
-                    <Typography
-                      variant="body2"
+                  {showConnectionFlow ? (
+                    <Box
                       sx={{
-                        color: vncStageInfo.detailTone || MAGIC_UI.textMuted,
-                        maxWidth: 340,
+                        width: "100%",
+                        display: "flex",
+                        justifyContent: "center",
+                        px: 1,
                       }}
                     >
-                      {connectionFlowDetail}
-                    </Typography>
+                      <Box
+                        sx={{
+                          width: "100%",
+                          maxWidth: 340,
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "flex-start",
+                        }}
+                      >
+                        {connectionFlowStages.map((step, index) => {
+                          const isLast = index === connectionFlowStages.length - 1;
+                          const iconColor =
+                            step.status === "complete"
+                              ? MAGIC_UI.accentC
+                              : step.status === "active"
+                                ? MAGIC_UI.accentA
+                                : step.status === "failed"
+                                  ? "#ff7b89"
+                                  : "rgba(148, 163, 184, 0.58)";
+                          const labelColor =
+                            step.status === "pending" ? MAGIC_UI.textMuted : MAGIC_UI.textBright;
+                          const detailColor =
+                            step.status === "failed"
+                              ? "#ff7b89"
+                              : step.status === "active"
+                                ? MAGIC_UI.accentA
+                                : MAGIC_UI.textMuted;
+                          const connectorColor =
+                            step.status === "complete"
+                              ? "linear-gradient(180deg, rgba(52,211,153,0.9), rgba(52,211,153,0.16))"
+                              : step.status === "active"
+                                ? "linear-gradient(180deg, rgba(125,201,255,0.95), rgba(125,201,255,0.18))"
+                                : step.status === "failed"
+                                  ? "linear-gradient(180deg, rgba(255,123,137,0.9), rgba(255,123,137,0.18))"
+                                  : "rgba(148,163,184,0.18)";
+                          const showStepDetail = step.status === "active" || step.status === "failed";
+                          return (
+                            <Box
+                              key={step.id}
+                              sx={{
+                                display: "flex",
+                                alignItems: "stretch",
+                                gap: 1.25,
+                                width: "100%",
+                              }}
+                            >
+                              <Box
+                                sx={{
+                                  width: 22,
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  alignItems: "center",
+                                  flexShrink: 0,
+                                }}
+                              >
+                                <Box
+                                  sx={{
+                                    width: 20,
+                                    height: 20,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    color: iconColor,
+                                    borderRadius: "50%",
+                                    ...(step.status === "active"
+                                      ? {
+                                          background: "rgba(125, 201, 255, 0.12)",
+                                          animation: "remoteDesktopFlowPulse 1.8s ease-out infinite",
+                                        }
+                                      : null),
+                                  }}
+                                >
+                                  {step.status === "complete" ? (
+                                    <StageCompleteIcon sx={{ fontSize: 18 }} />
+                                  ) : step.status === "active" ? (
+                                    <StageActiveIcon
+                                      sx={{
+                                        fontSize: 18,
+                                        animation: "remoteDesktopFlowSpin 1.15s linear infinite",
+                                      }}
+                                    />
+                                  ) : step.status === "failed" ? (
+                                    <StageErrorIcon sx={{ fontSize: 18 }} />
+                                  ) : (
+                                    <StagePendingIcon sx={{ fontSize: 18 }} />
+                                  )}
+                                </Box>
+                                {!isLast ? (
+                                  <Box
+                                    sx={{
+                                      mt: 0.4,
+                                      mb: 0.2,
+                                      width: 2,
+                                      flexGrow: 1,
+                                      minHeight: showStepDetail ? 22 : 14,
+                                      borderRadius: 999,
+                                      background: connectorColor,
+                                    }}
+                                  />
+                                ) : null}
+                              </Box>
+                              <Box
+                                sx={{
+                                  pt: 0.05,
+                                  pb: isLast ? 0 : 0.65,
+                                  minWidth: 0,
+                                  textAlign: "left",
+                                }}
+                              >
+                                <Typography
+                                  sx={{
+                                    color: labelColor,
+                                    fontSize: "0.85rem",
+                                    fontWeight:
+                                      step.status === "active" || step.status === "complete" ? 600 : 500,
+                                    letterSpacing: 0.2,
+                                  }}
+                                >
+                                  {step.label}
+                                </Typography>
+                                {showStepDetail ? (
+                                  <Typography
+                                    sx={{
+                                      mt: 0.2,
+                                      color: detailColor,
+                                      fontSize: "0.74rem",
+                                      lineHeight: 1.35,
+                                      maxWidth: 280,
+                                    }}
+                                  >
+                                    {step.detail}
+                                  </Typography>
+                                ) : null}
+                              </Box>
+                            </Box>
+                          );
+                        })}
+                      </Box>
+                    </Box>
                   ) : null}
                   {showLaunchButton ? (
                     <Button
