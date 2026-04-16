@@ -26,7 +26,6 @@ import {
   ExpandMore as ExpandMoreIcon,
 } from "@mui/icons-material";
 import RFB from "@novnc/novnc/lib/rfb";
-import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
 
 const MAGIC_UI = {
   panelBorder: "rgba(148, 163, 184, 0.35)",
@@ -41,9 +40,6 @@ const MAGIC_UI = {
 const VNC_STAGE_BACKGROUND = "#0b1325";
 const VNC_CANVAS_BOX_SHADOW =
   "0 0 0 1px rgba(125, 183, 255, 0.18), 0 18px 42px rgba(2, 6, 23, 0.4)";
-const REMOTE_DESKTOP_PAGE_TITLE = "Remote Desktop";
-const REMOTE_DESKTOP_PAGE_SUBTITLE =
-  "Remotely establish connection to device via agent's WireGuard tunnel.";
 
 const SIDEBAR_THEME = {
   panel:
@@ -1864,12 +1860,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const highlightedMonitorIds = selectionModeEnabled ? effectiveSelectedMonitorIds : [];
   const showViewportIndicator = Boolean(viewfinderViewportRect);
   const showViewfinderHelper = Boolean(viewfinderHelperText);
-  useRoutePageChrome({
-    title: REMOTE_DESKTOP_PAGE_TITLE,
-    subtitle: REMOTE_DESKTOP_PAGE_SUBTITLE,
-    Icon: DesktopIcon,
-    breadcrumbLabel: REMOTE_DESKTOP_PAGE_TITLE,
-  });
   const SidebarSection = ({ sectionId, icon, title, children }) => (
     <Accordion
       expanded={expandedSidebarSections[sectionId]}
@@ -1987,14 +1977,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       vncStage === "retrying");
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, flexGrow: 1, minHeight: 0 }}>
+    <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0, height: "100%" }}>
       <Box
         sx={{
           display: "grid",
           gridTemplateColumns: { xs: "1fr", lg: "320px minmax(0,1fr)" },
-          gap: 2,
+          gap: 1.5,
           flexGrow: 1,
           minHeight: 0,
+          height: "100%",
         }}
       >
         <Box sx={sidebarSx}>

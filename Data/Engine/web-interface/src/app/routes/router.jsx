@@ -103,7 +103,6 @@ export function buildAppRoutes() {
                     {
                       path: "remote-desktop",
                       handle: {
-                        title: "Remote Desktop",
                         breadcrumb: "Remote Desktop",
                         navKey: "devices",
                         pageKey: "device-remote-desktop",
