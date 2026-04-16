@@ -244,6 +244,14 @@ def _ready_wait_profile(
                 os.environ.get("BOREALIS_VNC_WARM_POST_BOOTSTRAP_GRACE_POLL_INTERVAL_SECONDS"),
                 min(warm_poll_seconds, 0.15),
             ),
+            "soft_retry_wait_seconds": _coerce_timeout(
+                os.environ.get("BOREALIS_VNC_WARM_SOFT_RETRY_WAIT_SECONDS"),
+                1.5,
+            ),
+            "soft_retry_poll_seconds": _coerce_timeout(
+                os.environ.get("BOREALIS_VNC_WARM_SOFT_RETRY_POLL_INTERVAL_SECONDS"),
+                min(warm_poll_seconds, 0.15),
+            ),
             "recent_backend_ready": True,
             "recent_backend_ready_age": recent_backend_ready_age,
             "warm_session_window_seconds": warm_session_window_seconds,
@@ -272,6 +280,14 @@ def _ready_wait_profile(
             ),
             "post_bootstrap_grace_poll_seconds": _coerce_timeout(
                 os.environ.get("BOREALIS_VNC_REFRESH_POST_BOOTSTRAP_GRACE_POLL_INTERVAL_SECONDS"),
+                min(refresh_poll_seconds, 0.15),
+            ),
+            "soft_retry_wait_seconds": _coerce_timeout(
+                os.environ.get("BOREALIS_VNC_REFRESH_SOFT_RETRY_WAIT_SECONDS"),
+                1.0,
+            ),
+            "soft_retry_poll_seconds": _coerce_timeout(
+                os.environ.get("BOREALIS_VNC_REFRESH_SOFT_RETRY_POLL_INTERVAL_SECONDS"),
                 min(refresh_poll_seconds, 0.15),
             ),
             "recent_backend_ready": bool(recent_backend_ready),
@@ -304,6 +320,14 @@ def _ready_wait_profile(
                 os.environ.get("BOREALIS_VNC_SOCKET_POST_BOOTSTRAP_GRACE_POLL_INTERVAL_SECONDS"),
                 min(socket_poll_seconds, 0.15),
             ),
+            "soft_retry_wait_seconds": _coerce_timeout(
+                os.environ.get("BOREALIS_VNC_SOCKET_SOFT_RETRY_WAIT_SECONDS"),
+                1.5,
+            ),
+            "soft_retry_poll_seconds": _coerce_timeout(
+                os.environ.get("BOREALIS_VNC_SOCKET_SOFT_RETRY_POLL_INTERVAL_SECONDS"),
+                min(socket_poll_seconds, 0.15),
+            ),
             "recent_backend_ready": bool(recent_backend_ready),
             "recent_backend_ready_age": recent_backend_ready_age,
             "warm_session_window_seconds": warm_session_window_seconds,
@@ -315,6 +339,8 @@ def _ready_wait_profile(
         "poll_seconds": cold_poll_seconds,
         "post_bootstrap_grace_seconds": 0.0,
         "post_bootstrap_grace_poll_seconds": cold_poll_seconds,
+        "soft_retry_wait_seconds": 0.0,
+        "soft_retry_poll_seconds": cold_poll_seconds,
         "recent_backend_ready": bool(recent_backend_ready),
         "recent_backend_ready_age": recent_backend_ready_age,
         "warm_session_window_seconds": warm_session_window_seconds,
@@ -693,6 +719,60 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                         ready=initial_ready,
                         wait_seconds=post_bootstrap_grace_seconds,
                         poll_seconds=post_bootstrap_grace_poll_seconds,
+                    )
+            if not initial_ready:
+                soft_retry_wait_seconds = float(wait_profile.get("soft_retry_wait_seconds", 0.0) or 0.0)
+                soft_retry_poll_seconds = float(
+                    wait_profile.get("soft_retry_poll_seconds", wait_profile["poll_seconds"]) or wait_profile["poll_seconds"]
+                )
+                if soft_retry_wait_seconds > 0:
+                    try:
+                        _trace(
+                            "E13S",
+                            agent_id=agent_id,
+                            session_id=collaboration_session.session_id,
+                            reason="vnc_connect_retry_soft",
+                        )
+                        _restart_tunnel("vnc_connect_retry_soft")
+                        emitted = _emit_vnc_start("vnc_connect_retry_soft")
+                        _trace(
+                            "E14S",
+                            agent_id=agent_id,
+                            session_id=collaboration_session.session_id,
+                            reason="vnc_connect_retry_soft",
+                            emit_ok=emitted,
+                        )
+                        if not emitted:
+                            _service_log_event(
+                                "vnc_backend_soft_retry_blocked agent_id={0} session_id={1} reason=agent_socket_missing".format(
+                                    agent_id,
+                                    collaboration_session.session_id,
+                                ),
+                                level="WARNING",
+                            )
+                            _trace(
+                                "E14SF",
+                                agent_id=agent_id,
+                                session_id=collaboration_session.session_id,
+                                result="agent_socket_missing",
+                                level="WARNING",
+                            )
+                            return {"error": "agent_socket_missing"}, 409
+                    except Exception:
+                        logger.debug("Failed to request VNC soft retry agent_id=%s", agent_id, exc_info=True)
+                    initial_ready = _wait_for_backend_ready(
+                        host,
+                        vnc_port,
+                        timeout_seconds=soft_retry_wait_seconds,
+                        poll_interval_seconds=soft_retry_poll_seconds,
+                    )
+                    _trace(
+                        "E15S",
+                        agent_id=agent_id,
+                        session_id=collaboration_session.session_id,
+                        ready=initial_ready,
+                        wait_seconds=soft_retry_wait_seconds,
+                        poll_seconds=soft_retry_poll_seconds,
                     )
         if not initial_ready:
             retry_wait_seconds = float(wait_profile["retry_wait_seconds"])
