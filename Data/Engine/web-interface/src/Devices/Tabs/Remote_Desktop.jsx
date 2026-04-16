@@ -600,6 +600,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const [displayTopology, setDisplayTopology] = useState([]);
   const [framebufferSize, setFramebufferSize] = useState({ width: 0, height: 0 });
   const [renderedCanvasSize, setRenderedCanvasSize] = useState({ width: 0, height: 0 });
+  const [viewfinderSize, setViewfinderSize] = useState({ width: 0, height: 126 });
   const [viewportPreview, setViewportPreview] = useState({
     left: 0,
     top: 0,
@@ -616,6 +617,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const containerRef = useRef(null);
   const displayScrollRef = useRef(null);
   const displayRef = useRef(null);
+  const viewfinderRef = useRef(null);
   const rfbRef = useRef(null);
   const agentIdRef = useRef("");
   const sessionIdRef = useRef("");
@@ -716,8 +718,12 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     return filtered.length ? filtered : diagramTopology;
   }, [diagramTopology, selectedDisplayId]);
   const displayLayoutGeometry = useMemo(
-    () => buildDisplayLayoutGeometry(viewfinderTopology),
-    [viewfinderTopology]
+    () =>
+      buildDisplayLayoutGeometry(viewfinderTopology, {
+        frameWidth: Math.max(1, Math.round(viewfinderSize.width || 256)),
+        frameHeight: Math.max(1, Math.round(viewfinderSize.height || 126)),
+      }),
+    [viewfinderSize.height, viewfinderSize.width, viewfinderTopology]
   );
   const displayLayoutFrames = useMemo(
     () => displayLayoutGeometry.frames,
@@ -1870,6 +1876,38 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       observer.disconnect();
     };
   }, [effectiveSelectedMonitorIds, isConnected, syncViewportSelection]);
+
+  useEffect(() => {
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const host = viewfinderRef.current;
+    if (!host) return undefined;
+    let frameId = 0;
+    const syncSize = () => {
+      const nextWidth = Math.max(0, Math.round(Number(host.clientWidth || 0)));
+      const nextHeight = Math.max(0, Math.round(Number(host.clientHeight || 0)));
+      setViewfinderSize((previous) => {
+        if (previous.width === nextWidth && previous.height === nextHeight) {
+          return previous;
+        }
+        return { width: nextWidth, height: nextHeight || previous.height || 126 };
+      });
+    };
+    syncSize();
+    const observer = new ResizeObserver(() => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      frameId = window.requestAnimationFrame(syncSize);
+    });
+    observer.observe(host);
+    return () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      observer.disconnect();
+    };
+  }, []);
+
   const shutdownSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "shutdown");
   const rebootSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "reboot");
   const resetSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "reset");
@@ -2165,6 +2203,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                   Viewfinder
                 </Typography>
                 <Box
+                  ref={viewfinderRef}
                   onPointerDown={previewNavigationEnabled ? handlePreviewNavigate : undefined}
                   sx={{
                     position: "relative",
