@@ -2120,11 +2120,23 @@ export default function ReverseTunnelVnc({ device }) {
               <span>Power</span>
             </Box>
             <Stack spacing={1}>
-              <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                  gap: 1,
+                  width: "100%",
+                }}
+              >
                 <Button
                   size="small"
                   variant="outlined"
-                  sx={purgeButtonSx}
+                  sx={{
+                    ...purgeButtonSx,
+                    width: "100%",
+                    minWidth: 0,
+                    px: 0.75,
+                  }}
                   disabled={!showPowerButtons || !shutdownSupported}
                   onClick={() => handlePowerAction("shutdown")}
                 >
@@ -2133,7 +2145,12 @@ export default function ReverseTunnelVnc({ device }) {
                 <Button
                   size="small"
                   variant="outlined"
-                  sx={deleteButtonSx}
+                  sx={{
+                    ...deleteButtonSx,
+                    width: "100%",
+                    minWidth: 0,
+                    px: 0.75,
+                  }}
                   disabled={!showPowerButtons || !rebootSupported}
                   onClick={() => handlePowerAction("reboot")}
                 >
@@ -2142,13 +2159,18 @@ export default function ReverseTunnelVnc({ device }) {
                 <Button
                   size="small"
                   variant="outlined"
-                  sx={simpleButtonSx}
+                  sx={{
+                    ...simpleButtonSx,
+                    width: "100%",
+                    minWidth: 0,
+                    px: 0.75,
+                  }}
                   disabled={!showPowerButtons || !resetSupported}
                   onClick={() => handlePowerAction("reset")}
                 >
                   Reset
                 </Button>
-              </Stack>
+              </Box>
             </Stack>
           </Box>
 
@@ -2156,7 +2178,7 @@ export default function ReverseTunnelVnc({ device }) {
             sx={{
               mt: "auto",
               display: "flex",
-              justifyContent: "flex-end",
+              width: "100%",
             }}
           >
             <Button
@@ -2167,7 +2189,8 @@ export default function ReverseTunnelVnc({ device }) {
                 ...simpleButtonSx,
                 minHeight: 36,
                 px: 1.8,
-                minWidth: 132,
+                width: "100%",
+                minWidth: 0,
               }}
               disabled={!isConnected}
               onClick={handleDisconnect}
