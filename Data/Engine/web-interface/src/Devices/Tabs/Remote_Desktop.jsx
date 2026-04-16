@@ -481,31 +481,33 @@ function aspectRatioMatches(leftSize, rightSize, tolerance = 0.12) {
 }
 
 function displayDiagramTopology(topology, framebufferSize, renderedCanvasSize) {
-  const preferredSingleDisplaySize =
-    renderedCanvasSize?.width && renderedCanvasSize?.height
-      ? renderedCanvasSize
-      : framebufferSize;
+  const authoritativeFramebufferSize =
+    framebufferSize?.width && framebufferSize?.height
+      ? framebufferSize
+      : renderedCanvasSize?.width && renderedCanvasSize?.height
+        ? renderedCanvasSize
+        : null;
 
   if (Array.isArray(topology) && topology.length > 1) {
     return topology;
   }
   if (Array.isArray(topology) && topology.length === 1) {
     const [display] = topology;
-    if (preferredSingleDisplaySize?.width && preferredSingleDisplaySize?.height) {
+    if (authoritativeFramebufferSize?.width && authoritativeFramebufferSize?.height) {
       const bounds = displayTopologyBounds(topology);
       const shouldUsePreferredSize =
         !topologyMatchesFramebuffer(bounds, framebufferSize) ||
-        !aspectRatioMatches(display, preferredSingleDisplaySize);
+        !aspectRatioMatches(display, authoritativeFramebufferSize);
       if (shouldUsePreferredSize) {
         return [
           {
             ...display,
             left: 0,
             top: 0,
-            right: preferredSingleDisplaySize.width,
-            bottom: preferredSingleDisplaySize.height,
-            width: preferredSingleDisplaySize.width,
-            height: preferredSingleDisplaySize.height,
+            right: authoritativeFramebufferSize.width,
+            bottom: authoritativeFramebufferSize.height,
+            width: authoritativeFramebufferSize.width,
+            height: authoritativeFramebufferSize.height,
             primary: true,
             synthetic: true,
           },
@@ -515,9 +517,11 @@ function displayDiagramTopology(topology, framebufferSize, renderedCanvasSize) {
     return topology;
   }
   const fallbackSize =
-    renderedCanvasSize?.width && renderedCanvasSize?.height
-      ? renderedCanvasSize
-      : framebufferSize;
+    framebufferSize?.width && framebufferSize?.height
+      ? framebufferSize
+      : renderedCanvasSize?.width && renderedCanvasSize?.height
+        ? renderedCanvasSize
+        : null;
   if (!fallbackSize?.width || !fallbackSize?.height) {
     return [];
   }
