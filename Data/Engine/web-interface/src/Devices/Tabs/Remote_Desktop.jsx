@@ -80,15 +80,15 @@ const simpleButtonSx = {
 };
 
 const sidebarSx = {
-  minWidth: 280,
-  maxWidth: 360,
-  width: { xs: "100%", lg: 320 },
+  minWidth: 260,
+  maxWidth: 260,
+  width: { xs: "100%", lg: 260 },
   borderRadius: 2.5,
-  border: `1px solid ${SIDEBAR_THEME.border}`,
+  border: `1px solid ${NAV_COLORS.line}`,
   background:
-    "linear-gradient(180deg, rgba(64,164,255,0.05) 0%, rgba(192,132,252,0.04) 100%), rgba(15,20,28,0.96)",
-  boxShadow: "0 16px 40px rgba(2,6,23,0.3)",
-  p: 0.5,
+    "linear-gradient(180deg, rgba(64,164,255,0.05) 0%, rgba(192,132,252,0.04) 100%), #0f141c",
+  boxShadow: "none",
+  p: 0.25,
   display: "flex",
   flexDirection: "column",
   gap: 0.25,
@@ -2026,6 +2026,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
 
   const showClipboardActions = isConnected;
   const showPowerButtons = isConnected;
+  const displaySettingsEnabled = isConnected;
   const showLaunchButton = !loading;
   const showConnectingStatus =
     !isConnected &&
@@ -2063,14 +2064,14 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           sx={{
             ...sidebarSx,
             flexShrink: 0,
-            width: { xs: "100%", lg: 320 },
-            maxWidth: { xs: "100%", lg: 320 },
+            width: { xs: "100%", lg: 260 },
+            maxWidth: { xs: "100%", lg: 260 },
             borderRadius: { xs: 2.5, lg: 0 },
-            borderTop: `1px solid ${SIDEBAR_THEME.border}`,
-            borderBottom: `1px solid ${SIDEBAR_THEME.border}`,
-            borderLeft: `1px solid ${SIDEBAR_THEME.border}`,
-            borderRight: { xs: `1px solid ${SIDEBAR_THEME.border}`, lg: "none" },
-            boxShadow: { xs: "0 16px 40px rgba(2,6,23,0.3)", lg: "none" },
+            borderTop: `1px solid ${NAV_COLORS.line}`,
+            borderBottom: `1px solid ${NAV_COLORS.line}`,
+            borderLeft: `1px solid ${NAV_COLORS.line}`,
+            borderRight: { xs: `1px solid ${NAV_COLORS.line}`, lg: "none" },
+            boxShadow: "none",
             height: { xs: "auto", lg: "100%" },
           }}
         >
@@ -2082,31 +2083,36 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
               <SidebarNavRow
                 icon={<FitScreenIcon fontSize="small" />}
                 label="Fit"
-                active={displayMode === "fit"}
+                active={displaySettingsEnabled && displayMode === "fit"}
+                disabled={!displaySettingsEnabled}
                 onClick={() => setDisplayMode("fit")}
               />
               <SidebarNavRow
                 icon={<CropFreeIcon fontSize="small" />}
                 label="Actual"
-                active={displayMode === "actual"}
+                active={displaySettingsEnabled && displayMode === "actual"}
+                disabled={!displaySettingsEnabled}
                 onClick={() => setDisplayMode("actual")}
               />
               <SidebarNavRow
                 icon={<SwapHorizIcon fontSize="small" />}
                 label="Scaled"
-                active={displayMode === "scaled"}
+                active={displaySettingsEnabled && displayMode === "scaled"}
+                disabled={!displaySettingsEnabled}
                 onClick={() => setDisplayMode("scaled")}
               />
               <SidebarNavRow
                 icon={<DesktopIcon fontSize="small" />}
                 label="View only"
-                active={effectiveViewOnly}
+                active={displaySettingsEnabled && effectiveViewOnly}
+                disabled={!displaySettingsEnabled}
                 onClick={() => setViewOnly((previous) => !previous)}
                 trailing={
                   <Switch
                     checked={effectiveViewOnly}
                     onClick={(event) => event.stopPropagation()}
                     onChange={(event) => setViewOnly(event.target.checked)}
+                    disabled={!displaySettingsEnabled}
                     size="small"
                     color="info"
                   />
@@ -2127,6 +2133,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                       border: `1px solid ${SIDEBAR_THEME.border}`,
                       background: "rgba(7,12,23,0.82)",
                       overflow: "hidden",
+                      opacity: displaySettingsEnabled ? 1 : 0.6,
                       cursor: previewNavigationEnabled
                         ? viewportPreview.interactive
                           ? "crosshair"
@@ -2214,6 +2221,11 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                 {!normalizedDisplayTopology.length && framebufferSize.width > 0 && framebufferSize.height > 0 ? (
                   <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
                     Showing the live framebuffer as a single display map.
+                  </Typography>
+                ) : null}
+                {!displaySettingsEnabled ? (
+                  <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
+                    Connect to enable display controls.
                   </Typography>
                 ) : null}
                 {viewportHint ? (
@@ -2313,15 +2325,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
               component="button"
               type="button"
               onClick={handleReturnToDevice}
-              title={`Go back to ${deviceHostname}`}
+              title={deviceHostname}
               sx={{
                 width: "100%",
-                minHeight: 32,
+                height: 28,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 gap: 0.75,
-                px: 1.25,
+                px: 1,
                 background: "rgba(255,255,255,0.04)",
                 border: `1px solid ${NAV_COLORS.line}`,
                 borderRadius: 6,
@@ -2348,7 +2360,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                   textOverflow: "ellipsis",
                 }}
               >
-                {`Go back to ${deviceHostname}`}
+                {deviceHostname}
               </Typography>
             </Box>
           </Box>
