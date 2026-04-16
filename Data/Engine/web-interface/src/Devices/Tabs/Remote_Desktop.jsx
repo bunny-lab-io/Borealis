@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Accordion,
   AccordionDetails,
@@ -7,12 +7,11 @@ import {
   Box,
   Button,
   Divider,
+  ListItemButton,
+  ListItemText,
   Switch,
-  FormControlLabel,
   LinearProgress,
   Stack,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import {
@@ -22,10 +21,17 @@ import {
   KeyboardRounded as KeyboardIcon,
   ContentPasteRounded as ClipboardIcon,
   PowerSettingsNewRounded as PowerIcon,
-  AspectRatioRounded as DisplayIcon,
   ExpandMore as ExpandMoreIcon,
+  FitScreenRounded as FitScreenIcon,
+  CropFreeRounded as CropFreeIcon,
+  SwapHorizRounded as SwapHorizIcon,
+  RestartAltRounded as RestartAltIcon,
+  ReplayRounded as ReplayIcon,
+  KeyboardCommandKeyRounded as KeyboardCommandKeyIcon,
+  ChevronLeft as ChevronLeftIcon,
 } from "@mui/icons-material";
 import RFB from "@novnc/novnc/lib/rfb";
+import { APP_PATHS } from "../../app/routes/paths.js";
 
 const MAGIC_UI = {
   panelBorder: "rgba(148, 163, 184, 0.35)",
@@ -50,6 +56,16 @@ const SIDEBAR_THEME = {
   accent: "#7db7ff",
 };
 
+const NAV_COLORS = {
+  cyan: "#7db7ff",
+  text: "#cbd5e1",
+  textActive: "#e6f2ff",
+  line: "rgba(125,183,255,0.14)",
+  hover: "rgba(255,255,255,0.05)",
+  itemActiveBg:
+    "linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
+};
+
 const simpleButtonSx = {
   textTransform: "none",
   fontWeight: 600,
@@ -60,30 +76,6 @@ const simpleButtonSx = {
   "&:hover": {
     borderColor: "rgba(125,183,255,0.5)",
     backgroundColor: "rgba(12,18,36,0.9)",
-  },
-};
-
-const deleteButtonSx = {
-  textTransform: "none",
-  fontWeight: 600,
-  borderRadius: 1,
-  color: "#f97316",
-  borderColor: "rgba(249,115,22,0.6)",
-  "&:hover": {
-    borderColor: "rgba(249,115,22,0.8)",
-    backgroundColor: "rgba(249,115,22,0.08)",
-  },
-};
-
-const purgeButtonSx = {
-  textTransform: "none",
-  fontWeight: 600,
-  borderRadius: 1,
-  color: "#f43f5e",
-  borderColor: "rgba(244,63,94,0.6)",
-  "&:hover": {
-    borderColor: "rgba(244,63,94,0.8)",
-    backgroundColor: "rgba(244,63,94,0.08)",
   },
 };
 
@@ -103,16 +95,6 @@ const sidebarSx = {
   overflow: "auto",
 };
 
-const sectionHeaderSx = {
-  display: "flex",
-  alignItems: "center",
-  gap: 0.75,
-  color: SIDEBAR_THEME.muted,
-  fontWeight: 700,
-  fontSize: "0.8rem",
-  letterSpacing: "0.04em",
-};
-
 const sidebarAccordionSx = {
   "&:before": { display: "none" },
   m: 0,
@@ -123,13 +105,13 @@ const sidebarAccordionSx = {
 
 const sidebarAccordionSummarySx = {
   minHeight: 38,
-  px: 1.25,
-  py: 0.25,
+  px: 1.5,
   backgroundColor: "rgba(255,255,255,0.02)",
-  borderRadius: 2,
+  borderTopRightRadius: 8,
+  borderBottomRightRadius: 8,
   "& .MuiAccordionSummary-content": {
     m: 0,
-    py: 0.4,
+    py: 0.5,
     display: "flex",
   },
   "&.Mui-expanded": {
@@ -141,37 +123,7 @@ const sidebarAccordionSummarySx = {
 };
 
 const sidebarAccordionDetailsSx = {
-  px: 1.25,
-  pt: 1.1,
-  pb: 1.25,
-};
-
-const splitToggleSx = {
-  background: "rgba(9,14,25,0.9)",
-  borderRadius: 1,
-  border: `1px solid ${SIDEBAR_THEME.border}`,
-  overflow: "hidden",
-  width: "100%",
-  "& .MuiToggleButton-root": {
-    borderRadius: 0,
-    border: "none",
-    color: SIDEBAR_THEME.text,
-    textTransform: "none",
-    px: 1.6,
-    py: 0.8,
-    fontWeight: 600,
-    backgroundColor: "#0f1627",
-    flex: 1,
-    minWidth: 0,
-    "&:hover": { backgroundColor: "rgba(148,163,184,0.14)" },
-  },
-  "& .MuiToggleButton-root.Mui-selected": {
-    color: "#0c1224 !important",
-    backgroundImage: "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)",
-  },
-  "& .MuiToggleButton-root.Mui-selected:hover": {
-    backgroundImage: "linear-gradient(135deg,#8bd8ff 0%,#c0a8ff 100%)",
-  },
+  p: 0,
 };
 
 const glassCardSx = {
@@ -206,6 +158,46 @@ const primaryHeroActionSx = {
     backgroundColor: "transparent",
   },
 };
+
+function sidebarNavRowSx(active, disabled = false) {
+  return {
+    pl: 2,
+    pr: 2,
+    py: 1,
+    color: active ? NAV_COLORS.textActive : NAV_COLORS.text,
+    position: "relative",
+    background: active ? NAV_COLORS.itemActiveBg : "transparent",
+    borderTopRightRadius: 0,
+    borderBottomRightRadius: 0,
+    justifyContent: "space-between",
+    transition:
+      "background 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease",
+    "&:hover": {
+      background: active ? NAV_COLORS.itemActiveBg : NAV_COLORS.hover,
+    },
+    "&:active": {
+      transform: "translateY(0.5px)",
+    },
+    "&.Mui-disabled": {
+      color: "rgba(203,213,225,0.38)",
+    },
+    ...(disabled
+      ? {
+          cursor: "not-allowed",
+        }
+      : null),
+  };
+}
+
+function sidebarNavIconSx(active, disabled = false) {
+  return {
+    mr: 1,
+    display: "flex",
+    alignItems: "center",
+    color: disabled ? "rgba(143,191,255,0.35)" : active ? NAV_COLORS.cyan : "#8fbfff",
+    transition: "color 160ms ease",
+  };
+}
 
 function normalizeText(value) {
   if (value == null) return "";
@@ -549,6 +541,7 @@ function displayDiagramTopology(topology, framebufferSize, renderedCanvasSize) {
 
 export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const { deviceId } = useParams();
   const device = useMemo(() => {
     if (providedDevice) {
@@ -634,6 +627,22 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       ""
     );
   }, [device]);
+  const deviceRouteId = useMemo(
+    () =>
+      normalizeText(device?.agent_guid) ||
+      normalizeText(device?.agentGuid) ||
+      normalizeText(device?.id) ||
+      normalizeText(deviceId),
+    [device, deviceId]
+  );
+  const deviceHostname = useMemo(
+    () =>
+      normalizeText(device?.hostname) ||
+      normalizeText(device?.summary?.hostname) ||
+      deviceRouteId ||
+      "device",
+    [device, deviceRouteId]
+  );
   const qualityLevel = Math.min(8, Math.max(0, performanceLevel));
   const compressionLevel = Math.max(0, 8 - qualityLevel);
   const dragViewport = false;
@@ -1113,6 +1122,20 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       setLoading(false);
     }
   }, [cancelPendingConnect, disconnectVnc, resetDisconnectedViewState, teardownDisplay]);
+
+  const handleReturnToDevice = useCallback(() => {
+    if (deviceRouteId) {
+      navigate(APP_PATHS.device(deviceRouteId), {
+        state: device ? { initialDevice: device } : undefined,
+      });
+      return;
+    }
+    if (typeof window !== "undefined" && window.history.length > 1) {
+      navigate(-1);
+      return;
+    }
+    navigate(APP_PATHS.devices);
+  }, [device, deviceRouteId, navigate]);
 
   useEffect(() => {
     return () => {
@@ -1860,7 +1883,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const highlightedMonitorIds = selectionModeEnabled ? effectiveSelectedMonitorIds : [];
   const showViewportIndicator = Boolean(viewfinderViewportRect);
   const showViewfinderHelper = Boolean(viewfinderHelperText);
-  const SidebarSection = ({ sectionId, icon, title, children }) => (
+  const SidebarSection = ({ sectionId, title, children }) => (
     <Accordion
       expanded={expandedSidebarSections[sectionId]}
       onChange={(_, expanded) => {
@@ -1871,16 +1894,52 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       sx={sidebarAccordionSx}
     >
       <AccordionSummary
-        expandIcon={<ExpandMoreIcon sx={{ color: SIDEBAR_THEME.accent }} />}
+        expandIcon={<ExpandMoreIcon sx={{ color: NAV_COLORS.cyan }} />}
         sx={sidebarAccordionSummarySx}
       >
-        <Box sx={sectionHeaderSx}>
-          {icon}
-          <span>{title}</span>
-        </Box>
+        <Typography
+          sx={{
+            fontSize: "0.85rem",
+            color: NAV_COLORS.cyan,
+            fontWeight: 700,
+            letterSpacing: 0.3,
+          }}
+        >
+          {title}
+        </Typography>
       </AccordionSummary>
       <AccordionDetails sx={sidebarAccordionDetailsSx}>{children}</AccordionDetails>
     </Accordion>
+  );
+  const SidebarNavRow = ({
+    icon,
+    label,
+    onClick,
+    active = false,
+    disabled = false,
+    trailing = null,
+    ariaLabel = null,
+  }) => (
+    <ListItemButton
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      aria-label={ariaLabel || label}
+      sx={sidebarNavRowSx(active, disabled)}
+    >
+      <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, flex: "1 1 auto" }}>
+        <Box sx={sidebarNavIconSx(active, disabled)}>{icon}</Box>
+        <ListItemText
+          primary={label}
+          primaryTypographyProps={{
+            fontSize: "0.8rem",
+            fontWeight: active ? 600 : 400,
+            letterSpacing: 0.2,
+            noWrap: true,
+          }}
+        />
+      </Box>
+      {trailing ? <Box sx={{ ml: 1, flexShrink: 0 }}>{trailing}</Box> : null}
+    </ListItemButton>
   );
   const vncStageInfo = useMemo(() => {
     const errorDetail = summarizeStatus(statusMessage) || "VNC session encountered an error.";
@@ -2018,256 +2077,219 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           <SidebarSection
             sectionId="display"
             title="Display & Focus"
-            icon={<DisplayIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />}
           >
-            <Stack spacing={1}>
-              <ToggleButtonGroup
-                exclusive
-                size="small"
-                value={displayMode}
-                onChange={(_, value) => {
-                  if (!value) return;
-                  setDisplayMode(value);
-                }}
-                sx={splitToggleSx}
-              >
-                <ToggleButton value="fit">Fit</ToggleButton>
-                <ToggleButton value="actual">Actual</ToggleButton>
-                <ToggleButton value="scaled">Scaled</ToggleButton>
-              </ToggleButtonGroup>
-
-              <FormControlLabel
-                control={
+            <>
+              <SidebarNavRow
+                icon={<FitScreenIcon fontSize="small" />}
+                label="Fit"
+                active={displayMode === "fit"}
+                onClick={() => setDisplayMode("fit")}
+              />
+              <SidebarNavRow
+                icon={<CropFreeIcon fontSize="small" />}
+                label="Actual"
+                active={displayMode === "actual"}
+                onClick={() => setDisplayMode("actual")}
+              />
+              <SidebarNavRow
+                icon={<SwapHorizIcon fontSize="small" />}
+                label="Scaled"
+                active={displayMode === "scaled"}
+                onClick={() => setDisplayMode("scaled")}
+              />
+              <SidebarNavRow
+                icon={<DesktopIcon fontSize="small" />}
+                label="View only"
+                active={effectiveViewOnly}
+                onClick={() => setViewOnly((previous) => !previous)}
+                trailing={
                   <Switch
                     checked={effectiveViewOnly}
+                    onClick={(event) => event.stopPropagation()}
                     onChange={(event) => setViewOnly(event.target.checked)}
                     size="small"
                     color="info"
                   />
                 }
-                label={<Typography variant="body2">View only</Typography>}
               />
-
-              <Divider sx={{ borderColor: "rgba(148,163,184,0.15)" }} />
-
-              <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                Monitors
-              </Typography>
-              {displayLayoutFrames.length ? (
-                <Box
-                  onPointerDown={previewNavigationEnabled ? handlePreviewNavigate : undefined}
-                  sx={{
-                    position: "relative",
-                    height: 126,
-                    borderRadius: 2,
-                    border: `1px solid ${SIDEBAR_THEME.border}`,
-                    background: "rgba(7,12,23,0.82)",
-                    overflow: "hidden",
-                    cursor: previewNavigationEnabled
-                      ? viewportPreview.interactive
-                        ? "crosshair"
-                        : "default"
-                      : "default",
-                    touchAction: previewNavigationEnabled ? "none" : "auto",
-                  }}
-                >
-                  {displayLayoutFrames.map((item) => {
-                    const monitorId = monitorSelectionId(item);
-                    const selected = highlightedMonitorIds.includes(monitorId);
-                    const selectable = selectionModeEnabled && normalizedDisplayTopology.length > 1;
-                    return (
+              <Divider sx={{ borderColor: NAV_COLORS.line, mx: 2 }} />
+              <Box sx={{ px: 2, py: 1.25, display: "flex", flexDirection: "column", gap: 1 }}>
+                <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
+                  Monitors
+                </Typography>
+                {displayLayoutFrames.length ? (
+                  <Box
+                    onPointerDown={previewNavigationEnabled ? handlePreviewNavigate : undefined}
+                    sx={{
+                      position: "relative",
+                      height: 126,
+                      borderRadius: 2,
+                      border: `1px solid ${SIDEBAR_THEME.border}`,
+                      background: "rgba(7,12,23,0.82)",
+                      overflow: "hidden",
+                      cursor: previewNavigationEnabled
+                        ? viewportPreview.interactive
+                          ? "crosshair"
+                          : "default"
+                        : "default",
+                      touchAction: previewNavigationEnabled ? "none" : "auto",
+                    }}
+                  >
+                    {displayLayoutFrames.map((item) => {
+                      const monitorId = monitorSelectionId(item);
+                      const selected = highlightedMonitorIds.includes(monitorId);
+                      const selectable = selectionModeEnabled && normalizedDisplayTopology.length > 1;
+                      return (
+                        <Box
+                          key={item.id}
+                          onClick={selectable ? () => toggleMonitorSelection(monitorId) : undefined}
+                          sx={{
+                            position: "absolute",
+                            left: item.x,
+                            top: item.y,
+                            width: item.widthPx,
+                            height: item.heightPx,
+                            borderRadius: 1.5,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: "1rem",
+                            fontWeight: 700,
+                            cursor: selectable ? "pointer" : "default",
+                            color: selected ? "#08111f" : SIDEBAR_THEME.text,
+                            border: selected
+                              ? "1px solid transparent"
+                              : `1px solid ${SIDEBAR_THEME.border}`,
+                            background: selected
+                              ? "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)"
+                              : item.primary
+                                ? "rgba(125,183,255,0.18)"
+                                : "rgba(148,163,184,0.14)",
+                            boxShadow: selected
+                              ? "0 10px 28px rgba(91,126,255,0.25)"
+                              : "none",
+                            transition: "all 140ms ease",
+                            "&:hover": {
+                              borderColor: selectable
+                                ? "rgba(125,183,255,0.58)"
+                                : undefined,
+                              transform: selectable ? "translateY(-1px)" : undefined,
+                            },
+                          }}
+                        >
+                          {item.label}
+                        </Box>
+                      );
+                    })}
+                    {showViewportIndicator ? (
                       <Box
-                        key={item.id}
-                        onClick={selectable ? () => toggleMonitorSelection(monitorId) : undefined}
                         sx={{
                           position: "absolute",
-                          left: item.x,
-                          top: item.y,
-                          width: item.widthPx,
-                          height: item.heightPx,
+                          left: viewfinderViewportRect.x,
+                          top: viewfinderViewportRect.y,
+                          width: viewfinderViewportRect.width,
+                          height: viewfinderViewportRect.height,
                           borderRadius: 1.5,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: "1rem",
-                          fontWeight: 700,
-                          cursor: selectable ? "pointer" : "default",
-                          color: selected ? "#08111f" : SIDEBAR_THEME.text,
-                          border: selected
-                            ? "1px solid transparent"
-                            : `1px solid ${SIDEBAR_THEME.border}`,
-                          background: selected
-                            ? "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)"
-                            : item.primary
-                              ? "rgba(125,183,255,0.18)"
-                              : "rgba(148,163,184,0.14)",
-                          boxShadow: selected
-                            ? "0 10px 28px rgba(91,126,255,0.25)"
-                            : "none",
-                          transition: "all 140ms ease",
-                          "&:hover": {
-                            borderColor: selectable
-                              ? "rgba(125,183,255,0.58)"
-                              : undefined,
-                            transform: selectable ? "translateY(-1px)" : undefined,
-                          },
+                          border: "2px solid rgba(125, 201, 255, 0.98)",
+                          background:
+                            "linear-gradient(135deg, rgba(125,201,255,0.18), rgba(177,149,255,0.14))",
+                          boxShadow:
+                            "0 0 0 1px rgba(8,17,31,0.62), inset 0 0 0 1px rgba(255,255,255,0.08)",
+                          pointerEvents: "none",
                         }}
-                      >
-                        {item.label}
-                      </Box>
-                    );
-                  })}
-                  {showViewportIndicator ? (
-                    <Box
-                      sx={{
-                        position: "absolute",
-                        left: viewfinderViewportRect.x,
-                        top: viewfinderViewportRect.y,
-                        width: viewfinderViewportRect.width,
-                        height: viewfinderViewportRect.height,
-                        borderRadius: 1.5,
-                        border: "2px solid rgba(125, 201, 255, 0.98)",
-                        background:
-                          "linear-gradient(135deg, rgba(125,201,255,0.18), rgba(177,149,255,0.14))",
-                        boxShadow:
-                          "0 0 0 1px rgba(8,17,31,0.62), inset 0 0 0 1px rgba(255,255,255,0.08)",
-                        pointerEvents: "none",
-                      }}
-                    />
-                  ) : null}
-                </Box>
-              ) : null}
-              {showViewfinderHelper ? (
-                <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                  {viewfinderHelperText}
-                </Typography>
-              ) : null}
-              {!previewNavigationEnabled && !topologyTrusted && normalizedDisplayTopology.length > 1 ? (
-                <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                  Monitor layout shown from agent telemetry. Targeted monitor selection will unlock once it matches the live desktop geometry.
-                </Typography>
-              ) : null}
-              {!normalizedDisplayTopology.length && framebufferSize.width > 0 && framebufferSize.height > 0 ? (
-                <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                  Showing the live framebuffer as a single display map.
-                </Typography>
-              ) : null}
-              {viewportHint ? (
-                <Typography variant="caption" sx={{ color: "#ffb86b" }}>
-                  {viewportHint}
-                </Typography>
-              ) : null}
-            </Stack>
+                      />
+                    ) : null}
+                  </Box>
+                ) : null}
+                {showViewfinderHelper ? (
+                  <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
+                    {viewfinderHelperText}
+                  </Typography>
+                ) : null}
+                {!previewNavigationEnabled && !topologyTrusted && normalizedDisplayTopology.length > 1 ? (
+                  <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
+                    Monitor layout shown from agent telemetry. Targeted monitor selection will unlock once it matches the live desktop geometry.
+                  </Typography>
+                ) : null}
+                {!normalizedDisplayTopology.length && framebufferSize.width > 0 && framebufferSize.height > 0 ? (
+                  <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
+                    Showing the live framebuffer as a single display map.
+                  </Typography>
+                ) : null}
+                {viewportHint ? (
+                  <Typography variant="caption" sx={{ color: "#ffb86b" }}>
+                    {viewportHint}
+                  </Typography>
+                ) : null}
+              </Box>
+            </>
           </SidebarSection>
 
           <SidebarSection
             sectionId="clipboard"
             title="Clipboard & Keys"
-            icon={<ClipboardIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />}
           >
-            <Stack spacing={1}>
-              <FormControlLabel
-                control={
+            <>
+              <SidebarNavRow
+                icon={<ClipboardIcon fontSize="small" />}
+                label="Sync remote clipboard to browser"
+                active={clipboardSync}
+                onClick={() => setClipboardSync((previous) => !previous)}
+                trailing={
                   <Switch
                     checked={clipboardSync}
+                    onClick={(event) => event.stopPropagation()}
                     onChange={(event) => setClipboardSync(event.target.checked)}
                     size="small"
                     color="info"
                   />
                 }
-                label={<Typography variant="body2">Sync remote clipboard to browser</Typography>}
               />
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<ClipboardIcon />}
-                sx={simpleButtonSx}
+              <SidebarNavRow
+                icon={<ClipboardIcon fontSize="small" />}
+                label="Paste Clipboard"
                 disabled={!showClipboardActions || effectiveViewOnly}
                 onClick={pasteClipboardText}
-              >
-                Paste Clipboard
-              </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<KeyboardIcon />}
-                sx={simpleButtonSx}
+              />
+              <SidebarNavRow
+                icon={<KeyboardIcon fontSize="small" />}
+                label="Inject Keystrokes"
                 disabled={!showClipboardActions || effectiveViewOnly}
                 onClick={() => injectClipboardKeystrokes()}
-              >
-                Inject Keystrokes
-              </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<KeyboardIcon />}
-                sx={simpleButtonSx}
+              />
+              <SidebarNavRow
+                icon={<KeyboardCommandKeyIcon fontSize="small" />}
+                label="Send Ctrl+Alt+Del"
                 disabled={!showClipboardActions || effectiveViewOnly}
                 onClick={handleCtrlAltDel}
-              >
-                Send Ctrl+Alt+Del
-              </Button>
-            </Stack>
+              />
+            </>
           </SidebarSection>
 
           <SidebarSection
             sectionId="power"
             title="Power"
-            icon={<PowerIcon sx={{ fontSize: 18, color: "#f97316" }} />}
           >
-            <Stack spacing={1}>
-              <Box
-                sx={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-                  gap: 1,
-                  width: "100%",
-                }}
-              >
-                <Button
-                  size="small"
-                  variant="outlined"
-                  sx={{
-                    ...purgeButtonSx,
-                    width: "100%",
-                    minWidth: 0,
-                    px: 0.75,
-                  }}
-                  disabled={!showPowerButtons || !shutdownSupported}
-                  onClick={() => handlePowerAction("shutdown")}
-                >
-                  Shutdown
-                </Button>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  sx={{
-                    ...deleteButtonSx,
-                    width: "100%",
-                    minWidth: 0,
-                    px: 0.75,
-                  }}
-                  disabled={!showPowerButtons || !rebootSupported}
-                  onClick={() => handlePowerAction("reboot")}
-                >
-                  Restart
-                </Button>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  sx={{
-                    ...simpleButtonSx,
-                    width: "100%",
-                    minWidth: 0,
-                    px: 0.75,
-                  }}
-                  disabled={!showPowerButtons || !resetSupported}
-                  onClick={() => handlePowerAction("reset")}
-                >
-                  Reset
-                </Button>
-              </Box>
-            </Stack>
+            <>
+              <SidebarNavRow
+                icon={<PowerIcon fontSize="small" />}
+                label="Shutdown"
+                disabled={!showPowerButtons || !shutdownSupported}
+                onClick={() => handlePowerAction("shutdown")}
+              />
+              <SidebarNavRow
+                icon={<RestartAltIcon fontSize="small" />}
+                label="Restart"
+                disabled={!showPowerButtons || !rebootSupported}
+                onClick={() => handlePowerAction("reboot")}
+              />
+              <SidebarNavRow
+                icon={<ReplayIcon fontSize="small" />}
+                label="Reset"
+                disabled={!showPowerButtons || !resetSupported}
+                onClick={() => handlePowerAction("reset")}
+              />
+            </>
           </SidebarSection>
 
           <Box
@@ -2275,24 +2297,60 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
               mt: "auto",
               display: "flex",
               width: "100%",
+              pt: 0.75,
             }}
           >
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<StopIcon />}
-              sx={{
-                ...simpleButtonSx,
-                minHeight: 36,
-                px: 1.8,
-                width: "100%",
-                minWidth: 0,
-              }}
+            <SidebarNavRow
+              icon={<StopIcon fontSize="small" />}
+              label="Disconnect"
               disabled={!isConnected}
               onClick={handleDisconnect}
+            />
+          </Box>
+
+          <Box sx={{ px: 1, pb: 1, pt: 0.5 }}>
+            <Box
+              component="button"
+              type="button"
+              onClick={handleReturnToDevice}
+              title={`Go back to ${deviceHostname}`}
+              sx={{
+                width: "100%",
+                minHeight: 32,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 0.75,
+                px: 1.25,
+                background: "rgba(255,255,255,0.04)",
+                border: `1px solid ${NAV_COLORS.line}`,
+                borderRadius: 6,
+                color: NAV_COLORS.cyan,
+                cursor: "pointer",
+                transition: "background 160ms ease, transform 120ms ease",
+                "&:hover": {
+                  background: "rgba(255,255,255,0.08)",
+                },
+                "&:active": {
+                  transform: "translateY(1px)",
+                },
+              }}
             >
-              Disconnect
-            </Button>
+              <ChevronLeftIcon fontSize="small" />
+              <Typography
+                sx={{
+                  color: NAV_COLORS.cyan,
+                  fontSize: "0.8rem",
+                  fontWeight: 600,
+                  lineHeight: 1.1,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {`Go back to ${deviceHostname}`}
+              </Typography>
+            </Box>
           </Box>
 
         </Box>

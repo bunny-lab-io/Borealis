@@ -2743,14 +2743,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   const pageHeaderActions = useMemo(
     () => [
       {
-        id: "device-summary-actions",
-        label: "Actions",
-        icon: <MoreHorizIcon />,
-        tone: "primary",
-        disabled: !activityHostname,
-        onClick: (event) => setMenuAnchor(event.currentTarget),
-      },
-      {
         id: "device-summary-remote-desktop",
         label: "Remote Desktop",
         icon: <DesktopWindowsRoundedIcon />,
@@ -2762,6 +2754,14 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
             state: { initialDevice: tunnelDevice },
           });
         },
+      },
+      {
+        id: "device-summary-actions",
+        label: "Actions",
+        icon: <MoreHorizIcon />,
+        tone: "primary",
+        disabled: !activityHostname,
+        onClick: (event) => setMenuAnchor(event.currentTarget),
       },
     ],
     [activityHostname, deviceId, navigate, tunnelDevice]
