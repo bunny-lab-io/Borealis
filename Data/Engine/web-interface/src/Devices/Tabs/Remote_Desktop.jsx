@@ -428,7 +428,7 @@ function selectedDisplayBounds(topology, selectionIds) {
 
 function buildDisplayLayoutGeometry(
   topology,
-  { frameWidth = 256, frameHeight = 126, padding = 10 } = {}
+  { frameWidth = 256, frameHeight = 126, padding = 10, edgeInset = 4 } = {}
 ) {
   const bounds = displayTopologyBounds(topology);
   if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
@@ -436,22 +436,24 @@ function buildDisplayLayoutGeometry(
       bounds: null,
       frameWidth,
       frameHeight,
-      offsetX: padding,
-      offsetY: padding,
+      offsetX: padding + edgeInset,
+      offsetY: padding + edgeInset,
       padding,
+      edgeInset,
       scale: 1,
       frames: [],
     };
   }
-  const innerWidth = Math.max(1, frameWidth - padding * 2);
-  const innerHeight = Math.max(1, frameHeight - padding * 2);
+  const insetPadding = padding + edgeInset;
+  const innerWidth = Math.max(1, frameWidth - insetPadding * 2);
+  const innerHeight = Math.max(1, frameHeight - insetPadding * 2);
   const scale = Math.min(innerWidth / bounds.width, innerHeight / bounds.height);
   const layoutWidth = bounds.width * scale;
   const layoutHeight = bounds.height * scale;
-  const offsetX = padding + (innerWidth - layoutWidth) / 2;
-  const offsetY = padding + (innerHeight - layoutHeight) / 2;
-  const maxRight = frameWidth - padding;
-  const maxBottom = frameHeight - padding;
+  const offsetX = insetPadding + (innerWidth - layoutWidth) / 2;
+  const offsetY = insetPadding + (innerHeight - layoutHeight) / 2;
+  const maxRight = frameWidth - insetPadding;
+  const maxBottom = frameHeight - insetPadding;
   return {
     bounds,
     frameWidth,
@@ -459,12 +461,13 @@ function buildDisplayLayoutGeometry(
     offsetX,
     offsetY,
     padding,
+    edgeInset,
     scale,
     frames: topology.map((item) => {
       const rawX = offsetX + (item.left - bounds.left) * scale;
       const rawY = offsetY + (item.top - bounds.top) * scale;
-      const x = clampNumber(rawX, padding, maxRight);
-      const y = clampNumber(rawY, padding, maxBottom);
+      const x = clampNumber(rawX, insetPadding, maxRight);
+      const y = clampNumber(rawY, insetPadding, maxBottom);
       return {
         ...item,
         x,
@@ -1880,10 +1883,11 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     const rawY =
       displayLayoutGeometry.offsetY +
       (viewportPreview.top - displayLayoutGeometry.bounds.top) * displayLayoutGeometry.scale;
-    const maxRight = displayLayoutGeometry.frameWidth - displayLayoutGeometry.padding;
-    const maxBottom = displayLayoutGeometry.frameHeight - displayLayoutGeometry.padding;
-    const x = clampNumber(rawX, displayLayoutGeometry.padding, maxRight);
-    const y = clampNumber(rawY, displayLayoutGeometry.padding, maxBottom);
+    const insetPadding = displayLayoutGeometry.padding + (displayLayoutGeometry.edgeInset || 0);
+    const maxRight = displayLayoutGeometry.frameWidth - insetPadding;
+    const maxBottom = displayLayoutGeometry.frameHeight - insetPadding;
+    const x = clampNumber(rawX, insetPadding, maxRight);
+    const y = clampNumber(rawY, insetPadding, maxBottom);
     const width = Math.max(
       2,
       Math.min(viewportPreview.width * displayLayoutGeometry.scale, maxRight - x)
@@ -2255,11 +2259,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                 {!displaySettingsEnabled ? (
                   <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
                     Connect to enable display controls.
-                  </Typography>
-                ) : null}
-                {viewportHint ? (
-                  <Typography variant="caption" sx={{ color: "#ffb86b" }}>
-                    {viewportHint}
                   </Typography>
                 ) : null}
               </Box>
