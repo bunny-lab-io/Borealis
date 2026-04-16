@@ -1977,18 +1977,44 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       vncStage === "retrying");
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0, height: "100%" }}>
+    <Box
+      className="remote-desktop-shell"
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        flexGrow: 1,
+        minHeight: 0,
+        minWidth: 0,
+        height: "100%",
+        overflow: "hidden",
+      }}
+    >
       <Box
         sx={{
-          display: "grid",
-          gridTemplateColumns: { xs: "1fr", lg: "320px minmax(0,1fr)" },
-          gap: 1.5,
+          display: "flex",
+          flexDirection: { xs: "column", lg: "row" },
           flexGrow: 1,
           minHeight: 0,
+          minWidth: 0,
           height: "100%",
+          overflow: "hidden",
         }}
       >
-        <Box sx={sidebarSx}>
+        <Box
+          sx={{
+            ...sidebarSx,
+            flexShrink: 0,
+            width: { xs: "100%", lg: 320 },
+            maxWidth: { xs: "100%", lg: 320 },
+            borderRadius: { xs: 2.5, lg: 0 },
+            borderTop: `1px solid ${SIDEBAR_THEME.border}`,
+            borderBottom: `1px solid ${SIDEBAR_THEME.border}`,
+            borderLeft: `1px solid ${SIDEBAR_THEME.border}`,
+            borderRight: { xs: `1px solid ${SIDEBAR_THEME.border}`, lg: "none" },
+            boxShadow: { xs: "0 16px 40px rgba(2,6,23,0.3)", lg: "none" },
+            height: { xs: "auto", lg: "100%" },
+          }}
+        >
           <SidebarSection
             sectionId="display"
             title="Display & Focus"
@@ -2271,17 +2297,32 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
 
         </Box>
 
-        <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, minHeight: 0 }}>
+        <Box
+          sx={{
+            display: "flex",
+            flexDirection: "column",
+            flexGrow: 1,
+            minHeight: 0,
+            minWidth: 0,
+            overflow: "hidden",
+          }}
+        >
           <Box
             ref={containerRef}
             sx={{
               flexGrow: 1,
-              minHeight: 420,
+              minHeight: { xs: 420, lg: 0 },
               display: "flex",
               flexDirection: "column",
               ...glassCardSx,
               overflow: "hidden",
               position: "relative",
+              borderRadius: { xs: 3, lg: 0 },
+              borderTop: `1px solid ${MAGIC_UI.panelBorder}`,
+              borderRight: `1px solid ${MAGIC_UI.panelBorder}`,
+              borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
+              borderLeft: { xs: `1px solid ${MAGIC_UI.panelBorder}`, lg: "none" },
+              boxShadow: { xs: "0 25px 80px rgba(2,6,23,0.6)", lg: "none" },
             }}
           >
             {loading ? <LinearProgress color="info" sx={{ height: 3 }} /> : null}
