@@ -185,11 +185,7 @@ const compactSidebarCardSx = {
   gap: 0.85,
 };
 
-const fallbackViewportPresets = [
-  { value: "all", label: "All" },
-  { value: "left", label: "Left" },
-  { value: "right", label: "Right" },
-];
+const fallbackViewportPresets = [{ value: "all", label: "All" }];
 
 function normalizeText(value) {
   if (value == null) return "";
@@ -243,10 +239,6 @@ function buildRetryableError(message, retryable = true) {
 const VNC_AUTO_RETRY_ATTEMPTS = 3;
 const VNC_AUTO_RETRY_DELAY_MS = 1500;
 const VNC_OPEN_TIMEOUT_MS = 12000;
-const VNC_ACTIVE_BOUNDS_COLOR_THRESHOLD = 18;
-const VNC_ACTIVE_BOUNDS_VARIANCE_THRESHOLD = 42;
-const VNC_ACTIVE_BOUNDS_MARGIN_RATIO = 0.08;
-
 async function writeClipboardText(text) {
   if (!navigator?.clipboard?.writeText) return;
   try {
@@ -276,30 +268,9 @@ function supportsPowerAction(capabilities, action) {
   return (aliases[action] || []).some((key) => capabilityFlag(power?.[key]));
 }
 
-function clampNumber(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
 function coerceInteger(value, defaultValue = 0) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : defaultValue;
-}
-
-function samplePixel(data, width, x, y) {
-  const index = (y * width + x) * 4;
-  return [data[index] || 0, data[index + 1] || 0, data[index + 2] || 0];
-}
-
-function colorDistance(left, right) {
-  return (
-    Math.abs((left?.[0] || 0) - (right?.[0] || 0)) +
-    Math.abs((left?.[1] || 0) - (right?.[1] || 0)) +
-    Math.abs((left?.[2] || 0) - (right?.[2] || 0))
-  );
-}
-
-function luminance(pixel) {
-  return ((pixel?.[0] || 0) * 0.2126) + ((pixel?.[1] || 0) * 0.7152) + ((pixel?.[2] || 0) * 0.0722);
 }
 
 function normalizeDisplayTopology(value) {
@@ -356,6 +327,16 @@ function displayTopologyBounds(topology) {
   };
 }
 
+function topologyMatchesFramebuffer(topologyBounds, framebufferSize) {
+  if (!topologyBounds || !framebufferSize?.width || !framebufferSize?.height) return true;
+  const widthTolerance = Math.max(96, Math.round(framebufferSize.width * 0.18));
+  const heightTolerance = Math.max(96, Math.round(framebufferSize.height * 0.18));
+  return (
+    Math.abs(topologyBounds.width - framebufferSize.width) <= widthTolerance &&
+    Math.abs(topologyBounds.height - framebufferSize.height) <= heightTolerance
+  );
+}
+
 function monitorPresetValue(monitor) {
   return `display:${normalizeText(monitor?.id || monitor?.displayIndex || "")}`;
 }
@@ -367,10 +348,7 @@ function preferredViewportPreset(topology) {
 }
 
 function viewportOptionsForTopology(topology) {
-  if (!Array.isArray(topology) || !topology.length) {
-    return fallbackViewportPresets;
-  }
-  if (topology.length === 1) {
+  if (!Array.isArray(topology) || topology.length <= 1) {
     return [{ value: "all", label: "All" }];
   }
   return [
@@ -382,92 +360,28 @@ function viewportOptionsForTopology(topology) {
   ];
 }
 
-function estimateActiveDisplayBounds(display) {
-  try {
-    if (!display || typeof display.getImageData !== "function") return null;
-    const width = Number(display.width || 0);
-    const height = Number(display.height || 0);
-    if (width < 2 || height < 2) return null;
-
-    const image = display.getImageData();
-    const data = image?.data;
-    if (!data || !data.length) return null;
-
-    const xStep = Math.max(1, Math.floor(width / 180));
-    const yStep = Math.max(1, Math.floor(height / 120));
-
-    const edgeSamples = [];
-    for (let x = 0; x < width; x += xStep) {
-      edgeSamples.push(samplePixel(data, width, x, 0));
-      edgeSamples.push(samplePixel(data, width, x, height - 1));
-    }
-    for (let y = 0; y < height; y += yStep) {
-      edgeSamples.push(samplePixel(data, width, 0, y));
-      edgeSamples.push(samplePixel(data, width, width - 1, y));
-    }
-    if (!edgeSamples.length) return null;
-
-    const background = edgeSamples.reduce(
-      (acc, pixel) => {
-        acc[0] += pixel[0];
-        acc[1] += pixel[1];
-        acc[2] += pixel[2];
-        return acc;
-      },
-      [0, 0, 0]
-    ).map((value) => Math.round(value / edgeSamples.length));
-
-    const rowIsActive = (y) => {
-      let activePixels = 0;
-      let variation = 0;
-      let previousLuma = null;
-      let samples = 0;
-      for (let x = 0; x < width; x += xStep) {
-        const pixel = samplePixel(data, width, x, y);
-        const diff = colorDistance(pixel, background);
-        if (diff >= VNC_ACTIVE_BOUNDS_COLOR_THRESHOLD) {
-          activePixels += 1;
-        }
-        const currentLuma = luminance(pixel);
-        if (previousLuma != null) {
-          variation += Math.abs(currentLuma - previousLuma);
-        }
-        previousLuma = currentLuma;
-        samples += 1;
-      }
-      return (
-        activePixels >= Math.max(3, Math.floor(samples * 0.08)) ||
-        variation >= samples * VNC_ACTIVE_BOUNDS_VARIANCE_THRESHOLD
-      );
-    };
-
-    let top = 0;
-    while (top < height && !rowIsActive(top)) top += yStep;
-
-    let bottom = height - 1;
-    while (bottom > top && !rowIsActive(bottom)) bottom -= yStep;
-
-    if (top >= bottom) return null;
-
-    top = clampNumber(top - yStep, 0, height - 1);
-    bottom = clampNumber(bottom + yStep, 0, height - 1);
-
-    const boundsHeight = bottom - top + 1;
-    const verticalMargin = (height - boundsHeight) / height;
-
-    if (verticalMargin < VNC_ACTIVE_BOUNDS_MARGIN_RATIO) {
-      return null;
-    }
-
-    return {
-      x: 0,
-      y: top,
-      w: Math.max(1, width),
-      h: Math.max(1, boundsHeight),
-    };
-  } catch {
-    return null;
+function buildDisplayLayoutFrames(
+  topology,
+  { frameWidth = 256, frameHeight = 126, padding = 10 } = {}
+) {
+  const bounds = displayTopologyBounds(topology);
+  if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
+    return [];
   }
+  const innerWidth = Math.max(1, frameWidth - padding * 2);
+  const innerHeight = Math.max(1, frameHeight - padding * 2);
+  const scale = Math.min(innerWidth / bounds.width, innerHeight / bounds.height);
+  const layoutWidth = bounds.width * scale;
+  const layoutHeight = bounds.height * scale;
+  const offsetX = padding + (innerWidth - layoutWidth) / 2;
+  const offsetY = padding + (innerHeight - layoutHeight) / 2;
+  return topology.map((item) => ({
+    ...item,
+    x: offsetX + (item.left - bounds.left) * scale,
+    y: offsetY + (item.top - bounds.top) * scale,
+    widthPx: Math.max(28, item.width * scale),
+    heightPx: Math.max(24, item.height * scale),
+  }));
 }
 
 export default function ReverseTunnelVnc({ device }) {
@@ -486,6 +400,7 @@ export default function ReverseTunnelVnc({ device }) {
   const [viewportPreset, setViewportPreset] = useState("all");
   const [viewportHint, setViewportHint] = useState("");
   const [displayTopology, setDisplayTopology] = useState([]);
+  const [framebufferSize, setFramebufferSize] = useState({ width: 0, height: 0 });
 
   const containerRef = useRef(null);
   const displayRef = useRef(null);
@@ -517,9 +432,22 @@ export default function ReverseTunnelVnc({ device }) {
     () => normalizeDisplayTopology(displayTopology),
     [displayTopology]
   );
-  const viewportOptions = useMemo(
-    () => viewportOptionsForTopology(normalizedDisplayTopology),
+  const topologyBounds = useMemo(
+    () => displayTopologyBounds(normalizedDisplayTopology),
     [normalizedDisplayTopology]
+  );
+  const topologyTrusted = useMemo(() => {
+    if (!normalizedDisplayTopology.length) return false;
+    if (normalizedDisplayTopology.length <= 1) return false;
+    return topologyMatchesFramebuffer(topologyBounds, framebufferSize);
+  }, [framebufferSize, normalizedDisplayTopology, topologyBounds]);
+  const viewportOptions = useMemo(
+    () => (topologyTrusted ? viewportOptionsForTopology(normalizedDisplayTopology) : fallbackViewportPresets),
+    [normalizedDisplayTopology, topologyTrusted]
+  );
+  const displayLayoutFrames = useMemo(
+    () => (topologyTrusted ? buildDisplayLayoutFrames(normalizedDisplayTopology) : []),
+    [normalizedDisplayTopology, topologyTrusted]
   );
 
   const applySessionBootstrap = useCallback((data) => {
@@ -601,6 +529,20 @@ export default function ReverseTunnelVnc({ device }) {
     if (host) {
       host.innerHTML = "";
     }
+    setFramebufferSize({ width: 0, height: 0 });
+  }, []);
+
+  const syncFramebufferSize = useCallback((client) => {
+    const display = client?._display;
+    const width = Number(display?._fb_width || display?._fbWidth || client?._fbWidth || 0);
+    const height = Number(display?._fb_height || display?._fbHeight || client?._fbHeight || 0);
+    setFramebufferSize((previous) => {
+      if (previous.width === width && previous.height === height) {
+        return previous;
+      }
+      return { width, height };
+    });
+    return { width, height };
   }, []);
 
   const disconnectVnc = useCallback(async (reason = "operator_disconnect") => {
@@ -798,6 +740,7 @@ export default function ReverseTunnelVnc({ device }) {
             return;
           }
           connected = true;
+          syncFramebufferSize(rfb);
           setSessionState("connected");
           setVncStage("connected");
           setStatusMessage("");
@@ -882,6 +825,7 @@ export default function ReverseTunnelVnc({ device }) {
       qualityLevel,
       resizeSession,
       effectiveViewOnly,
+      syncFramebufferSize,
     ]
   );
 
@@ -1102,7 +1046,8 @@ export default function ReverseTunnelVnc({ device }) {
     }
     const fbWidth = display?._fb_width || display?._fbWidth || rfb?._fbWidth || 0;
     const fbHeight = display?._fb_height || display?._fbHeight || rfb?._fbHeight || 0;
-    const topologyBounds = displayTopologyBounds(normalizedDisplayTopology);
+    syncFramebufferSize(rfb);
+    const trustedTopology = topologyTrusted ? topologyBounds : null;
     if (!fbWidth || !fbHeight) {
       setViewportHint("Framebuffer size unavailable.");
       return;
@@ -1111,7 +1056,7 @@ export default function ReverseTunnelVnc({ device }) {
     if (screen?.style) {
       screen.style.alignItems = "center";
       screen.style.justifyContent = "center";
-      screen.style.overflow = value === "all" ? "hidden" : "auto";
+      screen.style.overflow = scaleViewport || value === "all" ? "hidden" : "auto";
     }
     if (canvas?.style) {
       canvas.style.display = "block";
@@ -1144,17 +1089,43 @@ export default function ReverseTunnelVnc({ device }) {
       }
     };
 
+    const applyFullFramebuffer = () => {
+      try {
+        if (host) {
+          host.scrollLeft = 0;
+          host.scrollTop = 0;
+        }
+        const viewportLoc = display?._viewportLoc || { x: 0, y: 0 };
+        if (typeof display.viewportChangePos === "function" && (viewportLoc.x || viewportLoc.y)) {
+          display.viewportChangePos(-viewportLoc.x, -viewportLoc.y);
+        }
+        if (typeof display.viewportChangeSize === "function") {
+          display.viewportChangeSize(fbWidth, fbHeight);
+        }
+        display.clipViewport = false;
+        if (scaleViewport && host && typeof display.autoscale === "function") {
+          display.autoscale(host.clientWidth, host.clientHeight);
+        } else if (typeof display.scale !== "undefined") {
+          display.scale = 1.0;
+        }
+        rfb.dragViewport = false;
+        setViewportHint("");
+      } catch {
+        setViewportHint("Viewport controls not available.");
+      }
+    };
+
     const displayTarget = normalizeText(value).startsWith("display:")
       ? normalizedDisplayTopology.find(
           (item) => monitorPresetValue(item) === normalizeText(value)
         ) || null
       : null;
 
-    if (displayTarget && topologyBounds) {
+    if (displayTarget && trustedTopology) {
       const applyMonitorViewport = () => {
         applyDisplayViewport({
-          x: displayTarget.left - topologyBounds.left,
-          y: displayTarget.top - topologyBounds.top,
+          x: displayTarget.left - trustedTopology.left,
+          y: displayTarget.top - trustedTopology.top,
           w: displayTarget.width,
           h: displayTarget.height,
         });
@@ -1168,65 +1139,16 @@ export default function ReverseTunnelVnc({ device }) {
     }
 
     if (value === "all") {
-      const resetViewport = () => {
-        try {
-          if (host) {
-            host.scrollLeft = 0;
-            host.scrollTop = 0;
-          }
-          const activeBounds =
-            topologyBounds && topologyBounds.width > 0 && topologyBounds.height > 0
-              ? {
-                  x: 0,
-                  y: 0,
-                  w: topologyBounds.width,
-                  h: topologyBounds.height,
-                }
-              : estimateActiveDisplayBounds(display);
-          applyDisplayViewport(
-            activeBounds || {
-              x: 0,
-              y: 0,
-              w: fbWidth,
-              h: fbHeight,
-            }
-          );
-        } catch {
-          setViewportHint("Viewport controls not available.");
-        }
-      };
-
       if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
-        window.requestAnimationFrame(resetViewport);
+        window.requestAnimationFrame(applyFullFramebuffer);
       } else {
-        resetViewport();
+        applyFullFramebuffer();
       }
       return;
     }
 
-    let target = { x: 0, y: 0, w: fbWidth, h: fbHeight };
-    switch (value) {
-      case "left":
-        target = { x: 0, y: 0, w: Math.floor(fbWidth / 2), h: fbHeight };
-        break;
-      case "right":
-        target = { x: Math.floor(fbWidth / 2), y: 0, w: Math.floor(fbWidth / 2), h: fbHeight };
-        break;
-      default:
-        target = { x: 0, y: 0, w: fbWidth, h: fbHeight };
-        break;
-    }
-
-    const applyViewport = () => {
-      applyDisplayViewport(target);
-    };
-
-    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
-      window.requestAnimationFrame(applyViewport);
-    } else {
-      applyViewport();
-    }
-  }, [normalizedDisplayTopology, scaleViewport]);
+    applyFullFramebuffer();
+  }, [normalizedDisplayTopology, scaleViewport, syncFramebufferSize, topologyBounds, topologyTrusted]);
 
   const applyViewportPreset = useCallback((value) => {
     syncViewportPreset(value, { updateState: true });
@@ -1238,6 +1160,11 @@ export default function ReverseTunnelVnc({ device }) {
     if (!isConnected) return;
     syncViewportPreset(viewportPreset, { updateState: false });
   }, [isConnected, scaleViewport, syncViewportPreset, viewportPreset]);
+
+  useEffect(() => {
+    if (viewportOptions.some((item) => item.value === viewportPreset)) return;
+    setViewportPreset(viewportOptions[0]?.value || "all");
+  }, [viewportOptions, viewportPreset]);
 
   useEffect(() => {
     if (
@@ -1423,7 +1350,7 @@ export default function ReverseTunnelVnc({ device }) {
                   height: "100%",
                   display: "block",
                   position: "relative",
-                  overflow: "hidden",
+                  overflow: scaleViewport ? "hidden" : "auto",
                   "& > div": {
                     width: "100%",
                     height: "100%",
@@ -1532,6 +1459,61 @@ export default function ReverseTunnelVnc({ device }) {
               <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
                 Monitors
               </Typography>
+              {displayLayoutFrames.length ? (
+                <Box
+                  sx={{
+                    position: "relative",
+                    height: 126,
+                    borderRadius: 2,
+                    border: `1px solid ${SIDEBAR_THEME.border}`,
+                    background: "rgba(7,12,23,0.82)",
+                    overflow: "hidden",
+                  }}
+                >
+                  {displayLayoutFrames.map((item) => {
+                    const selected = viewportPreset === monitorPresetValue(item);
+                    return (
+                      <Box
+                        key={item.id}
+                        onClick={() => applyViewportPreset(monitorPresetValue(item))}
+                        sx={{
+                          position: "absolute",
+                          left: item.x,
+                          top: item.y,
+                          width: item.widthPx,
+                          height: item.heightPx,
+                          borderRadius: 1.5,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: "1rem",
+                          fontWeight: 700,
+                          cursor: "pointer",
+                          color: selected ? "#08111f" : SIDEBAR_THEME.text,
+                          border: selected
+                            ? "1px solid transparent"
+                            : `1px solid ${SIDEBAR_THEME.border}`,
+                          background: selected
+                            ? "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)"
+                            : item.primary
+                              ? "rgba(125,183,255,0.18)"
+                              : "rgba(148,163,184,0.14)",
+                          boxShadow: selected
+                            ? "0 10px 28px rgba(91,126,255,0.25)"
+                            : "none",
+                          transition: "all 140ms ease",
+                          "&:hover": {
+                            borderColor: "rgba(125,183,255,0.58)",
+                            transform: "translateY(-1px)",
+                          },
+                        }}
+                      >
+                        {item.label}
+                      </Box>
+                    );
+                  })}
+                </Box>
+              ) : null}
               <ToggleButtonGroup
                 exclusive
                 size="small"
@@ -1548,6 +1530,11 @@ export default function ReverseTunnelVnc({ device }) {
                   </ToggleButton>
                 ))}
               </ToggleButtonGroup>
+              {!displayLayoutFrames.length && normalizedDisplayTopology.length > 1 ? (
+                <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
+                  Waiting for accurate monitor layout from the remote desktop session.
+                </Typography>
+              ) : null}
               {viewportHint ? (
                 <Typography variant="caption" sx={{ color: "#ffb86b" }}>
                   {viewportHint}

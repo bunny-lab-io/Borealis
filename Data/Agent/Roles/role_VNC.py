@@ -166,7 +166,152 @@ def _display_index_from_device_name(device_name: str, fallback_index: int) -> in
     return max(1, int(fallback_index or 1))
 
 
-def _collect_windows_display_topology() -> list[dict[str, Any]]:
+def _sort_display_topology(topology: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        topology,
+        key=lambda item: (
+            int(item.get("display_index") or 0),
+            0 if item.get("primary") else 1,
+            int(item.get("top") or 0),
+            int(item.get("left") or 0),
+        ),
+    )
+
+
+def _collect_windows_display_topology_via_display_settings() -> list[dict[str, Any]]:
+    if os.name != "nt" or wintypes is None:
+        return []
+    try:
+        user32 = ctypes.windll.user32
+    except Exception:
+        return []
+
+    class POINTL(ctypes.Structure):
+        _fields_ = [
+            ("x", wintypes.LONG),
+            ("y", wintypes.LONG),
+        ]
+
+    class DISPLAY_DEVICEW(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("DeviceName", wintypes.WCHAR * 32),
+            ("DeviceString", wintypes.WCHAR * 128),
+            ("StateFlags", wintypes.DWORD),
+            ("DeviceID", wintypes.WCHAR * 128),
+            ("DeviceKey", wintypes.WCHAR * 128),
+        ]
+
+    class DEVMODEW(ctypes.Structure):
+        _fields_ = [
+            ("dmDeviceName", wintypes.WCHAR * 32),
+            ("dmSpecVersion", wintypes.WORD),
+            ("dmDriverVersion", wintypes.WORD),
+            ("dmSize", wintypes.WORD),
+            ("dmDriverExtra", wintypes.WORD),
+            ("dmFields", wintypes.DWORD),
+            ("dmPosition", POINTL),
+            ("dmDisplayOrientation", wintypes.DWORD),
+            ("dmDisplayFixedOutput", wintypes.DWORD),
+            ("dmColor", ctypes.c_short),
+            ("dmDuplex", ctypes.c_short),
+            ("dmYResolution", ctypes.c_short),
+            ("dmTTOption", ctypes.c_short),
+            ("dmCollate", ctypes.c_short),
+            ("dmFormName", wintypes.WCHAR * 32),
+            ("dmLogPixels", wintypes.WORD),
+            ("dmBitsPerPel", wintypes.DWORD),
+            ("dmPelsWidth", wintypes.DWORD),
+            ("dmPelsHeight", wintypes.DWORD),
+            ("dmDisplayFlags", wintypes.DWORD),
+            ("dmDisplayFrequency", wintypes.DWORD),
+            ("dmICMMethod", wintypes.DWORD),
+            ("dmICMIntent", wintypes.DWORD),
+            ("dmMediaType", wintypes.DWORD),
+            ("dmDitherType", wintypes.DWORD),
+            ("dmReserved1", wintypes.DWORD),
+            ("dmReserved2", wintypes.DWORD),
+            ("dmPanningWidth", wintypes.DWORD),
+            ("dmPanningHeight", wintypes.DWORD),
+        ]
+
+    DISPLAY_DEVICE_ATTACHED_TO_DESKTOP = 0x00000001
+    DISPLAY_DEVICE_PRIMARY_DEVICE = 0x00000004
+    DISPLAY_DEVICE_MIRRORING_DRIVER = 0x00000008
+    ENUM_CURRENT_SETTINGS = -1
+    topology: list[dict[str, Any]] = []
+    index = 0
+
+    while True:
+        adapter = DISPLAY_DEVICEW()
+        adapter.cb = ctypes.sizeof(DISPLAY_DEVICEW)
+        try:
+            ok = user32.EnumDisplayDevicesW(None, index, ctypes.byref(adapter), 0)
+        except Exception:
+            return []
+        if not ok:
+            break
+        index += 1
+        state_flags = int(adapter.StateFlags or 0)
+        device_name = str(adapter.DeviceName or "").strip()
+        if not device_name:
+            continue
+        if state_flags & DISPLAY_DEVICE_MIRRORING_DRIVER:
+            continue
+        if not (state_flags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP):
+            continue
+
+        settings = DEVMODEW()
+        settings.dmSize = ctypes.sizeof(DEVMODEW)
+        try:
+            has_settings = user32.EnumDisplaySettingsExW(
+                device_name,
+                ENUM_CURRENT_SETTINGS,
+                ctypes.byref(settings),
+                0,
+            )
+        except Exception:
+            has_settings = 0
+        if not has_settings:
+            continue
+
+        left = int(settings.dmPosition.x)
+        top = int(settings.dmPosition.y)
+        width = max(0, int(settings.dmPelsWidth or 0))
+        height = max(0, int(settings.dmPelsHeight or 0))
+        if width <= 0 or height <= 0:
+            continue
+        right = left + width
+        bottom = top + height
+        display_index = _display_index_from_device_name(device_name, len(topology) + 1)
+        topology.append(
+            {
+                "id": str(display_index),
+                "display_index": int(display_index),
+                "label": str(display_index),
+                "device_name": device_name,
+                "device_string": str(adapter.DeviceString or "").strip(),
+                "left": left,
+                "top": top,
+                "right": right,
+                "bottom": bottom,
+                "width": width,
+                "height": height,
+                "work_left": left,
+                "work_top": top,
+                "work_right": right,
+                "work_bottom": bottom,
+                "work_width": width,
+                "work_height": height,
+                "primary": bool(state_flags & DISPLAY_DEVICE_PRIMARY_DEVICE),
+                "source": "display_settings",
+            }
+        )
+
+    return _sort_display_topology(topology)
+
+
+def _collect_windows_display_topology_via_monitors() -> list[dict[str, Any]]:
     if os.name != "nt" or wintypes is None:
         return []
     try:
@@ -236,6 +381,7 @@ def _collect_windows_display_topology() -> list[dict[str, Any]]:
                 "work_width": max(0, work_right - work_left),
                 "work_height": max(0, work_bottom - work_top),
                 "primary": bool(info.dwFlags & MONITORINFOF_PRIMARY),
+                "source": "monitor_info",
             }
         )
         return 1
@@ -245,15 +391,14 @@ def _collect_windows_display_topology() -> list[dict[str, Any]]:
     except Exception:
         return []
 
-    return sorted(
-        topology,
-        key=lambda item: (
-            int(item.get("display_index") or 0),
-            0 if item.get("primary") else 1,
-            int(item.get("top") or 0),
-            int(item.get("left") or 0),
-        ),
-    )
+    return _sort_display_topology(topology)
+
+
+def _collect_windows_display_topology() -> list[dict[str, Any]]:
+    topology = _collect_windows_display_topology_via_display_settings()
+    if topology:
+        return topology
+    return _collect_windows_display_topology_via_monitors()
 
 
 def _generate_runtime_vnc_password() -> str:
