@@ -185,8 +185,6 @@ const compactSidebarCardSx = {
   gap: 0.85,
 };
 
-const fallbackViewportPresets = [{ value: "all", label: "All" }];
-
 function normalizeText(value) {
   if (value == null) return "";
   try {
@@ -337,27 +335,43 @@ function topologyMatchesFramebuffer(topologyBounds, framebufferSize) {
   );
 }
 
-function monitorPresetValue(monitor) {
-  return `display:${normalizeText(monitor?.id || monitor?.displayIndex || "")}`;
+function monitorSelectionId(monitor) {
+  return normalizeText(monitor?.id || monitor?.displayIndex || "");
 }
 
-function preferredViewportPreset(topology) {
-  if (!Array.isArray(topology) || !topology.length) return "all";
+function preferredMonitorSelection(topology) {
+  if (!Array.isArray(topology) || !topology.length) return [];
   const primary = topology.find((item) => item.primary) || topology[0];
-  return monitorPresetValue(primary);
+  const monitorId = monitorSelectionId(primary);
+  return monitorId ? [monitorId] : [];
 }
 
-function viewportOptionsForTopology(topology) {
-  if (!Array.isArray(topology) || topology.length <= 1) {
-    return [{ value: "all", label: "All" }];
+function normalizeMonitorSelection(selectionIds, topology) {
+  const availableIds = new Set(
+    (Array.isArray(topology) ? topology : [])
+      .map((item) => monitorSelectionId(item))
+      .filter(Boolean)
+  );
+  if (!availableIds.size) return [];
+  const normalized = Array.isArray(selectionIds)
+    ? selectionIds.map((item) => normalizeText(item)).filter((item) => availableIds.has(item))
+    : [];
+  if (normalized.length) {
+    return Array.from(new Set(normalized));
   }
-  return [
-    { value: "all", label: "All" },
-    ...topology.map((item) => ({
-      value: monitorPresetValue(item),
-      label: item.label || String(item.displayIndex || ""),
-    })),
-  ];
+  return preferredMonitorSelection(topology);
+}
+
+function selectedDisplayBounds(topology, selectionIds) {
+  if (!Array.isArray(topology) || !topology.length) return null;
+  const normalizedSelection = new Set(
+    (Array.isArray(selectionIds) ? selectionIds : []).map((item) => normalizeText(item)).filter(Boolean)
+  );
+  const selected = normalizedSelection.size
+    ? topology.filter((item) => normalizedSelection.has(monitorSelectionId(item)))
+    : [];
+  if (!selected.length) return null;
+  return displayTopologyBounds(selected);
 }
 
 function buildDisplayLayoutFrames(
@@ -384,24 +398,44 @@ function buildDisplayLayoutFrames(
   }));
 }
 
-function displayDiagramTopology(topology, framebufferSize) {
+function aspectRatioMatches(leftSize, rightSize, tolerance = 0.12) {
+  if (!leftSize?.width || !leftSize?.height || !rightSize?.width || !rightSize?.height) {
+    return false;
+  }
+  const leftRatio = Number(leftSize.width) / Number(leftSize.height);
+  const rightRatio = Number(rightSize.width) / Number(rightSize.height);
+  if (!Number.isFinite(leftRatio) || !Number.isFinite(rightRatio) || rightRatio <= 0) {
+    return false;
+  }
+  return Math.abs(leftRatio - rightRatio) / rightRatio <= tolerance;
+}
+
+function displayDiagramTopology(topology, framebufferSize, renderedCanvasSize) {
+  const preferredSingleDisplaySize =
+    renderedCanvasSize?.width && renderedCanvasSize?.height
+      ? renderedCanvasSize
+      : framebufferSize;
+
   if (Array.isArray(topology) && topology.length > 1) {
     return topology;
   }
   if (Array.isArray(topology) && topology.length === 1) {
     const [display] = topology;
-    if (framebufferSize?.width && framebufferSize?.height) {
+    if (preferredSingleDisplaySize?.width && preferredSingleDisplaySize?.height) {
       const bounds = displayTopologyBounds(topology);
-      if (!topologyMatchesFramebuffer(bounds, framebufferSize)) {
+      const shouldUsePreferredSize =
+        !topologyMatchesFramebuffer(bounds, framebufferSize) ||
+        !aspectRatioMatches(display, preferredSingleDisplaySize);
+      if (shouldUsePreferredSize) {
         return [
           {
             ...display,
             left: 0,
             top: 0,
-            right: framebufferSize.width,
-            bottom: framebufferSize.height,
-            width: framebufferSize.width,
-            height: framebufferSize.height,
+            right: preferredSingleDisplaySize.width,
+            bottom: preferredSingleDisplaySize.height,
+            width: preferredSingleDisplaySize.width,
+            height: preferredSingleDisplaySize.height,
             primary: true,
             synthetic: true,
           },
@@ -410,7 +444,11 @@ function displayDiagramTopology(topology, framebufferSize) {
     }
     return topology;
   }
-  if (!framebufferSize?.width || !framebufferSize?.height) {
+  const fallbackSize =
+    renderedCanvasSize?.width && renderedCanvasSize?.height
+      ? renderedCanvasSize
+      : framebufferSize;
+  if (!fallbackSize?.width || !fallbackSize?.height) {
     return [];
   }
   return [
@@ -421,10 +459,10 @@ function displayDiagramTopology(topology, framebufferSize) {
       deviceName: "Framebuffer",
       left: 0,
       top: 0,
-      right: framebufferSize.width,
-      bottom: framebufferSize.height,
-      width: framebufferSize.width,
-      height: framebufferSize.height,
+      right: fallbackSize.width,
+      bottom: fallbackSize.height,
+      width: fallbackSize.width,
+      height: fallbackSize.height,
       primary: true,
       synthetic: true,
     },
@@ -444,10 +482,11 @@ export default function ReverseTunnelVnc({ device }) {
   const [scaleViewport, setScaleViewport] = useState(true);
   const [resizeSession, setResizeSession] = useState(true);
   const [capabilities, setCapabilities] = useState({});
-  const [viewportPreset, setViewportPreset] = useState("all");
+  const [selectedMonitorIds, setSelectedMonitorIds] = useState([]);
   const [viewportHint, setViewportHint] = useState("");
   const [displayTopology, setDisplayTopology] = useState([]);
   const [framebufferSize, setFramebufferSize] = useState({ width: 0, height: 0 });
+  const [renderedCanvasSize, setRenderedCanvasSize] = useState({ width: 0, height: 0 });
 
   const containerRef = useRef(null);
   const displayRef = useRef(null);
@@ -489,16 +528,16 @@ export default function ReverseTunnelVnc({ device }) {
     return topologyMatchesFramebuffer(topologyBounds, framebufferSize);
   }, [framebufferSize, normalizedDisplayTopology, topologyBounds]);
   const diagramTopology = useMemo(
-    () => displayDiagramTopology(normalizedDisplayTopology, framebufferSize),
-    [framebufferSize, normalizedDisplayTopology]
-  );
-  const viewportOptions = useMemo(
-    () => (topologyTrusted ? viewportOptionsForTopology(normalizedDisplayTopology) : fallbackViewportPresets),
-    [normalizedDisplayTopology, topologyTrusted]
+    () => displayDiagramTopology(normalizedDisplayTopology, framebufferSize, renderedCanvasSize),
+    [framebufferSize, normalizedDisplayTopology, renderedCanvasSize]
   );
   const displayLayoutFrames = useMemo(
     () => buildDisplayLayoutFrames(diagramTopology),
     [diagramTopology]
+  );
+  const effectiveSelectedMonitorIds = useMemo(
+    () => normalizeMonitorSelection(selectedMonitorIds, normalizedDisplayTopology),
+    [normalizedDisplayTopology, selectedMonitorIds]
   );
 
   const applySessionBootstrap = useCallback((data) => {
@@ -511,17 +550,7 @@ export default function ReverseTunnelVnc({ device }) {
     setSessionId(nextSessionId);
     setParticipantId(nextParticipantId);
     setDisplayTopology(nextDisplayTopology);
-    setViewportPreset((previous) => {
-      const nextOptions = viewportOptionsForTopology(nextDisplayTopology);
-      const previousStillValid = nextOptions.some((item) => item.value === previous);
-      if (nextDisplayTopology.length > 1 && (!previousStillValid || previous === "all")) {
-        return preferredViewportPreset(nextDisplayTopology);
-      }
-      if (!previousStillValid) {
-        return nextOptions[0]?.value || "all";
-      }
-      return previous;
-    });
+    setSelectedMonitorIds((previous) => normalizeMonitorSelection(previous, nextDisplayTopology));
   }, []);
 
   useEffect(() => {
@@ -581,6 +610,7 @@ export default function ReverseTunnelVnc({ device }) {
       host.innerHTML = "";
     }
     setFramebufferSize({ width: 0, height: 0 });
+    setRenderedCanvasSize({ width: 0, height: 0 });
   }, []);
 
   const syncFramebufferSize = useCallback((client) => {
@@ -588,6 +618,40 @@ export default function ReverseTunnelVnc({ device }) {
     const width = Number(display?._fb_width || display?._fbWidth || client?._fbWidth || 0);
     const height = Number(display?._fb_height || display?._fbHeight || client?._fbHeight || 0);
     setFramebufferSize((previous) => {
+      if (previous.width === width && previous.height === height) {
+        return previous;
+      }
+      return { width, height };
+    });
+    return { width, height };
+  }, []);
+
+  const syncRenderedCanvasSize = useCallback((client) => {
+    const canvas = client?._canvas || null;
+    const screen = client?._screen || null;
+    const canvasRect =
+      typeof canvas?.getBoundingClientRect === "function" ? canvas.getBoundingClientRect() : null;
+    const screenRect =
+      typeof screen?.getBoundingClientRect === "function" ? screen.getBoundingClientRect() : null;
+    const width = Math.max(
+      0,
+      Math.round(
+        Number(canvasRect?.width || 0) ||
+          Number(canvas?.clientWidth || 0) ||
+          Number(screenRect?.width || 0) ||
+          0
+      )
+    );
+    const height = Math.max(
+      0,
+      Math.round(
+        Number(canvasRect?.height || 0) ||
+          Number(canvas?.clientHeight || 0) ||
+          Number(screenRect?.height || 0) ||
+          0
+      )
+    );
+    setRenderedCanvasSize((previous) => {
       if (previous.width === width && previous.height === height) {
         return previous;
       }
@@ -792,6 +856,13 @@ export default function ReverseTunnelVnc({ device }) {
           }
           connected = true;
           syncFramebufferSize(rfb);
+          if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+            window.requestAnimationFrame(() => {
+              syncRenderedCanvasSize(rfb);
+            });
+          } else {
+            syncRenderedCanvasSize(rfb);
+          }
           setSessionState("connected");
           setVncStage("connected");
           setStatusMessage("");
@@ -877,6 +948,7 @@ export default function ReverseTunnelVnc({ device }) {
       resizeSession,
       effectiveViewOnly,
       syncFramebufferSize,
+      syncRenderedCanvasSize,
     ]
   );
 
@@ -952,12 +1024,7 @@ export default function ReverseTunnelVnc({ device }) {
       const nextDisplayTopology = normalizeDisplayTopology(nextSession.display_topology);
       if (nextDisplayTopology.length) {
         setDisplayTopology(nextDisplayTopology);
-        setViewportPreset((previous) => {
-          const nextOptions = viewportOptionsForTopology(nextDisplayTopology);
-          return nextOptions.some((item) => item.value === previous)
-            ? previous
-            : (nextOptions[0]?.value || "all");
-        });
+        setSelectedMonitorIds((previous) => normalizeMonitorSelection(previous, nextDisplayTopology));
       }
       setParticipantId((previous) => normalizeText(nextSession.current_participant_id) || previous);
     } catch {
@@ -1083,9 +1150,10 @@ export default function ReverseTunnelVnc({ device }) {
     [effectiveViewOnly]
   );
 
-  const syncViewportPreset = useCallback((value, options = {}) => {
+  const syncViewportSelection = useCallback((selectionIds, options = {}) => {
+    const normalizedSelection = normalizeMonitorSelection(selectionIds, normalizedDisplayTopology);
     if (options.updateState !== false) {
-      setViewportPreset(value);
+      setSelectedMonitorIds(normalizedSelection);
     }
     const rfb = rfbRef.current;
     const display = rfb?._display;
@@ -1107,7 +1175,7 @@ export default function ReverseTunnelVnc({ device }) {
     if (screen?.style) {
       screen.style.alignItems = "center";
       screen.style.justifyContent = "center";
-      screen.style.overflow = scaleViewport || value === "all" ? "hidden" : "auto";
+      screen.style.overflow = scaleViewport ? "hidden" : "auto";
     }
     if (canvas?.style) {
       canvas.style.display = "block";
@@ -1135,6 +1203,13 @@ export default function ReverseTunnelVnc({ device }) {
         }
         rfb.dragViewport = false;
         setViewportHint("");
+        if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+          window.requestAnimationFrame(() => {
+            syncRenderedCanvasSize(rfb);
+          });
+        } else {
+          syncRenderedCanvasSize(rfb);
+        }
       } catch {
         setViewportHint("Viewport controls not available.");
       }
@@ -1161,24 +1236,28 @@ export default function ReverseTunnelVnc({ device }) {
         }
         rfb.dragViewport = false;
         setViewportHint("");
+        if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+          window.requestAnimationFrame(() => {
+            syncRenderedCanvasSize(rfb);
+          });
+        } else {
+          syncRenderedCanvasSize(rfb);
+        }
       } catch {
         setViewportHint("Viewport controls not available.");
       }
     };
 
-    const displayTarget = normalizeText(value).startsWith("display:")
-      ? normalizedDisplayTopology.find(
-          (item) => monitorPresetValue(item) === normalizeText(value)
-        ) || null
-      : null;
+    const selectionBounds =
+      trustedTopology ? selectedDisplayBounds(normalizedDisplayTopology, normalizedSelection) : null;
 
-    if (displayTarget && trustedTopology) {
+    if (selectionBounds && trustedTopology) {
       const applyMonitorViewport = () => {
         applyDisplayViewport({
-          x: displayTarget.left - trustedTopology.left,
-          y: displayTarget.top - trustedTopology.top,
-          w: displayTarget.width,
-          h: displayTarget.height,
+          x: selectionBounds.left - trustedTopology.left,
+          y: selectionBounds.top - trustedTopology.top,
+          w: selectionBounds.width,
+          h: selectionBounds.height,
         });
       };
       if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
@@ -1189,53 +1268,66 @@ export default function ReverseTunnelVnc({ device }) {
       return;
     }
 
-    if (value === "all") {
-      if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
-        window.requestAnimationFrame(applyFullFramebuffer);
-      } else {
-        applyFullFramebuffer();
-      }
-      return;
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(applyFullFramebuffer);
+    } else {
+      applyFullFramebuffer();
     }
+  }, [
+    normalizedDisplayTopology,
+    scaleViewport,
+    syncFramebufferSize,
+    syncRenderedCanvasSize,
+    topologyBounds,
+    topologyTrusted,
+  ]);
 
-    applyFullFramebuffer();
-  }, [normalizedDisplayTopology, scaleViewport, syncFramebufferSize, topologyBounds, topologyTrusted]);
-
-  const applyViewportPreset = useCallback((value) => {
-    syncViewportPreset(value, { updateState: true });
-  }, [syncViewportPreset]);
+  const toggleMonitorSelection = useCallback((monitorId) => {
+    const normalizedId = normalizeText(monitorId);
+    if (!normalizedId) return;
+    setSelectedMonitorIds((previous) => {
+      const current = normalizeMonitorSelection(previous, normalizedDisplayTopology);
+      const alreadySelected = current.includes(normalizedId);
+      if (alreadySelected) {
+        if (current.length === 1) {
+          return current;
+        }
+        return current.filter((item) => item !== normalizedId);
+      }
+      return [...current, normalizedId];
+    });
+  }, [normalizedDisplayTopology]);
 
   const isConnected = sessionState === "connected";
 
   useEffect(() => {
     if (!isConnected) return;
-    syncViewportPreset(viewportPreset, { updateState: false });
-  }, [isConnected, scaleViewport, syncViewportPreset, viewportPreset]);
+    syncViewportSelection(effectiveSelectedMonitorIds, { updateState: false });
+  }, [effectiveSelectedMonitorIds, isConnected, scaleViewport, syncViewportSelection]);
 
   useEffect(() => {
-    if (viewportOptions.some((item) => item.value === viewportPreset)) return;
-    setViewportPreset(viewportOptions[0]?.value || "all");
-  }, [viewportOptions, viewportPreset]);
+    const normalized = normalizeMonitorSelection(selectedMonitorIds, normalizedDisplayTopology);
+    const same =
+      normalized.length === selectedMonitorIds.length &&
+      normalized.every((item, index) => item === selectedMonitorIds[index]);
+    if (same) return;
+    setSelectedMonitorIds(normalized);
+  }, [normalizedDisplayTopology, selectedMonitorIds]);
 
   useEffect(() => {
-    if (
-      !isConnected ||
-      (viewportPreset !== "all" && !normalizeText(viewportPreset).startsWith("display:"))
-    ) {
-      return undefined;
-    }
+    if (!isConnected) return undefined;
     const timers = [
       window.setTimeout(() => {
-        syncViewportPreset(viewportPreset, { updateState: false });
+        syncViewportSelection(effectiveSelectedMonitorIds, { updateState: false });
       }, 250),
       window.setTimeout(() => {
-        syncViewportPreset(viewportPreset, { updateState: false });
+        syncViewportSelection(effectiveSelectedMonitorIds, { updateState: false });
       }, 1200),
     ];
     return () => {
       timers.forEach((timerId) => window.clearTimeout(timerId));
     };
-  }, [isConnected, syncViewportPreset, viewportPreset]);
+  }, [effectiveSelectedMonitorIds, isConnected, syncViewportSelection]);
 
   useEffect(() => {
     if (!isConnected) return undefined;
@@ -1248,7 +1340,7 @@ export default function ReverseTunnelVnc({ device }) {
         window.cancelAnimationFrame(frameId);
       }
       frameId = window.requestAnimationFrame(() => {
-        syncViewportPreset(viewportPreset, { updateState: false });
+        syncViewportSelection(effectiveSelectedMonitorIds, { updateState: false });
       });
     });
     observer.observe(host);
@@ -1258,7 +1350,7 @@ export default function ReverseTunnelVnc({ device }) {
       }
       observer.disconnect();
     };
-  }, [isConnected, syncViewportPreset, viewportPreset]);
+  }, [effectiveSelectedMonitorIds, isConnected, syncViewportSelection]);
   const shutdownSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "shutdown");
   const rebootSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "reboot");
   const resetSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "reset");
@@ -1522,16 +1614,13 @@ export default function ReverseTunnelVnc({ device }) {
                   }}
                 >
                   {displayLayoutFrames.map((item) => {
-                    const canSelectMonitor = topologyTrusted && normalizedDisplayTopology.length > 1;
-                    const selected =
-                      (canSelectMonitor && viewportPreset === monitorPresetValue(item)) ||
-                      (!canSelectMonitor && item.primary);
+                    const monitorId = monitorSelectionId(item);
+                    const selected = effectiveSelectedMonitorIds.includes(monitorId);
+                    const selectable = normalizedDisplayTopology.length > 1;
                     return (
                       <Box
                         key={item.id}
-                        onClick={
-                          canSelectMonitor ? () => applyViewportPreset(monitorPresetValue(item)) : undefined
-                        }
+                        onClick={selectable ? () => toggleMonitorSelection(monitorId) : undefined}
                         sx={{
                           position: "absolute",
                           left: item.x,
@@ -1544,7 +1633,7 @@ export default function ReverseTunnelVnc({ device }) {
                           justifyContent: "center",
                           fontSize: "1rem",
                           fontWeight: 700,
-                          cursor: canSelectMonitor ? "pointer" : "default",
+                          cursor: selectable ? "pointer" : "default",
                           color: selected ? "#08111f" : SIDEBAR_THEME.text,
                           border: selected
                             ? "1px solid transparent"
@@ -1559,10 +1648,10 @@ export default function ReverseTunnelVnc({ device }) {
                             : "none",
                           transition: "all 140ms ease",
                           "&:hover": {
-                            borderColor: canSelectMonitor
+                            borderColor: selectable
                               ? "rgba(125,183,255,0.58)"
                               : undefined,
-                            transform: canSelectMonitor ? "translateY(-1px)" : undefined,
+                            transform: selectable ? "translateY(-1px)" : undefined,
                           },
                         }}
                       >
@@ -1572,22 +1661,11 @@ export default function ReverseTunnelVnc({ device }) {
                   })}
                 </Box>
               ) : null}
-              <ToggleButtonGroup
-                exclusive
-                size="small"
-                value={viewportPreset}
-                onChange={(_, value) => {
-                  if (!value) return;
-                  applyViewportPreset(value);
-                }}
-                sx={splitToggleSx}
-              >
-                {viewportOptions.map((preset) => (
-                  <ToggleButton key={preset.value} value={preset.value}>
-                    {preset.label}
-                  </ToggleButton>
-                ))}
-              </ToggleButtonGroup>
+              {normalizedDisplayTopology.length > 1 ? (
+                <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
+                  Click one or more displays to focus the viewport on that layout.
+                </Typography>
+              ) : null}
               {!topologyTrusted && normalizedDisplayTopology.length > 1 ? (
                 <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
                   Monitor layout shown from agent telemetry. Targeted monitor selection will unlock once it matches the live desktop geometry.
