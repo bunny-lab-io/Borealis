@@ -595,6 +595,13 @@ export default function ReverseTunnelVnc({ device }) {
     setVncStage("agent_onboarding");
   }, [notifyAgentOnboarding]);
 
+  const resetDisconnectedViewState = useCallback(() => {
+    setDisplayTopology([]);
+    setSelectedMonitorIds([]);
+    setViewportHint("");
+    setCapabilities({});
+  }, []);
+
   const teardownDisplay = useCallback(() => {
     try {
       const client = rfbRef.current;
@@ -611,6 +618,28 @@ export default function ReverseTunnelVnc({ device }) {
     }
     setFramebufferSize({ width: 0, height: 0 });
     setRenderedCanvasSize({ width: 0, height: 0 });
+  }, []);
+
+  const configureDisplaySurface = useCallback((client, fitViewport) => {
+    const host = displayRef.current;
+    const screen = client?._screen || host?.firstElementChild || null;
+    const canvas = client?._canvas || null;
+    if (screen?.style) {
+      screen.style.display = fitViewport ? "flex" : "block";
+      screen.style.width = "100%";
+      screen.style.height = "100%";
+      screen.style.alignItems = fitViewport ? "center" : "flex-start";
+      screen.style.justifyContent = fitViewport ? "center" : "flex-start";
+      screen.style.overflow = fitViewport ? "hidden" : "auto";
+    }
+    if (canvas?.style) {
+      canvas.style.display = "block";
+      canvas.style.flex = fitViewport ? "0 0 auto" : "none";
+      canvas.style.maxWidth = "none";
+      canvas.style.maxHeight = "none";
+      canvas.style.margin = fitViewport ? "auto" : "0";
+      canvas.style.boxShadow = VNC_CANVAS_BOX_SHADOW;
+    }
   }, []);
 
   const syncFramebufferSize = useCallback((client) => {
@@ -691,10 +720,11 @@ export default function ReverseTunnelVnc({ device }) {
       setSessionState("idle");
       setSessionId("");
       setParticipantId("");
+      resetDisconnectedViewState();
       clipboardLastRef.current = "";
       setLoading(false);
     }
-  }, [cancelPendingConnect, disconnectVnc, teardownDisplay]);
+  }, [cancelPendingConnect, disconnectVnc, resetDisconnectedViewState, teardownDisplay]);
 
   useEffect(() => {
     return () => {
@@ -787,21 +817,7 @@ export default function ReverseTunnelVnc({ device }) {
       rfb.qualityLevel = qualityLevel;
       rfb.compressionLevel = compressionLevel;
 
-      const screen = rfb._screen || null;
-      if (screen?.style) {
-        screen.style.alignItems = "center";
-        screen.style.justifyContent = "center";
-        screen.style.overflow = "hidden";
-      }
-      const canvas = rfb._canvas || null;
-      if (canvas?.style) {
-        canvas.style.display = "block";
-        canvas.style.flex = "0 0 auto";
-        canvas.style.maxWidth = "none";
-        canvas.style.maxHeight = "none";
-        canvas.style.margin = "auto";
-        canvas.style.boxShadow = VNC_CANVAS_BOX_SHADOW;
-      }
+      configureDisplaySurface(rfb, scaleViewport);
 
       rfbRef.current = rfb;
       setStatusMessage(
@@ -881,6 +897,10 @@ export default function ReverseTunnelVnc({ device }) {
           const wasManual = manualDisconnectRef.current;
           manualDisconnectRef.current = false;
           setSessionState("idle");
+          setSessionId("");
+          setParticipantId("");
+          resetDisconnectedViewState();
+          clipboardLastRef.current = "";
           setVncStage((prev) =>
             prev === "auth_failed" || prev === "error" ? prev : "disconnected"
           );
@@ -943,10 +963,13 @@ export default function ReverseTunnelVnc({ device }) {
     },
     [
       compressionLevel,
+      configureDisplaySurface,
       dragViewport,
       qualityLevel,
+      resetDisconnectedViewState,
       resizeSession,
       effectiveViewOnly,
+      scaleViewport,
       syncFramebufferSize,
       syncRenderedCanvasSize,
     ]
@@ -1018,7 +1041,7 @@ export default function ReverseTunnelVnc({ device }) {
         setVncStage("disconnected");
         setSessionId("");
         setParticipantId("");
-        setDisplayTopology([]);
+        resetDisconnectedViewState();
         return;
       }
       const nextDisplayTopology = normalizeDisplayTopology(nextSession.display_topology);
@@ -1030,7 +1053,7 @@ export default function ReverseTunnelVnc({ device }) {
     } catch {
       // ignore background session refresh failures
     }
-  }, [teardownDisplay]);
+  }, [resetDisconnectedViewState, teardownDisplay]);
 
   useEffect(() => {
     if (!sessionId) return undefined;
@@ -1171,20 +1194,7 @@ export default function ReverseTunnelVnc({ device }) {
       setViewportHint("Framebuffer size unavailable.");
       return;
     }
-    const canvas = rfb?._canvas || null;
-    if (screen?.style) {
-      screen.style.alignItems = "center";
-      screen.style.justifyContent = "center";
-      screen.style.overflow = scaleViewport ? "hidden" : "auto";
-    }
-    if (canvas?.style) {
-      canvas.style.display = "block";
-      canvas.style.flex = "0 0 auto";
-      canvas.style.maxWidth = "none";
-      canvas.style.maxHeight = "none";
-      canvas.style.margin = "auto";
-      canvas.style.boxShadow = VNC_CANVAS_BOX_SHADOW;
-    }
+    configureDisplaySurface(rfb, scaleViewport);
 
     const applyDisplayViewport = (target) => {
       try {
@@ -1220,6 +1230,10 @@ export default function ReverseTunnelVnc({ device }) {
         if (host) {
           host.scrollLeft = 0;
           host.scrollTop = 0;
+        }
+        if (screen) {
+          screen.scrollLeft = 0;
+          screen.scrollTop = 0;
         }
         const viewportLoc = display?._viewportLoc || { x: 0, y: 0 };
         if (typeof display.viewportChangePos === "function" && (viewportLoc.x || viewportLoc.y)) {
@@ -1274,6 +1288,7 @@ export default function ReverseTunnelVnc({ device }) {
       applyFullFramebuffer();
     }
   }, [
+    configureDisplaySurface,
     normalizedDisplayTopology,
     scaleViewport,
     syncFramebufferSize,
@@ -1493,7 +1508,7 @@ export default function ReverseTunnelVnc({ device }) {
                   height: "100%",
                   display: "block",
                   position: "relative",
-                  overflow: scaleViewport ? "hidden" : "auto",
+                  overflow: "hidden",
                   "& > div": {
                     width: "100%",
                     height: "100%",
