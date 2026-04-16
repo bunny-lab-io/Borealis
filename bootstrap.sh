@@ -40,6 +40,11 @@ Any other arguments are forwarded to Borealis.sh, for example:
 
 Agent bootstrap always forwards --newEngine so rerunning bootstrap clears
 persisted Engine trust and enrollment tokens before Borealis.sh starts.
+
+bootstrap.sh is the supported Linux first-run path for installing missing
+system packages. Direct Borealis.sh redeploys assume core OS dependencies
+already exist and focus on staging / verification instead of apt/yum/dnf
+checks on every run.
 EOF
 }
 
@@ -235,6 +240,7 @@ main() {
   fi
 
   export BOREALIS_BOOTSTRAP_NEW_ENGINE=1
+  export BOREALIS_ALLOW_SYSTEM_PACKAGE_INSTALL=1
   echo -e "${GREEN}Launching ${INSTALL_DIR}/Borealis.sh${RESET}"
   if [[ ! -t 0 && -r /dev/tty ]]; then
     # When bootstrap is piped to bash, stdin is consumed by the script stream.

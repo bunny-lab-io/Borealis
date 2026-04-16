@@ -130,8 +130,9 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 Use this section for Engine work (successor to the legacy server). Shared guidance is consolidated in `ui-and-notifications.md` and other knowledgebase pages.
 
 #### Scope and runtime paths
-- Bootstrap: `Borealis.sh` handles Engine staging and launch on Linux. (`Borealis.ps1` is agent-only.)
-- Edit in `Data/Engine`; runtime copies live under `/Engine` and are discarded every time the engine is launched.
+- Staging / launch: `Borealis.sh` handles Engine staging and launch on Linux once it is invoked directly or via `bootstrap.sh`. (`Borealis.ps1` is agent-only.)
+- Edit in `Data/Engine`; the runtime copy used by `borealis-engine.service` still lives under `/Engine`, and direct `systemctl restart borealis-engine` restarts do not currently restage `Data/Engine` automatically. Use `Borealis.sh --EngineDev` or `Borealis.sh --EngineProduction` when source changes need to reach the running service.
+- `bootstrap.sh` is the supported Linux first-run path for syncing the repo and installing missing OS packages. Direct `Borealis.sh` redeploys intentionally avoid repeated apt/yum/dnf package checks unless bootstrap has opted the run into system package installation.
 
 #### Architecture
 - Runtime: `Data/Engine/server.py` with NodeJS + Vite for live dev and Flask for production serving/API endpoints.
