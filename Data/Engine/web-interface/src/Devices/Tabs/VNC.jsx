@@ -384,6 +384,31 @@ function buildDisplayLayoutFrames(
   }));
 }
 
+function displayDiagramTopology(topology, framebufferSize) {
+  if (Array.isArray(topology) && topology.length) {
+    return topology;
+  }
+  if (!framebufferSize?.width || !framebufferSize?.height) {
+    return [];
+  }
+  return [
+    {
+      id: "1",
+      displayIndex: 1,
+      label: "1",
+      deviceName: "Framebuffer",
+      left: 0,
+      top: 0,
+      right: framebufferSize.width,
+      bottom: framebufferSize.height,
+      width: framebufferSize.width,
+      height: framebufferSize.height,
+      primary: true,
+      synthetic: true,
+    },
+  ];
+}
+
 export default function ReverseTunnelVnc({ device }) {
   const [sessionState, setSessionState] = useState("idle");
   const [vncStage, setVncStage] = useState("idle");
@@ -441,13 +466,17 @@ export default function ReverseTunnelVnc({ device }) {
     if (normalizedDisplayTopology.length <= 1) return false;
     return topologyMatchesFramebuffer(topologyBounds, framebufferSize);
   }, [framebufferSize, normalizedDisplayTopology, topologyBounds]);
+  const diagramTopology = useMemo(
+    () => displayDiagramTopology(normalizedDisplayTopology, framebufferSize),
+    [framebufferSize, normalizedDisplayTopology]
+  );
   const viewportOptions = useMemo(
     () => (topologyTrusted ? viewportOptionsForTopology(normalizedDisplayTopology) : fallbackViewportPresets),
     [normalizedDisplayTopology, topologyTrusted]
   );
   const displayLayoutFrames = useMemo(
-    () => (topologyTrusted ? buildDisplayLayoutFrames(normalizedDisplayTopology) : []),
-    [normalizedDisplayTopology, topologyTrusted]
+    () => buildDisplayLayoutFrames(diagramTopology),
+    [diagramTopology]
   );
 
   const applySessionBootstrap = useCallback((data) => {
@@ -1471,11 +1500,16 @@ export default function ReverseTunnelVnc({ device }) {
                   }}
                 >
                   {displayLayoutFrames.map((item) => {
-                    const selected = viewportPreset === monitorPresetValue(item);
+                    const canSelectMonitor = topologyTrusted && normalizedDisplayTopology.length > 1;
+                    const selected =
+                      (canSelectMonitor && viewportPreset === monitorPresetValue(item)) ||
+                      (!canSelectMonitor && item.primary);
                     return (
                       <Box
                         key={item.id}
-                        onClick={() => applyViewportPreset(monitorPresetValue(item))}
+                        onClick={
+                          canSelectMonitor ? () => applyViewportPreset(monitorPresetValue(item)) : undefined
+                        }
                         sx={{
                           position: "absolute",
                           left: item.x,
@@ -1488,7 +1522,7 @@ export default function ReverseTunnelVnc({ device }) {
                           justifyContent: "center",
                           fontSize: "1rem",
                           fontWeight: 700,
-                          cursor: "pointer",
+                          cursor: canSelectMonitor ? "pointer" : "default",
                           color: selected ? "#08111f" : SIDEBAR_THEME.text,
                           border: selected
                             ? "1px solid transparent"
@@ -1503,8 +1537,10 @@ export default function ReverseTunnelVnc({ device }) {
                             : "none",
                           transition: "all 140ms ease",
                           "&:hover": {
-                            borderColor: "rgba(125,183,255,0.58)",
-                            transform: "translateY(-1px)",
+                            borderColor: canSelectMonitor
+                              ? "rgba(125,183,255,0.58)"
+                              : undefined,
+                            transform: canSelectMonitor ? "translateY(-1px)" : undefined,
                           },
                         }}
                       >
@@ -1530,9 +1566,14 @@ export default function ReverseTunnelVnc({ device }) {
                   </ToggleButton>
                 ))}
               </ToggleButtonGroup>
-              {!displayLayoutFrames.length && normalizedDisplayTopology.length > 1 ? (
+              {!topologyTrusted && normalizedDisplayTopology.length > 1 ? (
                 <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                  Waiting for accurate monitor layout from the remote desktop session.
+                  Monitor layout shown from agent telemetry. Targeted monitor selection will unlock once it matches the live desktop geometry.
+                </Typography>
+              ) : null}
+              {!normalizedDisplayTopology.length && framebufferSize.width > 0 && framebufferSize.height > 0 ? (
+                <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
+                  Showing the live framebuffer as a single display map.
                 </Typography>
               ) : null}
               {viewportHint ? (
