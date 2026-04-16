@@ -1,15 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Box,
   Button,
-  Stack,
-  Typography,
-  LinearProgress,
   Divider,
   Switch,
   FormControlLabel,
+  LinearProgress,
+  Stack,
   ToggleButton,
   ToggleButtonGroup,
+  Typography,
 } from "@mui/material";
 import {
   DesktopWindowsRounded as DesktopIcon,
@@ -19,6 +22,7 @@ import {
   ContentPasteRounded as ClipboardIcon,
   PowerSettingsNewRounded as PowerIcon,
   AspectRatioRounded as DisplayIcon,
+  ExpandMore as ExpandMoreIcon,
 } from "@mui/icons-material";
 import RFB from "@novnc/novnc/lib/rfb";
 
@@ -86,14 +90,15 @@ const sidebarSx = {
   minWidth: 280,
   maxWidth: 360,
   width: { xs: "100%", lg: 320 },
-  borderRadius: 0,
-  border: "none",
-  background: "transparent",
-  boxShadow: "none",
-  p: 0,
+  borderRadius: 2.5,
+  border: `1px solid ${SIDEBAR_THEME.border}`,
+  background:
+    "linear-gradient(180deg, rgba(64,164,255,0.05) 0%, rgba(192,132,252,0.04) 100%), rgba(15,20,28,0.96)",
+  boxShadow: "0 16px 40px rgba(2,6,23,0.3)",
+  p: 0.5,
   display: "flex",
   flexDirection: "column",
-  gap: 1.5,
+  gap: 0.25,
   overflow: "auto",
 };
 
@@ -105,6 +110,39 @@ const sectionHeaderSx = {
   fontWeight: 700,
   fontSize: "0.8rem",
   letterSpacing: "0.04em",
+};
+
+const sidebarAccordionSx = {
+  "&:before": { display: "none" },
+  m: 0,
+  bgcolor: "transparent",
+  border: 0,
+  boxShadow: "none",
+};
+
+const sidebarAccordionSummarySx = {
+  minHeight: 38,
+  px: 1.25,
+  py: 0.25,
+  backgroundColor: "rgba(255,255,255,0.02)",
+  borderRadius: 2,
+  "& .MuiAccordionSummary-content": {
+    m: 0,
+    py: 0.4,
+    display: "flex",
+  },
+  "&.Mui-expanded": {
+    minHeight: 38,
+  },
+  "& .MuiAccordionSummary-content.Mui-expanded": {
+    my: 0,
+  },
+};
+
+const sidebarAccordionDetailsSx = {
+  px: 1.25,
+  pt: 1.1,
+  pb: 1.25,
 };
 
 const splitToggleSx = {
@@ -166,23 +204,6 @@ const primaryHeroActionSx = {
     backgroundImage: "linear-gradient(135deg,#95dcff 0%,#c1a9ff 100%)",
     backgroundColor: "transparent",
   },
-};
-
-const sidebarCardSx = {
-  borderRadius: 2.5,
-  border: `1px solid ${SIDEBAR_THEME.border}`,
-  background:
-    "linear-gradient(160deg, rgba(15,22,41,0.92) 0%, rgba(10,15,29,0.96) 100%)",
-  boxShadow: "0 16px 40px rgba(2,6,23,0.38)",
-  p: 1.4,
-  display: "flex",
-  flexDirection: "column",
-  gap: 1.1,
-};
-
-const compactSidebarCardSx = {
-  ...sidebarCardSx,
-  gap: 0.85,
 };
 
 function normalizeText(value) {
@@ -536,6 +557,11 @@ export default function ReverseTunnelVnc({ device }) {
   const [, setParticipantId] = useState("");
   const performanceLevel = 2;
   const [displayMode, setDisplayMode] = useState("scaled");
+  const [expandedSidebarSections, setExpandedSidebarSections] = useState({
+    display: true,
+    clipboard: true,
+    power: true,
+  });
   const [resizeSession, setResizeSession] = useState(true);
   const [capabilities, setCapabilities] = useState({});
   const [selectedMonitorIds, setSelectedMonitorIds] = useState([]);
@@ -1817,6 +1843,28 @@ export default function ReverseTunnelVnc({ device }) {
   const highlightedMonitorIds = selectionModeEnabled ? effectiveSelectedMonitorIds : [];
   const showViewportIndicator = Boolean(viewfinderViewportRect);
   const showViewfinderHelper = Boolean(viewfinderHelperText);
+  const SidebarSection = ({ sectionId, icon, title, children }) => (
+    <Accordion
+      expanded={expandedSidebarSections[sectionId]}
+      onChange={(_, expanded) => {
+        setExpandedSidebarSections((previous) => ({ ...previous, [sectionId]: expanded }));
+      }}
+      square
+      disableGutters
+      sx={sidebarAccordionSx}
+    >
+      <AccordionSummary
+        expandIcon={<ExpandMoreIcon sx={{ color: SIDEBAR_THEME.accent }} />}
+        sx={sidebarAccordionSummarySx}
+      >
+        <Box sx={sectionHeaderSx}>
+          {icon}
+          <span>{title}</span>
+        </Box>
+      </AccordionSummary>
+      <AccordionDetails sx={sidebarAccordionDetailsSx}>{children}</AccordionDetails>
+    </Accordion>
+  );
   const vncStageInfo = useMemo(() => {
     const errorDetail = summarizeStatus(statusMessage) || "VNC session encountered an error.";
     switch (vncStage) {
@@ -2050,11 +2098,11 @@ export default function ReverseTunnelVnc({ device }) {
         </Box>
 
         <Box sx={sidebarSx}>
-          <Box sx={compactSidebarCardSx}>
-            <Box sx={sectionHeaderSx}>
-              <DisplayIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />
-              <span>Display & Focus</span>
-            </Box>
+          <SidebarSection
+            sectionId="display"
+            title="Display & Focus"
+            icon={<DisplayIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />}
+          >
             <Stack spacing={1}>
               <ToggleButtonGroup
                 exclusive
@@ -2193,13 +2241,13 @@ export default function ReverseTunnelVnc({ device }) {
                 </Typography>
               ) : null}
             </Stack>
-          </Box>
+          </SidebarSection>
 
-          <Box sx={compactSidebarCardSx}>
-            <Box sx={sectionHeaderSx}>
-              <ClipboardIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />
-              <span>Clipboard & Keys</span>
-            </Box>
+          <SidebarSection
+            sectionId="clipboard"
+            title="Clipboard & Keys"
+            icon={<ClipboardIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />}
+          >
             <Stack spacing={1}>
               <FormControlLabel
                 control={
@@ -2243,13 +2291,13 @@ export default function ReverseTunnelVnc({ device }) {
                 Send Ctrl+Alt+Del
               </Button>
             </Stack>
-          </Box>
+          </SidebarSection>
 
-          <Box sx={compactSidebarCardSx}>
-            <Box sx={sectionHeaderSx}>
-              <PowerIcon sx={{ fontSize: 18, color: "#f97316" }} />
-              <span>Power</span>
-            </Box>
+          <SidebarSection
+            sectionId="power"
+            title="Power"
+            icon={<PowerIcon sx={{ fontSize: 18, color: "#f97316" }} />}
+          >
             <Stack spacing={1}>
               <Box
                 sx={{
@@ -2303,7 +2351,7 @@ export default function ReverseTunnelVnc({ device }) {
                 </Button>
               </Box>
             </Stack>
-          </Box>
+          </SidebarSection>
 
           <Box
             sx={{
