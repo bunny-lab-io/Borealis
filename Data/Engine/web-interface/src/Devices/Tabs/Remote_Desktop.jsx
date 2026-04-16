@@ -446,6 +446,8 @@ function buildDisplayLayoutGeometry(
   const layoutHeight = bounds.height * scale;
   const offsetX = padding + (innerWidth - layoutWidth) / 2;
   const offsetY = padding + (innerHeight - layoutHeight) / 2;
+  const maxRight = frameWidth - padding;
+  const maxBottom = frameHeight - padding;
   return {
     bounds,
     frameWidth,
@@ -454,13 +456,19 @@ function buildDisplayLayoutGeometry(
     offsetY,
     padding,
     scale,
-    frames: topology.map((item) => ({
-      ...item,
-      x: offsetX + (item.left - bounds.left) * scale,
-      y: offsetY + (item.top - bounds.top) * scale,
-      widthPx: Math.max(28, item.width * scale),
-      heightPx: Math.max(24, item.height * scale),
-    })),
+    frames: topology.map((item) => {
+      const rawX = offsetX + (item.left - bounds.left) * scale;
+      const rawY = offsetY + (item.top - bounds.top) * scale;
+      const x = clampNumber(rawX, padding, maxRight);
+      const y = clampNumber(rawY, padding, maxBottom);
+      return {
+        ...item,
+        x,
+        y,
+        widthPx: Math.max(2, Math.min(item.width * scale, maxRight - x)),
+        heightPx: Math.max(2, Math.min(item.height * scale, maxBottom - y)),
+      };
+    }),
   };
 }
 
