@@ -2307,21 +2307,19 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
             </>
           </SidebarSection>
 
-          <Box sx={{ mt: "auto" }}>
-            <SidebarSection
-              sectionId="session"
-              title="Session Control"
-            >
-              <SidebarNavRow
-                icon={<StopIcon fontSize="small" />}
-                label="Disconnect"
-                disabled={!isConnected}
-                onClick={handleDisconnect}
-              />
-            </SidebarSection>
-          </Box>
+          <SidebarSection
+            sectionId="session"
+            title="Session Control"
+          >
+            <SidebarNavRow
+              icon={<StopIcon fontSize="small" />}
+              label="Disconnect"
+              disabled={!isConnected}
+              onClick={handleDisconnect}
+            />
+          </SidebarSection>
 
-          <Box sx={{ px: 1, pb: 1 }}>
+          <Box sx={{ mt: "auto", px: 1, pb: 1 }}>
             <Box
               component="button"
               type="button"
