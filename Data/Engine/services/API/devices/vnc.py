@@ -193,6 +193,8 @@ def _ready_wait_profile(
     collaboration_session: Any,
     created: bool,
     recent_credential_refresh: bool = False,
+    credential_cached: bool = False,
+    socket_registered: Optional[bool] = None,
 ) -> Dict[str, Any]:
     cold_ready_wait_seconds = _coerce_timeout(
         os.environ.get("BOREALIS_VNC_READY_WAIT_SECONDS"),
@@ -234,6 +236,14 @@ def _ready_wait_profile(
             "initial_wait_seconds": warm_ready_wait_seconds,
             "retry_wait_seconds": warm_retry_wait_seconds,
             "poll_seconds": warm_poll_seconds,
+            "post_bootstrap_grace_seconds": _coerce_timeout(
+                os.environ.get("BOREALIS_VNC_WARM_POST_BOOTSTRAP_GRACE_SECONDS"),
+                1.5,
+            ),
+            "post_bootstrap_grace_poll_seconds": _coerce_timeout(
+                os.environ.get("BOREALIS_VNC_WARM_POST_BOOTSTRAP_GRACE_POLL_INTERVAL_SECONDS"),
+                min(warm_poll_seconds, 0.15),
+            ),
             "recent_backend_ready": True,
             "recent_backend_ready_age": recent_backend_ready_age,
             "warm_session_window_seconds": warm_session_window_seconds,
@@ -256,6 +266,44 @@ def _ready_wait_profile(
             "initial_wait_seconds": refresh_ready_wait_seconds,
             "retry_wait_seconds": refresh_retry_wait_seconds,
             "poll_seconds": refresh_poll_seconds,
+            "post_bootstrap_grace_seconds": _coerce_timeout(
+                os.environ.get("BOREALIS_VNC_REFRESH_POST_BOOTSTRAP_GRACE_SECONDS"),
+                1.0,
+            ),
+            "post_bootstrap_grace_poll_seconds": _coerce_timeout(
+                os.environ.get("BOREALIS_VNC_REFRESH_POST_BOOTSTRAP_GRACE_POLL_INTERVAL_SECONDS"),
+                min(refresh_poll_seconds, 0.15),
+            ),
+            "recent_backend_ready": bool(recent_backend_ready),
+            "recent_backend_ready_age": recent_backend_ready_age,
+            "warm_session_window_seconds": warm_session_window_seconds,
+        }
+    if credential_cached and socket_registered is True:
+        socket_ready_wait_seconds = _coerce_timeout(
+            os.environ.get("BOREALIS_VNC_SOCKET_READY_WAIT_SECONDS"),
+            min(cold_ready_wait_seconds, 3.0),
+        )
+        socket_retry_wait_seconds = _coerce_timeout(
+            os.environ.get("BOREALIS_VNC_SOCKET_RETRY_READY_WAIT_SECONDS"),
+            min(cold_retry_wait_seconds, 3.0),
+        )
+        socket_poll_seconds = _coerce_timeout(
+            os.environ.get("BOREALIS_VNC_SOCKET_READY_POLL_INTERVAL_SECONDS"),
+            min(cold_poll_seconds, 0.2),
+        )
+        return {
+            "mode": "socket_online",
+            "initial_wait_seconds": socket_ready_wait_seconds,
+            "retry_wait_seconds": socket_retry_wait_seconds,
+            "poll_seconds": socket_poll_seconds,
+            "post_bootstrap_grace_seconds": _coerce_timeout(
+                os.environ.get("BOREALIS_VNC_SOCKET_POST_BOOTSTRAP_GRACE_SECONDS"),
+                1.5,
+            ),
+            "post_bootstrap_grace_poll_seconds": _coerce_timeout(
+                os.environ.get("BOREALIS_VNC_SOCKET_POST_BOOTSTRAP_GRACE_POLL_INTERVAL_SECONDS"),
+                min(socket_poll_seconds, 0.15),
+            ),
             "recent_backend_ready": bool(recent_backend_ready),
             "recent_backend_ready_age": recent_backend_ready_age,
             "warm_session_window_seconds": warm_session_window_seconds,
@@ -265,6 +313,8 @@ def _ready_wait_profile(
         "initial_wait_seconds": cold_ready_wait_seconds,
         "retry_wait_seconds": cold_retry_wait_seconds,
         "poll_seconds": cold_poll_seconds,
+        "post_bootstrap_grace_seconds": 0.0,
+        "post_bootstrap_grace_poll_seconds": cold_poll_seconds,
         "recent_backend_ready": bool(recent_backend_ready),
         "recent_backend_ready_age": recent_backend_ready_age,
         "warm_session_window_seconds": warm_session_window_seconds,
@@ -496,10 +546,13 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 },
             )
 
+        socket_registered = _agent_socket_registered(adapters.context, agent_id)
         wait_profile = _ready_wait_profile(
             collaboration_session=collaboration_session,
             created=_created,
             recent_credential_refresh=recent_credential_refresh,
+            credential_cached=agent_credential is not None,
+            socket_registered=socket_registered,
         )
         fast_ready_wait = _coerce_timeout(
             os.environ.get("BOREALIS_VNC_FAST_READY_WAIT_SECONDS"),
@@ -550,7 +603,6 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 )
             )
         else:
-            socket_registered = _agent_socket_registered(adapters.context, agent_id)
             _trace(
                 "E09",
                 agent_id=agent_id,
@@ -622,6 +674,26 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 wait_seconds=ready_wait_seconds,
                 poll_seconds=ready_poll_seconds,
             )
+            if not initial_ready:
+                post_bootstrap_grace_seconds = float(wait_profile.get("post_bootstrap_grace_seconds", 0.0) or 0.0)
+                post_bootstrap_grace_poll_seconds = float(
+                    wait_profile.get("post_bootstrap_grace_poll_seconds", wait_profile["poll_seconds"]) or wait_profile["poll_seconds"]
+                )
+                if post_bootstrap_grace_seconds > 0:
+                    initial_ready = _wait_for_backend_ready(
+                        host,
+                        vnc_port,
+                        timeout_seconds=post_bootstrap_grace_seconds,
+                        poll_interval_seconds=post_bootstrap_grace_poll_seconds,
+                    )
+                    _trace(
+                        "E12G",
+                        agent_id=agent_id,
+                        session_id=collaboration_session.session_id,
+                        ready=initial_ready,
+                        wait_seconds=post_bootstrap_grace_seconds,
+                        poll_seconds=post_bootstrap_grace_poll_seconds,
+                    )
         if not initial_ready:
             retry_wait_seconds = float(wait_profile["retry_wait_seconds"])
             retry_poll_seconds = float(wait_profile["poll_seconds"])
