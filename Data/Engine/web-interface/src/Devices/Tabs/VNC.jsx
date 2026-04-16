@@ -1576,13 +1576,16 @@ export default function ReverseTunnelVnc({ device }) {
                     width: "100%",
                     height: "100%",
                     position: "relative",
-                    overflowX: displayMode === "fit" ? "hidden" : "auto",
-                    overflowY: displayMode === "actual" ? "auto" : "hidden",
+                    overflowX: displayMode === "fit" ? "hidden" : "scroll",
+                    overflowY: displayMode === "actual" ? "scroll" : "hidden",
+                    boxSizing: "border-box",
+                    pr: displayMode === "fit" ? 0 : "4px",
+                    pb: displayMode === "fit" ? 0 : "4px",
                     scrollbarGutter: displayMode === "fit" ? "auto" : "stable both-edges",
                     scrollbarWidth: displayMode === "fit" ? "none" : "auto",
                     "&::-webkit-scrollbar": {
-                      width: displayMode === "fit" ? 0 : 18,
-                      height: displayMode === "fit" ? 0 : 18,
+                      width: displayMode === "fit" ? 0 : 22,
+                      height: displayMode === "fit" ? 0 : 22,
                     },
                     "&::-webkit-scrollbar-track": {
                       background: "rgba(7,12,23,0.92)",
@@ -1591,7 +1594,7 @@ export default function ReverseTunnelVnc({ device }) {
                       background:
                         "linear-gradient(180deg, rgba(125,183,255,0.9), rgba(177,149,255,0.9))",
                       borderRadius: 999,
-                      border: "3px solid rgba(7,12,23,0.92)",
+                      border: "4px solid rgba(7,12,23,0.92)",
                     },
                     "&::-webkit-scrollbar-corner": {
                       background: "rgba(7,12,23,0.92)",
