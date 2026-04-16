@@ -338,7 +338,6 @@ export function buildAppRoutes() {
                 {
                   path: "new/workflow",
                   handle: {
-                    title: "New Workflow",
                     breadcrumb: "New Workflow",
                     navKey: "assemblies",
                     pageKey: "workflow",
@@ -377,7 +376,6 @@ export function buildAppRoutes() {
                 {
                   path: "workflows/:workflowGuid",
                   handle: {
-                    title: "Workflow",
                     breadcrumb: "Workflow",
                     navKey: "assemblies",
                     pageKey: "workflow",
@@ -390,7 +388,6 @@ export function buildAppRoutes() {
                 {
                   path: "workflows/runs/:runId",
                   handle: {
-                    title: "Workflow Run",
                     breadcrumb: "Workflow Run",
                     navKey: "assemblies",
                     pageKey: "workflow",
