@@ -368,6 +368,28 @@ function equalStringArrays(left, right) {
   return left.every((item, index) => item === right[index]);
 }
 
+function equalDisplayTopology(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right)) return false;
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => {
+    const other = right[index];
+    if (!other) return false;
+    return (
+      item.id === other.id &&
+      item.displayIndex === other.displayIndex &&
+      item.label === other.label &&
+      item.deviceName === other.deviceName &&
+      item.left === other.left &&
+      item.top === other.top &&
+      item.right === other.right &&
+      item.bottom === other.bottom &&
+      item.width === other.width &&
+      item.height === other.height &&
+      item.primary === other.primary
+    );
+  });
+}
+
 function selectedDisplayBounds(topology, selectionIds) {
   if (!Array.isArray(topology) || !topology.length) return null;
   const normalizedSelection = new Set(
@@ -493,9 +515,19 @@ export default function ReverseTunnelVnc({ device }) {
   const [displayTopology, setDisplayTopology] = useState([]);
   const [framebufferSize, setFramebufferSize] = useState({ width: 0, height: 0 });
   const [renderedCanvasSize, setRenderedCanvasSize] = useState({ width: 0, height: 0 });
+  const [scrollMetrics, setScrollMetrics] = useState({
+    viewportWidth: 0,
+    viewportHeight: 0,
+    contentWidth: 0,
+    contentHeight: 0,
+    scrollLeft: 0,
+    scrollTop: 0,
+  });
 
   const containerRef = useRef(null);
   const displayScrollRef = useRef(null);
+  const horizontalScrollbarRef = useRef(null);
+  const verticalScrollbarRef = useRef(null);
   const displayRef = useRef(null);
   const rfbRef = useRef(null);
   const agentIdRef = useRef("");
@@ -505,6 +537,10 @@ export default function ReverseTunnelVnc({ device }) {
   const connectAttemptRef = useRef(0);
   const manualDisconnectRef = useRef(false);
   const viewportSignatureRef = useRef("");
+  const forcedViewportKeyRef = useRef("");
+  const suppressViewportScrollSyncRef = useRef(false);
+  const suppressHorizontalScrollSyncRef = useRef(false);
+  const suppressVerticalScrollSyncRef = useRef(false);
 
   const agentId = useMemo(() => {
     return (
@@ -560,7 +596,9 @@ export default function ReverseTunnelVnc({ device }) {
     );
     setSessionId(nextSessionId);
     setParticipantId(nextParticipantId);
-    setDisplayTopology(nextDisplayTopology);
+    setDisplayTopology((previous) =>
+      equalDisplayTopology(previous, nextDisplayTopology) ? previous : nextDisplayTopology
+    );
     setSelectedMonitorIds((previous) => {
       const nextSelection = normalizeMonitorSelection(previous, nextDisplayTopology);
       return equalStringArrays(previous, nextSelection) ? previous : nextSelection;
@@ -611,10 +649,19 @@ export default function ReverseTunnelVnc({ device }) {
 
   const resetDisconnectedViewState = useCallback(() => {
     viewportSignatureRef.current = "";
+    forcedViewportKeyRef.current = "";
     setDisplayTopology([]);
     setSelectedMonitorIds([]);
     setViewportHint("");
     setCapabilities({});
+    setScrollMetrics({
+      viewportWidth: 0,
+      viewportHeight: 0,
+      contentWidth: 0,
+      contentHeight: 0,
+      scrollLeft: 0,
+      scrollTop: 0,
+    });
   }, []);
 
   const teardownDisplay = useCallback(() => {
@@ -632,8 +679,17 @@ export default function ReverseTunnelVnc({ device }) {
       host.innerHTML = "";
     }
     viewportSignatureRef.current = "";
+    forcedViewportKeyRef.current = "";
     setFramebufferSize({ width: 0, height: 0 });
     setRenderedCanvasSize({ width: 0, height: 0 });
+    setScrollMetrics({
+      viewportWidth: 0,
+      viewportHeight: 0,
+      contentWidth: 0,
+      contentHeight: 0,
+      scrollLeft: 0,
+      scrollTop: 0,
+    });
   }, []);
 
   const configureDisplaySurface = useCallback((client, mode) => {
@@ -658,6 +714,83 @@ export default function ReverseTunnelVnc({ device }) {
       canvas.style.boxShadow = VNC_CANVAS_BOX_SHADOW;
     }
   }, []);
+
+  const syncExternalScrollbars = useCallback((metrics) => {
+    const horizontal = horizontalScrollbarRef.current;
+    const vertical = verticalScrollbarRef.current;
+    if (horizontal && Math.abs(Number(horizontal.scrollLeft || 0) - Number(metrics.scrollLeft || 0)) > 1) {
+      suppressHorizontalScrollSyncRef.current = true;
+      horizontal.scrollLeft = Number(metrics.scrollLeft || 0);
+      window.requestAnimationFrame(() => {
+        suppressHorizontalScrollSyncRef.current = false;
+      });
+    }
+    if (vertical && Math.abs(Number(vertical.scrollTop || 0) - Number(metrics.scrollTop || 0)) > 1) {
+      suppressVerticalScrollSyncRef.current = true;
+      vertical.scrollTop = Number(metrics.scrollTop || 0);
+      window.requestAnimationFrame(() => {
+        suppressVerticalScrollSyncRef.current = false;
+      });
+    }
+  }, []);
+
+  const syncScrollMetrics = useCallback(() => {
+    const viewportHost = displayScrollRef.current;
+    if (!viewportHost) return;
+    const nextMetrics = {
+      viewportWidth: Math.max(0, Math.round(Number(viewportHost.clientWidth || 0))),
+      viewportHeight: Math.max(0, Math.round(Number(viewportHost.clientHeight || 0))),
+      contentWidth: Math.max(0, Math.round(Number(viewportHost.scrollWidth || 0))),
+      contentHeight: Math.max(0, Math.round(Number(viewportHost.scrollHeight || 0))),
+      scrollLeft: Math.max(0, Math.round(Number(viewportHost.scrollLeft || 0))),
+      scrollTop: Math.max(0, Math.round(Number(viewportHost.scrollTop || 0))),
+    };
+    setScrollMetrics((previous) => {
+      if (
+        previous.viewportWidth === nextMetrics.viewportWidth &&
+        previous.viewportHeight === nextMetrics.viewportHeight &&
+        previous.contentWidth === nextMetrics.contentWidth &&
+        previous.contentHeight === nextMetrics.contentHeight &&
+        previous.scrollLeft === nextMetrics.scrollLeft &&
+        previous.scrollTop === nextMetrics.scrollTop
+      ) {
+        return previous;
+      }
+      return nextMetrics;
+    });
+    syncExternalScrollbars(nextMetrics);
+  }, [syncExternalScrollbars]);
+
+  const handleViewportScroll = useCallback(() => {
+    if (suppressViewportScrollSyncRef.current) return;
+    syncScrollMetrics();
+  }, [syncScrollMetrics]);
+
+  const handleHorizontalScrollbarScroll = useCallback(() => {
+    if (suppressHorizontalScrollSyncRef.current) return;
+    const viewportHost = displayScrollRef.current;
+    const horizontal = horizontalScrollbarRef.current;
+    if (!viewportHost || !horizontal) return;
+    suppressViewportScrollSyncRef.current = true;
+    viewportHost.scrollLeft = Number(horizontal.scrollLeft || 0);
+    window.requestAnimationFrame(() => {
+      suppressViewportScrollSyncRef.current = false;
+      syncScrollMetrics();
+    });
+  }, [syncScrollMetrics]);
+
+  const handleVerticalScrollbarScroll = useCallback(() => {
+    if (suppressVerticalScrollSyncRef.current) return;
+    const viewportHost = displayScrollRef.current;
+    const vertical = verticalScrollbarRef.current;
+    if (!viewportHost || !vertical) return;
+    suppressViewportScrollSyncRef.current = true;
+    viewportHost.scrollTop = Number(vertical.scrollTop || 0);
+    window.requestAnimationFrame(() => {
+      suppressViewportScrollSyncRef.current = false;
+      syncScrollMetrics();
+    });
+  }, [syncScrollMetrics]);
 
   const syncFramebufferSize = useCallback((client) => {
     const display = client?._display;
@@ -892,9 +1025,11 @@ export default function ReverseTunnelVnc({ device }) {
           if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
             window.requestAnimationFrame(() => {
               syncRenderedCanvasSize(rfb);
+              syncScrollMetrics();
             });
           } else {
             syncRenderedCanvasSize(rfb);
+            syncScrollMetrics();
           }
           setSessionState("connected");
           setVncStage("connected");
@@ -989,6 +1124,7 @@ export default function ReverseTunnelVnc({ device }) {
       effectiveViewOnly,
       syncFramebufferSize,
       syncRenderedCanvasSize,
+      syncScrollMetrics,
     ]
   );
 
@@ -1063,7 +1199,9 @@ export default function ReverseTunnelVnc({ device }) {
       }
       const nextDisplayTopology = normalizeDisplayTopology(nextSession.display_topology);
       if (nextDisplayTopology.length) {
-        setDisplayTopology(nextDisplayTopology);
+        setDisplayTopology((previous) =>
+          equalDisplayTopology(previous, nextDisplayTopology) ? previous : nextDisplayTopology
+        );
         setSelectedMonitorIds((previous) => {
           const nextSelection = normalizeMonitorSelection(previous, nextDisplayTopology);
           return equalStringArrays(previous, nextSelection) ? previous : nextSelection;
@@ -1252,9 +1390,11 @@ export default function ReverseTunnelVnc({ device }) {
         if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
           window.requestAnimationFrame(() => {
             syncRenderedCanvasSize(rfb);
+            syncScrollMetrics();
           });
         } else {
           syncRenderedCanvasSize(rfb);
+          syncScrollMetrics();
         }
       } catch {
         setViewportHint("Viewport controls not available.");
@@ -1281,9 +1421,11 @@ export default function ReverseTunnelVnc({ device }) {
         if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
           window.requestAnimationFrame(() => {
             syncRenderedCanvasSize(rfb);
+            syncScrollMetrics();
           });
         } else {
           syncRenderedCanvasSize(rfb);
+          syncScrollMetrics();
         }
       } catch {
         setViewportHint("Viewport controls not available.");
@@ -1355,6 +1497,7 @@ export default function ReverseTunnelVnc({ device }) {
     syncRenderedCanvasSize,
     topologyBounds,
     topologyTrusted,
+    syncScrollMetrics,
   ]);
 
   const toggleMonitorSelection = useCallback((monitorId) => {
@@ -1375,10 +1518,20 @@ export default function ReverseTunnelVnc({ device }) {
 
   const isConnected = sessionState === "connected";
 
+  const forcedViewportKey = useMemo(
+    () => (isConnected ? `${displayMode}|${effectiveSelectedMonitorIds.join(",") || "-"}` : ""),
+    [displayMode, effectiveSelectedMonitorIds, isConnected]
+  );
+
   useEffect(() => {
-    if (!isConnected) return;
+    if (!isConnected) {
+      forcedViewportKeyRef.current = "";
+      return;
+    }
+    if (forcedViewportKeyRef.current === forcedViewportKey) return;
+    forcedViewportKeyRef.current = forcedViewportKey;
     syncViewportSelection(effectiveSelectedMonitorIds, { updateState: false, forceReset: true });
-  }, [displayMode, effectiveSelectedMonitorIds, isConnected, syncViewportSelection]);
+  }, [effectiveSelectedMonitorIds, forcedViewportKey, isConnected, syncViewportSelection]);
 
   useEffect(() => {
     const normalized = normalizeMonitorSelection(selectedMonitorIds, normalizedDisplayTopology);
@@ -1416,6 +1569,7 @@ export default function ReverseTunnelVnc({ device }) {
       }
       frameId = window.requestAnimationFrame(() => {
         syncViewportSelection(effectiveSelectedMonitorIds, { updateState: false });
+        syncScrollMetrics();
       });
     });
     observer.observe(host);
@@ -1425,10 +1579,41 @@ export default function ReverseTunnelVnc({ device }) {
       }
       observer.disconnect();
     };
-  }, [effectiveSelectedMonitorIds, isConnected, syncViewportSelection]);
+  }, [effectiveSelectedMonitorIds, isConnected, syncScrollMetrics, syncViewportSelection]);
+  useEffect(() => {
+    if (!isConnected || typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
+      return undefined;
+    }
+    const frameId = window.requestAnimationFrame(() => {
+      syncScrollMetrics();
+    });
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [
+    displayMode,
+    isConnected,
+    renderedCanvasSize.height,
+    renderedCanvasSize.width,
+    syncScrollMetrics,
+  ]);
   const shutdownSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "shutdown");
   const rebootSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "reboot");
   const resetSupported = isConnected && !effectiveViewOnly && supportsPowerAction(capabilities, "reset");
+  const showHorizontalRail = isConnected && displayMode !== "fit";
+  const showVerticalRail = isConnected && displayMode === "actual";
+  const externalScrollbarSize = 26;
+  const externalScrollbarGap = 8;
+  const horizontalRailWidth = Math.max(
+    scrollMetrics.contentWidth,
+    scrollMetrics.viewportWidth,
+    1
+  );
+  const verticalRailHeight = Math.max(
+    scrollMetrics.contentHeight,
+    scrollMetrics.viewportHeight,
+    1
+  );
   const vncStageInfo = useMemo(() => {
     const errorDetail = summarizeStatus(statusMessage) || "VNC session encountered an error.";
     switch (vncStage) {
@@ -1565,66 +1750,141 @@ export default function ReverseTunnelVnc({ device }) {
                 sx={{
                   width: "100%",
                   height: "100%",
-                  display: "block",
+                  display: "grid",
+                  gridTemplateColumns: showVerticalRail
+                    ? `minmax(0, 1fr) ${externalScrollbarSize}px`
+                    : "minmax(0, 1fr)",
+                  gridTemplateRows: showHorizontalRail
+                    ? `minmax(0, 1fr) ${externalScrollbarSize}px`
+                    : "minmax(0, 1fr)",
+                  columnGap: showVerticalRail ? `${externalScrollbarGap}px` : 0,
+                  rowGap: showHorizontalRail ? `${externalScrollbarGap}px` : 0,
                   position: "relative",
                   overflow: "hidden",
+                  minWidth: 0,
+                  minHeight: 0,
                 }}
               >
                 <Box
-                  ref={displayScrollRef}
                   sx={{
-                    width: "100%",
-                    height: "100%",
+                    minWidth: 0,
+                    minHeight: 0,
+                    overflow: "hidden",
                     position: "relative",
-                    overflowX: displayMode === "fit" ? "hidden" : "scroll",
-                    overflowY: displayMode === "actual" ? "scroll" : "hidden",
-                    boxSizing: "border-box",
-                    pr: displayMode === "fit" ? 0 : "4px",
-                    pb: displayMode === "fit" ? 0 : "4px",
-                    scrollbarGutter: displayMode === "fit" ? "auto" : "stable both-edges",
-                    scrollbarWidth: displayMode === "fit" ? "none" : "auto",
-                    "&::-webkit-scrollbar": {
-                      width: displayMode === "fit" ? 0 : 22,
-                      height: displayMode === "fit" ? 0 : 22,
-                    },
-                    "&::-webkit-scrollbar-track": {
-                      background: "rgba(7,12,23,0.92)",
-                    },
-                    "&::-webkit-scrollbar-thumb": {
-                      background:
-                        "linear-gradient(180deg, rgba(125,183,255,0.9), rgba(177,149,255,0.9))",
-                      borderRadius: 999,
-                      border: "4px solid rgba(7,12,23,0.92)",
-                    },
-                    "&::-webkit-scrollbar-corner": {
-                      background: "rgba(7,12,23,0.92)",
-                    },
                   }}
                 >
                   <Box
-                    ref={displayRef}
+                    ref={displayScrollRef}
+                    onScroll={handleViewportScroll}
                     sx={{
-                      width: displayMode === "fit" ? "100%" : "max-content",
-                      height: displayMode === "fit" ? "100%" : "max-content",
-                      minWidth: "100%",
-                      minHeight: "100%",
-                      display: "block",
+                      width: "100%",
+                      height: "100%",
                       position: "relative",
-                      overflow: "hidden",
-                      "& > div": {
-                        width: displayMode === "fit" ? "100%" : "max-content",
-                        height: displayMode === "fit" ? "100%" : "max-content",
-                      },
-                      "& canvas": {
-                        display: "block",
-                        flex: "0 0 auto",
-                        maxWidth: "none",
-                        maxHeight: "none",
-                        boxShadow: VNC_CANVAS_BOX_SHADOW,
+                      overflowX: displayMode === "fit" ? "hidden" : "auto",
+                      overflowY: displayMode === "actual" ? "auto" : "hidden",
+                      boxSizing: "border-box",
+                      scrollbarWidth: "none",
+                      msOverflowStyle: "none",
+                      "&::-webkit-scrollbar": {
+                        display: "none",
+                        width: 0,
+                        height: 0,
                       },
                     }}
-                  />
+                  >
+                    <Box
+                      ref={displayRef}
+                      sx={{
+                        width: displayMode === "fit" ? "100%" : "max-content",
+                        height: displayMode === "fit" ? "100%" : "max-content",
+                        minWidth: displayMode === "fit" ? "100%" : "auto",
+                        minHeight: displayMode === "fit" ? "100%" : "auto",
+                        display: "block",
+                        position: "relative",
+                        overflow: "hidden",
+                        "& > div": {
+                          width: displayMode === "fit" ? "100%" : "max-content",
+                          height: displayMode === "fit" ? "100%" : "max-content",
+                        },
+                        "& canvas": {
+                          display: "block",
+                          flex: "0 0 auto",
+                          maxWidth: "none",
+                          maxHeight: "none",
+                          boxShadow: VNC_CANVAS_BOX_SHADOW,
+                        },
+                      }}
+                    />
+                  </Box>
                 </Box>
+                {showVerticalRail ? (
+                  <Box
+                    ref={verticalScrollbarRef}
+                    onScroll={handleVerticalScrollbarScroll}
+                    sx={{
+                      overflowX: "hidden",
+                      overflowY: "scroll",
+                      background: "rgba(7,12,23,0.96)",
+                      borderRadius: 2,
+                      minHeight: 0,
+                      scrollbarWidth: "auto",
+                      scrollbarColor: "#93b8ff rgba(7,12,23,0.96)",
+                      "&::-webkit-scrollbar": {
+                        width: externalScrollbarSize,
+                      },
+                      "&::-webkit-scrollbar-track": {
+                        background: "rgba(7,12,23,0.96)",
+                        borderRadius: 999,
+                      },
+                      "&::-webkit-scrollbar-thumb": {
+                        background:
+                          "linear-gradient(180deg, rgba(125,183,255,0.92), rgba(177,149,255,0.92))",
+                        borderRadius: 999,
+                        border: "4px solid rgba(7,12,23,0.96)",
+                      },
+                    }}
+                  >
+                    <Box sx={{ width: 1, height: `${verticalRailHeight}px` }} />
+                  </Box>
+                ) : null}
+                {showHorizontalRail ? (
+                  <Box
+                    ref={horizontalScrollbarRef}
+                    onScroll={handleHorizontalScrollbarScroll}
+                    sx={{
+                      overflowX: "scroll",
+                      overflowY: "hidden",
+                      background: "rgba(7,12,23,0.96)",
+                      borderRadius: 2,
+                      minWidth: 0,
+                      scrollbarWidth: "auto",
+                      scrollbarColor: "#93b8ff rgba(7,12,23,0.96)",
+                      "&::-webkit-scrollbar": {
+                        height: externalScrollbarSize,
+                      },
+                      "&::-webkit-scrollbar-track": {
+                        background: "rgba(7,12,23,0.96)",
+                        borderRadius: 999,
+                      },
+                      "&::-webkit-scrollbar-thumb": {
+                        background:
+                          "linear-gradient(180deg, rgba(125,183,255,0.92), rgba(177,149,255,0.92))",
+                        borderRadius: 999,
+                        border: "4px solid rgba(7,12,23,0.96)",
+                      },
+                    }}
+                  >
+                    <Box sx={{ width: `${horizontalRailWidth}px`, height: 1 }} />
+                  </Box>
+                ) : null}
+                {showHorizontalRail && showVerticalRail ? (
+                  <Box
+                    sx={{
+                      background: "rgba(7,12,23,0.96)",
+                      borderRadius: 2,
+                    }}
+                  />
+                ) : null}
               </Box>
               {!isConnected ? (
                 <Stack
