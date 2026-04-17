@@ -34,10 +34,29 @@ function Write-UpdateFileLine {
     }
 }
 
+function Reset-UpdateLogFile {
+    try {
+        $parent = Split-Path -Path $script:UpdaterLogPath -Parent
+        if ($parent -and -not (Test-Path $parent -PathType Container)) {
+            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        }
+        Set-Content -Path $script:UpdaterLogPath -Value @() -Encoding UTF8 -ErrorAction Stop
+        $script:UpdateFileLoggingWarned = $false
+        return $true
+    } catch {
+        if (-not $script:UpdateFileLoggingWarned) {
+            $script:UpdateFileLoggingWarned = $true
+            Write-Warning ("Unable to reset updater log at {0}: {1}" -f $script:UpdaterLogPath, $_.Exception.Message)
+        }
+        return $false
+    }
+}
+
 function Initialize-UpdateLogging {
     if ($script:UpdateLoggingInitialized) { return }
 
     $script:UpdateLoggingInitialized = $true
+    [void](Reset-UpdateLogFile)
     $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     Write-UpdateFileLine ("[{0}] [STEP] ===== Starting Update.ps1 session =====" -f $timestamp)
 }
@@ -56,7 +75,7 @@ function Finalize-UpdateLogging {
 function New-UpdateSessionResult {
     param(
         [string]$Outcome,
-        [string]$FinalLevel,bo
+        [string]$FinalLevel,
         [string]$FinalMessage
     )
 

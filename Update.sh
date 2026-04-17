@@ -22,8 +22,8 @@ setup_logging() {
   local timestamp
   timestamp="$(date +%FT%T)"
 
-  if ! touch "${LOG_FILE}" 2>/dev/null; then
-    printf "[%s] [WARN] Unable to open updater log at %s; continuing without file logging.\n" "${timestamp}" "${LOG_FILE}" >&2
+  if ! : > "${LOG_FILE}" 2>/dev/null; then
+    printf "[%s] [WARN] Unable to reset updater log at %s; continuing without file logging.\n" "${timestamp}" "${LOG_FILE}" >&2
     return 0
   fi
 
