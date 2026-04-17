@@ -1911,19 +1911,40 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       if (!rect.width || !rect.height) return;
       const localX = event.clientX - rect.left;
       const localY = event.clientY - rect.top;
+      const dragRect =
+        singleViewfinderFrameRect &&
+        viewportPreview.targetWidth > 0 &&
+        viewportPreview.targetHeight > 0
+          ? {
+              x:
+                singleViewfinderFrameRect.x +
+                ((viewportPreview.left - viewportPreview.targetLeft) / viewportPreview.targetWidth) *
+                  singleViewfinderFrameRect.widthPx,
+              y:
+                singleViewfinderFrameRect.y +
+                ((viewportPreview.top - viewportPreview.targetTop) / viewportPreview.targetHeight) *
+                  singleViewfinderFrameRect.heightPx,
+              width:
+                (viewportPreview.width / viewportPreview.targetWidth) *
+                singleViewfinderFrameRect.widthPx,
+              height:
+                (viewportPreview.height / viewportPreview.targetHeight) *
+                singleViewfinderFrameRect.heightPx,
+            }
+          : null;
       const canDragViewport =
-        Boolean(viewfinderViewportRect) &&
+        Boolean(dragRect) &&
         viewportPreview.interactive &&
-        localX >= viewfinderViewportRect.x &&
-        localX <= viewfinderViewportRect.x + viewfinderViewportRect.width &&
-        localY >= viewfinderViewportRect.y &&
-        localY <= viewfinderViewportRect.y + viewfinderViewportRect.height;
+        localX >= dragRect.x &&
+        localX <= dragRect.x + dragRect.width &&
+        localY >= dragRect.y &&
+        localY <= dragRect.y + dragRect.height;
       if (canDragViewport) {
         viewfinderDragRef.current = {
           active: true,
           pointerId: event.pointerId,
-          offsetX: localX - viewfinderViewportRect.x,
-          offsetY: localY - viewfinderViewportRect.y,
+          offsetX: localX - dragRect.x,
+          offsetY: localY - dragRect.y,
         };
         if (typeof event.currentTarget.setPointerCapture === "function") {
           event.currentTarget.setPointerCapture(event.pointerId);
@@ -1936,8 +1957,16 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       displayMode,
       isConnected,
       queueViewfinderNavigate,
-      viewfinderViewportRect,
+      singleViewfinderFrameRect,
       viewportPreview.interactive,
+      viewportPreview.height,
+      viewportPreview.left,
+      viewportPreview.targetHeight,
+      viewportPreview.targetLeft,
+      viewportPreview.targetTop,
+      viewportPreview.targetWidth,
+      viewportPreview.top,
+      viewportPreview.width,
     ]
   );
 
