@@ -1024,6 +1024,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           h: Number.isFinite(Number(viewportLoc.h)) ? Number(viewportLoc.h) : targetBounds.height,
         };
       };
+      const currentViewport = resolveViewportLoc();
       const previous = viewportStateRef.current;
       const sameTarget =
         previous.mode === mode &&
@@ -1090,8 +1091,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         viewportHeight = Math.min(targetBounds.height, hostHeight);
       }
 
-      let nextX = sameTarget && !forceReset ? previous.viewportX : targetBounds.x;
-      let nextY = sameTarget && !forceReset ? previous.viewportY : targetBounds.y;
+      let nextX = sameTarget && !forceReset ? currentViewport.x : targetBounds.x;
+      let nextY = sameTarget && !forceReset ? currentViewport.y : targetBounds.y;
       if (requestedCenter) {
         nextX =
           targetBounds.x +
@@ -1129,26 +1130,25 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       if (typeof display.scale !== "undefined") {
         display.scale = mode === "scaled" ? scale : 1.0;
       }
-      const actualViewport = resolveViewportLoc();
       const interactive =
         mode === "scaled"
-          ? targetBounds.width > actualViewport.w
-          : targetBounds.width > actualViewport.w || targetBounds.height > actualViewport.h;
+          ? targetBounds.width > viewportWidth
+          : targetBounds.width > viewportWidth || targetBounds.height > viewportHeight;
       syncViewportPreview({
         mode,
         targetBounds,
         targetPreviewBounds,
-        viewportX: actualViewport.x,
-        viewportY: actualViewport.y,
-        viewportWidth: actualViewport.w,
-        viewportHeight: actualViewport.h,
+        viewportX: nextX,
+        viewportY: nextY,
+        viewportWidth,
+        viewportHeight,
         interactive,
       });
       return {
-        x: actualViewport.x,
-        y: actualViewport.y,
-        width: actualViewport.w,
-        height: actualViewport.h,
+        x: nextX,
+        y: nextY,
+        width: viewportWidth,
+        height: viewportHeight,
         interactive,
       };
     },
