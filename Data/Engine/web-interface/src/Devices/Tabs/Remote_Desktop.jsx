@@ -428,7 +428,7 @@ function selectedDisplayBounds(topology, selectionIds) {
 
 function buildDisplayLayoutGeometry(
   topology,
-  { frameWidth = 256, frameHeight = 126, padding = 0, edgeInset = 0 } = {}
+  { frameWidth = 256, frameHeight = 126, padding = 6, edgeInset = 0 } = {}
 ) {
   const bounds = displayTopologyBounds(topology);
   if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
@@ -2180,7 +2180,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                                 cursor: "default",
                                 color: selected ? "#08111f" : SIDEBAR_THEME.text,
                                 border: selected
-                                  ? "1px solid transparent"
+                                  ? "1px solid rgba(125, 201, 255, 0.42)"
                                   : `1px solid ${SIDEBAR_THEME.border}`,
                                 background: selected
                                   ? "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)"
