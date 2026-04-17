@@ -2144,9 +2144,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     }
     let frameId = 0;
     const renderMirror = () => {
-      const sourceCanvas = rfbRef.current?._canvas || displayRef.current?.querySelector("canvas") || null;
-      const sourceWidth = Number(sourceCanvas?.width || 0);
-      const sourceHeight = Number(sourceCanvas?.height || 0);
+      const display = rfbRef.current?._display || null;
+      const sourceCanvas =
+        display?._backbuffer || rfbRef.current?._canvas || displayRef.current?.querySelector("canvas") || null;
+      const sourceWidth = Number(
+        sourceCanvas?.width || display?._fbWidth || display?._fb_width || 0
+      );
+      const sourceHeight = Number(
+        sourceCanvas?.height || display?._fbHeight || display?._fb_height || 0
+      );
       if (!sourceCanvas || sourceWidth <= 0 || sourceHeight <= 0 || !diagramBounds?.width || !diagramBounds?.height) {
         frameId = window.requestAnimationFrame(renderMirror);
         return;
