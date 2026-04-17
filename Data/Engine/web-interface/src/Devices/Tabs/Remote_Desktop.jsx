@@ -2142,7 +2142,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       }
     };
     captureSnapshot();
-    const intervalId = window.setInterval(captureSnapshot, 1000);
+    const intervalId = window.setInterval(captureSnapshot, 10000);
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
@@ -2514,16 +2514,14 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                             border: focusedViewfinderSelected
                               ? "1px solid rgba(125, 201, 255, 0.42)"
                               : `1px solid ${SIDEBAR_THEME.border}`,
-                            backgroundImage:
-                              showViewfinderSnapshot && !showViewportIndicator
-                                ? `linear-gradient(135deg, rgba(125,201,255,0.12), rgba(177,149,255,0.08)), url("${viewfinderSnapshotUrl}")`
-                                : focusedViewfinderSelected
-                                  ? "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)"
-                                  : singleViewfinderFrameRect.primary
-                                    ? "linear-gradient(180deg, rgba(125,183,255,0.18), rgba(125,183,255,0.18))"
-                                    : "linear-gradient(180deg, rgba(148,163,184,0.14), rgba(148,163,184,0.14))",
-                            backgroundSize:
-                              showViewfinderSnapshot && !showViewportIndicator ? "100% 100%" : "auto",
+                            backgroundImage: showViewfinderSnapshot
+                              ? `linear-gradient(135deg, rgba(125,201,255,0.12), rgba(177,149,255,0.08)), url("${viewfinderSnapshotUrl}")`
+                              : focusedViewfinderSelected
+                                ? "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)"
+                                : singleViewfinderFrameRect.primary
+                                  ? "linear-gradient(180deg, rgba(125,183,255,0.18), rgba(125,183,255,0.18))"
+                                  : "linear-gradient(180deg, rgba(148,163,184,0.14), rgba(148,163,184,0.14))",
+                            backgroundSize: showViewfinderSnapshot ? "100% 100%" : "auto",
                             backgroundPosition: "center",
                             backgroundRepeat: "no-repeat",
                             boxShadow: focusedViewfinderSelected
@@ -2545,12 +2543,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                               height: viewfinderViewportRect.height,
                               borderRadius: 1.5,
                               border: "2px solid rgba(125, 201, 255, 0.98)",
-                              backgroundImage: showViewfinderSnapshot
-                                ? `linear-gradient(135deg, rgba(125,201,255,0.12), rgba(177,149,255,0.08)), url("${viewfinderSnapshotUrl}")`
-                                : "linear-gradient(135deg, rgba(125,201,255,0.18), rgba(177,149,255,0.14))",
-                              backgroundSize: showViewfinderSnapshot ? "100% 100%" : "auto",
-                              backgroundPosition: "center",
-                              backgroundRepeat: "no-repeat",
+                              background:
+                                "linear-gradient(135deg, rgba(125,201,255,0.16), rgba(177,149,255,0.08))",
                               boxShadow:
                                 "0 0 0 1px rgba(8,17,31,0.62), inset 0 0 0 1px rgba(255,255,255,0.08)",
                               pointerEvents: "none",
