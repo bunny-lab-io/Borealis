@@ -644,6 +644,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     pointerId: null,
     offsetX: 0,
     offsetY: 0,
+    width: 0,
+    height: 0,
   });
   const viewfinderNavigateRafRef = useRef(0);
   const pendingViewfinderPointRef = useRef(null);
@@ -1945,6 +1947,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           pointerId: event.pointerId,
           offsetX: localX - dragRect.x,
           offsetY: localY - dragRect.y,
+          width: dragRect.width,
+          height: dragRect.height,
         };
         if (typeof event.currentTarget.setPointerCapture === "function") {
           event.currentTarget.setPointerCapture(event.pointerId);
@@ -1983,15 +1987,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         event.clientX -
         rect.left -
         dragState.offsetX +
-        viewfinderViewportRect.width / 2;
+        dragState.width / 2;
       const localY =
         event.clientY -
         rect.top -
         dragState.offsetY +
-        viewfinderViewportRect.height / 2;
+        dragState.height / 2;
       queueViewfinderNavigate(localX, localY);
     },
-    [queueViewfinderNavigate, viewfinderViewportRect.height, viewfinderViewportRect.width]
+    [queueViewfinderNavigate]
   );
 
   const endPreviewDrag = useCallback((event) => {
@@ -2011,6 +2015,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       pointerId: null,
       offsetX: 0,
       offsetY: 0,
+      width: 0,
+      height: 0,
     };
   }, []);
 
