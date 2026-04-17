@@ -740,6 +740,17 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     () => displayLayoutGeometry.frames,
     [displayLayoutGeometry]
   );
+  const singleViewfinderFrameRect = useMemo(() => {
+    if (displayLayoutFrames.length !== 1) return null;
+    const [item] = displayLayoutFrames;
+    const x = Math.max(0, (viewfinderSize.width - item.widthPx) / 2);
+    const y = Math.max(0, (viewfinderSize.height - item.heightPx) / 2);
+    return {
+      ...item,
+      x,
+      y,
+    };
+  }, [displayLayoutFrames, viewfinderSize.height, viewfinderSize.width]);
 
   const applySessionBootstrap = useCallback((data) => {
     const nextSession = data?.session && typeof data.session === "object" ? data.session : null;
@@ -1776,15 +1787,43 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       const rfb = rfbRef.current;
       const state = viewportStateRef.current;
       const geometry = displayLayoutGeometry;
-      if (!rfb || !state?.interactive || !geometry?.bounds || !geometry.scale) return;
+      if (!rfb || !state?.interactive) return;
       const rect = event.currentTarget.getBoundingClientRect();
       if (!rect.width || !rect.height) return;
       const localX = event.clientX - rect.left;
       const localY = event.clientY - rect.top;
-      const previewX =
-        geometry.bounds.left + (localX - geometry.offsetX) / geometry.scale;
-      const previewY =
-        geometry.bounds.top + (localY - geometry.offsetY) / geometry.scale;
+      let previewX = 0;
+      let previewY = 0;
+      if (
+        singleViewfinderFrameRect &&
+        state.targetPreviewBounds?.width > 0 &&
+        state.targetPreviewBounds?.height > 0
+      ) {
+        const relativeX = clampNumber(
+          localX - singleViewfinderFrameRect.x,
+          0,
+          singleViewfinderFrameRect.widthPx
+        );
+        const relativeY = clampNumber(
+          localY - singleViewfinderFrameRect.y,
+          0,
+          singleViewfinderFrameRect.heightPx
+        );
+        previewX =
+          state.targetPreviewBounds.left +
+          (relativeX / Math.max(1, singleViewfinderFrameRect.widthPx)) *
+            state.targetPreviewBounds.width;
+        previewY =
+          state.targetPreviewBounds.top +
+          (relativeY / Math.max(1, singleViewfinderFrameRect.heightPx)) *
+            state.targetPreviewBounds.height;
+      } else {
+        if (!geometry?.bounds || !geometry.scale) return;
+        previewX =
+          geometry.bounds.left + (localX - geometry.offsetX) / geometry.scale;
+        previewY =
+          geometry.bounds.top + (localY - geometry.offsetY) / geometry.scale;
+      }
       const clampedCenter = {
         x: clampNumber(
           previewX,
@@ -1817,7 +1856,14 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         setViewportHint("Viewport controls not available.");
       }
     },
-    [applyViewportFrame, displayLayoutGeometry, displayMode, isConnected, syncRenderedCanvasSize]
+    [
+      applyViewportFrame,
+      displayLayoutGeometry,
+      displayMode,
+      isConnected,
+      singleViewfinderFrameRect,
+      syncRenderedCanvasSize,
+    ]
   );
 
   const forcedViewportKey = useMemo(
@@ -1926,6 +1972,48 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     if (!isConnected || !displayLayoutGeometry.bounds || viewportPreview.width <= 0 || viewportPreview.height <= 0) {
       return null;
     }
+    if (
+      singleViewfinderFrameRect &&
+      viewportPreview.targetWidth > 0 &&
+      viewportPreview.targetHeight > 0
+    ) {
+      const x =
+        singleViewfinderFrameRect.x +
+        ((viewportPreview.left - viewportPreview.targetLeft) / viewportPreview.targetWidth) *
+          singleViewfinderFrameRect.widthPx;
+      const y =
+        singleViewfinderFrameRect.y +
+        ((viewportPreview.top - viewportPreview.targetTop) / viewportPreview.targetHeight) *
+          singleViewfinderFrameRect.heightPx;
+      const width =
+        (viewportPreview.width / viewportPreview.targetWidth) * singleViewfinderFrameRect.widthPx;
+      const height =
+        (viewportPreview.height / viewportPreview.targetHeight) *
+        singleViewfinderFrameRect.heightPx;
+      const clampedX = clampNumber(
+        x,
+        singleViewfinderFrameRect.x,
+        singleViewfinderFrameRect.x + Math.max(0, singleViewfinderFrameRect.widthPx - 2)
+      );
+      const clampedY = clampNumber(
+        y,
+        singleViewfinderFrameRect.y,
+        singleViewfinderFrameRect.y + Math.max(0, singleViewfinderFrameRect.heightPx - 2)
+      );
+      return {
+        x: clampedX,
+        y: clampedY,
+        width: Math.max(
+          2,
+          Math.min(width, singleViewfinderFrameRect.x + singleViewfinderFrameRect.widthPx - clampedX)
+        ),
+        height: Math.max(
+          2,
+          Math.min(height, singleViewfinderFrameRect.y + singleViewfinderFrameRect.heightPx - clampedY)
+        ),
+        interactive: viewportPreview.interactive,
+      };
+    }
     const rawX =
       displayLayoutGeometry.offsetX +
       (viewportPreview.left - displayLayoutGeometry.bounds.left) * displayLayoutGeometry.scale;
@@ -1980,6 +2068,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     viewportPreview.targetWidth,
     viewportPreview.top,
     viewportPreview.width,
+    singleViewfinderFrameRect,
   ]);
   const viewfinderHelperText = previewNavigationEnabled
     ? viewportPreview.interactive
@@ -2192,7 +2281,10 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                     }}
                   >
                     {isConnected
-                      ? displayLayoutFrames.map((item) => {
+                      ? (singleViewfinderFrameRect
+                          ? [singleViewfinderFrameRect]
+                          : displayLayoutFrames
+                        ).map((item) => {
                           const monitorId = monitorSelectionId(item);
                           const selected = highlightedMonitorIds.includes(monitorId);
                           return (
