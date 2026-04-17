@@ -612,7 +612,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const [framebufferSize, setFramebufferSize] = useState({ width: 0, height: 0 });
   const [renderedCanvasSize, setRenderedCanvasSize] = useState({ width: 0, height: 0 });
   const [viewfinderSize, setViewfinderSize] = useState({ width: 0, height: 126 });
-  const [viewfinderSnapshotUrl, setViewfinderSnapshotUrl] = useState("");
   const [viewportPreview, setViewportPreview] = useState({
     left: 0,
     top: 0,
@@ -631,6 +630,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const displayRef = useRef(null);
   const viewfinderRef = useRef(null);
   const rfbRef = useRef(null);
+  const viewfinderCanvasRefs = useRef(new Map());
   const agentIdRef = useRef("");
   const sessionIdRef = useRef("");
   const clipboardSyncRef = useRef(clipboardSync);
@@ -710,6 +710,10 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     () => displayDiagramTopology(normalizedDisplayTopology, framebufferSize, renderedCanvasSize),
     [framebufferSize, normalizedDisplayTopology, renderedCanvasSize]
   );
+  const diagramBounds = useMemo(
+    () => displayTopologyBounds(diagramTopology),
+    [diagramTopology]
+  );
   const displaySelectorOptions = useMemo(
     () => [
       { id: ALL_DISPLAYS_ID, label: "All", shortLabel: "All" },
@@ -766,6 +770,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       y,
     };
   }, [displayLayoutFrames, viewfinderSize.height, viewfinderSize.width]);
+
+  const registerViewfinderCanvas = useCallback((frameId, node) => {
+    if (!frameId) return;
+    if (node) {
+      viewfinderCanvasRefs.current.set(frameId, node);
+      return;
+    }
+    viewfinderCanvasRefs.current.delete(frameId);
+  }, []);
 
   const applySessionBootstrap = useCallback((data) => {
     const nextSession = data?.session && typeof data.session === "object" ? data.session : null;
@@ -842,7 +855,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     setDisplayMode("fit");
     setViewportHint("");
     setCapabilities({});
-    setViewfinderSnapshotUrl("");
     setViewportPreview({
       left: 0,
       top: 0,
@@ -885,7 +897,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     };
     setFramebufferSize({ width: 0, height: 0 });
     setRenderedCanvasSize({ width: 0, height: 0 });
-    setViewfinderSnapshotUrl("");
     setViewportPreview({
       left: 0,
       top: 0,
@@ -2120,34 +2131,80 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   }, []);
 
   useEffect(() => {
+    const clearViewfinderCanvases = () => {
+      viewfinderCanvasRefs.current.forEach((canvas) => {
+        const context = canvas?.getContext?.("2d");
+        if (!context) return;
+        context.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
+      });
+    };
     if (!isConnected) {
-      setViewfinderSnapshotUrl("");
+      clearViewfinderCanvases();
       return undefined;
     }
-    let cancelled = false;
-    const captureSnapshot = () => {
-      const client = rfbRef.current;
-      const canvas = client?._canvas || displayRef.current?.querySelector("canvas") || null;
-      if (!canvas) return;
-      const width = Number(canvas.width || canvas.clientWidth || 0);
-      const height = Number(canvas.height || canvas.clientHeight || 0);
-      if (width <= 0 || height <= 0) return;
-      try {
-        const nextUrl = canvas.toDataURL("image/jpeg", 0.55);
-        if (!cancelled) {
-          setViewfinderSnapshotUrl((previous) => (previous === nextUrl ? previous : nextUrl));
-        }
-      } catch {
-        /* ignore snapshot failures */
+    let frameId = 0;
+    const renderMirror = () => {
+      const sourceCanvas = rfbRef.current?._canvas || displayRef.current?.querySelector("canvas") || null;
+      const sourceWidth = Number(sourceCanvas?.width || 0);
+      const sourceHeight = Number(sourceCanvas?.height || 0);
+      if (!sourceCanvas || sourceWidth <= 0 || sourceHeight <= 0 || !diagramBounds?.width || !diagramBounds?.height) {
+        frameId = window.requestAnimationFrame(renderMirror);
+        return;
       }
+      const sourceScaleX = sourceWidth / diagramBounds.width;
+      const sourceScaleY = sourceHeight / diagramBounds.height;
+      const topologyById = new Map(diagramTopology.map((item) => [item.id, item]));
+      const frameById = new Map(displayLayoutFrames.map((item) => [item.id, item]));
+      viewfinderCanvasRefs.current.forEach((targetCanvas, frameIdKey) => {
+        const topologyItem = topologyById.get(frameIdKey);
+        const frameItem = frameById.get(frameIdKey);
+        const context = targetCanvas?.getContext?.("2d");
+        if (!topologyItem || !frameItem || !context) return;
+        const destWidth = Math.max(1, Math.round(Number(frameItem.widthPx || 0)));
+        const destHeight = Math.max(1, Math.round(Number(frameItem.heightPx || 0)));
+        if (targetCanvas.width !== destWidth) targetCanvas.width = destWidth;
+        if (targetCanvas.height !== destHeight) targetCanvas.height = destHeight;
+        context.clearRect(0, 0, destWidth, destHeight);
+        const sourceX = clampNumber(
+          Math.round((topologyItem.left - diagramBounds.left) * sourceScaleX),
+          0,
+          Math.max(0, sourceWidth - 1)
+        );
+        const sourceY = clampNumber(
+          Math.round((topologyItem.top - diagramBounds.top) * sourceScaleY),
+          0,
+          Math.max(0, sourceHeight - 1)
+        );
+        const sourceWidthClamped = Math.max(
+          1,
+          Math.min(sourceWidth - sourceX, Math.round(topologyItem.width * sourceScaleX))
+        );
+        const sourceHeightClamped = Math.max(
+          1,
+          Math.min(sourceHeight - sourceY, Math.round(topologyItem.height * sourceScaleY))
+        );
+        context.drawImage(
+          sourceCanvas,
+          sourceX,
+          sourceY,
+          sourceWidthClamped,
+          sourceHeightClamped,
+          0,
+          0,
+          destWidth,
+          destHeight
+        );
+      });
+      frameId = window.requestAnimationFrame(renderMirror);
     };
-    captureSnapshot();
-    const intervalId = window.setInterval(captureSnapshot, 10000);
+    frameId = window.requestAnimationFrame(renderMirror);
     return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      clearViewfinderCanvases();
     };
-  }, [isConnected, sessionId]);
+  }, [diagramBounds, diagramTopology, displayLayoutFrames, isConnected]);
 
   useEffect(() => {
     return () => {
@@ -2282,7 +2339,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const focusedViewfinderSelected =
     Boolean(focusedViewfinderMonitorId) &&
     highlightedMonitorIds.includes(focusedViewfinderMonitorId);
-  const showViewfinderSnapshot = Boolean(isConnected && viewfinderSnapshotUrl);
   const showViewfinderHelper = Boolean(viewfinderHelperText);
   const SidebarSection = ({ sectionId, title, children }) => (
     <Accordion
@@ -2504,6 +2560,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                             inset: 0,
                             boxSizing: "border-box",
                             borderRadius: 1.5,
+                            overflow: "hidden",
                             display: "flex",
                             alignItems: "center",
                             justifyContent: "center",
@@ -2514,23 +2571,40 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                             border: focusedViewfinderSelected
                               ? "1px solid rgba(125, 201, 255, 0.42)"
                               : `1px solid ${SIDEBAR_THEME.border}`,
-                            backgroundImage: showViewfinderSnapshot
-                              ? `linear-gradient(135deg, rgba(125,201,255,0.12), rgba(177,149,255,0.08)), url("${viewfinderSnapshotUrl}")`
-                              : focusedViewfinderSelected
-                                ? "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)"
-                                : singleViewfinderFrameRect.primary
-                                  ? "linear-gradient(180deg, rgba(125,183,255,0.18), rgba(125,183,255,0.18))"
-                                  : "linear-gradient(180deg, rgba(148,163,184,0.14), rgba(148,163,184,0.14))",
-                            backgroundSize: showViewfinderSnapshot ? "100% 100%" : "auto",
-                            backgroundPosition: "center",
-                            backgroundRepeat: "no-repeat",
+                            background: focusedViewfinderSelected
+                              ? "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)"
+                              : singleViewfinderFrameRect.primary
+                                ? "linear-gradient(180deg, rgba(125,183,255,0.18), rgba(125,183,255,0.18))"
+                                : "linear-gradient(180deg, rgba(148,163,184,0.14), rgba(148,163,184,0.14))",
                             boxShadow: focusedViewfinderSelected
                               ? "0 10px 28px rgba(91,126,255,0.25)"
                               : "none",
                             transition: "all 140ms ease",
                           }}
                         >
+                          <Box
+                            component="canvas"
+                            ref={(node) => registerViewfinderCanvas(singleViewfinderFrameRect.id, node)}
+                            sx={{
+                              position: "absolute",
+                              inset: 0,
+                              width: "100%",
+                              height: "100%",
+                              display: "block",
+                            }}
+                          />
+                          <Box
+                            sx={{
+                              position: "absolute",
+                              inset: 0,
+                              background:
+                                "linear-gradient(135deg, rgba(125,201,255,0.08), rgba(177,149,255,0.05))",
+                              pointerEvents: "none",
+                            }}
+                          />
+                          <Box sx={{ position: "relative", zIndex: 1 }}>
                           {singleViewfinderFrameRect.label}
+                          </Box>
                         </Box>
                         {showViewportIndicator ? (
                           <Box
@@ -2564,34 +2638,57 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                                 boxSizing: "border-box",
                                 left: item.x,
                                 top: item.y,
-                                width: item.widthPx,
-                                height: item.heightPx,
-                                borderRadius: 1.5,
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
+                              width: item.widthPx,
+                              height: item.heightPx,
+                              borderRadius: 1.5,
+                              overflow: "hidden",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
                                 fontSize: "1rem",
                                 fontWeight: 700,
                                 cursor: "default",
-                                color: selected ? "#08111f" : SIDEBAR_THEME.text,
-                                border: selected
-                                  ? "1px solid rgba(125, 201, 255, 0.42)"
-                                  : `1px solid ${SIDEBAR_THEME.border}`,
-                                background: selected
+                              color: selected ? "#08111f" : SIDEBAR_THEME.text,
+                              border: selected
+                                ? "1px solid rgba(125, 201, 255, 0.42)"
+                                : `1px solid ${SIDEBAR_THEME.border}`,
+                              background: selected
                                   ? "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)"
                                   : item.primary
                                     ? "rgba(125,183,255,0.18)"
                                     : "rgba(148,163,184,0.14)",
-                                boxShadow: selected
-                                  ? "0 10px 28px rgba(91,126,255,0.25)"
-                                  : "none",
-                                transition: "all 140ms ease",
+                              boxShadow: selected
+                                ? "0 10px 28px rgba(91,126,255,0.25)"
+                                : "none",
+                              transition: "all 140ms ease",
+                            }}
+                          >
+                            <Box
+                              component="canvas"
+                              ref={(node) => registerViewfinderCanvas(item.id, node)}
+                              sx={{
+                                position: "absolute",
+                                inset: 0,
+                                width: "100%",
+                                height: "100%",
+                                display: "block",
                               }}
-                            >
+                            />
+                            <Box
+                              sx={{
+                                position: "absolute",
+                                inset: 0,
+                                background:
+                                  "linear-gradient(135deg, rgba(125,201,255,0.08), rgba(177,149,255,0.05))",
+                                pointerEvents: "none",
+                              }}
+                            />
+                            <Box sx={{ position: "relative", zIndex: 1 }}>
                               {item.label}
                             </Box>
-                          );
-                        })
+                          </Box>
+                        );
+                      })
                       : null}
                     {isConnected && showViewportIndicator && !singleViewfinderFrameRect ? (
                       <Box
@@ -2604,12 +2701,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                           height: viewfinderViewportRect.height,
                           borderRadius: 1.5,
                           border: "2px solid rgba(125, 201, 255, 0.98)",
-                          backgroundImage: showViewfinderSnapshot
-                            ? `linear-gradient(135deg, rgba(125,201,255,0.12), rgba(177,149,255,0.08)), url("${viewfinderSnapshotUrl}")`
-                            : "linear-gradient(135deg, rgba(125,201,255,0.18), rgba(177,149,255,0.14))",
-                          backgroundSize: showViewfinderSnapshot ? "100% 100%" : "auto",
-                          backgroundPosition: "center",
-                          backgroundRepeat: "no-repeat",
+                          background: "linear-gradient(135deg, rgba(125,201,255,0.18), rgba(177,149,255,0.14))",
                           boxShadow:
                             "0 0 0 1px rgba(8,17,31,0.62), inset 0 0 0 1px rgba(255,255,255,0.08)",
                           pointerEvents: "none",
