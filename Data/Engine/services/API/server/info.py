@@ -927,6 +927,25 @@ def _collect_operator_session_count(adapters: "EngineServiceAdapters") -> int:
     return 0
 
 
+def _collect_vnc_session_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]:
+    manager = getattr(adapters.context, "vnc_collaboration_manager", None)
+    if manager is None or not hasattr(manager, "list_sessions") or not hasattr(manager, "session_snapshot"):
+        return {
+            "active_session_count": 0,
+            "active_sessions": [],
+        }
+    try:
+        sessions = list(manager.list_sessions())
+        snapshots = [manager.session_snapshot(session) for session in sessions]
+    except Exception:
+        adapters.context.logger.debug("Failed to collect VNC collaboration sessions.", exc_info=True)
+        snapshots = []
+    return {
+        "active_session_count": len(snapshots),
+        "active_sessions": snapshots,
+    }
+
+
 def _collect_security_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]:
     aegis_service = getattr(adapters, "aegis_cipher_service", None)
     if aegis_service is None or not hasattr(aegis_service, "status"):
@@ -988,6 +1007,7 @@ def _build_overview_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]
         "public_edge": _collect_public_edge_payload(adapters.context),
         "security": _collect_security_payload(adapters),
         "ansible_runner": _collect_ansible_runner_payload(),
+        "remote_desktop": _collect_vnc_session_payload(adapters),
         "operator_session_count": _collect_operator_session_count(adapters),
     }
 

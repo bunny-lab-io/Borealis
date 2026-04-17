@@ -81,16 +81,38 @@ export function buildAppRoutes() {
                 },
                 {
                   path: ":deviceId",
+                  element: <RootShell />,
                   handle: {
                     title: "Device Details",
                     breadcrumb: "Device",
                     navKey: "devices",
                     pageKey: "device",
                   },
-                  lazy: lazyNamed(
-                    () => import("../route-modules/inventoryRoutes.jsx"),
-                    "DeviceSummaryRoute"
-                  ),
+                  children: [
+                    {
+                      index: true,
+                      handle: {
+                        navKey: "devices",
+                        pageKey: "device",
+                      },
+                      lazy: lazyNamed(
+                        () => import("../route-modules/inventoryRoutes.jsx"),
+                        "DeviceSummaryRoute"
+                      ),
+                    },
+                    {
+                      path: "remote-desktop",
+                      handle: {
+                        breadcrumb: "Remote Desktop",
+                        navKey: "devices",
+                        pageKey: "device-remote-desktop",
+                      },
+                      lazy: lazyNamed(
+                        () => import("../route-modules/inventoryRoutes.jsx"),
+                        "RemoteDesktopRoute"
+                      ),
+                    },
+                  ],
                 },
                 {
                   element: <RequireAdmin />,
@@ -316,7 +338,6 @@ export function buildAppRoutes() {
                 {
                   path: "new/workflow",
                   handle: {
-                    title: "New Workflow",
                     breadcrumb: "New Workflow",
                     navKey: "assemblies",
                     pageKey: "workflow",
@@ -355,7 +376,6 @@ export function buildAppRoutes() {
                 {
                   path: "workflows/:workflowGuid",
                   handle: {
-                    title: "Workflow",
                     breadcrumb: "Workflow",
                     navKey: "assemblies",
                     pageKey: "workflow",
@@ -368,7 +388,6 @@ export function buildAppRoutes() {
                 {
                   path: "workflows/runs/:runId",
                   handle: {
-                    title: "Workflow Run",
                     breadcrumb: "Workflow Run",
                     navKey: "assemblies",
                     pageKey: "workflow",

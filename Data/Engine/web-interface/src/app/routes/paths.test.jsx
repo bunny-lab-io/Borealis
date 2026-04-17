@@ -4,6 +4,7 @@ import { APP_PATHS, buildSiteAssignmentPath } from "./paths.js";
 describe("route path helpers", () => {
   it("builds canonical resource routes", () => {
     expect(APP_PATHS.device("agent-1")).toBe("/devices/agent-1");
+    expect(APP_PATHS.deviceRemoteDesktop("agent-1")).toBe("/devices/agent-1/remote-desktop");
     expect(APP_PATHS.filter(42)).toBe("/filters/42");
     expect(APP_PATHS.job(19)).toBe("/jobs/19");
     expect(APP_PATHS.assemblyScript("SCRIPT-123")).toBe("/assemblies/scripts/SCRIPT-123");

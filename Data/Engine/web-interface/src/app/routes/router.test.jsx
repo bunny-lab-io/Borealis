@@ -27,6 +27,7 @@ describe("app router", () => {
     const paths = flattened.map((route) => route.fullPath);
 
     expect(paths).toContain("/devices/:deviceId");
+    expect(paths).toContain("/devices/:deviceId/remote-desktop");
     expect(paths).toContain("/filters/:filterId");
     expect(paths).toContain("/jobs/:jobId");
     expect(paths).toContain("/assemblies/new/script");
@@ -43,6 +44,7 @@ describe("app router", () => {
     const lazyPaths = flattened.filter((route) => route.hasLazy).map((route) => route.fullPath);
 
     expect(lazyPaths).toContain("/devices");
+    expect(lazyPaths).toContain("/devices/:deviceId/remote-desktop");
     expect(lazyPaths).toContain("/filters");
     expect(lazyPaths).toContain("/jobs");
     expect(lazyPaths).toContain("/assemblies");
@@ -54,6 +56,7 @@ describe("app router", () => {
     const byPath = new Map(flattened.map((route) => [route.fullPath, route.handle]));
 
     expect(byPath.get("/devices/:deviceId")?.pageKey).toBe("device");
+    expect(byPath.get("/devices/:deviceId/remote-desktop")?.pageKey).toBe("device-remote-desktop");
     expect(byPath.get("/filters/:filterId")?.pageKey).toBe("filter");
     expect(byPath.get("/jobs/:jobId")?.pageKey).toBe("job");
     expect(byPath.get("/assemblies/scripts/:assemblyGuid")?.pageKey).toBe("script-assembly");

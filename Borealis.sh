@@ -121,6 +121,10 @@ env_flag_enabled() {
   esac
 }
 
+allow_system_package_install() {
+  env_flag_enabled "${BOREALIS_ALLOW_SYSTEM_PACKAGE_INSTALL:-0}"
+}
+
 if [[ "${VERBOSE_FLAG}" -eq 0 ]] && env_flag_enabled "${BOOTSTRAP_VERBOSE_DEFAULT}"; then
   VERBOSE_FLAG=1
 fi
@@ -1158,6 +1162,11 @@ install_shared_dependencies() {
     return 0
   fi
 
+  if ! allow_system_package_install; then
+    ui_error "Missing required system dependencies (python3/pip3). Run bootstrap.sh or install them manually before rerunning Borealis.sh."
+    return 1
+  fi
+
   case "$DISTRO_ID" in
     ubuntu|debian|linuxmint|pop)
       run_privileged_quiet apt update -qq
@@ -1196,6 +1205,15 @@ postgres_service_name() {
 }
 
 install_postgresql_best_effort() {
+  if command_exists psql; then
+    return 0
+  fi
+
+  if ! allow_system_package_install; then
+    ui_error "PostgreSQL is not installed. Run bootstrap.sh or install PostgreSQL manually before rerunning Borealis.sh."
+    return 1
+  fi
+
   detect_distro
   case "$DISTRO_ID" in
     ubuntu|debian|linuxmint|pop)
@@ -1365,6 +1383,15 @@ EOF
 }
 
 install_tesseract() {
+  if command_exists tesseract; then
+    return 0
+  fi
+
+  if ! allow_system_package_install; then
+    ui_warn "Tesseract is not installed. OCR features will remain unavailable until it is installed separately."
+    return 0
+  fi
+
   detect_distro
   case "$DISTRO_ID" in
     ubuntu|debian|linuxmint|pop)
@@ -1433,6 +1460,16 @@ install_wireguard_tools_best_effort() {
     else
       write_agent_log "WireGuard tools available (wg/wg-quick)."
     fi
+    return 0
+  fi
+
+  if ! allow_system_package_install; then
+    if [[ "${install_target}" == "engine" ]]; then
+      write_engine_log "WireGuard tools not found and package-manager installation is disabled for this Borealis.sh run." "engine-supervision.log"
+    else
+      write_agent_log "WireGuard tools not found and package-manager installation is disabled for this Borealis.sh run."
+    fi
+    ui_warn "WireGuard tools not found. Run bootstrap.sh or install 'wireguard-tools' manually for VPN tunnel support."
     return 0
   fi
 
@@ -1793,7 +1830,7 @@ install_or_update_borealis_agent() {
   fi
   set_step_plan "${total_steps}"
 
-  run_step "Installing / Updating Dependencies" install_agent_dependencies
+  run_step "Verifying Runtime Dependencies" install_agent_dependencies
 
   local runtime_dir
   runtime_dir="$(agent_runtime_dir)"
@@ -2562,6 +2599,11 @@ install_traefik_best_effort() {
     return 0
   fi
 
+  if ! allow_system_package_install; then
+    download_traefik_binary
+    return $?
+  fi
+
   detect_distro
   case "$DISTRO_ID" in
     ubuntu|debian|linuxmint|pop)
@@ -3179,7 +3221,7 @@ server_menu() {
     set_step_plan 9
   fi
 
-  run_step "Installing / Updating Dependencies" install_server_dependencies
+  run_step "Verifying Runtime Dependencies" install_server_dependencies
   run_step "Auto-Configure Engine Profile" auto_configure_engine_profile
   run_step "Configure PostgreSQL" ensure_engine_postgresql_ready
   export PATH="${NODE_DIR}/bin:${PATH}"

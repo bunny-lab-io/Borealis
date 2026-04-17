@@ -98,9 +98,11 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 ### WireGuard and VNC wiring
 - WireGuard server manager: `Data/Engine/services/VPN/wireguard_server.py`.
 - Tunnel orchestration: `Data/Engine/services/VPN/vpn_tunnel_service.py`.
+- VNC collaboration state: `Data/Engine/services/RemoteDesktop/vnc_sessions.py`.
 - VNC proxy: `Data/Engine/services/RemoteDesktop/vnc_proxy.py`.
-- API entrypoints: `/api/vnc/establish`, `/api/vnc/disconnect`, `/api/shell/establish`, `/api/shell/disconnect`.
+- API entrypoints: `/api/vnc/establish`, `/api/vnc/disconnect`, `/api/vnc/handoff`, `/api/vnc/sessions`, `/api/shell/establish`, `/api/shell/disconnect`.
 - Persistent tunnels are established by agents via `POST /api/agent/vpn/ensure` and kept online.
+- The Engine caches each agent's currently advertised VNC password in memory, reuses that credential across collaboration sessions until the agent restarts or the agent-side daily VNC credential rotation publishes a new revision, fast-probes the advertised UltraVNC listener before re-emitting bootstrap events, waits for agent listener readiness before returning browser bootstrap data when that fast probe misses, and exposes active remote desktop session inventory in `GET /api/server/overview`.
 
 ### Assembly runtime
 - Assembly cache is initialized in `Data/Engine/assembly_management` and attached to `context.assembly_cache`.
@@ -128,8 +130,9 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 Use this section for Engine work (successor to the legacy server). Shared guidance is consolidated in `ui-and-notifications.md` and other knowledgebase pages.
 
 #### Scope and runtime paths
-- Bootstrap: `Borealis.sh` handles Engine staging and launch on Linux. (`Borealis.ps1` is agent-only.)
-- Edit in `Data/Engine`; runtime copies live under `/Engine` and are discarded every time the engine is launched.
+- Staging / launch: `Borealis.sh` handles Engine staging and launch on Linux once it is invoked directly or via `bootstrap.sh`. (`Borealis.ps1` is agent-only.)
+- Edit in `Data/Engine`; the runtime copy used by `borealis-engine.service` still lives under `/Engine`, and direct `systemctl restart borealis-engine` restarts do not currently restage `Data/Engine` automatically. Use `Borealis.sh --EngineDev` or `Borealis.sh --EngineProduction` when source changes need to reach the running service.
+- `bootstrap.sh` is the supported Linux first-run path for syncing the repo and installing missing OS packages. Direct `Borealis.sh` redeploys intentionally avoid repeated apt/yum/dnf package checks unless bootstrap has opted the run into system package installation.
 
 #### Architecture
 - Runtime: `Data/Engine/server.py` with NodeJS + Vite for live dev and Flask for production serving/API endpoints.

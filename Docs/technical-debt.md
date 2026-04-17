@@ -35,6 +35,34 @@ GitHub Issue: <link or "not yet">
 ```
 
 ## Issues
+ID: TD-20260416-02
+Status: active
+Owner: Engine + Agent
+Date Added: 2026-04-16
+Summary: Linux OS package installation now rides through `bootstrap.sh`, while direct `Borealis.sh` redeploys only verify dependencies until `Update.sh` grows a proper update workflow.
+Impact: Local Engine and Agent redeploys stop hammering apt/yum/dnf on every run, but package installation and package upgrade behavior are now split across two scripts instead of one cohesive dependency-management workflow.
+Root Cause: `Borealis.sh` previously mixed runtime staging with OS package-manager update/install logic, so every local redeploy could re-check distro repositories even when the host was already provisioned.
+Current Mitigation: `bootstrap.sh` now exports `BOREALIS_ALLOW_SYSTEM_PACKAGE_INSTALL=1` so first-run Linux installs can still add missing system packages, while direct `Borealis.sh` runs skip package-manager checks for shared Python/PostgreSQL/WireGuard dependencies and fall back to warnings or explicit errors when prerequisites are absent.
+Removal Criteria: Borealis has a first-class dependency/update workflow in `Update.sh` (or equivalent) so bootstrap, redeploy, and package update responsibilities are fully separated without transitional gating flags.
+Files: `Borealis.sh`, `bootstrap.sh`, `Docs/getting-started.md`, `Docs/engine-runtime.md`, `Update.sh`
+Evidence: Repeated local Engine and Agent redeploys were still running distro package-manager checks (`apt update`, `yum install`, etc.) even when the host was already provisioned, which created unnecessary package-manager load and slowed down routine redeploys.
+Next Step: Move package refresh / upgrade semantics into `Update.sh` so bootstrap only covers first-run provisioning and `Borealis.sh` stays focused on runtime staging.
+GitHub Issue: not yet
+
+ID: TD-20260416-01
+Status: active
+Owner: Engine
+Date Added: 2026-04-16
+Summary: Direct Linux Engine service restarts can relaunch a stale `/Engine` runtime tree instead of freshly staged `Data/Engine` code.
+Impact: Operators and developers can pull a new branch tip, restart `borealis-engine.service`, and still observe old backend or WebUI behavior because the live runtime copy under `/Engine` did not refresh from `Data/Engine`.
+Root Cause: `borealis-engine.service` executes `Engine/run-engine-service.sh developer`, which launches the Engine from `/opt/Borealis/Engine/...`; runtime staging normally happens through `Borealis.sh`, but a plain systemd restart bypasses that staging flow.
+Current Mitigation: Borealis documentation now explicitly tells operators to use `Borealis.sh --EngineDev` or `Borealis.sh --EngineProduction` after source updates so the runtime tree is restaged before the service restarts.
+Removal Criteria: The Linux Engine launch path restages `Data/Engine` into `/Engine` automatically on every service start, or the service runs directly from `Data/Engine` without a shadow runtime tree.
+Files: `Docs/engine-runtime.md`, `Engine/run-engine-service.sh`
+Evidence: On April 16, 2026, `/opt/Borealis/Data/Engine/services/API/devices/vnc.py` and `/opt/Borealis/Data/Engine/services/WebSocket/__init__.py` contained newer VNC latency logic (`ready_profile`, `vnc_socket_prewarm`), but `/opt/Borealis/Engine/Logs/VNC.log` still showed the older `E12 wait_seconds=12.0` / `E15 wait_seconds=8.0` path after `systemctl restart borealis-engine`, and the live runtime files under `/opt/Borealis/Engine/Data/Engine/...` still lacked the new code.
+Next Step: Update the Linux Engine startup path so runtime staging happens automatically before every service launch.
+GitHub Issue: not yet
+
 ID: TD-20260405-02
 Status: active
 Owner: WebUI

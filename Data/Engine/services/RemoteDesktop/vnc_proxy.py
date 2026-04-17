@@ -42,8 +42,24 @@ class VncSession:
     created_at: float
     expires_at: float
     operator_id: Optional[str] = None
+    session_id: str = ""
+    participant_id: str = ""
+    role: str = ""
     restart_tunnel: Optional[Callable[[str], None]] = None
     confirm_transport: Optional[Callable[[str], None]] = None
+    on_open: Optional[Callable[[], None]] = None
+    on_close: Optional[Callable[[str], None]] = None
+
+
+@dataclass
+class ActiveVncConnection:
+    connection_id: str
+    websocket: Any
+    session_id: str
+    participant_id: str
+    agent_id: str
+    operator_id: str
+    role: str
 
 
 class VncSessionRegistry:
@@ -66,8 +82,13 @@ class VncSessionRegistry:
         host: str,
         port: int,
         operator_id: Optional[str] = None,
+        session_id: str = "",
+        participant_id: str = "",
+        role: str = "",
         restart_tunnel: Optional[Callable[[str], None]] = None,
         confirm_transport: Optional[Callable[[str], None]] = None,
+        on_open: Optional[Callable[[], None]] = None,
+        on_close: Optional[Callable[[str], None]] = None,
     ) -> VncSession:
         token = uuid.uuid4().hex
         now = time.time()
@@ -80,8 +101,13 @@ class VncSessionRegistry:
             created_at=now,
             expires_at=expires_at,
             operator_id=operator_id,
+            session_id=session_id,
+            participant_id=participant_id,
+            role=role,
             restart_tunnel=restart_tunnel,
             confirm_transport=confirm_transport,
+            on_open=on_open,
+            on_close=on_close,
         )
         with self._lock:
             self._cleanup(now)
@@ -131,10 +157,13 @@ class VncProxyServer:
         self.path = path or VNC_WS_PATH
         self.ssl_context = ssl_context
         self._thread: Optional[threading.Thread] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._ready = threading.Event()
         self._failed = threading.Event()
         self._connect_recovery_lock = threading.Lock()
         self._last_connect_recovery_by_agent: Dict[str, float] = {}
+        self._active_connections_lock = threading.Lock()
+        self._active_connections: Dict[str, ActiveVncConnection] = {}
 
     def ensure_started(self, timeout: float = 3.0) -> bool:
         if self._thread and self._thread.is_alive():
@@ -156,6 +185,7 @@ class VncProxyServer:
 
     async def _serve(self) -> None:
         self.logger.info("Starting VNC proxy on %s:%s", self.host, self.port)
+        self._loop = asyncio.get_running_loop()
         try:
             server = await websockets.serve(
                 self._handle_client,
@@ -201,16 +231,31 @@ class VncProxyServer:
             return
 
         logger = self.logger.getChild("session")
-        logger.info("VNC session start agent_id=%s", agent_id)
+        logger.info(
+            "VNC session start agent_id=%s session_id=%s participant_id=%s role=%s",
+            agent_id,
+            session.session_id or "-",
+            session.participant_id or "-",
+            session.role or "-",
+        )
 
+        connection_id = ""
+        close_reason = "session_end"
         try:
             try:
                 reader, writer = await self._connect_vnc(session)
                 self._configure_writer_socket(writer)
             except Exception as exc:
                 logger.warning("VNC connect failed: %s", exc)
+                close_reason = "vnc_unavailable"
                 await websocket.close(code=1011, reason="vnc_unavailable")
                 return
+            connection_id = self._register_active_connection(session, websocket)
+            if callable(session.on_open):
+                try:
+                    session.on_open()
+                except Exception:
+                    self.logger.debug("Failed to notify VNC session open agent_id=%s", session.agent_id, exc_info=True)
 
             async def _ws_to_tcp() -> None:
                 try:
@@ -236,6 +281,8 @@ class VncProxyServer:
                         if not data:
                             break
                         await websocket.send(data)
+                except websockets.exceptions.ConnectionClosed:
+                    pass
                 finally:
                     try:
                         await websocket.close()
@@ -247,7 +294,24 @@ class VncProxyServer:
                 return_when=asyncio.FIRST_COMPLETED,
             )
         finally:
-            logger.info("VNC session ended agent_id=%s", agent_id)
+            websocket_close_reason = getattr(websocket, "close_reason", None)
+            if websocket_close_reason and close_reason == "session_end":
+                close_reason = str(websocket_close_reason).strip()[:120] or close_reason
+            if connection_id:
+                self._unregister_active_connection(connection_id)
+            if callable(session.on_close):
+                try:
+                    session.on_close(close_reason)
+                except Exception:
+                    self.logger.debug("Failed to notify VNC session close agent_id=%s", session.agent_id, exc_info=True)
+            logger.info(
+                "VNC session ended agent_id=%s session_id=%s participant_id=%s role=%s reason=%s",
+                agent_id,
+                session.session_id or "-",
+                session.participant_id or "-",
+                session.role or "-",
+                close_reason,
+            )
 
     def _configure_writer_socket(self, writer: Any) -> None:
         try:
@@ -342,6 +406,75 @@ class VncProxyServer:
             self._emit_agent_event(session.agent_id, "vnc_stop", payload)
         except Exception:
             self.logger.debug("Failed to emit vnc_stop for agent_id=%s", session.agent_id, exc_info=True)
+
+    def _register_active_connection(self, session: VncSession, websocket: Any) -> str:
+        connection_id = uuid.uuid4().hex
+        record = ActiveVncConnection(
+            connection_id=connection_id,
+            websocket=websocket,
+            session_id=session.session_id or "",
+            participant_id=session.participant_id or "",
+            agent_id=session.agent_id or "",
+            operator_id=session.operator_id or "",
+            role=session.role or "",
+        )
+        with self._active_connections_lock:
+            self._active_connections[connection_id] = record
+        return connection_id
+
+    def _unregister_active_connection(self, connection_id: str) -> None:
+        with self._active_connections_lock:
+            self._active_connections.pop(connection_id, None)
+
+    async def _close_websocket(self, websocket: Any, *, reason: str) -> None:
+        try:
+            await websocket.close(code=4000, reason=(reason or "vnc_session_closed")[:120])
+        except Exception:
+            pass
+
+    def _close_matching_connections(self, predicate: Callable[[ActiveVncConnection], bool], *, reason: str) -> int:
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return 0
+        with self._active_connections_lock:
+            targets = [record.websocket for record in self._active_connections.values() if predicate(record)]
+        for websocket in targets:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._close_websocket(websocket, reason=reason),
+                    loop,
+                )
+            except Exception:
+                self.logger.debug("Failed to schedule VNC websocket close.", exc_info=True)
+        return len(targets)
+
+    def disconnect_session(self, session_id: str, *, reason: str = "session_closed") -> int:
+        normalized_session_id = str(session_id or "").strip()
+        if not normalized_session_id:
+            return 0
+        return self._close_matching_connections(
+            lambda record: record.session_id == normalized_session_id,
+            reason=reason,
+        )
+
+    def disconnect_participant(
+        self,
+        session_id: str,
+        participant_id: str,
+        *,
+        reason: str = "participant_disconnect",
+    ) -> int:
+        normalized_session_id = str(session_id or "").strip()
+        normalized_participant_id = str(participant_id or "").strip()
+        if not normalized_session_id or not normalized_participant_id:
+            return 0
+        return self._close_matching_connections(
+            lambda record: (
+                record.session_id == normalized_session_id
+                and record.participant_id == normalized_participant_id
+            ),
+            reason=reason,
+        )
 
 def ensure_vnc_proxy(
     context: Any,

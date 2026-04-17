@@ -318,6 +318,56 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
     setattr(context, "emit_host_service_event", agent_registry.emit_to_host)
     setattr(context, "has_host_service_socket", agent_registry.is_host_mode_registered)
 
+    def _prewarm_vnc_credential(agent_id: str) -> None:
+        normalized_agent_id = _normalize_text(agent_id)
+        if not normalized_agent_id:
+            return
+        try:
+            from ..RemoteDesktop.vnc_sessions import ensure_vnc_collaboration_manager
+
+            manager = ensure_vnc_collaboration_manager(context, logger=context.logger)
+            cached_credential = manager.get_agent_credential(normalized_agent_id)
+            if cached_credential is not None and _normalize_text(getattr(cached_credential, "controller_password", "")):
+                try:
+                    adapters.service_log(
+                        "VNC",
+                        "vnc_socket_prewarm_skip agent_id={0} reason=credential_cached".format(
+                            normalized_agent_id,
+                        ),
+                    )
+                except Exception:
+                    agent_logger.debug(
+                        "Failed to write VNC prewarm skip log for agent_id=%s",
+                        normalized_agent_id,
+                        exc_info=True,
+                    )
+                return
+            emitted = agent_registry.emit(
+                normalized_agent_id,
+                "vnc_refresh",
+                {"agent_id": normalized_agent_id, "reason": "socket_register_prewarm"},
+            )
+            try:
+                adapters.service_log(
+                    "VNC",
+                    "vnc_socket_prewarm agent_id={0} refresh_emit={1}".format(
+                        normalized_agent_id,
+                        "true" if emitted else "false",
+                    ),
+                )
+            except Exception:
+                agent_logger.debug(
+                    "Failed to write VNC prewarm log for agent_id=%s",
+                    normalized_agent_id,
+                    exc_info=True,
+                )
+        except Exception:
+            agent_logger.debug(
+                "Failed to prewarm VNC credential for agent_id=%s",
+                normalized_agent_id,
+                exc_info=True,
+            )
+
     def _emit_operator_presence_changed() -> None:
         try:
             socket_server.emit("server_operator_presence_changed", {"changed_at": _now_ts()})
@@ -686,6 +736,8 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
                             request.sid,
                         )
                     )
+
+        _prewarm_vnc_credential(agent_id)
 
         return {"status": "ok"}
 
