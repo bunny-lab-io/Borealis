@@ -612,6 +612,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const [framebufferSize, setFramebufferSize] = useState({ width: 0, height: 0 });
   const [renderedCanvasSize, setRenderedCanvasSize] = useState({ width: 0, height: 0 });
   const [viewfinderSize, setViewfinderSize] = useState({ width: 0, height: 126 });
+  const [viewfinderSnapshotUrl, setViewfinderSnapshotUrl] = useState("");
   const [viewportPreview, setViewportPreview] = useState({
     left: 0,
     top: 0,
@@ -638,6 +639,14 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const manualDisconnectRef = useRef(false);
   const viewportSignatureRef = useRef("");
   const forcedViewportKeyRef = useRef("");
+  const viewfinderDragRef = useRef({
+    active: false,
+    pointerId: null,
+    offsetX: 0,
+    offsetY: 0,
+  });
+  const viewfinderNavigateRafRef = useRef(0);
+  const pendingViewfinderPointRef = useRef(null);
   const viewportStateRef = useRef({
     mode: "fit",
     targetBounds: null,
@@ -831,6 +840,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     setDisplayMode("fit");
     setViewportHint("");
     setCapabilities({});
+    setViewfinderSnapshotUrl("");
     setViewportPreview({
       left: 0,
       top: 0,
@@ -873,6 +883,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     };
     setFramebufferSize({ width: 0, height: 0 });
     setRenderedCanvasSize({ width: 0, height: 0 });
+    setViewfinderSnapshotUrl("");
     setViewportPreview({
       left: 0,
       top: 0,
@@ -1782,20 +1793,13 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const isConnected = sessionState === "connected";
   const previewNavigationEnabled = isConnected && displayMode !== "fit";
 
-  const handlePreviewNavigate = useCallback(
-    (event) => {
+  const navigateViewfinderPoint = useCallback(
+    (localX, localY) => {
       if (!isConnected || displayMode === "fit") return;
-      if (typeof event.preventDefault === "function") {
-        event.preventDefault();
-      }
       const rfb = rfbRef.current;
       const state = viewportStateRef.current;
       const geometry = displayLayoutGeometry;
       if (!rfb || !state?.interactive) return;
-      const rect = event.currentTarget.getBoundingClientRect();
-      if (!rect.width || !rect.height) return;
-      const localX = event.clientX - rect.left;
-      const localY = event.clientY - rect.top;
       let previewX = 0;
       let previewY = 0;
       if (
@@ -1869,6 +1873,118 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       syncRenderedCanvasSize,
     ]
   );
+
+  const queueViewfinderNavigate = useCallback(
+    (localX, localY) => {
+      pendingViewfinderPointRef.current = { localX, localY };
+      if (
+        typeof window === "undefined" ||
+        typeof window.requestAnimationFrame !== "function"
+      ) {
+        const nextPoint = pendingViewfinderPointRef.current;
+        pendingViewfinderPointRef.current = null;
+        if (nextPoint) {
+          navigateViewfinderPoint(nextPoint.localX, nextPoint.localY);
+        }
+        return;
+      }
+      if (viewfinderNavigateRafRef.current) return;
+      viewfinderNavigateRafRef.current = window.requestAnimationFrame(() => {
+        viewfinderNavigateRafRef.current = 0;
+        const nextPoint = pendingViewfinderPointRef.current;
+        pendingViewfinderPointRef.current = null;
+        if (nextPoint) {
+          navigateViewfinderPoint(nextPoint.localX, nextPoint.localY);
+        }
+      });
+    },
+    [navigateViewfinderPoint]
+  );
+
+  const handlePreviewPointerDown = useCallback(
+    (event) => {
+      if (!isConnected || displayMode === "fit") return;
+      if (typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      const rect = event.currentTarget.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const localX = event.clientX - rect.left;
+      const localY = event.clientY - rect.top;
+      const canDragViewport =
+        Boolean(showViewportIndicator) &&
+        viewportPreview.interactive &&
+        localX >= viewfinderViewportRect.x &&
+        localX <= viewfinderViewportRect.x + viewfinderViewportRect.width &&
+        localY >= viewfinderViewportRect.y &&
+        localY <= viewfinderViewportRect.y + viewfinderViewportRect.height;
+      if (canDragViewport) {
+        viewfinderDragRef.current = {
+          active: true,
+          pointerId: event.pointerId,
+          offsetX: localX - viewfinderViewportRect.x,
+          offsetY: localY - viewfinderViewportRect.y,
+        };
+        if (typeof event.currentTarget.setPointerCapture === "function") {
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }
+        return;
+      }
+      queueViewfinderNavigate(localX, localY);
+    },
+    [
+      displayMode,
+      isConnected,
+      queueViewfinderNavigate,
+      showViewportIndicator,
+      viewfinderViewportRect,
+      viewportPreview.interactive,
+    ]
+  );
+
+  const handlePreviewPointerMove = useCallback(
+    (event) => {
+      const dragState = viewfinderDragRef.current;
+      if (!dragState.active || dragState.pointerId !== event.pointerId) return;
+      if (typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      const rect = event.currentTarget.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const localX =
+        event.clientX -
+        rect.left -
+        dragState.offsetX +
+        viewfinderViewportRect.width / 2;
+      const localY =
+        event.clientY -
+        rect.top -
+        dragState.offsetY +
+        viewfinderViewportRect.height / 2;
+      queueViewfinderNavigate(localX, localY);
+    },
+    [queueViewfinderNavigate, viewfinderViewportRect.height, viewfinderViewportRect.width]
+  );
+
+  const endPreviewDrag = useCallback((event) => {
+    const dragState = viewfinderDragRef.current;
+    if (!dragState.active) return;
+    if (event && dragState.pointerId !== event.pointerId) return;
+    if (
+      event &&
+      typeof event.currentTarget.releasePointerCapture === "function" &&
+      typeof event.currentTarget.hasPointerCapture === "function" &&
+      event.currentTarget.hasPointerCapture(event.pointerId)
+    ) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    viewfinderDragRef.current = {
+      active: false,
+      pointerId: null,
+      offsetX: 0,
+      offsetY: 0,
+    };
+  }, []);
 
   const forcedViewportKey = useMemo(
     () =>
@@ -1966,6 +2082,48 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         window.cancelAnimationFrame(frameId);
       }
       observer.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isConnected) {
+      setViewfinderSnapshotUrl("");
+      return undefined;
+    }
+    let cancelled = false;
+    const captureSnapshot = () => {
+      const client = rfbRef.current;
+      const canvas = client?._canvas || displayRef.current?.querySelector("canvas") || null;
+      if (!canvas) return;
+      const width = Number(canvas.width || canvas.clientWidth || 0);
+      const height = Number(canvas.height || canvas.clientHeight || 0);
+      if (width <= 0 || height <= 0) return;
+      try {
+        const nextUrl = canvas.toDataURL("image/jpeg", 0.55);
+        if (!cancelled) {
+          setViewfinderSnapshotUrl((previous) => (previous === nextUrl ? previous : nextUrl));
+        }
+      } catch {
+        /* ignore snapshot failures */
+      }
+    };
+    captureSnapshot();
+    const intervalId = window.setInterval(captureSnapshot, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [isConnected, sessionId]);
+
+  useEffect(() => {
+    return () => {
+      if (
+        typeof window !== "undefined" &&
+        typeof window.cancelAnimationFrame === "function" &&
+        viewfinderNavigateRafRef.current
+      ) {
+        window.cancelAnimationFrame(viewfinderNavigateRafRef.current);
+      }
     };
   }, []);
 
@@ -2076,7 +2234,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   ]);
   const viewfinderHelperText = previewNavigationEnabled
     ? viewportPreview.interactive
-      ? "Tap anywhere on the preview to recenter the live viewport."
+      ? "Drag the viewport or tap anywhere on the preview to recenter."
       : "The full desktop already fits inside the current viewport."
     : "";
   const highlightedMonitorIds =
@@ -2084,6 +2242,13 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const showViewportIndicator = Boolean(
     viewfinderViewportRect && previewNavigationEnabled && viewportPreview.interactive
   );
+  const focusedViewfinderMonitorId = singleViewfinderFrameRect
+    ? monitorSelectionId(singleViewfinderFrameRect)
+    : "";
+  const focusedViewfinderSelected =
+    Boolean(focusedViewfinderMonitorId) &&
+    highlightedMonitorIds.includes(focusedViewfinderMonitorId);
+  const showViewfinderSnapshot = Boolean(isConnected && viewfinderSnapshotUrl);
   const showViewfinderHelper = Boolean(viewfinderHelperText);
   const SidebarSection = ({ sectionId, title, children }) => (
     <Accordion
@@ -2271,7 +2436,11 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                 >
                   <Box
                     ref={viewfinderRef}
-                    onPointerDown={previewNavigationEnabled ? handlePreviewNavigate : undefined}
+                    onPointerDown={previewNavigationEnabled ? handlePreviewPointerDown : undefined}
+                    onPointerMove={previewNavigationEnabled ? handlePreviewPointerMove : undefined}
+                    onPointerUp={previewNavigationEnabled ? endPreviewDrag : undefined}
+                    onPointerCancel={previewNavigationEnabled ? endPreviewDrag : undefined}
+                    onLostPointerCapture={previewNavigationEnabled ? endPreviewDrag : undefined}
                     sx={{
                       position: "absolute",
                       inset: 10,
@@ -2307,26 +2476,23 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                             fontSize: "1rem",
                             fontWeight: 700,
                             cursor: "default",
-                            color: highlightedMonitorIds.includes(
-                              monitorSelectionId(singleViewfinderFrameRect)
-                            )
-                              ? "#08111f"
-                              : SIDEBAR_THEME.text,
-                            border: highlightedMonitorIds.includes(
-                              monitorSelectionId(singleViewfinderFrameRect)
-                            )
+                            color: focusedViewfinderSelected ? "#08111f" : SIDEBAR_THEME.text,
+                            border: focusedViewfinderSelected
                               ? "1px solid rgba(125, 201, 255, 0.42)"
                               : `1px solid ${SIDEBAR_THEME.border}`,
-                            background: highlightedMonitorIds.includes(
-                              monitorSelectionId(singleViewfinderFrameRect)
-                            )
-                              ? "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)"
-                              : singleViewfinderFrameRect.primary
-                                ? "rgba(125,183,255,0.18)"
-                                : "rgba(148,163,184,0.14)",
-                            boxShadow: highlightedMonitorIds.includes(
-                              monitorSelectionId(singleViewfinderFrameRect)
-                            )
+                            backgroundImage:
+                              showViewfinderSnapshot && !showViewportIndicator
+                                ? `linear-gradient(135deg, rgba(125,201,255,0.12), rgba(177,149,255,0.08)), url("${viewfinderSnapshotUrl}")`
+                                : focusedViewfinderSelected
+                                  ? "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)"
+                                  : singleViewfinderFrameRect.primary
+                                    ? "linear-gradient(180deg, rgba(125,183,255,0.18), rgba(125,183,255,0.18))"
+                                    : "linear-gradient(180deg, rgba(148,163,184,0.14), rgba(148,163,184,0.14))",
+                            backgroundSize:
+                              showViewfinderSnapshot && !showViewportIndicator ? "100% 100%" : "auto",
+                            backgroundPosition: "center",
+                            backgroundRepeat: "no-repeat",
+                            boxShadow: focusedViewfinderSelected
                               ? "0 10px 28px rgba(91,126,255,0.25)"
                               : "none",
                             transition: "all 140ms ease",
@@ -2345,8 +2511,12 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                               height: viewfinderViewportRect.height,
                               borderRadius: 1.5,
                               border: "2px solid rgba(125, 201, 255, 0.98)",
-                              background:
-                                "linear-gradient(135deg, rgba(125,201,255,0.18), rgba(177,149,255,0.14))",
+                              backgroundImage: showViewfinderSnapshot
+                                ? `linear-gradient(135deg, rgba(125,201,255,0.12), rgba(177,149,255,0.08)), url("${viewfinderSnapshotUrl}")`
+                                : "linear-gradient(135deg, rgba(125,201,255,0.18), rgba(177,149,255,0.14))",
+                              backgroundSize: showViewfinderSnapshot ? "100% 100%" : "auto",
+                              backgroundPosition: "center",
+                              backgroundRepeat: "no-repeat",
                               boxShadow:
                                 "0 0 0 1px rgba(8,17,31,0.62), inset 0 0 0 1px rgba(255,255,255,0.08)",
                               pointerEvents: "none",
@@ -2406,8 +2576,12 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                           height: viewfinderViewportRect.height,
                           borderRadius: 1.5,
                           border: "2px solid rgba(125, 201, 255, 0.98)",
-                          background:
-                            "linear-gradient(135deg, rgba(125,201,255,0.18), rgba(177,149,255,0.14))",
+                          backgroundImage: showViewfinderSnapshot
+                            ? `linear-gradient(135deg, rgba(125,201,255,0.12), rgba(177,149,255,0.08)), url("${viewfinderSnapshotUrl}")`
+                            : "linear-gradient(135deg, rgba(125,201,255,0.18), rgba(177,149,255,0.14))",
+                          backgroundSize: showViewfinderSnapshot ? "100% 100%" : "auto",
+                          backgroundPosition: "center",
+                          backgroundRepeat: "no-repeat",
                           boxShadow:
                             "0 0 0 1px rgba(8,17,31,0.62), inset 0 0 0 1px rgba(255,255,255,0.08)",
                           pointerEvents: "none",
