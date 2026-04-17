@@ -745,8 +745,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     const [item] = displayLayoutFrames;
     const widthPx = Math.max(2, Math.round(item.widthPx));
     const heightPx = Math.max(2, Math.round(item.heightPx));
-    const x = Math.max(0, Math.round((viewfinderSize.width - widthPx) / 2));
-    const y = Math.max(0, Math.round((viewfinderSize.height - heightPx) / 2));
+    const x = Math.max(0, (viewfinderSize.width - widthPx) / 2);
+    const y = Math.max(0, (viewfinderSize.height - heightPx) / 2);
     return {
       ...item,
       widthPx,
@@ -2284,11 +2284,78 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                       touchAction: previewNavigationEnabled ? "none" : "auto",
                     }}
                   >
-                    {isConnected
-                      ? (singleViewfinderFrameRect
-                          ? [singleViewfinderFrameRect]
-                          : displayLayoutFrames
-                        ).map((item) => {
+                    {isConnected && singleViewfinderFrameRect ? (
+                      <Box
+                        sx={{
+                          position: "absolute",
+                          left: "50%",
+                          top: "50%",
+                          width: singleViewfinderFrameRect.widthPx,
+                          height: singleViewfinderFrameRect.heightPx,
+                          transform: "translate(-50%, -50%)",
+                        }}
+                      >
+                        <Box
+                          sx={{
+                            position: "absolute",
+                            inset: 0,
+                            boxSizing: "border-box",
+                            borderRadius: 1.5,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: "1rem",
+                            fontWeight: 700,
+                            cursor: "default",
+                            color: highlightedMonitorIds.includes(
+                              monitorSelectionId(singleViewfinderFrameRect)
+                            )
+                              ? "#08111f"
+                              : SIDEBAR_THEME.text,
+                            border: highlightedMonitorIds.includes(
+                              monitorSelectionId(singleViewfinderFrameRect)
+                            )
+                              ? "1px solid rgba(125, 201, 255, 0.42)"
+                              : `1px solid ${SIDEBAR_THEME.border}`,
+                            background: highlightedMonitorIds.includes(
+                              monitorSelectionId(singleViewfinderFrameRect)
+                            )
+                              ? "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)"
+                              : singleViewfinderFrameRect.primary
+                                ? "rgba(125,183,255,0.18)"
+                                : "rgba(148,163,184,0.14)",
+                            boxShadow: highlightedMonitorIds.includes(
+                              monitorSelectionId(singleViewfinderFrameRect)
+                            )
+                              ? "0 10px 28px rgba(91,126,255,0.25)"
+                              : "none",
+                            transition: "all 140ms ease",
+                          }}
+                        >
+                          {singleViewfinderFrameRect.label}
+                        </Box>
+                        {showViewportIndicator ? (
+                          <Box
+                            sx={{
+                              position: "absolute",
+                              boxSizing: "border-box",
+                              left: viewfinderViewportRect.x - singleViewfinderFrameRect.x,
+                              top: viewfinderViewportRect.y - singleViewfinderFrameRect.y,
+                              width: viewfinderViewportRect.width,
+                              height: viewfinderViewportRect.height,
+                              borderRadius: 1.5,
+                              border: "2px solid rgba(125, 201, 255, 0.98)",
+                              background:
+                                "linear-gradient(135deg, rgba(125,201,255,0.18), rgba(177,149,255,0.14))",
+                              boxShadow:
+                                "0 0 0 1px rgba(8,17,31,0.62), inset 0 0 0 1px rgba(255,255,255,0.08)",
+                              pointerEvents: "none",
+                            }}
+                          />
+                        ) : null}
+                      </Box>
+                    ) : isConnected
+                      ? displayLayoutFrames.map((item) => {
                           const monitorId = monitorSelectionId(item);
                           const selected = highlightedMonitorIds.includes(monitorId);
                           return (
@@ -2328,7 +2395,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                           );
                         })
                       : null}
-                    {isConnected && showViewportIndicator ? (
+                    {isConnected && showViewportIndicator && !singleViewfinderFrameRect ? (
                       <Box
                         sx={{
                           position: "absolute",
