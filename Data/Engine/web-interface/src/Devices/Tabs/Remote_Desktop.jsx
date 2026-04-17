@@ -741,36 +741,20 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     [displayLayoutGeometry]
   );
   const singleViewfinderFrameRect = useMemo(() => {
-    if (viewfinderTopology.length !== 1) return null;
-    const [display] = viewfinderTopology;
-    const boundsWidth = Math.max(1, Number(display.width || 0));
-    const boundsHeight = Math.max(1, Number(display.height || 0));
-    const aspectRatio = boundsWidth / boundsHeight;
-    const inset = 10;
-    const availableWidth = Math.max(1, viewfinderSize.width - inset * 2);
-    const availableHeight = Math.max(1, viewfinderSize.height - inset * 2);
-    const widthUtilization =
-      aspectRatio >= 3
-        ? 0.82
-        : aspectRatio >= 2
-          ? 0.88
-          : 0.92;
-    const heightUtilization = 0.9;
-    const widthLimit = availableWidth * widthUtilization;
-    const heightLimit = availableHeight * heightUtilization;
-    const widthFromHeight = heightLimit * aspectRatio;
-    const resolvedWidth = Math.min(widthLimit, widthFromHeight);
-    const resolvedHeight = resolvedWidth / aspectRatio;
-    const x = Math.max(0, (viewfinderSize.width - resolvedWidth) / 2);
-    const y = Math.max(0, (viewfinderSize.height - resolvedHeight) / 2);
+    if (displayLayoutFrames.length !== 1) return null;
+    const [item] = displayLayoutFrames;
+    const widthPx = Math.max(2, Math.round(item.widthPx));
+    const heightPx = Math.max(2, Math.round(item.heightPx));
+    const x = Math.max(0, Math.round((viewfinderSize.width - widthPx) / 2));
+    const y = Math.max(0, Math.round((viewfinderSize.height - heightPx) / 2));
     return {
-      ...display,
-      widthPx: resolvedWidth,
-      heightPx: resolvedHeight,
+      ...item,
+      widthPx,
+      heightPx,
       x,
       y,
     };
-  }, [viewfinderSize.height, viewfinderSize.width, viewfinderTopology]);
+  }, [displayLayoutFrames, viewfinderSize.height, viewfinderSize.width]);
 
   const applySessionBootstrap = useCallback((data) => {
     const nextSession = data?.session && typeof data.session === "object" ? data.session : null;
