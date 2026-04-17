@@ -1912,7 +1912,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       const localX = event.clientX - rect.left;
       const localY = event.clientY - rect.top;
       const canDragViewport =
-        Boolean(showViewportIndicator) &&
+        Boolean(viewfinderViewportRect) &&
         viewportPreview.interactive &&
         localX >= viewfinderViewportRect.x &&
         localX <= viewfinderViewportRect.x + viewfinderViewportRect.width &&
@@ -1936,7 +1936,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       displayMode,
       isConnected,
       queueViewfinderNavigate,
-      showViewportIndicator,
       viewfinderViewportRect,
       viewportPreview.interactive,
     ]
