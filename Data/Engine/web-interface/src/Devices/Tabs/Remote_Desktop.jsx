@@ -428,7 +428,7 @@ function selectedDisplayBounds(topology, selectionIds) {
 
 function buildDisplayLayoutGeometry(
   topology,
-  { frameWidth = 256, frameHeight = 126, padding = 10, edgeInset = 4 } = {}
+  { frameWidth = 256, frameHeight = 126, padding = 0, edgeInset = 0 } = {}
 ) {
   const bounds = displayTopologyBounds(topology);
   if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
@@ -2133,8 +2133,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                   Viewfinder
                 </Typography>
                 <Box
-                  ref={viewfinderRef}
-                  onPointerDown={previewNavigationEnabled ? handlePreviewNavigate : undefined}
                   sx={{
                     position: "relative",
                     height: 126,
@@ -2143,72 +2141,82 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                     background: "rgba(7,12,23,0.82)",
                     overflow: "hidden",
                     opacity: displaySettingsEnabled ? 1 : 0.6,
-                    cursor: previewNavigationEnabled
-                      ? viewportPreview.interactive
-                        ? "crosshair"
-                        : "default"
-                      : "default",
-                    touchAction: previewNavigationEnabled ? "none" : "auto",
                   }}
                 >
-                  {isConnected
-                    ? displayLayoutFrames.map((item) => {
-                        const monitorId = monitorSelectionId(item);
-                        const selected = highlightedMonitorIds.includes(monitorId);
-                        return (
-                          <Box
-                            key={item.id}
-                            sx={{
-                              position: "absolute",
-                              left: item.x,
-                              top: item.y,
-                              width: item.widthPx,
-                              height: item.heightPx,
-                              borderRadius: 1.5,
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              fontSize: "1rem",
-                              fontWeight: 700,
-                              cursor: "default",
-                              color: selected ? "#08111f" : SIDEBAR_THEME.text,
-                              border: selected
-                                ? "1px solid transparent"
-                                : `1px solid ${SIDEBAR_THEME.border}`,
-                              background: selected
-                                ? "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)"
-                                : item.primary
-                                  ? "rgba(125,183,255,0.18)"
-                                  : "rgba(148,163,184,0.14)",
-                              boxShadow: selected
-                                ? "0 10px 28px rgba(91,126,255,0.25)"
-                                : "none",
-                              transition: "all 140ms ease",
-                            }}
-                          >
-                            {item.label}
-                          </Box>
-                        );
-                      })
-                    : null}
-                  {isConnected && showViewportIndicator ? (
-                    <Box
-                      sx={{
-                        position: "absolute",
-                        left: viewfinderViewportRect.x,
-                        top: viewfinderViewportRect.y,
-                        width: viewfinderViewportRect.width,
-                        height: viewfinderViewportRect.height,
-                        borderRadius: 1.5,
-                        border: "2px solid rgba(125, 201, 255, 0.98)",
-                        background:
-                          "linear-gradient(135deg, rgba(125,201,255,0.18), rgba(177,149,255,0.14))",
-                        boxShadow:
-                          "0 0 0 1px rgba(8,17,31,0.62), inset 0 0 0 1px rgba(255,255,255,0.08)",
-                        pointerEvents: "none",
-                      }}
-                    />
-                  ) : null}
+                  <Box
+                    ref={viewfinderRef}
+                    onPointerDown={previewNavigationEnabled ? handlePreviewNavigate : undefined}
+                    sx={{
+                      position: "absolute",
+                      inset: 10,
+                      overflow: "hidden",
+                      cursor: previewNavigationEnabled
+                        ? viewportPreview.interactive
+                          ? "crosshair"
+                          : "default"
+                        : "default",
+                      touchAction: previewNavigationEnabled ? "none" : "auto",
+                    }}
+                  >
+                    {isConnected
+                      ? displayLayoutFrames.map((item) => {
+                          const monitorId = monitorSelectionId(item);
+                          const selected = highlightedMonitorIds.includes(monitorId);
+                          return (
+                            <Box
+                              key={item.id}
+                              sx={{
+                                position: "absolute",
+                                left: item.x,
+                                top: item.y,
+                                width: item.widthPx,
+                                height: item.heightPx,
+                                borderRadius: 1.5,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                fontSize: "1rem",
+                                fontWeight: 700,
+                                cursor: "default",
+                                color: selected ? "#08111f" : SIDEBAR_THEME.text,
+                                border: selected
+                                  ? "1px solid transparent"
+                                  : `1px solid ${SIDEBAR_THEME.border}`,
+                                background: selected
+                                  ? "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)"
+                                  : item.primary
+                                    ? "rgba(125,183,255,0.18)"
+                                    : "rgba(148,163,184,0.14)",
+                                boxShadow: selected
+                                  ? "0 10px 28px rgba(91,126,255,0.25)"
+                                  : "none",
+                                transition: "all 140ms ease",
+                              }}
+                            >
+                              {item.label}
+                            </Box>
+                          );
+                        })
+                      : null}
+                    {isConnected && showViewportIndicator ? (
+                      <Box
+                        sx={{
+                          position: "absolute",
+                          left: viewfinderViewportRect.x,
+                          top: viewfinderViewportRect.y,
+                          width: viewfinderViewportRect.width,
+                          height: viewfinderViewportRect.height,
+                          borderRadius: 1.5,
+                          border: "2px solid rgba(125, 201, 255, 0.98)",
+                          background:
+                            "linear-gradient(135deg, rgba(125,201,255,0.18), rgba(177,149,255,0.14))",
+                          boxShadow:
+                            "0 0 0 1px rgba(8,17,31,0.62), inset 0 0 0 1px rgba(255,255,255,0.08)",
+                          pointerEvents: "none",
+                        }}
+                      />
+                    ) : null}
+                  </Box>
                 </Box>
                 {showViewfinderHelper ? (
                   <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
