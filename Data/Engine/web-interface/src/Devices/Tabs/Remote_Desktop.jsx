@@ -2167,6 +2167,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                               key={item.id}
                               sx={{
                                 position: "absolute",
+                                boxSizing: "border-box",
                                 left: item.x,
                                 top: item.y,
                                 width: item.widthPx,
@@ -2202,6 +2203,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                       <Box
                         sx={{
                           position: "absolute",
+                          boxSizing: "border-box",
                           left: viewfinderViewportRect.x,
                           top: viewfinderViewportRect.y,
                           width: viewfinderViewportRect.width,
