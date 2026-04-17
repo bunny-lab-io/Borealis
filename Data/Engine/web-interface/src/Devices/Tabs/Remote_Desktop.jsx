@@ -1968,7 +1968,9 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     : "";
   const highlightedMonitorIds =
     selectedDisplayId === ALL_DISPLAYS_ID ? [] : effectiveSelectedMonitorIds;
-  const showViewportIndicator = Boolean(viewfinderViewportRect);
+  const showViewportIndicator = Boolean(
+    viewfinderViewportRect && previewNavigationEnabled && viewportPreview.interactive
+  );
   const showViewfinderHelper = Boolean(viewfinderHelperText);
   const SidebarSection = ({ sectionId, title, children }) => (
     <Accordion
