@@ -1932,18 +1932,34 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     const rawY =
       displayLayoutGeometry.offsetY +
       (viewportPreview.top - displayLayoutGeometry.bounds.top) * displayLayoutGeometry.scale;
+    const rawTargetX =
+      displayLayoutGeometry.offsetX +
+      (viewportPreview.targetLeft - displayLayoutGeometry.bounds.left) * displayLayoutGeometry.scale;
+    const rawTargetY =
+      displayLayoutGeometry.offsetY +
+      (viewportPreview.targetTop - displayLayoutGeometry.bounds.top) * displayLayoutGeometry.scale;
     const insetPadding = displayLayoutGeometry.padding + (displayLayoutGeometry.edgeInset || 0);
     const maxRight = displayLayoutGeometry.frameWidth - insetPadding;
     const maxBottom = displayLayoutGeometry.frameHeight - insetPadding;
-    const x = clampNumber(rawX, insetPadding, maxRight);
-    const y = clampNumber(rawY, insetPadding, maxBottom);
+    const targetX = clampNumber(rawTargetX, insetPadding, maxRight);
+    const targetY = clampNumber(rawTargetY, insetPadding, maxBottom);
+    const targetRight = Math.max(
+      targetX,
+      Math.min(maxRight, targetX + viewportPreview.targetWidth * displayLayoutGeometry.scale)
+    );
+    const targetBottom = Math.max(
+      targetY,
+      Math.min(maxBottom, targetY + viewportPreview.targetHeight * displayLayoutGeometry.scale)
+    );
+    const x = clampNumber(rawX, targetX, Math.max(targetX, targetRight - 2));
+    const y = clampNumber(rawY, targetY, Math.max(targetY, targetBottom - 2));
     const width = Math.max(
       2,
-      Math.min(viewportPreview.width * displayLayoutGeometry.scale, maxRight - x)
+      Math.min(viewportPreview.width * displayLayoutGeometry.scale, targetRight - x)
     );
     const height = Math.max(
       2,
-      Math.min(viewportPreview.height * displayLayoutGeometry.scale, maxBottom - y)
+      Math.min(viewportPreview.height * displayLayoutGeometry.scale, targetBottom - y)
     );
     return {
       x,
@@ -1958,6 +1974,10 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     viewportPreview.height,
     viewportPreview.interactive,
     viewportPreview.left,
+    viewportPreview.targetHeight,
+    viewportPreview.targetLeft,
+    viewportPreview.targetTop,
+    viewportPreview.targetWidth,
     viewportPreview.top,
     viewportPreview.width,
   ]);
