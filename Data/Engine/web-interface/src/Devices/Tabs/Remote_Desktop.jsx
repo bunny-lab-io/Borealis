@@ -430,7 +430,6 @@ function buildDisplayLayoutGeometry(
   topology,
   { frameWidth = 256, frameHeight = 126, padding = 6, edgeInset = 0 } = {}
 ) {
-  const previewUtilization = 0.9;
   const bounds = displayTopologyBounds(topology);
   if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
     return {
@@ -448,9 +447,17 @@ function buildDisplayLayoutGeometry(
   const insetPadding = padding + edgeInset;
   const innerWidth = Math.max(1, frameWidth - insetPadding * 2);
   const innerHeight = Math.max(1, frameHeight - insetPadding * 2);
+  const aspectRatio = bounds.width / bounds.height;
+  const horizontalUtilization =
+    aspectRatio >= 3
+      ? 0.78
+      : aspectRatio >= 2
+        ? 0.84
+        : 0.9;
+  const verticalUtilization = 0.9;
   const scale = Math.min(
-    (innerWidth * previewUtilization) / bounds.width,
-    (innerHeight * previewUtilization) / bounds.height
+    (innerWidth * horizontalUtilization) / bounds.width,
+    (innerHeight * verticalUtilization) / bounds.height
   );
   const layoutWidth = bounds.width * scale;
   const layoutHeight = bounds.height * scale;
