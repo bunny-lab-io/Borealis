@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { useLoaderData, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Alert,
   Autocomplete,
@@ -37,6 +37,13 @@ import {
 } from "../../Assemblies/assemblyUtils";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
+import {
+  createRouteRequestPlan,
+  fetchRouteJson,
+  getRouteErrorMessage,
+  requireAuthenticatedRequest,
+  rethrowIfRouteRedirect,
+} from "../../app/routes/routeData.js";
 import { APP_PATHS } from "../../app/routes/paths.js";
 import {
   GRID_WRAPPER_SX,
@@ -1261,7 +1268,54 @@ function ActionCard({ action, assemblyOptions, onAssemblyChange, onVariableChang
   );
 }
 
+export async function loadWatchdogEditorPageData(request, routeWatchdogId) {
+  const watchdogId = String(routeWatchdogId || "").trim();
+  const progress = createRouteRequestPlan(request, 7);
+
+  try {
+    await requireAuthenticatedRequest(request, progress);
+    const [metadataPayload, sitesPayload, filtersPayload, assembliesPayload, watchdogPayload] =
+      await Promise.all([
+        progress.fetchJson("/api/watchdogs/metadata"),
+        progress.fetchJson("/api/sites"),
+        progress.fetchJson("/api/device_filters?archived=0"),
+        progress.fetchJson("/api/assemblies"),
+        watchdogId ? progress.fetchJson(`/api/watchdogs/${encodeURIComponent(watchdogId)}`) : Promise.resolve(null),
+      ]);
+    if (!watchdogId) {
+      progress.skip(1);
+    }
+
+    const normalizedAssemblies = parseAssembliesCollectionPayload(assembliesPayload || {});
+    return {
+      metadata: metadataPayload || {},
+      sites: Array.isArray(sitesPayload?.sites) ? sitesPayload.sites : [],
+      filters: Array.isArray(filtersPayload?.filters)
+        ? filtersPayload.filters
+        : Array.isArray(filtersPayload?.items)
+          ? filtersPayload.items
+          : [],
+      assemblyOptions: buildAssemblyIndex(normalizedAssemblies.items, normalizedAssemblies.queue).records,
+      watchdog: watchdogPayload || null,
+      initialError: "",
+    };
+  } catch (error) {
+    rethrowIfRouteRedirect(error);
+    return {
+      metadata: {},
+      sites: [],
+      filters: [],
+      assemblyOptions: [],
+      watchdog: null,
+      initialError: getRouteErrorMessage(error, "Unable to load watchdog editor."),
+    };
+  } finally {
+    progress.finalize();
+  }
+}
+
 export default function WatchdogEditor() {
+  const loaderData = useLoaderData();
   const location = useLocation();
   const navigate = useNavigate();
   const { watchdogId } = useParams();
@@ -1270,15 +1324,23 @@ export default function WatchdogEditor() {
   const assemblyExportCacheRef = useRef(new Map());
   const pendingAssemblyHydrationRef = useRef(new Set());
   const [activeTab, setActiveTab] = useState("name");
-  const [formState, setFormState] = useState(() => defaultWatchdog(watchDraftFromLocation(location.state)));
-  const [metadata, setMetadata] = useState({});
-  const [sites, setSites] = useState([]);
-  const [filters, setFilters] = useState([]);
-  const [assemblyOptions, setAssemblyOptions] = useState([]);
+  const [formState, setFormState] = useState(() =>
+    defaultWatchdog(loaderData?.watchdog || watchDraftFromLocation(location.state))
+  );
+  const [metadata, setMetadata] = useState(() => loaderData?.metadata || {});
+  const [sites, setSites] = useState(() =>
+    Array.isArray(loaderData?.sites) ? loaderData.sites : []
+  );
+  const [filters, setFilters] = useState(() =>
+    Array.isArray(loaderData?.filters) ? loaderData.filters : []
+  );
+  const [assemblyOptions, setAssemblyOptions] = useState(() =>
+    Array.isArray(loaderData?.assemblyOptions) ? loaderData.assemblyOptions : []
+  );
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => String(loaderData?.initialError || ""));
   const [validationErrors, setValidationErrors] = useState([]);
   const [previewRows, setPreviewRows] = useState([]);
   const [previewSummary, setPreviewSummary] = useState({ device_count: 0, matched_count: 0 });
@@ -1352,8 +1414,22 @@ export default function WatchdogEditor() {
   }, [hydrateFromRecord, location.state, watchdogId]);
 
   useEffect(() => {
-    loadInitialData();
-  }, [loadInitialData]);
+    if (!loaderData) {
+      loadInitialData();
+      return;
+    }
+    setMetadata(loaderData?.metadata || {});
+    setSites(Array.isArray(loaderData?.sites) ? loaderData.sites : []);
+    setFilters(Array.isArray(loaderData?.filters) ? loaderData.filters : []);
+    setAssemblyOptions(Array.isArray(loaderData?.assemblyOptions) ? loaderData.assemblyOptions : []);
+    if (loaderData?.watchdog) {
+      hydrateFromRecord(loaderData.watchdog);
+    } else {
+      hydrateFromRecord(watchDraftFromLocation(location.state));
+    }
+    setError(String(loaderData?.initialError || ""));
+    setLoading(false);
+  }, [hydrateFromRecord, loadInitialData, loaderData, location.state]);
 
   useEffect(() => {
     setPreviewStale(true);

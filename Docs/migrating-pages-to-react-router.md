@@ -55,6 +55,12 @@ Document the Borealis WebUI router architecture and provide a repeatable migrati
   - `return <DeviceSummary />;`
   - `return <CreateJob />;`
 - Do not move API fetching into router loaders/actions in this migration unless the product work explicitly calls for it.
+- Buffered page hydration is now an approved product pattern for data-heavy pages that should not flash empty grids or half-hydrated editors during navigation.
+- When a page adopts buffered hydration:
+  - keep the route module as the boundary that exports `*RouteLoader`
+  - move only first-paint critical data into the loader
+  - leave background polling, dialog-only fetches, and hidden-tab fetches in the page component
+  - initialize page state from `useLoaderData()` before any mount-time refresh logic runs
 
 ## Route-Native Conversion Pattern
 - Replace prop-derived identifiers with `useParams()`.
@@ -195,3 +201,4 @@ function openQuickJob(hostnames) {
 - If a page still needs the adapter bridge, keep the bridge thin and obvious.
 - Preserve deep-link refresh behavior before cleaning up internal code style.
 - When a migration adds dependencies or changes shell ownership, update docs and `SBOM.md` in the same change.
+- For buffered routes, verify the old page remains visible while the next route loader is pending and that the page does not render an empty-shell first paint before its critical loader data arrives.

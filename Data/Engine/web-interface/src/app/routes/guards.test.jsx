@@ -31,7 +31,7 @@ function renderGuardedRouter({ authValue, guardElement, initialEntries, protecte
 
 describe("route guards", () => {
   it("redirects unauthenticated users to login", async () => {
-    renderGuardedRouter({
+    const router = renderGuardedRouter({
       authValue: {
         ready: true,
         isAuthenticated: false,
@@ -45,9 +45,11 @@ describe("route guards", () => {
     await waitFor(() => {
       expect(screen.getByText("Login Page")).toBeInTheDocument();
     });
+    expect(router.state.location.pathname).toBe("/login");
+    expect(router.state.location.search).toBe("?next=%2Fprotected");
   });
 
-  it("redirects non-admin users to sites and sets the not-authorized state flag", async () => {
+  it("redirects non-admin users to sites with the not-authorized query flag", async () => {
     const router = renderGuardedRouter({
       authValue: {
         ready: true,
@@ -62,6 +64,7 @@ describe("route guards", () => {
     await waitFor(() => {
       expect(screen.getByText("Sites Page")).toBeInTheDocument();
     });
-    expect(router.state.location.state?.showNotAuthorizedDialog).toBe(true);
+    expect(router.state.location.pathname).toBe("/sites");
+    expect(router.state.location.search).toBe("?not_authorized=1");
   });
 });

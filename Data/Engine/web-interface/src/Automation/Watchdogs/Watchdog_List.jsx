@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLoaderData, useNavigate } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -21,6 +21,13 @@ import { AllCommunityModule, ModuleRegistry } from "ag-grid-community";
 
 import PageBodyFrame from "../../PageBodyFrame.jsx";
 import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
+import {
+  createRouteRequestPlan,
+  fetchRouteJson,
+  getRouteErrorMessage,
+  requireAuthenticatedRequest,
+  rethrowIfRouteRedirect,
+} from "../../app/routes/routeData.js";
 import { APP_PATHS } from "../../app/routes/paths.js";
 import {
   GRID_WRAPPER_SX,
@@ -38,14 +45,43 @@ const PAGE_TITLE = "Watchdogs";
 const PAGE_SUBTITLE =
   "Design device-targeted watchdog policies that evaluate Borealis inventory, explain why they matched, and launch native remediation.";
 
+export async function loadWatchdogListPageData(request) {
+  const progress = createRouteRequestPlan(request, 4);
+  try {
+    await requireAuthenticatedRequest(request, progress);
+    const [activePayload, archivedPayload] = await Promise.all([
+      progress.fetchJson("/api/watchdogs?archived=0"),
+      progress.fetchJson("/api/watchdogs?archived=1"),
+    ]);
+
+    return {
+      items: Array.isArray(activePayload?.items) ? activePayload.items : [],
+      archivedItems: Array.isArray(archivedPayload?.items) ? archivedPayload.items : [],
+      initialError: "",
+    };
+  } catch (error) {
+    rethrowIfRouteRedirect(error);
+    return {
+      items: [],
+      archivedItems: [],
+      initialError: getRouteErrorMessage(error, "Failed to load watchdogs."),
+    };
+  } finally {
+    progress.finalize();
+  }
+}
+
 export default function WatchdogList() {
+  const loaderData = useLoaderData();
   const navigate = useNavigate();
   const gridRef = useRef(null);
-  const [items, setItems] = useState([]);
-  const [archivedItems, setArchivedItems] = useState([]);
+  const [items, setItems] = useState(() => (Array.isArray(loaderData?.items) ? loaderData.items : []));
+  const [archivedItems, setArchivedItems] = useState(() =>
+    Array.isArray(loaderData?.archivedItems) ? loaderData.archivedItems : []
+  );
   const [activeTab, setActiveTab] = useState("active");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => String(loaderData?.initialError || ""));
   const [selectedIds, setSelectedIds] = useState([]);
 
   const rowSelection = useMemo(
@@ -103,8 +139,14 @@ export default function WatchdogList() {
   }, []);
 
   useEffect(() => {
-    loadItems();
-  }, [loadItems]);
+    if (!loaderData) {
+      loadItems();
+      return;
+    }
+    setItems(Array.isArray(loaderData?.items) ? loaderData.items : []);
+    setArchivedItems(Array.isArray(loaderData?.archivedItems) ? loaderData.archivedItems : []);
+    setError(String(loaderData?.initialError || ""));
+  }, [loadItems, loaderData]);
 
   useEffect(() => {
     const socket = typeof window !== "undefined" ? window.BorealisSocket : null;

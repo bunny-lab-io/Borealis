@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { APP_PATHS, buildSiteAssignmentPath } from "./paths.js";
+import {
+  APP_PATHS,
+  buildLoginPath,
+  buildSiteAssignmentPath,
+  buildSitesPath,
+  normalizeAppRedirectTarget,
+} from "./paths.js";
 
 describe("route path helpers", () => {
   it("builds canonical resource routes", () => {
@@ -17,5 +23,19 @@ describe("route path helpers", () => {
     expect(buildSiteAssignmentPath(["alice", "bob"])).toBe(
       `${APP_PATHS.siteAssignment}?user=alice&user=bob`
     );
+  });
+
+  it("builds loader-friendly redirect paths", () => {
+    expect(buildLoginPath("/devices/alpha?tab=device_summary")).toBe(
+      "/login?next=%2Fdevices%2Falpha%3Ftab%3Ddevice_summary"
+    );
+    expect(buildSitesPath({ notAuthorized: true })).toBe("/sites?not_authorized=1");
+  });
+
+  it("sanitizes redirect targets to internal app paths only", () => {
+    expect(normalizeAppRedirectTarget("/devices/alpha")).toBe("/devices/alpha");
+    expect(normalizeAppRedirectTarget("https://example.com")).toBe("");
+    expect(normalizeAppRedirectTarget("//example.com")).toBe("");
+    expect(normalizeAppRedirectTarget("/login")).toBe("");
   });
 });

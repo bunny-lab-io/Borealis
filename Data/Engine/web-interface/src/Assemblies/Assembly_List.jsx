@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLoaderData, useNavigate } from "react-router-dom";
 import {
   Paper,
   Box,
@@ -41,6 +41,13 @@ import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import { useAuth } from "../app/providers/AuthContext.jsx";
+import {
+  createRouteRequestPlan,
+  fetchRouteJson,
+  getRouteErrorMessage,
+  requireAuthenticatedRequest,
+  rethrowIfRouteRedirect,
+} from "../app/routes/routeData.js";
 import { APP_PATHS } from "../app/routes/paths.js";
 
 import { Apps as AppsIcon } from "@mui/icons-material";
@@ -510,26 +517,82 @@ const formatOfficialUpdateAllMessage = (payload) => {
   return sentences.join(" ");
 };
 
+const DEFAULT_CATALOG_STATUS = {
+  repoUrl: AURORA_REPOSITORY_URL,
+  source: "bundled",
+  available: false,
+  updateCount: 0,
+  newAssemblyCount: 0,
+  metadataRefreshCount: 0,
+  actionableCount: 0,
+  deletedAssemblyCount: 0,
+  error: "",
+  warning: "",
+  hasChecked: false,
+};
+
+function buildAssembliesRouteSnapshot(payload) {
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  const queue = Array.isArray(payload?.queue) ? payload.queue : [];
+  const officialCatalog =
+    payload?.official_catalog && typeof payload.official_catalog === "object"
+      ? payload.official_catalog
+      : {};
+  const queueMap = queue.reduce((acc, entry) => {
+    if (entry && entry.assembly_guid) {
+      acc[entry.assembly_guid] = entry;
+    }
+    return acc;
+  }, {});
+  const rows = items
+    .map((item) => normalizeRow(item, queueMap[item?.assembly_guid || item?.assembly_id || ""]))
+    .filter(Boolean);
+
+  return {
+    rows,
+    catalogStatus: {
+      ...DEFAULT_CATALOG_STATUS,
+      repoUrl: officialCatalog?.repo_url || AURORA_REPOSITORY_URL,
+      source: officialCatalog?.source || "bundled",
+    },
+  };
+}
+
+export async function loadAssemblyListPageData(request) {
+  const progress = createRouteRequestPlan(request, 3);
+  try {
+    await requireAuthenticatedRequest(request, progress);
+    const payload = await progress.fetchJson("/api/assemblies");
+    return {
+      ...buildAssembliesRouteSnapshot(payload),
+      initialError: "",
+    };
+  } catch (error) {
+    rethrowIfRouteRedirect(error);
+    return {
+      rows: [],
+      catalogStatus: DEFAULT_CATALOG_STATUS,
+      initialError: getRouteErrorMessage(error, "Failed to load assemblies."),
+    };
+  } finally {
+    progress.finalize();
+  }
+}
+
 export default function AssemblyList() {
+  const loaderData = useLoaderData();
   const navigate = useNavigate();
   const { role } = useAuth();
   const gridRef = useRef(null);
-  const [rows, setRows] = useState([]);
+  const initialRows = Array.isArray(loaderData?.rows) ? loaderData.rows : [];
+  const initialCatalogStatus =
+    loaderData?.catalogStatus && typeof loaderData.catalogStatus === "object"
+      ? loaderData.catalogStatus
+      : DEFAULT_CATALOG_STATUS;
+  const [rows, setRows] = useState(() => initialRows);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [catalogStatus, setCatalogStatus] = useState({
-    repoUrl: AURORA_REPOSITORY_URL,
-    source: "bundled",
-    available: false,
-    updateCount: 0,
-    newAssemblyCount: 0,
-    metadataRefreshCount: 0,
-    actionableCount: 0,
-    deletedAssemblyCount: 0,
-    error: "",
-    warning: "",
-    hasChecked: false,
-  });
+  const [error, setError] = useState(() => String(loaderData?.initialError || ""));
+  const [catalogStatus, setCatalogStatus] = useState(() => initialCatalogStatus);
 
   const [newMenuAnchor, setNewMenuAnchor] = useState(null);
   const [scriptDialog, setScriptDialog] = useState({ open: false, typeKey: null });
@@ -643,8 +706,10 @@ export default function AssemblyList() {
   }, [sendNotification]);
 
   useEffect(() => {
-    fetchAssemblies();
-  }, [fetchAssemblies]);
+    setRows(initialRows);
+    setCatalogStatus(initialCatalogStatus);
+    setError(String(loaderData?.initialError || ""));
+  }, [initialCatalogStatus, initialRows, loaderData]);
 
   const openRow = useCallback(
     (row) => {

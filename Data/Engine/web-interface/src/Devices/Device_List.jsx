@@ -1,7 +1,7 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/web-interface/src/Devices/Device_List.jsx
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLoaderData, useNavigate } from "react-router-dom";
 import {
   Alert,
   Paper,
@@ -28,6 +28,13 @@ import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import { useAuth } from "../app/providers/AuthContext.jsx";
+import {
+  createRouteRequestPlan,
+  fetchRouteJson,
+  getRouteErrorMessage,
+  requireAuthenticatedRequest,
+  rethrowIfRouteRedirect,
+} from "../app/routes/routeData.js";
 import { APP_PATHS } from "../app/routes/paths.js";
 import { createQuickJobDraft } from "../app/utils/quickJob.js";
 
@@ -352,6 +359,202 @@ function formatUptime(seconds) {
   return parts.join(' ');
 }
 
+function normalizeDeviceCollection(
+  list,
+  {
+    tunnelLookup = new Map(),
+    tunnelStatusLookup = new Map(),
+  } = {}
+) {
+  const safeList = Array.isArray(list) ? list : [];
+
+  const normalizeJson = (value) => {
+    if (!value) return "";
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "";
+    }
+  };
+
+  return safeList.map((device, index) => {
+    const summary = device && typeof device.summary === "object" ? { ...device.summary } : {};
+    const rawHostname = (device.hostname || summary.hostname || "").trim();
+    const hostname = rawHostname || `device-${index + 1}`;
+    const agentId = (device.agent_id || summary.agent_id || "").trim();
+    const guidRaw = (device.agent_guid || summary.agent_guid || "").trim();
+    const rowKey = guidRaw || agentId || hostname || `device-${index + 1}`;
+    const lastSeen = Number(device.last_seen || summary.last_seen || 0) || 0;
+    const status = device.status || statusFromHeartbeat(lastSeen);
+
+    if (guidRaw && !summary.agent_guid) {
+      summary.agent_guid = guidRaw;
+    }
+
+    let createdTs = Number(device.created_at || 0) || 0;
+    let createdDisplay = summary.created || "";
+    if (!createdTs && createdDisplay) {
+      const parsed = Date.parse(createdDisplay.replace(" ", "T"));
+      if (!Number.isNaN(parsed)) createdTs = Math.floor(parsed / 1000);
+    }
+    if (!createdDisplay && device.created_at_iso) {
+      try {
+        createdDisplay = new Date(device.created_at_iso).toLocaleString();
+      } catch {
+        createdDisplay = "";
+      }
+    }
+
+    const osName =
+      device.operating_system ||
+      summary.operating_system ||
+      summary.agent_operating_system ||
+      "-";
+    const type = (device.device_type || summary.device_type || "").trim();
+    const lastUser = (device.last_user || summary.last_user || "").trim();
+    const domain = (device.domain || summary.domain || "").trim();
+    const internalIp = (device.internal_ip || summary.internal_ip || "").trim();
+    const externalIp = (device.external_ip || summary.external_ip || "").trim();
+    const agentLookupKey = (agentId || guidRaw || "").toLowerCase();
+    const tunnelPeerIp = agentLookupKey ? tunnelLookup.get(agentLookupKey) || "" : "";
+    const wireguardVpnStatus = agentLookupKey
+      ? tunnelStatusLookup.get(agentLookupKey) || "Offline"
+      : "Offline";
+    const wireguardPeerIp = (
+      device.wireguard_peer_ip ||
+      device.peer_ip ||
+      device.virtual_ip ||
+      device.vpn_ip ||
+      summary.wireguard_peer_ip ||
+      summary.peer_ip ||
+      summary.virtual_ip ||
+      summary.vpn_ip ||
+      summary.wireguard_virtual_ip ||
+      tunnelPeerIp ||
+      ""
+    )
+      .toString()
+      .trim();
+    const lastReboot = (device.last_reboot || summary.last_reboot || "").trim();
+    const uptimeSeconds = Number(
+      device.uptime ||
+        summary.uptime_sec ||
+        summary.uptime_seconds ||
+        summary.uptime ||
+        0
+    ) || 0;
+    const connectionType = (device.connection_type || summary.connection_type || "")
+      .trim()
+      .toLowerCase();
+    const connectionLabel =
+      connectionType === "ssh" ? "SSH" : connectionType === "winrm" ? "WinRM" : "";
+    const connectionEndpoint = (device.connection_endpoint || summary.connection_endpoint || "").trim();
+
+    const memoryList = Array.isArray(device.memory) ? device.memory : [];
+    const networkList = Array.isArray(device.network) ? device.network : [];
+    const softwareList = Array.isArray(device.software) ? device.software : [];
+    const storageList = Array.isArray(device.storage) ? device.storage : [];
+    const cpuObj =
+      (device.cpu && typeof device.cpu === "object" && device.cpu) ||
+      (summary.cpu && typeof summary.cpu === "object" ? summary.cpu : {});
+
+    const memoryDisplay = memoryList.length ? `${memoryList.length} module(s)` : "";
+    const networkDisplay = networkList.length
+      ? networkList.map((n) => n.adapter || n.name || "").filter(Boolean).join(", ")
+      : "";
+    const softwareDisplay = softwareList.length ? `${softwareList.length} item(s)` : "";
+    const storageDisplay = storageList.length ? `${storageList.length} volume(s)` : "";
+    const cpuDisplay = cpuObj.name || summary.processor || "";
+
+    return {
+      id: rowKey,
+      hostname,
+      status,
+      lastSeen,
+      lastSeenDisplay: formatLastSeen(lastSeen),
+      os: osName,
+      lastUser,
+      type: type || connectionLabel || "",
+      site: device.site_name || "Not Configured",
+      siteId: device.site_id || null,
+      siteDescription: device.site_description || "",
+      description: (device.description || summary.description || "").trim(),
+      created: createdDisplay,
+      createdTs,
+      createdIso: device.created_at_iso || "",
+      agentGuid: guidRaw,
+      agentId,
+      domain,
+      internalIp,
+      externalIp,
+      wireguardVpnStatus,
+      wireguardPeerIp,
+      lastReboot,
+      uptime: uptimeSeconds,
+      uptimeDisplay: formatUptime(uptimeSeconds),
+      memory: memoryDisplay,
+      memoryRaw: normalizeJson(memoryList),
+      network: networkDisplay,
+      networkRaw: normalizeJson(networkList),
+      software: softwareDisplay,
+      softwareRaw: normalizeJson(softwareList),
+      storage: storageDisplay,
+      storageRaw: normalizeJson(storageList),
+      cpu: cpuDisplay,
+      cpuRaw: normalizeJson(cpuObj),
+      summary,
+      details: device.details || {},
+      connectionType,
+      connectionLabel,
+      connectionEndpoint,
+      isRemote: Boolean(connectionLabel),
+    };
+  });
+}
+
+function filterDeviceRowsByMode(rows, filterMode) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  if (filterMode === "agent") {
+    return safeRows.filter((row) => !row.connectionType);
+  }
+  if (filterMode === "ssh") {
+    return safeRows.filter((row) => row.connectionType === "ssh");
+  }
+  if (filterMode === "winrm") {
+    return safeRows.filter((row) => row.connectionType === "winrm");
+  }
+  return safeRows;
+}
+
+export async function loadDeviceListPageData(request) {
+  const progress = createRouteRequestPlan(request, 5);
+  try {
+    await requireAuthenticatedRequest(request, progress);
+    const [devicesPayload, viewsPayload, sitesPayload] = await Promise.all([
+      progress.fetchJson("/api/devices"),
+      progress.fetchJson("/api/device_list_views").catch(() => ({ views: [] })),
+      progress.fetchJson("/api/sites").catch(() => ({ sites: [] })),
+    ]);
+
+    return {
+      rows: normalizeDeviceCollection(devicesPayload?.devices || []),
+      views: Array.isArray(viewsPayload?.views) ? viewsPayload.views : [],
+      sites: Array.isArray(sitesPayload?.sites) ? sitesPayload.sites : [],
+      initialError: "",
+    };
+  } catch (error) {
+    rethrowIfRouteRedirect(error);
+    return {
+      rows: [],
+      views: [],
+      sites: [],
+      initialError: getRouteErrorMessage(error, "Failed to load devices."),
+    };
+  } finally {
+    progress.finalize();
+  }
+}
+
 export default function DeviceList({
   filterMode = "all",
   title,
@@ -359,9 +562,23 @@ export default function DeviceList({
   addButtonLabel,
   defaultAddType,
 }) {
+  const loaderData = useLoaderData();
   const navigate = useNavigate();
   const { isAdmin, user } = useAuth();
-  const [rows, setRows] = useState([]);
+  const initialRows = useMemo(
+    () => filterDeviceRowsByMode(loaderData?.rows, filterMode),
+    [filterMode, loaderData?.rows]
+  );
+  const initialViews = useMemo(
+    () => (Array.isArray(loaderData?.views) ? loaderData.views : []),
+    [loaderData?.views]
+  );
+  const initialSites = useMemo(
+    () => (Array.isArray(loaderData?.sites) ? loaderData.sites : []),
+    [loaderData?.sites]
+  );
+  const initialError = String(loaderData?.initialError || "");
+  const [rows, setRows] = useState(() => initialRows);
   const [loading, setLoading] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [selected, setSelected] = useState(null);
@@ -427,8 +644,8 @@ export default function DeviceList({
   });
 
   // Saved custom views (from server)
-  const [views, setViews] = useState([]); // [{id, name, columns:[id], filters:{}}]
-  const [viewsLoaded, setViewsLoaded] = useState(false);
+  const [views, setViews] = useState(() => initialViews); // [{id, name, columns:[id], filters:{}}]
+  const [viewsLoaded, setViewsLoaded] = useState(() => initialViews.length > 0);
   const [selectedViewId, setSelectedViewId] = useState("default");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newViewName, setNewViewName] = useState("");
@@ -579,13 +796,14 @@ export default function DeviceList({
 
   const filters = filtersState;
 
-  const [sites, setSites] = useState([]); // sites list for assignment
+  const [sites, setSites] = useState(() => initialSites); // sites list for assignment
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [assignSiteId, setAssignSiteId] = useState(null);
   const [assignTargets, setAssignTargets] = useState([]); // hostnames
   const [savedFilterPreview, setSavedFilterPreview] = useState(null);
   const [savedFilterHostnames, setSavedFilterHostnames] = useState(null);
   const [savedFilterPreviewError, setSavedFilterPreviewError] = useState("");
+  const [routeLoadError, setRouteLoadError] = useState(() => initialError);
 
   const gridWrapperClass = themeClassName;
 
@@ -721,156 +939,17 @@ export default function DeviceList({
         throw err;
       }
       const payload = await res.json();
-      const list = Array.isArray(payload?.devices) ? payload.devices : [];
-
-      const normalizeJson = (value) => {
-        if (!value) return '';
-        try {
-          return JSON.stringify(value);
-        } catch {
-          return '';
-        }
-      };
-
-      const normalized = list.map((device, index) => {
-        const summary = device && typeof device.summary === 'object' ? { ...device.summary } : {};
-        const rawHostname = (device.hostname || summary.hostname || '').trim();
-        const hostname = rawHostname || `device-${index + 1}`;
-        const agentId = (device.agent_id || summary.agent_id || '').trim();
-        const guidRaw = (device.agent_guid || summary.agent_guid || '').trim();
-        const guidLookupKey = guidRaw.toLowerCase();
-        const rowKey = guidRaw || agentId || hostname || `device-${index + 1}`;
-        const hostKey = hostname.trim().toLowerCase();
-        const lastSeen = Number(device.last_seen || summary.last_seen || 0) || 0;
-        const status = device.status || statusFromHeartbeat(lastSeen);
-
-        if (guidRaw && !summary.agent_guid) {
-          summary.agent_guid = guidRaw;
-        }
-
-        let createdTs = Number(device.created_at || 0) || 0;
-        let createdDisplay = summary.created || '';
-        if (!createdTs && createdDisplay) {
-          const parsed = Date.parse(createdDisplay.replace(' ', 'T'));
-          if (!Number.isNaN(parsed)) createdTs = Math.floor(parsed / 1000);
-        }
-        if (!createdDisplay && device.created_at_iso) {
-          try {
-            createdDisplay = new Date(device.created_at_iso).toLocaleString();
-          } catch {}
-        }
-
-        const osName =
-          device.operating_system ||
-          summary.operating_system ||
-          summary.agent_operating_system ||
-          "-";
-        const type = (device.device_type || summary.device_type || '').trim();
-        const lastUser = (device.last_user || summary.last_user || '').trim();
-        const domain = (device.domain || summary.domain || '').trim();
-        const internalIp = (device.internal_ip || summary.internal_ip || '').trim();
-        const externalIp = (device.external_ip || summary.external_ip || '').trim();
-        const agentLookupKey = (agentId || guidRaw || '').toLowerCase();
-        const tunnelPeerIp = agentLookupKey ? (tunnelLookup.get(agentLookupKey) || '') : '';
-        const wireguardVpnStatus = agentLookupKey ? (tunnelStatusLookup.get(agentLookupKey) || "Offline") : "Offline";
-        const wireguardPeerIp = (
-          device.wireguard_peer_ip ||
-          device.peer_ip ||
-          device.virtual_ip ||
-          device.vpn_ip ||
-          summary.wireguard_peer_ip ||
-          summary.peer_ip ||
-          summary.virtual_ip ||
-          summary.vpn_ip ||
-          summary.wireguard_virtual_ip ||
-          tunnelPeerIp ||
-          ''
-        ).toString().trim();
-        const lastReboot = (device.last_reboot || summary.last_reboot || '').trim();
-        const uptimeSeconds = Number(
-          device.uptime ||
-            summary.uptime_sec ||
-            summary.uptime_seconds ||
-            summary.uptime ||
-            0
-        ) || 0;
-        const connectionType = (device.connection_type || summary.connection_type || '').trim().toLowerCase();
-        const connectionLabel = connectionType === 'ssh' ? 'SSH' : connectionType === 'winrm' ? 'WinRM' : '';
-        const connectionEndpoint = (device.connection_endpoint || summary.connection_endpoint || '').trim();
-
-        const memoryList = Array.isArray(device.memory) ? device.memory : [];
-        const networkList = Array.isArray(device.network) ? device.network : [];
-        const softwareList = Array.isArray(device.software) ? device.software : [];
-        const storageList = Array.isArray(device.storage) ? device.storage : [];
-        const cpuObj =
-          (device.cpu && typeof device.cpu === 'object' && device.cpu) ||
-          (summary.cpu && typeof summary.cpu === 'object' ? summary.cpu : {});
-
-        const memoryDisplay = memoryList.length ? `${memoryList.length} module(s)` : '';
-        const networkDisplay = networkList.length ? networkList.map((n) => n.adapter || n.name || '').filter(Boolean).join(', ') : '';
-        const softwareDisplay = softwareList.length ? `${softwareList.length} item(s)` : '';
-        const storageDisplay = storageList.length ? `${storageList.length} volume(s)` : '';
-        const cpuDisplay = cpuObj.name || summary.processor || '';
-
-        return {
-          id: rowKey,
-          hostname,
-          status,
-          lastSeen,
-          lastSeenDisplay: formatLastSeen(lastSeen),
-          os: osName,
-          lastUser,
-          type: type || connectionLabel || '',
-          site: device.site_name || 'Not Configured',
-          siteId: device.site_id || null,
-          siteDescription: device.site_description || '',
-          description: (device.description || summary.description || '').trim(),
-          created: createdDisplay,
-          createdTs,
-          createdIso: device.created_at_iso || '',
-          agentGuid: guidRaw,
-          agentId,
-          domain,
-          internalIp,
-          externalIp,
-          wireguardVpnStatus,
-          wireguardPeerIp,
-          lastReboot,
-          uptime: uptimeSeconds,
-          uptimeDisplay: formatUptime(uptimeSeconds),
-          memory: memoryDisplay,
-          memoryRaw: normalizeJson(memoryList),
-          network: networkDisplay,
-          networkRaw: normalizeJson(networkList),
-          software: softwareDisplay,
-          softwareRaw: normalizeJson(softwareList),
-          storage: storageDisplay,
-          storageRaw: normalizeJson(storageList),
-          cpu: cpuDisplay,
-          cpuRaw: normalizeJson(cpuObj),
-          summary,
-          details: device.details || {},
-          connectionType,
-          connectionLabel,
-          connectionEndpoint,
-          isRemote: Boolean(connectionLabel),
-        };
+      const normalized = normalizeDeviceCollection(payload?.devices || [], {
+        tunnelLookup,
+        tunnelStatusLookup,
       });
-
-      let filtered = normalized;
-      if (filterMode === "agent") {
-        filtered = normalized.filter((row) => !row.connectionType);
-      } else if (filterMode === "ssh") {
-        filtered = normalized.filter((row) => row.connectionType === "ssh");
-      } else if (filterMode === "winrm") {
-        filtered = normalized.filter((row) => row.connectionType === "winrm");
-      }
-
-      setRows(filtered);
+      setRows(filterDeviceRowsByMode(normalized, filterMode));
+      setRouteLoadError("");
       if (tunnelTelemetry.fetched) applyTunnelTelemetry(tunnelTelemetry);
     } catch (e) {
       console.warn('Failed to load devices:', e);
       setRows([]);
+      setRouteLoadError(String(e?.message || "Failed to load devices."));
     } finally {
       if (showLoading) setLoading(false);
     }
@@ -922,9 +1001,12 @@ export default function DeviceList({
   }, [viewsLoaded]);
 
   useEffect(() => {
-    // Initial load only; removed auto-refresh interval
-    fetchDevices();
-  }, [fetchDevices]);
+    setRows(initialRows);
+    setViews(initialViews);
+    setViewsLoaded(initialViews.length > 0);
+    setSites(initialSites);
+    setRouteLoadError(initialError);
+  }, [initialError, initialRows, initialSites, initialViews]);
 
   // Sites helper fetch
   const fetchSites = useCallback(async () => {
@@ -1808,6 +1890,7 @@ export default function DeviceList({
                 Viewing Saved Filter: {savedFilterPreview.name} ({savedFilterPreview.matched_device_count} matched)
               </Alert>
             ) : null}
+            {routeLoadError ? <Alert severity="error">{routeLoadError}</Alert> : null}
             {savedFilterPreviewError ? <Alert severity="warning">{savedFilterPreviewError}</Alert> : null}
             <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center" }}>
               <Box sx={{ flex: "1 1 260px", minWidth: 220, display: "flex", alignItems: "center" }}>

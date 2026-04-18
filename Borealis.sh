@@ -326,6 +326,23 @@ run_logged_command() {
   return "${exit_code}"
 }
 
+append_file_tail_to_current_step_logs() {
+  local label="$1"
+  local file_path="$2"
+  local line_count="${3:-40}"
+  [[ -f "${file_path}" && -s "${file_path}" ]] || return 0
+
+  local heading="${label}: ${file_path}"
+  if [[ -n "${CURRENT_INSTALL_LOG_FILE:-}" ]]; then
+    printf "[%s] %s\n" "$(date +%FT%T)" "${heading}" >> "${CURRENT_INSTALL_LOG_FILE}"
+    tail -n "${line_count}" "${file_path}" >> "${CURRENT_INSTALL_LOG_FILE}"
+  fi
+  if [[ -n "${CURRENT_STEP_CAPTURE_FILE:-}" ]]; then
+    printf "%s\n" "${heading}" >> "${CURRENT_STEP_CAPTURE_FILE}"
+    tail -n "${line_count}" "${file_path}" >> "${CURRENT_STEP_CAPTURE_FILE}"
+  fi
+}
+
 ensure_visible_sudo_session() {
   if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     SUDO_SESSION_READY=1
@@ -3073,7 +3090,7 @@ install_engine_python_deps() {
 vite_web_frontend_install() {
   local engine_ui_dest="${SCRIPT_DIR}/Engine/web-interface"
   ensure_node_bins
-  run_logged_command bash -lc "cd \"$engine_ui_dest\" && PATH=\"${NODE_DIR}/bin:\$PATH\" \"${NPM_BIN}\" install --silent --no-fund --audit=false"
+  run_logged_command bash -lc "cd \"$engine_ui_dest\" && PATH=\"${NODE_DIR}/bin:\$PATH\" \"${NPM_BIN}\" install --loglevel=error --no-fund --audit=false"
 }
 
 vite_web_frontend_start() {
@@ -3107,10 +3124,14 @@ vite_web_frontend_start() {
     local logdir; logdir=$(ensure_engine_log_dir)
     local stdout_log="${logdir}/vite-build.stdout.log"
     local stderr_log="${logdir}/vite-build.stderr.log"
+    mv -f "$stdout_log" "${stdout_log}.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+    mv -f "$stderr_log" "${stderr_log}.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
     if ! (
       cd "$engine_ui_dest" &&
       PATH="${NODE_DIR}/bin:${PATH}" "$NPM_BIN" run build >>"$stdout_log" 2>>"$stderr_log"
     ); then
+      append_file_tail_to_current_step_logs "vite build stderr tail" "$stderr_log" 40
+      append_file_tail_to_current_step_logs "vite build stdout tail" "$stdout_log" 20
       write_vite_log "npm run build failed. stderr log: ${stderr_log}" "vite-build"
       return 1
     fi

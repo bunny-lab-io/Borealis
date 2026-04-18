@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { useLoaderData, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Alert,
   Autocomplete,
@@ -32,6 +32,13 @@ import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-communi
 
 import PageBodyFrame from "../../PageBodyFrame.jsx";
 import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
+import {
+  createRouteRequestPlan,
+  fetchRouteJson,
+  getRouteErrorMessage,
+  requireAuthenticatedRequest,
+  rethrowIfRouteRedirect,
+} from "../../app/routes/routeData.js";
 import { APP_PATHS } from "../../app/routes/paths.js";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -533,7 +540,43 @@ function FilterCriterionRow({
   );
 }
 
+export async function loadDeviceFilterEditorPageData(request, routeFilterId) {
+  const parsedFilterId = Number(routeFilterId);
+  const filterId = Number.isInteger(parsedFilterId) && parsedFilterId > 0 ? parsedFilterId : null;
+  const progress = createRouteRequestPlan(request, 5);
+
+  try {
+    await requireAuthenticatedRequest(request, progress);
+    const [metadataPayload, sitesPayload, filterPayload] = await Promise.all([
+      progress.fetchJson("/api/device_filters/metadata"),
+      progress.fetchJson("/api/sites"),
+      filterId ? progress.fetchJson(`/api/device_filters/${filterId}`) : Promise.resolve(null),
+    ]);
+    if (!filterId) {
+      progress.skip(1);
+    }
+
+    return {
+      metadata: metadataPayload || null,
+      sites: Array.isArray(sitesPayload?.sites) ? sitesPayload.sites : [],
+      filter: filterPayload?.filter || null,
+      initialError: "",
+    };
+  } catch (error) {
+    rethrowIfRouteRedirect(error);
+    return {
+      metadata: null,
+      sites: [],
+      filter: null,
+      initialError: getRouteErrorMessage(error, "Unable to load filter editor."),
+    };
+  } finally {
+    progress.finalize();
+  }
+}
+
 export default function DeviceFilterEditor() {
+  const loaderData = useLoaderData();
   const location = useLocation();
   const navigate = useNavigate();
   const { filterId: routeFilterId } = useParams();
@@ -546,13 +589,17 @@ export default function DeviceFilterEditor() {
   }, [location.state, routeFilterId]);
   const filterId = initialFilter?.id ? Number(initialFilter.id) : null;
   const [activeTab, setActiveTab] = useState("name");
-  const [metadata, setMetadata] = useState(null);
-  const [sites, setSites] = useState([]);
-  const [formState, setFormState] = useState(() => normalizeFilterRecord(initialFilter));
-  const [loading, setLoading] = useState(Boolean(filterId));
+  const [metadata, setMetadata] = useState(() => loaderData?.metadata || null);
+  const [sites, setSites] = useState(() =>
+    Array.isArray(loaderData?.sites) ? loaderData.sites : []
+  );
+  const [formState, setFormState] = useState(() =>
+    normalizeFilterRecord(loaderData?.filter || initialFilter)
+  );
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => String(loaderData?.initialError || ""));
   const [validationErrors, setValidationErrors] = useState([]);
   const [previewCount, setPreviewCount] = useState(null);
   const [previewRows, setPreviewRows] = useState([]);
@@ -627,8 +674,20 @@ export default function DeviceFilterEditor() {
   }, [filterId, hydrateFromRecord, initialFilter]);
 
   useEffect(() => {
-    loadInitialData();
-  }, [loadInitialData]);
+    if (!loaderData) {
+      loadInitialData();
+      return;
+    }
+    setMetadata(loaderData?.metadata || null);
+    setSites(Array.isArray(loaderData?.sites) ? loaderData.sites : []);
+    if (loaderData?.filter) {
+      hydrateFromRecord(loaderData.filter);
+    } else {
+      hydrateFromRecord(initialFilter || {});
+    }
+    setError(String(loaderData?.initialError || ""));
+    setLoading(false);
+  }, [hydrateFromRecord, initialFilter, loadInitialData, loaderData]);
 
   useEffect(() => {
     formStateRef.current = formState;

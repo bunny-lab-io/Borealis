@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLoaderData } from "react-router-dom";
 import {
   Autocomplete,
   Box,
@@ -38,6 +39,13 @@ import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import { useAuth } from "../app/providers/AuthContext.jsx";
+import {
+  createRouteRequestPlan,
+  fetchRouteJson,
+  getRouteErrorMessage,
+  requireAdminRequest,
+  rethrowIfRouteRedirect,
+} from "../app/routes/routeData.js";
 import {
   DEFAULT_GRID_COL_DEF,
   DEVICE_GRID_STYLE,
@@ -602,15 +610,36 @@ function MasterTextCell(props) {
   );
 }
 
+export async function loadServerOverviewPageData(request) {
+  const progress = createRouteRequestPlan(request, 3);
+  try {
+    await requireAdminRequest(request, progress);
+    const overview = await progress.fetchJson("/api/server/overview");
+    return {
+      overview: overview || null,
+      initialError: "",
+    };
+  } catch (error) {
+    rethrowIfRouteRedirect(error);
+    return {
+      overview: null,
+      initialError: getRouteErrorMessage(error, "Borealis could not load the server overview."),
+    };
+  } finally {
+    progress.finalize();
+  }
+}
+
 export default function ServerInfo() {
+  const loaderData = useLoaderData();
   const { isAdmin } = useAuth();
   const [aboutOpen, setAboutOpen] = useState(false);
-  const [overview, setOverview] = useState(null);
+  const [overview, setOverview] = useState(() => loaderData?.overview || null);
   const [serverTimeSnapshot, setServerTimeSnapshot] = useState(null);
   const [serverTimeLoading, setServerTimeLoading] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !loaderData?.overview && !loaderData?.initialError);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => String(loaderData?.initialError || ""));
   const [actionError, setActionError] = useState("");
   const [actionBusyKey, setActionBusyKey] = useState("");
   const [confirmAction, setConfirmAction] = useState(null);
@@ -631,7 +660,7 @@ export default function ServerInfo() {
     currentTimezone: "",
     changeSupported: null,
   });
-  const hasOverviewRef = useRef(false);
+  const hasOverviewRef = useRef(Boolean(loaderData?.overview));
 
   const sendScopedNotification = useAppNotifications();
 
@@ -768,8 +797,15 @@ export default function ServerInfo() {
   });
 
   useEffect(() => {
-    fetchOverview({ background: false });
-  }, [fetchOverview]);
+    if (!loaderData) {
+      fetchOverview({ background: false });
+      return;
+    }
+    setOverview(loaderData?.overview || null);
+    setError(String(loaderData?.initialError || ""));
+    setLoading(false);
+    hasOverviewRef.current = Boolean(loaderData?.overview);
+  }, [fetchOverview, loaderData]);
 
   useEffect(() => {
     if (!isAdmin) return;

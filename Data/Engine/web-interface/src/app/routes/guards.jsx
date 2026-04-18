@@ -2,9 +2,9 @@ import React from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { Box, CircularProgress } from "@mui/material";
 import { useAuth } from "../providers/AuthContext.jsx";
-import { APP_PATHS } from "./paths.js";
+import { buildLoginPath, buildSitesPath } from "./paths.js";
 
-function FullScreenPending() {
+export function FullScreenPending() {
   return (
     <Box
       sx={{
@@ -28,7 +28,13 @@ export function RequireAuth() {
     return <FullScreenPending />;
   }
   if (!isAuthenticated) {
-    return <Navigate to={APP_PATHS.login} replace state={{ from: location }} />;
+    return (
+      <Navigate
+        to={buildLoginPath(`${location.pathname}${location.search}`)}
+        replace
+        state={{ from: location }}
+      />
+    );
   }
   return <Outlet />;
 }
@@ -41,10 +47,16 @@ export function RequireAdmin() {
     return <FullScreenPending />;
   }
   if (!isAuthenticated) {
-    return <Navigate to={APP_PATHS.login} replace state={{ from: location }} />;
+    return (
+      <Navigate
+        to={buildLoginPath(`${location.pathname}${location.search}`)}
+        replace
+        state={{ from: location }}
+      />
+    );
   }
   if (!isAdmin) {
-    return <Navigate to={APP_PATHS.sites} replace state={{ showNotAuthorizedDialog: true }} />;
+    return <Navigate to={buildSitesPath({ notAuthorized: true })} replace />;
   }
   return <Outlet />;
 }

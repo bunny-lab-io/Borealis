@@ -48,6 +48,31 @@ export const APP_PATHS = {
   pageTemplate: "/page-template",
 };
 
+export function normalizeAppRedirectTarget(value) {
+  const text = String(value || "").trim();
+  if (!text || !text.startsWith("/") || text.startsWith("//")) {
+    return "";
+  }
+  return text === APP_PATHS.login ? "" : text;
+}
+
+export function buildLoginPath(nextPath = "") {
+  const params = new URLSearchParams();
+  const normalizedNextPath = normalizeAppRedirectTarget(nextPath);
+  if (normalizedNextPath) {
+    params.set("next", normalizedNextPath);
+  }
+  return appendQuery(APP_PATHS.login, params);
+}
+
+export function buildSitesPath({ notAuthorized = false } = {}) {
+  const params = new URLSearchParams();
+  if (notAuthorized) {
+    params.set("not_authorized", "1");
+  }
+  return appendQuery(APP_PATHS.sites, params);
+}
+
 export function buildSiteAssignmentPath(usernames = []) {
   const params = new URLSearchParams();
   usernames

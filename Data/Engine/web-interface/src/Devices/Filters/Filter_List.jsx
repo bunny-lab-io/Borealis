@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLoaderData, useNavigate } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -37,6 +37,13 @@ import {
   DialogHeaderBlock,
 } from "../../DialogStyles.jsx";
 import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
+import {
+  createRouteRequestPlan,
+  fetchRouteJson,
+  getRouteErrorMessage,
+  requireAuthenticatedRequest,
+  rethrowIfRouteRedirect,
+} from "../../app/routes/routeData.js";
 import { APP_PATHS } from "../../app/routes/paths.js";
 import { CountSliderGroup } from "../../Automation/Watchdogs/shared.jsx";
 
@@ -260,13 +267,43 @@ function JobsDialog({ open, onClose, jobs, onOpenJob, title }) {
   );
 }
 
+export async function loadDeviceFilterListPageData(request) {
+  const progress = createRouteRequestPlan(request, 4);
+  try {
+    await requireAuthenticatedRequest(request, progress);
+    const [activePayload, archivedPayload] = await Promise.all([
+      progress.fetchJson("/api/device_filters?archived=0"),
+      progress.fetchJson("/api/device_filters?archived=1"),
+    ]);
+
+    return {
+      filterCollections: {
+        active: Array.isArray(activePayload?.filters) ? activePayload.filters : [],
+        archived: Array.isArray(archivedPayload?.filters) ? archivedPayload.filters : [],
+      },
+      initialError: "",
+    };
+  } catch (error) {
+    rethrowIfRouteRedirect(error);
+    return {
+      filterCollections: { active: [], archived: [] },
+      initialError: getRouteErrorMessage(error, "Unable to load filters."),
+    };
+  } finally {
+    progress.finalize();
+  }
+}
+
 export default function DeviceFilterList({ refreshToken }) {
+  const loaderData = useLoaderData();
   const navigate = useNavigate();
   const gridRef = useRef(null);
   const [tab, setTab] = useState("active");
-  const [filterCollections, setFilterCollections] = useState({ active: [], archived: [] });
+  const [filterCollections, setFilterCollections] = useState(
+    () => loaderData?.filterCollections || { active: [], archived: [] }
+  );
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => String(loaderData?.initialError || ""));
   const [actionError, setActionError] = useState("");
   const [jobsDialog, setJobsDialog] = useState({ open: false, jobs: [], title: "" });
   const filters = useMemo(() => {
@@ -308,8 +345,13 @@ export default function DeviceFilterList({ refreshToken }) {
   }, []);
 
   useEffect(() => {
-    loadFilters();
-  }, [loadFilters, refreshToken]);
+    if (!loaderData) {
+      loadFilters();
+      return;
+    }
+    setFilterCollections(loaderData?.filterCollections || { active: [], archived: [] });
+    setError(String(loaderData?.initialError || ""));
+  }, [loadFilters, loaderData, refreshToken]);
 
   const handleViewDevices = useCallback(
     (filter) => {

@@ -8,7 +8,21 @@ import { APP_PATHS } from "./paths.js";
 function lazyNamed(importer, exportName) {
   return async () => {
     const module = await importer();
-    return { Component: module[exportName] };
+    const loaderExportName = `${exportName}Loader`;
+    const errorBoundaryExportName = `${exportName}ErrorBoundary`;
+    const shouldRevalidateExportName = `${exportName}ShouldRevalidate`;
+    return {
+      Component: module[exportName],
+      loader: typeof module[loaderExportName] === "function" ? module[loaderExportName] : undefined,
+      ErrorBoundary:
+        typeof module[errorBoundaryExportName] === "function"
+          ? module[errorBoundaryExportName]
+          : undefined,
+      shouldRevalidate:
+        typeof module[shouldRevalidateExportName] === "function"
+          ? module[shouldRevalidateExportName]
+          : undefined,
+    };
   };
 }
 

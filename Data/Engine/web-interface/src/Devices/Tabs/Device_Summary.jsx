@@ -1,8 +1,9 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { useLoaderData, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
+  Alert,
   Box,
   Stack,
   Tabs,
@@ -50,6 +51,13 @@ import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
 import { useUrlTabState } from "../../app/hooks/useUrlTabState.js";
 import { APP_PATHS } from "../../app/routes/paths.js";
+import {
+  createRouteRequestPlan,
+  fetchRouteJson,
+  getRouteErrorMessage,
+  requireAuthenticatedRequest,
+  rethrowIfRouteRedirect,
+} from "../../app/routes/routeData.js";
 import { createQuickJobDraft, normalizeQuickJobTargets } from "../../app/utils/quickJob.js";
 
 const TUNNEL_STATUS_POLL_INTERVAL_MS = 15000;
@@ -336,6 +344,343 @@ const UNABLE_TO_RETRIEVE_SN = "<Unable to Retrieve S/N>";
 const STORAGE_USAGE_ALERT_THRESHOLD_PCT = 90;
 const STORAGE_USAGE_ALERT_LABEL = `Usage Exceeding ${STORAGE_USAGE_ALERT_THRESHOLD_PCT}%`;
 const STORAGE_USAGE_ALERT_COLOR = "#facc15";
+
+function statusFromHeartbeat(tsSec, offlineAfter = 300) {
+  if (!tsSec) return "Offline";
+  const now = Date.now() / 1000;
+  return now - tsSec <= offlineAfter ? "Online" : "Offline";
+}
+
+function formatDeviceSummaryUtcTimestamp(dateObj) {
+  if (!dateObj || Number.isNaN(dateObj.getTime())) return "";
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${dateObj.getUTCFullYear()}-${pad(dateObj.getUTCMonth() + 1)}-${pad(dateObj.getUTCDate())} ${pad(dateObj.getUTCHours())}:${pad(dateObj.getUTCMinutes())}:${pad(dateObj.getUTCSeconds())}`;
+}
+
+function readFirstNonEmptyValue(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function normalizeDeviceSummarySnapshot(detailData, { device = {}, deviceId = "", agentRecord = null } = {}) {
+  const guid =
+    device?.agent_guid || device?.guid || device?.agentGuid || device?.summary?.agent_guid || deviceId || "";
+  const agentId = device?.agentId || device?.summary?.agent_id || device?.id || "";
+  const hostname = device?.hostname || device?.summary?.hostname || deviceId || "";
+
+  const summary =
+    detailData?.summary && typeof detailData.summary === "object"
+      ? detailData.summary
+      : detailData?.details?.summary || {};
+  const normalizedSummary = { ...(summary || {}) };
+  if (detailData?.description) {
+    normalizedSummary.description = detailData.description;
+  }
+
+  const connectionType =
+    (normalizedSummary.connection_type || normalizedSummary.remote_type || "").toLowerCase();
+  const connectionEndpoint =
+    normalizedSummary.connection_endpoint ||
+    normalizedSummary.connection_address ||
+    detailData?.connection_endpoint ||
+    "";
+
+  const details = {
+    summary: normalizedSummary,
+    memory: Array.isArray(detailData?.memory)
+      ? detailData.memory
+      : Array.isArray(detailData?.details?.memory)
+        ? detailData.details.memory
+        : [],
+    network: Array.isArray(detailData?.network)
+      ? detailData.network
+      : Array.isArray(detailData?.details?.network)
+        ? detailData.details.network
+        : [],
+    software: Array.isArray(detailData?.software)
+      ? detailData.software
+      : Array.isArray(detailData?.details?.software)
+        ? detailData.details.software
+        : [],
+    storage: Array.isArray(detailData?.storage)
+      ? detailData.storage
+      : Array.isArray(detailData?.details?.storage)
+        ? detailData.details.storage
+        : [],
+    cpu: detailData?.cpu || detailData?.details?.cpu || {},
+  };
+
+  const cpuIdentity = details.cpu && typeof details.cpu === "object" ? details.cpu : {};
+  const manufacturerValue = readFirstNonEmptyValue(
+    detailData?.manufacturer,
+    normalizedSummary.manufacturer,
+    normalizedSummary.vendor,
+    detailData?.details?.summary?.manufacturer,
+    detailData?.details?.summary?.vendor,
+    cpuIdentity.system_manufacturer
+  );
+  const systemModelValue = readFirstNonEmptyValue(
+    detailData?.system_model,
+    normalizedSummary.system_model,
+    normalizedSummary.device_model,
+    detailData?.details?.summary?.system_model,
+    detailData?.details?.summary?.device_model,
+    cpuIdentity.system_model_raw
+  );
+  const combinedModelValue =
+    readFirstNonEmptyValue(
+      detailData?.model,
+      normalizedSummary.model,
+      detailData?.details?.summary?.model,
+      cpuIdentity.system_model
+    ) || [manufacturerValue, systemModelValue].filter(Boolean).join(" ").trim();
+  const serialNumberValue =
+    readFirstNonEmptyValue(
+      detailData?.serial_number,
+      normalizedSummary.serial_number,
+      normalizedSummary.serial,
+      normalizedSummary.bios_serial,
+      detailData?.details?.summary?.serial_number,
+      detailData?.details?.summary?.serial,
+      detailData?.details?.summary?.bios_serial,
+      cpuIdentity.system_serial_number,
+      cpuIdentity.serial_number,
+      detailData?.asset_tag,
+      normalizedSummary.asset_tag
+    ) || UNABLE_TO_RETRIEVE_SN;
+
+  if (!normalizedSummary.manufacturer && manufacturerValue) {
+    normalizedSummary.manufacturer = manufacturerValue;
+  }
+  if (!normalizedSummary.system_model && systemModelValue) {
+    normalizedSummary.system_model = systemModelValue;
+  }
+  if (!normalizedSummary.device_model && systemModelValue) {
+    normalizedSummary.device_model = systemModelValue;
+  }
+  if (!normalizedSummary.model && combinedModelValue) {
+    normalizedSummary.model = combinedModelValue;
+  }
+  if (!normalizedSummary.serial_number && serialNumberValue) {
+    normalizedSummary.serial_number = serialNumberValue;
+  }
+  if (!normalizedSummary.serial && serialNumberValue) {
+    normalizedSummary.serial = serialNumberValue;
+  }
+  if (!normalizedSummary.bios_serial && serialNumberValue) {
+    normalizedSummary.bios_serial = serialNumberValue;
+  }
+
+  if (details.cpu && typeof details.cpu === "object") {
+    if (manufacturerValue && !details.cpu.system_manufacturer) {
+      details.cpu.system_manufacturer = manufacturerValue;
+    }
+    if (systemModelValue && !details.cpu.system_model_raw) {
+      details.cpu.system_model_raw = systemModelValue;
+    }
+    if (combinedModelValue && !details.cpu.system_model) {
+      details.cpu.system_model = combinedModelValue;
+    }
+    if (serialNumberValue && !details.cpu.system_serial_number) {
+      details.cpu.system_serial_number = serialNumberValue;
+    }
+  }
+
+  let createdDisplay = normalizedSummary.created || "";
+  if (!createdDisplay) {
+    if (detailData?.created_at && Number(detailData.created_at)) {
+      createdDisplay = formatDeviceSummaryUtcTimestamp(new Date(Number(detailData.created_at) * 1000));
+    } else if (detailData?.created_at_iso) {
+      createdDisplay = formatDeviceSummaryUtcTimestamp(new Date(detailData.created_at_iso));
+    }
+  }
+
+  const lastEnrollmentAtValue =
+    detailData?.last_enrollment_at ||
+    normalizedSummary.last_enrollment_at ||
+    detailData?.details?.summary?.last_enrollment_at ||
+    detailData?.created_at ||
+    normalizedSummary.created_at ||
+    0;
+  const lastEnrollmentAtIso =
+    detailData?.last_enrollment_at_iso ||
+    normalizedSummary.last_enrollment_at_iso ||
+    detailData?.details?.summary?.last_enrollment_at_iso ||
+    detailData?.created_at_iso ||
+    "";
+
+  const meta = {
+    hostname: detailData?.hostname || normalizedSummary.hostname || hostname || "",
+    lastUser: detailData?.last_user || normalizedSummary.last_user || "",
+    deviceType: detailData?.device_type || normalizedSummary.device_type || "",
+    created: createdDisplay,
+    createdAtIso: detailData?.created_at_iso || "",
+    lastEnrollmentAt: lastEnrollmentAtValue,
+    lastEnrollmentAtIso: lastEnrollmentAtIso,
+    lastSeen: detailData?.last_seen || normalizedSummary.last_seen || 0,
+    lastReboot: detailData?.last_reboot || normalizedSummary.last_reboot || "",
+    operatingSystem:
+      detailData?.operating_system ||
+      normalizedSummary.operating_system ||
+      normalizedSummary.agent_operating_system ||
+      "",
+    agentId: detailData?.agent_id || normalizedSummary.agent_id || agentId || "",
+    agentGuid: detailData?.agent_guid || normalizedSummary.agent_guid || guid || "",
+    agentBuildId:
+      detailData?.agent_build_id ||
+      detailData?.agent_hash ||
+      normalizedSummary.agent_build_id ||
+      normalizedSummary.agent_hash ||
+      "",
+    agentVersionStatus:
+      detailData?.agent_version_status ||
+      normalizedSummary.agent_version_status ||
+      detailData?.details?.summary?.agent_version_status ||
+      "Needs Updated",
+    internalIp: detailData?.internal_ip || normalizedSummary.internal_ip || "",
+    externalIp: detailData?.external_ip || normalizedSummary.external_ip || "",
+    manufacturer: manufacturerValue || "",
+    systemModel: systemModelValue || "",
+    model: combinedModelValue || "",
+    serialNumber: serialNumberValue || UNABLE_TO_RETRIEVE_SN,
+    siteId: detailData?.site_id,
+    siteName: detailData?.site_name || "",
+    siteDescription: detailData?.site_description || "",
+    status: detailData?.status || "",
+    connectionType,
+    connectionEndpoint,
+    agentRoleHealth:
+      detailData?.agent_role_health ||
+      normalizedSummary.agent_role_health ||
+      detailData?.details?.summary?.agent_role_health ||
+      { roles: [], reported_at: 0 },
+  };
+
+  const description = normalizedSummary.description || detailData?.description || "";
+  const baseAgent =
+    agentRecord && meta.agentId && typeof agentRecord === "object"
+      ? { id: meta.agentId, ...agentRecord }
+      : { ...(device || {}) };
+  const agent = {
+    ...(baseAgent || {}),
+    id: meta.agentId || baseAgent?.id || "",
+    hostname: meta.hostname || baseAgent?.hostname || "",
+    agent_guid: meta.agentGuid || baseAgent?.agent_guid || baseAgent?.guid || guid || "",
+    guid: meta.agentGuid || baseAgent?.guid || baseAgent?.agent_guid || guid || "",
+    agent_hash: meta.agentBuildId || baseAgent?.agent_hash || baseAgent?.agent_build_id || "",
+    agent_build_id: meta.agentBuildId || baseAgent?.agent_build_id || baseAgent?.agent_hash || "",
+    agent_operating_system: meta.operatingSystem || baseAgent?.agent_operating_system || "",
+    device_type: meta.deviceType || baseAgent?.device_type || "",
+    last_seen: meta.lastSeen || baseAgent?.last_seen || 0,
+  };
+
+  return {
+    deviceId: String(deviceId || meta.agentGuid || meta.hostname || "").trim(),
+    agent,
+    details,
+    meta,
+    description,
+    connectionType,
+    connectionEndpoint,
+    lockedStatus: meta.status || statusFromHeartbeat(meta.lastSeen),
+  };
+}
+
+async function fetchDeviceSummarySnapshot({ request, device, deviceId, includeAgents = true, progress = null } = {}) {
+  const guid =
+    device?.agent_guid || device?.guid || device?.agentGuid || device?.summary?.agent_guid || deviceId || "";
+  const hostname = device?.hostname || device?.summary?.hostname || deviceId || "";
+  const agentId = device?.agentId || device?.summary?.agent_id || device?.id || "";
+  const fetchJsonWithProgress =
+    progress?.fetchJson ||
+    ((input, options = {}) =>
+      fetchRouteJson(input, {
+        ...options,
+        request: options.request || request,
+      }));
+
+  const agentsPromise = includeAgents
+    ? fetchJsonWithProgress("/api/agents").catch(() => null)
+    : Promise.resolve(null);
+
+  let detailPayload = null;
+  let lastError = null;
+  if (guid) {
+    try {
+      detailPayload = await fetchJsonWithProgress(`/api/devices/${encodeURIComponent(guid)}`);
+    } catch (error) {
+      rethrowIfRouteRedirect(error);
+      lastError = error;
+    }
+  }
+  if (!detailPayload && hostname) {
+    try {
+      detailPayload = await fetchJsonWithProgress(`/api/device/details/${encodeURIComponent(hostname)}`);
+    } catch (error) {
+      rethrowIfRouteRedirect(error);
+      lastError = error;
+    }
+  } else if (progress && guid) {
+    progress.skip(1);
+  }
+
+  if (!detailPayload) {
+    throw lastError || new Error("Unable to load device details.");
+  }
+
+  const agentsData = await agentsPromise;
+  const agentRecord =
+    agentId && agentsData && typeof agentsData === "object" ? agentsData[agentId] || null : null;
+
+  return normalizeDeviceSummarySnapshot(detailPayload, {
+    device,
+    deviceId,
+    agentRecord,
+  });
+}
+
+export async function loadDeviceSummaryPageData(request, routeDeviceId) {
+  const deviceId = String(routeDeviceId || "").trim();
+  const initialDevice = {
+    agent_guid: deviceId || null,
+    hostname: deviceId || null,
+  };
+  const progress = createRouteRequestPlan(request, 5);
+
+  try {
+    await requireAuthenticatedRequest(request, progress);
+    if (!deviceId) {
+      progress.skip(3);
+      return {
+        snapshot: null,
+        initialError: "Unable to identify the selected device.",
+      };
+    }
+
+    return {
+      snapshot: await fetchDeviceSummarySnapshot({
+        request,
+        device: initialDevice,
+        deviceId,
+        includeAgents: true,
+        progress,
+      }),
+      initialError: "",
+    };
+  } catch (error) {
+    rethrowIfRouteRedirect(error);
+    return {
+      snapshot: null,
+      initialError: getRouteErrorMessage(error, "Unable to load device details."),
+    };
+  } finally {
+    progress.finalize();
+  }
+}
 
 function buildAgentHealthMeta(rows, emptyText, fallbackText) {
   if (!rows.length) return emptyText;
@@ -727,6 +1072,7 @@ const SummarySectionsNav = React.memo(function SummarySectionsNav({ onSelectSect
 });
 
 export default function DeviceSummary() {
+  const loaderData = useLoaderData();
   const location = useLocation();
   const navigate = useNavigate();
   const { deviceId } = useParams();
@@ -769,17 +1115,34 @@ export default function DeviceSummary() {
     );
   }, [deviceId, location.search, location.state, navigate]);
 
-  const [agent, setAgent] = useState(device || {});
-  const [details, setDetails] = useState({});
-  const [meta, setMeta] = useState({});
-  const [description, setDescription] = useState("");
-  const [connectionType, setConnectionType] = useState("");
-  const [connectionEndpoint, setConnectionEndpoint] = useState("");
-  const [connectionDraft, setConnectionDraft] = useState("");
+  const loaderSnapshot = useMemo(() => {
+    const snapshot = loaderData?.snapshot;
+    if (!snapshot || typeof snapshot !== "object") {
+      return null;
+    }
+    const snapshotDeviceId = String(snapshot.deviceId || "").trim();
+    if (!snapshotDeviceId || snapshotDeviceId === String(deviceId || "").trim()) {
+      return snapshot;
+    }
+    return null;
+  }, [deviceId, loaderData]);
+
+  const [agent, setAgent] = useState(() => loaderSnapshot?.agent || device || {});
+  const [details, setDetails] = useState(() => loaderSnapshot?.details || {});
+  const [meta, setMeta] = useState(() => loaderSnapshot?.meta || {});
+  const [description, setDescription] = useState(() => String(loaderSnapshot?.description || ""));
+  const [connectionType, setConnectionType] = useState(() => String(loaderSnapshot?.connectionType || ""));
+  const [connectionEndpoint, setConnectionEndpoint] = useState(
+    () => String(loaderSnapshot?.connectionEndpoint || "")
+  );
+  const [connectionDraft, setConnectionDraft] = useState(
+    () => String(loaderSnapshot?.connectionEndpoint || "")
+  );
   const [connectionSaving, setConnectionSaving] = useState(false);
   const [connectionMessage, setConnectionMessage] = useState("");
   const [connectionError, setConnectionError] = useState("");
-  const [summaryDataReady, setSummaryDataReady] = useState(false);
+  const [loadError, setLoadError] = useState(() => String(loaderData?.initialError || ""));
+  const [summaryDataReady, setSummaryDataReady] = useState(() => Boolean(loaderSnapshot));
   const [summaryScrollOffset, setSummaryScrollOffset] = useState(0);
   const [summaryBottomSpacer, setSummaryBottomSpacer] = useState(0);
   const [tunnelInfo, setTunnelInfo] = useState(TUNNEL_INFO_IDLE);
@@ -790,18 +1153,19 @@ export default function DeviceSummary() {
   const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
   // Snapshotted status for the lifetime of this page
   const [lockedStatus, setLockedStatus] = useState(() => {
+    if (loaderSnapshot?.lockedStatus) {
+      return loaderSnapshot.lockedStatus;
+    }
     // Prefer status provided by the device list row if available
     if (device?.status) return device.status;
     // Fallback: compute once from the provided lastSeen timestamp
     const tsSec = device?.lastSeen;
-    if (!tsSec) return "Offline";
-    const now = Date.now() / 1000;
-    return now - tsSec <= 300 ? "Online" : "Offline";
+    return statusFromHeartbeat(tsSec);
   });
-  const descriptionDraftRef = useRef("");
-  const loadedDescriptionRef = useRef("");
-  const connectionDraftRef = useRef("");
-  const loadedConnectionEndpointRef = useRef("");
+  const descriptionDraftRef = useRef(String(loaderSnapshot?.description || ""));
+  const loadedDescriptionRef = useRef(String(loaderSnapshot?.description || ""));
+  const connectionDraftRef = useRef(String(loaderSnapshot?.connectionEndpoint || ""));
+  const loadedConnectionEndpointRef = useRef(String(loaderSnapshot?.connectionEndpoint || ""));
   const pageRenderCountRef = useRef(0);
   pageRenderCountRef.current += 1;
   const summary = details.summary || {};
@@ -873,6 +1237,63 @@ export default function DeviceSummary() {
       setConnectionError("");
     }
   }, [connectionType]);
+
+  const applyDeviceSummarySnapshot = useCallback(
+    (snapshot, { silent = false } = {}) => {
+      if (!snapshot || typeof snapshot !== "object") {
+        return;
+      }
+
+      setDetails(snapshot.details || {});
+      setMeta(snapshot.meta || {});
+      setConnectionType(String(snapshot.connectionType || ""));
+      setConnectionEndpoint(String(snapshot.connectionEndpoint || ""));
+      if (
+        !silent ||
+        String(connectionDraftRef.current || "").trim() ===
+          String(loadedConnectionEndpointRef.current || "").trim()
+      ) {
+        setConnectionDraft(String(snapshot.connectionEndpoint || ""));
+      }
+      loadedConnectionEndpointRef.current = String(snapshot.connectionEndpoint || "");
+      setConnectionMessage("");
+      setConnectionError("");
+
+      if (
+        !silent ||
+        String(descriptionDraftRef.current || "").trim() === String(loadedDescriptionRef.current || "").trim()
+      ) {
+        setDescription(String(snapshot.description || ""));
+      }
+      loadedDescriptionRef.current = String(snapshot.description || "");
+
+      setAgent((previous) => ({
+        ...(previous || {}),
+        ...(snapshot.agent || {}),
+      }));
+
+      if (snapshot.lockedStatus) {
+        setLockedStatus(snapshot.lockedStatus);
+      } else if (snapshot.meta?.status) {
+        setLockedStatus(snapshot.meta.status);
+      } else if (snapshot.meta?.lastSeen) {
+        setLockedStatus(statusFromHeartbeat(snapshot.meta.lastSeen));
+      }
+
+      setLoadError("");
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!loaderSnapshot) {
+      setLoadError(String(loaderData?.initialError || ""));
+      return;
+    }
+    applyDeviceSummarySnapshot(loaderSnapshot, { silent: false });
+    setSummaryDataReady(true);
+    setLoadError(String(loaderData?.initialError || ""));
+  }, [applyDeviceSummarySnapshot, loaderData, loaderSnapshot]);
 
   useEffect(() => {
     let canceled = false;
@@ -947,22 +1368,18 @@ export default function DeviceSummary() {
     };
   }, [tunnelAgentId, shouldPollTunnelStatus]);
 
-  const statusFromHeartbeat = (tsSec, offlineAfter = 300) => {
-    if (!tsSec) return "Offline";
-    const now = Date.now() / 1000;
-    return now - tsSec <= offlineAfter ? "Online" : "Offline";
-  };
-
   useEffect(() => {
     let canceled = false;
     let inFlight = false;
     let pollingTimer = null;
-    if (device) {
+
+    if (loaderSnapshot?.lockedStatus) {
+      setLockedStatus(loaderSnapshot.lockedStatus);
+    } else if (device) {
       setLockedStatus(device.status || statusFromHeartbeat(device.lastSeen));
     }
 
     const guid = device?.agent_guid || device?.guid || device?.agentGuid || device?.summary?.agent_guid;
-    const agentId = device?.agentId || device?.summary?.agent_id || device?.id;
     const hostname = device?.hostname || device?.summary?.hostname;
     if (!device || (!guid && !hostname)) {
       setSummaryDataReady(true);
@@ -971,282 +1388,27 @@ export default function DeviceSummary() {
       };
     }
 
-    setSummaryDataReady(false);
+    if (!loaderSnapshot) {
+      setSummaryDataReady(false);
+    }
 
     const load = async ({ silent = false, includeAgents = false } = {}) => {
       if (inFlight) return;
       inFlight = true;
       try {
-        const agentsPromise = includeAgents ? fetch("/api/agents").catch(() => null) : Promise.resolve(null);
-        let detailResponse = null;
-        if (guid) {
-          try {
-            detailResponse = await fetch(`/api/devices/${encodeURIComponent(guid)}`);
-          } catch (err) {
-            detailResponse = null;
-          }
-        }
-        if ((!detailResponse || !detailResponse.ok) && hostname) {
-          try {
-            detailResponse = await fetch(`/api/device/details/${encodeURIComponent(hostname)}`);
-          } catch (err) {
-            detailResponse = null;
-          }
-        }
-        if (!detailResponse || !detailResponse.ok) {
-          throw new Error(`Failed to load device record (${detailResponse ? detailResponse.status : 'no response'})`);
-        }
-
-        const [agentsData, detailData] = await Promise.all([
-          agentsPromise?.then((r) => (r ? r.json() : {})).catch(() => ({})),
-          detailResponse.json(),
-        ]);
+        const snapshot = await fetchDeviceSummarySnapshot({
+          device,
+          deviceId,
+          includeAgents,
+        });
         if (canceled) return;
-
-        if (agentsData && agentId && agentsData[agentId]) {
-          setAgent({ id: agentId, ...agentsData[agentId] });
-        }
-
-        const summary =
-          detailData?.summary && typeof detailData.summary === "object"
-            ? detailData.summary
-            : (detailData?.details?.summary || {});
-        const normalizedSummary = { ...(summary || {}) };
-        if (detailData?.description) {
-          normalizedSummary.description = detailData.description;
-        }
-
-        const connectionTypeValue =
-          (normalizedSummary.connection_type ||
-            normalizedSummary.remote_type ||
-            "").toLowerCase();
-        const connectionEndpointValue =
-          normalizedSummary.connection_endpoint ||
-          normalizedSummary.connection_address ||
-          detailData?.connection_endpoint ||
-          "";
-        setConnectionType(connectionTypeValue);
-        setConnectionEndpoint(connectionEndpointValue);
-        if (
-          !silent ||
-          String(connectionDraftRef.current || "").trim() === String(loadedConnectionEndpointRef.current || "").trim()
-        ) {
-          setConnectionDraft(connectionEndpointValue);
-        }
-        loadedConnectionEndpointRef.current = String(connectionEndpointValue || "");
-        setConnectionMessage("");
-        setConnectionError("");
-
-        const normalized = {
-          summary: normalizedSummary,
-          memory: Array.isArray(detailData?.memory)
-            ? detailData.memory
-            : Array.isArray(detailData?.details?.memory)
-              ? detailData.details.memory
-              : [],
-          network: Array.isArray(detailData?.network)
-            ? detailData.network
-            : Array.isArray(detailData?.details?.network)
-              ? detailData.details.network
-              : [],
-          software: Array.isArray(detailData?.software)
-            ? detailData.software
-            : Array.isArray(detailData?.details?.software)
-              ? detailData.details.software
-              : [],
-          storage: Array.isArray(detailData?.storage)
-            ? detailData.storage
-            : Array.isArray(detailData?.details?.storage)
-              ? detailData.details.storage
-              : [],
-          cpu: detailData?.cpu || detailData?.details?.cpu || {},
-        };
-        const readNonEmpty = (...values) => {
-          for (const value of values) {
-            if (value === undefined || value === null) continue;
-            const text = String(value).trim();
-            if (text) return text;
-          }
-          return "";
-        };
-        const cpuIdentity = normalized.cpu && typeof normalized.cpu === "object" ? normalized.cpu : {};
-        const manufacturerValue = readNonEmpty(
-          detailData?.manufacturer,
-          normalizedSummary.manufacturer,
-          normalizedSummary.vendor,
-          detailData?.details?.summary?.manufacturer,
-          detailData?.details?.summary?.vendor,
-          cpuIdentity.system_manufacturer
-        );
-        const systemModelValue = readNonEmpty(
-          detailData?.system_model,
-          normalizedSummary.system_model,
-          normalizedSummary.device_model,
-          detailData?.details?.summary?.system_model,
-          detailData?.details?.summary?.device_model,
-          cpuIdentity.system_model_raw
-        );
-        const combinedModelValue =
-          readNonEmpty(
-            detailData?.model,
-            normalizedSummary.model,
-            detailData?.details?.summary?.model,
-            cpuIdentity.system_model
-          ) || [manufacturerValue, systemModelValue].filter(Boolean).join(" ").trim();
-        const serialNumberValue =
-          readNonEmpty(
-            detailData?.serial_number,
-            normalizedSummary.serial_number,
-            normalizedSummary.serial,
-            normalizedSummary.bios_serial,
-            detailData?.details?.summary?.serial_number,
-            detailData?.details?.summary?.serial,
-            detailData?.details?.summary?.bios_serial,
-            cpuIdentity.system_serial_number,
-            cpuIdentity.serial_number,
-            detailData?.asset_tag,
-            normalizedSummary.asset_tag
-          ) || UNABLE_TO_RETRIEVE_SN;
-        if (!normalizedSummary.manufacturer && manufacturerValue) {
-          normalizedSummary.manufacturer = manufacturerValue;
-        }
-        if (!normalizedSummary.system_model && systemModelValue) {
-          normalizedSummary.system_model = systemModelValue;
-        }
-        if (!normalizedSummary.device_model && systemModelValue) {
-          normalizedSummary.device_model = systemModelValue;
-        }
-        if (!normalizedSummary.model && combinedModelValue) {
-          normalizedSummary.model = combinedModelValue;
-        }
-        if (!normalizedSummary.serial_number && serialNumberValue) {
-          normalizedSummary.serial_number = serialNumberValue;
-        }
-        if (!normalizedSummary.serial && serialNumberValue) {
-          normalizedSummary.serial = serialNumberValue;
-        }
-        if (!normalizedSummary.bios_serial && serialNumberValue) {
-          normalizedSummary.bios_serial = serialNumberValue;
-        }
-        if (normalized.cpu && typeof normalized.cpu === "object") {
-          if (manufacturerValue && !normalized.cpu.system_manufacturer) {
-            normalized.cpu.system_manufacturer = manufacturerValue;
-          }
-          if (systemModelValue && !normalized.cpu.system_model_raw) {
-            normalized.cpu.system_model_raw = systemModelValue;
-          }
-          if (combinedModelValue && !normalized.cpu.system_model) {
-            normalized.cpu.system_model = combinedModelValue;
-          }
-          if (serialNumberValue && !normalized.cpu.system_serial_number) {
-            normalized.cpu.system_serial_number = serialNumberValue;
-          }
-        }
-        setDetails(normalized);
-
-        const toYmdHms = (dateObj) => {
-          if (!dateObj || Number.isNaN(dateObj.getTime())) return '';
-          const pad = (v) => String(v).padStart(2, '0');
-          return `${dateObj.getUTCFullYear()}-${pad(dateObj.getUTCMonth() + 1)}-${pad(dateObj.getUTCDate())} ${pad(dateObj.getUTCHours())}:${pad(dateObj.getUTCMinutes())}:${pad(dateObj.getUTCSeconds())}`;
-        };
-
-        let createdDisplay = normalizedSummary.created || '';
-        if (!createdDisplay) {
-          if (detailData?.created_at && Number(detailData.created_at)) {
-            createdDisplay = toYmdHms(new Date(Number(detailData.created_at) * 1000));
-          } else if (detailData?.created_at_iso) {
-            createdDisplay = toYmdHms(new Date(detailData.created_at_iso));
-          }
-        }
-
-        const lastEnrollmentAtValue =
-          detailData?.last_enrollment_at ||
-          normalizedSummary.last_enrollment_at ||
-          detailData?.details?.summary?.last_enrollment_at ||
-          detailData?.created_at ||
-          normalizedSummary.created_at ||
-          0;
-        const lastEnrollmentAtIso =
-          detailData?.last_enrollment_at_iso ||
-          normalizedSummary.last_enrollment_at_iso ||
-          detailData?.details?.summary?.last_enrollment_at_iso ||
-          detailData?.created_at_iso ||
-          "";
-
-        const metaPayload = {
-          hostname: detailData?.hostname || normalizedSummary.hostname || hostname || "",
-          lastUser: detailData?.last_user || normalizedSummary.last_user || "",
-          deviceType: detailData?.device_type || normalizedSummary.device_type || "",
-          created: createdDisplay,
-          createdAtIso: detailData?.created_at_iso || "",
-          lastEnrollmentAt: lastEnrollmentAtValue,
-          lastEnrollmentAtIso: lastEnrollmentAtIso,
-          lastSeen: detailData?.last_seen || normalizedSummary.last_seen || 0,
-          lastReboot: detailData?.last_reboot || normalizedSummary.last_reboot || "",
-          operatingSystem:
-            detailData?.operating_system || normalizedSummary.operating_system || normalizedSummary.agent_operating_system || "",
-          agentId: detailData?.agent_id || normalizedSummary.agent_id || agentId || "",
-          agentGuid: detailData?.agent_guid || normalizedSummary.agent_guid || guid || "",
-          agentBuildId:
-            detailData?.agent_build_id ||
-            detailData?.agent_hash ||
-            normalizedSummary.agent_build_id ||
-            normalizedSummary.agent_hash ||
-            "",
-          agentVersionStatus:
-            detailData?.agent_version_status ||
-            normalizedSummary.agent_version_status ||
-            detailData?.details?.summary?.agent_version_status ||
-            "Needs Updated",
-          internalIp: detailData?.internal_ip || normalizedSummary.internal_ip || "",
-          externalIp: detailData?.external_ip || normalizedSummary.external_ip || "",
-          manufacturer: manufacturerValue || "",
-          systemModel: systemModelValue || "",
-          model: combinedModelValue || "",
-          serialNumber: serialNumberValue || UNABLE_TO_RETRIEVE_SN,
-          siteId: detailData?.site_id,
-          siteName: detailData?.site_name || "",
-          siteDescription: detailData?.site_description || "",
-          status: detailData?.status || "",
-          connectionType: connectionTypeValue,
-          connectionEndpoint: connectionEndpointValue,
-          agentRoleHealth:
-            detailData?.agent_role_health ||
-            normalizedSummary.agent_role_health ||
-            detailData?.details?.summary?.agent_role_health ||
-            { roles: [], reported_at: 0 },
-        };
-        setMeta(metaPayload);
-        const nextDescription = normalizedSummary.description || detailData?.description || "";
-        if (
-          !silent ||
-          String(descriptionDraftRef.current || "") === String(loadedDescriptionRef.current || "")
-        ) {
-          setDescription(nextDescription);
-        }
-        loadedDescriptionRef.current = String(nextDescription || "");
-
-        setAgent((prev) => ({
-          ...(prev || {}),
-          id: agentId || prev?.id,
-          hostname: metaPayload.hostname || prev?.hostname,
-          agent_hash: metaPayload.agentBuildId || prev?.agent_hash,
-          agent_build_id: metaPayload.agentBuildId || prev?.agent_build_id,
-          agent_operating_system: metaPayload.operatingSystem || prev?.agent_operating_system,
-          device_type: metaPayload.deviceType || prev?.device_type,
-          last_seen: metaPayload.lastSeen || prev?.last_seen,
-        }));
-
-        if (metaPayload.status) {
-          setLockedStatus(metaPayload.status);
-        } else if (metaPayload.lastSeen) {
-          setLockedStatus(statusFromHeartbeat(metaPayload.lastSeen));
-        }
+        applyDeviceSummarySnapshot(snapshot, { silent });
       } catch (e) {
         if (canceled) return;
         console.warn("Failed to load device info", e);
         if (!silent) {
           setMeta({});
+          setLoadError(String(e?.message || "Unable to load device details."));
         }
       } finally {
         inFlight = false;
@@ -1255,7 +1417,9 @@ export default function DeviceSummary() {
         }
       }
     };
-    load({ silent: false, includeAgents: true });
+    if (!loaderSnapshot) {
+      load({ silent: false, includeAgents: true });
+    }
     pollingTimer = setInterval(() => {
       load({ silent: true, includeAgents: false });
     }, DEVICE_DETAILS_POLL_INTERVAL_MS);
@@ -1263,7 +1427,7 @@ export default function DeviceSummary() {
       canceled = true;
       if (pollingTimer) clearInterval(pollingTimer);
     };
-  }, [device]);
+  }, [applyDeviceSummarySnapshot, device, deviceId, loaderSnapshot]);
 
   const activityHostname = useMemo(() => {
     return (meta?.hostname || summary.hostname || agent?.hostname || device?.hostname || "").trim();
@@ -2873,6 +3037,11 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           Clear Device Activity
         </MenuItem>
       </Menu>
+      {loadError ? (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {loadError}
+        </Alert>
+      ) : null}
       <Tabs
         value={tab}
         onChange={(e, v) => setActiveTabKey(TOP_TABS[v]?.key || TOP_TABS[0]?.key || "summary")}

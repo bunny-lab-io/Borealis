@@ -1,13 +1,15 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   AppBar,
   Box,
   Breadcrumbs,
   Button,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  LinearProgress,
   Menu,
   MenuItem,
   TextField,
@@ -22,7 +24,7 @@ import {
   NavigateNext as NavigateNextIcon,
   VpnKey as VpnKeyIcon,
 } from "@mui/icons-material";
-import { Outlet, useLocation, useMatches, useNavigate } from "react-router-dom";
+import { Outlet, useLocation, useMatches, useNavigate, useNavigation } from "react-router-dom";
 import { NotAuthorizedDialog } from "../../Dialogs.jsx";
 import NavigationSidebar from "../../Navigation_Sidebar.jsx";
 import GlobalDeviceSearch from "../../GlobalDeviceSearch.jsx";
@@ -52,6 +54,12 @@ import {
   resolvePageChromeDefaults,
 } from "../routes/breadcrumbs.js";
 import { APP_PATHS } from "../routes/paths.js";
+import {
+  clearRouteRequestProgress,
+  getRouteRequestProgressSnapshot,
+  startRouteRequestProgress,
+  subscribeRouteRequestProgress,
+} from "../routes/routeData.js";
 import { getBorealisSocket } from "../runtime/bootstrapClientRuntime.js";
 import { formatOperatorPresencePage } from "../utils/operatorPresence.js";
 import { APP_AURORA_BACKGROUND } from "../utils/theme.js";
@@ -103,6 +111,12 @@ export default function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const matches = useMatches();
+  const navigation = useNavigation();
+  const routeRequestProgress = useSyncExternalStore(
+    subscribeRouteRequestProgress,
+    getRouteRequestProgressSnapshot,
+    getRouteRequestProgressSnapshot
+  );
   const {
     user,
     displayName,
@@ -173,6 +187,28 @@ export default function AppShell() {
       resolvedChrome.controls?.length
   );
 
+  const isBufferedRoutePending = useMemo(() => {
+    if (navigation.state === "idle" || !navigation.location) {
+      return false;
+    }
+    const nextTarget = `${navigation.location.pathname}${navigation.location.search || ""}`;
+    const currentTarget = `${location.pathname}${location.search || ""}`;
+    return nextTarget !== currentTarget;
+  }, [location.pathname, location.search, navigation.location, navigation.state]);
+  const routeRequestProgressValue = useMemo(() => {
+    const total = Number(routeRequestProgress?.total || 0);
+    const completed = Math.min(Number(routeRequestProgress?.completed || 0), total);
+    return total > 0 ? Math.round((completed / total) * 100) : 0;
+  }, [routeRequestProgress]);
+  const routeRequestProgressLabel = useMemo(() => {
+    const total = Number(routeRequestProgress?.total || 0);
+    const completed = Math.min(Number(routeRequestProgress?.completed || 0), total);
+    if (total <= 0) {
+      return "Preparing requests...";
+    }
+    return `${completed} of ${total} Requests Complete`;
+  }, [routeRequestProgress]);
+
   useEffect(() => {
     if (typeof document === "undefined") {
       return;
@@ -180,6 +216,16 @@ export default function AppShell() {
 
     document.title = formatDocumentTitle(resolvedChrome.title);
   }, [resolvedChrome.title]);
+
+  useEffect(() => {
+    if (isBufferedRoutePending && navigation.location) {
+      startRouteRequestProgress(
+        `${navigation.location.pathname}${navigation.location.search || ""}`
+      );
+      return;
+    }
+    clearRouteRequestProgress();
+  }, [isBufferedRoutePending, navigation.location]);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -201,14 +247,25 @@ export default function AppShell() {
   }, []);
 
   useEffect(() => {
-    if (!location.state?.showNotAuthorizedDialog) {
+    const queryParams = new URLSearchParams(location.search);
+    const hasNotAuthorizedQuery = queryParams.get("not_authorized") === "1";
+    if (!location.state?.showNotAuthorizedDialog && !hasNotAuthorizedQuery) {
       return;
     }
     setNotAuthorizedOpen(true);
-    navigate(`${location.pathname}${location.search}`, {
-      replace: true,
-      state: stripTransientLocationState(location.state),
-    });
+    if (hasNotAuthorizedQuery) {
+      queryParams.delete("not_authorized");
+    }
+    navigate(
+      {
+        pathname: location.pathname,
+        search: queryParams.toString() ? `?${queryParams.toString()}` : "",
+      },
+      {
+        replace: true,
+        state: stripTransientLocationState(location.state),
+      }
+    );
   }, [location.pathname, location.search, location.state, navigate]);
 
   const syncOperatorPresence = useCallback(() => {
@@ -705,6 +762,7 @@ export default function AppShell() {
                 flexDirection: "column",
                 overflow: "auto",
                 minHeight: 0,
+                position: "relative",
                 "& > *": {
                   alignSelf: "stretch",
                   minHeight: 0,
@@ -712,6 +770,61 @@ export default function AppShell() {
               }}
             >
               <Outlet />
+              {isBufferedRoutePending ? (
+                <Box
+                  sx={{
+                    position: "absolute",
+                    inset: 0,
+                    zIndex: 20,
+                    display: "grid",
+                    placeItems: "center",
+                    background:
+                      "linear-gradient(180deg, rgba(4,7,17,0.42), rgba(4,7,17,0.62)), rgba(4,7,17,0.36)",
+                    backdropFilter: "blur(10px)",
+                    pointerEvents: "auto",
+                  }}
+                >
+                  <Box
+                    sx={{
+                      minWidth: 240,
+                      px: 3,
+                      py: 2.5,
+                      borderRadius: 3,
+                      border: "1px solid rgba(125,211,252,0.28)",
+                      background:
+                        "linear-gradient(165deg, rgba(8,12,24,0.94), rgba(10,16,31,0.9))",
+                      boxShadow: "0 20px 60px rgba(2,8,23,0.5)",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 1.5,
+                    }}
+                  >
+                    <CircularProgress size={24} sx={{ color: "#7dd3fc" }} />
+                    <Box>
+                      <Typography sx={{ color: "#e2e8f0", fontWeight: 700, fontSize: "0.95rem" }}>
+                        Loading Data...
+                      </Typography>
+                      <Typography sx={{ color: "#94a3b8", fontSize: "0.82rem", mt: 0.25 }}>
+                        {routeRequestProgressLabel}
+                      </Typography>
+                      <LinearProgress
+                        variant={routeRequestProgress?.total > 0 ? "determinate" : "indeterminate"}
+                        value={routeRequestProgressValue}
+                        sx={{
+                          mt: 1.2,
+                          height: 6,
+                          borderRadius: 999,
+                          backgroundColor: "rgba(148,163,184,0.16)",
+                          "& .MuiLinearProgress-bar": {
+                            borderRadius: 999,
+                            background: "linear-gradient(90deg, #7dd3fc, #c084fc)",
+                          },
+                        }}
+                      />
+                    </Box>
+                  </Box>
+                </Box>
+              ) : null}
             </Box>
           </Box>
         </Box>

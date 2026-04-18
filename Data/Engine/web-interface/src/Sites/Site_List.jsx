@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLoaderData, useNavigate } from "react-router-dom";
 import {
+  Alert,
   Box,
   Button,
   Dialog,
@@ -25,6 +26,13 @@ import { CreateSiteDialog, RenameSiteDialog } from "../Dialogs.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import {
+  createRouteRequestPlan,
+  fetchRouteJson,
+  getRouteErrorMessage,
+  requireAuthenticatedRequest,
+  rethrowIfRouteRedirect,
+} from "../app/routes/routeData.js";
 import { APP_PATHS } from "../app/routes/paths.js";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -207,6 +215,45 @@ function deriveInstallServerUrl(payload) {
   }
 }
 
+export async function loadSiteListPageData(request) {
+  const progress = createRouteRequestPlan(request, 4);
+  try {
+    await requireAuthenticatedRequest(request, progress);
+    const data = await progress.fetchJson("/api/sites");
+    let installServerUrl = deriveInstallServerUrl(data);
+    if (!installServerUrl) {
+      try {
+        const overviewPayload = await progress.fetchJson("/api/server/overview");
+        installServerUrl = deriveInstallServerUrl({
+          public_base_url:
+            overviewPayload?.host?.public_base_url || overviewPayload?.public_edge?.public_base_url || "",
+          public_hostname:
+            overviewPayload?.host?.public_hostname || overviewPayload?.public_edge?.fqdn || "",
+        });
+      } catch (error) {
+        rethrowIfRouteRedirect(error);
+      }
+    } else {
+      progress.skip(1);
+    }
+
+    return {
+      rows: Array.isArray(data?.sites) ? data.sites : [],
+      installServerUrl,
+      initialError: "",
+    };
+  } catch (error) {
+    rethrowIfRouteRedirect(error);
+    return {
+      rows: [],
+      installServerUrl: "",
+      initialError: getRouteErrorMessage(error, "Unable to load sites."),
+    };
+  } finally {
+    progress.finalize();
+  }
+}
+
 function stopGridRowSelectionEvent(event) {
   if (!event) return;
   if (typeof event.stopPropagation === "function") {
@@ -325,9 +372,13 @@ const PAGE_SUBTITLE = "Manage site enrollment codes and open device inventories 
 const PAGE_ICON = LocationCityIcon;
 
 export default function SiteList() {
+  const loaderData = useLoaderData();
   const navigate = useNavigate();
-  const [rows, setRows] = useState([]);
-  const [installServerUrl, setInstallServerUrl] = useState("");
+  const initialRows = Array.isArray(loaderData?.rows) ? loaderData.rows : [];
+  const initialInstallServerUrl = String(loaderData?.installServerUrl || "");
+  const [rows, setRows] = useState(() => initialRows);
+  const [installServerUrl, setInstallServerUrl] = useState(() => initialInstallServerUrl);
+  const [loadError, setLoadError] = useState(() => String(loaderData?.initialError || ""));
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -389,13 +440,19 @@ export default function SiteList() {
       const nextInstallServerUrl = deriveInstallServerUrl(data) || await fetchInstallServerUrlFromOverview();
       setRows(Array.isArray(data?.sites) ? data.sites : []);
       setInstallServerUrl(nextInstallServerUrl);
+      setLoadError("");
     } catch {
       setRows([]);
       setInstallServerUrl("");
+      setLoadError("Unable to load sites.");
     }
   }, [fetchInstallServerUrlFromOverview]);
 
-  useEffect(() => { fetchSites(); }, [fetchSites]);
+  useEffect(() => {
+    setRows(initialRows);
+    setInstallServerUrl(initialInstallServerUrl);
+    setLoadError(String(loaderData?.initialError || ""));
+  }, [initialInstallServerUrl, initialRows, loaderData]);
 
   const autoSizeColumns = useCallback(() => {
     const api = gridApiRef.current || gridRef.current?.api;
@@ -844,6 +901,11 @@ export default function SiteList() {
       </Menu>
       <PageBodyFrame variant="grid">
         <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0 }}>
+          {loadError ? (
+            <Alert severity="error" sx={{ mx: 2, mt: 2, mb: 0 }}>
+              {loadError}
+            </Alert>
+          ) : null}
           <Box
             className={themeClassName}
             sx={{
