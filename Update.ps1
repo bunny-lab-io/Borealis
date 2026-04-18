@@ -478,12 +478,13 @@ function Get-BorealisServerUrl {
     $serverBaseUrl = $env:BOREALIS_SERVER_URL
     if (-not $serverBaseUrl) {
         try {
-            if (-not $AgentRoot) { $AgentRoot = $scriptDir }
-            $settingsDir = Join-Path $AgentRoot 'Settings'
-            $serverUrlFile = Join-Path $settingsDir 'server_url.txt'
-            if (Test-Path $serverUrlFile -PathType Leaf) {
-                $content = Get-Content -Path $serverUrlFile -Raw -ErrorAction Stop
-                if ($content) { $serverBaseUrl = $content.Trim() }
+            $settingsDir = Get-AgentSettingsDirectory -AgentRoot $AgentRoot
+            if ($settingsDir) {
+                $serverUrlFile = Join-Path $settingsDir 'server_url.txt'
+                if (Test-Path $serverUrlFile -PathType Leaf) {
+                    $content = Get-Content -Path $serverUrlFile -Raw -ErrorAction Stop
+                    if ($content) { $serverBaseUrl = $content.Trim() }
+                }
             }
         } catch {}
     }
@@ -538,8 +539,10 @@ function Get-AgentServerUrlFromSettings {
         [string]$AgentRoot
     )
 
-    if (-not $AgentRoot) { $AgentRoot = $scriptDir }
-    $settingsDir = Join-Path $AgentRoot 'Settings'
+    $settingsDir = Get-AgentSettingsDirectory -AgentRoot $AgentRoot
+    if (-not $settingsDir) {
+        $settingsDir = Get-CanonicalAgentSettingsDirectory -AgentRoot $AgentRoot
+    }
     $serverUrlFile = Join-Path $settingsDir 'server_url.txt'
     if (-not (Test-Path $serverUrlFile -PathType Leaf)) {
         return [pscustomobject]@{
@@ -1204,22 +1207,15 @@ function Get-AgentGuid {
         [string]$AgentRoot
     )
 
-    if (-not $AgentRoot) { $AgentRoot = $scriptDir }
     $candidates = @()
-    if ($AgentRoot) {
-        $settingsDir = Join-Path $AgentRoot 'Settings'
-        if ($settingsDir) {
-            $settingsGuid = Join-Path $settingsDir 'Agent_GUID.txt'
-            if ($candidates -notcontains $settingsGuid) { $candidates += $settingsGuid }
+    foreach ($root in (Get-AgentSettingsDirectoryCandidates -AgentRoot $AgentRoot)) {
+        foreach ($leaf in @('Agent_GUID.txt', 'agent_GUID')) {
+            try {
+                $candidate = Join-Path $root $leaf
+                if ($candidates -notcontains $candidate) { $candidates += $candidate }
+            } catch {}
         }
-        $legacyPath = Join-Path $AgentRoot 'agent_GUID'
-        if ($candidates -notcontains $legacyPath) { $candidates += $legacyPath }
     }
-
-    $projectSettingsGuid = Join-Path $scriptDir 'Agent\Borealis\Settings\Agent_GUID.txt'
-    if ($candidates -notcontains $projectSettingsGuid) { $candidates += $projectSettingsGuid }
-    $projectLegacyGuid = Join-Path $scriptDir 'Agent\Borealis\agent_GUID'
-    if ($candidates -notcontains $projectLegacyGuid) { $candidates += $projectLegacyGuid }
 
     foreach ($path in ($candidates | Select-Object -Unique)) {
         try {
@@ -1233,13 +1229,149 @@ function Get-AgentGuid {
     return ''
 }
 
+function Get-CanonicalAgentSettingsDirectory {
+    param(
+        [string]$AgentRoot
+    )
+
+    try {
+        if ($env:BOREALIS_AGENT_SETTINGS_DIR) {
+            $override = $env:BOREALIS_AGENT_SETTINGS_DIR.Trim()
+            if ($override) { return $override }
+        }
+    } catch {}
+
+    if (-not $AgentRoot) {
+        $agentRootCandidate = Join-Path $scriptDir 'Agent\Borealis'
+        if (Test-Path $agentRootCandidate -PathType Container) {
+            $AgentRoot = $agentRootCandidate
+        } else {
+            $AgentRoot = $scriptDir
+        }
+    }
+
+    try {
+        return (Join-Path $AgentRoot 'Settings')
+    } catch {
+        return ''
+    }
+}
+
+function Get-AgentSettingsDirectoryCandidates {
+    param(
+        [string]$AgentRoot
+    )
+
+    $candidates = @()
+    $canonical = Get-CanonicalAgentSettingsDirectory -AgentRoot $AgentRoot
+    if ($canonical -and ($candidates -notcontains $canonical)) { $candidates += $canonical }
+
+    if ($AgentRoot) {
+        if ($candidates -notcontains $AgentRoot) { $candidates += $AgentRoot }
+        try {
+            $agentParent = Split-Path -Path $AgentRoot -Parent
+            if ($agentParent) {
+                $legacySettings = Join-Path $agentParent 'Settings'
+                if ($candidates -notcontains $legacySettings) { $candidates += $legacySettings }
+            }
+        } catch {}
+    }
+
+    foreach ($path in @(
+        (Join-Path $scriptDir 'Agent\Borealis\Settings'),
+        (Join-Path $scriptDir 'Agent\Borealis'),
+        (Join-Path $scriptDir 'Agent\Settings')
+    )) {
+        if ($path -and ($candidates -notcontains $path)) { $candidates += $path }
+    }
+
+    return ($candidates | Select-Object -Unique)
+}
+
+function Copy-AgentSettingsFileIfMissing {
+    param(
+        [string]$Destination,
+        [string]$Source,
+        [switch]$Text
+    )
+
+    if (-not $Destination -or -not $Source) { return $false }
+    if (Test-Path $Destination -PathType Leaf) { return $false }
+    if (-not (Test-Path $Source -PathType Leaf)) { return $false }
+
+    try {
+        $parent = Split-Path -Path $Destination -Parent
+        if ($parent -and -not (Test-Path $parent -PathType Container)) {
+            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        }
+        if ($Text) {
+            $content = Get-Content -Path $Source -Raw -ErrorAction Stop
+            Set-Content -Path $Destination -Value $content -Encoding UTF8 -ErrorAction Stop
+        } else {
+            [System.IO.File]::WriteAllBytes($Destination, [System.IO.File]::ReadAllBytes($Source))
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Sync-AgentSettingsDirectoryMaterial {
+    param(
+        [string]$AgentRoot
+    )
+
+    $settingsDir = Get-CanonicalAgentSettingsDirectory -AgentRoot $AgentRoot
+    if (-not $settingsDir) { return '' }
+
+    try {
+        if (-not (Test-Path $settingsDir -PathType Container)) {
+            New-Item -ItemType Directory -Path $settingsDir -Force | Out-Null
+        }
+    } catch {
+        return ''
+    }
+
+    $candidates = @(Get-AgentSettingsDirectoryCandidates -AgentRoot $AgentRoot | Where-Object {
+        $_ -and ([string]$_).Trim() -and (([string]$_).TrimEnd('\') -ne $settingsDir.TrimEnd('\'))
+    })
+
+    $fileSpecs = @(
+        @{ Destination = 'server_url.txt'; Sources = @('server_url.txt'); Text = $true },
+        @{ Destination = 'Agent_GUID.txt'; Sources = @('Agent_GUID.txt', 'agent_GUID'); Text = $true },
+        @{ Destination = 'refresh.token'; Sources = @('refresh.token'); Text = $false },
+        @{ Destination = 'access.jwt'; Sources = @('access.jwt'); Text = $true },
+        @{ Destination = 'access.meta.json'; Sources = @('access.meta.json'); Text = $true }
+    )
+
+    foreach ($spec in $fileSpecs) {
+        $destination = Join-Path $settingsDir $spec.Destination
+        if (Test-Path $destination -PathType Leaf) { continue }
+        foreach ($candidateRoot in $candidates) {
+            foreach ($sourceName in $spec.Sources) {
+                try {
+                    $source = Join-Path $candidateRoot $sourceName
+                } catch {
+                    continue
+                }
+                if (Copy-AgentSettingsFileIfMissing -Destination $destination -Source $source -Text:([bool]$spec.Text)) {
+                    Write-UpdateLog ("Recovered agent settings file from legacy path: {0} -> {1}" -f $source, $destination) 'WARN'
+                    break
+                }
+            }
+            if (Test-Path $destination -PathType Leaf) { break }
+        }
+    }
+
+    return $settingsDir
+}
+
 function Get-AgentSettingsDirectory {
     param(
         [string]$AgentRoot
     )
 
-    if (-not $AgentRoot) { $AgentRoot = $scriptDir }
-    $settingsDir = Join-Path $AgentRoot 'Settings'
+    $settingsDir = Sync-AgentSettingsDirectoryMaterial -AgentRoot $AgentRoot
     if ($settingsDir -and (Test-Path $settingsDir -PathType Container)) {
         return $settingsDir
     }
@@ -1261,6 +1393,58 @@ function Get-ProtectedTokenString {
     } catch {
         return ''
     }
+
+    try {
+        $rawJson = [System.Text.Encoding]::UTF8.GetString($protected)
+        if ($rawJson) {
+            $payload = $rawJson | ConvertFrom-Json -ErrorAction Stop
+            if ($payload -and $payload.format -eq 'dpapi-multi' -and $payload.entries) {
+                $preferredEntries = @()
+                $preferredScope = ''
+                try { $preferredScope = (($payload.preferred_scope) -as [string]).Trim().ToLowerInvariant() } catch {}
+                if ($preferredScope -eq 'local_machine') {
+                    $preferredEntries = @('local_machine', 'current_user')
+                } else {
+                    $preferredEntries = @('current_user', 'local_machine')
+                }
+
+                foreach ($entryName in $preferredEntries) {
+                    try {
+                        $encoded = (($payload.entries.$entryName) -as [string]).Trim()
+                    } catch {
+                        $encoded = ''
+                    }
+                    if (-not $encoded) { continue }
+                    try {
+                        $entryBytes = [Convert]::FromBase64String($encoded)
+                    } catch {
+                        continue
+                    }
+                    $entryScopes = if ($entryName -eq 'local_machine') {
+                        @(
+                            [System.Security.Cryptography.DataProtectionScope]::LocalMachine,
+                            [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+                        )
+                    } else {
+                        @(
+                            [System.Security.Cryptography.DataProtectionScope]::CurrentUser,
+                            [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+                        )
+                    }
+                    foreach ($entryScope in $entryScopes) {
+                        try {
+                            $unprotected = [System.Security.Cryptography.ProtectedData]::Unprotect($entryBytes, $null, $entryScope)
+                            if ($unprotected -and $unprotected.Length -gt 0) {
+                                return [System.Text.Encoding]::UTF8.GetString($unprotected)
+                            }
+                        } catch {
+                            continue
+                        }
+                    }
+                }
+            }
+        }
+    } catch {}
 
     $scopes = @(
         [System.Security.Cryptography.DataProtectionScope]::CurrentUser,
@@ -1851,6 +2035,7 @@ function Invoke-BorealisAgentUpdate {
         }
     }
     Write-UpdateLog ("Agent root resolved to {0}" -f $agentRoot) 'INFO'
+    [void](Sync-AgentSettingsDirectoryMaterial -AgentRoot $agentRoot)
 
     $agentGuid = Get-AgentGuid -AgentRoot $agentRoot
     if ($agentGuid) {

@@ -317,6 +317,23 @@ def _protect(data: bytes, *, scope_system: bool) -> bytes:
     return data
 
 
+def _protect_single_scope(data: bytes, *, scope_system: bool) -> bytes:
+    if not IS_WINDOWS or not win32crypt:
+        return data
+    flags = 0
+    if scope_system:
+        flags = getattr(win32crypt, "CRYPTPROTECT_LOCAL_MACHINE", 0x4)
+    protected = win32crypt.CryptProtectData(data, None, None, None, None, flags)  # type: ignore[attr-defined]
+    blob = protected[1]
+    if isinstance(blob, memoryview):
+        return blob.tobytes()
+    if isinstance(blob, bytearray):
+        return bytes(blob)
+    if isinstance(blob, bytes):
+        return blob
+    raise TypeError("Unsupported protected payload type")
+
+
 def _unprotect(data: bytes, *, scope_system: bool) -> bytes:
     if not IS_WINDOWS or not win32crypt:
         return data
@@ -341,6 +358,75 @@ def _unprotect(data: bytes, *, scope_system: bool) -> bytes:
         if isinstance(blob, bytes):
             return blob
     return data
+
+
+def _encode_refresh_token_payload(token: str, *, scope_system: bool) -> bytes:
+    payload = token.encode("utf-8")
+    if not IS_WINDOWS or not win32crypt:
+        return payload
+
+    entries = {}
+    for label, entry_scope in (("local_machine", True), ("current_user", False)):
+        try:
+            protected = _protect_single_scope(payload, scope_system=entry_scope)
+        except Exception:
+            continue
+        if protected:
+            entries[label] = base64.b64encode(protected).decode("ascii")
+
+    if entries:
+        envelope = {
+            "format": "dpapi-multi",
+            "preferred_scope": "local_machine" if scope_system else "current_user",
+            "entries": entries,
+        }
+        return json.dumps(envelope, sort_keys=True).encode("utf-8")
+
+    return _protect(payload, scope_system=scope_system)
+
+
+def _decode_refresh_token_payload(data: bytes, *, scope_system: bool) -> Optional[str]:
+    if not data:
+        return None
+
+    if IS_WINDOWS and win32crypt:
+        try:
+            envelope = json.loads(data.decode("utf-8"))
+        except Exception:
+            envelope = None
+        if isinstance(envelope, dict) and envelope.get("format") == "dpapi-multi":
+            entries = envelope.get("entries")
+            if isinstance(entries, dict):
+                order = ["local_machine", "current_user"] if scope_system else ["current_user", "local_machine"]
+                for label in order:
+                    encoded = entries.get(label)
+                    if not isinstance(encoded, str) or not encoded.strip():
+                        continue
+                    try:
+                        protected = base64.b64decode(encoded)
+                    except Exception:
+                        continue
+                    try:
+                        candidate = _unprotect(protected, scope_system=(label == "local_machine"))
+                    except Exception:
+                        continue
+                    if not candidate:
+                        continue
+                    try:
+                        return candidate.decode("utf-8")
+                    except Exception:
+                        continue
+
+    try:
+        candidate = _unprotect(data, scope_system=scope_system)
+    except Exception:
+        return None
+    if not candidate:
+        return None
+    try:
+        return candidate.decode("utf-8")
+    except Exception:
+        return None
 
 
 def _fingerprint_der(public_der: bytes) -> str:
@@ -489,7 +575,7 @@ class AgentKeyStore:
     def save_refresh_token(self, token: str) -> None:
         if not token:
             return
-        protected = _protect(token.encode("utf-8"), scope_system=self.scope_system)
+        protected = _encode_refresh_token_payload(token.strip(), scope_system=self.scope_system)
         with open(self._refresh_token_path, "wb") as fh:
             fh.write(protected)
         _restrict_permissions(self._refresh_token_path)
@@ -503,18 +589,10 @@ class AgentKeyStore:
         except Exception:
             return None
 
-        # Try both scopes (preferred first) and decode once a UTF-8 payload is recovered.
         for scope_first in (self.scope_system, not self.scope_system):
-            try:
-                candidate = _unprotect(protected, scope_system=scope_first)
-            except Exception:
-                continue
-            if not candidate:
-                continue
-            try:
-                return candidate.decode("utf-8")
-            except Exception:
-                continue
+            token = _decode_refresh_token_payload(protected, scope_system=scope_first)
+            if token:
+                return token
         return None
 
     def clear_tokens(self) -> None:

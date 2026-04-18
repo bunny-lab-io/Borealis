@@ -11,8 +11,18 @@ from urllib.parse import urlencode, urlparse, urlunparse
 
 import requests
 
-from security import AgentKeyStore
-from update_state import get_busy_snapshot, installed_build_id_path, read_installed_build_id, read_repo_build_id, sync_installed_build_id
+try:
+    from security import AgentKeyStore
+    from update_state import get_busy_snapshot, installed_build_id_path, read_installed_build_id, read_repo_build_id, sync_installed_build_id
+except ImportError:  # pragma: no cover - package import path for tests
+    from .security import AgentKeyStore
+    from .update_state import (
+        get_busy_snapshot,
+        installed_build_id_path,
+        read_installed_build_id,
+        read_repo_build_id,
+        sync_installed_build_id,
+    )
 
 
 _TRANSIENT_REFRESH_STATUS_CODES = frozenset({500, 502, 503, 504})
@@ -20,7 +30,96 @@ _REFRESH_RETRY_DELAYS_SECONDS = (1.0, 2.0, 5.0)
 
 
 def _settings_dir() -> Path:
-    return installed_build_id_path().parent
+    raw_override = (os.environ.get("BOREALIS_AGENT_SETTINGS_DIR") or "").strip()
+    if raw_override:
+        canonical = Path(raw_override).expanduser()
+    else:
+        canonical = installed_build_id_path().parent
+    _sync_legacy_settings_material(canonical)
+    return canonical
+
+
+def _legacy_settings_roots() -> list[Path]:
+    roots: list[Path] = []
+    project_root = _resolve_project_root()
+    raw_override = (os.environ.get("BOREALIS_AGENT_SETTINGS_DIR") or "").strip()
+    if raw_override:
+        roots.append(Path(raw_override).expanduser())
+
+    roots.extend(
+        [
+            project_root / "Agent" / "Settings",
+            project_root / "Agent" / "Borealis",
+            Path(__file__).resolve().parent / "Settings",
+        ]
+    )
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in roots:
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            resolved = candidate
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(resolved)
+    return unique
+
+
+def _resolve_project_root() -> Path:
+    current = Path(__file__).resolve().parent
+    for candidate in [current, *current.parents]:
+        if (candidate / "Borealis.ps1").is_file() or (candidate / "Borealis.sh").is_file():
+            return candidate
+
+    override = (os.environ.get("BOREALIS_ROOT") or os.environ.get("BOREALIS_PROJECT_ROOT") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    return current
+
+
+def _copy_if_missing(destination: Path, source: Path, *, text_mode: bool = False) -> bool:
+    if destination.exists() or not source.is_file():
+        return False
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if text_mode:
+        destination.write_text(source.read_text(encoding="utf-8", errors="ignore"), encoding="utf-8")
+    else:
+        destination.write_bytes(source.read_bytes())
+    return True
+
+
+def _sync_legacy_settings_material(destination: Path) -> None:
+    try:
+        destination.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+
+    sources = [path for path in _legacy_settings_roots() if path != destination]
+    file_specs = (
+        ("server_url.txt", ("server_url.txt",), True),
+        ("Agent_GUID.txt", ("Agent_GUID.txt", "agent_GUID"), True),
+        ("refresh.token", ("refresh.token",), False),
+        ("access.jwt", ("access.jwt",), True),
+        ("access.meta.json", ("access.meta.json",), True),
+    )
+    for dest_name, source_names, text_mode in file_specs:
+        dest_path = destination / dest_name
+        if dest_path.exists():
+            continue
+        copied = False
+        for root in sources:
+            for source_name in source_names:
+                try:
+                    if _copy_if_missing(dest_path, root / source_name, text_mode=text_mode):
+                        copied = True
+                        break
+                except Exception:
+                    continue
+            if copied:
+                break
 
 
 def _read_server_url() -> str:
