@@ -287,7 +287,33 @@ function Invoke-GitCommand {
         throw "Working directory '$WorkingDirectory' does not exist."
     }
 
-    $fullArgs = @('-C', $WorkingDirectory) + $Arguments
+    $fullArgs = @()
+    $gitMetadataPath = ''
+    try {
+        $gitMetadataPath = Join-Path $WorkingDirectory '.git'
+    } catch {
+        $gitMetadataPath = ''
+    }
+    if ($gitMetadataPath -and (Test-Path $gitMetadataPath)) {
+        $safeDirectory = ''
+        try {
+            $resolvedWorkingDirectory = (Resolve-Path -Path $WorkingDirectory -ErrorAction Stop).Path
+        } catch {
+            $resolvedWorkingDirectory = $WorkingDirectory
+        }
+        try {
+            $safeDirectory = [System.IO.Path]::GetFullPath($resolvedWorkingDirectory)
+        } catch {
+            $safeDirectory = $resolvedWorkingDirectory
+        }
+        if ($safeDirectory) {
+            $safeDirectory = $safeDirectory -replace '\\', '/'
+            $fullArgs += @('-c', "safe.directory=$safeDirectory")
+            Write-UpdateLog ("Applying git safe.directory override for {0}" -f $safeDirectory) 'DEBUG'
+        }
+    }
+
+    $fullArgs += @('-C', $WorkingDirectory) + $Arguments
     $joined = ($Arguments | ForEach-Object { [string]$_ }) -join ' '
     Write-UpdateLog ("Running git command: git {0}" -f $joined) 'DEBUG'
     $output = & $GitExe @fullArgs 2>&1
