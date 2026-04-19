@@ -686,7 +686,18 @@ function Invoke-AgentUpdateHelper {
         throw "Agent update helper not found at '$helperScript'."
     }
 
-    $output = & $pythonExe $helperScript @Arguments 2>&1
+    foreach ($cachePath in @(
+        (Join-Path $scriptDir 'Data\Agent\__pycache__'),
+        (Join-Path $scriptDir 'Agent\Borealis\__pycache__')
+    )) {
+        try {
+            if (Test-Path $cachePath) {
+                Remove-Item -LiteralPath $cachePath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        } catch {}
+    }
+
+    $output = & $pythonExe -B $helperScript @Arguments 2>&1
     $exitCode = $LASTEXITCODE
     $text = (($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
     if ($exitCode -ne 0) {

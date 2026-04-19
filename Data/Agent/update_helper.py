@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import ipaddress
 import json
 import os
@@ -17,34 +18,8 @@ import requests
 
 try:
     from security import AgentKeyStore
-    from update_state import (
-        clear_pending_update,
-        get_busy_snapshot,
-        installed_build_id_path,
-        read_installed_build_id,
-        read_pending_update,
-        read_repo_build_id,
-        read_update_status,
-        sync_installed_build_id,
-        write_installed_build_id,
-        write_pending_update,
-        write_update_status,
-    )
 except ImportError:  # pragma: no cover - package import path for tests
     from .security import AgentKeyStore
-    from .update_state import (
-        clear_pending_update,
-        get_busy_snapshot,
-        installed_build_id_path,
-        read_pending_update,
-        read_installed_build_id,
-        read_repo_build_id,
-        read_update_status,
-        sync_installed_build_id,
-        write_installed_build_id,
-        write_pending_update,
-        write_update_status,
-    )
 
 
 _TRANSIENT_REFRESH_STATUS_CODES = frozenset({500, 502, 503, 504})
@@ -103,6 +78,49 @@ def _resolve_project_root() -> Path:
     if override:
         return Path(override).expanduser()
     return current
+
+
+def _load_update_state_module():
+    module_path = Path(__file__).resolve().with_name("update_state.py")
+    spec = importlib.util.spec_from_file_location("_borealis_update_state_runtime", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to load update_state module from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    required_attrs = (
+        "installed_build_id_path",
+        "read_installed_build_id",
+        "read_repo_build_id",
+        "sync_installed_build_id",
+        "write_installed_build_id",
+        "get_busy_snapshot",
+        "read_update_status",
+        "write_update_status",
+        "read_pending_update",
+        "write_pending_update",
+        "clear_pending_update",
+    )
+    missing = [name for name in required_attrs if not hasattr(module, name)]
+    if missing:
+        raise ImportError(
+            "update_state.py is missing required updater APIs: "
+            + ", ".join(sorted(missing))
+        )
+    return module
+
+
+_UPDATE_STATE = _load_update_state_module()
+installed_build_id_path = _UPDATE_STATE.installed_build_id_path
+read_installed_build_id = _UPDATE_STATE.read_installed_build_id
+read_repo_build_id = _UPDATE_STATE.read_repo_build_id
+sync_installed_build_id = _UPDATE_STATE.sync_installed_build_id
+write_installed_build_id = _UPDATE_STATE.write_installed_build_id
+get_busy_snapshot = _UPDATE_STATE.get_busy_snapshot
+read_update_status = _UPDATE_STATE.read_update_status
+write_update_status = _UPDATE_STATE.write_update_status
+read_pending_update = _UPDATE_STATE.read_pending_update
+write_pending_update = _UPDATE_STATE.write_pending_update
+clear_pending_update = _UPDATE_STATE.clear_pending_update
 
 
 def _copy_if_missing(destination: Path, source: Path, *, text_mode: bool = False) -> bool:

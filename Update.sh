@@ -110,7 +110,8 @@ helper_script() {
 run_helper() {
   local python_bin="$1"
   shift
-  BOREALIS_PROJECT_ROOT="${SCRIPT_DIR}" "${python_bin}" "$(helper_script)" "$@"
+  rm -rf "${SCRIPT_DIR}/Data/Agent/__pycache__" "${SCRIPT_DIR}/Agent/Borealis/__pycache__" 2>/dev/null || true
+  BOREALIS_PROJECT_ROOT="${SCRIPT_DIR}" PYTHONDONTWRITEBYTECODE=1 "${python_bin}" -B "$(helper_script)" "$@"
 }
 
 json_bool_busy() {
