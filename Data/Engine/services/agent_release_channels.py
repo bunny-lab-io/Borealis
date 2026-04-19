@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import time
+import zipfile
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -19,6 +20,17 @@ DEFAULT_AGENT_RELEASE_CHANNEL = "stable"
 DEFAULT_REFRESH_INTERVAL_SECONDS = 60
 _ARTIFACT_ID_PATTERN = re.compile(r"[^a-z0-9._-]+")
 _SETTINGS_PATH_ENV = "BOREALIS_AGENT_RELEASE_CHANNELS_PATH"
+_REQUIRED_UPDATE_STATE_MARKERS = (
+    "def clear_pending_update(",
+    "def read_pending_update(",
+    "def read_update_status(",
+    "def write_pending_update(",
+    "def write_update_status(",
+)
+_REQUIRED_UPDATE_HELPER_MARKERS = (
+    'add_parser("prepare-update"',
+    'add_parser("finalize-update"',
+)
 
 
 def _project_root() -> Path:
@@ -100,6 +112,18 @@ def _artifact_id(channel: str, build_id: str) -> str:
     cleaned_channel = _ARTIFACT_ID_PATTERN.sub("-", _clean_text(channel).lower()).strip("-") or "channel"
     cleaned_build = _ARTIFACT_ID_PATTERN.sub("-", _clean_text(build_id).lower()).strip("-") or "build"
     return f"{cleaned_channel}-{cleaned_build[:20]}"
+
+
+def _archive_member_text(archive: zipfile.ZipFile, suffix: str) -> str:
+    normalized_suffix = suffix.replace("\\", "/").lstrip("/")
+    for name in archive.namelist():
+        normalized_name = str(name or "").replace("\\", "/").strip("/")
+        if not normalized_name:
+            continue
+        if normalized_name == normalized_suffix or normalized_name.endswith(f"/{normalized_suffix}"):
+            with archive.open(name) as handle:
+                return handle.read().decode("utf-8", errors="ignore")
+    return ""
 
 
 class AgentReleaseChannelManager:
@@ -326,13 +350,36 @@ class AgentReleaseChannelManager:
             stable_candidate = self._stable_candidate(repo)
             unstable_candidate = self._unstable_candidate(repo, default_branch)
 
-            stable_target = self._ensure_cached_artifact(repo, stable_candidate, force=force)
-            unstable_target = self._ensure_cached_artifact(repo, unstable_candidate, force=force)
+            refresh_errors = []
+
+            try:
+                stable_target = self._ensure_cached_artifact(repo, stable_candidate, force=force)
+            except Exception as exc:
+                refresh_errors.append(f"stable: {exc}")
+                stable_target = self._channel_error_target(
+                    repo=repo,
+                    candidate=stable_candidate,
+                    prior_target=prior_channels.get("stable") if isinstance(prior_channels, dict) else None,
+                    error=exc,
+                )
+                self._log(f"stable agent release target unavailable err={exc}", level="WARN")
+
+            try:
+                unstable_target = self._ensure_cached_artifact(repo, unstable_candidate, force=force)
+            except Exception as exc:
+                refresh_errors.append(f"unstable: {exc}")
+                unstable_target = self._channel_error_target(
+                    repo=repo,
+                    candidate=unstable_candidate,
+                    prior_target=prior_channels.get("unstable") if isinstance(prior_channels, dict) else None,
+                    error=exc,
+                )
+                self._log(f"unstable agent release target unavailable err={exc}", level="WARN")
 
             snapshot["channels"]["stable"] = stable_target
             snapshot["channels"]["unstable"] = unstable_target
             snapshot["last_refresh_completed_at"] = _now_ts()
-            snapshot["last_refresh_error"] = ""
+            snapshot["last_refresh_error"] = "; ".join(refresh_errors)
             self._update_settings(snapshot)
 
             changed_channels = []
@@ -439,6 +486,88 @@ class AgentReleaseChannelManager:
             raise RuntimeError("artifact download returned no content")
         return bytes(body)
 
+    def _validate_cached_artifact(self, artifact_path: Path) -> None:
+        try:
+            with zipfile.ZipFile(artifact_path) as archive:
+                update_state_text = _archive_member_text(archive, "Data/Agent/update_state.py")
+                update_helper_text = _archive_member_text(archive, "Data/Agent/update_helper.py")
+        except zipfile.BadZipFile as exc:
+            raise RuntimeError(f"cached artifact is not a valid zip: {exc}") from exc
+
+        if not update_state_text or not update_helper_text:
+            raise RuntimeError("artifact is missing Data/Agent/update_state.py or Data/Agent/update_helper.py")
+
+        missing_state = [marker for marker in _REQUIRED_UPDATE_STATE_MARKERS if marker not in update_state_text]
+        if missing_state:
+            missing_names = [marker.replace("def ", "").replace("(", "") for marker in missing_state]
+            raise RuntimeError(
+                "artifact predates the Engine-managed updater interface "
+                f"(missing update_state APIs: {', '.join(missing_names)})"
+            )
+
+        missing_helper = [marker for marker in _REQUIRED_UPDATE_HELPER_MARKERS if marker not in update_helper_text]
+        if missing_helper:
+            raise RuntimeError("artifact predates the Engine-managed updater commands required by release channels")
+
+    def _validated_prior_target(self, target: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(target, dict):
+            return None
+        artifact_path = Path(_clean_text(target.get("artifact_path"))) if _clean_text(target.get("artifact_path")) else None
+        build_id = _clean_text(target.get("build_id")).lower()
+        if not artifact_path or not artifact_path.is_file() or not build_id:
+            return None
+        self._validate_cached_artifact(artifact_path)
+        return _json_clone(target)
+
+    def _channel_error_target(
+        self,
+        *,
+        repo: str,
+        candidate: Dict[str, Any],
+        prior_target: Optional[Dict[str, Any]],
+        error: Exception,
+    ) -> Dict[str, Any]:
+        preserved: Optional[Dict[str, Any]] = None
+        if prior_target:
+            try:
+                preserved = self._validated_prior_target(prior_target)
+            except Exception:
+                preserved = None
+
+        base = preserved or {
+            "channel": _normalize_channel(candidate.get("channel")),
+            "repo": repo,
+            "build_id": "",
+            "artifact_id": "",
+            "artifact_path": "",
+            "artifact_sha256": "",
+            "artifact_size": 0,
+            "promoted_at": 0,
+        }
+        base.update(
+            {
+                "channel": _normalize_channel(candidate.get("channel")),
+                "repo": repo,
+                "download_url": _clean_text(candidate.get("download_url")),
+                "fallback_url": _clean_text(candidate.get("fallback_url")),
+                "version_label": _clean_text(candidate.get("version_label")),
+                "release_tag": _clean_text(candidate.get("release_tag")),
+                "release_name": _clean_text(candidate.get("release_name")),
+                "published_at": _clean_text(candidate.get("published_at")),
+                "branch": _clean_text(candidate.get("branch")),
+                "refreshed_at": _now_ts(),
+                "last_error": str(error),
+            }
+        )
+        if preserved is None:
+            base["build_id"] = ""
+            base["artifact_id"] = ""
+            base["artifact_path"] = ""
+            base["artifact_sha256"] = ""
+            base["artifact_size"] = 0
+            base["promoted_at"] = 0
+        return base
+
     def _ensure_cached_artifact(self, repo: str, candidate: Dict[str, Any], *, force: bool = False) -> Dict[str, Any]:
         channel = _normalize_channel(candidate.get("channel"))
         build_id = _clean_text(candidate.get("build_id")).lower()
@@ -460,9 +589,12 @@ class AgentReleaseChannelManager:
             temp_path = artifact_path.with_suffix(".download")
             payload = self._download_bytes(_clean_text(candidate.get("download_url")))
             temp_path.write_bytes(payload)
+            self._validate_cached_artifact(temp_path)
             artifact_sha256 = _safe_sha_file(temp_path)
             artifact_size = int(temp_path.stat().st_size)
             temp_path.replace(artifact_path)
+
+        self._validate_cached_artifact(artifact_path)
 
         manifest = {
             "channel": channel,
