@@ -24,9 +24,22 @@ except ImportError:  # pragma: no cover - package import path for tests
 
 _TRANSIENT_REFRESH_STATUS_CODES = frozenset({500, 502, 503, 504})
 _REFRESH_RETRY_DELAYS_SECONDS = (1.0, 2.0, 5.0)
+_REQUIRED_UPDATE_STATE_ATTRS = (
+    "installed_build_id_path",
+    "read_installed_build_id",
+    "read_repo_build_id",
+    "sync_installed_build_id",
+    "write_installed_build_id",
+    "get_busy_snapshot",
+    "read_update_status",
+    "write_update_status",
+    "read_pending_update",
+    "write_pending_update",
+    "clear_pending_update",
+)
 # Preserve live runtime/dependency trees; the platform-specific refresh step restages them safely afterward.
 _SYNC_EXCLUDED_TOP_LEVEL = frozenset({"Agent", "Engine", "Dependencies", ".git", "__pycache__", ".pytest_cache"})
-_SYNC_EXCLUDED_RELATIVE = frozenset({"Update.ps1", "Update.sh", "Data/Agent/update_helper.py"})
+_SYNC_EXCLUDED_RELATIVE = frozenset({"Update.ps1", "Update.sh"})
 
 
 def _settings_dir() -> Path:
@@ -80,33 +93,27 @@ def _resolve_project_root() -> Path:
     return current
 
 
-def _load_update_state_module():
-    module_path = Path(__file__).resolve().with_name("update_state.py")
-    spec = importlib.util.spec_from_file_location("_borealis_update_state_runtime", module_path)
+def _load_update_state_module_from_path(module_path: Path):
+    module_path = module_path.resolve()
+    spec = importlib.util.spec_from_file_location(
+        f"_borealis_update_state_runtime_{abs(hash(str(module_path)))}",
+        module_path,
+    )
     if spec is None or spec.loader is None:
         raise ImportError(f"Unable to load update_state module from {module_path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    required_attrs = (
-        "installed_build_id_path",
-        "read_installed_build_id",
-        "read_repo_build_id",
-        "sync_installed_build_id",
-        "write_installed_build_id",
-        "get_busy_snapshot",
-        "read_update_status",
-        "write_update_status",
-        "read_pending_update",
-        "write_pending_update",
-        "clear_pending_update",
-    )
-    missing = [name for name in required_attrs if not hasattr(module, name)]
+    missing = [name for name in _REQUIRED_UPDATE_STATE_ATTRS if not hasattr(module, name)]
     if missing:
         raise ImportError(
             "update_state.py is missing required updater APIs: "
             + ", ".join(sorted(missing))
         )
     return module
+
+
+def _load_update_state_module():
+    return _load_update_state_module_from_path(Path(__file__).resolve().with_name("update_state.py"))
 
 
 _UPDATE_STATE = _load_update_state_module()
@@ -542,6 +549,24 @@ def _resolve_extracted_source_root(extract_root: Path) -> Path:
     return extract_root
 
 
+def _validate_engine_managed_source_root(source_root: Path) -> None:
+    helper_path = source_root / "Data" / "Agent" / "update_helper.py"
+    update_state_path = source_root / "Data" / "Agent" / "update_state.py"
+    if not helper_path.is_file() or not update_state_path.is_file():
+        raise RuntimeError(
+            "target artifact is missing Engine-managed updater files under Data/Agent; "
+            "publish a release that includes the new updater or switch this device to unstable"
+        )
+    try:
+        _load_update_state_module_from_path(update_state_path)
+    except Exception as exc:
+        raise RuntimeError(
+            "target artifact predates the Engine-managed updater interface; "
+            "publish a new stable release with the updater changes or switch this device to unstable "
+            f"(detail: {exc})"
+        ) from exc
+
+
 def _should_exclude_relative(relative_path: str) -> bool:
     normalized = str(relative_path or "").replace("\\", "/").strip("/")
     if not normalized:
@@ -598,6 +623,7 @@ def _apply_source_archive(archive_path: Path) -> None:
         with zipfile.ZipFile(archive_path) as archive:
             archive.extractall(extract_root)
         source_root = _resolve_extracted_source_root(extract_root)
+        _validate_engine_managed_source_root(source_root)
         _copy_tree(source_root, project_root, relative_root=source_root)
 
 
