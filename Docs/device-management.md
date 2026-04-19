@@ -65,7 +65,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details.
 - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory.
 - `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service.
-- `POST /api/device/update-agent/<hostname>` (Token Authenticated) - request an immediate agent updater run.
+- `POST /api/device/update-agent/<hostname>` (Token Authenticated) - ask a device to start its local AutoUpdater task immediately.
 - `POST /api/device/description/<hostname>` (Token Authenticated) - update description.
 - `GET /api/device_list_views` (Token Authenticated) - list saved views.
 - `GET /api/device_list_views/<int:view_id>` (Token Authenticated) - get saved view.
@@ -125,6 +125,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Installed software is also normalized into `device_software_inventory` so filters can match name, source, and version reliably.
 - Service inventory is cached in the `devices.services` JSON blob and merged with pending operator actions until a fresh agent snapshot confirms the desired state.
 - Manual agent update requests from the Device Summary action menu call `POST /api/device/update-agent/<hostname>` and are delivered over the device's SYSTEM Socket.IO channel as `agent_update_request`.
+- The agent does not launch `Update.ps1` / `Update.sh` directly for that request anymore; it starts the existing local AutoUpdater scheduler path instead so manual and scheduled updates use the same execution flow.
 
 ### Status computation
 - Online/offline is computed from `last_seen` (online if within ~300 seconds).

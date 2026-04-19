@@ -738,13 +738,6 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
                     )
 
         _prewarm_vnc_credential(agent_id)
-        release_manager = getattr(context, "agent_release_manager", None)
-        if release_manager is not None:
-            try:
-                release_manager.notify_device(hostname=inferred_hostname)
-            except Exception:
-                agent_logger.debug("Failed to emit agent update availability on connect hostname=%s", inferred_hostname, exc_info=True)
-
         return {"status": "ok"}
 
     @socket_server.on("operator_presence_sync")

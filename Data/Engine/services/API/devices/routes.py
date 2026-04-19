@@ -413,19 +413,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         finally:
             conn.close()
 
-        response_payload = {"status": "ok", "poll_after_ms": 15000}
-        if release_manager is not None:
-            try:
-                response_payload.update(
-                    release_manager.heartbeat_hint_for_device(
-                        guid=getattr(ctx, "guid", "") or "",
-                        hostname=updates.get("hostname") or "",
-                        installed_build_id=updates.get("agent_hash") or "",
-                    )
-                )
-            except Exception:
-                response_payload.update({"update_available": False, "target_channel": "", "target_build_id": ""})
-        return jsonify(response_payload)
+        return jsonify({"status": "ok", "poll_after_ms": 15000})
 
     @blueprint.route("/api/agent/script/request", methods=["POST"])
     @require_device_auth(auth_manager)

@@ -1498,12 +1498,6 @@ class DeviceManagementService:
         finally:
             conn.close()
 
-        if self.agent_release_manager is not None and hostname:
-            try:
-                self.agent_release_manager.notify_device(guid=normalized_guid, hostname=hostname)
-            except Exception:
-                self.logger.debug("Failed to notify device after release-channel override change", exc_info=True)
-
         effective_channel, target_build_id, target_published_at = self._resolve_agent_target(cleaned_override)
         return {
             "status": "ok",

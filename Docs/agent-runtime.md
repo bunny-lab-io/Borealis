@@ -93,7 +93,9 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
   - `Agent/Logs/agent.log` for enrollment errors.
   - `Engine/Logs/engine.log` for approval or auth failures.
 - The updater helper (`Data/Agent/update_helper.py`) requires a configured public HTTPS FQDN and uses normal CA + hostname validation only.
-- Operator-requested manual updates arrive over the SYSTEM Socket.IO channel as `agent_update_request` and launch the same `Update.ps1` / `Update.sh` flow immediately rather than waiting for the hourly scheduler.
+- Operator-requested manual updates arrive over the SYSTEM Socket.IO channel as `agent_update_request` and start the local AutoUpdater task/service immediately so the same scheduler-owned update path is used for both manual and hourly runs.
+- Engine-managed release channels still decide what build the agent should adopt, but the agent now discovers and applies those targets during its scheduled updater cadence instead of reacting to live Engine push events.
+- The scheduled AutoUpdater cadence is hourly with up to 15 minutes of random delay on normal timer-driven runs so fleets do not all recheck at once.
 - If scripts do not run:
   - Confirm `quick_job_run` events and the correct role context.
   - Verify signatures with `signature_utils` logs.

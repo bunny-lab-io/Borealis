@@ -40,16 +40,12 @@ from security import AgentKeyStore
 from signature_utils import decode_script_bytes as _decode_script_bytes, verify_and_store_script_signature as _verify_and_store_script_signature
 try:
     from update_state import (
-        get_busy_snapshot as _get_update_busy_snapshot,
-        read_pending_update as _read_pending_update,
         read_installed_build_id as _read_installed_build_id,
         read_repo_build_id as _read_repo_build_id,
         read_update_status as _read_update_status,
         sync_installed_build_id as _sync_installed_build_id,
     )
 except Exception:
-    _get_update_busy_snapshot = None
-    _read_pending_update = None
     _read_installed_build_id = None
     _read_repo_build_id = None
     _read_update_status = None
@@ -975,146 +971,80 @@ def _process_tray_restart_request_now() -> bool:
     return True
 
 
-_MANUAL_UPDATE_PROCESS_LOCK = threading.Lock()
-_MANUAL_UPDATE_PROCESS = None
+_MANUAL_UPDATE_REQUEST_LOCK = threading.Lock()
+_WINDOWS_AUTO_UPDATER_TASK_NAME = "Borealis Agent (AutoUpdater)"
+_LINUX_AUTO_UPDATER_SERVICE_NAME = "borealis-agent-updater.service"
 
 
 def _manual_update_command(project_root: str) -> Tuple[Optional[List[str]], str]:
-    root = os.path.abspath(project_root or _find_project_root())
     if os.name == 'nt':
-        update_script = os.path.join(root, 'Update.ps1')
-        if not os.path.isfile(update_script):
-            return None, update_script
-        powershell = os.path.expandvars(r"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe")
-        if not os.path.isfile(powershell):
-            powershell = "powershell.exe"
-        return [powershell, "-ExecutionPolicy", "Bypass", "-NoProfile", "-File", update_script], update_script
+        schtasks = os.path.expandvars(r"%SystemRoot%\System32\schtasks.exe")
+        if not os.path.isfile(schtasks):
+            schtasks = "schtasks.exe"
+        return [schtasks, "/Run", "/TN", _WINDOWS_AUTO_UPDATER_TASK_NAME], _WINDOWS_AUTO_UPDATER_TASK_NAME
 
-    update_script = os.path.join(root, 'Update.sh')
-    if not os.path.isfile(update_script):
-        return None, update_script
-    shell_path = shutil.which("bash") or "/bin/bash"
-    return [shell_path, update_script], update_script
+    systemctl = shutil.which("systemctl") or "/bin/systemctl"
+    if not systemctl or (systemctl != "systemctl" and not os.path.isfile(systemctl)):
+        return None, _LINUX_AUTO_UPDATER_SERVICE_NAME
+    return [systemctl, "start", "--no-block", _LINUX_AUTO_UPDATER_SERVICE_NAME], _LINUX_AUTO_UPDATER_SERVICE_NAME
 
 
 def _launch_manual_agent_update(*, requested_by: str = "", requested_at: Any = None) -> Tuple[bool, str]:
-    global _MANUAL_UPDATE_PROCESS
-
     project_root = _find_project_root()
-    command, script_path = _manual_update_command(project_root)
+    command, updater_target = _manual_update_command(project_root)
     if not command:
-        return False, f"updater_missing:{script_path}"
+        return False, f"updater_missing:{updater_target}"
 
-    with _MANUAL_UPDATE_PROCESS_LOCK:
-        existing = _MANUAL_UPDATE_PROCESS
-        if existing is not None:
-            try:
-                if existing.poll() is None:
-                    return False, "update_already_running"
-            except Exception:
-                return False, "update_already_running"
-            _MANUAL_UPDATE_PROCESS = None
-
+    with _MANUAL_UPDATE_REQUEST_LOCK:
         env = os.environ.copy()
         env["BOREALIS_PROJECT_ROOT"] = project_root
         env.setdefault("BOREALIS_ROOT", project_root)
-        popen_kwargs: Dict[str, Any] = {
+        run_kwargs: Dict[str, Any] = {
             "cwd": project_root,
             "env": env,
             "stdin": subprocess.DEVNULL,
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
         }
-        if os.name == 'nt':
-            creationflags = (
-                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                | getattr(subprocess, "DETACHED_PROCESS", 0)
-                | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            )
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             if creationflags:
-                popen_kwargs["creationflags"] = creationflags
-        else:
-            popen_kwargs["start_new_session"] = True
-
-        proc = subprocess.Popen(command, **popen_kwargs)
-        _MANUAL_UPDATE_PROCESS = proc
+                run_kwargs["creationflags"] = creationflags
+        try:
+            result = subprocess.run(command, timeout=30, **run_kwargs)
+        except subprocess.TimeoutExpired:
+            result = None
+        except Exception as exc:
+            return False, f"launcher_failed:{exc}"
 
     _log_agent(
-        "Manual agent update launch queued requested_by={0} requested_at={1} pid={2} script={3}".format(
+        "Manual agent AutoUpdater start requested requested_by={0} requested_at={1} target={2}".format(
             requested_by or "-",
             requested_at if requested_at is not None else "-",
-            getattr(proc, "pid", "-"),
-            os.path.basename(script_path),
+            updater_target,
         ),
         fname='agent.log',
     )
-    return True, "queued"
+    if result is None:
+        return True, "queued"
+    if result.returncode == 0:
+        return True, "queued"
+    stderr_text = str(getattr(result, "stderr", "") or "").strip()
+    stdout_text = str(getattr(result, "stdout", "") or "").strip()
+    detail = stderr_text or stdout_text or f"exit_{result.returncode}"
+    return False, f"launcher_failed:{detail}"
 
 
-def _schedule_engine_managed_update(reason: str, *, payload: Optional[Dict[str, Any]] = None) -> bool:
-    if not SYSTEM_SERVICE_MODE:
-        return False
-    requested_at = int(time.time())
-    requested_by = f"engine:{str(reason or 'update').strip()}"
-    if isinstance(payload, dict) and str(payload.get("requested_by") or "").strip():
-        requested_by = str(payload.get("requested_by")).strip()
-    launched, status = _launch_manual_agent_update(
-        requested_by=requested_by,
-        requested_at=requested_at,
+def _log_manual_update_request_failure(*, requested_by: str = "", requested_at: Any = None, detail: str = "") -> None:
+    _log_agent(
+        "Manual agent update request failed requested_by={0} requested_at={1} detail={2}".format(
+            requested_by or "-",
+            requested_at if requested_at is not None else "-",
+            detail or "-",
+        ),
+        fname='agent.error.log',
     )
-    if launched:
-        _log_agent(
-            "Engine-managed update scheduled reason={0} target_build_id={1} target_channel={2}".format(
-                reason or "-",
-                str((payload or {}).get("target_build_id") or "").strip() or "-",
-                str((payload or {}).get("target_channel") or "").strip() or "-",
-            ),
-            fname="agent.log",
-        )
-        return True
-    if status != "update_already_running":
-        _log_agent(
-            "Engine-managed update schedule failed reason={0} status={1}".format(reason or "-", status),
-            fname="agent.error.log",
-        )
-    return False
-
-
-def _maybe_schedule_pending_update(reason: str = "pending_update") -> bool:
-    if not SYSTEM_SERVICE_MODE:
-        return False
-    pending_payload = {}
-    try:
-        if callable(_read_pending_update):
-            pending_payload = _read_pending_update() or {}
-    except Exception:
-        pending_payload = {}
-    if not isinstance(pending_payload, dict) or not pending_payload:
-        return False
-    target_build_id = str(pending_payload.get("target_build_id") or "").strip().lower()
-    if target_build_id and target_build_id == _current_agent_build_id().strip().lower():
-        return False
-    try:
-        if callable(_get_update_busy_snapshot):
-            snapshot = _get_update_busy_snapshot() or {}
-            if snapshot.get("busy"):
-                return False
-    except Exception:
-        return False
-    return _schedule_engine_managed_update(reason, payload=pending_payload)
-
-
-def _handle_agent_update_hint(payload: Optional[Dict[str, Any]], *, source: str) -> None:
-    if not SYSTEM_SERVICE_MODE or not isinstance(payload, dict):
-        return
-    update_available = bool(payload.get("update_available"))
-    target_build_id = str(payload.get("target_build_id") or "").strip().lower()
-    current_build_id = _current_agent_build_id().strip().lower()
-    if not update_available and target_build_id and current_build_id and target_build_id != current_build_id:
-        update_available = True
-    if not update_available:
-        return
-    _schedule_engine_managed_update(source, payload=payload)
 
 
 def _format_debug_pairs(pairs: Dict[str, Any]) -> str:
@@ -2949,9 +2879,6 @@ async def send_heartbeat():
             }
             response = await client.async_post_json("/api/agent/heartbeat", payload, require_auth=True)
             _record_tray_heartbeat_success(client=client)
-            if isinstance(response, dict):
-                _handle_agent_update_hint(response, source="heartbeat")
-            _maybe_schedule_pending_update("heartbeat_pending_retry")
         except Exception as exc:
             _log_agent(f'Heartbeat post failed: {exc}', fname='agent.error.log')
             _record_tray_error("transport", _describe_exception(exc), client=client, socket_connected=False)
@@ -3370,8 +3297,6 @@ async def connect():
         }
         response = await client.async_post_json("/api/agent/heartbeat", payload, require_auth=True)
         _record_tray_heartbeat_success(client=client)
-        if isinstance(response, dict):
-            _handle_agent_update_hint(response, source="connect_heartbeat")
     except Exception as exc:
         _log_agent(f'Initial REST heartbeat failed: {exc}', fname='agent.error.log')
         _record_tray_error("transport", _describe_exception(exc), client=client, socket_connected=True)
@@ -3428,15 +3353,6 @@ async def watch_tray_restart_requests():
             _log_agent(f"Tray restart watcher failed: {exc}", fname="agent.error.log")
         await asyncio.sleep(2)
 
-
-async def watch_pending_updates():
-    await asyncio.sleep(10)
-    while True:
-        try:
-            _maybe_schedule_pending_update("pending_update_watcher")
-        except Exception as exc:
-            _log_agent(f"Pending update watcher failed: {exc}", fname="agent.error.log")
-        await asyncio.sleep(15)
 
 # //////////////////////////////////////////////////////////////////////////
 # CORE SECTION: AGENT CONFIG MANAGEMENT / WINDOW MANAGEMENT
@@ -3498,43 +3414,13 @@ async def on_agent_update_request(payload):
         )
         if launched:
             return
-        if status == "update_already_running":
-            _log_agent(
-                "Manual agent update request ignored because an updater process is already running requested_by={0} requested_at={1}".format(
-                    requested_by or "-",
-                    requested_at if requested_at is not None else "-",
-                ),
-                fname='agent.log',
-            )
-            return
-        _log_agent(
-            "Manual agent update request failed requested_by={0} requested_at={1} detail={2}".format(
-                requested_by or "-",
-                requested_at if requested_at is not None else "-",
-                status,
-            ),
-            fname='agent.error.log',
+        _log_manual_update_request_failure(
+            requested_by=requested_by,
+            requested_at=requested_at,
+            detail=status,
         )
     except Exception as exc:
         _log_agent(f"Manual agent update request handler failed: {exc}", fname='agent.error.log')
-
-
-@sio.on('agent_update_available')
-async def on_agent_update_available(payload):
-    try:
-        if not isinstance(payload, dict):
-            return
-        if str(SERVICE_MODE_CANONICAL or "").upper() != "SYSTEM":
-            return
-        target_agent = str(payload.get("agent_id") or "").strip()
-        if target_agent and target_agent != AGENT_ID:
-            return
-        target_hostname = str(payload.get("hostname") or "").strip().lower()
-        if target_hostname and target_hostname != socket.gethostname().strip().lower():
-            return
-        _handle_agent_update_hint(payload, source="socket_update_available")
-    except Exception as exc:
-        _log_agent(f"Agent update availability handler failed: {exc}", fname='agent.error.log')
 
 # ---------------- Config Watcher ----------------
 async def config_watcher():
@@ -3950,7 +3836,6 @@ if __name__=='__main__':
         # Start periodic heartbeats
         background_tasks.append(loop.create_task(send_heartbeat()))
         background_tasks.append(loop.create_task(watch_tray_restart_requests()))
-        background_tasks.append(loop.create_task(watch_pending_updates()))
         background_tasks.append(loop.create_task(poll_script_requests()))
         # Inventory upload is handled by the DeviceAudit role running in SYSTEM context.
         # Do not schedule the legacy agent-level details poster to avoid duplicates.

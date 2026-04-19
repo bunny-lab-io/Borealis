@@ -396,7 +396,6 @@ class AgentReleaseChannelManager:
                         for channel in changed_channels
                     )
                 )
-                self._emit_updates_for_channels(changed_channels)
 
             return self.get_settings()
         except Exception as exc:
@@ -709,27 +708,6 @@ class AgentReleaseChannelManager:
             "promoted_at": int(target.get("promoted_at") or 0),
         }
 
-    def heartbeat_hint_for_device(
-        self,
-        *,
-        guid: str = "",
-        hostname: str = "",
-        installed_build_id: str = "",
-    ) -> Dict[str, Any]:
-        try:
-            manifest = self.manifest_for_device(guid=guid, hostname=hostname, installed_build_id=installed_build_id)
-        except Exception:
-            return {
-                "update_available": False,
-                "target_channel": "",
-                "target_build_id": "",
-            }
-        return {
-            "update_available": bool(manifest.get("update_available")),
-            "target_channel": _clean_text(manifest.get("target_channel")),
-            "target_build_id": _clean_text(manifest.get("target_build_id")),
-        }
-
     def artifact_path_for_id(self, artifact_id: str) -> Optional[Path]:
         normalized = _clean_text(artifact_id)
         if not normalized:
@@ -738,80 +716,3 @@ class AgentReleaseChannelManager:
         if not candidate.is_file():
             return None
         return candidate
-
-    def notify_device(self, *, guid: str = "", hostname: str = "") -> bool:
-        record = self._load_device_identity(guid=guid, hostname=hostname)
-        if record is None:
-            return False
-        try:
-            manifest = self.manifest_for_device(
-                guid=record.get("guid") or guid,
-                hostname=record.get("hostname") or hostname,
-                installed_build_id=record.get("agent_hash") or "",
-            )
-        except Exception:
-            return False
-        if not manifest.get("update_available"):
-            return False
-        payload = {
-            "hostname": record.get("hostname") or hostname,
-            "agent_id": record.get("agent_id") or "",
-            "requested_at": _now_ts(),
-            "target_channel": _clean_text(manifest.get("target_channel")),
-            "target_build_id": _clean_text(manifest.get("target_build_id")),
-            "artifact_id": _clean_text(manifest.get("artifact_id")),
-        }
-        emit_host_service_event = getattr(self._context, "emit_host_service_event", None)
-        emit_agent_event = getattr(self._context, "emit_agent_event", None)
-        emitted = False
-        if callable(emit_host_service_event) and _clean_text(record.get("hostname")):
-            try:
-                emitted = bool(
-                    emit_host_service_event(
-                        record.get("hostname"),
-                        "system",
-                        "agent_update_available",
-                        payload,
-                    )
-                )
-            except Exception:
-                emitted = False
-        if not emitted and callable(emit_agent_event) and _clean_text(record.get("agent_id")):
-            try:
-                emitted = bool(emit_agent_event(record.get("agent_id"), "agent_update_available", payload))
-            except Exception:
-                emitted = False
-        return emitted
-
-    def _emit_updates_for_channels(self, channels: list[str]) -> None:
-        normalized_channels = {self.resolve_effective_channel(channel) for channel in channels if channel}
-        if not normalized_channels:
-            return
-        snapshot = self._settings_snapshot()
-        default_channel = self.resolve_effective_channel(snapshot.get("default_channel"))
-        conn = self._db_conn_factory()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT guid, hostname, agent_hash, agent_id, agent_release_channel_override
-                  FROM devices
-                """
-            )
-            rows = cur.fetchall()
-        finally:
-            conn.close()
-        for row in rows or []:
-            override = _normalize_channel(row[4], default="") if _clean_text(row[4]) else ""
-            effective_channel = override if override in VALID_AGENT_RELEASE_CHANNELS else default_channel
-            if effective_channel not in normalized_channels:
-                continue
-            target = snapshot.get("channels", {}).get(effective_channel, {})
-            target_build_id = _clean_text(target.get("build_id")).lower()
-            installed_build_id = _clean_text(row[2]).lower()
-            if target_build_id and installed_build_id == target_build_id:
-                continue
-            try:
-                self.notify_device(guid=row[0], hostname=row[1])
-            except Exception:
-                self._logger.debug("Failed to notify device about channel target change", exc_info=True)

@@ -1693,6 +1693,7 @@ Description=Borealis Agent Auto Updater Timer
 
 [Timer]
 OnCalendar=hourly
+RandomizedDelaySec=15min
 Persistent=true
 AccuracySec=1s
 Unit=${service_name}

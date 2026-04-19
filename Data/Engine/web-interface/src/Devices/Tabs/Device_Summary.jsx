@@ -1227,7 +1227,7 @@ export default function DeviceSummary() {
   const [tunnelInfo, setTunnelInfo] = useState(TUNNEL_INFO_IDLE);
   const [agentHealthDialogEntry, setAgentHealthDialogEntry] = useState(null);
   const [menuAnchor, setMenuAnchor] = useState(null);
-  const [releaseChannelMenuAnchor, setReleaseChannelMenuAnchor] = useState(null);
+  const [releaseChannelMenuPosition, setReleaseChannelMenuPosition] = useState(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [updateAgentBusy, setUpdateAgentBusy] = useState(false);
   const [releaseChannelSaving, setReleaseChannelSaving] = useState(false);
@@ -1576,20 +1576,20 @@ export default function DeviceSummary() {
       if (!resp.ok) {
         let message = String(data?.message || data?.error || `HTTP ${resp.status}`);
         if (String(data?.error || "").trim() === "agent_unavailable") {
-          message = "The agent SYSTEM socket is not connected, so Borealis could not queue the update request.";
+          message = "The agent SYSTEM socket is not connected, so Borealis could not start the local AutoUpdater.";
         }
         throw new Error(message);
       }
       await notifyOperator({
-        title: "Agent Update Requested",
-        message: `Queued an immediate agent update check for ${targetHost}.`,
+        title: "AutoUpdater Requested",
+        message: `Asked ${targetHost} to start its local AutoUpdater task immediately.`,
         icon: "update",
         variant: "info",
       });
     } catch (err) {
       await notifyOperator({
         title: "Agent Update Failed",
-        message: `Could not queue an update for ${targetHost}: ${String(err?.message || err)}`,
+        message: `Could not start the AutoUpdater for ${targetHost}: ${String(err?.message || err)}`,
         icon: "error",
         variant: "error",
       });
@@ -1603,13 +1603,25 @@ export default function DeviceSummary() {
       if (!isAdmin || releaseChannelSaving) return;
       if (event?.preventDefault) event.preventDefault();
       if (event?.stopPropagation) event.stopPropagation();
-      setReleaseChannelMenuAnchor(event?.currentTarget || null);
+      const rect = event?.currentTarget?.getBoundingClientRect?.();
+      if (rect) {
+        setReleaseChannelMenuPosition({
+          top: Math.round(rect.bottom + 4),
+          left: Math.round(rect.left),
+        });
+        return;
+      }
+      setReleaseChannelMenuPosition(
+        typeof event?.clientX === "number" && typeof event?.clientY === "number"
+          ? { top: Math.round(event.clientY + 4), left: Math.round(event.clientX) }
+          : null
+      );
     },
     [isAdmin, releaseChannelSaving]
   );
 
   const closeReleaseChannelMenu = useCallback(() => {
-    setReleaseChannelMenuAnchor(null);
+    setReleaseChannelMenuPosition(null);
   }, []);
 
   const applyAgentReleaseChannelOverride = useCallback(
@@ -1635,9 +1647,14 @@ export default function DeviceSummary() {
           includeAgents: false,
         });
         applyDeviceSummarySnapshot(snapshot, { silent: true });
+        const resolvedChannel =
+          String(data?.agent_release_channel_effective || normalizedChannel || "stable")
+            .trim()
+            .toLowerCase() || "stable";
+        const targetLabel = activityHostname || targetGuid;
         await notifyOperator({
           title: "Agent Channel Updated",
-          message: `${activityHostname || targetGuid} now resolves through ${String(data?.agent_release_channel_effective || normalizedChannel || "inherited")}.`,
+          message: `<b>${targetLabel}</b> Release Channel changed to <b>${resolvedChannel}</b>`,
           icon: "info",
           variant: "success",
         });
@@ -3383,9 +3400,11 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         </MenuItem>
       </Menu>
       <Menu
-        anchorEl={releaseChannelMenuAnchor}
-        open={Boolean(releaseChannelMenuAnchor)}
+        anchorReference="anchorPosition"
+        anchorPosition={releaseChannelMenuPosition || undefined}
+        open={Boolean(releaseChannelMenuPosition)}
         onClose={closeReleaseChannelMenu}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
         PaperProps={{
           sx: {
             bgcolor: "rgba(8,12,24,0.96)",

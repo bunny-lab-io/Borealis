@@ -5,7 +5,7 @@
 # API Endpoints (if applicable):
 # - GET /api/device/services/<hostname> (Token Authenticated) - Returns cached service inventory for an in-scope device.
 # - POST /api/device/services/<hostname>/action (Token Authenticated) - Start, stop, or restart a named service on an in-scope device.
-# - POST /api/device/update-agent/<hostname> (Token Authenticated) - Request an immediate agent updater run for an in-scope device.
+# - POST /api/device/update-agent/<hostname> (Token Authenticated) - Ask an in-scope device to start its local AutoUpdater task immediately.
 # ======================================================
 
 """Device service inventory and operator-triggered control endpoints for the Borealis Engine."""
@@ -350,7 +350,7 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
                 jsonify(
                     {
                         "error": "agent_unavailable",
-                        "message": "The agent SYSTEM socket is not available for an immediate update request.",
+                        "message": "The agent SYSTEM socket is not available to start the local AutoUpdater task.",
                     }
                 ),
                 409,
