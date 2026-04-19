@@ -813,7 +813,7 @@ const AgentHealthLinkCell = React.memo(function AgentHealthLinkCell(props) {
         justifyContent: "flex-start",
         textTransform: "none",
         color: SUMMARY_FIELD_TEXT_COLOR,
-        fontWeight: 600,
+        fontWeight: 400,
         textDecoration: "none",
         "&:hover": {
           background: "transparent",
@@ -953,7 +953,29 @@ const SummarySectionGrid = React.memo(function SummarySectionGrid({
   });
 
   return (
-    <GridShell sx={{ height }}>
+    <GridShell
+      sx={{
+        height,
+        "& .ag-cell": {
+          display: "flex",
+          alignItems: "center",
+          paddingTop: 0,
+          paddingBottom: 0,
+        },
+        "& .ag-cell-wrapper": {
+          display: "flex",
+          alignItems: "center",
+          width: "100%",
+          minHeight: "100%",
+        },
+        "& .ag-cell-value": {
+          display: "flex",
+          alignItems: "center",
+          width: "100%",
+          minHeight: "100%",
+        },
+      }}
+    >
       <AgGridReact
         rowData={rowData}
         columnDefs={columnDefs}
@@ -2975,24 +2997,42 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     const row = params?.data && typeof params.data === "object" ? params.data : {};
     const label = String(row?.label || params?.value || "").trim() || "unknown";
     const content = (
-      <Typography
+      <Box
         sx={{
-          color: SUMMARY_FIELD_TEXT_COLOR,
-          fontSize: "0.82rem",
-          lineHeight: 1.45,
-          whiteSpace: "normal",
-          wordBreak: "break-word",
+          display: "flex",
+          alignItems: "center",
+          width: "100%",
+          minHeight: "100%",
         }}
       >
-        {label}
-      </Typography>
+        <Typography
+          sx={{
+            color: SUMMARY_FIELD_TEXT_COLOR,
+            fontSize: "0.82rem",
+            lineHeight: 1.45,
+            whiteSpace: "normal",
+            wordBreak: "break-word",
+          }}
+        >
+          {label}
+        </Typography>
+      </Box>
     );
     if (!row?.labelTooltip) {
       return content;
     }
     return (
       <Tooltip title={String(row.labelTooltip)} arrow placement="top">
-        <Box sx={{ display: "inline-flex", alignItems: "center", maxWidth: "100%" }}>{content}</Box>
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            width: "100%",
+            minHeight: "100%",
+          }}
+        >
+          {content}
+        </Box>
       </Tooltip>
     );
   }, []);
@@ -3003,7 +3043,17 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       const value = String(params?.value ?? row?.value ?? "").trim() || "unknown";
       if (row?.id === "agent-channel") {
         return (
-          <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.8, flexWrap: "wrap", minWidth: 0 }}>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 0.8,
+              flexWrap: "wrap",
+              minWidth: 0,
+              width: "100%",
+              minHeight: "100%",
+            }}
+          >
             <Typography
               sx={{
                 color: MAGIC_UI.textBright,
@@ -3022,6 +3072,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                 disabled={releaseChannelSaving}
                 onClick={openReleaseChannelMenu}
                 sx={{
+                  display: "inline-flex",
+                  alignItems: "center",
                   p: 0,
                   m: 0,
                   border: 0,
@@ -3030,7 +3082,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                   cursor: releaseChannelSaving ? "default" : "pointer",
                   font: "inherit",
                   fontSize: "0.82rem",
-                  lineHeight: 1.2,
+                  lineHeight: 1.45,
                   textDecoration: "none",
                   transition: "color 160ms ease, opacity 160ms ease",
                   "&:hover": releaseChannelSaving
@@ -3051,17 +3103,26 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         );
       }
       return (
-        <Typography
+        <Box
           sx={{
-            color: MAGIC_UI.textBright,
-            fontSize: "0.88rem",
-            lineHeight: 1.45,
-            whiteSpace: "normal",
-            wordBreak: "break-word",
+            display: "flex",
+            alignItems: "center",
+            width: "100%",
+            minHeight: "100%",
           }}
         >
-          {value}
-        </Typography>
+          <Typography
+            sx={{
+              color: MAGIC_UI.textBright,
+              fontSize: "0.88rem",
+              lineHeight: 1.45,
+              whiteSpace: "normal",
+              wordBreak: "break-word",
+            }}
+          >
+            {value}
+          </Typography>
+        </Box>
       );
     },
     [openReleaseChannelMenu, releaseChannelSaving]
