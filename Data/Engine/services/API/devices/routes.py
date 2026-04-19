@@ -17,7 +17,7 @@ from Data.Engine.db import dbapi as sqlite3
 import time
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from flask import Blueprint, jsonify, request, g
+from flask import Blueprint, jsonify, request, g, send_file
 
 from ....auth.device_auth import AGENT_CONTEXT_HEADER, require_device_auth
 from ....auth.guid_utils import normalize_guid
@@ -90,6 +90,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
     log = adapters.service_log
     db_conn_factory = adapters.db_conn_factory
     script_signer = adapters.script_signer
+    release_manager = getattr(adapters, "agent_release_manager", None)
 
     def _vnc_trace(step: str, context_hint: Optional[str], *, level: str = "INFO", **fields: Any) -> None:
         parts = [f"vnc_trace step={str(step or '-').strip() or '-'}"]
@@ -293,6 +294,22 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         agent_build_id = payload.get("agent_build_id") or payload.get("installed_build_id") or payload.get("agent_hash")
         if isinstance(agent_build_id, str) and agent_build_id.strip():
             updates["agent_hash"] = agent_build_id.strip()
+        incoming_update_status = payload.get("agent_update_status") if isinstance(payload.get("agent_update_status"), dict) else {}
+        if incoming_update_status:
+            update_channel = (
+                incoming_update_status.get("target_channel")
+                or incoming_update_status.get("effective_channel")
+                or ""
+            )
+            update_target_build_id = incoming_update_status.get("target_build_id") or ""
+            update_state = incoming_update_status.get("state") or ""
+            update_error = incoming_update_status.get("last_error") or ""
+            update_source = incoming_update_status.get("last_source") or ""
+            updates["agent_update_channel"] = str(update_channel).strip()
+            updates["agent_update_target_build_id"] = str(update_target_build_id).strip()
+            updates["agent_update_state"] = str(update_state).strip()
+            updates["agent_update_error"] = str(update_error).strip()
+            updates["agent_update_source"] = str(update_source).strip()
 
         conn = db_conn_factory()
         try:
@@ -396,7 +413,19 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         finally:
             conn.close()
 
-        return jsonify({"status": "ok", "poll_after_ms": 15000})
+        response_payload = {"status": "ok", "poll_after_ms": 15000}
+        if release_manager is not None:
+            try:
+                response_payload.update(
+                    release_manager.heartbeat_hint_for_device(
+                        guid=getattr(ctx, "guid", "") or "",
+                        hostname=updates.get("hostname") or "",
+                        installed_build_id=updates.get("agent_hash") or "",
+                    )
+                )
+            except Exception:
+                response_payload.update({"update_available": False, "target_channel": "", "target_build_id": ""})
+        return jsonify(response_payload)
 
     @blueprint.route("/api/agent/script/request", methods=["POST"])
     @require_device_auth(auth_manager)
@@ -429,6 +458,50 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                 "sig_alg": "ed25519",
                 "signing_key": signing_key,
             }
+        )
+
+    @blueprint.route("/api/agent/update/manifest", methods=["GET"])
+    @require_device_auth(auth_manager)
+    def agent_update_manifest():
+        ctx = _auth_context()
+        if ctx is None:
+            return jsonify({"error": "auth_context_missing"}), 500
+        if release_manager is None:
+            return jsonify({"error": "release_channels_unavailable"}), 503
+        installed_build_id = (
+            request.args.get("installed_build_id")
+            or request.args.get("current_build_id")
+            or request.args.get("agent_build_id")
+            or ""
+        )
+        try:
+            payload = release_manager.manifest_for_device(
+                guid=getattr(ctx, "guid", "") or "",
+                hostname=request.args.get("hostname") or "",
+                installed_build_id=installed_build_id,
+            )
+        except Exception as exc:
+            log("agents", f"agent update manifest failed guid={getattr(ctx, 'guid', '')} err={exc}", _context_hint(ctx), level="ERROR")
+            return jsonify({"error": "manifest_unavailable", "message": str(exc)}), 503
+        return jsonify(payload), 200
+
+    @blueprint.route("/api/agent/update/download/<artifact_id>", methods=["GET"])
+    @require_device_auth(auth_manager)
+    def agent_update_download(artifact_id: str):
+        ctx = _auth_context()
+        if ctx is None:
+            return jsonify({"error": "auth_context_missing"}), 500
+        if release_manager is None:
+            return jsonify({"error": "release_channels_unavailable"}), 503
+        artifact_path = release_manager.artifact_path_for_id(artifact_id)
+        if artifact_path is None:
+            return jsonify({"error": "artifact_not_found"}), 404
+        return send_file(
+            artifact_path,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=artifact_path.name,
+            conditional=True,
         )
 
     @blueprint.route("/api/agent/vpn/ensure", methods=["POST"])

@@ -850,6 +850,7 @@ class WatchdogRuntimeService:
         adapters: Any = None,
         context: Any = None,
         github_integration: Any = None,
+        agent_release_manager: Any = None,
     ) -> None:
         self._db_conn_factory = db_conn_factory
         self._socketio = socketio
@@ -868,6 +869,7 @@ class WatchdogRuntimeService:
         self._adapters = adapters
         self._context = context
         self._github_integration = github_integration
+        self._agent_release_manager = agent_release_manager
         self._running = False
         self._repo_hash_cache: Dict[str, Any] = {"sha": "", "expires_at": 0}
         self._device_snapshot_cache: Dict[str, Any] = {"devices": [], "expires_at": 0}
@@ -944,6 +946,18 @@ class WatchdogRuntimeService:
         }
         return sha
 
+    def _resolve_device_target_build_id(self, channel_override: Any) -> str:
+        normalized_override = _clean_text(channel_override)
+        if self._agent_release_manager is not None:
+            try:
+                target = self._agent_release_manager.target_for_override(normalized_override)
+                build_id = _clean_text(target.get("build_id")).lower()
+                if build_id:
+                    return build_id
+            except Exception:
+                pass
+        return self._current_target_repo_hash()
+
     def _invalidate_device_snapshot_cache(self) -> None:
         with self._device_snapshot_lock:
             self._device_snapshot_cache = {"devices": [], "expires_at": 0}
@@ -973,14 +987,14 @@ class WatchdogRuntimeService:
                     sessions,
                     processes,
                     cpu_percent,
-                    memory_percent
+                    memory_percent,
+                    agent_release_channel_override
                   FROM devices
                 """
             )
             rows = cur.fetchall()
         finally:
             conn.close()
-        repo_hash = self._current_target_repo_hash()
         for row in rows:
             guid = normalize_guid(row[0]) or ""
             hostname = _clean_text(row[1])
@@ -990,7 +1004,8 @@ class WatchdogRuntimeService:
             services_payload = normalize_device_services(row[2], default_captured_at=_coerce_int(row[4], 0))
             role_health_payload = normalize_agent_role_health(row[3])
             installed_hash = _clean_text(row[6]).lower()
-            agent_version_status = "Up-to-Date" if installed_hash and repo_hash and installed_hash == repo_hash else "Needs Updated"
+            target_build_id = self._resolve_device_target_build_id(row[14])
+            agent_version_status = "Up-to-Date" if installed_hash and target_build_id and installed_hash == target_build_id else "Needs Updated"
             sessions_payload = normalize_device_sessions(row[10], default_reported_at=_coerce_int(row[4], 0))
             processes_payload = normalize_device_processes(row[11], default_reported_at=_coerce_int(row[4], 0))
             device["services_payload"] = services_payload

@@ -9,6 +9,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  MenuItem,
   Stack,
   TextField,
   Typography,
@@ -304,6 +305,12 @@ function formatDateOnly(value) {
   const day = String(parsed.getUTCDate()).padStart(2, "0");
   const year = parsed.getUTCFullYear();
   return `${month}/${day}/${year}`;
+}
+
+function formatBuildShort(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "Unavailable";
+  return raw.length > 12 ? raw.slice(0, 12) : raw;
 }
 
 function formatUnixDateTime(value) {
@@ -656,6 +663,12 @@ export default function ServerInfo() {
   const [ansibleRunnerError, setAnsibleRunnerError] = useState("");
   const [ansibleRunnerJobLimit, setAnsibleRunnerJobLimit] = useState("20");
   const [ansibleRunnerGlobalLimit, setAnsibleRunnerGlobalLimit] = useState("50");
+  const [releaseChannelsDialogOpen, setReleaseChannelsDialogOpen] = useState(false);
+  const [releaseChannelsSaving, setReleaseChannelsSaving] = useState(false);
+  const [releaseChannelsRefreshing, setReleaseChannelsRefreshing] = useState(false);
+  const [releaseChannelsError, setReleaseChannelsError] = useState("");
+  const [releaseDefaultChannel, setReleaseDefaultChannel] = useState("stable");
+  const [releaseRepo, setReleaseRepo] = useState("");
   const [timezoneMeta, setTimezoneMeta] = useState({
     currentTimezone: "",
     changeSupported: null,
@@ -913,6 +926,105 @@ export default function ServerInfo() {
     setAnsibleRunnerError("");
   }, [ansibleRunnerSaving]);
 
+  const openReleaseChannelsDialog = useCallback(() => {
+    const currentSettings = overview?.agent_release_channels || {};
+    setReleaseDefaultChannel(String(currentSettings?.default_channel || "stable").toLowerCase());
+    setReleaseRepo(String(currentSettings?.github?.repo || ""));
+    setReleaseChannelsError("");
+    setReleaseChannelsDialogOpen(true);
+  }, [overview]);
+
+  const closeReleaseChannelsDialog = useCallback(() => {
+    if (releaseChannelsSaving || releaseChannelsRefreshing) return;
+    setReleaseChannelsDialogOpen(false);
+    setReleaseChannelsError("");
+  }, [releaseChannelsRefreshing, releaseChannelsSaving]);
+
+  const applyReleaseChannelSettings = useCallback(async () => {
+    const repoValue = String(releaseRepo || "").trim();
+    if (!repoValue || !repoValue.includes("/")) {
+      setReleaseChannelsError("GitHub repo must be in owner/name form.");
+      return;
+    }
+    setReleaseChannelsSaving(true);
+    setReleaseChannelsError("");
+    try {
+      const response = await fetch("/api/server/agent-release-channels", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          default_channel: releaseDefaultChannel,
+          repo: repoValue,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
+      }
+      setReleaseChannelsDialogOpen(false);
+      await sendScopedNotification({
+        title: "Release Channels Updated",
+        message: `Default agent channel set to ${String(payload?.default_channel || releaseDefaultChannel)}.`,
+        icon: "settings",
+        variant: "info",
+      });
+      setBoostPollingUntil(Date.now() + BOOSTED_POLL_DURATION_MS);
+      await fetchOverview({ background: false });
+    } catch (requestError) {
+      const message =
+        requestError instanceof Error && requestError.message
+          ? requestError.message
+          : "Borealis could not update the agent release-channel settings.";
+      setReleaseChannelsError(message);
+      await sendScopedNotification({
+        title: "Release Channels Update Failed",
+        message,
+        icon: "warning",
+        variant: "error",
+      });
+    } finally {
+      setReleaseChannelsSaving(false);
+    }
+  }, [fetchOverview, releaseDefaultChannel, releaseRepo, sendScopedNotification]);
+
+  const refreshReleaseChannelTargets = useCallback(async () => {
+    setReleaseChannelsRefreshing(true);
+    setReleaseChannelsError("");
+    try {
+      const response = await fetch("/api/server/agent-release-channels/refresh", {
+        method: "POST",
+        credentials: "include",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
+      }
+      await sendScopedNotification({
+        title: "Release Targets Refreshed",
+        message: "Borealis refreshed the cached Stable and Unstable agent artifacts.",
+        icon: "info",
+        variant: "success",
+      });
+      setBoostPollingUntil(Date.now() + BOOSTED_POLL_DURATION_MS);
+      await fetchOverview({ background: false });
+    } catch (requestError) {
+      const message =
+        requestError instanceof Error && requestError.message
+          ? requestError.message
+          : "Borealis could not refresh the agent release-channel targets.";
+      setReleaseChannelsError(message);
+      await sendScopedNotification({
+        title: "Release Target Refresh Failed",
+        message,
+        icon: "warning",
+        variant: "error",
+      });
+    } finally {
+      setReleaseChannelsRefreshing(false);
+    }
+  }, [fetchOverview, sendScopedNotification]);
+
   const applyAnsibleRunnerSettings = useCallback(async () => {
     const jobLimit = Number(ansibleRunnerJobLimit);
     const globalLimit = Number(ansibleRunnerGlobalLimit);
@@ -1085,9 +1197,12 @@ export default function ServerInfo() {
   const wireguard = overview?.wireguard || {};
   const publicEdge = overview?.public_edge || {};
   const ansibleRunner = overview?.ansible_runner || {};
+  const agentReleaseChannels = overview?.agent_release_channels || {};
   const certificates = Array.isArray(publicEdge?.certificates) ? publicEdge.certificates : [];
   const worstCert = getWorstCertificate(certificates);
   const aegis = overview?.security?.aegis || {};
+  const stableChannel = agentReleaseChannels?.channels?.stable || {};
+  const unstableChannel = agentReleaseChannels?.channels?.unstable || {};
   const effectiveTimezoneId = String(
     host?.timezone_id || timezoneMeta.currentTimezone || serverTimeSnapshot?.timezone_id || ""
   ).trim();
@@ -1227,6 +1342,20 @@ export default function ServerInfo() {
         ],
       },
       {
+        id: "agent_release_channels",
+        name: "Agent Release Channels",
+        value: `${formatTitleCase(agentReleaseChannels?.default_channel || "stable")} / ${String(agentReleaseChannels?.github?.repo || "Unavailable")}`,
+        details: `Stable ${String(stableChannel?.release_tag || formatBuildShort(stableChannel?.build_id))} · Unstable ${formatBuildShort(unstableChannel?.build_id)} · Refreshed ${formatDateTime(agentReleaseChannels?.last_refresh_completed_at ? new Date(Number(agentReleaseChannels.last_refresh_completed_at) * 1000).toISOString() : "")}`,
+        actions: [
+          {
+            id: "edit_agent_release_channels",
+            label: releaseChannelsRefreshing ? "Refreshing..." : "Configure",
+            disabled: releaseChannelsRefreshing || releaseChannelsSaving,
+            onClick: openReleaseChannelsDialog,
+          },
+        ],
+      },
+      {
         id: "system_time",
         name: "System Time",
         value: clockValue,
@@ -1255,7 +1384,25 @@ export default function ServerInfo() {
         actions: [],
       },
     ],
-    [ansibleRunner, ansibleRunnerSaving, clockValue, timezoneDisplayValue, loadAverageCaption, loadAverageValue, openAnsibleRunnerDialog, openTimezoneDialog, timezoneChangeSupported, timezoneSaving, host]
+    [
+      agentReleaseChannels,
+      ansibleRunner,
+      ansibleRunnerSaving,
+      clockValue,
+      host,
+      loadAverageCaption,
+      loadAverageValue,
+      openAnsibleRunnerDialog,
+      openReleaseChannelsDialog,
+      openTimezoneDialog,
+      releaseChannelsRefreshing,
+      releaseChannelsSaving,
+      stableChannel,
+      timezoneChangeSupported,
+      timezoneDisplayValue,
+      timezoneSaving,
+      unstableChannel,
+    ]
   );
 
   const resourceRows = useMemo(
@@ -1661,6 +1808,71 @@ export default function ServerInfo() {
           </Button>
           <Button onClick={applyAnsibleRunnerSettings} sx={DIALOG_PRIMARY_BUTTON_SX} disabled={ansibleRunnerSaving}>
             {ansibleRunnerSaving ? "Saving..." : "Save Limits"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={releaseChannelsDialogOpen} onClose={closeReleaseChannelsDialog} PaperProps={{ sx: DIALOG_PAPER_SX }}>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="Agent Release Channels"
+            subtitle="Choose the Engine-wide default agent channel and refresh the cached Stable / Unstable targets."
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
+          <Typography sx={DIALOG_BODY_TEXT_SX}>
+            Stable tracks the latest GitHub release source zip. Unstable tracks the default branch head and pushes new targets to connected SYSTEM agents as soon as Borealis has cached the artifact.
+          </Typography>
+          <Stack spacing={2} sx={{ mt: 2 }}>
+            <TextField
+              select
+              label="Default Agent Channel"
+              value={releaseDefaultChannel}
+              onChange={(event) => {
+                setReleaseDefaultChannel(String(event.target.value || "stable").toLowerCase());
+                if (releaseChannelsError) setReleaseChannelsError("");
+              }}
+              sx={DIALOG_INPUT_SX}
+            >
+              <MenuItem value="stable">Stable</MenuItem>
+              <MenuItem value="unstable">Unstable</MenuItem>
+            </TextField>
+            <TextField
+              label="GitHub Repo"
+              value={releaseRepo}
+              onChange={(event) => {
+                setReleaseRepo(event.target.value);
+                if (releaseChannelsError) setReleaseChannelsError("");
+              }}
+              sx={DIALOG_INPUT_SX}
+              helperText="Repo identity in owner/name form."
+            />
+            <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.84rem", lineHeight: 1.45 }}>
+              Stable target: {String(stableChannel?.release_tag || formatBuildShort(stableChannel?.build_id) || "Unavailable")}
+              {" · "}
+              Unstable target: {formatBuildShort(unstableChannel?.build_id)}
+            </Typography>
+            <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.84rem", lineHeight: 1.45 }}>
+              GitHub token ready: {agentReleaseChannels?.github_token?.has_token ? "Yes" : "No"}
+              {" · "}
+              Last refresh: {formatDateTime(agentReleaseChannels?.last_refresh_completed_at ? new Date(Number(agentReleaseChannels.last_refresh_completed_at) * 1000).toISOString() : "")}
+            </Typography>
+          </Stack>
+          {releaseChannelsError ? (
+            <Typography sx={{ mt: 1.4, color: "#ffb7b7", fontSize: "0.84rem", lineHeight: 1.45 }}>
+              {releaseChannelsError}
+            </Typography>
+          ) : null}
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={closeReleaseChannelsDialog} sx={DIALOG_BUTTON_SX} disabled={releaseChannelsSaving || releaseChannelsRefreshing}>
+            Cancel
+          </Button>
+          <Button onClick={refreshReleaseChannelTargets} sx={DIALOG_BUTTON_SX} disabled={releaseChannelsSaving || releaseChannelsRefreshing}>
+            {releaseChannelsRefreshing ? "Refreshing..." : "Refresh Targets"}
+          </Button>
+          <Button onClick={applyReleaseChannelSettings} sx={DIALOG_PRIMARY_BUTTON_SX} disabled={releaseChannelsSaving || releaseChannelsRefreshing}>
+            {releaseChannelsSaving ? "Saving..." : "Save Channels"}
           </Button>
         </DialogActions>
       </Dialog>

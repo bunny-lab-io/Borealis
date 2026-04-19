@@ -35,6 +35,20 @@ GitHub Issue: <link or "not yet">
 ```
 
 ## Issues
+ID: TD-20260419-01
+Status: active
+Owner: Agent + Engine
+Date Added: 2026-04-19
+Summary: Engine-managed zip apply intentionally preserves the currently running updater tooling, so changes to `Update.sh`, `Update.ps1`, and `Data/Agent/update_helper.py` can take one extra update cycle to land on agents.
+Impact: The new release-channel system can stage and apply most source changes immediately, but updater-tooling fixes themselves may not take effect until the next successful update pass, which can surprise operators during rollout/debugging.
+Root Cause: The agent now applies full-repo zip artifacts in place while the updater helper and wrapper scripts are still executing, so overwriting those files mid-run risks corrupting the active update process.
+Current Mitigation: `Data/Agent/update_helper.py` excludes `Update.sh`, `Update.ps1`, and `Data/Agent/update_helper.py` from staged archive replacement, while the Engine-managed manifest flow still updates the rest of the agent/runtime tree and records channel-aware update state.
+Removal Criteria: Borealis gains a two-phase updater bootstrap path, atomic updater self-replacement flow, or a dedicated external updater binary/service that can safely swap updater-tooling files during the same release.
+Files: `Data/Agent/update_helper.py`, `Update.sh`, `Update.ps1`
+Evidence: The staged zip-apply path now uses `_SYNC_EXCLUDED_RELATIVE = {"Update.ps1", "Update.sh", "Data/Agent/update_helper.py"}` to avoid overwriting the actively executing updater files during `prepare-update`.
+Next Step: Split the updater bootstrap/runtime apply responsibilities so the bootstrap layer can safely replace the helper and wrapper scripts before handing off to the new version.
+GitHub Issue: not yet
+
 ID: TD-20260416-02
 Status: active
 Owner: Engine + Agent

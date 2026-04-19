@@ -1692,8 +1692,8 @@ EOF
 Description=Borealis Agent Auto Updater Timer
 
 [Timer]
-OnCalendar=*-*-* *:00:00
-OnBootSec=5min
+OnCalendar=*-*-* 03:00:00
+OnBootSec=10min
 Persistent=true
 AccuracySec=1s
 Unit=${service_name}

@@ -49,6 +49,7 @@ import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "
 import ServiceList from "../Services/Service_List.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
+import { useAuth } from "../../app/providers/AuthContext.jsx";
 import { useUrlTabState } from "../../app/hooks/useUrlTabState.js";
 import { APP_PATHS } from "../../app/routes/paths.js";
 import {
@@ -541,6 +542,38 @@ function normalizeDeviceSummarySnapshot(detailData, { device = {}, deviceId = ""
       normalizedSummary.agent_version_status ||
       detailData?.details?.summary?.agent_version_status ||
       "Needs Updated",
+    agentReleaseChannelOverride:
+      detailData?.agent_release_channel_override ||
+      normalizedSummary.agent_release_channel_override ||
+      detailData?.details?.summary?.agent_release_channel_override ||
+      "",
+    agentReleaseChannelEffective:
+      detailData?.agent_release_channel_effective ||
+      normalizedSummary.agent_release_channel_effective ||
+      detailData?.details?.summary?.agent_release_channel_effective ||
+      "",
+    agentTargetBuildId:
+      detailData?.agent_target_build_id ||
+      normalizedSummary.agent_target_build_id ||
+      detailData?.details?.summary?.agent_target_build_id ||
+      detailData?.agent_update_target_build_id ||
+      normalizedSummary.agent_update_target_build_id ||
+      "",
+    agentUpdateState:
+      detailData?.agent_update_state ||
+      normalizedSummary.agent_update_state ||
+      detailData?.details?.summary?.agent_update_state ||
+      "",
+    agentUpdateError:
+      detailData?.agent_update_error ||
+      normalizedSummary.agent_update_error ||
+      detailData?.details?.summary?.agent_update_error ||
+      "",
+    agentUpdateSource:
+      detailData?.agent_update_source ||
+      normalizedSummary.agent_update_source ||
+      detailData?.details?.summary?.agent_update_source ||
+      "",
     internalIp: detailData?.internal_ip || normalizedSummary.internal_ip || "",
     externalIp: detailData?.external_ip || normalizedSummary.external_ip || "",
     manufacturer: manufacturerValue || "",
@@ -1076,6 +1109,7 @@ export default function DeviceSummary() {
   const location = useLocation();
   const navigate = useNavigate();
   const { deviceId } = useParams();
+  const { isAdmin } = useAuth();
   const initialDevice = location.state?.initialDevice;
   const device = useMemo(
     () =>
@@ -1150,6 +1184,7 @@ export default function DeviceSummary() {
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [updateAgentBusy, setUpdateAgentBusy] = useState(false);
+  const [releaseChannelSaving, setReleaseChannelSaving] = useState(false);
   const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
   // Snapshotted status for the lifetime of this page
   const [lockedStatus, setLockedStatus] = useState(() => {
@@ -1516,6 +1551,59 @@ export default function DeviceSummary() {
       setUpdateAgentBusy(false);
     }
   }, [activityHostname, notifyOperator, updateAgentBusy]);
+
+  const applyAgentReleaseChannelOverride = useCallback(
+    async (channel) => {
+      const targetGuid = meta.agentGuid || summary.agent_guid || device?.agent_guid || device?.guid || "";
+      if (!isAdmin || !targetGuid || releaseChannelSaving) return;
+      const normalizedChannel = String(channel || "").trim().toLowerCase();
+      setReleaseChannelSaving(true);
+      try {
+        const resp = await fetch(`/api/devices/${encodeURIComponent(targetGuid)}/agent-release-channel`, {
+          method: "PUT",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channel: normalizedChannel || null }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
+        }
+        const snapshot = await fetchDeviceSummarySnapshot({
+          device,
+          deviceId,
+          includeAgents: false,
+        });
+        applyDeviceSummarySnapshot(snapshot, { silent: true });
+        await notifyOperator({
+          title: "Agent Channel Updated",
+          message: `${activityHostname || targetGuid} now resolves through ${String(data?.agent_release_channel_effective || normalizedChannel || "inherited")}.`,
+          icon: "info",
+          variant: "success",
+        });
+      } catch (err) {
+        await notifyOperator({
+          title: "Agent Channel Update Failed",
+          message: `Could not update the agent release channel: ${String(err?.message || err)}`,
+          icon: "error",
+          variant: "error",
+        });
+      } finally {
+        setReleaseChannelSaving(false);
+      }
+    },
+    [
+      activityHostname,
+      applyDeviceSummarySnapshot,
+      device,
+      deviceId,
+      isAdmin,
+      meta.agentGuid,
+      notifyOperator,
+      releaseChannelSaving,
+      summary.agent_guid,
+    ]
+  );
 
   const saveDescription = async () => {
     const targetHost = meta.hostname || details.summary?.hostname;
@@ -2145,6 +2233,63 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                         ) : (
                           <SummaryGridPlaceholder height={topLevelSplitGridHeight} />
                         )}
+                        {isAdmin ? (
+                          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 0.8 }}>
+                            <Button
+                              size="small"
+                              disabled={releaseChannelSaving}
+                              onClick={() => applyAgentReleaseChannelOverride("")}
+                              sx={{
+                                minWidth: 0,
+                                px: 1.4,
+                                py: 0.4,
+                                borderRadius: 999,
+                                textTransform: "none",
+                                color: MAGIC_UI.textBright,
+                                border: `1px solid ${MAGIC_UI.panelBorder}`,
+                              }}
+                            >
+                              {releaseChannelSaving ? "Saving..." : "Use Default"}
+                            </Button>
+                            <Button
+                              size="small"
+                              disabled={releaseChannelSaving}
+                              onClick={() => applyAgentReleaseChannelOverride("stable")}
+                              sx={{
+                                minWidth: 0,
+                                px: 1.4,
+                                py: 0.4,
+                                borderRadius: 999,
+                                textTransform: "none",
+                                color: MAGIC_UI.textBright,
+                                border: `1px solid ${MAGIC_UI.panelBorder}`,
+                              }}
+                            >
+                              Stable
+                            </Button>
+                            <Button
+                              size="small"
+                              disabled={releaseChannelSaving}
+                              onClick={() => applyAgentReleaseChannelOverride("unstable")}
+                              sx={{
+                                minWidth: 0,
+                                px: 1.4,
+                                py: 0.4,
+                                borderRadius: 999,
+                                textTransform: "none",
+                                color: MAGIC_UI.textBright,
+                                border: `1px solid ${MAGIC_UI.panelBorder}`,
+                              }}
+                            >
+                              Unstable
+                            </Button>
+                          </Stack>
+                        ) : null}
+                        {meta.agentUpdateError ? (
+                          <Typography sx={{ mt: 0.8, color: "#ffb7b7", fontSize: "0.78rem", lineHeight: 1.45 }}>
+                            {meta.agentUpdateError}
+                          </Typography>
+                        ) : null}
                       </Box>
                     </Box>
                   </Island>
@@ -2646,6 +2791,26 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           value: meta.agentVersionStatus || summary.agent_version_status || "Needs Updated",
         },
         {
+          id: "agent-channel",
+          label: "Release Channel",
+          value:
+            meta.agentReleaseChannelEffective ||
+            summary.agent_release_channel_effective ||
+            meta.agentReleaseChannelOverride ||
+            summary.agent_release_channel_override ||
+            "stable",
+        },
+        {
+          id: "agent-target-build",
+          label: "Target Build",
+          value: meta.agentTargetBuildId || summary.agent_target_build_id || "unknown",
+        },
+        {
+          id: "agent-update-state",
+          label: "Update State",
+          value: meta.agentUpdateState || summary.agent_update_state || "idle",
+        },
+        {
           id: "reenrollment-date",
           label: "(Re)Enrollment Date",
           value: formatDateValue(
@@ -2666,11 +2831,19 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     [
       meta.agentGuid,
       meta.agentVersionStatus,
+      meta.agentReleaseChannelEffective,
+      meta.agentReleaseChannelOverride,
+      meta.agentTargetBuildId,
+      meta.agentUpdateState,
       meta.lastEnrollmentAt,
       meta.lastEnrollmentAtIso,
       meta.created,
       summary.agent_guid,
       summary.agent_version_status,
+      summary.agent_release_channel_effective,
+      summary.agent_release_channel_override,
+      summary.agent_target_build_id,
+      summary.agent_update_state,
       summary.last_enrollment_at,
       summary.created,
       device?.agent_guid,

@@ -162,6 +162,7 @@ class EngineContext:
     aegis_cipher_service: Optional[Any] = None
     workflow_runtime: Optional[Any] = None
     watchdog_runtime: Optional[Any] = None
+    agent_release_manager: Optional[Any] = None
 
 
 __all__ = ["EngineContext", "create_app", "register_engine_api"]
@@ -345,6 +346,12 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
     API.register_api(app, context)
     WebUI.register_web_ui(app, context)
     WebSocket.register_realtime(socketio, context)
+    release_manager = getattr(context, "agent_release_manager", None)
+    if release_manager is not None:
+        try:
+            release_manager.start()
+        except Exception:
+            logger.error("Failed to start agent release channel manager.", exc_info=True)
     try:
         registry = ensure_vnc_proxy(context, logger=logger.getChild("vnc_proxy"))
         if registry is None:

@@ -31,6 +31,7 @@ from ...security import signing
 from ...enrollment import NonceCache
 from ...integrations import GitHubIntegration
 from ..aegis_cipher import AegisCipherService
+from ..agent_release_channels import AgentReleaseChannelManager
 from ..auth import DevModeManager
 from .enrollment import routes as enrollment_routes
 from .tokens import routes as token_routes
@@ -206,6 +207,7 @@ class EngineServiceAdapters:
     service_log: Callable[[str, str, Optional[str]], None] = field(init=False)
     device_auth_manager: DeviceAuthManager = field(init=False)
     github_integration: GitHubIntegration = field(init=False)
+    agent_release_manager: AgentReleaseChannelManager = field(init=False)
     dev_mode_manager: DevModeManager = field(init=False)
     aegis_cipher_service: AegisCipherService = field(init=False)
 
@@ -289,6 +291,14 @@ class EngineServiceAdapters:
             default_ttl_seconds=default_ttl_seconds,
             aegis_cipher_service=self.aegis_cipher_service,
         )
+        self.agent_release_manager = AgentReleaseChannelManager(
+            context=self.context,
+            db_conn_factory=self.db_conn_factory,
+            github_integration=self.github_integration,
+            service_log=self.service_log,
+            logger=self.context.logger.getChild("agent_release_channels"),
+        )
+        self.context.agent_release_manager = self.agent_release_manager
 
         env_ttl_raw = os.environ.get("BOREALIS_DEV_MODE_TTL_SECONDS")
         try:

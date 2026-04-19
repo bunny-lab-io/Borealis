@@ -47,6 +47,7 @@ def ensure_watchdog_runtime(app: Flask, adapters: "EngineServiceAdapters") -> Wa
         adapters=adapters,
         context=adapters.context,
         github_integration=adapters.github_integration,
+        agent_release_manager=getattr(adapters, "agent_release_manager", None),
     )
     runtime.start()
     adapters.context.watchdog_runtime = runtime

@@ -381,6 +381,19 @@ def _extract_device_columns(details: Dict[str, Any]) -> Dict[str, Any]:
         or summary.get("external_ip")
         or summary.get("internal_ip")
     )
+    payload["agent_update_channel"] = _clean_device_str(
+        summary.get("agent_update_channel")
+        or summary.get("target_channel")
+        or summary.get("agent_release_channel_effective")
+    )
+    payload["agent_update_target_build_id"] = _clean_device_str(
+        summary.get("agent_update_target_build_id")
+        or summary.get("target_build_id")
+        or summary.get("agent_target_build_id")
+    )
+    payload["agent_update_state"] = _clean_device_str(summary.get("agent_update_state") or summary.get("update_state"))
+    payload["agent_update_error"] = _clean_device_str(summary.get("agent_update_error") or summary.get("last_update_error"))
+    payload["agent_update_source"] = _clean_device_str(summary.get("agent_update_source") or summary.get("update_source"))
     return payload
 
 
@@ -447,8 +460,13 @@ def _device_upsert(
             uptime,
             agent_id,
             connection_type,
-            connection_endpoint
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            connection_endpoint,
+            agent_update_channel,
+            agent_update_target_build_id,
+            agent_update_state,
+            agent_update_error,
+            agent_update_source
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(hostname) DO UPDATE SET
             description=excluded.description,
             created_at=COALESCE({DEVICE_TABLE}.created_at, excluded.created_at),
@@ -476,7 +494,12 @@ def _device_upsert(
             uptime=COALESCE(NULLIF(excluded.uptime, 0), {DEVICE_TABLE}.uptime),
             agent_id=COALESCE(NULLIF(excluded.agent_id, ''), {DEVICE_TABLE}.agent_id),
             connection_type=COALESCE(NULLIF(excluded.connection_type, ''), {DEVICE_TABLE}.connection_type),
-            connection_endpoint=COALESCE(NULLIF(excluded.connection_endpoint, ''), {DEVICE_TABLE}.connection_endpoint)
+            connection_endpoint=COALESCE(NULLIF(excluded.connection_endpoint, ''), {DEVICE_TABLE}.connection_endpoint),
+            agent_update_channel=COALESCE(NULLIF(excluded.agent_update_channel, ''), {DEVICE_TABLE}.agent_update_channel),
+            agent_update_target_build_id=COALESCE(NULLIF(excluded.agent_update_target_build_id, ''), {DEVICE_TABLE}.agent_update_target_build_id),
+            agent_update_state=COALESCE(NULLIF(excluded.agent_update_state, ''), {DEVICE_TABLE}.agent_update_state),
+            agent_update_error=COALESCE(NULLIF(excluded.agent_update_error, ''), {DEVICE_TABLE}.agent_update_error),
+            agent_update_source=COALESCE(NULLIF(excluded.agent_update_source, ''), {DEVICE_TABLE}.agent_update_source)
     """
 
     params: List[Any] = [
@@ -508,6 +531,11 @@ def _device_upsert(
         column_values.get("agent_id"),
         column_values.get("connection_type"),
         column_values.get("connection_endpoint"),
+        column_values.get("agent_update_channel"),
+        column_values.get("agent_update_target_build_id"),
+        column_values.get("agent_update_state"),
+        column_values.get("agent_update_error"),
+        column_values.get("agent_update_source"),
     ]
     cur.execute(sql, params)
 
@@ -545,6 +573,12 @@ class DeviceManagementService:
         "agent_id",
         "connection_type",
         "connection_endpoint",
+        "agent_release_channel_override",
+        "agent_update_channel",
+        "agent_update_target_build_id",
+        "agent_update_state",
+        "agent_update_error",
+        "agent_update_source",
     )
 
     def __init__(self, app, adapters: "EngineServiceAdapters") -> None:
@@ -554,6 +588,7 @@ class DeviceManagementService:
         self.service_log = adapters.service_log
         self.logger = adapters.context.logger or logging.getLogger(__name__)
         self.repo_cache = adapters.github_integration
+        self.agent_release_manager = getattr(adapters, "agent_release_manager", None)
         self._repo_hash_cache: Dict[str, Any] = {"sha": "", "expires_at": 0}
         self.site_access = UserSiteAccessManager(self.db_conn_factory, logger=self.logger)
 
@@ -606,6 +641,17 @@ class DeviceManagementService:
             return "Up-to-Date"
         return "Needs Updated"
 
+    def _resolve_agent_target(self, channel_override: Any) -> Tuple[str, str]:
+        normalized_override = _clean_device_str(channel_override)
+        if self.agent_release_manager is not None:
+            try:
+                effective_channel = self.agent_release_manager.resolve_effective_channel(normalized_override)
+                target = self.agent_release_manager.target_for_override(normalized_override)
+                return effective_channel, (_clean_device_str(target.get("build_id")) or "").lower()
+            except Exception:
+                pass
+        return "", self._current_target_repo_hash()
+
     def _attach_agent_version_status(
         self,
         payload: Dict[str, Any],
@@ -614,9 +660,14 @@ class DeviceManagementService:
     ) -> Dict[str, Any]:
         if not isinstance(payload, dict):
             return payload
-        if target_build_id is None:
-            target_build_id = self._current_target_repo_hash()
         summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        channel_override = (
+            _clean_device_str(payload.get("agent_release_channel_override"))
+            or _clean_device_str(summary.get("agent_release_channel_override"))
+        )
+        effective_channel = ""
+        if target_build_id is None:
+            effective_channel, target_build_id = self._resolve_agent_target(channel_override)
         installed_build_id = (
             _clean_device_str(payload.get("agent_build_id"))
             or _clean_device_str(payload.get("agent_hash"))
@@ -625,10 +676,20 @@ class DeviceManagementService:
         )
         status = self._compute_agent_version_status(installed_build_id, target_build_id)
         payload["agent_version_status"] = status
+        payload["agent_target_build_id"] = target_build_id or ""
+        payload["agent_release_channel_override"] = channel_override or None
+        payload["agent_release_channel_effective"] = effective_channel or (
+            _clean_device_str(summary.get("agent_release_channel_effective"))
+            or _clean_device_str(payload.get("agent_release_channel_effective"))
+        )
         if installed_build_id:
             payload["agent_build_id"] = installed_build_id
         if isinstance(summary, dict):
             summary["agent_version_status"] = status
+            summary["agent_target_build_id"] = target_build_id or ""
+            summary["agent_release_channel_override"] = channel_override or None
+            if payload.get("agent_release_channel_effective"):
+                summary["agent_release_channel_effective"] = payload.get("agent_release_channel_effective")
             if installed_build_id and not summary.get("agent_build_id"):
                 summary["agent_build_id"] = installed_build_id
         details = payload.get("details")
@@ -636,6 +697,10 @@ class DeviceManagementService:
             detail_summary = details.setdefault("summary", {})
             if isinstance(detail_summary, dict):
                 detail_summary["agent_version_status"] = status
+                detail_summary["agent_target_build_id"] = target_build_id or ""
+                detail_summary["agent_release_channel_override"] = channel_override or None
+                if payload.get("agent_release_channel_effective"):
+                    detail_summary["agent_release_channel_effective"] = payload.get("agent_release_channel_effective")
                 if installed_build_id and not detail_summary.get("agent_build_id"):
                     detail_summary["agent_build_id"] = installed_build_id
         return payload
@@ -746,6 +811,12 @@ class DeviceManagementService:
             "last_enrollment_at": last_enrollment_at or 0,
             "connection_type": mapping.get("connection_type") or "",
             "connection_endpoint": mapping.get("connection_endpoint") or "",
+            "agent_release_channel_override": mapping.get("agent_release_channel_override") or "",
+            "agent_update_channel": mapping.get("agent_update_channel") or "",
+            "agent_update_target_build_id": mapping.get("agent_update_target_build_id") or "",
+            "agent_update_state": mapping.get("agent_update_state") or "",
+            "agent_update_error": mapping.get("agent_update_error") or "",
+            "agent_update_source": mapping.get("agent_update_source") or "",
         }
         details = {
             "summary": summary,
@@ -799,6 +870,12 @@ class DeviceManagementService:
             "agent_id": summary["agent_id"],
             "connection_type": summary["connection_type"],
             "connection_endpoint": summary["connection_endpoint"],
+            "agent_release_channel_override": summary["agent_release_channel_override"],
+            "agent_update_channel": summary["agent_update_channel"],
+            "agent_update_target_build_id": summary["agent_update_target_build_id"],
+            "agent_update_state": summary["agent_update_state"],
+            "agent_update_error": summary["agent_update_error"],
+            "agent_update_source": summary["agent_update_source"],
             "site_id": site_id,
             "site_name": site_name or "",
             "site_description": site_description or "",
@@ -1108,6 +1185,13 @@ class DeviceManagementService:
             or _clean_device_str((details.get("summary") or {}).get("service_mode"))
             or _clean_device_str(getattr(ctx, "service_mode", None))
         )
+        incoming_update_status = (
+            payload.get("agent_update_status")
+            if isinstance(payload.get("agent_update_status"), dict)
+            else (details.get("summary") or {}).get("agent_update_status")
+        )
+        if not isinstance(incoming_update_status, dict):
+            incoming_update_status = {}
 
         raw_guid = getattr(ctx, "guid", None)
         try:
@@ -1202,6 +1286,25 @@ class DeviceManagementService:
             if agent_hash:
                 incoming_summary["agent_hash"] = agent_hash
                 incoming_summary["agent_build_id"] = agent_hash
+            if incoming_update_status:
+                update_channel = _clean_device_str(
+                    incoming_update_status.get("target_channel")
+                    or incoming_update_status.get("effective_channel")
+                )
+                update_target_build_id = _clean_device_str(incoming_update_status.get("target_build_id"))
+                update_state = _clean_device_str(incoming_update_status.get("state"))
+                update_error = _clean_device_str(incoming_update_status.get("last_error"))
+                update_source = _clean_device_str(incoming_update_status.get("last_source"))
+                if update_channel:
+                    incoming_summary["agent_update_channel"] = update_channel
+                if update_target_build_id:
+                    incoming_summary["agent_update_target_build_id"] = update_target_build_id
+                if update_state:
+                    incoming_summary["agent_update_state"] = update_state
+                if update_error:
+                    incoming_summary["agent_update_error"] = update_error
+                if update_source:
+                    incoming_summary["agent_update_source"] = update_source
 
             effective_guid = auth_guid or existing_guid
             if effective_guid:
@@ -1347,6 +1450,61 @@ class DeviceManagementService:
         except Exception as exc:
             self.logger.debug("Failed to load device details", exc_info=True)
             return {"error": str(exc)}, 500
+
+    def set_agent_release_channel_override(self, guid: str, channel_override: Any) -> Tuple[Dict[str, Any], int]:
+        normalized_guid = normalize_guid(guid) if _clean_device_str(guid) else ""
+        if not normalized_guid:
+            return {"error": "invalid_guid"}, 400
+
+        cleaned_override = _clean_device_str(channel_override).lower()
+        if cleaned_override not in {"", "stable", "unstable"}:
+            return {"error": "invalid_channel"}, 400
+        stored_override = cleaned_override or None
+
+        conn = self._db_conn()
+        hostname = ""
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE devices
+                   SET agent_release_channel_override = ?
+                 WHERE UPPER(guid) = ?
+                """,
+                (stored_override, normalized_guid),
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                return {"error": "not found"}, 404
+            cur.execute(
+                "SELECT hostname FROM devices WHERE UPPER(guid) = ? LIMIT 1",
+                (normalized_guid,),
+            )
+            row = cur.fetchone()
+            hostname = _clean_device_str(row[0]) if row else ""
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            self.logger.debug("Failed to update agent release channel override", exc_info=True)
+            return {"error": str(exc)}, 500
+        finally:
+            conn.close()
+
+        if self.agent_release_manager is not None and hostname:
+            try:
+                self.agent_release_manager.notify_device(guid=normalized_guid, hostname=hostname)
+            except Exception:
+                self.logger.debug("Failed to notify device after release-channel override change", exc_info=True)
+
+        effective_channel, target_build_id = self._resolve_agent_target(cleaned_override)
+        return {
+            "status": "ok",
+            "guid": normalized_guid,
+            "hostname": hostname,
+            "agent_release_channel_override": stored_override,
+            "agent_release_channel_effective": effective_channel,
+            "agent_target_build_id": target_build_id or "",
+        }, 200
 
     def set_device_description(self, hostname: str, description: str) -> Tuple[Dict[str, Any], int]:
         current_user = self._current_user()
@@ -2608,6 +2766,16 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
             payload, status = requirement
             return jsonify(payload), status
         payload, status = service.purge_device(guid)
+        return jsonify(payload), status
+
+    @blueprint.route("/api/devices/<guid>/agent-release-channel", methods=["PUT"])
+    def _set_device_agent_release_channel(guid: str):
+        requirement = service._require_admin()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+        body = request.get_json(silent=True) or {}
+        payload, status = service.set_agent_release_channel_override(guid, body.get("channel"))
         return jsonify(payload), status
 
     @blueprint.route("/api/device/details/<hostname>", methods=["GET"])

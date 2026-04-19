@@ -143,6 +143,26 @@ json_repo_target_branch() {
   printf '%s' "${2:-}" | "${python_bin}" -c 'import json,sys; data=json.load(sys.stdin); print((data.get("branch") or "main").strip() or "main")'
 }
 
+json_update_status() {
+  local python_bin="$1"
+  printf '%s' "${2:-}" | "${python_bin}" -c 'import json,sys; data=json.load(sys.stdin); print((data.get("status") or "").strip())'
+}
+
+json_update_target_hash() {
+  local python_bin="$1"
+  printf '%s' "${2:-}" | "${python_bin}" -c 'import json,sys; data=json.load(sys.stdin); print((data.get("target_build_id") or "").strip())'
+}
+
+json_update_target_channel() {
+  local python_bin="$1"
+  printf '%s' "${2:-}" | "${python_bin}" -c 'import json,sys; data=json.load(sys.stdin); print((data.get("target_channel") or data.get("effective_channel") or "").strip())'
+}
+
+json_update_source() {
+  local python_bin="$1"
+  printf '%s' "${2:-}" | "${python_bin}" -c 'import json,sys; data=json.load(sys.stdin); print((data.get("last_source") or "").strip())'
+}
+
 resolve_repository_url() {
   local configured_repo_url="${BOREALIS_UPDATE_REPO_URL:-}"
   configured_repo_url="$(printf '%s' "${configured_repo_url}" | tr -d '\r\n')"
@@ -241,36 +261,6 @@ main() {
     return 1
   fi
 
-  local status_json=""
-  status_json="$(run_helper "${python_bin}" status)"
-  local installed_hash=""
-  local repo_hash=""
-  local busy="0"
-  local busy_reasons=""
-  installed_hash="$(json_installed_hash "${python_bin}" "${status_json}")"
-  repo_hash="$(json_repo_hash "${python_bin}" "${status_json}")"
-  busy="$(json_bool_busy "${python_bin}" "${status_json}")"
-  busy_reasons="$(json_busy_reasons "${python_bin}" "${status_json}")"
-
-  local repo_info_json=""
-  repo_info_json="$(run_helper "${python_bin}" repo-hash --refresh)"
-  local target_hash=""
-  local target_branch=""
-  target_hash="$(json_repo_target_hash "${python_bin}" "${repo_info_json}")"
-  target_branch="$(json_repo_target_branch "${python_bin}" "${repo_info_json}")"
-
-  local normalized_installed=""
-  local normalized_repo=""
-  local normalized_target=""
-  normalized_installed="$(normalize_hash "${installed_hash}")"
-  normalized_repo="$(normalize_hash "${repo_hash}")"
-  normalized_target="$(normalize_hash "${target_hash}")"
-
-  if [[ -z "${normalized_target}" ]]; then
-    log_line "ERROR" "Engine did not return a target repository hash."
-    return 1
-  fi
-
   local update_mode="${update_mode:-update}"
   update_mode="$(printf '%s' "${update_mode}" | tr '[:upper:]' '[:lower:]')"
   local force_update="0"
@@ -278,64 +268,50 @@ main() {
     force_update="1"
   fi
 
-  local runtime_needs_update="0"
-  local repo_needs_sync="0"
-  if [[ -z "${normalized_installed}" || "${normalized_installed}" != "${normalized_target}" ]]; then
-    runtime_needs_update="1"
+  ensure_lock
+  local prepare_args=("prepare-update")
+  if [[ "${force_update}" == "1" ]]; then
+    prepare_args+=("--force")
   fi
-  if [[ -z "${normalized_repo}" || "${normalized_repo}" != "${normalized_target}" ]]; then
-    repo_needs_sync="1"
-  fi
+  local prepare_json=""
+  prepare_json="$(run_helper "${python_bin}" "${prepare_args[@]}")"
+  local prepare_status=""
+  local target_hash=""
+  local target_channel=""
+  local download_source=""
+  prepare_status="$(json_update_status "${python_bin}" "${prepare_json}")"
+  target_hash="$(json_update_target_hash "${python_bin}" "${prepare_json}")"
+  target_channel="$(json_update_target_channel "${python_bin}" "${prepare_json}")"
+  download_source="$(json_update_source "${python_bin}" "${prepare_json}")"
 
-  if [[ "${force_update}" != "1" && "${runtime_needs_update}" != "1" && "${repo_needs_sync}" != "1" ]]; then
-    run_helper "${python_bin}" sync-build-id >/dev/null || true
+  if [[ "${prepare_status}" == "up_to_date" ]]; then
     log_line "SUCCESS" "Borealis agent is already up to date."
     return 0
   fi
-
-  if [[ "${busy}" == "1" ]]; then
+  if [[ "${prepare_status}" == "deferred" ]]; then
+    local busy_reasons=""
+    busy_reasons="$(json_busy_reasons "${python_bin}" "$(run_helper "${python_bin}" status)")"
     if [[ -z "${busy_reasons}" ]]; then
       busy_reasons="unspecified activity"
     fi
     log_line "WARN" "Agent update deferred because the device is busy: ${busy_reasons}"
     return 0
   fi
-
-  ensure_lock
-
-  status_json="$(run_helper "${python_bin}" status)"
-  busy="$(json_bool_busy "${python_bin}" "${status_json}")"
-  busy_reasons="$(json_busy_reasons "${python_bin}" "${status_json}")"
-  if [[ "${busy}" == "1" ]]; then
-    if [[ -z "${busy_reasons}" ]]; then
-      busy_reasons="unspecified activity"
-    fi
-    log_line "WARN" "Agent update deferred after lock acquisition because the device is busy: ${busy_reasons}"
-    return 0
+  if [[ "${prepare_status}" != "staged" ]]; then
+    log_line "ERROR" "Unexpected prepare-update status: ${prepare_status:-unknown}"
+    return 1
+  fi
+  if [[ -z "${target_hash}" ]]; then
+    log_line "ERROR" "Prepared update did not report a target build id."
+    return 1
   fi
 
-  local repo_url=""
-  repo_url="$(resolve_repository_url)"
-  log_line "STEP" "Syncing Borealis repository to ${target_hash} on branch ${target_branch}."
-  sync_repository "${repo_url}" "${target_hash}" "${target_branch}"
-
-  chmod +x "${SCRIPT_DIR}/Borealis.sh" "${SCRIPT_DIR}/Update.sh" "${SCRIPT_DIR}/bootstrap.sh" >/dev/null 2>&1 || true
+  chmod +x "${SCRIPT_DIR}/Borealis.sh" "${SCRIPT_DIR}/bootstrap.sh" >/dev/null 2>&1 || true
 
   log_line "STEP" "Refreshing Borealis agent runtime in place."
   "${SCRIPT_DIR}/Borealis.sh" --agent --refresh-agent-runtime
 
-  local synced_build_id=""
-  synced_build_id="$(run_helper "${python_bin}" sync-build-id || true)"
-  if [[ -n "${synced_build_id}" ]]; then
-    log_line "INFO" "Installed build id synced to ${synced_build_id}."
-  fi
-
-  status_json="$(run_helper "${python_bin}" status)"
-  installed_hash="$(json_installed_hash "${python_bin}" "${status_json}")"
-  normalized_installed="$(normalize_hash "${installed_hash}")"
-  if [[ -n "${normalized_installed}" && "${normalized_installed}" != "${normalized_target}" ]]; then
-    log_line "WARN" "Installed build id ${installed_hash} does not yet match target ${target_hash}."
-  fi
+  run_helper "${python_bin}" finalize-update --build-id "${target_hash}" --channel "${target_channel}" --source "${download_source}" >/dev/null
 
   log_line "SUCCESS" "Borealis agent auto-update completed successfully."
 }

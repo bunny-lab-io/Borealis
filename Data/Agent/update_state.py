@@ -73,6 +73,14 @@ def installed_build_id_path(project_root: Optional[Path] = None) -> Path:
     return _settings_dir(project_root) / "installed_build_id.txt"
 
 
+def update_status_path(project_root: Optional[Path] = None) -> Path:
+    return _updater_root(project_root) / "update_status.json"
+
+
+def pending_update_path(project_root: Optional[Path] = None) -> Path:
+    return _updater_root(project_root) / "pending_update.json"
+
+
 def _resolve_git_dir(project_root: Optional[Path] = None) -> Optional[Path]:
     root = _resolve_project_root() if project_root is None else project_root
     git_path = root / ".git"
@@ -171,6 +179,54 @@ def sync_installed_build_id(project_root: Optional[Path] = None) -> str:
     if repo_build_id:
         return write_installed_build_id(repo_build_id, project_root)
     return read_installed_build_id(project_root)
+
+
+def read_update_status(project_root: Optional[Path] = None) -> Dict[str, Any]:
+    path = update_status_path(project_root)
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_update_status(payload: Dict[str, Any], project_root: Optional[Path] = None) -> Dict[str, Any]:
+    normalized = payload if isinstance(payload, dict) else {}
+    _write_json_atomic(update_status_path(project_root), normalized)
+    return dict(normalized)
+
+
+def clear_update_status(project_root: Optional[Path] = None) -> None:
+    try:
+        update_status_path(project_root).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def read_pending_update(project_root: Optional[Path] = None) -> Dict[str, Any]:
+    path = pending_update_path(project_root)
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_pending_update(payload: Dict[str, Any], project_root: Optional[Path] = None) -> Dict[str, Any]:
+    normalized = payload if isinstance(payload, dict) else {}
+    _write_json_atomic(pending_update_path(project_root), normalized)
+    return dict(normalized)
+
+
+def clear_pending_update(project_root: Optional[Path] = None) -> None:
+    try:
+        pending_update_path(project_root).unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
@@ -303,12 +359,16 @@ def get_busy_snapshot(project_root: Optional[Path] = None) -> Dict[str, Any]:
     reasons = [str(entry.get("reason") or "").strip() for entry in entries if str(entry.get("reason") or "").strip()]
     installed_build_id = read_installed_build_id(project_root)
     repo_build_id = read_repo_build_id(project_root)
+    pending_update = read_pending_update(project_root)
+    update_status = read_update_status(project_root)
     return {
         "busy": bool(entries),
         "reasons": reasons,
         "entries": entries,
         "installed_build_id": installed_build_id,
         "repo_build_id": repo_build_id,
+        "pending_update": pending_update,
+        "update_status": update_status,
     }
 
 

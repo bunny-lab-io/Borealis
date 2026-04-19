@@ -1007,9 +1007,36 @@ def _build_overview_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]
         "public_edge": _collect_public_edge_payload(adapters.context),
         "security": _collect_security_payload(adapters),
         "ansible_runner": _collect_ansible_runner_payload(),
+        "agent_release_channels": _collect_agent_release_channels_payload(adapters),
         "remote_desktop": _collect_vnc_session_payload(adapters),
         "operator_session_count": _collect_operator_session_count(adapters),
     }
+
+
+def _collect_agent_release_channels_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]:
+    manager = getattr(adapters, "agent_release_manager", None)
+    if manager is None:
+        return {
+            "default_channel": "stable",
+            "github": {"repo": "", "default_branch": ""},
+            "channels": {"stable": {}, "unstable": {}},
+            "github_token": {"has_token": False, "reset_required": False, "reset_at": 0},
+            "last_refresh_started_at": 0,
+            "last_refresh_completed_at": 0,
+            "last_refresh_error": "release channel manager unavailable",
+        }
+    try:
+        return manager.get_settings()
+    except Exception as exc:
+        return {
+            "default_channel": "stable",
+            "github": {"repo": "", "default_branch": ""},
+            "channels": {"stable": {}, "unstable": {}},
+            "github_token": {"has_token": False, "reset_required": False, "reset_at": 0},
+            "last_refresh_started_at": 0,
+            "last_refresh_completed_at": 0,
+            "last_refresh_error": str(exc),
+        }
 
 
 def _resolve_restart_unit(
@@ -1143,6 +1170,39 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if admin_error:
             return jsonify(admin_error[0]), admin_error[1]
         return jsonify(_build_overview_payload(adapters))
+
+    @blueprint.route("/api/server/agent-release-channels", methods=["GET"])
+    def get_agent_release_channels() -> Any:
+        admin_error = auth.require_admin()
+        if admin_error:
+            return jsonify(admin_error[0]), admin_error[1]
+        manager = getattr(adapters, "agent_release_manager", None)
+        if manager is None:
+            return _error_response("release_channels_unavailable", "Agent release channels are unavailable on this engine.", 503)
+        return jsonify(manager.get_settings())
+
+    @blueprint.route("/api/server/agent-release-channels", methods=["PUT"])
+    def update_agent_release_channels() -> Any:
+        admin_error = auth.require_admin()
+        if admin_error:
+            return jsonify(admin_error[0]), admin_error[1]
+        manager = getattr(adapters, "agent_release_manager", None)
+        if manager is None:
+            return _error_response("release_channels_unavailable", "Agent release channels are unavailable on this engine.", 503)
+        body = request.get_json(silent=True) or {}
+        default_channel = body.get("default_channel") if "default_channel" in body else None
+        repo = body.get("repo") if "repo" in body else None
+        return jsonify(manager.set_settings(default_channel=default_channel, repo=repo))
+
+    @blueprint.route("/api/server/agent-release-channels/refresh", methods=["POST"])
+    def refresh_agent_release_channels() -> Any:
+        admin_error = auth.require_admin()
+        if admin_error:
+            return jsonify(admin_error[0]), admin_error[1]
+        manager = getattr(adapters, "agent_release_manager", None)
+        if manager is None:
+            return _error_response("release_channels_unavailable", "Agent release channels are unavailable on this engine.", 503)
+        return jsonify(manager.refresh_channels(force=True))
 
     @blueprint.route("/api/server/ansible-runner-settings", methods=["GET"])
     def get_ansible_runner_settings() -> Any:
