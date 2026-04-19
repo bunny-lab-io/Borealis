@@ -8,6 +8,7 @@ import {
   Stack,
   Tabs,
   Tab,
+  Tooltip,
   Typography,
   Button,
   Menu,
@@ -88,6 +89,8 @@ const NAV_TAB_COLORS = {
 };
 const SUMMARY_SECTION_ACTIVE_BG =
   "linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)";
+const BOREALIS_LINK_COLOR = "#7db7ff";
+const BOREALIS_LINK_HOVER_COLOR = "#a8d4ff";
 
 const BASE_GRID_HEIGHTS = {
   topLevel: 300,
@@ -256,6 +259,21 @@ function parseAgentHealthTunnelId(detailText) {
   const text = String(detailText || "").trim();
   const match = text.match(/\btunnel_id=([^\s]+)/i);
   return match ? String(match[1] || "").trim() : "";
+}
+
+function describeAgentUpdateState(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "No recent updater activity";
+  if (normalized === "applied") return "Update applied successfully";
+  if (normalized === "up_to_date") return "Checked and already current";
+  if (normalized === "deferred") return "Update queued until the device is idle";
+  if (normalized === "checking") return "Checking for channel updates";
+  if (normalized === "downloading") return "Downloading the update package";
+  if (normalized === "staging") return "Staging the update package";
+  if (normalized === "staged") return "Update staged and awaiting runtime refresh";
+  if (normalized === "failed") return "Last update attempt failed";
+  if (normalized === "idle") return "No recent updater activity";
+  return normalized.replace(/[_-]+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
 }
 
 function formatAgentHealthDialogValue(value, fallback = "Unavailable") {
@@ -558,6 +576,11 @@ function normalizeDeviceSummarySnapshot(detailData, { device = {}, deviceId = ""
       detailData?.details?.summary?.agent_target_build_id ||
       detailData?.agent_update_target_build_id ||
       normalizedSummary.agent_update_target_build_id ||
+      "",
+    agentTargetPublishedAt:
+      detailData?.agent_target_published_at ||
+      normalizedSummary.agent_target_published_at ||
+      detailData?.details?.summary?.agent_target_published_at ||
       "",
     agentUpdateState:
       detailData?.agent_update_state ||
@@ -1182,6 +1205,7 @@ export default function DeviceSummary() {
   const [tunnelInfo, setTunnelInfo] = useState(TUNNEL_INFO_IDLE);
   const [agentHealthDialogEntry, setAgentHealthDialogEntry] = useState(null);
   const [menuAnchor, setMenuAnchor] = useState(null);
+  const [releaseChannelMenuAnchor, setReleaseChannelMenuAnchor] = useState(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [updateAgentBusy, setUpdateAgentBusy] = useState(false);
   const [releaseChannelSaving, setReleaseChannelSaving] = useState(false);
@@ -1552,6 +1576,20 @@ export default function DeviceSummary() {
     }
   }, [activityHostname, notifyOperator, updateAgentBusy]);
 
+  const openReleaseChannelMenu = useCallback(
+    (event) => {
+      if (!isAdmin || releaseChannelSaving) return;
+      if (event?.preventDefault) event.preventDefault();
+      if (event?.stopPropagation) event.stopPropagation();
+      setReleaseChannelMenuAnchor(event?.currentTarget || null);
+    },
+    [isAdmin, releaseChannelSaving]
+  );
+
+  const closeReleaseChannelMenu = useCallback(() => {
+    setReleaseChannelMenuAnchor(null);
+  }, []);
+
   const applyAgentReleaseChannelOverride = useCallback(
     async (channel) => {
       const targetGuid = meta.agentGuid || summary.agent_guid || device?.agent_guid || device?.guid || "";
@@ -1603,6 +1641,14 @@ export default function DeviceSummary() {
       releaseChannelSaving,
       summary.agent_guid,
     ]
+  );
+
+  const handleReleaseChannelSelection = useCallback(
+    (channel) => {
+      closeReleaseChannelMenu();
+      applyAgentReleaseChannelOverride(channel);
+    },
+    [applyAgentReleaseChannelOverride, closeReleaseChannelMenu]
   );
 
   const saveDescription = async () => {
@@ -2233,58 +2279,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                         ) : (
                           <SummaryGridPlaceholder height={topLevelSplitGridHeight} />
                         )}
-                        {isAdmin ? (
-                          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 0.8 }}>
-                            <Button
-                              size="small"
-                              disabled={releaseChannelSaving}
-                              onClick={() => applyAgentReleaseChannelOverride("")}
-                              sx={{
-                                minWidth: 0,
-                                px: 1.4,
-                                py: 0.4,
-                                borderRadius: 999,
-                                textTransform: "none",
-                                color: MAGIC_UI.textBright,
-                                border: `1px solid ${MAGIC_UI.panelBorder}`,
-                              }}
-                            >
-                              {releaseChannelSaving ? "Saving..." : "Use Default"}
-                            </Button>
-                            <Button
-                              size="small"
-                              disabled={releaseChannelSaving}
-                              onClick={() => applyAgentReleaseChannelOverride("stable")}
-                              sx={{
-                                minWidth: 0,
-                                px: 1.4,
-                                py: 0.4,
-                                borderRadius: 999,
-                                textTransform: "none",
-                                color: MAGIC_UI.textBright,
-                                border: `1px solid ${MAGIC_UI.panelBorder}`,
-                              }}
-                            >
-                              Stable
-                            </Button>
-                            <Button
-                              size="small"
-                              disabled={releaseChannelSaving}
-                              onClick={() => applyAgentReleaseChannelOverride("unstable")}
-                              sx={{
-                                minWidth: 0,
-                                px: 1.4,
-                                py: 0.4,
-                                borderRadius: 999,
-                                textTransform: "none",
-                                color: MAGIC_UI.textBright,
-                                border: `1px solid ${MAGIC_UI.panelBorder}`,
-                              }}
-                            >
-                              Unstable
-                            </Button>
-                          </Stack>
-                        ) : null}
                         {meta.agentUpdateError ? (
                           <Typography sx={{ mt: 0.8, color: "#ffb7b7", fontSize: "0.78rem", lineHeight: 1.45 }}>
                             {meta.agentUpdateError}
@@ -2779,6 +2773,22 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   const borealisAgentRows = useMemo(
     () => {
+      const effectiveChannel =
+        String(
+          meta.agentReleaseChannelEffective ||
+            summary.agent_release_channel_effective ||
+            meta.agentReleaseChannelOverride ||
+            summary.agent_release_channel_override ||
+            "stable"
+        )
+          .trim()
+          .toLowerCase() || "stable";
+      const lastChannelUpdateValue = formatDateValue(
+        meta.agentTargetPublishedAt || summary.agent_target_published_at || "",
+        "unknown"
+      );
+      const targetBuildId = meta.agentTargetBuildId || summary.agent_target_build_id || "unknown";
+      const rawUpdateState = meta.agentUpdateState || summary.agent_update_state || "idle";
       return [
         {
           id: "agent-guid",
@@ -2793,22 +2803,21 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         {
           id: "agent-channel",
           label: "Release Channel",
-          value:
-            meta.agentReleaseChannelEffective ||
-            summary.agent_release_channel_effective ||
-            meta.agentReleaseChannelOverride ||
-            summary.agent_release_channel_override ||
-            "stable",
+          value: effectiveChannel,
+          changeActionVisible: Boolean(isAdmin),
+          changeActionText: releaseChannelSaving ? "[saving...]" : "[change]",
         },
         {
-          id: "agent-target-build",
-          label: "Target Build",
-          value: meta.agentTargetBuildId || summary.agent_target_build_id || "unknown",
+          id: "agent-last-channel-update",
+          label: "Last Channel Update",
+          labelTooltip: `Target Build: ${targetBuildId}`,
+          value: lastChannelUpdateValue,
         },
         {
           id: "agent-update-state",
-          label: "Update State",
-          value: meta.agentUpdateState || summary.agent_update_state || "idle",
+          label: "Agent Update Status",
+          labelTooltip: "Shows the updater's most recent result or current activity on this device.",
+          value: describeAgentUpdateState(rawUpdateState),
         },
         {
           id: "reenrollment-date",
@@ -2834,15 +2843,19 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       meta.agentReleaseChannelEffective,
       meta.agentReleaseChannelOverride,
       meta.agentTargetBuildId,
+      meta.agentTargetPublishedAt,
       meta.agentUpdateState,
       meta.lastEnrollmentAt,
       meta.lastEnrollmentAtIso,
       meta.created,
+      isAdmin,
+      releaseChannelSaving,
       summary.agent_guid,
       summary.agent_version_status,
       summary.agent_release_channel_effective,
       summary.agent_release_channel_override,
       summary.agent_target_build_id,
+      summary.agent_target_published_at,
       summary.agent_update_state,
       summary.last_enrollment_at,
       summary.created,
@@ -2958,6 +2971,102 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     [openAgentHealthDialog]
   );
 
+  const renderTopLevelFieldCell = useCallback((params) => {
+    const row = params?.data && typeof params.data === "object" ? params.data : {};
+    const label = String(row?.label || params?.value || "").trim() || "unknown";
+    const content = (
+      <Typography
+        sx={{
+          color: SUMMARY_FIELD_TEXT_COLOR,
+          fontSize: "0.82rem",
+          lineHeight: 1.45,
+          whiteSpace: "normal",
+          wordBreak: "break-word",
+        }}
+      >
+        {label}
+      </Typography>
+    );
+    if (!row?.labelTooltip) {
+      return content;
+    }
+    return (
+      <Tooltip title={String(row.labelTooltip)} arrow placement="top">
+        <Box sx={{ display: "inline-flex", alignItems: "center", maxWidth: "100%" }}>{content}</Box>
+      </Tooltip>
+    );
+  }, []);
+
+  const renderTopLevelValueCell = useCallback(
+    (params) => {
+      const row = params?.data && typeof params.data === "object" ? params.data : {};
+      const value = String(params?.value ?? row?.value ?? "").trim() || "unknown";
+      if (row?.id === "agent-channel") {
+        return (
+          <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.8, flexWrap: "wrap", minWidth: 0 }}>
+            <Typography
+              sx={{
+                color: MAGIC_UI.textBright,
+                fontSize: "0.88rem",
+                lineHeight: 1.45,
+                whiteSpace: "normal",
+                wordBreak: "break-word",
+              }}
+            >
+              {value}
+            </Typography>
+            {row?.changeActionVisible ? (
+              <Box
+                component="button"
+                type="button"
+                disabled={releaseChannelSaving}
+                onClick={openReleaseChannelMenu}
+                sx={{
+                  p: 0,
+                  m: 0,
+                  border: 0,
+                  background: "transparent",
+                  color: BOREALIS_LINK_COLOR,
+                  cursor: releaseChannelSaving ? "default" : "pointer",
+                  font: "inherit",
+                  fontSize: "0.82rem",
+                  lineHeight: 1.2,
+                  textDecoration: "none",
+                  transition: "color 160ms ease, opacity 160ms ease",
+                  "&:hover": releaseChannelSaving
+                    ? undefined
+                    : {
+                        color: BOREALIS_LINK_HOVER_COLOR,
+                        textDecoration: "underline",
+                      },
+                  "&:disabled": {
+                    opacity: 0.6,
+                  },
+                }}
+              >
+                {String(row.changeActionText || "[change]")}
+              </Box>
+            ) : null}
+          </Box>
+        );
+      }
+      return (
+        <Typography
+          sx={{
+            color: MAGIC_UI.textBright,
+            fontSize: "0.88rem",
+            lineHeight: 1.45,
+            whiteSpace: "normal",
+            wordBreak: "break-word",
+          }}
+        >
+          {value}
+        </Typography>
+      );
+    },
+    [openReleaseChannelMenu, releaseChannelSaving]
+  );
+
   const topLevelSplitColumnDefs = useMemo(
     () => [
       {
@@ -2968,6 +3077,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         sortable: false,
         filter: false,
         cellStyle: { color: SUMMARY_FIELD_TEXT_COLOR },
+        cellRenderer: renderTopLevelFieldCell,
       },
       {
         field: "value",
@@ -2976,9 +3086,10 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         minWidth: 220,
         sortable: false,
         filter: false,
+        cellRenderer: renderTopLevelValueCell,
       },
     ],
-    []
+    [renderTopLevelFieldCell, renderTopLevelValueCell]
   );
 
   const resolveGridHeight = useCallback((rowCount, options = {}) => {
@@ -3208,6 +3319,40 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           }}
         >
           Clear Device Activity
+        </MenuItem>
+      </Menu>
+      <Menu
+        anchorEl={releaseChannelMenuAnchor}
+        open={Boolean(releaseChannelMenuAnchor)}
+        onClose={closeReleaseChannelMenu}
+        PaperProps={{
+          sx: {
+            bgcolor: "rgba(8,12,24,0.96)",
+            color: "#fff",
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+          },
+        }}
+      >
+        <MenuItem
+          selected={!String(meta.agentReleaseChannelOverride || summary.agent_release_channel_override || "").trim()}
+          disabled={releaseChannelSaving}
+          onClick={() => handleReleaseChannelSelection("")}
+        >
+          Use Default
+        </MenuItem>
+        <MenuItem
+          selected={String(meta.agentReleaseChannelOverride || summary.agent_release_channel_override || "").trim().toLowerCase() === "stable"}
+          disabled={releaseChannelSaving}
+          onClick={() => handleReleaseChannelSelection("stable")}
+        >
+          Stable
+        </MenuItem>
+        <MenuItem
+          selected={String(meta.agentReleaseChannelOverride || summary.agent_release_channel_override || "").trim().toLowerCase() === "unstable"}
+          disabled={releaseChannelSaving}
+          onClick={() => handleReleaseChannelSelection("unstable")}
+        >
+          Unstable
         </MenuItem>
       </Menu>
       {loadError ? (

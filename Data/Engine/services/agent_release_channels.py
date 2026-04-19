@@ -437,19 +437,26 @@ class AgentReleaseChannelManager:
     def _repo_metadata(self, repo: str) -> Dict[str, Any]:
         return self._request_json(f"https://api.github.com/repos/{repo}")
 
-    def _commit_sha(self, repo: str, ref_name: str) -> str:
+    def _commit_metadata(self, repo: str, ref_name: str) -> Dict[str, str]:
         payload = self._request_json(f"https://api.github.com/repos/{repo}/commits/{ref_name}")
         sha = _clean_text(payload.get("sha")).lower()
         if not sha:
             raise RuntimeError(f"GitHub commit lookup missing sha for ref={ref_name}")
-        return sha
+        commit_payload = payload.get("commit") if isinstance(payload.get("commit"), dict) else {}
+        author_payload = commit_payload.get("author") if isinstance(commit_payload.get("author"), dict) else {}
+        committer_payload = commit_payload.get("committer") if isinstance(commit_payload.get("committer"), dict) else {}
+        published_at = _clean_text(author_payload.get("date")) or _clean_text(committer_payload.get("date"))
+        return {
+            "sha": sha,
+            "published_at": published_at,
+        }
 
     def _stable_candidate(self, repo: str) -> Dict[str, Any]:
         payload = self._request_json(f"https://api.github.com/repos/{repo}/releases/latest")
         tag_name = _clean_text(payload.get("tag_name"))
         if not tag_name:
             raise RuntimeError("GitHub latest release payload missing tag_name")
-        build_id = self._commit_sha(repo, tag_name)
+        build_id = self._commit_metadata(repo, tag_name).get("sha") or ""
         fallback_url = f"https://github.com/{repo}/archive/refs/tags/{tag_name}.zip"
         return {
             "channel": "stable",
@@ -463,7 +470,8 @@ class AgentReleaseChannelManager:
         }
 
     def _unstable_candidate(self, repo: str, default_branch: str) -> Dict[str, Any]:
-        build_id = self._commit_sha(repo, default_branch)
+        commit_meta = self._commit_metadata(repo, default_branch)
+        build_id = _clean_text(commit_meta.get("sha")).lower()
         return {
             "channel": "unstable",
             "build_id": build_id,
@@ -471,6 +479,7 @@ class AgentReleaseChannelManager:
             "fallback_url": f"https://github.com/{repo}/archive/{build_id}.zip",
             "version_label": default_branch,
             "branch": default_branch,
+            "published_at": _clean_text(commit_meta.get("published_at")),
         }
 
     def _download_bytes(self, url: str) -> bytes:

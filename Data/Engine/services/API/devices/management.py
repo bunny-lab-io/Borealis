@@ -641,16 +641,20 @@ class DeviceManagementService:
             return "Up-to-Date"
         return "Needs Updated"
 
-    def _resolve_agent_target(self, channel_override: Any) -> Tuple[str, str]:
+    def _resolve_agent_target(self, channel_override: Any) -> Tuple[str, str, str]:
         normalized_override = _clean_device_str(channel_override)
         if self.agent_release_manager is not None:
             try:
                 effective_channel = self.agent_release_manager.resolve_effective_channel(normalized_override)
                 target = self.agent_release_manager.target_for_override(normalized_override)
-                return effective_channel, (_clean_device_str(target.get("build_id")) or "").lower()
+                return (
+                    effective_channel,
+                    (_clean_device_str(target.get("build_id")) or "").lower(),
+                    _clean_device_str(target.get("published_at")),
+                )
             except Exception:
                 pass
-        return "", self._current_target_repo_hash()
+        return "", self._current_target_repo_hash(), ""
 
     def _attach_agent_version_status(
         self,
@@ -666,8 +670,9 @@ class DeviceManagementService:
             or _clean_device_str(summary.get("agent_release_channel_override"))
         )
         effective_channel = ""
+        target_published_at = ""
         if target_build_id is None:
-            effective_channel, target_build_id = self._resolve_agent_target(channel_override)
+            effective_channel, target_build_id, target_published_at = self._resolve_agent_target(channel_override)
         installed_build_id = (
             _clean_device_str(payload.get("agent_build_id"))
             or _clean_device_str(payload.get("agent_hash"))
@@ -677,6 +682,7 @@ class DeviceManagementService:
         status = self._compute_agent_version_status(installed_build_id, target_build_id)
         payload["agent_version_status"] = status
         payload["agent_target_build_id"] = target_build_id or ""
+        payload["agent_target_published_at"] = target_published_at or ""
         payload["agent_release_channel_override"] = channel_override or None
         payload["agent_release_channel_effective"] = effective_channel or (
             _clean_device_str(summary.get("agent_release_channel_effective"))
@@ -687,6 +693,7 @@ class DeviceManagementService:
         if isinstance(summary, dict):
             summary["agent_version_status"] = status
             summary["agent_target_build_id"] = target_build_id or ""
+            summary["agent_target_published_at"] = target_published_at or ""
             summary["agent_release_channel_override"] = channel_override or None
             if payload.get("agent_release_channel_effective"):
                 summary["agent_release_channel_effective"] = payload.get("agent_release_channel_effective")
@@ -698,6 +705,7 @@ class DeviceManagementService:
             if isinstance(detail_summary, dict):
                 detail_summary["agent_version_status"] = status
                 detail_summary["agent_target_build_id"] = target_build_id or ""
+                detail_summary["agent_target_published_at"] = target_published_at or ""
                 detail_summary["agent_release_channel_override"] = channel_override or None
                 if payload.get("agent_release_channel_effective"):
                     detail_summary["agent_release_channel_effective"] = payload.get("agent_release_channel_effective")
@@ -1496,7 +1504,7 @@ class DeviceManagementService:
             except Exception:
                 self.logger.debug("Failed to notify device after release-channel override change", exc_info=True)
 
-        effective_channel, target_build_id = self._resolve_agent_target(cleaned_override)
+        effective_channel, target_build_id, target_published_at = self._resolve_agent_target(cleaned_override)
         return {
             "status": "ok",
             "guid": normalized_guid,
@@ -1504,6 +1512,7 @@ class DeviceManagementService:
             "agent_release_channel_override": stored_override,
             "agent_release_channel_effective": effective_channel,
             "agent_target_build_id": target_build_id or "",
+            "agent_target_published_at": target_published_at or "",
         }, 200
 
     def set_device_description(self, hostname: str, description: str) -> Tuple[Dict[str, Any], int]:
