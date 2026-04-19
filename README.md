@@ -296,7 +296,7 @@ Credential Management Editor:
 
 # Getting Started
 
-## Deploy the Engine
+## Deploy the Borealis Engine
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s --
