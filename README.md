@@ -5,7 +5,7 @@ Borealis is a remote management and automation platform built around a Linux-hos
 The project was originally created to consolidate the functionality of multiple standalone tools used in and outside my homelab and real-world environments (Various RMM platforms, Ansible/AWX, SemaphoreUI, etc.) into a single, cohesive platform.
 
 ## A Note on Development Pace
-I'm the sole maintainer and still learning as I go while working a full-time IT job. Progress is iterative, and parts of the system are occasionally reworked as better architectural approaches emerge.
+I'm the sole maintainer of this project and still learning as I go while working a full-time IT job. Progress is iterative, and parts of the system are occasionally reworked as better architectural approaches emerge.
 
 ---
 
