@@ -2081,10 +2081,7 @@ function Ensure-AgentTasks {
     }
 
     $autoUpdaterName = 'Borealis Agent (AutoUpdater)'
-    $hourlyTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date)
-    try { $hourlyTrigger.Repetition.Interval = (New-TimeSpan -Hours 1) } catch {}
-    try { $hourlyTrigger.Repetition.Duration = (New-TimeSpan -Days 3650) } catch {}
-    try { $hourlyTrigger.Repetition.StopAtDurationEnd = $false } catch {}
+    $hourlyTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Hours 1)
     $updateArg = ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $updateScript)
     $updateAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $updateArg -WorkingDirectory $ScriptRoot
     Register-ScheduledTask -TaskName $autoUpdaterName -Action $updateAction -Trigger $hourlyTrigger -Settings $taskSettings -Principal $principalSystem -Force | Out-Null
