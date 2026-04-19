@@ -49,7 +49,8 @@ except ImportError:  # pragma: no cover - package import path for tests
 
 _TRANSIENT_REFRESH_STATUS_CODES = frozenset({500, 502, 503, 504})
 _REFRESH_RETRY_DELAYS_SECONDS = (1.0, 2.0, 5.0)
-_SYNC_EXCLUDED_TOP_LEVEL = frozenset({"Agent", "Engine", ".git", "__pycache__", ".pytest_cache"})
+# Preserve live runtime/dependency trees; the platform-specific refresh step restages them safely afterward.
+_SYNC_EXCLUDED_TOP_LEVEL = frozenset({"Agent", "Engine", "Dependencies", ".git", "__pycache__", ".pytest_cache"})
 _SYNC_EXCLUDED_RELATIVE = frozenset({"Update.ps1", "Update.sh", "Data/Agent/update_helper.py"})
 
 
