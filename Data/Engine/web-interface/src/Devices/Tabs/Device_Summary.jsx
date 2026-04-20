@@ -28,7 +28,7 @@ import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import ListAltRoundedIcon from "@mui/icons-material/ListAltRounded";
 import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
 import DesktopWindowsRoundedIcon from "@mui/icons-material/DesktopWindowsRounded";
-import SmartToyRoundedIcon from "@mui/icons-material/SmartToyRounded";
+import PolicyIcon from "@mui/icons-material/Policy";
 import SpeedRoundedIcon from "@mui/icons-material/SpeedRounded";
 import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
@@ -114,7 +114,7 @@ const TOP_TABS = [
   { key: "summary", label: "Device Summary", icon: InfoOutlinedIcon },
   { key: "software", label: "Installed Software", icon: AppsRoundedIcon },
   { key: "services", label: "Services", icon: SettingsRoundedIcon },
-  { key: "watchdogs", label: "Watchdogs", icon: SmartToyRoundedIcon },
+  { key: "watchdogs", label: "Watchdogs", icon: PolicyIcon },
   { key: "activity", label: "Activity History", icon: ListAltRoundedIcon },
   { key: "shell", label: "Remote Shell", icon: TerminalRoundedIcon },
 ];
