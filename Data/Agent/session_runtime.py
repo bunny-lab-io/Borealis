@@ -657,7 +657,10 @@ class SessionHelperBroker:
                 "detail": f"{len(ready)} interactive helper session(s) ready.",
                 "details": {
                     "running_status": "Ready",
+                    "execution_context": "CURRENTUSER",
                     "eligible_sessions": str(len(eligible)),
+                    "listener_ready": True,
+                    "listener_state": "Registered",
                     "ready_helpers": str(len(ready)),
                 },
             }
@@ -670,7 +673,10 @@ class SessionHelperBroker:
                 "detail": "Interactive sessions are present, but helper connections are still warming up.",
                 "details": {
                     "running_status": "Recovering",
+                    "execution_context": "CURRENTUSER",
                     "eligible_sessions": str(len(eligible)),
+                    "listener_ready": False,
+                    "listener_state": "Registering",
                     "ready_helpers": "0",
                 },
             }
@@ -682,7 +688,10 @@ class SessionHelperBroker:
             "detail": "No interactive user sessions are currently eligible.",
             "details": {
                 "running_status": "Waiting",
+                "execution_context": "CURRENTUSER",
                 "eligible_sessions": "0",
+                "listener_ready": False,
+                "listener_state": "Not Registered",
                 "ready_helpers": "0",
             },
         }

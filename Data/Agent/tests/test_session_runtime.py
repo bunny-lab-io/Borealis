@@ -65,6 +65,56 @@ def test_listener_address_accepts_unique_suffix() -> None:
     assert "abc123" in address
 
 
+def test_currentuser_role_health_reports_registered_when_helper_is_ready() -> None:
+    broker = SessionHelperBroker(
+        loop=None,
+        log=lambda _message: None,
+        emit_quick_job_result=lambda _payload: None,
+        http_client_factory=None,
+    )
+    broker.session_inventory_payload = lambda: {  # type: ignore[assignment]
+        "sessions": [
+            {
+                "session_id": 1,
+                "eligible_for_interactive": True,
+                "helper_ready": True,
+            }
+        ]
+    }
+
+    report = broker.currentuser_role_health()
+
+    assert report["status"] == "healthy"
+    assert report["details"]["execution_context"] == "CURRENTUSER"
+    assert report["details"]["listener_state"] == "Registered"
+    assert report["details"]["listener_ready"] is True
+
+
+def test_currentuser_role_health_reports_registering_while_helper_warms_up() -> None:
+    broker = SessionHelperBroker(
+        loop=None,
+        log=lambda _message: None,
+        emit_quick_job_result=lambda _payload: None,
+        http_client_factory=None,
+    )
+    broker.session_inventory_payload = lambda: {  # type: ignore[assignment]
+        "sessions": [
+            {
+                "session_id": 1,
+                "eligible_for_interactive": True,
+                "helper_ready": False,
+            }
+        ]
+    }
+
+    report = broker.currentuser_role_health()
+
+    assert report["status"] == "recovering"
+    assert report["details"]["execution_context"] == "CURRENTUSER"
+    assert report["details"]["listener_state"] == "Registering"
+    assert report["details"]["listener_ready"] is False
+
+
 def test_ensure_helper_logs_listener_create_failure_instead_of_raising(monkeypatch) -> None:
     logged = []
     broker = SessionHelperBroker(
