@@ -5,6 +5,7 @@ import base64
 import contextlib
 import os
 import secrets
+import signal
 import socket
 import subprocess
 import sys
@@ -23,6 +24,7 @@ SESSION_TARGET_ALL = "all_active_sessions"
 SESSION_TARGET_SPECIFIC = "specific_session"
 _HELPER_HEARTBEAT_STALE_AFTER_SECONDS = 45
 _SESSION_RECONCILE_INTERVAL_SECONDS = 10
+_HELPER_LAUNCH_GRACE_SECONDS = max(30, _SESSION_RECONCILE_INTERVAL_SECONDS * 3)
 
 
 def _clean_text(value: Any) -> str:
@@ -148,7 +150,7 @@ def _launch_helper_process_as_user_windows(
     session_id: int,
     command: Sequence[str],
     cwd: str,
-) -> Tuple[bool, str]:
+) -> Tuple[bool, str, int]:
     import ctypes
     from ctypes import wintypes
 
@@ -347,9 +349,9 @@ def _launch_helper_process_as_user_windows(
             raise ctypes.WinError(ctypes.get_last_error())
         pid = int(process_info.dwProcessId or 0)
         session_label = f"{domain}\\{username}" if username and domain else username or f"session-{int(session_id)}"
-        return True, f"launched helper pid={pid} user={session_label}"
+        return True, f"launched helper pid={pid} user={session_label}", pid
     except Exception as exc:
-        return False, str(exc)
+        return False, str(exc), 0
     finally:
         for handle in (process_info.hThread, process_info.hProcess):
             if handle:
@@ -395,6 +397,21 @@ class _HelperState:
     def ready(self) -> bool:
         now = int(time.time())
         return bool(self.connection is not None and self.last_seen_at and (now - int(self.last_seen_at)) <= _HELPER_HEARTBEAT_STALE_AFTER_SECONDS)
+
+    def launch_in_progress(self) -> bool:
+        if self.ready():
+            return False
+        now = int(time.time())
+        if self.connection is not None:
+            return bool(self.last_seen_at and (now - int(self.last_seen_at)) <= _HELPER_HEARTBEAT_STALE_AFTER_SECONDS)
+        if self.connected_at > 0:
+            return bool(self.last_seen_at and (now - int(self.last_seen_at)) <= _HELPER_HEARTBEAT_STALE_AFTER_SECONDS)
+        if int(self.launched_at or 0) <= 0:
+            return False
+        listener_thread = self.listener_thread
+        if listener_thread is None or not listener_thread.is_alive():
+            return False
+        return (now - int(self.launched_at)) <= _HELPER_LAUNCH_GRACE_SECONDS
 
 
 class SessionHelperBroker:
@@ -619,12 +636,20 @@ class SessionHelperBroker:
             return self._helpers.get(int(session_id))
 
     def _ensure_helper(self, session_id: int, session: Dict[str, Any]) -> None:
+        existing_error = ""
+        existing_helper = None
         with self._lock:
             helper = self._helpers.get(session_id)
             if helper is not None:
                 helper.session = dict(session)
-                if helper.ready():
+                if helper.ready() or helper.launch_in_progress():
                     return
+                existing_error = _clean_text(helper.last_error)
+                existing_helper = helper
+        if existing_helper is not None:
+            detail = existing_error or "helper_not_ready"
+            self._log(f"session helper session_id={session_id} restarting stale helper error={detail}")
+            self._stop_helper(session_id, reason="helper_restart")
         address_suffix = f"{os.getpid()}_{int(time.time())}_{secrets.token_hex(4)}"
         address = _listener_address(session_id, address_suffix)
         auth_token = base64.urlsafe_b64encode(secrets.token_bytes(18)).decode("ascii")
@@ -657,12 +682,13 @@ class SessionHelperBroker:
             daemon=True,
         )
         helper.listener_thread.start()
-        ok, detail = self._launch_helper(helper)
+        ok, detail, pid = self._launch_helper(helper)
+        helper.helper_pid = int(pid or 0)
         helper.last_error = "" if ok else detail
         if detail:
             self._log(f"session helper session_id={session_id} {detail}")
 
-    def _launch_helper(self, helper: _HelperState) -> Tuple[bool, str]:
+    def _launch_helper(self, helper: _HelperState) -> Tuple[bool, str, int]:
         command, cwd = _helper_command(
             session_id=helper.session_id,
             address=helper.address,
@@ -675,7 +701,7 @@ class SessionHelperBroker:
                 cwd=cwd,
             )
         try:
-            subprocess.Popen(
+            process = subprocess.Popen(
                 command,
                 cwd=cwd,
                 stdin=subprocess.DEVNULL,
@@ -683,9 +709,9 @@ class SessionHelperBroker:
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
-            return True, f"launched helper for session_id={helper.session_id}"
+            return True, f"launched helper pid={int(process.pid or 0)} session_id={helper.session_id}", int(process.pid or 0)
         except Exception as exc:
-            return False, str(exc)
+            return False, str(exc), 0
 
     def _accept_helper_connection(self, helper: _HelperState) -> None:
         try:
@@ -694,12 +720,24 @@ class SessionHelperBroker:
         except Exception as exc:
             helper.last_error = str(exc)
             return
+        superseded = False
         with self._lock:
             stored = self._helpers.get(helper.session_id)
-            if stored is not None:
+            if stored is helper:
                 stored.connection = connection
                 stored.connected_at = int(time.time())
                 stored.last_seen_at = int(time.time())
+            else:
+                superseded = True
+        if superseded:
+            with contextlib.suppress(Exception):
+                connection.send({"type": "shutdown", "reason": "helper_superseded"})
+            with contextlib.suppress(Exception):
+                connection.close()
+            with contextlib.suppress(Exception):
+                if helper.listener is not None:
+                    helper.listener.close()
+            return
         reader = threading.Thread(
             target=self._helper_reader,
             args=(helper.session_id, connection),
@@ -849,6 +887,9 @@ class SessionHelperBroker:
         with contextlib.suppress(Exception):
             if helper.listener is not None:
                 helper.listener.close()
+        if helper.connection is None and int(helper.helper_pid or 0) > 0:
+            with contextlib.suppress(Exception):
+                os.kill(int(helper.helper_pid), signal.SIGTERM)
         if not IS_WINDOWS:
             with contextlib.suppress(Exception):
                 if os.path.exists(helper.address):

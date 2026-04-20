@@ -5,6 +5,8 @@ from Data.Agent.session_runtime import (
     SESSION_TARGET_ALL,
     _PendingJob,
     SessionHelperBroker,
+    _HelperState,
+    _HELPER_LAUNCH_GRACE_SECONDS,
     _listener_address,
     build_currentuser_dispatch_fields,
     normalize_session_target,
@@ -89,3 +91,135 @@ def test_ensure_helper_logs_listener_create_failure_instead_of_raising(monkeypat
     )
 
     assert any("listener create failed" in entry for entry in logged)
+
+
+class _FakeThread:
+    def __init__(self, *args, alive: bool = True, **_kwargs) -> None:
+        self.started = False
+        self._alive = alive
+
+    def start(self) -> None:
+        self.started = True
+
+    def is_alive(self) -> bool:
+        return self._alive
+
+
+class _FakeListener:
+    def __init__(self, *args, **_kwargs) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_ensure_helper_does_not_relaunch_while_launch_in_progress(monkeypatch) -> None:
+    broker = SessionHelperBroker(
+        loop=None,
+        log=lambda _message: None,
+        emit_quick_job_result=lambda _payload: None,
+        http_client_factory=None,
+    )
+    existing = _HelperState(
+        session_id=9,
+        session={"session_id": 9, "username": "nicole"},
+        address="existing",
+        auth_token="token",
+        launched_at=int(session_runtime.time.time()),
+        listener_thread=_FakeThread(alive=True),
+    )
+    broker._helpers[9] = existing
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("helper launch should not happen while a launch is still in progress")
+
+    monkeypatch.setattr(session_runtime, "Listener", _boom)
+    monkeypatch.setattr(broker, "_launch_helper", _boom)
+
+    broker._ensure_helper(
+        9,
+        {
+            "session_id": 9,
+            "username": "nicole",
+            "state": "active",
+            "state_code": "active",
+            "eligible_for_interactive": True,
+        },
+    )
+
+    assert broker._helpers[9] is existing
+
+
+def test_ensure_helper_restarts_stale_helper_once(monkeypatch) -> None:
+    logged = []
+    broker = SessionHelperBroker(
+        loop=None,
+        log=lambda message: logged.append(str(message)),
+        emit_quick_job_result=lambda _payload: None,
+        http_client_factory=None,
+    )
+    old_listener = _FakeListener()
+    existing = _HelperState(
+        session_id=11,
+        session={"session_id": 11, "username": "nicole"},
+        address="old-address",
+        auth_token="old-token",
+        listener=old_listener,
+        listener_thread=_FakeThread(alive=False),
+        launched_at=int(session_runtime.time.time()) - _HELPER_LAUNCH_GRACE_SECONDS - 5,
+        helper_pid=0,
+    )
+    broker._helpers[11] = existing
+    created_listeners = []
+
+    def _listener_factory(*_args, **_kwargs):
+        listener = _FakeListener()
+        created_listeners.append(listener)
+        return listener
+
+    monkeypatch.setattr(session_runtime, "Listener", _listener_factory)
+    monkeypatch.setattr(session_runtime.threading, "Thread", _FakeThread)
+    monkeypatch.setattr(broker, "_launch_helper", lambda _helper: (True, "launched helper pid=222 user=test", 222))
+
+    broker._ensure_helper(
+        11,
+        {
+            "session_id": 11,
+            "username": "nicole",
+            "state": "active",
+            "state_code": "active",
+            "eligible_for_interactive": True,
+        },
+    )
+
+    replacement = broker._helpers[11]
+    assert replacement is not existing
+    assert replacement.helper_pid == 222
+    assert len(created_listeners) == 1
+    assert old_listener.closed is True
+    assert any("restarting stale helper" in entry for entry in logged)
+
+
+def test_stop_helper_terminates_unconnected_helper_pid(monkeypatch) -> None:
+    broker = SessionHelperBroker(
+        loop=None,
+        log=lambda _message: None,
+        emit_quick_job_result=lambda _payload: None,
+        http_client_factory=None,
+    )
+    helper = _HelperState(
+        session_id=13,
+        session={"session_id": 13},
+        address="stale-address",
+        auth_token="token",
+        helper_pid=4321,
+        listener=_FakeListener(),
+    )
+    broker._helpers[13] = helper
+    killed = []
+
+    monkeypatch.setattr(session_runtime.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+
+    broker._stop_helper(13, reason="helper_restart")
+
+    assert killed == [(4321, session_runtime.signal.SIGTERM)]
