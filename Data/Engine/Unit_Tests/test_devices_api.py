@@ -696,6 +696,25 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
     ]
 
 
+def test_agent_heartbeat_returns_assigned_site(engine_harness: EngineTestHarness) -> None:
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/agent/heartbeat",
+        headers=_device_headers(),
+        json={
+            "hostname": "test-device",
+            "service_mode": "system",
+            "metrics": {},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["site_name"] == "Main Lab"
+    assert payload["site_id"] == 1
+
+
 def test_device_list_views_lifecycle(engine_harness: EngineTestHarness) -> None:
     client = _client_with_admin_session(engine_harness)
     create_resp = client.post(

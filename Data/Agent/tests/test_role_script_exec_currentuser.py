@@ -95,7 +95,9 @@ def test_copy_support_details_uses_clipboard(monkeypatch) -> None:
     role = role_module.Role.__new__(role_module.Role)
     role._copy_support_details({"support_text": "Device: workstation-01"})
 
-    assert clipboard.text == "Device: workstation-01"
+    assert "Device: workstation-01" in clipboard.text
+    assert "Engine Trust: Checking trust" in clipboard.text
+    assert "Engine <--> Agent WebSocket: Disconnected" in clipboard.text
 
 
 def test_build_status_details_text_includes_wireguard_and_logs() -> None:
@@ -104,12 +106,20 @@ def test_build_status_details_text_includes_wireguard_and_logs() -> None:
     text = role._build_status_details_text(
         {
             "support_text": "Device: workstation-01\nStatus: Connected",
+            "security_status": "Secure connection",
+            "system_socket_connected": True,
+            "wireguard_status": "Connected",
+            "helper_session_status": "Running",
             "wireguard_detail": "Persistent tunnel active.",
             "logs_dir": "/tmp/Agent/Logs",
         }
     )
 
     assert "Device: workstation-01" in text
+    assert "Engine Trust: Secure (TLS + Ed25519)" in text
+    assert "Engine <--> Agent WebSocket: Connected" in text
+    assert "WireGuard VPN Tunnel: Connected" in text
+    assert "Interactive User Session: Running" in text
     assert "WireGuard Detail: Persistent tunnel active." in text
     assert "Logs Folder: /tmp/Agent/Logs" in text
 

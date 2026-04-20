@@ -202,6 +202,8 @@ def build_default_snapshot(
         "updated_at": timestamp,
         "server_url": normalized_server_url,
         "server_host": extract_server_host(normalized_server_url),
+        "site_id": None,
+        "site_name": "",
         "guid_present": False,
         "verify_enabled": True,
         "socket_connected": False,
@@ -221,6 +223,11 @@ def load_status_snapshot(service_mode: Any, *, start: Optional[Path] = None) -> 
     payload["service_mode"] = normalize_service_mode(payload.get("service_mode") or service_mode)
     payload.setdefault("server_url", "")
     payload["server_host"] = extract_server_host(payload.get("server_url")) or str(payload.get("server_host") or "").strip()
+    payload["site_name"] = str(payload.get("site_name") or "").strip()
+    try:
+        payload["site_id"] = int(payload.get("site_id")) if payload.get("site_id") is not None else None
+    except Exception:
+        payload["site_id"] = None
     if not isinstance(payload.get("role_health"), dict):
         payload["role_health"] = dict(_DEFAULT_ROLE_HEALTH)
     return payload
@@ -248,6 +255,11 @@ def write_status_snapshot(
     merged["service_mode"] = normalized_mode
     merged["updated_at"] = timestamp
     merged["server_host"] = extract_server_host(merged.get("server_url")) or str(merged.get("server_host") or "").strip()
+    merged["site_name"] = str(merged.get("site_name") or "").strip()
+    try:
+        merged["site_id"] = int(merged.get("site_id")) if merged.get("site_id") is not None else None
+    except Exception:
+        merged["site_id"] = None
     if not isinstance(merged.get("role_health"), dict):
         merged["role_health"] = dict(_DEFAULT_ROLE_HEALTH)
     _write_json_atomic(status_path(normalized_mode, start), merged)
@@ -430,7 +442,7 @@ def wireguard_summary(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, str]:
     status_code = str(role.get("status_code") or role.get("status") or "").strip().lower() or "unknown"
     detail = str(role.get("detail") or "").strip()
     if status_code == "healthy":
-        return {"status_code": status_code, "label": "Ready", "detail": detail or "WireGuard tunnel is ready."}
+        return {"status_code": status_code, "label": "Connected", "detail": detail or "WireGuard tunnel is connected."}
     if status_code in {"recovering", "pending"}:
         return {"status_code": status_code, "label": "Starting", "detail": detail or "WireGuard is still starting."}
     if status_code == "unhealthy":
@@ -598,15 +610,20 @@ def build_tray_view(
         or configured_server_host
         or "Not configured"
     )
+    site_name = (
+        str(current.get("site_name") or "").strip()
+        or str(system.get("site_name") or "").strip()
+    )
     last_check_in_at = max(
         int(current.get("last_heartbeat_success_at") or 0),
         int(system.get("last_heartbeat_success_at") or 0),
     )
     last_check_in = format_relative_time(last_check_in_at, now=timestamp)
+    last_heartbeat_value = f"{max(0, timestamp - last_check_in_at)}s" if last_check_in_at > 0 else "Never"
     activity_status = activity_label_from_snapshot(busy)
 
     if current_live:
-        helper_session_status = "Loaded Successfully"
+        helper_session_status = "Running"
         helper_session_status_code = "healthy"
     elif current_booting or bool(current_session_active):
         helper_session_status = "Loading"
@@ -675,8 +692,10 @@ def build_tray_view(
         "security_status": security_status,
         "activity_status": activity_status,
         "connected_host": connected_host,
+        "site_name": site_name,
         "last_check_in": last_check_in,
         "last_check_in_at": last_check_in_at,
+        "last_heartbeat_value": last_heartbeat_value,
         "wireguard_status": wireguard["label"],
         "wireguard_detail": wireguard["detail"],
         "wireguard_status_code": wireguard["status_code"],
@@ -720,6 +739,7 @@ def build_support_details(view: Mapping[str, Any]) -> List[Dict[str, str]]:
     warning_text = "; ".join(str(item).strip() for item in warnings if str(item).strip()) or "None"
     return [
         {"label": "Device", "value": str(view.get("device_name") or "Unknown Device")},
+        {"label": "Site", "value": str(view.get("site_name") or "Not Configured")},
         {"label": "Status", "value": str(view.get("overall_status") or "Unknown")},
         {"label": "Connection", "value": str(view.get("connection_status") or "Unknown")},
         {"label": "Security", "value": str(view.get("security_status") or "Checking connection")},

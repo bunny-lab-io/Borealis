@@ -2916,7 +2916,19 @@ async def send_heartbeat():
                 "service_mode": SERVICE_MODE,
             }
             response = await client.async_post_json("/api/agent/heartbeat", payload, require_auth=True)
-            _record_tray_heartbeat_success(client=client)
+            tray_updates = {
+                "last_heartbeat_success_at": int(time.time()),
+                "last_error_kind": "",
+                "last_error_message": "",
+            }
+            if isinstance(response, dict):
+                tray_updates["site_name"] = str(response.get("site_name") or "").strip()
+                site_id = response.get("site_id")
+                try:
+                    tray_updates["site_id"] = int(site_id) if site_id is not None else None
+                except Exception:
+                    tray_updates["site_id"] = None
+            _sync_tray_status(tray_updates, client=client)
         except Exception as exc:
             _log_agent(f'Heartbeat post failed: {exc}', fname='agent.error.log')
             _record_tray_error("transport", _describe_exception(exc), client=client, socket_connected=False)
@@ -3345,7 +3357,19 @@ async def connect():
             "service_mode": SERVICE_MODE,
         }
         response = await client.async_post_json("/api/agent/heartbeat", payload, require_auth=True)
-        _record_tray_heartbeat_success(client=client)
+        tray_updates = {
+            "last_heartbeat_success_at": int(time.time()),
+            "last_error_kind": "",
+            "last_error_message": "",
+        }
+        if isinstance(response, dict):
+            tray_updates["site_name"] = str(response.get("site_name") or "").strip()
+            site_id = response.get("site_id")
+            try:
+                tray_updates["site_id"] = int(site_id) if site_id is not None else None
+            except Exception:
+                tray_updates["site_id"] = None
+        _sync_tray_status(tray_updates, client=client)
     except Exception as exc:
         _log_agent(f'Initial REST heartbeat failed: {exc}', fname='agent.error.log')
         _record_tray_error("transport", _describe_exception(exc), client=client, socket_connected=True)

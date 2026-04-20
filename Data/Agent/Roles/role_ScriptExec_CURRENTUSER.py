@@ -43,8 +43,8 @@ ROLE_CONTEXTS = ['interactive', 'helper']
 
 
 IS_WINDOWS = os.name == 'nt'
-TRAY_POPUP_MARGIN = 18
-TRAY_POPUP_WIDTH = 432
+TRAY_POPUP_MARGIN = 0
+TRAY_POPUP_WIDTH = 508
 
 
 def _popup_palette(tone: str) -> Dict[str, str]:
@@ -503,7 +503,15 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
             "WindowType.WindowStaysOnTopHint",
             getattr(QtCore.Qt, "WindowStaysOnTopHint", 0),
         )
-        self.setWindowFlags(popup_flag | frameless_flag | stays_on_top_flag)
+        no_drop_shadow_flag = qt_enum(
+            QtCore.Qt,
+            "WindowType.NoDropShadowWindowHint",
+            getattr(QtCore.Qt, "NoDropShadowWindowHint", None),
+        )
+        window_flags = popup_flag | frameless_flag | stays_on_top_flag
+        if no_drop_shadow_flag is not None:
+            window_flags |= no_drop_shadow_flag
+        self.setWindowFlags(window_flags)
 
         translucent_attr = qt_enum(
             QtCore.Qt,
@@ -532,25 +540,25 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
         self.setStyleSheet("QFrame#TrayPopupShell { background: transparent; border: none; }")
 
         root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
+        root.setContentsMargins(0, 0, 0, 0)
 
         self._panel = QtWidgets.QFrame(self)
         self._panel.setObjectName("TrayPopupPanel")
         panel_layout = QtWidgets.QVBoxLayout(self._panel)
-        panel_layout.setContentsMargins(20, 20, 20, 18)
-        panel_layout.setSpacing(14)
+        panel_layout.setContentsMargins(22, 22, 22, 20)
+        panel_layout.setSpacing(16)
 
         header = QtWidgets.QHBoxLayout()
-        header.setSpacing(14)
+        header.setSpacing(16)
         self._icon_label = QtWidgets.QLabel(self._panel)
-        self._icon_label.setFixedSize(52, 52)
+        self._icon_label.setFixedSize(76, 76)
         self._icon_label.setAlignment(
             qt_enum(QtCore.Qt, "AlignmentFlag.AlignCenter", getattr(QtCore.Qt, "AlignCenter", 0))
         )
         header.addWidget(self._icon_label, 0)
 
         title_layout = QtWidgets.QVBoxLayout()
-        title_layout.setSpacing(3)
+        title_layout.setSpacing(4)
         self._title_label = QtWidgets.QLabel("Borealis Agent", self._panel)
         self._title_label.setObjectName("TrayPopupTitle")
         self._subtitle_label = QtWidgets.QLabel("", self._panel)
@@ -559,46 +567,49 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
         title_layout.addWidget(self._title_label)
         title_layout.addWidget(self._subtitle_label)
         header.addLayout(title_layout, 1)
-
-        self._status_badge = QtWidgets.QLabel("", self._panel)
-        self._status_badge.setObjectName("TrayPopupBadge")
-        self._status_badge.setAlignment(
-            qt_enum(QtCore.Qt, "AlignmentFlag.AlignCenter", getattr(QtCore.Qt, "AlignCenter", 0))
-        )
-        header.addWidget(self._status_badge, 0)
         panel_layout.addLayout(header)
 
         chip_grid = QtWidgets.QGridLayout()
-        chip_grid.setHorizontalSpacing(10)
-        chip_grid.setVerticalSpacing(10)
-        self._connection_card, self._connection_value = self._create_metric_card("Connection")
+        chip_grid.setHorizontalSpacing(12)
+        chip_grid.setVerticalSpacing(12)
         self._activity_card, self._activity_value = self._create_metric_card("Activity")
         self._release_card, self._release_value = self._create_metric_card("Release Channel")
-        self._session_card, self._session_value = self._create_metric_card("Session")
-        chip_grid.addWidget(self._connection_card, 0, 0)
-        chip_grid.addWidget(self._activity_card, 0, 1)
-        chip_grid.addWidget(self._release_card, 1, 0)
-        chip_grid.addWidget(self._session_card, 1, 1)
+        chip_grid.addWidget(self._activity_card, 0, 0)
+        chip_grid.addWidget(self._release_card, 0, 1)
         panel_layout.addLayout(chip_grid)
 
         self._checks_card = QtWidgets.QFrame(self._panel)
         self._checks_card.setObjectName("TrayPopupCard")
         checks_layout = QtWidgets.QVBoxLayout(self._checks_card)
-        checks_layout.setContentsMargins(14, 14, 14, 14)
-        checks_layout.setSpacing(8)
-        checks_title = QtWidgets.QLabel("Connection Checks", self._checks_card)
-        checks_title.setObjectName("TrayPopupSectionTitle")
-        checks_layout.addWidget(checks_title)
+        checks_layout.setContentsMargins(16, 16, 16, 16)
+        checks_layout.setSpacing(10)
+        self._checks_title = QtWidgets.QLabel("Connection Health", self._checks_card)
+        self._checks_title.setObjectName("TrayPopupSectionTitle")
+        checks_layout.addWidget(self._checks_title)
         self._check_values: Dict[str, Any] = {}
-        for label in ("Engine Trust", "WebSocket", "WireGuard", "Helper Session"):
+        for label in (
+            "Engine Trust",
+            "Engine <--> Agent WebSocket",
+            "WireGuard VPN Tunnel",
+            "Interactive User Session",
+            "Last Heartbeat",
+        ):
             self._check_values[label] = self._add_check_row(checks_layout, label)
+        self._engine_url_label = QtWidgets.QLabel("", self._checks_card)
+        self._engine_url_label.setObjectName("TrayPopupFootnote")
+        self._engine_url_label.setWordWrap(True)
+        self._engine_url_label.setAlignment(
+            qt_enum(QtCore.Qt, "AlignmentFlag.AlignCenter", getattr(QtCore.Qt, "AlignCenter", 0))
+        )
+        checks_layout.addSpacing(6)
+        checks_layout.addWidget(self._engine_url_label)
         panel_layout.addWidget(self._checks_card)
 
         self._warning_card = QtWidgets.QFrame(self._panel)
         self._warning_card.setObjectName("TrayPopupWarningCard")
         warning_layout = QtWidgets.QVBoxLayout(self._warning_card)
-        warning_layout.setContentsMargins(14, 12, 14, 12)
-        warning_layout.setSpacing(6)
+        warning_layout.setContentsMargins(16, 14, 16, 14)
+        warning_layout.setSpacing(8)
         self._warning_title = QtWidgets.QLabel("Attention Needed", self._warning_card)
         self._warning_title.setObjectName("TrayPopupSectionTitle")
         self._warning_body = QtWidgets.QLabel("", self._warning_card)
@@ -609,7 +620,7 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
         panel_layout.addWidget(self._warning_card)
 
         restart_row = QtWidgets.QHBoxLayout()
-        restart_row.setSpacing(10)
+        restart_row.setSpacing(12)
         self._restart_button = QtWidgets.QPushButton("Restart Agent", self._panel)
         self._restart_button.setObjectName("TrayPopupPrimaryButton")
         self._restart_button.clicked.connect(self._role._restart_agent)
@@ -617,7 +628,7 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
         panel_layout.addLayout(restart_row)
 
         action_row = QtWidgets.QHBoxLayout()
-        action_row.setSpacing(10)
+        action_row.setSpacing(12)
         copy_button = QtWidgets.QPushButton("Copy Support Details", self._panel)
         copy_button.setObjectName("TrayPopupButton")
         copy_button.clicked.connect(self._copy_support_details)
@@ -633,33 +644,33 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
         self._feedback_label.setVisible(False)
         panel_layout.addWidget(self._feedback_label)
 
-        self._legal_label = QtWidgets.QLabel(
-            "Borealis is distributed under AGPL-3.0. Source and license text ship with the project.",
-            self._panel,
-        )
-        self._legal_label.setObjectName("TrayPopupLegal")
-        self._legal_label.setWordWrap(True)
-        panel_layout.addWidget(self._legal_label)
-
         root.addWidget(self._panel)
 
-        try:
-            shadow = QtWidgets.QGraphicsDropShadowEffect(self)
-            shadow.setBlurRadius(32)
-            shadow.setOffset(0, 12)
-            shadow.setColor(QtGui.QColor(2, 6, 23, 168))
-            self._panel.setGraphicsEffect(shadow)
-        except Exception:
-            pass
-
         self.apply_view({})
+
+    def _sync_window_mask(self) -> None:
+        if QtGui is None or QtCore is None:
+            return
+        rect = QtCore.QRectF(self.rect())
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+        rect.adjust(0.5, 0.5, -0.5, -0.5)
+        path = QtGui.QPainterPath()
+        path.addRoundedRect(rect, 24.0, 24.0)
+        self.setMask(QtGui.QRegion(path.toFillPolygon().toPolygon()))
+
+    def resizeEvent(self, event: Any) -> None:
+        resize_event = getattr(super(), "resizeEvent", None)
+        if callable(resize_event):
+            resize_event(event)
+        self._sync_window_mask()
 
     def _create_metric_card(self, label: str) -> Tuple[Any, Any]:
         card = QtWidgets.QFrame(self._panel)
         card.setObjectName("TrayPopupChip")
         layout = QtWidgets.QVBoxLayout(card)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(4)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(6)
         title = QtWidgets.QLabel(label, card)
         title.setObjectName("TrayPopupChipLabel")
         value = QtWidgets.QLabel("", card)
@@ -671,7 +682,7 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
 
     def _add_check_row(self, layout: Any, label: str) -> Any:
         row = QtWidgets.QHBoxLayout()
-        row.setSpacing(12)
+        row.setSpacing(14)
         title = QtWidgets.QLabel(label, self._checks_card)
         title.setObjectName("TrayPopupDetailLabel")
         value = QtWidgets.QLabel("", self._checks_card)
@@ -721,7 +732,7 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
         }
         widget.setText(text)
         widget.setStyleSheet(
-            f"color: {color_map.get(status_code, '#eef4ff')}; font-size: 11px; font-weight: 700;"
+            f"color: {color_map.get(status_code, '#eef4ff')}; font-size: 13px; font-weight: 700;"
         )
 
     def apply_view(self, view: Dict[str, Any]) -> None:
@@ -731,12 +742,12 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
             f"""
             QFrame#TrayPopupPanel {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #07111d, stop:1 #0d1728);
-                border: 1px solid rgba(84, 112, 146, 0.30);
-                border-radius: 22px;
+                border: 1px solid rgba(68, 92, 122, 0.16);
+                border-radius: 24px;
             }}
             QFrame#TrayPopupCard, QFrame#TrayPopupChip {{
                 background-color: rgba(11, 20, 35, 0.88);
-                border: 1px solid rgba(84, 112, 146, 0.22);
+                border: 1px solid rgba(68, 92, 122, 0.18);
                 border-radius: 16px;
             }}
             QFrame#TrayPopupWarningCard {{
@@ -746,54 +757,47 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
             }}
             QLabel#TrayPopupTitle {{
                 color: #f8fafc;
-                font-size: 17px;
+                font-size: 19px;
                 font-weight: 700;
             }}
             QLabel#TrayPopupSubtitle {{
-                color: #9eb0c8;
-                font-size: 11px;
-            }}
-            QLabel#TrayPopupBadge {{
-                background-color: {palette["accent_soft"]};
-                border: 1px solid {palette["accent_border"]};
-                border-radius: 999px;
-                color: {palette["accent"]};
-                font-size: 11px;
-                font-weight: 700;
-                padding: 6px 12px;
+                color: #69b7ff;
+                font-size: 13px;
+                font-weight: 600;
             }}
             QLabel#TrayPopupChipLabel, QLabel#TrayPopupDetailLabel, QLabel#TrayPopupSectionTitle {{
                 color: #8ea4b8;
-                font-size: 10px;
+                font-size: 12px;
                 font-weight: 700;
             }}
             QLabel#TrayPopupChipValue {{
                 color: #eef4ff;
-                font-size: 12px;
+                font-size: 14px;
                 font-weight: 600;
+            }}
+            QLabel#TrayPopupFootnote {{
+                color: #7d8ba1;
+                font-size: 11px;
+                padding-top: 6px;
             }}
             QLabel#TrayPopupWarningText {{
                 color: #fce8e8;
-                font-size: 11px;
+                font-size: 13px;
             }}
             QLabel#TrayPopupFeedback {{
                 color: {palette["accent"]};
-                font-size: 11px;
+                font-size: 13px;
                 font-weight: 700;
-            }}
-            QLabel#TrayPopupLegal {{
-                color: #7d8ba1;
-                font-size: 10px;
             }}
             QPushButton#TrayPopupPrimaryButton {{
                 background-color: {palette["accent"]};
                 border: none;
                 border-radius: 12px;
                 color: #06111d;
-                font-size: 12px;
+                font-size: 14px;
                 font-weight: 700;
-                min-height: 38px;
-                padding: 0 14px;
+                min-height: 42px;
+                padding: 0 16px;
             }}
             QPushButton#TrayPopupPrimaryButton:disabled {{
                 background-color: rgba(84, 112, 146, 0.3);
@@ -807,10 +811,10 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
                 border: 1px solid rgba(84, 112, 146, 0.24);
                 border-radius: 12px;
                 color: #dce7f7;
-                font-size: 11px;
+                font-size: 13px;
                 font-weight: 600;
-                min-height: 34px;
-                padding: 0 12px;
+                min-height: 38px;
+                padding: 0 14px;
             }}
             QPushButton#TrayPopupButton:hover {{
                 border-color: {palette["accent_border"]};
@@ -818,27 +822,27 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
             }}
             """
         )
-
-        self._status_badge.setText(str(current_view.get("connection_status") or "Checking"))
         self._title_label.setText(str(current_view.get("device_name") or "Borealis Agent"))
-        self._subtitle_label.setText(
-            f"{current_view.get('connected_host') or 'Not configured'} • Last Heartbeat: {current_view.get('last_check_in') or 'Never'}"
-        )
-        self._connection_value.setText(str(current_view.get("connection_status") or "Checking"))
+        site_name = str(current_view.get("site_name") or "").strip()
+        self._subtitle_label.setText(site_name)
+        self._subtitle_label.setVisible(bool(site_name))
         self._activity_value.setText(str(current_view.get("activity_status") or "Idle"))
         self._release_value.setText(str(current_view.get("release_channel_label") or "Unknown"))
-        self._session_value.setText(str(current_view.get("helper_session_status") or "Unavailable"))
 
         security_status = str(current_view.get("security_status") or "Checking connection")
         if security_status == "Secure connection":
+            security_text = "Secure (TLS + Ed25519)"
             security_code = "healthy"
         elif security_status in {"Checking connection"}:
+            security_text = "Checking trust"
             security_code = "neutral"
         elif security_status in {"Certificate trust issue", "Sign-in problem"}:
+            security_text = security_status
             security_code = "error"
         else:
+            security_text = security_status
             security_code = "warning"
-        self._set_check_status(self._check_values["Engine Trust"], security_status, security_code)
+        self._set_check_status(self._check_values["Engine Trust"], security_text, security_code)
 
         socket_connected = bool(current_view.get("system_socket_connected"))
         if socket_connected:
@@ -850,16 +854,32 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
         else:
             websocket_text = "Disconnected"
             websocket_code = "warning"
-        self._set_check_status(self._check_values["WebSocket"], websocket_text, websocket_code)
         self._set_check_status(
-            self._check_values["WireGuard"],
+            self._check_values["Engine <--> Agent WebSocket"],
+            websocket_text,
+            websocket_code,
+        )
+        self._set_check_status(
+            self._check_values["WireGuard VPN Tunnel"],
             str(current_view.get("wireguard_status") or "Unavailable"),
             str(current_view.get("wireguard_status_code") or "warning"),
         )
         self._set_check_status(
-            self._check_values["Helper Session"],
+            self._check_values["Interactive User Session"],
             str(current_view.get("helper_session_status") or "Unavailable"),
             str(current_view.get("helper_session_status_code") or "warning"),
+        )
+        heartbeat_value = str(current_view.get("last_heartbeat_value") or "Never")
+        heartbeat_code = "healthy" if int(current_view.get("last_check_in_at") or 0) > 0 else (
+            "neutral" if str(current_view.get("overall_status") or "").strip().lower() in {"starting up", "restarting"} else "warning"
+        )
+        self._set_check_status(
+            self._check_values["Last Heartbeat"],
+            heartbeat_value,
+            heartbeat_code,
+        )
+        self._engine_url_label.setText(
+            f"Engine URL: {str(current_view.get('connected_host') or 'Not configured')}"
         )
 
         warnings = _warning_lines(current_view)
@@ -879,7 +899,7 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
             tray_icon = getattr(self._role, "_base_tray_icon", None)
         if tray_icon is not None:
             try:
-                pixmap = tray_icon.pixmap(52, 52)
+                pixmap = tray_icon.pixmap(76, 76)
                 if not pixmap.isNull():
                     self._icon_label.setPixmap(pixmap)
                     return
@@ -1246,6 +1266,9 @@ class Role:
         self.tray.setToolTip(str(view.get("tooltip") or "Borealis Agent"))
         if self._tray_popup is not None and self._tray_popup.isVisible():
             self._tray_popup.apply_view(view)
+            self._tray_popup.adjustSize()
+            self._tray_popup.resize(self._tray_popup.sizeHint())
+            self._tray_popup._sync_window_mask()
             self._position_tray_popup()
 
     def _apply_tray_icon(self, view: Dict[str, Any]) -> None:
@@ -1294,6 +1317,25 @@ class Role:
 
     def _build_status_details_text(self, view: Dict[str, Any]) -> str:
         lines = [str(view.get("support_text") or "").strip()]
+        security_status = str(view.get("security_status") or "Checking connection")
+        if security_status == "Secure connection":
+            security_text = "Secure (TLS + Ed25519)"
+        elif security_status == "Checking connection":
+            security_text = "Checking trust"
+        else:
+            security_text = security_status
+        socket_connected = bool(view.get("system_socket_connected"))
+        if socket_connected:
+            websocket_text = "Connected"
+        elif str(view.get("overall_status") or "").strip().lower() in {"starting up", "restarting"}:
+            websocket_text = "Connecting"
+        else:
+            websocket_text = "Disconnected"
+        lines.append("")
+        lines.append(f"Engine Trust: {security_text}")
+        lines.append(f"Engine <--> Agent WebSocket: {websocket_text}")
+        lines.append(f"WireGuard VPN Tunnel: {str(view.get('wireguard_status') or 'Unavailable')}")
+        lines.append(f"Interactive User Session: {str(view.get('helper_session_status') or 'Unavailable')}")
         wireguard_detail = str(view.get("wireguard_detail") or "").strip()
         if wireguard_detail:
             lines.append("")
@@ -1312,7 +1354,7 @@ class Role:
         clipboard = app.clipboard()
         if clipboard is None:
             return
-        clipboard.setText(str(view.get("support_text") or ""))
+        clipboard.setText(self._build_status_details_text(view))
 
     def _open_logs_folder(self, view: Dict[str, Any]) -> None:
         logs_dir = str(view.get("logs_dir") or "").strip()
@@ -1374,6 +1416,7 @@ class Role:
         popup.apply_view(latest_view)
         popup.adjustSize()
         popup.resize(popup.sizeHint())
+        popup._sync_window_mask()
         self._position_tray_popup()
         popup.show()
         raise_window = getattr(popup, "raise_", None) or getattr(popup, "raise", None)

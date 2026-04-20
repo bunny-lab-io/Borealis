@@ -121,7 +121,11 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         repaired_agent_id = str(agent_id or "").strip()
         if not normalized or not repaired_agent_id:
             return
+        normalized_guid = normalize_guid(ctx.guid)
+        guid_lookup = normalized_guid or str(ctx.guid or "").strip()
         conn = db_conn_factory()
+        site_id = None
+        site_name = ""
         try:
             cur = conn.cursor()
             cur.execute(
@@ -246,6 +250,8 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         payload = request.get_json(force=True, silent=True) or {}
         context_label = _context_hint(ctx)
         now_ts = int(time.time())
+        normalized_guid = normalize_guid(ctx.guid)
+        guid_lookup = normalized_guid or str(ctx.guid or "").strip()
 
         updates: Dict[str, Optional[str]] = {"last_seen": now_ts}
 
@@ -409,11 +415,41 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             if rowcount == 0:
                 log("agents", f"heartbeat missing device record guid={ctx.guid}", context_label, level="ERROR")
                 return jsonify({"error": "device_not_registered"}), 404
+            if guid_lookup:
+                try:
+                    cur.execute(
+                        """
+                        SELECT ds.site_id, s.name
+                          FROM devices AS d
+                     LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
+                     LEFT JOIN sites AS s ON s.id = ds.site_id
+                         WHERE UPPER(d.guid) = UPPER(?)
+                         LIMIT 1
+                        """,
+                        (guid_lookup,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        try:
+                            site_id = int(row[0]) if row[0] is not None else None
+                        except Exception:
+                            site_id = None
+                        site_name = str(row[1] or "").strip()
+                except Exception:
+                    site_id = None
+                    site_name = ""
             conn.commit()
         finally:
             conn.close()
 
-        return jsonify({"status": "ok", "poll_after_ms": 15000})
+        return jsonify(
+            {
+                "status": "ok",
+                "poll_after_ms": 15000,
+                "site_id": site_id,
+                "site_name": site_name,
+            }
+        )
 
     @blueprint.route("/api/agent/script/request", methods=["POST"])
     @require_device_auth(auth_manager)

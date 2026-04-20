@@ -37,6 +37,7 @@ def _snapshot(
     error_message: str = "",
     socket_connected: bool = True,
     verify_enabled: bool = True,
+    site_name: str = "",
 ) -> dict:
     snapshot = tray_state.build_default_snapshot(
         service_mode,
@@ -53,6 +54,7 @@ def _snapshot(
     snapshot["last_error_message"] = error_message
     snapshot["socket_connected"] = socket_connected
     snapshot["verify_enabled"] = verify_enabled
+    snapshot["site_name"] = site_name
     snapshot["updated_at"] = now
     return snapshot
 
@@ -101,7 +103,7 @@ def test_request_restart_and_consume_request(tmp_path: Path) -> None:
 
 def test_build_tray_view_connected_state(tmp_path: Path) -> None:
     start = _setup_start_path(tmp_path)
-    current = _snapshot("currentuser", now=200, started_at=60, auth_at=180, heartbeat_at=190)
+    current = _snapshot("currentuser", now=200, started_at=60, auth_at=180, heartbeat_at=190, site_name="Bunny Lab HQ")
     system = _snapshot(
         "system",
         now=200,
@@ -128,8 +130,10 @@ def test_build_tray_view_connected_state(tmp_path: Path) -> None:
     assert view["connection_status"] == "Healthy"
     assert view["security_status"] == "Secure connection"
     assert view["activity_status"] == "Idle"
-    assert view["wireguard_status"] == "Ready"
-    assert view["helper_session_status"] == "Loaded Successfully"
+    assert view["site_name"] == "Bunny Lab HQ"
+    assert view["wireguard_status"] == "Connected"
+    assert view["helper_session_status"] == "Running"
+    assert view["last_heartbeat_value"] == "29s"
     assert view["release_channel_label"] == "Unknown"
     assert view["tooltip"] == "Borealis Agent"
     assert labels == [
@@ -169,6 +173,7 @@ def test_build_tray_view_starting_state_uses_busy_activity(tmp_path: Path) -> No
     assert view["security_status"] == "Checking connection"
     assert view["activity_status"] == "Remote shell active"
     assert view["wireguard_status"] == "Starting"
+    assert view["last_heartbeat_value"] == "Never"
     assert view["icon_tone"] == "neutral"
 
 
@@ -382,6 +387,7 @@ def test_support_detail_order_is_fixed(tmp_path: Path) -> None:
 
     assert labels == [
         "Device",
+        "Site",
         "Status",
         "Connection",
         "Security",
