@@ -34,4 +34,3 @@ Borealis now routes both SYSTEM and current-user agent work through a single Eng
 - Swapped the popup’s top-level shell from a `QFrame` to a plain `QWidget` while explicitly disabling system background painting on the shell, which should eliminate the last stray rounded outline artifact without changing the inner panel styling or behavior.
 - Matched the popup shell mask radius to the dialog body radius and made the engine host under the hostname quietly clickable as `Engine: <FQDN>`, while re-centering the hostname plus engine line against the bunny logo so the header feels visually balanced.
 - Increased the outer shell mask radius beyond the inner panel radius so the remaining shell outline follows a softer curve and better matches the dialog body instead of looking tighter at the corners.
-- Increased the outer shell mask radius again to make the remaining top-level outline noticeably rounder without changing the inner dialog body or card styling.
