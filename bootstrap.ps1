@@ -682,6 +682,7 @@ $rawArgs = @($args)
 for ($i = 0; $i -lt $rawArgs.Count; $i++) {
     $token = [string]$rawArgs[$i]
     $normalized = $token.ToLowerInvariant()
+    $handledBootstrapOption = $false
 
     switch -Regex ($normalized) {
         '^(-h|--help|-help|/\?)$' {
@@ -692,44 +693,51 @@ for ($i = 0; $i -lt $rawArgs.Count; $i++) {
             $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--install-dir'
             $installDir = $result.Value
             $i = $result.NextIndex
-            continue
+            $handledBootstrapOption = $true
+            break
         }
         '^(--repo-url|-repo-url|-repourl)(=.*)?$' {
             $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--repo-url'
             $repoUrl = $result.Value
             $i = $result.NextIndex
-            continue
+            $handledBootstrapOption = $true
+            break
         }
         '^(--release-channel|--release_channel|-release-channel|-releasechannel)(=.*)?$' {
             $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--release-channel'
             $releaseChannel = $result.Value
             $i = $result.NextIndex
-            continue
+            $handledBootstrapOption = $true
+            break
         }
         '^(--ref|--branch|--repo-branch|--repo_branch|-ref|-branch|-repo-branch|-repobranch)(=.*)?$' {
             $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--ref'
             $repoRef = $result.Value
             $repoRefExplicit = $true
             $i = $result.NextIndex
-            continue
+            $handledBootstrapOption = $true
+            break
         }
         '^(--git-zip-url|-git-zip-url|-gitzipurl)(=.*)?$' {
             $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--git-zip-url'
             $gitZipUrl = $result.Value
             $i = $result.NextIndex
-            continue
+            $handledBootstrapOption = $true
+            break
         }
         '^(--git-zip-path|-git-zip-path|-gitzippath)(=.*)?$' {
             $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--git-zip-path'
             $gitZipPath = $result.Value
             $i = $result.NextIndex
-            continue
+            $handledBootstrapOption = $true
+            break
         }
         '^(--git-dir|-git-dir|-gitdir)(=.*)?$' {
             $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--git-dir'
             $gitCacheDir = $result.Value
             $i = $result.NextIndex
-            continue
+            $handledBootstrapOption = $true
+            break
         }
         '^(--zip-url|-zip-url|-zipurl)(=.*)?$' {
             throw 'ZIP-based repository bootstrap is no longer supported. Use --repo-url/--ref.'
@@ -737,6 +745,10 @@ for ($i = 0; $i -lt $rawArgs.Count; $i++) {
         '^(--zip-path|-zip-path|-zippath)(=.*)?$' {
             throw 'ZIP-based repository bootstrap is no longer supported. Use --repo-url/--ref.'
         }
+    }
+
+    if ($handledBootstrapOption) {
+        continue
     }
 
     $normalizedResult = Normalize-BorealisArgument -Token $token -Index $i -SourceArgs $rawArgs
