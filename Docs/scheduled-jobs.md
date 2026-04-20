@@ -6,7 +6,7 @@ Explain how Borealis schedules recurring jobs, targets devices, and records run 
 
 ## Scheduler Overview
 - Scheduler implementation lives in `Data/Engine/services/API/scheduled_jobs/job_scheduler.py`.
-- It reads job definitions from PostgreSQL and emits quick job payloads over Socket.IO.
+- It reads job definitions from PostgreSQL and emits quick job payloads over the host's SYSTEM socket.
 - Run history is stored in `scheduled_job_runs`, `scheduled_job_run_targets`, and `scheduled_job_run_activity` tables.
 
 ## Schedule Types
@@ -36,7 +36,7 @@ Supported schedule types (from the scheduler core):
 1) Scheduler tick loads enabled jobs.
 2) Each due occurrence resolves its targets once and creates `scheduled_job_runs` plus `scheduled_job_run_targets` rows.
 3) Pending targets dispatch when their host is online.
-4) Device-local script runs emit quick job payloads with `scheduled_job_id` context.
+4) Device-local script runs emit quick job payloads with `scheduled_job_id`, `target_context`, and helper-routing metadata when the job targets current-user execution.
 5) Engine-side Ansible jobs using `local`, `ssh`, or `winrm` create one shared run row per playbook component, synthesize an ephemeral inventory, and execute directly on the Linux Engine.
 6) Engine-side Ansible jobs using `ssh_individual` or `winrm_individual` create one `scheduled_job_runs` row per target host per playbook component, synthesize a one-host inventory for each row, and execute those rows with bounded concurrency on the Linux Engine.
 7) Remote Ansible runs map Borealis inventory aliases to active WireGuard peer IPs and exclude devices that are not currently eligible.
@@ -53,7 +53,7 @@ Supported schedule types (from the scheduler core):
 
 ## Execution Contexts
 - `system` - runs on the agent as SYSTEM.
-- `current_user` - runs on the agent in the logged-in user context.
+- `current_user` - runs through the host's SYSTEM socket and is forwarded by the agent broker into helper processes for active or locked user sessions.
 - `ssh` - runs on the Linux Engine, synthesizes one shared inventory, and targets SSH devices over the managed WireGuard network as one grouped playbook run.
 - `ssh_individual` - runs on the Linux Engine, synthesizes one-host inventories, and targets SSH devices individually with bounded concurrency.
 - `winrm` - runs on the Linux Engine, synthesizes one shared inventory, and targets WinRM devices over the managed WireGuard network as one grouped playbook run.
@@ -65,6 +65,8 @@ Supported schedule types (from the scheduler core):
   - workflow assemblies ignore scheduler-level execution context entirely
 - The editor and API both reject jobs that mix script assemblies with Ansible playbook assemblies. Use separate jobs instead of mixing execution domains in one scheduled occurrence.
 - `local` remains an internal Engine-side Ansible context for legacy/internal flows such as watchdog Ansible remediations, but it is no longer exposed in the scheduled-job editor.
+- Scheduled current-user jobs default to `session_target = all_active_sessions`; scheduled jobs do not pin themselves to a raw Windows `session_id`.
+- If no eligible interactive session exists for a current-user run, Borealis records the dispatch failure instead of silently falling back to SYSTEM.
 - For shared Ansible runs, the selected execution context is the transport source of truth. Borealis uses `ssh` or `winrm` based on that operator choice and gates targets on WireGuard reachability plus credential/service-account readiness, not on the device row's stored `connection_type`.
 - For individual Ansible runs, Borealis persists one run row per target host per playbook component so each device gets its own stdout/stderr, timeout, and terminal status instead of inheriting one shared batch result.
 - Server Info exposes the live scheduled-Ansible runner budget through `GET/PUT /api/server/ansible-runner-settings`, and the scheduler applies those limits whenever it dispatches Engine-side scheduled Ansible runners.
@@ -119,7 +121,12 @@ Supported schedule types (from the scheduler core):
   - `scheduled_job_id`
   - `scheduled_job_run_id`
   - `scheduled_ts`
+- Agent-side script payloads also carry:
+  - `target_context` (`system` or `currentuser`)
+  - `session_target` (`all_active_sessions` for scheduled current-user jobs)
+  - `target_session_id` only when a specific session is explicitly chosen by an ad hoc caller
 - `quick_job_result` updates `scheduled_job_runs` and `activity_history`.
+- The scheduler does not speak to helpers directly; it targets the host's SYSTEM socket and lets the agent broker fan current-user runs out to helper-ready sessions.
 - `execution_context = local` is Engine-side only and runs the playbook directly on the Linux Engine against the localhost-style Engine target.
 - `execution_context = ssh` and `execution_context = winrm` run from the Linux Engine, synthesize shared per-run inventories, and target remote devices over the managed WireGuard network.
 - `execution_context = ssh_individual` and `execution_context = winrm_individual` run from the Linux Engine, synthesize one-host inventories, and dispatch one run row per target host per playbook component with bounded concurrency.
@@ -145,6 +152,7 @@ Supported schedule types (from the scheduler core):
 ### UI touch points
 - Scheduled job UI lives under `Data/Engine/web-interface/src/Scheduling/`.
 - The list page expects pagination and run history endpoints to respond quickly.
+- Session-target selection is currently an ad hoc quick-run concept; scheduled current-user jobs intentionally default to all active sessions until a dedicated scheduler UI is introduced.
 - WebUI deep links:
 - Create route: `/jobs/new`
 - Edit route: `/jobs/<job_id>`

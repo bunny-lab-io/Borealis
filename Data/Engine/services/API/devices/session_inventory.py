@@ -124,6 +124,10 @@ def _normalize_session_entry(item: Any) -> Dict[str, Any] | None:
         "state": STATE_LABELS.get(state_code, "Unknown"),
         "protocol": protocol,
         "is_rdp": is_rdp,
+        "eligible_for_interactive": _coerce_bool(item.get("eligible_for_interactive"), state_code in {"active", "locked"}),
+        "helper_ready": _coerce_bool(item.get("helper_ready"), False),
+        "helper_pid": _coerce_int(item.get("helper_pid"), 0),
+        "helper_last_seen_at": _coerce_int(item.get("helper_last_seen_at"), 0),
     }
 
 

@@ -6,21 +6,21 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 
 ## Runtime Summary
 - Main entry: `Data/Agent/agent.py` (Python agent service).
-- Service modes: SYSTEM and CURRENTUSER (controlled by `--system-service` or environment).
+- Service modes: SYSTEM plus a local helper mode launched into user sessions by the SYSTEM broker.
 - Role system: `Data/Agent/role_manager.py` auto-loads `Data/Agent/Roles/role_*.py`.
-- Networking: REST to Engine APIs + Socket.IO for realtime job dispatch and VPN orchestration.
+- Session broker: `Data/Agent/session_runtime.py` launches and tracks per-session helpers, local IPC, and helper readiness.
+- Networking: the SYSTEM runtime owns REST to Engine APIs plus the single Socket.IO connection; helpers use local IPC only.
 - Security: Ed25519 identity keys, public CA + hostname validation for the Engine FQDN, signed script payloads, encrypted token storage.
 
 ## Role Catalog (Current)
 - `role_DeviceAudit.py` (ROLE_NAME: `device_audit`) - inventory and audit data capture.
-- `role_Macro.py` (ROLE_NAME: `macro`) - macro automation.
 - `role_VNC.py` (ROLE_NAME: `VNC`) - always-on UltraVNC server lifecycle.
 - `role_RemoteShell.py` (ROLE_NAME: `RemoteShell`) - remote shell server over WireGuard (PowerShell on Windows, Bash on Linux).
 - `role_ServiceControl.py` (ROLE_NAME: `service_control`) - system service inventory and start/stop/restart control.
-- `role_Screenshot.py` (ROLE_NAME: `screenshot`) - screenshot capture.
-- `role_ScriptExec_CURRENTUSER.py` (ROLE_NAME: `script_exec_currentuser`) - interactive device-local script execution (PowerShell, Batch, Bash when available).
+- `role_ScriptExec_CURRENTUSER.py` (ROLE_NAME: `script_exec_currentuser`) - interactive device-local script execution inside the per-session helper (PowerShell, Batch, Bash when available).
 - `role_ScriptExec_SYSTEM.py` (ROLE_NAME: `script_exec_system`) - SYSTEM device-local script execution (PowerShell, Batch, Bash when available).
 - `role_WireGuardTunnel.py` (ROLE_NAME: `WireGuardTunnel`) - WireGuard client lifecycle.
+- `role_Macro.py` and `role_Screenshot.py` still exist as legacy interactive-only roles, but the supported one-socket Windows helper path does not load them.
 
 ## Agent Settings and Storage
 - Settings root: `Agent/Borealis/Settings/` (runtime).
@@ -49,14 +49,16 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 
 ### Service modes and context
 - SYSTEM mode is used for elevated tasks (scheduled tasks, VPN, system scripts).
-- CURRENTUSER mode handles interactive tasks and UI-scoped execution.
-- The agent includes `X-Borealis-Agent-Context` in headers to label context.
+- The SYSTEM runtime is the only Borealis process that authenticates to the Engine, enrolls, refreshes tokens, or opens a Socket.IO connection.
+- Interactive user work now runs in helper mode, launched by the SYSTEM broker into active or locked user sessions and reached over local IPC.
+- Direct Session 0 UI is not supported; Borealis keeps the Engine-facing socket in SYSTEM and bridges into desktop sessions when current-user interaction is required.
+- The agent still labels Engine traffic with `X-Borealis-Agent-Context`, but the supported Windows service path no longer relies on a standalone CURRENTUSER Engine identity.
 
 ### Role discovery and extension
 - Roles are discovered dynamically from `Data/Agent/Roles/`.
 - Each role must define:
   - `ROLE_NAME` (string)
-  - `ROLE_CONTEXTS` (list: `['system']`, `['interactive']`, or both)
+  - `ROLE_CONTEXTS` (list: `['system']`, `['interactive']`, `['helper']`, or combinations as needed)
   - `Role` class with optional `register_events`, `on_config`, and `stop_all`.
 - To add a role:
   1) Create `Data/Agent/Roles/role_<Name>.py`.
@@ -66,10 +68,13 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 ### Networking and authentication
 - All REST calls flow through `AgentHttpClient` in `Data/Agent/agent.py`.
 - `AgentHttpClient.ensure_authenticated()` handles enrollment and refresh.
-- Socket.IO is used for:
-  - `quick_job_run` dispatch (script execution payloads).
+- Socket.IO is used by the SYSTEM runtime for:
+  - `quick_job_run` dispatch (system jobs plus helper-backed current-user jobs).
   - `vpn_tunnel_start` (WireGuard lifecycle; tunnels are persistent and ignore stop events).
   - `connect_agent` registration (agent socket registry).
+- The SYSTEM socket advertises `helper_contexts=["currentuser"]` when the session broker is running so the Engine can route logical current-user work through the same socket.
+- Helper processes never enroll, never refresh tokens, never open Socket.IO, and never talk to the Engine directly.
+- SYSTEM-to-helper communication uses per-session local IPC keyed by Windows `session_id`; the helper trusts `broker_verified` payloads from the local broker and still validates signed payloads if used outside that path.
 - WireGuard tunnels are ensured via `POST /api/agent/vpn/ensure` on boot and refreshed periodically.
 - The ensure loop re-establishes the tunnel automatically after network hiccups.
 - Heartbeats/details also carry per-role health snapshots so the Device Details `Agent Roles Health` section can show current role/service status with last-checked timestamps.
@@ -92,6 +97,8 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - If enrollment fails, check:
   - `Agent/Logs/agent.log` for enrollment errors.
   - `Engine/Logs/engine.log` for approval or auth failures.
+- If current-user execution fails, confirm the SYSTEM broker is advertising helper capability, inspect session inventory for `helper_ready`, and expect `no_interactive_user_session` when no eligible user session exists.
+- If a helper never appears after logon/unlock, inspect the broker reconcile loop in `Data/Agent/session_runtime.py` and confirm the legacy `Borealis Agent (UserHelper)` task has been removed rather than still competing with the broker-launched helper.
 - The updater helper (`Data/Agent/update_helper.py`) requires a configured public HTTPS FQDN and uses normal CA + hostname validation only.
 - Operator-requested manual updates arrive over the SYSTEM Socket.IO channel as `agent_update_request` and start the local AutoUpdater task/service immediately so the same scheduler-owned update path is used for both manual and hourly runs.
 - Engine-managed release channels still decide what build the agent should adopt, but the agent now discovers and applies those targets during its scheduled updater cadence instead of reacting to live Engine push events.
@@ -112,7 +119,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 
 #### Scope and runtime paths
 - Purpose: outbound-only connectivity, device telemetry, scripting, UI helpers.
-- Bootstrap: `Borealis.ps1` preps dependencies, activates the agent venv, and configures scheduled tasks/services for the Windows agent runtime.
+- Bootstrap: `Borealis.ps1` preps dependencies, activates the agent venv, keeps only the SYSTEM startup task, and removes the legacy `Borealis Agent (UserHelper)` scheduled task on install/update.
 - Edit in `Data/Agent`, not `/Agent`; runtime copies are ephemeral and wiped regularly.
 
 #### Logging
@@ -128,6 +135,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - REST and Socket.IO traffic use the public Engine FQDN with normal CA + hostname validation.
 - Validates script payloads with backend-issued Ed25519 signatures before execution.
 - Outbound-only; API/WebSocket calls flow through `AgentHttpClient.ensure_authenticated` for proactive refresh. Logs bootstrap, enrollment, token refresh, and signature events in `Agent/Logs/`.
+- Helper processes inherit no Borealis token state and rely on the local SYSTEM broker for job delivery.
 
 #### Reverse VPN tunnels
 - WireGuard reverse VPN design and lifecycle are documented in `vpn-and-remote-access.md`.
@@ -139,7 +147,8 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 #### Execution contexts and roles
 - Auto-discovers roles from `Data/Agent/Roles/`; no loader changes needed.
 - Naming: `role_<Purpose>.py` with `ROLE_NAME`, `ROLE_CONTEXTS`, and optional hooks (`register_events`, `on_config`, `stop_all`).
-- Standard roles: `role_DeviceAudit.py`, `role_ServiceControl.py`, `role_Screenshot.py`, `role_ScriptExec_CURRENTUSER.py`, `role_ScriptExec_SYSTEM.py`, `role_Macro.py`, `role_RemoteShell.py`, `role_VNC.py`, `role_WireGuardTunnel.py`.
+- Standard supported one-socket roles: `role_DeviceAudit.py`, `role_ServiceControl.py`, `role_ScriptExec_CURRENTUSER.py`, `role_ScriptExec_SYSTEM.py`, `role_RemoteShell.py`, `role_VNC.py`, `role_WireGuardTunnel.py`.
+- `role_Macro.py` and `role_Screenshot.py` remain legacy interactive-only implementations and are not part of the supported helper-backed Windows runtime path.
 - SYSTEM tasks depend on scheduled-task creation rights; failures should surface through Engine logging.
 
 #### Platform parity

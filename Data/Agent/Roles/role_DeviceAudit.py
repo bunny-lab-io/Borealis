@@ -24,6 +24,7 @@ except Exception:
 
 ROLE_NAME = 'device_audit'
 ROLE_CONTEXTS = ['system']
+SESSION_INVENTORY_ENRICHER = None
 
 
 IS_WINDOWS = os.name == 'nt'
@@ -1666,7 +1667,7 @@ $rows | ConvertTo-Json -Compress
         for item in sessions:
             key = f"{int(item.get('session_id') or 0)}:{str(item.get('username') or '').lower()}:{str(item.get('session_name') or '').lower()}"
             deduped[key] = item
-        return {
+        payload = {
             'reported_at': reported_at,
             'sessions': sorted(
                 deduped.values(),
@@ -1677,6 +1678,15 @@ $rows | ConvertTo-Json -Compress
                 ),
             ),
         }
+        enricher = globals().get('SESSION_INVENTORY_ENRICHER')
+        if callable(enricher):
+            try:
+                enriched = enricher(payload)
+                if isinstance(enriched, dict):
+                    return enriched
+            except Exception:
+                pass
+        return payload
     except Exception:
         return {'reported_at': reported_at, 'sessions': []}
 
@@ -1852,6 +1862,10 @@ class Role:
     def __init__(self, ctx):
         self.ctx = ctx
         self.role_health_label = "Device Audit"
+        try:
+            globals()['SESSION_INVENTORY_ENRICHER'] = (getattr(ctx, 'hooks', {}) or {}).get('session_inventory_enricher')
+        except Exception:
+            pass
         self._ext_ip = None
         self._ext_ip_ts = 0
         self._refresh_ts = 0

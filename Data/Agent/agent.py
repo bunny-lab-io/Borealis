@@ -38,6 +38,7 @@ import aiohttp
 import socketio
 from security import AgentKeyStore
 from signature_utils import decode_script_bytes as _decode_script_bytes, verify_and_store_script_signature as _verify_and_store_script_signature
+from session_runtime import SessionHelperBroker, SessionHelperClient
 try:
     from update_state import (
         read_installed_build_id as _read_installed_build_id,
@@ -216,14 +217,18 @@ def _log_exception_trace(prefix: str) -> None:
         pass
 
 # Headless/service mode flag (skip Qt and interactive UI)
-SYSTEM_SERVICE_MODE = ('--system-service' in sys.argv) or (os.environ.get('BOREALIS_AGENT_MODE') == 'system')
+SESSION_HELPER_MODE = ('--session-helper' in sys.argv) or (os.environ.get('BOREALIS_AGENT_MODE') == 'helper')
+SYSTEM_SERVICE_MODE = (not SESSION_HELPER_MODE) and (('--system-service' in sys.argv) or (os.environ.get('BOREALIS_AGENT_MODE') == 'system'))
 SERVICE_MODE = 'system' if SYSTEM_SERVICE_MODE else 'currentuser'
+INTERACTIVE_RUNTIME_MODE = SESSION_HELPER_MODE or not SYSTEM_SERVICE_MODE
 SERVICE_MODE_CANONICAL = SERVICE_MODE.upper()
 _AGENT_STARTED_AT = int(time.time())
 _TRAY_STATUS_LOCK = threading.RLock()
 _TRAY_STATUS_STATE: Dict[str, Any] = {}
 _PLANNED_SHUTDOWN_REASON: Optional[str] = None
-_bootstrap_log(f'agent.py loaded; SYSTEM_SERVICE_MODE={SYSTEM_SERVICE_MODE}; argv={sys.argv!r}')
+_bootstrap_log(
+    f'agent.py loaded; SYSTEM_SERVICE_MODE={SYSTEM_SERVICE_MODE}; SESSION_HELPER_MODE={SESSION_HELPER_MODE}; argv={sys.argv!r}'
+)
 def _argv_get(flag: str, default: str = None):
     try:
         if flag in sys.argv:
@@ -234,6 +239,9 @@ def _argv_get(flag: str, default: str = None):
         pass
     return default
 CONFIG_NAME_SUFFIX = _argv_get('--config', None)
+HELPER_SESSION_ID = _argv_get('--helper-session-id', '')
+HELPER_PIPE_ADDRESS = _argv_get('--helper-pipe-address', '')
+HELPER_AUTH_TOKEN = _argv_get('--helper-auth-token', '')
 
 
 def _canonical_config_suffix(raw_suffix: str) -> str:
@@ -499,7 +507,7 @@ def _persist_agent_guid_local_internal(guid: str, *, assume_locked: bool) -> Non
         with _acquire_guid_lock():
             _write()
 
-if not SYSTEM_SERVICE_MODE:
+if INTERACTIVE_RUNTIME_MODE:
     # Reduce noisy Qt output and attempt to avoid Windows OleInitialize warnings
     os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.*=false;*.debug=false")
     from qasync import QEventLoop
@@ -2635,6 +2643,8 @@ AGENT_LOOP = None
 ROLE_MANAGER = None
 ROLE_MANAGER_SYS = None
 ROLE_HEALTH_REGISTRY = RoleHealthRegistry()
+SESSION_HELPER_BROKER = None
+HELPER_CLIENT = None
 
 # ---------------- Local IPC Bridge (Service -> Agent) ----------------
 def start_agent_bridge_pipe(loop_ref):
@@ -2855,6 +2865,32 @@ def _collect_agent_role_health() -> Dict[str, Any]:
     except Exception as exc:
         _log_agent(f'Role health snapshot failed: {exc}', fname='agent.error.log')
     return {"roles": [], "reported_at": int(time.time())}
+
+
+def _emit_quick_job_result_local(payload: Dict[str, Any]) -> None:
+    async def _emit():
+        try:
+            await sio.emit('quick_job_result', payload)
+        except Exception as exc:
+            _log_agent(f'Failed to emit local quick_job_result: {exc}', fname='agent.error.log')
+
+    try:
+        if AGENT_LOOP is not None:
+            asyncio.run_coroutine_threadsafe(_emit(), AGENT_LOOP)
+    except Exception as exc:
+        _log_agent(f'Failed to schedule local quick_job_result emit: {exc}', fname='agent.error.log')
+
+
+async def watch_session_helper_reconcile():
+    await asyncio.sleep(2)
+    while True:
+        try:
+            broker = SESSION_HELPER_BROKER
+            if broker is not None:
+                broker.reconcile_sessions()
+        except Exception as exc:
+            _log_agent(f'Session helper reconcile failed: {exc}', fname='agent.error.log')
+        await asyncio.sleep(10)
 
 
 # ---------------- Heartbeat ----------------
@@ -3278,7 +3314,18 @@ async def connect():
         )
     except Exception:
         pass
-    await sio.emit('connect_agent', {"agent_id": AGENT_ID, "service_mode": SERVICE_MODE})
+    connect_payload = {"agent_id": AGENT_ID, "service_mode": SERVICE_MODE}
+    try:
+        if socket.gethostname():
+            connect_payload["hostname"] = socket.gethostname()
+    except Exception:
+        pass
+    try:
+        if SYSTEM_SERVICE_MODE and SESSION_HELPER_BROKER is not None and SESSION_HELPER_BROKER.supports_currentuser_dispatch():
+            connect_payload["helper_contexts"] = ["currentuser"]
+    except Exception:
+        pass
+    await sio.emit('connect_agent', connect_payload)
     _request_system_wireguard_ensure("socket_connect")
 
     # Send an immediate heartbeat via authenticated REST call.
@@ -3610,7 +3657,7 @@ Get-ScheduledTask -TaskName $task | Out-Null
             pass
 
 # ---------------- Dummy Qt Widget to Prevent Exit ----------------
-if not SYSTEM_SERVICE_MODE:
+if INTERACTIVE_RUNTIME_MODE:
     class PersistentWindow(QtWidgets.QWidget):
         def __init__(self):
             super().__init__()
@@ -3763,32 +3810,35 @@ if __name__=='__main__':
         loop=QEventLoop(app); asyncio.set_event_loop(loop)
     AGENT_LOOP = loop
     try:
-        if not SYSTEM_SERVICE_MODE:
+        if not SYSTEM_SERVICE_MODE and not SESSION_HELPER_MODE:
             start_agent_bridge_pipe(loop)
     except Exception:
         pass
-    if not SYSTEM_SERVICE_MODE:
+    if INTERACTIVE_RUNTIME_MODE:
         dummy_window=PersistentWindow(); dummy_window.show()
     # Initialize roles context for role tasks
     # Initialize role manager and hot-load roles from Roles/
-    client = http_client()
-    try:
-        client.ensure_authenticated()
-    except Exception as exc:
-        _log_agent(f'Authentication bootstrap failed: {exc}', fname='agent.error.log')
-        print(f"[WARN] Authentication bootstrap failed: {exc}")
-        _record_tray_error("auth", _describe_exception(exc), client=client, socket_connected=False)
-    try:
-        build_id = _current_agent_build_id(sync=True)
-        if build_id:
-            _log_agent(f'Agent build id ready: {build_id}')
-    except Exception:
-        pass
+    client = None
+    if not SESSION_HELPER_MODE:
+        client = http_client()
+        try:
+            client.ensure_authenticated()
+        except Exception as exc:
+            _log_agent(f'Authentication bootstrap failed: {exc}', fname='agent.error.log')
+            print(f"[WARN] Authentication bootstrap failed: {exc}")
+            _record_tray_error("auth", _describe_exception(exc), client=client, socket_connected=False)
+        try:
+            build_id = _current_agent_build_id(sync=True)
+            if build_id:
+                _log_agent(f'Agent build id ready: {build_id}')
+        except Exception:
+            pass
+    else:
+        _log_agent('Starting Borealis helper runtime without Engine authentication bootstrap.')
     try:
         base_hooks = {
             'send_service_control': send_service_control,
             'get_server_url': get_server_url,
-            'http_client': http_client,
             'get_agent_id': lambda: AGENT_ID,
             'get_agent_build_id': lambda: _current_agent_build_id(sync=True),
             'log_agent': lambda message, **kwargs: _log_agent(message, **kwargs),
@@ -3796,7 +3846,67 @@ if __name__=='__main__':
             'process_restart_request_now': _process_tray_restart_request_now,
             'sync_tray_status': _sync_tray_status,
         }
-        if not SYSTEM_SERVICE_MODE:
+        if not SESSION_HELPER_MODE:
+            base_hooks['http_client'] = http_client
+        if SYSTEM_SERVICE_MODE:
+            SESSION_HELPER_BROKER = SessionHelperBroker(
+                loop=loop,
+                log=lambda message: _log_agent(message, fname='agent.log'),
+                emit_quick_job_result=_emit_quick_job_result_local,
+                http_client_factory=http_client,
+            )
+            try:
+                ROLE_HEALTH_REGISTRY.register_role(
+                    'script_exec_currentuser',
+                    context='currentuser',
+                    reporter=SESSION_HELPER_BROKER.currentuser_role_health,
+                    role_label='Script Execution - CURRENTUSER',
+                )
+            except Exception as exc:
+                _log_agent(f'Failed to register currentuser helper health reporter: {exc}', fname='agent.error.log')
+            base_hooks['dispatch_currentuser_quick_job'] = SESSION_HELPER_BROKER.dispatch_currentuser_quick_job
+            base_hooks['session_inventory_enricher'] = SESSION_HELPER_BROKER.enrich_session_inventory
+        if SESSION_HELPER_MODE:
+            def _shutdown_helper_runtime() -> None:
+                try:
+                    if QtWidgets is not None:
+                        app_instance = QtWidgets.QApplication.instance()
+                        if app_instance is not None:
+                            app_instance.quit()
+                            return
+                except Exception:
+                    pass
+                try:
+                    if AGENT_LOOP is not None:
+                        AGENT_LOOP.call_soon_threadsafe(AGENT_LOOP.stop)
+                except Exception:
+                    pass
+
+            HELPER_CLIENT = SessionHelperClient(
+                loop=loop,
+                address=str(HELPER_PIPE_ADDRESS or ''),
+                auth_token=str(HELPER_AUTH_TOKEN or ''),
+                session_id=int(HELPER_SESSION_ID or 0),
+                log=lambda message: _log_agent(message, fname='agent.log'),
+                shutdown_callback=_shutdown_helper_runtime,
+            )
+            HELPER_CLIENT.start()
+            hooks_helper = {
+                **base_hooks,
+                'service_mode': 'currentuser',
+                'register_local_helper_handler': HELPER_CLIENT.register_handler,
+            }
+            ROLE_MANAGER = RoleManager(
+                base_dir=os.path.dirname(__file__),
+                context='helper',
+                sio=sio,
+                agent_id=AGENT_ID,
+                config=CONFIG,
+                loop=loop,
+                hooks=hooks_helper,
+            )
+            ROLE_MANAGER.load()
+        elif not SYSTEM_SERVICE_MODE:
             # Load interactive-context roles (tray/UI, current-user execution, screenshot, etc.)
             hooks_interactive = {**base_hooks, 'service_mode': 'currentuser'}
             ROLE_MANAGER = RoleManager(
@@ -3830,13 +3940,15 @@ if __name__=='__main__':
             pass
     _sync_tray_status({}, client=client)
     try:
-        background_tasks.append(loop.create_task(config_watcher()))
-        background_tasks.append(loop.create_task(connect_loop()))
-        background_tasks.append(loop.create_task(idle_task()))
-        # Start periodic heartbeats
-        background_tasks.append(loop.create_task(send_heartbeat()))
-        background_tasks.append(loop.create_task(watch_tray_restart_requests()))
-        background_tasks.append(loop.create_task(poll_script_requests()))
+        if not SESSION_HELPER_MODE:
+            background_tasks.append(loop.create_task(config_watcher()))
+            background_tasks.append(loop.create_task(connect_loop()))
+            background_tasks.append(loop.create_task(idle_task()))
+            background_tasks.append(loop.create_task(send_heartbeat()))
+            background_tasks.append(loop.create_task(watch_tray_restart_requests()))
+            background_tasks.append(loop.create_task(poll_script_requests()))
+        if SYSTEM_SERVICE_MODE and SESSION_HELPER_BROKER is not None:
+            background_tasks.append(loop.create_task(watch_session_helper_reconcile()))
         # Inventory upload is handled by the DeviceAudit role running in SYSTEM context.
         # Do not schedule the legacy agent-level details poster to avoid duplicates.
         
@@ -3850,6 +3962,16 @@ if __name__=='__main__':
         print(f"[FATAL] Event loop crashed: {e}")
         traceback.print_exc()
     finally:
+        try:
+            if HELPER_CLIENT is not None:
+                HELPER_CLIENT.stop()
+        except Exception:
+            pass
+        try:
+            if SESSION_HELPER_BROKER is not None:
+                SESSION_HELPER_BROKER.stop()
+        except Exception:
+            pass
         try:
             if _PLANNED_SHUTDOWN_REASON == "tray_restart":
                 _bootstrap_log('Agent restarting per tray request.')

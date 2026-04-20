@@ -109,6 +109,13 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _normalize_host_key(value: Any) -> str:
+    try:
+        return str(value or "").strip().lower()
+    except Exception:
+        return ""
+
+
 def _normalize_service_mode(value: Any, agent_id: Optional[str] = None) -> str:
     try:
         text = str(value or "").strip().lower()
@@ -1034,12 +1041,43 @@ class DeviceManagementService:
                 only_agents=True,
                 allowed_site_ids=self.site_access.site_ids_for_user(self._current_user()),
             )
+            registry = getattr(getattr(self.adapters, "context", None), "agent_socket_registry", None)
+            registry_snapshot: Dict[str, Dict[str, Any]] = {}
+            if registry is not None and callable(getattr(registry, "snapshot", None)):
+                try:
+                    registry_snapshot = registry.snapshot() or {}
+                except Exception:
+                    self.logger.debug("Failed to snapshot agent socket registry", exc_info=True)
+                    registry_snapshot = {}
+            helper_contexts_by_host: Dict[str, Tuple[str, ...]] = {}
+            system_socket_by_host: Dict[str, Dict[str, Any]] = {}
+            for socket_record in registry_snapshot.values():
+                host_key = _normalize_host_key(socket_record.get("hostname"))
+                mode_key = _normalize_service_mode(
+                    socket_record.get("service_mode"),
+                    socket_record.get("agent_id"),
+                )
+                if host_key and mode_key == "system":
+                    system_socket_by_host[host_key] = dict(socket_record)
+                    helper_contexts_by_host[host_key] = tuple(
+                        str(item or "").strip().lower()
+                        for item in (socket_record.get("helper_contexts") or [])
+                        if str(item or "").strip()
+                    )
             grouped: Dict[str, Dict[str, Dict[str, Any]]] = {}
             now = time.time()
             for record in devices:
                 hostname = (record.get("hostname") or "").strip() or "unknown"
+                host_key = _normalize_host_key(hostname)
                 agent_id = (record.get("agent_id") or "").strip()
                 mode = _normalize_service_mode(record.get("service_mode"), agent_id)
+                helper_contexts = list(helper_contexts_by_host.get(host_key, ()))
+                if mode == "currentuser" and "currentuser" in helper_contexts:
+                    mode = "system"
+                    socket_record = system_socket_by_host.get(host_key) or {}
+                    socket_agent_id = str(socket_record.get("agent_id") or "").strip()
+                    if socket_agent_id:
+                        agent_id = socket_agent_id
                 if mode != "currentuser":
                     lowered = agent_id.lower()
                     if lowered.endswith("-script"):
@@ -1080,6 +1118,7 @@ class DeviceManagementService:
                     "site_id": record.get("site_id"),
                     "site_name": record.get("site_name") or "",
                     "site_description": record.get("site_description") or "",
+                    "helper_contexts": helper_contexts,
                 }
                 bucket = grouped.setdefault(hostname, {})
                 existing = bucket.get(mode)

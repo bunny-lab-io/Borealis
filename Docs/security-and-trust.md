@@ -14,6 +14,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Operator sign-in methods: Borealis supports password plus TOTP MFA, and WebAuthn passkeys for direct browser sign-in once the Engine reaches the `login_required` bootstrap phase.
 - Operator auth secrets at rest: Aegis now protects stored password hashes, TOTP secrets, passkey cryptographic material, reusable credentials, and the GitHub API token.
 - Code signing: scripts are signed by the Engine; agents reject payloads with invalid signatures.
+- On supported Windows deployments, only the SYSTEM Borealis runtime authenticates to the Engine; per-session helpers are local-only and inherit no Borealis token or socket identity.
 
 ## Security Breakdown (Full)
 ### Overall
@@ -21,7 +22,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Public HTTPS terminates at the Borealis-managed Traefik edge on the engine host. Let's Encrypt owns the browser/agent trust chain, while the Python Engine stays on loopback HTTP behind Traefik.
 - Operators no longer need to download or install a Borealis private root CA for normal browser access.
 - Device enrollment is gated by enrollment and installer codes (configurable expiration and usage limits) and an operator approval queue; replay-resistant nonces plus rate limits (40 req/min/IP, 12 req/min/fingerprint) prevent brute force or code reuse.
-- All device APIs require Authorization: Bearer headers and a service-context marker (SYSTEM or CURRENTUSER); missing, expired, mismatched, or revoked credentials are rejected before any business logic runs. Operator-driven revoking and device quarantining are not yet implemented.
+- Supported Windows agent traffic is owned by the SYSTEM runtime; per-session helpers never call device APIs or open their own Engine socket. Missing, expired, mismatched, or revoked credentials are rejected before any business logic runs. Operator-driven revoking and device quarantining are not yet implemented.
 - Replay and credential theft defenses layer in DPoP proof validation (thumbprint binding) on the server side and short-lived access tokens (about 15 minutes) with 90-day refresh tokens hashed via SHA-256.
 - Centralized logging under `Engine/Logs` and `Agent/Logs` captures enrollment approvals, rate-limit hits, signature failures, and auth anomalies for post-incident review.
 - Operator-facing API endpoints (device inventory, assemblies, job history, credentials, user management, etc.) require the Engine to be Aegis-unlocked and in the `login_required` bootstrap phase before an authenticated operator session or bearer token is honored.
@@ -49,6 +50,8 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Treats every script payload as hostile until verified: only Ed25519 signatures from the server are accepted, missing or invalid signatures are logged and dropped, and the trusted signing key is updated only after successful verification between the agent and the server.
 - Operates outbound-only; there are no listener ports, and every API/WebSocket call flows through `AgentHttpClient.ensure_authenticated`, forcing token refresh logic before retrying.
 - Logs bootstrap, enrollment, token refresh, and signature events to daily-rotated files under `Agent/Logs`, giving operators visibility without leaking secrets outside the project root.
+- The SYSTEM broker can launch per-session helpers for current-user execution, but those helpers do not enroll, do not store tokens, and talk only to the local SYSTEM broker over local IPC.
+- Borealis treats direct Session 0 interaction as unsupported; helper launch into `winsta0\\default` is the supported path for user-visible interaction.
 
 ### WireGuard Agent to Engine Tunnels
 - Borealis started with a bespoke reverse tunnel stack (WebSocket framing + domain lanes); its handshake and security model did not scale, so the project moved to WireGuard as the Engine <-> Agent data pipeline for secure remote protocols and future remote desktop control.
@@ -92,60 +95,44 @@ sequenceDiagram
     participant Operator
     participant Server
     participant SYS as "SYSTEM Agent"
-    participant CUR as "CURRENTUSER Agent"
+    participant HELPER as "Session Helper"
 
     Operator->>Server: Request installer code
     Server-->>Operator: Deliver hashed installer code
     Note over Operator,Server: Human-controlled code binds enrollment to known device
 
-    par TLS Handshake (SYSTEM)
-        SYS->>Server: Initiate TLS session
-        Server-->>SYS: Present TLS certificate
-    and TLS Handshake (CURRENTUSER)
-        CUR->>Server: Initiate TLS session
-        Server-->>CUR: Present TLS certificate
-    end
+    SYS->>Server: Initiate TLS session
+    Server-->>SYS: Present TLS certificate
     Note over SYS,Server: Public CA validation plus hostname checks stop MITM
-    Note over CUR,Server: The agent trusts the Engine FQDN via the system CA store
 
     SYS->>SYS: Generate Ed25519 identity key pair
     Note right of SYS: Private key stored under Certificates/... protected by DPAPI or chmod 600
-    CUR->>CUR: Generate Ed25519 identity key pair
-    Note right of CUR: Private key stored in user context and DPAPI-protected
 
     SYS->>Server: Enrollment request (installer code, public key, fingerprint)
-    CUR->>Server: Enrollment request (installer code, public key, fingerprint)
 
     Server->>Operator: Prompt for enrollment approval
     Operator-->>Server: Approve device enrollment
     Note over Operator,Server: Manual approval blocks rogue agents
 
     Server-->>SYS: Send enrollment nonce
-    Server-->>CUR: Send enrollment nonce
     SYS->>Server: Return signed nonce to prove key possession
-    CUR->>Server: Return signed nonce
-    Note over Server,Operator: Server verifies signatures and records GUID plus key fingerprint
+    Note over Server,Operator: Server verifies signature and records GUID plus key fingerprint
 
     Server->>SYS: Issue GUID, short-lived token, refresh token, script-signing key
-    Server->>CUR: Issue GUID, short-lived token, refresh token, script-signing key
     Note over SYS,Server: Agent stores GUID and DPAPI-encrypts refresh token
-    Note over CUR,Server: Agent stores GUID and encrypts refresh token
     Note over Server,Operator: Database keeps refresh token hash, key fingerprint, audit trail
 
     loop Secure Sessions
         SYS->>Server: REST heartbeat and job polling with Bearer token
-        CUR->>Server: REST heartbeat and WebSocket connect with Bearer token
         Server-->>SYS: Provide new access token before expiry
-        Server-->>CUR: Provide new access token before expiry
         SYS->>Server: Refresh request over public CA validated HTTPS
-        CUR->>Server: Refresh request over public CA validated HTTPS
     end
 
     Server-->>SYS: Deliver script payload plus Ed25519 signature
     SYS->>SYS: Verify signature before execution
-    Server-->>CUR: Deliver script payload plus Ed25519 signature
-    CUR->>CUR: Verify signature and reject tampered content
-    Note over SYS,CUR: Signature failure triggers re-enrollment and detailed logging
+    SYS->>HELPER: Launch helper into active user session when needed
+    Note over SYS,HELPER: Helper receives work only from the local SYSTEM broker and holds no Engine token
+    Note over SYS,HELPER: Signature failure triggers detailed logging; helper-backed payloads are broker-verified
     Note over Server,Operator: Persistent records and approvals sustain long term trust
 ```
 
@@ -155,7 +142,7 @@ sequenceDiagram
     participant Operator
     participant Server
     participant SYS as "SYSTEM Agent"
-    participant CUR as "CURRENTUSER Agent"
+    participant HELPER as "Session Helper"
 
     Operator->>Server: Upload or author script
     Server->>Server: Store script and metadata on-disk
@@ -164,14 +151,12 @@ sequenceDiagram
     Server->>Server: Load Ed25519 code signing key from secure store
     Server->>Server: Sign script hash and execution manifest (The Assembly)
 
-    Server->>Server: Enqueue job with signed payload for target agent (SYSTEM or CurrentUser)
+    Server->>Server: Enqueue job with signed payload for the host's SYSTEM socket
     Note over Server: Dispatch limited to enrolled agents with valid GUID + tokens
 
     loop Agent job polling (public CA validated HTTPS + Bearer token)
         SYS->>Server: REST heartbeat and job poll
-        CUR->>Server: REST heartbeat and job poll
         Server-->>SYS: Pending job payloads
-        Server-->>CUR: Pending job payloads
     end
 
     alt SYSTEM context
@@ -180,20 +165,19 @@ sequenceDiagram
         SYS->>SYS: Verify Ed25519 signature using pinned server key
         SYS->>SYS: Recalculate script hash and compare
         Note right of SYS: Verification failure stops execution and logs incident
-        SYS->>SYS: Execute via SYSTEM scheduled-task runner
+        SYS->>SYS: Execute in the SYSTEM runtime
         SYS-->>Server: Return execution status, output, telemetry
     else CURRENTUSER context
-        Server-->>CUR: Script, signature, hash, execution parameters
-        CUR->>CUR: Verify HTTPS trust and token freshness
-        CUR->>CUR: Verify Ed25519 signature using pinned server key
-        CUR->>CUR: Recalculate script hash and compare
-        Note right of CUR: Validation failure stops execution and logs incident
-        CUR->>CUR: Execute within interactive PowerShell host
-        CUR-->>Server: Return execution status, output, telemetry
+        Server-->>SYS: Script, signature, hash, execution parameters, session target
+        SYS->>SYS: Verify HTTPS trust, token freshness, and Ed25519 signature
+        SYS->>HELPER: Forward broker-verified payload over local IPC
+        HELPER->>HELPER: Execute within the interactive user session
+        HELPER-->>SYS: Return execution status, output, telemetry
+        SYS-->>Server: Return session-scoped execution result
     end
 
     Server->>Server: Record results and logs alongside job metadata
-    Note over SYS,CUR: Public CA validated HTTPS, signed payloads, and DPAPI-protected secrets defend against tampering and replay
+    Note over SYS,HELPER: Public CA validated HTTPS, signed payloads, DPAPI-protected secrets, and helper-local IPC defend against tampering and replay
 ```
 
 ## API Endpoints

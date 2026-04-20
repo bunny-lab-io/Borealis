@@ -40,8 +40,9 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 
 ## Quick Jobs
 - Quick jobs are immediate executions of a script assembly.
-- The Engine resolves the script, signs it, and emits a Socket.IO `quick_job_run` event.
-- Agents execute the payload and return `quick_job_result` for status and output.
+- The Engine resolves the script, signs it, and emits a Socket.IO `quick_job_run` event to the host's SYSTEM socket.
+- The agent SYSTEM broker executes SYSTEM work locally and forwards current-user work into helper processes when `run_mode` targets the interactive user context.
+- Agents return `quick_job_result` for status and output through the SYSTEM socket.
 
 ## Watchdog-Triggered Remediation
 - Watchdogs can use assemblies as remediation actions.
@@ -87,7 +88,7 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - `GET /api/assemblies/<assembly_guid>/export` (Token Authenticated) - export legacy JSON.
 - `POST /api/assemblies/<assembly_guid>/official-update` (Admin) - update one official assembly from the active catalog.
 - `POST /api/assemblies/official/update-all` (Admin) - sync official assemblies from the active catalog, including brand-new Aurora entries that are not yet installed locally.
-- `POST /api/scripts/quick_run` (Token Authenticated) - quick agent-side script job (`powershell`, `batch`, or `bash`, depending on the target agent platform/runtime).
+- `POST /api/scripts/quick_run` (Token Authenticated) - quick agent-side script job (`powershell`, `batch`, or `bash`, depending on the target agent platform/runtime), with optional current-user `session_target` and `target_session_id`.
 - `GET /api/device/activity/<hostname>` (Token Authenticated) - device activity history.
 - `DELETE /api/device/activity/<hostname>` (Token Authenticated) - clear history.
 - `GET /api/device/activity/job/<int:job_id>` (Token Authenticated) - activity record.
@@ -125,9 +126,10 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 1) Operator calls `/api/scripts/quick_run` with `script_path` or `assembly_guid`, plus `hostnames`.
 2) Engine resolves the assembly document (DB-backed or filesystem).
 3) Engine rewrites variable placeholders and signs the script with Ed25519.
-4) Engine creates `activity_history` rows and emits `quick_job_run` over Socket.IO.
-5) Agent role executes the script (SYSTEM or CURRENTUSER) and returns `quick_job_result`.
-6) Engine updates `activity_history` and emits `device_activity_changed`.
+4) Engine creates `activity_history` rows, sets `target_context`, and emits `quick_job_run` over Socket.IO to the host's SYSTEM socket.
+5) The agent either executes the script in SYSTEM mode or forwards current-user work into one or more helper sessions, depending on `run_mode`, `session_target`, and `target_session_id`.
+6) The agent returns `quick_job_result` through the SYSTEM socket.
+7) Engine updates `activity_history` and emits `device_activity_changed`.
 
 ### Script variables and environment injection
 - Assembly variables are stored with name, type, default, and description.

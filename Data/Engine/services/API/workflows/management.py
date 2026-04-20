@@ -294,7 +294,7 @@ def register_management(app: "Flask", adapters: "EngineServiceAdapters") -> None
         config=adapters.config,
         logger=adapters.context.logger,
         db_conn_factory=adapters.db_conn_factory,
-        aegis_cipher_service=adapters.aegis_cipher_service,
+        aegis_cipher_service=getattr(adapters, "aegis_cipher_service", None),
     )
     blueprint = Blueprint("workflows", __name__, url_prefix="/api/workflows")
 

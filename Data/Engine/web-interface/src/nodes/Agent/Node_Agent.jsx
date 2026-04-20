@@ -32,15 +32,31 @@ const BorealisAgentNode = ({ id, data }) => {
       const host = (info.hostname || info.agent_hostname || "").trim() || "unknown";
       const modeRaw = (info.service_mode || "").toString().toLowerCase();
       const mode = modeRaw === "system" ? "system" : "currentuser";
+      const helperContexts = Array.isArray(info.helper_contexts)
+        ? info.helper_contexts
+            .map((value) => String(value || "").trim().toLowerCase())
+            .filter(Boolean)
+        : [];
       if (!grouped[host]) {
         grouped[host] = { currentuser: null, system: null };
       }
-      grouped[host][mode] = {
+      const entry = {
         agent_id: aid,
         status: info.status || "offline",
         last_seen: info.last_seen || 0,
         info,
       };
+      grouped[host][mode] = entry;
+      if (mode === "system" && helperContexts.includes("currentuser") && !grouped[host].currentuser) {
+        grouped[host].currentuser = {
+          ...entry,
+          info: {
+            ...info,
+            helper_backed: true,
+            service_mode: "currentuser",
+          },
+        };
+      }
     });
     return grouped;
   }, [agents]);
@@ -220,12 +236,12 @@ const hostOptions = useMemo(() => {
     () => [
       {
         value: "currentuser",
-        label: "CURRENTUSER (Screen Capture / Macros)",
+        label: "CURRENTUSER (Interactive Helper)",
         disabled: !activeHostContexts?.currentuser,
       },
       {
         value: "system",
-        label: "SYSTEM (Scripts)",
+        label: "SYSTEM (Core Agent)",
         disabled: !activeHostContexts?.system,
       },
     ],

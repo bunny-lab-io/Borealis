@@ -35,6 +35,7 @@ from ..assemblies.execution import (
     prepare_variable_context,
 )
 from ..devices.agent_role_health import normalize_agent_role_health
+from ..devices.session_dispatch import build_currentuser_dispatch_fields
 from ..devices.process_inventory import normalize_device_processes
 from ..devices.session_inventory import normalize_device_sessions
 from ..devices.service_inventory import (
@@ -3403,6 +3404,12 @@ class WatchdogRuntimeService:
                 "trigger_source": "watchdog",
             },
         }
+        payload.update(
+            build_currentuser_dispatch_fields(
+                run_mode=payload.get("run_mode"),
+                session_target="all_active_sessions",
+            )
+        )
         emit_host_service_event = getattr(self._context, "emit_host_service_event", None) if self._context is not None else None
         emit_agent_event = getattr(self._context, "emit_agent_event", None) if self._context is not None else None
         emitted = False

@@ -39,6 +39,8 @@ def _scheduled_jobs_client_with_context(engine_harness: EngineTestHarness):
     }
     app, _socketio, context = create_app(config)
     app.config.update(TESTING=True)
+    if getattr(context, "scheduler", None) is not None:
+        context.scheduler.RETENTION_DAYS = 3650
     client = app.test_client()
     with client.session_transaction() as sess:
         sess["username"] = "admin"
@@ -1471,7 +1473,11 @@ def test_shared_ansible_dispatch_reports_aegis_locked_and_recovers_after_unlock(
 ) -> None:
     _client, scheduler, context = _scheduled_jobs_client_with_context(engine_harness)
     service = context.aegis_cipher_service
-    service.setup("shared-ansible-cipher")
+    cipher = str(engine_harness.aegis_cipher or "shared-ansible-cipher")
+    if not service.is_configured():
+        service.setup(cipher)
+    elif service.is_locked():
+        service.unlock(cipher)
 
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:
@@ -1691,7 +1697,7 @@ def test_shared_ansible_dispatch_reports_aegis_locked_and_recovers_after_unlock(
     assert locked_target[1] == "credential_locked"
 
     captured: dict[str, object] = {}
-    service.unlock("shared-ansible-cipher")
+    service.unlock(cipher)
     monkeypatch.setattr(
         scheduler,
         "_prepare_vpn_sessions",
@@ -3857,6 +3863,7 @@ def test_scheduled_job_dispatch_accepts_batch_and_bash(
     assert service_mode == "system"
     assert event_name == "quick_job_run"
     assert payload["script_type"] == script_type
+    assert payload["target_context"] == "system"
 
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:

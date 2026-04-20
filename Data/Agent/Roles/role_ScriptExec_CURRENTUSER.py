@@ -35,7 +35,7 @@ except Exception:
     busy_activity = None
 
 ROLE_NAME = 'script_exec_currentuser'
-ROLE_CONTEXTS = ['interactive']
+ROLE_CONTEXTS = ['interactive', 'helper']
 
 
 IS_WINDOWS = os.name == 'nt'
@@ -465,140 +465,193 @@ class Role:
             },
         }
 
+    def _log(self, message: str, *, error: bool = False) -> None:
+        hooks = getattr(self.ctx, "hooks", {}) or {}
+        log_agent_hook = hooks.get("log_agent")
+        if callable(log_agent_hook):
+            try:
+                log_agent_hook(message)
+                if error:
+                    log_agent_hook(message, fname="agent.error.log")
+            except Exception:
+                pass
+
+    def _result_payload(
+        self,
+        *,
+        payload: Dict[str, Any],
+        job_id: Any,
+        status: str,
+        stdout: str = "",
+        stderr: str = "",
+    ) -> Dict[str, Any]:
+        result = {
+            "job_id": job_id,
+            "status": status,
+            "stdout": stdout,
+            "stderr": stderr,
+        }
+        context = payload.get("context") if isinstance(payload, dict) else None
+        if isinstance(context, dict):
+            result["context"] = dict(context)
+        return result
+
+    async def _handle_quick_job_run(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        try:
+            import socket
+
+            hostname = socket.gethostname()
+            target = (payload.get("target_hostname") or "").strip().lower()
+            if target and target != hostname.lower():
+                return None
+
+            job_id = payload.get("job_id")
+            script_type = (payload.get("script_type") or "").lower()
+            run_mode = (payload.get("run_mode") or "current_user").lower()
+            if run_mode == "system":
+                return None
+
+            job_label = job_id if job_id is not None else "unknown"
+            self._log(f"quick_job_run(currentuser) received payload job_id={job_label}")
+
+            script_bytes = decode_script_bytes(payload.get("script_content"), payload.get("script_encoding"))
+            if script_bytes is None:
+                self._log(f"quick_job_run(currentuser) invalid script payload job_id={job_label}", error=True)
+                return self._result_payload(
+                    payload=payload,
+                    job_id=job_id,
+                    status="Failed",
+                    stderr="Invalid script payload (unable to decode)",
+                )
+
+            broker_verified = bool(payload.get("broker_verified"))
+            if not broker_verified:
+                signature_b64 = payload.get("signature")
+                sig_alg = (payload.get("sig_alg") or "ed25519").lower()
+                signing_key = payload.get("signing_key")
+                if sig_alg and sig_alg not in ("ed25519", "eddsa"):
+                    self._log(
+                        f"quick_job_run(currentuser) unsupported signature algorithm job_id={job_label} alg={sig_alg}",
+                        error=True,
+                    )
+                    return self._result_payload(
+                        payload=payload,
+                        job_id=job_id,
+                        status="Failed",
+                        stderr=f"Unsupported script signature algorithm: {sig_alg}",
+                    )
+                if not isinstance(signature_b64, str) or not signature_b64.strip():
+                    self._log(f"quick_job_run(currentuser) missing signature job_id={job_label}", error=True)
+                    return self._result_payload(
+                        payload=payload,
+                        job_id=job_id,
+                        status="Failed",
+                        stderr="Missing script signature; rejecting payload",
+                    )
+                http_client_fn = getattr(self.ctx, "hooks", {}).get("http_client") if hasattr(self.ctx, "hooks") else None
+                client = http_client_fn() if callable(http_client_fn) else None
+                if client is None:
+                    self._log(f"quick_job_run(currentuser) missing http_client hook job_id={job_label}", error=True)
+                    return self._result_payload(
+                        payload=payload,
+                        job_id=job_id,
+                        status="Failed",
+                        stderr="Signature verification unavailable (client missing)",
+                    )
+                if not verify_and_store_script_signature(client, script_bytes, signature_b64, signing_key):
+                    self._log(f"quick_job_run(currentuser) signature verification failed job_id={job_label}", error=True)
+                    return self._result_payload(
+                        payload=payload,
+                        job_id=job_id,
+                        status="Failed",
+                        stderr="Rejected script payload due to invalid signature",
+                    )
+                self._log(f"quick_job_run(currentuser) signature verified job_id={job_label}")
+
+            content = script_bytes.decode("utf-8", errors="replace")
+            raw_env = payload.get("environment")
+            env_map = _sanitize_env_map(raw_env)
+            variables = payload.get("variables") if isinstance(payload.get("variables"), list) else []
+            for var in variables:
+                if not isinstance(var, dict):
+                    continue
+                name = str(var.get("name") or "").strip()
+                if not name:
+                    continue
+                key = _canonical_env_key(name)
+                if key in env_map:
+                    continue
+                default_val = var.get("default")
+                if isinstance(default_val, bool):
+                    env_map[key] = "True" if default_val else "False"
+                elif default_val is None:
+                    env_map[key] = ""
+                else:
+                    env_map[key] = str(default_val)
+            env_map = _apply_variable_aliases(env_map, variables)
+            try:
+                timeout_seconds = max(0, int(payload.get("timeout_seconds") or 0))
+            except Exception:
+                timeout_seconds = 0
+
+            busy_ctx = (
+                busy_activity(
+                    "quick_job_currentuser",
+                    metadata={
+                        "job_id": str(job_label),
+                        "script_type": script_type or "unknown",
+                    },
+                )
+                if callable(busy_activity)
+                else contextlib.nullcontext()
+            )
+            with busy_ctx:
+                if script_type == "powershell":
+                    rc, out, err = await _run_powershell_script_content(content, env_map, timeout_seconds)
+                elif script_type == "batch":
+                    rc, out, err = await _run_batch_local(content, env_map, timeout_seconds)
+                elif script_type == "bash":
+                    rc, out, err = await _run_bash_local(content, env_map, timeout_seconds)
+                else:
+                    return self._result_payload(
+                        payload=payload,
+                        job_id=job_id,
+                        status="Failed",
+                        stderr=f"Unsupported type: {script_type}",
+                    )
+            return self._result_payload(
+                payload=payload,
+                job_id=job_id,
+                status="Success" if rc == 0 else "Failed",
+                stdout=out,
+                stderr=err,
+            )
+        except Exception as exc:
+            return self._result_payload(
+                payload=payload if isinstance(payload, dict) else {},
+                job_id=payload.get("job_id") if isinstance(payload, dict) else None,
+                status="Failed",
+                stderr=str(exc),
+            )
+
     def register_events(self):
         sio = self.ctx.sio
         self._listener_registered = True
         hooks = getattr(self.ctx, 'hooks', {}) or {}
-        log_agent_hook = hooks.get('log_agent')
+        helper_register = hooks.get("register_local_helper_handler")
+        if callable(helper_register):
+            helper_register(self._handle_quick_job_run)
+            return
 
-        def _log(message: str, *, error: bool = False) -> None:
-            if callable(log_agent_hook):
-                try:
-                    log_agent_hook(message)
-                    if error:
-                        log_agent_hook(message, fname='agent.error.log')
-                except Exception:
-                    pass
-
-        @sio.on('quick_job_run')
+        @sio.on("quick_job_run")
         async def _on_quick_job_run(payload):
+            result = await self._handle_quick_job_run(payload if isinstance(payload, dict) else {})
+            if not isinstance(result, dict):
+                return
             try:
-                import socket
-                hostname = socket.gethostname()
-                target = (payload.get('target_hostname') or '').strip().lower()
-                if not target or target != hostname.lower():
-                    return
-                job_id = payload.get('job_id')
-                script_type = (payload.get('script_type') or '').lower()
-                run_mode = (payload.get('run_mode') or 'current_user').lower()
-                if run_mode == 'system':
-                    return
-                job_label = job_id if job_id is not None else 'unknown'
-                _log(f"quick_job_run(currentuser) received payload job_id={job_label}")
-                context = payload.get('context') if isinstance(payload, dict) else None
-
-                def _result_payload(job_value, status_value, stdout_value="", stderr_value=""):
-                    result = {
-                        'job_id': job_value,
-                        'status': status_value,
-                        'stdout': stdout_value,
-                        'stderr': stderr_value,
-                    }
-                    if isinstance(context, dict):
-                        result['context'] = context
-                    return result
-
-                script_bytes = decode_script_bytes(payload.get('script_content'), payload.get('script_encoding'))
-                if script_bytes is None:
-                    _log(f"quick_job_run(currentuser) invalid script payload job_id={job_label}", error=True)
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Invalid script payload (unable to decode)'))
-                    return
-                signature_b64 = payload.get('signature')
-                sig_alg = (payload.get('sig_alg') or 'ed25519').lower()
-                signing_key = payload.get('signing_key')
-                if sig_alg and sig_alg not in ('ed25519', 'eddsa'):
-                    _log(f"quick_job_run(currentuser) unsupported signature algorithm job_id={job_label} alg={sig_alg}", error=True)
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', f'Unsupported script signature algorithm: {sig_alg}'))
-                    return
-                if not isinstance(signature_b64, str) or not signature_b64.strip():
-                    _log(f"quick_job_run(currentuser) missing signature job_id={job_label}", error=True)
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Missing script signature; rejecting payload'))
-                    return
-                http_client_fn = getattr(self.ctx, 'hooks', {}).get('http_client') if hasattr(self.ctx, 'hooks') else None
-                client = http_client_fn() if callable(http_client_fn) else None
-                if client is None:
-                    _log(f"quick_job_run(currentuser) missing http_client hook job_id={job_label}", error=True)
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Signature verification unavailable (client missing)'))
-                    return
-                if not verify_and_store_script_signature(client, script_bytes, signature_b64, signing_key):
-                    _log(f"quick_job_run(currentuser) signature verification failed job_id={job_label}", error=True)
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Rejected script payload due to invalid signature'))
-                    return
-                _log(f"quick_job_run(currentuser) signature verified job_id={job_label}")
-                content = script_bytes.decode('utf-8', errors='replace')
-                raw_env = payload.get('environment')
-                env_map = _sanitize_env_map(raw_env)
-                variables = payload.get('variables') if isinstance(payload.get('variables'), list) else []
-                for var in variables:
-                    if not isinstance(var, dict):
-                        continue
-                    name = str(var.get('name') or '').strip()
-                    if not name:
-                        continue
-                    key = _canonical_env_key(name)
-                    if key in env_map:
-                        continue
-                    default_val = var.get('default')
-                    if isinstance(default_val, bool):
-                        env_map[key] = "True" if default_val else "False"
-                    elif default_val is None:
-                        env_map[key] = ""
-                    else:
-                        env_map[key] = str(default_val)
-                env_map = _apply_variable_aliases(env_map, variables)
-                try:
-                    timeout_seconds = max(0, int(payload.get('timeout_seconds') or 0))
-                except Exception:
-                    timeout_seconds = 0
-                busy_ctx = (
-                    busy_activity(
-                        'quick_job_currentuser',
-                        metadata={
-                            'job_id': str(job_label),
-                            'script_type': script_type or 'unknown',
-                        },
-                    )
-                    if callable(busy_activity)
-                    else contextlib.nullcontext()
-                )
-                with busy_ctx:
-                    if script_type == 'powershell':
-                        rc, out, err = await _run_powershell_via_user_task(content, env_map, timeout_seconds)
-                        if rc == -999:
-                            rc, out, err = await _run_powershell_script_content(content, env_map, timeout_seconds)
-                    elif script_type == 'batch':
-                        rc, out, err = await _run_batch_local(content, env_map, timeout_seconds)
-                    elif script_type == 'bash':
-                        rc, out, err = await _run_bash_local(content, env_map, timeout_seconds)
-                    else:
-                        await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', f'Unsupported type: {script_type}'))
-                        return
-                    status = 'Success' if rc == 0 else 'Failed'
-                    await sio.emit('quick_job_result', _result_payload(job_id, status, out, err))
-            except Exception as e:
-                try:
-                    context = payload.get('context') if isinstance(payload, dict) else None
-                    result = {
-                        'job_id': payload.get('job_id') if isinstance(payload, dict) else None,
-                        'status': 'Failed',
-                        'stdout': '',
-                        'stderr': str(e),
-                    }
-                    if isinstance(context, dict):
-                        result['context'] = context
-                    await sio.emit('quick_job_result', result)
-                except Exception:
-                    pass
+                await sio.emit("quick_job_result", result)
+            except Exception:
+                pass
 
     def _setup_tray(self):
         if QtWidgets is None or QtGui is None or QtCore is None:

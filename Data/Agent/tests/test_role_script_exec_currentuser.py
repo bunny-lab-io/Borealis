@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import types
 from pathlib import Path
 
@@ -210,3 +211,57 @@ def test_restart_agent_on_windows_exits_after_requesting_restart(monkeypatch, tm
     assert tray_state.load_restart_request("currentuser", start=start)["service_mode"] == "currentuser"
     assert tray_state.load_restart_request("system", start=start)["service_mode"] == "system"
     assert calls == ["refresh", "exit"]
+
+
+def test_register_events_uses_helper_handler_when_present() -> None:
+    registered = {}
+
+    role = role_module.Role.__new__(role_module.Role)
+    role.ctx = type(
+        "Ctx",
+        (),
+        {
+            "sio": object(),
+            "hooks": {
+                "register_local_helper_handler": lambda handler: registered.setdefault("handler", handler),
+            },
+        },
+    )()
+    role._listener_registered = False
+
+    role.register_events()
+
+    assert role._listener_registered is True
+    assert callable(registered.get("handler"))
+
+
+def test_handle_quick_job_run_trusts_broker_verified_payload(monkeypatch) -> None:
+    async def _fake_ps(content, env_map, timeout_seconds):
+        return 0, "hello from helper", ""
+
+    monkeypatch.setattr(role_module, "_run_powershell_script_content", _fake_ps)
+
+    role = role_module.Role.__new__(role_module.Role)
+    role.ctx = type("Ctx", (), {"hooks": {}})()
+    role._listener_registered = True
+
+    payload = {
+        "job_id": 14,
+        "target_hostname": "",
+        "script_type": "powershell",
+        "run_mode": "currentuser",
+        "script_content": "V3JpdGUtT3V0cHV0ICdoZWxsbycK",
+        "script_encoding": "base64",
+        "broker_verified": True,
+        "context": {"source": "test"},
+    }
+
+    result = asyncio.run(role._handle_quick_job_run(payload))
+
+    assert result == {
+        "job_id": 14,
+        "status": "Success",
+        "stdout": "hello from helper",
+        "stderr": "",
+        "context": {"source": "test"},
+    }
