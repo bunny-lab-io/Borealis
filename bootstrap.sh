@@ -16,10 +16,18 @@ INFO="[i]"
 DEFAULT_INSTALL_DIR="/opt/Borealis"
 DEFAULT_REPO_URL="https://github.com/bunny-lab-io/Borealis.git"
 DEFAULT_REPO_REF="main"
+DEFAULT_RELEASE_CHANNEL="${BOREALIS_BOOTSTRAP_RELEASE_CHANNEL:-unstable}"
+DEFAULT_STABLE_REF="${BOREALIS_BOOTSTRAP_STABLE_REF:-}"
+DEFAULT_UNSTABLE_REF="${BOREALIS_BOOTSTRAP_UNSTABLE_REF:-${DEFAULT_REPO_REF}}"
 
 INSTALL_DIR="${BOREALIS_INSTALL_DIR:-${DEFAULT_INSTALL_DIR}}"
 REPO_URL="${BOREALIS_BOOTSTRAP_REPO_URL:-${DEFAULT_REPO_URL}}"
-REPO_REF="${BOREALIS_BOOTSTRAP_REF:-${DEFAULT_REPO_REF}}"
+REPO_REF="${BOREALIS_BOOTSTRAP_REF:-}"
+REPO_REF_EXPLICIT=0
+RELEASE_CHANNEL="${DEFAULT_RELEASE_CHANNEL}"
+if [[ -n "${REPO_REF}" ]]; then
+  REPO_REF_EXPLICIT=1
+fi
 
 FORWARD_ARGS=()
 FORWARD_AGENT=0
@@ -30,13 +38,19 @@ usage() {
 Usage: bootstrap.sh [bootstrap options] [Borealis.sh options]
 
 Bootstrap options:
-  --install-dir <path>   Install location (default: /opt/Borealis)
-  --repo-url <url>       Git repository URL (default: https://github.com/bunny-lab-io/Borealis.git)
-  --ref <name>           Git ref/branch/tag/commit to deploy (default: main)
+  --install-dir <path>                 Install location (default: /opt/Borealis)
+  --repo-url <url>                     Git repository URL (default: https://github.com/bunny-lab-io/Borealis.git)
+  --release-channel <stable|unstable>  Select the deploy channel (default: unstable)
+  --repo-branch <name>                 Git branch to deploy for testing; alias for --ref
+  --ref <name>                         Git ref/branch/tag/commit to deploy; overrides release-channel
   -h, --help             Show this help
 
 Any other arguments are forwarded to Borealis.sh, for example:
   bootstrap.sh --agent --serverurl https://10.0.0.54:5000 --enrollmentcode XXXX-XXXX
+
+Channel resolution:
+  unstable -> main (or BOREALIS_BOOTSTRAP_UNSTABLE_REF)
+  stable   -> latest numeric Git tag from the repository (or BOREALIS_BOOTSTRAP_STABLE_REF)
 
 Agent bootstrap always forwards --newEngine so rerunning bootstrap clears
 persisted Engine trust and enrollment tokens before Borealis.sh starts.
@@ -98,12 +112,65 @@ restore_selinux_context_if_needed() {
   run_privileged restorecon -RF "${target}" >/dev/null 2>&1 || true
 }
 
+normalize_release_channel() {
+  local raw="${1:-}"
+  raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
+  case "${raw}" in
+    ""|unstable) printf '%s\n' "unstable" ;;
+    stable) printf '%s\n' "stable" ;;
+    *)
+      echo -e "${RED}Unsupported release channel '${1}'. Use stable or unstable.${RESET}" >&2
+      return 1
+      ;;
+  esac
+}
+
+resolve_latest_stable_tag() {
+  local repo_url="$1"
+  git ls-remote --tags --refs "${repo_url}" \
+    | awk '{print $2}' \
+    | sed 's#refs/tags/##' \
+    | grep -E '^[0-9]+(\.[0-9]+)*$' \
+    | sort -V \
+    | tail -n 1
+}
+
+resolve_repo_ref() {
+  RELEASE_CHANNEL="$(normalize_release_channel "${RELEASE_CHANNEL}")"
+  if [[ "${REPO_REF_EXPLICIT}" -eq 1 ]]; then
+    return 0
+  fi
+
+  case "${RELEASE_CHANNEL}" in
+    stable)
+      if [[ -n "${DEFAULT_STABLE_REF}" ]]; then
+        REPO_REF="${DEFAULT_STABLE_REF}"
+        echo -e "${INFO} Resolved stable release channel to configured ref '${REPO_REF}'"
+        return 0
+      fi
+      local stable_tag=""
+      stable_tag="$(resolve_latest_stable_tag "${REPO_URL}" || true)"
+      if [[ -n "${stable_tag}" ]]; then
+        REPO_REF="${stable_tag}"
+        echo -e "${INFO} Resolved stable release channel to latest tag '${REPO_REF}'"
+        return 0
+      fi
+      REPO_REF="${DEFAULT_UNSTABLE_REF}"
+      echo -e "${RED}Stable release channel could not resolve a remote release tag; falling back to '${REPO_REF}'.${RESET}" >&2
+      ;;
+    unstable)
+      REPO_REF="${DEFAULT_UNSTABLE_REF}"
+      echo -e "${INFO} Resolved unstable release channel to ref '${REPO_REF}'"
+      ;;
+  esac
+}
+
 parse_args() {
   local key=""
   local value=""
   while (( "$#" )); do
     case "$1" in
-      --install-dir|--repo-url|--ref|--branch)
+      --install-dir|--repo-url|--ref|--branch|--repo-branch|--repo_branch|--release-channel|--release_channel)
         if [[ $# -lt 2 ]]; then
           echo -e "${RED}Missing value for ${1}.${RESET}" >&2
           exit 1
@@ -111,17 +178,25 @@ parse_args() {
         case "$1" in
           --install-dir) INSTALL_DIR="$2" ;;
           --repo-url) REPO_URL="$2" ;;
-          --ref|--branch) REPO_REF="$2" ;;
+          --release-channel|--release_channel) RELEASE_CHANNEL="$2" ;;
+          --ref|--branch|--repo-branch|--repo_branch)
+            REPO_REF="$2"
+            REPO_REF_EXPLICIT=1
+            ;;
         esac
         shift
         ;;
-      --install-dir=*|--repo-url=*|--ref=*|--branch=*)
+      --install-dir=*|--repo-url=*|--ref=*|--branch=*|--repo-branch=*|--repo_branch=*|--release-channel=*|--release_channel=*)
         key="${1%%=*}"
         value="${1#*=}"
         case "${key}" in
           --install-dir) INSTALL_DIR="${value}" ;;
           --repo-url) REPO_URL="${value}" ;;
-          --ref|--branch) REPO_REF="${value}" ;;
+          --release-channel|--release_channel) RELEASE_CHANNEL="${value}" ;;
+          --ref|--branch|--repo-branch|--repo_branch)
+            REPO_REF="${value}"
+            REPO_REF_EXPLICIT=1
+            ;;
         esac
         ;;
       --zip-url|--zip-path|--zip-url=*|--zip-path=*)
@@ -157,6 +232,12 @@ validate_paths() {
     echo -e "${RED}Repository URL cannot be empty.${RESET}" >&2
     return 1
   fi
+  if ! normalize_release_channel "${RELEASE_CHANNEL}" >/dev/null; then
+    return 1
+  fi
+}
+
+validate_resolved_ref() {
   if [[ -z "${REPO_REF}" ]]; then
     echo -e "${RED}Repository ref cannot be empty.${RESET}" >&2
     return 1
@@ -232,6 +313,8 @@ main() {
   parse_args "$@"
   validate_paths
   ensure_bootstrap_dependencies
+  resolve_repo_ref
+  validate_resolved_ref
   sync_repo
 
   if [[ "${FORWARD_AGENT}" -eq 1 && "${FORWARDED_NEW_ENGINE}" -eq 0 ]]; then
@@ -240,6 +323,8 @@ main() {
   fi
 
   export BOREALIS_BOOTSTRAP_NEW_ENGINE=1
+  export BOREALIS_BOOTSTRAP_RELEASE_CHANNEL="${RELEASE_CHANNEL}"
+  export BOREALIS_BOOTSTRAP_RESOLVED_REF="${REPO_REF}"
   export BOREALIS_ALLOW_SYSTEM_PACKAGE_INSTALL=1
   echo -e "${GREEN}Launching ${INSTALL_DIR}/Borealis.sh${RESET}"
   if [[ ! -t 0 && -r /dev/tty ]]; then

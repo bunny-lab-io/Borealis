@@ -7,6 +7,8 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 ## Quick Start (Engine)
 - Linux production, first install: `./bootstrap.sh --EngineProduction` (public UI at `https://<your-public-fqdn>` through the embedded Traefik + Let's Encrypt edge).
 - Linux dev, first install: `./bootstrap.sh --EngineDev` (public UI on `https://<your-public-fqdn>` through the embedded Traefik edge, with Vite HMR running on loopback `127.0.0.1:5173` behind Traefik).
+- Linux stable-channel install: `./bootstrap.sh --release-channel stable --EngineProduction`.
+- Linux branch testing install: `./bootstrap.sh --repo-branch optimization/agent-context-socket-consolidation --EngineProduction`.
 - Linux production, local redeploy after bootstrap: `./Borealis.sh --EngineProduction`.
 - Linux dev, local redeploy after bootstrap: `./Borealis.sh --EngineDev`.
 - Add `--verbose` (or `BOREALIS_VERBOSE=1`) to stream the underlying package-manager, installer, and service output instead of the default quieter step view.
@@ -18,6 +20,10 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Run in elevated PowerShell: `./Borealis.ps1`.
 - Bootstrap one-liner:
   `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent`
+- Bootstrap one-liner pinned to the latest stable release tag:
+  `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --release-channel stable --agent`
+- Bootstrap one-liner pinned to a testing branch:
+  `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --repo-branch optimization/agent-context-socket-consolidation --agent`
 - Automated enrollment example:
   `./Borealis.ps1 -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Non-interactive server URL + enrollment example:
@@ -54,9 +60,9 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Always edit source under `Data/` and re-run the appropriate launcher to apply changes: `bootstrap.sh` for first-run Linux provisioning, `Borealis.sh` for normal Linux redeploys, and `Borealis.ps1` / `bootstrap.ps1` for the Windows agent.
 
 ### Launch mechanics
-- `bootstrap.sh` is the Linux first-run path that syncs the repo and opts into missing OS package installation before handing off to `Borealis.sh`.
+- `bootstrap.sh` is the Linux first-run path that syncs the repo and opts into missing OS package installation before handing off to `Borealis.sh`; it now accepts `--release-channel stable|unstable` plus `--repo-branch` / `--ref` for targeted deploys.
 - `Borealis.sh` now focuses on runtime verification, venv activation, and staging for the Linux Engine runtime during normal redeploys; it no longer performs package-manager checks on every run unless bootstrap explicitly opts in.
-- `Borealis.ps1` handles dependency setup and staging for the Windows agent runtime.
+- `bootstrap.ps1` and `Borealis.ps1` handle dependency setup and staging for the Windows agent runtime, and `bootstrap.ps1` now accepts the same release-channel and branch-selection bootstrap options as the Linux bootstrapper.
 - Dev mode (`--EngineDev`) uses Vite for the WebUI behind the embedded Traefik edge, while the Engine API stays on loopback.
 - Production (`--EngineProduction`) runs the Engine on loopback HTTP and publishes the app through the embedded Traefik edge.
 - `Borealis.sh` now defaults to a compact step-oriented console view. Detailed bootstrap subprocess output is captured in `Engine/Logs/install.log` or `Agent/Logs/install.log` and is surfaced inline only on failures unless `--verbose` is enabled.
