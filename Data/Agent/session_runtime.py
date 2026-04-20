@@ -104,6 +104,211 @@ def _listener_address(session_id: int, suffix: str = "") -> str:
     return f"{base}_{normalized_suffix}.sock" if normalized_suffix else f"{base}.sock"
 
 
+def _create_helper_listener(*, session_id: int, address: str, auth_token: str):
+    authkey = auth_token.encode("utf-8")
+    if IS_WINDOWS:
+        return _WindowsSessionPipeListener(
+            address=address,
+            authkey=authkey,
+            session_id=session_id,
+        )
+    return Listener(address, family=_connection_family(), authkey=authkey)
+
+
+def _session_user_sid_windows(session_id: int) -> str:
+    if not IS_WINDOWS:
+        return ""
+
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    wtsapi32 = ctypes.WinDLL("wtsapi32", use_last_error=True)
+
+    TokenUser = 1
+
+    class SID_AND_ATTRIBUTES(ctypes.Structure):
+        _fields_ = [
+            ("Sid", wintypes.LPVOID),
+            ("Attributes", wintypes.DWORD),
+        ]
+
+    class TOKEN_USER(ctypes.Structure):
+        _fields_ = [("User", SID_AND_ATTRIBUTES)]
+
+    wtsapi32.WTSQueryUserToken.argtypes = [wintypes.ULONG, ctypes.POINTER(wintypes.HANDLE)]
+    wtsapi32.WTSQueryUserToken.restype = wintypes.BOOL
+
+    advapi32.GetTokenInformation.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.GetTokenInformation.restype = wintypes.BOOL
+    advapi32.ConvertSidToStringSidW.argtypes = [wintypes.LPVOID, ctypes.POINTER(wintypes.LPWSTR)]
+    advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+
+    kernel32.LocalFree.argtypes = [wintypes.LPVOID]
+    kernel32.LocalFree.restype = wintypes.LPVOID
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    token = wintypes.HANDLE()
+    buffer = None
+    sid_text = wintypes.LPWSTR()
+    required = wintypes.DWORD(0)
+    try:
+        if not wtsapi32.WTSQueryUserToken(int(session_id), ctypes.byref(token)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        advapi32.GetTokenInformation(token, TokenUser, None, 0, ctypes.byref(required))
+        if int(required.value or 0) <= 0:
+            raise ctypes.WinError(ctypes.get_last_error())
+        buffer = ctypes.create_string_buffer(required.value)
+        if not advapi32.GetTokenInformation(token, TokenUser, buffer, required, ctypes.byref(required)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        token_user = ctypes.cast(buffer, ctypes.POINTER(TOKEN_USER)).contents
+        if not advapi32.ConvertSidToStringSidW(token_user.User.Sid, ctypes.byref(sid_text)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return _clean_text(sid_text.value)
+    finally:
+        if sid_text:
+            with contextlib.suppress(Exception):
+                kernel32.LocalFree(sid_text)
+        if token:
+            with contextlib.suppress(Exception):
+                kernel32.CloseHandle(token)
+
+
+class _WindowsSessionPipeListener:
+    def __init__(self, *, address: str, authkey: bytes, session_id: int) -> None:
+        if not IS_WINDOWS:
+            raise RuntimeError("Windows pipe listener is only available on Windows")
+
+        import ctypes
+        from ctypes import wintypes
+        import multiprocessing.connection as mp_connection
+
+        self._ctypes = ctypes
+        self._wintypes = wintypes
+        self._mp_connection = mp_connection
+        self._address = address
+        self._authkey = authkey
+        self._session_id = int(session_id)
+        self._last_accepted = None
+        self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self._advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+
+        class SECURITY_ATTRIBUTES(ctypes.Structure):
+            _fields_ = [
+                ("nLength", wintypes.DWORD),
+                ("lpSecurityDescriptor", wintypes.LPVOID),
+                ("bInheritHandle", wintypes.BOOL),
+            ]
+
+        self._SECURITY_ATTRIBUTES = SECURITY_ATTRIBUTES
+        self._kernel32.CreateNamedPipeW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.POINTER(SECURITY_ATTRIBUTES),
+        ]
+        self._kernel32.CreateNamedPipeW.restype = wintypes.HANDLE
+        self._kernel32.ConnectNamedPipe.argtypes = [wintypes.HANDLE, wintypes.LPVOID]
+        self._kernel32.ConnectNamedPipe.restype = wintypes.BOOL
+        self._kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        self._kernel32.CloseHandle.restype = wintypes.BOOL
+        self._kernel32.LocalFree.argtypes = [wintypes.LPVOID]
+        self._kernel32.LocalFree.restype = wintypes.LPVOID
+        self._advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.LPVOID),
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        self._advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
+
+        self._handle = self._create_pipe_handle()
+
+    def _create_pipe_handle(self):
+        ctypes = self._ctypes
+        wintypes = self._wintypes
+        import _winapi
+
+        user_sid = _session_user_sid_windows(self._session_id)
+        sddl = "D:(A;;GA;;;SY)(A;;GA;;;BA)"
+        if user_sid:
+            sddl = f"{sddl}(A;;GA;;;{user_sid})"
+        else:
+            sddl = f"{sddl}(A;;GA;;;AU)"
+
+        security_descriptor = wintypes.LPVOID()
+        if not self._advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl,
+            1,
+            ctypes.byref(security_descriptor),
+            None,
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            security_attributes = self._SECURITY_ATTRIBUTES()
+            security_attributes.nLength = ctypes.sizeof(self._SECURITY_ATTRIBUTES)
+            security_attributes.lpSecurityDescriptor = security_descriptor
+            security_attributes.bInheritHandle = False
+            handle = self._kernel32.CreateNamedPipeW(
+                self._address,
+                _winapi.PIPE_ACCESS_DUPLEX | _winapi.FILE_FLAG_FIRST_PIPE_INSTANCE,
+                _winapi.PIPE_TYPE_MESSAGE | _winapi.PIPE_READMODE_MESSAGE | _winapi.PIPE_WAIT,
+                1,
+                8192,
+                8192,
+                _winapi.NMPWAIT_WAIT_FOREVER,
+                ctypes.byref(security_attributes),
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                self._kernel32.LocalFree(security_descriptor)
+        invalid_handle = ctypes.c_void_p(-1).value
+        if int(handle or 0) == int(invalid_handle or 0):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return handle
+
+    def accept(self):
+        import _winapi
+
+        if not self._handle:
+            raise OSError("listener is closed")
+
+        connected = self._kernel32.ConnectNamedPipe(self._handle, None)
+        if not connected:
+            error = self._ctypes.get_last_error()
+            if error not in (_winapi.ERROR_PIPE_CONNECTED, _winapi.ERROR_NO_DATA):
+                raise self._ctypes.WinError(error)
+
+        pipe_connection = getattr(self._mp_connection, "PipeConnection", None)
+        if pipe_connection is None:
+            raise RuntimeError("PipeConnection is unavailable on this runtime")
+        connection = pipe_connection(self._handle)
+        self._handle = None
+        self._last_accepted = self._address
+        if self._authkey is not None:
+            self._mp_connection.deliver_challenge(connection, self._authkey)
+            self._mp_connection.answer_challenge(connection, self._authkey)
+        return connection
+
+    def close(self) -> None:
+        if self._handle:
+            with contextlib.suppress(Exception):
+                self._kernel32.CloseHandle(self._handle)
+            self._handle = None
+
+
 def _helper_command(
     *,
     session_id: int,
@@ -660,7 +865,11 @@ class SessionHelperBroker:
         except Exception:
             pass
         try:
-            listener = Listener(address, family=_connection_family(), authkey=auth_token.encode("utf-8"))
+            listener = _create_helper_listener(
+                session_id=session_id,
+                address=address,
+                auth_token=auth_token,
+            )
         except Exception as exc:
             helper.last_error = f"listener_create_failed: {exc}"
             self._log(

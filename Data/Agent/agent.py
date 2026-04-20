@@ -725,6 +725,8 @@ def _sync_tray_status(updates: Optional[Dict[str, Any]] = None, *, client=None) 
         state["started_at"] = int(state.get("started_at") or _AGENT_STARTED_AT)
         _TRAY_STATUS_STATE.clear()
         _TRAY_STATUS_STATE.update(state)
+        if SESSION_HELPER_MODE:
+            return dict(state)
         try:
             persisted = _tray_state.write_status_snapshot(SERVICE_MODE, state, now=timestamp)
         except Exception as exc:

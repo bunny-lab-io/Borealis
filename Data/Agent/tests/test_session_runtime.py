@@ -93,6 +93,31 @@ def test_ensure_helper_logs_listener_create_failure_instead_of_raising(monkeypat
     assert any("listener create failed" in entry for entry in logged)
 
 
+def test_create_helper_listener_uses_standard_listener_off_windows(monkeypatch) -> None:
+    captured = {}
+    sentinel = object()
+
+    def _fake_listener(address, family=None, authkey=None):
+        captured["args"] = (address, family, authkey)
+        return sentinel
+
+    monkeypatch.setattr(session_runtime, "IS_WINDOWS", False)
+    monkeypatch.setattr(
+        session_runtime,
+        "Listener",
+        _fake_listener,
+    )
+
+    result = session_runtime._create_helper_listener(
+        session_id=7,
+        address="listener.sock",
+        auth_token="abc123",
+    )
+
+    assert result is sentinel
+    assert captured["args"] == ("listener.sock", session_runtime._connection_family(), b"abc123")
+
+
 class _FakeThread:
     def __init__(self, *args, alive: bool = True, **_kwargs) -> None:
         self.started = False

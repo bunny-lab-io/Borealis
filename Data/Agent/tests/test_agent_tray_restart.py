@@ -175,3 +175,37 @@ def test_launch_windows_restart_task_helper_uses_powershell_script(monkeypatch) 
             },
         )
     ]
+
+
+def test_sync_tray_status_skips_persist_in_helper_mode(monkeypatch) -> None:
+    class _FakeTrayState:
+        SCHEMA_VERSION = 3
+
+        @staticmethod
+        def build_default_snapshot(service_mode, now, started_at, pid, server_url):
+            return {
+                "service_mode": service_mode,
+                "started_at": started_at,
+                "pid": pid,
+                "server_url": server_url,
+            }
+
+        @staticmethod
+        def write_status_snapshot(*args, **kwargs):
+            raise AssertionError("helper mode should not persist tray snapshots to disk")
+
+    monkeypatch.setattr(agent_module, "_tray_state", _FakeTrayState())
+    monkeypatch.setattr(agent_module, "SESSION_HELPER_MODE", True)
+    monkeypatch.setattr(agent_module, "SERVICE_MODE", "currentuser")
+    monkeypatch.setattr(agent_module, "_AGENT_STARTED_AT", 100)
+    monkeypatch.setattr(agent_module, "_tray_snapshot_updates", lambda client=None: {"socket_connected": False})
+    monkeypatch.setattr(agent_module.time, "time", lambda: 150)
+    monkeypatch.setattr(agent_module.os, "getpid", lambda: 4242)
+    monkeypatch.setattr(agent_module, "_tray_server_url", lambda: "https://example.invalid")
+    agent_module._TRAY_STATUS_STATE.clear()
+
+    state = agent_module._sync_tray_status({"last_error_kind": ""})
+
+    assert state["pid"] == 4242
+    assert state["service_mode"] == "currentuser"
+    assert state["socket_connected"] is False
