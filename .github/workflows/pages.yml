@@ -35,6 +35,11 @@ jobs:
         run: |
           mkdir -p site
           cp -R Docs/website/. site/
+          mkdir -p site/Branding site/repo_screenshots
+          cp -R Docs/Branding/. site/Branding/
+          cp -R Docs/images/repo_screenshots/. site/repo_screenshots/
+          VERSION="$(git rev-parse --short HEAD)"
+          sed -i "s/__BOREALIS_BUILD_VERSION__/${VERSION}/g" site/index.html
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5

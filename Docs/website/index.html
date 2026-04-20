@@ -923,7 +923,7 @@
   <header class="topbar">
     <div class="topbar-inner">
       <div class="brand">
-        <img src="https://raw.githubusercontent.com/bunny-lab-io/Borealis/main/Docs/Branding/Borealis_Logo_Full.png" alt="Borealis logo" onerror="this.style.display='none';document.getElementById('brand-fallback').style.display='block';" />
+        <img src="Branding/Borealis_Logo_Full.png?v=__BOREALIS_BUILD_VERSION__" alt="Borealis logo" onerror="this.style.display='none';document.getElementById('brand-fallback').style.display='block';" />
         <p id="brand-fallback" class="brand-fallback" style="display:none;">Borealis</p>
       </div>
       <nav class="nav" aria-label="Main">
@@ -944,7 +944,7 @@
         <div class="hero-logo-wrap">
           <img
             class="hero-logo"
-            src="https://raw.githubusercontent.com/bunny-lab-io/Borealis/main/Docs/Branding/Borealis_Logo_Full.png"
+            src="Branding/Borealis_Logo_Full.png?v=__BOREALIS_BUILD_VERSION__"
             alt="Borealis Automation Platform"
             onerror="this.style.display='none';document.getElementById('hero-logo-fallback').style.display='block';"
           />
@@ -973,7 +973,7 @@
           </div>
           <div class="carousel-shell">
             <figure class="carousel">
-              <img id="carousel-image" src="https://raw.githubusercontent.com/bunny-lab-io/Borealis/main/Docs/images/repo_screenshots/Device_List.png" alt="Borealis screenshot" />
+              <img id="carousel-image" src="repo_screenshots/Device_List.png?v=__BOREALIS_BUILD_VERSION__" alt="Borealis screenshot" />
               <div class="carousel-controls">
                 <div class="carousel-buttons">
                   <button id="prev-btn" class="carousel-btn" type="button" aria-label="Previous screenshot">&#10094;</button>
@@ -1092,7 +1092,8 @@
 
   <script>
     (function () {
-      const screenshotBase = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/main/Docs/images/repo_screenshots";
+      const assetVersion = "__BOREALIS_BUILD_VERSION__";
+      const screenshotBase = "repo_screenshots";
       const slides = [
         { file: "Device_List.png", label: "Device List" },
         { file: "Device_Details.png", label: "Device Details" },
@@ -1122,7 +1123,7 @@
         { file: "Device_Filter_Editor.png", label: "Device Filter Editor" }
       ].map(function (item) {
         return {
-          src: screenshotBase + "/" + item.file,
+          src: screenshotBase + "/" + item.file + "?v=" + assetVersion,
           label: item.label
         };
       });
