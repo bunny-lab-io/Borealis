@@ -290,6 +290,18 @@ function buildAgentHealthDialogContent(entry, tunnelInfo) {
   const appendLine = (label, value, fallback = "Unavailable") => {
     lines.push(`${label}: ${formatAgentHealthDialogValue(value, fallback)}`);
   };
+  const appendMultilineSection = (label, value) => {
+    const text = String(value || "").trim();
+    if (!text) return;
+    lines.push("");
+    lines.push(`${label}:`);
+    for (const line of text.split(/\r?\n/)) {
+      const trimmed = String(line || "").trim();
+      if (trimmed) {
+        lines.push(trimmed);
+      }
+    }
+  };
 
   const presentationKey = String(entry.presentationKey || "").trim().toLowerCase();
   const parsedHostPort = parseAgentHealthHostPort(entry.detail);
@@ -321,6 +333,8 @@ function buildAgentHealthDialogContent(entry, tunnelInfo) {
     case "scriptexeccurrentuser":
       appendLine("Execution Context", details.execution_context, "CURRENTUSER");
       appendLine("Listener State", details.listener_state, "Unknown");
+      appendMultilineSection("Loaded Helper Sessions", details.loaded_helper_sessions);
+      appendMultilineSection("Pending Helper Sessions", details.pending_helper_sessions);
       break;
     case "scriptexecsystem":
       appendLine("Execution Context", details.execution_context, "SYSTEM");

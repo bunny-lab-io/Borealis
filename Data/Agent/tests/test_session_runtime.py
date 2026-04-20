@@ -76,6 +76,15 @@ def test_currentuser_role_health_reports_registered_when_helper_is_ready() -> No
         "sessions": [
             {
                 "session_id": 1,
+                "username": "BUNNY-LAB\\nicole.rappe",
+                "session_name": "console",
+                "eligible_for_interactive": True,
+                "helper_ready": True,
+            },
+            {
+                "session_id": 2,
+                "username": "BUNNY-LAB\\testuser",
+                "session_name": "rdp-tcp#5",
                 "eligible_for_interactive": True,
                 "helper_ready": True,
             }
@@ -88,6 +97,10 @@ def test_currentuser_role_health_reports_registered_when_helper_is_ready() -> No
     assert report["details"]["execution_context"] == "CURRENTUSER"
     assert report["details"]["listener_state"] == "Registered"
     assert report["details"]["listener_ready"] is True
+    assert report["details"]["loaded_helper_sessions"] == (
+        "BUNNY-LAB\\nicole.rappe (console) - Loaded Successfully\n"
+        "BUNNY-LAB\\testuser (rdp-tcp#5) - Loaded Successfully"
+    )
 
 
 def test_currentuser_role_health_reports_registering_while_helper_warms_up() -> None:
@@ -101,6 +114,8 @@ def test_currentuser_role_health_reports_registering_while_helper_warms_up() -> 
         "sessions": [
             {
                 "session_id": 1,
+                "username": "BUNNY-LAB\\testuser",
+                "session_name": "rdp-tcp#5",
                 "eligible_for_interactive": True,
                 "helper_ready": False,
             }
@@ -113,6 +128,8 @@ def test_currentuser_role_health_reports_registering_while_helper_warms_up() -> 
     assert report["details"]["execution_context"] == "CURRENTUSER"
     assert report["details"]["listener_state"] == "Registering"
     assert report["details"]["listener_ready"] is False
+    assert report["details"]["loaded_helper_sessions"] == ""
+    assert report["details"]["pending_helper_sessions"] == "BUNNY-LAB\\testuser (rdp-tcp#5) - Helper Warming Up"
 
 
 def test_ensure_helper_logs_listener_create_failure_instead_of_raising(monkeypatch) -> None:

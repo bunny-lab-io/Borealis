@@ -45,6 +45,28 @@ def _coerce_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _format_helper_session_label(entry: Mapping[str, Any]) -> str:
+    username = _clean_text(entry.get("username"))
+    session_name = _clean_text(entry.get("session_name"))
+    base = username or f"session-{normalize_target_session_id(entry.get('session_id')) or 'unknown'}"
+    return f"{base} ({session_name})" if session_name else base
+
+
+def _format_helper_session_lines(
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    status_text: str,
+) -> str:
+    lines: List[str] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        label = _format_helper_session_label(entry)
+        if label:
+            lines.append(f"{label} - {status_text}")
+    return "\n".join(lines)
+
+
 def normalize_session_target(value: Any, *, default: str = SESSION_TARGET_ALL) -> str:
     text = _clean_text(value).lower().replace("-", "_")
     if text in {"specific", "specific_session", "single", "session"}:
@@ -648,6 +670,11 @@ class SessionHelperBroker:
         sessions = inventory.get("sessions") or []
         eligible = [entry for entry in sessions if bool(entry.get("eligible_for_interactive"))]
         ready = [entry for entry in eligible if bool(entry.get("helper_ready"))]
+        ready_helper_lines = _format_helper_session_lines(ready, status_text="Loaded Successfully")
+        pending_helper_lines = _format_helper_session_lines(
+            [entry for entry in eligible if not bool(entry.get("helper_ready"))],
+            status_text="Helper Warming Up",
+        )
         if ready:
             return {
                 "role_name": "script_exec_currentuser",
@@ -661,6 +688,7 @@ class SessionHelperBroker:
                     "eligible_sessions": str(len(eligible)),
                     "listener_ready": True,
                     "listener_state": "Registered",
+                    "loaded_helper_sessions": ready_helper_lines,
                     "ready_helpers": str(len(ready)),
                 },
             }
@@ -677,6 +705,8 @@ class SessionHelperBroker:
                     "eligible_sessions": str(len(eligible)),
                     "listener_ready": False,
                     "listener_state": "Registering",
+                    "loaded_helper_sessions": ready_helper_lines,
+                    "pending_helper_sessions": pending_helper_lines,
                     "ready_helpers": "0",
                 },
             }
@@ -692,6 +722,7 @@ class SessionHelperBroker:
                 "eligible_sessions": "0",
                 "listener_ready": False,
                 "listener_state": "Not Registered",
+                "loaded_helper_sessions": "",
                 "ready_helpers": "0",
             },
         }
