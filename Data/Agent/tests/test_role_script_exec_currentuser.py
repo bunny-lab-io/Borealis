@@ -96,7 +96,7 @@ def test_copy_support_details_uses_clipboard(monkeypatch) -> None:
     role._copy_support_details({"support_text": "Device: workstation-01"})
 
     assert "Device: workstation-01" in clipboard.text
-    assert "Engine Trust: Checking trust" in clipboard.text
+    assert "Engine Trust: Checking Trust..." in clipboard.text
     assert "Websocket Connection: Disconnected" in clipboard.text
 
 

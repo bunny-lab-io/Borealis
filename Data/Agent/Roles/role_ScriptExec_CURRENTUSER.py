@@ -44,8 +44,8 @@ ROLE_CONTEXTS = ['interactive', 'helper']
 
 IS_WINDOWS = os.name == 'nt'
 TRAY_POPUP_MARGIN = 0
-TRAY_POPUP_WIDTH = 516
-TRAY_HEADER_ICON_SIZE = 132
+TRAY_POPUP_WIDTH = 440
+TRAY_HEADER_ICON_SIZE = 106
 
 
 def _popup_palette(tone: str) -> Dict[str, str]:
@@ -559,7 +559,7 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
         self._panel = QtWidgets.QFrame(self)
         self._panel.setObjectName("TrayPopupPanel")
         panel_layout = QtWidgets.QVBoxLayout(self._panel)
-        panel_layout.setContentsMargins(22, 22, 22, 20)
+        panel_layout.setContentsMargins(20, 20, 20, 18)
         panel_layout.setSpacing(16)
 
         header = QtWidgets.QHBoxLayout()
@@ -579,6 +579,7 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
         )
 
         title_layout = QtWidgets.QVBoxLayout()
+        title_layout.setContentsMargins(0, 20, 0, 0)
         title_layout.setSpacing(2)
         self._title_label = QtWidgets.QLabel("Borealis Agent", self._panel)
         self._title_label.setObjectName("TrayPopupTitle")
@@ -591,15 +592,6 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
         title_layout.addStretch(1)
         header.addLayout(title_layout, 1)
         panel_layout.addLayout(header)
-
-        chip_grid = QtWidgets.QGridLayout()
-        chip_grid.setHorizontalSpacing(12)
-        chip_grid.setVerticalSpacing(12)
-        self._activity_card, self._activity_value = self._create_metric_card("Activity")
-        self._release_card, self._release_value = self._create_metric_card("Release Channel")
-        chip_grid.addWidget(self._activity_card, 0, 0)
-        chip_grid.addWidget(self._release_card, 0, 1)
-        panel_layout.addLayout(chip_grid)
 
         self._checks_card = QtWidgets.QFrame(self._panel)
         self._checks_card.setObjectName("TrayPopupCard")
@@ -726,21 +718,6 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
             return False
         return False
 
-    def _create_metric_card(self, label: str) -> Tuple[Any, Any]:
-        card = QtWidgets.QFrame(self._panel)
-        card.setObjectName("TrayPopupChip")
-        layout = QtWidgets.QVBoxLayout(card)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(6)
-        title = QtWidgets.QLabel(label, card)
-        title.setObjectName("TrayPopupChipLabel")
-        value = QtWidgets.QLabel("", card)
-        value.setObjectName("TrayPopupChipValue")
-        value.setWordWrap(True)
-        layout.addWidget(title)
-        layout.addWidget(value)
-        return card, value
-
     def _add_check_row(self, layout: Any, label: str) -> Any:
         row = QtWidgets.QHBoxLayout()
         row.setSpacing(14)
@@ -830,7 +807,7 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
             }}
             QLabel#TrayPopupSectionTitle {{
                 color: #eef4ff;
-                font-size: 24px;
+                font-size: 17px;
                 font-weight: 800;
             }}
             QLabel#TrayPopupSectionSubtitle {{
@@ -863,7 +840,7 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
                 border: none;
                 border-radius: 12px;
                 color: #06111d;
-                font-size: 21px;
+                font-size: 15px;
                 font-weight: 700;
                 min-height: 42px;
                 padding: 0 16px;
@@ -892,24 +869,18 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
             """
         )
         self._title_label.setText(str(current_view.get("device_name") or "Borealis Agent"))
-        site_name = str(current_view.get("site_name") or "").strip()
-        site_id = current_view.get("site_id")
-        if not site_name and site_id is not None:
-            site_name = f"Site {site_id}"
-        self._subtitle_label.setText(site_name)
-        self._subtitle_label.setVisible(bool(site_name))
-        self._activity_value.setText(str(current_view.get("activity_status") or "Idle"))
-        self._release_value.setText(str(current_view.get("release_channel_label") or "Unknown"))
-        self._checks_subtitle.setText(
-            f"Engine URL: {str(current_view.get('connected_host') or 'Not configured')}"
-        )
+        engine_url_text = f"Engine URL: {str(current_view.get('connected_host') or 'Not configured')}"
+        self._subtitle_label.setText(engine_url_text)
+        self._subtitle_label.setVisible(True)
+        self._checks_subtitle.clear()
+        self._checks_subtitle.setVisible(False)
 
         security_status = str(current_view.get("security_status") or "Checking connection")
         if security_status == "Secure connection":
             security_text = "Secure (TLS + Ed25519)"
             security_code = "healthy"
         elif security_status in {"Checking connection"}:
-            security_text = "Checking trust"
+            security_text = "Checking Trust..."
             security_code = "neutral"
         elif security_status in {"Certificate trust issue", "Sign-in problem"}:
             security_text = security_status
@@ -1391,7 +1362,7 @@ class Role:
         if security_status == "Secure connection":
             security_text = "Secure (TLS + Ed25519)"
         elif security_status == "Checking connection":
-            security_text = "Checking trust"
+            security_text = "Checking Trust..."
         else:
             security_text = security_status
         socket_connected = bool(view.get("system_socket_connected"))
