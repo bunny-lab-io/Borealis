@@ -114,6 +114,34 @@ def test_build_status_details_text_includes_wireguard_and_logs() -> None:
     assert "Logs Folder: /tmp/Agent/Logs" in text
 
 
+def test_bottom_right_anchor_keeps_popup_inside_margin() -> None:
+    x, y = role_module._bottom_right_anchor(
+        100,
+        50,
+        800,
+        600,
+        320,
+        240,
+        margin=18,
+    )
+
+    assert (x, y) == (562, 392)
+
+
+def test_bottom_right_anchor_falls_back_to_margin_when_popup_is_large() -> None:
+    x, y = role_module._bottom_right_anchor(
+        0,
+        0,
+        300,
+        200,
+        480,
+        260,
+        margin=18,
+    )
+
+    assert (x, y) == (18, 18)
+
+
 def test_open_logs_folder_uses_subprocess_on_non_windows(monkeypatch) -> None:
     popen_calls: list[list[str]] = []
     monkeypatch.setattr(role_module.subprocess, "Popen", lambda args: popen_calls.append(list(args)))

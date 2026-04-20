@@ -510,13 +510,13 @@ def _persist_agent_guid_local_internal(guid: str, *, assume_locked: bool) -> Non
 if INTERACTIVE_RUNTIME_MODE:
     # Reduce noisy Qt output and attempt to avoid Windows OleInitialize warnings
     os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.*=false;*.debug=false")
-    from qasync import QEventLoop
-    from PyQt5 import QtCore, QtGui, QtWidgets
+    from qt_compat import QEventLoop, QtCore, QtGui, QtWidgets, qt_enum
     try:
         # Swallow Qt framework messages to keep console clean
         def _qt_msg_handler(mode, context, message):
             return
-        QtCore.qInstallMessageHandler(_qt_msg_handler)
+        if QtCore is not None:
+            QtCore.qInstallMessageHandler(_qt_msg_handler)
     except Exception:
         pass
     from PIL import ImageGrab
@@ -3665,7 +3665,13 @@ if INTERACTIVE_RUNTIME_MODE:
             super().__init__()
             self.setWindowTitle("KeepAlive")
             self.setGeometry(-1000,-1000,1,1)
-            self.setAttribute(QtCore.Qt.WA_DontShowOnScreen)
+            dont_show_attr = qt_enum(
+                QtCore.Qt,
+                "WidgetAttribute.WA_DontShowOnScreen",
+                getattr(QtCore.Qt, "WA_DontShowOnScreen", None),
+            )
+            if dont_show_attr is not None:
+                self.setAttribute(dont_show_attr)
             self.hide()
 
 # //////////////////////////////////////////////////////////////////////////
@@ -3808,6 +3814,8 @@ if __name__=='__main__':
     if SYSTEM_SERVICE_MODE:
         loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
     else:
+        if QtWidgets is None or QEventLoop is None:
+            raise RuntimeError("Qt runtime unavailable for interactive Borealis mode.")
         app=QtWidgets.QApplication(sys.argv)
         loop=QEventLoop(app); asyncio.set_event_loop(loop)
     AGENT_LOOP = loop

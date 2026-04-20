@@ -9,6 +9,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Service modes: SYSTEM plus a local helper mode launched into user sessions by the SYSTEM broker.
 - Role system: `Data/Agent/role_manager.py` auto-loads `Data/Agent/Roles/role_*.py`.
 - Session broker: `Data/Agent/session_runtime.py` launches and tracks per-session helpers, local IPC, and helper readiness.
+- Desktop helper UI: `Data/Agent/Roles/role_ScriptExec_CURRENTUSER.py` owns the current-user tray popup, using `Data/Agent/qt_compat.py` to prefer PySide6 while keeping the existing asyncio/Qt integration path.
 - Networking: the SYSTEM runtime owns REST to Engine APIs plus the single Socket.IO connection; helpers use local IPC only.
 - Security: Ed25519 identity keys, public CA + hostname validation for the Engine FQDN, signed script payloads, encrypted token storage.
 
@@ -52,6 +53,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - The SYSTEM runtime is the only Borealis process that authenticates to the Engine, enrolls, refreshes tokens, or opens a Socket.IO connection.
 - Interactive user work now runs in helper mode, launched by the SYSTEM broker into active or locked user sessions and reached over local IPC.
 - Direct Session 0 UI is not supported; Borealis keeps the Engine-facing socket in SYSTEM and bridges into desktop sessions when current-user interaction is required.
+- The helper tray UI now opens a dedicated bottom-right status popup from tray icon clicks instead of using a right-click context menu, and that popup is the supported user-facing control surface for helper restart/status actions.
 - The agent still labels Engine traffic with `X-Borealis-Agent-Context`, but the supported Windows service path no longer relies on a standalone CURRENTUSER Engine identity.
 
 ### Role discovery and extension

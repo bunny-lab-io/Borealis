@@ -13,7 +13,7 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - eventlet - MIT - https://spdx.org/licenses/MIT.html
 - aiohttp - Apache-2.0 AND MIT - https://github.com/aio-libs/aiohttp/blob/master/LICENSE.txt
 - cryptography - Apache-2.0 OR BSD-3-Clause - https://github.com/pyca/cryptography/blob/main/LICENSE
-- PyQt5 - GPL-3.0-only - https://www.riverbankcomputing.com/static/Docs/PyQt5/introduction.html#license
+- PySide6 - LGPL-3.0-only OR GPL-3.0-only - https://doc.qt.io/qt-6/licensing.html
 - qasync - BSD-2-Clause - https://github.com/CabbageDevelopment/qasync/blob/master/LICENSE
 - opencv-python - Apache-2.0 - https://spdx.org/licenses/Apache-2.0.html
 - Pillow - MIT-CMU - https://github.com/python-pillow/Pillow/blob/main/LICENSE
