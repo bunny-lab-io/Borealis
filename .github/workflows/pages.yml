@@ -27,12 +27,14 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v6
+        with:
+          token: ${{ secrets.PAGES_ADMIN_TOKEN != '' && secrets.PAGES_ADMIN_TOKEN || github.token }}
+          enablement: ${{ secrets.PAGES_ADMIN_TOKEN != '' }}
 
       - name: Prepare site
         run: |
           mkdir -p site
           cp -R Docs/website/. site/
-          cp Data/Engine/web-interface/public/Borealis_Logo_Full.png site/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5

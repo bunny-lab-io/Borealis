@@ -923,7 +923,7 @@
   <header class="topbar">
     <div class="topbar-inner">
       <div class="brand">
-        <img src="../../Data/Engine/web-interface/public/Borealis_Logo_Full.png" alt="Borealis logo" onerror="this.style.display='none';document.getElementById('brand-fallback').style.display='block';" />
+        <img src="https://raw.githubusercontent.com/bunny-lab-io/Borealis/main/Docs/Branding/Borealis_Logo_Full.png" alt="Borealis logo" onerror="this.style.display='none';document.getElementById('brand-fallback').style.display='block';" />
         <p id="brand-fallback" class="brand-fallback" style="display:none;">Borealis</p>
       </div>
       <nav class="nav" aria-label="Main">
@@ -944,7 +944,7 @@
         <div class="hero-logo-wrap">
           <img
             class="hero-logo"
-            src="https://github.com/bunny-lab-io/Borealis/raw/main/Data/Engine/web-interface/public/Borealis_Logo_Full.png"
+            src="https://raw.githubusercontent.com/bunny-lab-io/Borealis/main/Docs/Branding/Borealis_Logo_Full.png"
             alt="Borealis Automation Platform"
             onerror="this.style.display='none';document.getElementById('hero-logo-fallback').style.display='block';"
           />
@@ -953,9 +953,9 @@
         <br>
         <div class="hero-copy">
           <p>
-            Borealis is a remote management platform with a simple, visual automation layer, enabling you to leverage scripts and advanced
-            nodegraph-based automation workflows.  I originally created Borealis to work towards consolidating the core functionality of several
-            standalone automation platforms in my homelab, such as TacticalRMM, Ansible AWX, SemaphoreUI, and a few others.
+            Borealis is a remote management and automation platform built around a Linux-hosted Engine, a Windows-first agent model, and a
+            visual workflow layer, with broader Linux agent parity still in progress. I originally started it to consolidate the mix of RMM,
+            automation, and orchestration tools I was using across my homelab and real-world environments into one cohesive platform.
           </p>
           <br>
           <b>A Note on Development Pace:</b>
@@ -978,32 +978,36 @@
       <div id="features" class="content-panel active" role="tabpanel" aria-labelledby="content-tab-features" data-content-panel="features">
         <div class="feature-grid">
           <article class="feature">
-            <h3>Device Inventory + Jobs</h3>
-            <p>OS, hardware, and status metadata are collected on connect and refreshed through heartbeat/details updates.</p>
+            <h3>Device Inventory + Approvals</h3>
+            <p>Inventory, site assignment, approval queues, RBAC-scoped targeting, and filterable device views are built into the core platform.</p>
           </article>
           <article class="feature">
             <h3>Remote Shell + VNC</h3>
-            <p>WireGuard-backed remote PowerShell sessions and VNC workflows are available through the Engine/WebUI stack.</p>
+            <p>WireGuard-backed remote shell supports PowerShell on Windows and Bash on Linux, with same-origin VNC remote desktop for Windows.</p>
           </article>
           <article class="feature">
             <h3>Visual Workflows</h3>
-            <p>Create drag-and-drop node workflows to combine logic, analysis, and automation actions in one canvas.</p>
+            <p>Create drag-and-drop workflows that combine logic, scripts, and automation actions in one canvas.</p>
           </article>
           <article class="feature">
-            <h3>Security Model</h3>
-            <p>Pinned TLS trust, Ed25519 identities/tokens, signed payload delivery, and operator approval-gated enrollment.</p>
+            <h3>Engine-side Ansible</h3>
+            <p>The Linux Engine can run scheduled Ansible jobs over Borealis-managed WireGuard, SSH, and WinRM paths.</p>
+          </article>
+          <article class="feature">
+            <h3>Security + Trust</h3>
+            <p>Aegis bootstrap and unlock, MFA, passkeys, signed payload delivery, short-lived tokens, and approval-gated enrollment are all part of the current trust model.</p>
           </article>
           <article class="feature">
             <h3>Remote Script Execution</h3>
-            <p>Execute PowerShell in <code>CURRENT USER</code> or <code>NT AUTHORITY\SYSTEM</code> context with signed payload validation.</p>
+            <p>Run PowerShell, Batch, and Bash where available in <code>CURRENTUSER</code> or <code>NT AUTHORITY\SYSTEM</code> contexts.</p>
           </article>
           <article class="feature">
             <h3>Quick Jobs + Scheduling</h3>
-            <p>Run immediate quick jobs or define schedules with target resolution and execution history tracking.</p>
+            <p>Run quick jobs immediately or schedule scripts, workflows, and Engine-side automation with retained history.</p>
           </article>
           <article class="feature">
-            <h3>Operator UI + Notifications</h3>
-            <p>MagicUI glass panels, Quartz tables, and realtime toast notifications over Socket.IO events.</p>
+            <h3>Watchdogs + Alerts</h3>
+            <p>Watchdogs, device alerts, and per-device role health help surface drift and trigger remediation workflows.</p>
           </article>
         </div>
       </div>
@@ -1013,26 +1017,25 @@
           <article class="lane">
             <h3>In Progress</h3>
             <ul>
-              <li>Current focus remains Engine runtime and WebUI delivery on the Linux Engine platform.</li>
-              <li>Continue Engine-centric runtime migration and API/service parity work across legacy paths.</li>
-              <li>Harden tunnel and remote-shell operator flow for onboarding/readiness checks.</li>
+              <li>Broader cross-platform feature parity and polish across the Engine and agent runtimes.</li>
+              <li>Richer Ansible recap and reporting UX on top of the current Engine-side runtime.</li>
+              <li>Continued UI, API, and realtime cleanup across the Engine-hosted stack.</li>
             </ul>
           </article>
           <article class="lane">
             <h3>Next</h3>
             <ul>
-              <li>Ansible is currently unstable/incomplete; rebuild quick-run, scheduled, and agent playbook paths.</li>
-              <li>Complete server-driven Ansible dispatch over SSH/WinRM in a predictable pipeline.</li>
-              <li>Advance queued realtime migration tasks (Engine-side Socket.IO integrations).</li>
+              <li>Aurora repository workflow improvements and better import/export tooling for automation content.</li>
+              <li>Additional remote protocol coverage beyond the current shell and VNC surfaces.</li>
+              <li>More operational visibility around alerts, health, and maintenance workflows.</li>
             </ul>
           </article>
           <article class="lane">
             <h3>Long-Term</h3>
             <ul>
-              <li>Deliver full Linux support with reliable enrollment, script execution, auditing, and remote workflows.</li>
-              <li>Expand remote protocol capabilities over WireGuard beyond current shell/VNC workflows.</li>
-              <li>Strengthen trust operations (revocation/quarantine controls and maintenance tasks).</li>
-              <li>Grow automation ecosystem maturity across workflows, scheduling, and role portability over time.</li>
+              <li>Stronger Linux agent parity across scripting, service control, auditing, and remote workflows.</li>
+              <li>Deeper workflow, scheduling, and watchdog maturity as the automation ecosystem grows.</li>
+              <li>Future horizontal scaling and clustering beyond today's single-node Engine model.</li>
             </ul>
           </article>
         </div>
@@ -1041,13 +1044,13 @@
       <div id="screenshots" class="content-panel" role="tabpanel" aria-labelledby="content-tab-screenshots" data-content-panel="screenshots" hidden>
         <div class="carousel-shell">
           <figure class="carousel">
-            <img id="carousel-image" src="https://github.com/bunny-lab-io/Borealis/blob/main/Docs/images/repo_screenshots/Device_List.png?raw=true" alt="Borealis screenshot" />
+            <img id="carousel-image" src="https://raw.githubusercontent.com/bunny-lab-io/Borealis/main/Docs/images/repo_screenshots/Agent_System_Tray.png" alt="Borealis screenshot" />
             <div class="carousel-controls">
               <div class="carousel-buttons">
                 <button id="prev-btn" class="carousel-btn" type="button" aria-label="Previous screenshot">&#10094;</button>
                 <button id="next-btn" class="carousel-btn" type="button" aria-label="Next screenshot">&#10095;</button>
               </div>
-              <div id="carousel-meta" class="carousel-meta">Device List</div>
+              <div id="carousel-meta" class="carousel-meta">Agent System Tray</div>
             </div>
           </figure>
           <div id="dot-row" class="dot-row" aria-label="Screenshot selector"></div>
@@ -1081,21 +1084,26 @@
               <strong>Linux Engine</strong>
               <div class="code-wrap">
                 <button class="copy-btn" type="button" data-copy-target="cmd-linux-engine" aria-label="Copy Linux Engine commands"><span class="material-symbols-outlined" aria-hidden="true">content_copy</span></button>
-                <code id="cmd-linux-engine">./Borealis.sh --EngineProduction
+                <code id="cmd-linux-engine">./bootstrap.sh --EngineProduction
+./bootstrap.sh --EngineDev
+
+# Later redeploys
+./Borealis.sh --EngineProduction
 ./Borealis.sh --EngineDev</code>
               </div>
               <ul class="cmd-meta">
                 <li><strong>Production:</strong> <code>https://&lt;your-public-fqdn&gt;</code></li>
                 <li><strong>Development:</strong> <code>https://&lt;your-public-fqdn&gt;</code> via Traefik-backed Vite HMR</li>
               </ul>
-              <p>Engine deployment is Linux-only; use production or Vite-backed dev mode.</p>
+              <p>Use <code>bootstrap.sh</code> for first-run provisioning, then <code>Borealis.sh</code> for later local redeploys.</p>
             </article>
             <article class="cmd cmd-wide">
-              <strong>Default Login Credentials</strong>
-              <p>Please be sure to change the admin credentials before deploying the engine to production.</p>
+              <strong>Fresh Install Login Flow</strong>
+              <p>Fresh installs do not seed a default administrator anymore. Borealis first requires Aegis setup, then first-admin creation, before the normal login UI becomes available.</p>
               <ul class="cmd-meta">
-                <li><strong>Username:</strong> admin</li>
-                <li><strong>Password:</strong> Password</li>
+                <li><strong>Step 1:</strong> Complete the Aegis bootstrap gate.</li>
+                <li><strong>Step 2:</strong> Create the first administrator account.</li>
+                <li><strong>Step 3:</strong> Sign in normally once bootstrap reaches the login-required state.</li>
               </ul>
             </article>
           </div>
@@ -1105,7 +1113,7 @@
           <div class="bo-tab-row compact" role="tablist" aria-label="Agent operating systems">
             <button id="qs-subtab-windows" class="bo-tab-btn active" type="button" role="tab" aria-selected="true" aria-controls="qs-subpanel-windows" data-qs-subtarget="windows">Windows</button>
             <button id="qs-subtab-linux" class="bo-tab-btn" type="button" role="tab" aria-selected="false" aria-controls="qs-subpanel-linux" data-qs-subtarget="linux">Linux</button>
-            <button id="qs-subtab-macos" class="bo-tab-btn" type="button" role="tab" aria-selected="false" aria-controls="qs-subpanel-macos" data-qs-subtarget="macos">MacOS</button>
+            <button id="qs-subtab-macos" class="bo-tab-btn" type="button" role="tab" aria-selected="false" aria-controls="qs-subpanel-macos" data-qs-subtarget="macos">macOS</button>
           </div>
 
           <div id="qs-subpanel-windows" class="qs-subpanel active" role="tabpanel" aria-labelledby="qs-subtab-windows" data-qs-subpanel="windows">
@@ -1130,32 +1138,23 @@
                 <strong>Windows Agent (embedded server URL + enrollment code)</strong>
                 <div class="code-wrap">
                   <button class="copy-btn" type="button" data-copy-target="cmd-win-agent-embedded" aria-label="Copy Windows embedded Agent command"><span class="material-symbols-outlined" aria-hidden="true">content_copy</span></button>
-                  <code id="cmd-win-agent-embedded">&amp; ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent --serverurl "https://10.0.0.54:5000" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"</code>
+                  <code id="cmd-win-agent-embedded">&amp; ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"</code>
                 </div>
                 <span class="embedded-label">Embedded bootstrap example</span>
-                <p>Use when distributing non-interactive installs with a predefined server endpoint and enrollment code.</p>
+                <p>Use when distributing non-interactive installs with a predefined server endpoint and site enrollment code.</p>
               </article>
             </div>
           </div>
 
           <div id="qs-subpanel-linux" class="qs-subpanel" role="tabpanel" aria-labelledby="qs-subtab-linux" data-qs-subpanel="linux" hidden>
             <div class="quickstart-grid">
-              <article class="cmd">
-                <strong>Linux Agent Path</strong>
-                <div class="code-wrap">
-                  <button class="copy-btn" type="button" data-copy-target="cmd-linux-agent-path" aria-label="Copy Linux Agent command"><span class="material-symbols-outlined" aria-hidden="true">content_copy</span></button>
-                  <code id="cmd-linux-agent-path">curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s --</code>
-                </div>
-                <p>Current Linux agent support is incomplete; treat this path as experimental.</p>
-              </article>
               <article class="cmd cmd-wide">
-                <strong>Linux Agent (embedded server URL + enrollment code)</strong>
-                <div class="code-wrap">
-                  <button class="copy-btn" type="button" data-copy-target="cmd-linux-agent-embedded" aria-label="Copy Linux embedded Agent command"><span class="material-symbols-outlined" aria-hidden="true">content_copy</span></button>
-                  <code id="cmd-linux-agent-embedded">curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --agent --serverurl https://10.0.0.54:5000 --enrollmentcode E56F-FD6A-7D68-DEE9-899D-68AC-127D-84FE</code>
-                </div>
-                <span class="embedded-label">Embedded bootstrap example</span>
-                <p>Passes server URL and enrollment code directly during scripted install.</p>
+                <strong>Linux Agent Status</strong>
+                <p>Linux agent binaries are not currently published as a supported install path. The docs still treat Linux agent parity as incomplete, so the supported Borealis deployment today is the Linux Engine with the Windows agent.</p>
+                <ul class="cmd-meta">
+                  <li><strong>Current state:</strong> parity work remains in progress.</li>
+                  <li><strong>Today:</strong> use the Linux Engine on the server side and Windows agents for supported rollouts.</li>
+                </ul>
               </article>
             </div>
           </div>
@@ -1163,13 +1162,13 @@
           <div id="qs-subpanel-macos" class="qs-subpanel" role="tabpanel" aria-labelledby="qs-subtab-macos" data-qs-subpanel="macos" hidden>
             <div class="quickstart-grid">
               <article class="cmd cmd-wide">
-                <strong>MacOS Agent (placeholder)</strong>
+                <strong>macOS Agent (placeholder)</strong>
                 <div class="code-wrap">
-                  <button class="copy-btn" type="button" data-copy-target="cmd-macos-agent-placeholder" aria-label="Copy MacOS Agent placeholder status"><span class="material-symbols-outlined" aria-hidden="true">content_copy</span></button>
+                  <button class="copy-btn" type="button" data-copy-target="cmd-macos-agent-placeholder" aria-label="Copy macOS Agent placeholder status"><span class="material-symbols-outlined" aria-hidden="true">content_copy</span></button>
                   <code id="cmd-macos-agent-placeholder">Status: Planned (far-future)
 Priority: Not current</code>
                 </div>
-                <p>MacOS agent support is not a current priority and is considered a far-future feature on the Borealis roadmap.</p>
+                <p>macOS agent support is not a current priority and is considered a far-future feature on the Borealis roadmap.</p>
               </article>
             </div>
           </div>
@@ -1193,18 +1192,40 @@ Priority: Not current</code>
 
   <script>
     (function () {
+      const screenshotBase = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/main/Docs/images/repo_screenshots";
       const slides = [
-        { src: "https://github.com/bunny-lab-io/Borealis/blob/main/Docs/images/repo_screenshots/Device_List.png?raw=true", label: "Device List" },
-        { src: "https://github.com/bunny-lab-io/Borealis/blob/main/Docs/images/repo_screenshots/Device_Details.png?raw=true", label: "Device Details" },
-        { src: "https://github.com/bunny-lab-io/Borealis/blob/main/Docs/images/repo_screenshots/Device_VNC.png?raw=true", label: "Device Remote Desktop (VNC)" },
-        { src: "https://github.com/bunny-lab-io/Borealis/blob/main/Docs/images/repo_screenshots/Device_Remote_Shell.png?raw=true", label: "Device Remote Shell" },
-        { src: "https://github.com/bunny-lab-io/Borealis/blob/main/Docs/images/repo_screenshots/Device_Approval_Queue.png?raw=true", label: "Device Approval Queue" },
-        { src: "https://github.com/bunny-lab-io/Borealis/blob/main/Docs/images/repo_screenshots/Assembly_List.png?raw=true", label: "Assembly List" },
-        { src: "https://github.com/bunny-lab-io/Borealis/blob/main/Docs/images/repo_screenshots/Assembly_Editor.png?raw=true", label: "Assembly Editor" },
-        { src: "https://github.com/bunny-lab-io/Borealis/blob/main/Docs/images/repo_screenshots/Workflow_Editor.png?raw=true", label: "Workflow Editor" },
-        { src: "https://github.com/bunny-lab-io/Borealis/blob/main/Docs/images/repo_screenshots/Scheduled_Job_List.png?raw=true", label: "Scheduled Job List" },
-        { src: "https://github.com/bunny-lab-io/Borealis/blob/main/Docs/images/repo_screenshots/Log_Management.png?raw=true", label: "Log Management" }
-      ];
+        { file: "Agent_System_Tray.png", label: "Agent System Tray" },
+        { file: "Remote_Desktop.png", label: "Remote Desktop" },
+        { file: "Server_Overview.png", label: "Server Overview" },
+        { file: "Device_Service_List.png", label: "Device Service List" },
+        { file: "Device_Details_Agent_Health.png", label: "Device Details - Agent Health" },
+        { file: "User_Site_Assignment.png", label: "User Site Assignment" },
+        { file: "Aegis_Cipher.png", label: "Aegis Cipher" },
+        { file: "Credential_Management.png", label: "Credential Management" },
+        { file: "Credential_Management_Editor.png", label: "Credential Management Editor" },
+        { file: "Assembly_List.png", label: "Assembly List" },
+        { file: "Assembly_Editor.png", label: "Assembly Editor" },
+        { file: "Ansible_Playbook_Recap.png", label: "Ansible Playbook Recap" },
+        { file: "Site_List.png", label: "Site List" },
+        { file: "Scheduled_Job_List.png", label: "Scheduled Job List" },
+        { file: "Log_Management_Raw.png", label: "Log Management - Raw" },
+        { file: "Log_Management.png", label: "Log Management" },
+        { file: "Device_List.png", label: "Device List" },
+        { file: "Device_Approval_Queue.png", label: "Device Approval Queue" },
+        { file: "Workflow_Editor.png", label: "Workflow Editor" },
+        { file: "Scheduled_Job_History.png", label: "Scheduled Job History" },
+        { file: "Scheduled_Job_Editor.png", label: "Scheduled Job Editor" },
+        { file: "Github_API_Token.png", label: "GitHub API Token" },
+        { file: "Device_Remote_Shell.png", label: "Device Remote Shell" },
+        { file: "Device_Filter_List.png", label: "Device Filter List" },
+        { file: "Device_Filter_Editor.png", label: "Device Filter Editor" },
+        { file: "Device_Details.png", label: "Device Details" }
+      ].map(function (item) {
+        return {
+          src: screenshotBase + "/" + item.file,
+          label: item.label
+        };
+      });
 
       const image = document.getElementById("carousel-image");
       const meta = document.getElementById("carousel-meta");
