@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import html
 import asyncio
 import contextlib
 import tempfile
@@ -46,6 +47,7 @@ IS_WINDOWS = os.name == 'nt'
 TRAY_POPUP_MARGIN = 0
 TRAY_POPUP_WIDTH = 440
 TRAY_HEADER_ICON_SIZE = 106
+TRAY_POPUP_RADIUS = 24
 
 
 def _popup_palette(tone: str) -> Dict[str, str]:
@@ -572,7 +574,7 @@ class _TrayStatusPopup(QtWidgets.QWidget if QtWidgets is not None else object):
         header = QtWidgets.QHBoxLayout()
         header.setSpacing(18)
         header.setAlignment(
-            qt_enum(QtCore.Qt, "AlignmentFlag.AlignTop", getattr(QtCore.Qt, "AlignTop", 0))
+            qt_enum(QtCore.Qt, "AlignmentFlag.AlignVCenter", getattr(QtCore.Qt, "AlignVCenter", 0))
         )
         self._icon_label = QtWidgets.QLabel(self._panel)
         self._icon_label.setFixedSize(TRAY_HEADER_ICON_SIZE, TRAY_HEADER_ICON_SIZE)
@@ -582,18 +584,34 @@ class _TrayStatusPopup(QtWidgets.QWidget if QtWidgets is not None else object):
         header.addWidget(
             self._icon_label,
             0,
-            qt_enum(QtCore.Qt, "AlignmentFlag.AlignTop", getattr(QtCore.Qt, "AlignTop", 0)),
+            qt_enum(QtCore.Qt, "AlignmentFlag.AlignVCenter", getattr(QtCore.Qt, "AlignVCenter", 0)),
         )
 
         title_layout = QtWidgets.QVBoxLayout()
-        title_layout.setContentsMargins(0, 20, 0, 0)
-        title_layout.setSpacing(2)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(4)
         self._title_label = QtWidgets.QLabel("Borealis Agent", self._panel)
         self._title_label.setObjectName("TrayPopupTitle")
         self._title_label.setWordWrap(True)
         self._subtitle_label = QtWidgets.QLabel("", self._panel)
         self._subtitle_label.setObjectName("TrayPopupSubtitle")
         self._subtitle_label.setWordWrap(True)
+        self._subtitle_label.setTextFormat(
+            qt_enum(
+                QtCore.Qt,
+                "TextFormat.RichText",
+                getattr(QtCore.Qt, "RichText", 1),
+            )
+        )
+        self._subtitle_label.setTextInteractionFlags(
+            qt_enum(
+                QtCore.Qt,
+                "TextInteractionFlag.LinksAccessibleByMouse",
+                getattr(QtCore.Qt, "LinksAccessibleByMouse", 0),
+            )
+        )
+        self._subtitle_label.setOpenExternalLinks(True)
+        title_layout.addStretch(1)
         title_layout.addWidget(self._title_label)
         title_layout.addWidget(self._subtitle_label)
         title_layout.addStretch(1)
@@ -667,12 +685,15 @@ class _TrayStatusPopup(QtWidgets.QWidget if QtWidgets is not None else object):
         self.apply_view({})
 
     def _sync_window_mask(self) -> None:
-        clear_mask = getattr(self, "clearMask", None)
-        if callable(clear_mask):
-            try:
-                clear_mask()
-            except Exception:
-                pass
+        if QtGui is None or QtCore is None:
+            return
+        rect = QtCore.QRectF(self.rect())
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+        rect.adjust(0.5, 0.5, -0.5, -0.5)
+        path = QtGui.QPainterPath()
+        path.addRoundedRect(rect, float(TRAY_POPUP_RADIUS), float(TRAY_POPUP_RADIUS))
+        self.setMask(QtGui.QRegion(path.toFillPolygon().toPolygon()))
 
     def resizeEvent(self, event: Any) -> None:
         resize_event = getattr(super(), "resizeEvent", None)
@@ -785,7 +806,7 @@ class _TrayStatusPopup(QtWidgets.QWidget if QtWidgets is not None else object):
             QFrame#TrayPopupPanel {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #07111d, stop:1 #0d1728);
                 border: 1px solid rgba(68, 92, 122, 0.16);
-                border-radius: 24px;
+                border-radius: {TRAY_POPUP_RADIUS}px;
             }}
             QFrame#TrayPopupCard, QFrame#TrayPopupChip {{
                 background-color: rgba(11, 20, 35, 0.88);
@@ -876,7 +897,15 @@ class _TrayStatusPopup(QtWidgets.QWidget if QtWidgets is not None else object):
             """
         )
         self._title_label.setText(str(current_view.get("device_name") or "Borealis Agent"))
-        engine_url_text = f"Engine URL: {str(current_view.get('connected_host') or 'Not configured')}"
+        engine_host = str(current_view.get("connected_host") or "Not configured").strip() or "Not configured"
+        if engine_host != "Not configured":
+            engine_href = f"https://{engine_host}"
+            engine_url_text = (
+                f'Engine: <a href="{html.escape(engine_href, quote=True)}" '
+                f'style="color:#69b7ff; text-decoration:none;">{html.escape(engine_host)}</a>'
+            )
+        else:
+            engine_url_text = "Engine: Not configured"
         self._subtitle_label.setText(engine_url_text)
         self._subtitle_label.setVisible(True)
         self._checks_subtitle.clear()
