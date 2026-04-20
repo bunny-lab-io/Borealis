@@ -23,13 +23,16 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Bootstrap one-liner pinned to the latest stable release tag:
   `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --release-channel stable --agent`
 - Bootstrap one-liner pinned to a testing branch:
-  `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --repo-branch optimization/agent-context-socket-consolidation --agent`
+  `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/optimization/agent-context-socket-consolidation/bootstrap.ps1"))) --repo-branch optimization/agent-context-socket-consolidation --agent`
+- When testing bootstrap-only changes that have not merged to `main` yet, fetch `bootstrap.ps1` from the same branch or commit you want to validate; otherwise `main` may download an older bootstrapper that does not understand the new flags even if the target branch does.
 - Automated enrollment example:
   `./Borealis.ps1 -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Non-interactive server URL + enrollment example:
   `./Borealis.ps1 -ServerUrl "https://borealis.example.com" -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Bootstrap + server URL + enrollment example:
   `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
+- Branch bootstrap + server URL + enrollment example:
+  `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/optimization/agent-context-socket-consolidation/bootstrap.ps1"))) --agent --repo-branch optimization/agent-context-socket-consolidation --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Linux agent binaries are not available; `Borealis.sh --Agent` only stages settings.
 
 ## First Run Checklist
@@ -63,6 +66,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - `bootstrap.sh` is the Linux first-run path that syncs the repo and opts into missing OS package installation before handing off to `Borealis.sh`; it now accepts `--release-channel stable|unstable` plus `--repo-branch` / `--ref` for targeted deploys.
 - `Borealis.sh` now focuses on runtime verification, venv activation, and staging for the Linux Engine runtime during normal redeploys; it no longer performs package-manager checks on every run unless bootstrap explicitly opts in.
 - `bootstrap.ps1` and `Borealis.ps1` handle dependency setup and staging for the Windows agent runtime, and `bootstrap.ps1` now accepts the same release-channel and branch-selection bootstrap options as the Linux bootstrapper.
+- When validating new bootstrap-only behavior before it merges to `main`, download `bootstrap.ps1` from the same branch or commit you intend to test; using the `main` bootstrapper with branch-only flags can fail before the repo sync step has a chance to pull the newer code.
 - Dev mode (`--EngineDev`) uses Vite for the WebUI behind the embedded Traefik edge, while the Engine API stays on loopback.
 - Production (`--EngineProduction`) runs the Engine on loopback HTTP and publishes the app through the embedded Traefik edge.
 - `Borealis.sh` now defaults to a compact step-oriented console view. Detailed bootstrap subprocess output is captured in `Engine/Logs/install.log` or `Agent/Logs/install.log` and is surfaced inline only on failures unless `--verbose` is enabled.
