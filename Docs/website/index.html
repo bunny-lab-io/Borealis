@@ -227,7 +227,8 @@
     }
 
     .hero-logo {
-      width: min(1008px, 100%);
+      width: min(806px, 80%);
+      max-width: 100%;
       height: auto;
       display: block;
       filter: drop-shadow(0 10px 24px rgba(4, 7, 17, 0.52));
@@ -245,6 +246,16 @@
       display: grid;
       gap: 8px;
       max-width: 108ch;
+    }
+
+    .hero-screenshots {
+      display: grid;
+      gap: 10px;
+      max-width: 1000px;
+    }
+
+    .hero-screenshots .carousel {
+      width: 100%;
     }
 
     .hero-note-title {
@@ -578,8 +589,7 @@
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
     }
 
-    .content-tabs,
-    .quickstart-tabs {
+    .content-tabs {
       display: grid;
       gap: 12px;
     }
@@ -658,25 +668,11 @@
       display: block;
     }
 
-    .qs-panel,
-    .qs-subpanel {
-      display: none;
-    }
-
-    .qs-panel.active,
-    .qs-subpanel.active {
-      display: block;
-    }
-
     .quickstart-grid {
       display: grid;
       gap: 14px;
       grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
       align-items: start;
-    }
-
-    .qs-panel[data-qs-panel="agent"] .quickstart-grid {
-      grid-template-columns: 1fr;
     }
 
     .cmd-wide {
@@ -714,7 +710,8 @@
     }
 
     .code-wrap > code {
-      display: block;
+      display: flex;
+      align-items: center;
       color: #dbeafe;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       font-size: 0.76rem;
@@ -723,7 +720,7 @@
       word-break: break-word;
       margin-top: 0;
       padding-right: 48px;
-      min-height: calc(1.5em * 2);
+      min-height: 56px;
     }
 
     .copy-btn {
@@ -731,12 +728,11 @@
       top: 50%;
       right: 8px;
       transform: translateY(-50%);
-      border: 1px solid rgba(125, 183, 255, 0.55);
-      background: rgba(9, 29, 49, 0.95);
-      color: #dbeafe;
-      border-radius: 6px;
-      width: 30px;
-      height: 30px;
+      border: none;
+      background: transparent;
+      color: #b9ddff;
+      width: auto;
+      height: auto;
       padding: 0;
       display: grid;
       place-items: center;
@@ -744,7 +740,7 @@
       line-height: 1;
       font-weight: 600;
       cursor: pointer;
-      transition: background 140ms ease, border-color 140ms ease;
+      transition: color 140ms ease;
     }
 
     .copy-btn .material-symbols-outlined {
@@ -755,19 +751,15 @@
     .copy-btn:hover,
     .copy-btn:focus-visible {
       outline: none;
-      background: rgba(14, 42, 70, 0.95);
-      border-color: rgba(125, 183, 255, 0.78);
+      background: transparent;
+      color: #ffffff;
     }
 
     .copy-btn.copied {
-      border-color: rgba(52, 211, 153, 0.7);
-      background: rgba(8, 54, 45, 0.92);
       color: #d1fae5;
     }
 
     .copy-btn.failed {
-      border-color: rgba(244, 114, 182, 0.65);
-      background: rgba(66, 18, 41, 0.9);
       color: #ffd7e7;
     }
 
@@ -950,6 +942,25 @@
           />
           <p id="hero-logo-fallback" class="hero-logo-fallback" style="display:none;">Borealis</p>
         </div>
+        <div id="screenshots" class="hero-screenshots">
+          <div class="section-head">
+            <h2>Screenshots</h2>
+            <p class="sub">A quick look at the current Borealis interface.</p>
+          </div>
+          <div class="carousel-shell">
+            <figure class="carousel">
+              <img id="carousel-image" src="https://raw.githubusercontent.com/bunny-lab-io/Borealis/main/Docs/images/repo_screenshots/Device_List.png" alt="Borealis screenshot" />
+              <div class="carousel-controls">
+                <div class="carousel-buttons">
+                  <button id="prev-btn" class="carousel-btn" type="button" aria-label="Previous screenshot">&#10094;</button>
+                  <button id="next-btn" class="carousel-btn" type="button" aria-label="Next screenshot">&#10095;</button>
+                </div>
+                <div id="carousel-meta" class="carousel-meta">Device List</div>
+              </div>
+            </figure>
+            <div id="dot-row" class="dot-row" aria-label="Screenshot selector"></div>
+          </div>
+        </div>
         <br>
         <div class="hero-copy">
           <p>
@@ -972,7 +983,6 @@
       <div class="bo-tab-row" role="tablist" aria-label="Borealis sections">
         <button id="content-tab-features" class="bo-tab-btn active" type="button" role="tab" aria-selected="true" aria-controls="features" data-content-target="features">Core Features</button>
         <button id="content-tab-roadmap" class="bo-tab-btn" type="button" role="tab" aria-selected="false" aria-controls="roadmap" data-content-target="roadmap">Roadmap</button>
-        <button id="content-tab-screenshots" class="bo-tab-btn" type="button" role="tab" aria-selected="false" aria-controls="screenshots" data-content-target="screenshots">Screenshots</button>
       </div>
 
       <div id="features" class="content-panel active" role="tabpanel" aria-labelledby="content-tab-features" data-content-panel="features">
@@ -987,7 +997,7 @@
           </article>
           <article class="feature">
             <h3>WireGuard-First Remote Access</h3>
-            <p>Borealis uses managed WireGuard tunnels as the transport backbone for remote shell, VNC, and future remote workflows.</p>
+            <p>Borealis uses managed WireGuard tunnels as the transport backbone for remote shell, VNC, Ansible, and future remote workflows.</p>
           </article>
           <article class="feature">
             <h3>Remote Desktop That Just Works</h3>
@@ -1041,21 +1051,6 @@
         </div>
       </div>
 
-      <div id="screenshots" class="content-panel" role="tabpanel" aria-labelledby="content-tab-screenshots" data-content-panel="screenshots" hidden>
-        <div class="carousel-shell">
-          <figure class="carousel">
-            <img id="carousel-image" src="https://raw.githubusercontent.com/bunny-lab-io/Borealis/main/Docs/images/repo_screenshots/Agent_System_Tray.png" alt="Borealis screenshot" />
-            <div class="carousel-controls">
-              <div class="carousel-buttons">
-                <button id="prev-btn" class="carousel-btn" type="button" aria-label="Previous screenshot">&#10094;</button>
-                <button id="next-btn" class="carousel-btn" type="button" aria-label="Next screenshot">&#10095;</button>
-              </div>
-              <div id="carousel-meta" class="carousel-meta">Agent System Tray</div>
-            </div>
-          </figure>
-          <div id="dot-row" class="dot-row" aria-label="Screenshot selector"></div>
-        </div>
-      </div>
     </section>
 
     <section id="quickstart" class="section">
@@ -1072,7 +1067,6 @@
             <button class="copy-btn" type="button" data-copy-target="cmd-linux-engine" aria-label="Copy Linux Engine bootstrap command"><span class="material-symbols-outlined" aria-hidden="true">content_copy</span></button>
             <code id="cmd-linux-engine">curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s --</code>
           </div>
-          <p>This is the main Borealis bootstrap command for bringing up the Linux Engine.</p>
         </article>
       </div>
     </section>
@@ -1095,6 +1089,15 @@
     (function () {
       const screenshotBase = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/main/Docs/images/repo_screenshots";
       const slides = [
+        { file: "Device_List.png", label: "Device List" },
+        { file: "Device_Details.png", label: "Device Details" },
+        { file: "Assembly_List.png", label: "Assembly List" },
+        { file: "Assembly_Editor.png", label: "Assembly Editor" },
+        { file: "Device_Remote_Shell.png", label: "Device Remote Shell" },
+        { file: "Ansible_Playbook_Recap.png", label: "Ansible Playbook Recap" },
+        { file: "Scheduled_Job_List.png", label: "Scheduled Job List" },
+        { file: "Scheduled_Job_Editor.png", label: "Create Job" },
+        { file: "Scheduled_Job_History.png", label: "Scheduled Job History" },
         { file: "Agent_System_Tray.png", label: "Agent System Tray" },
         { file: "Remote_Desktop.png", label: "Remote Desktop" },
         { file: "Server_Overview.png", label: "Server Overview" },
@@ -1104,23 +1107,14 @@
         { file: "Aegis_Cipher.png", label: "Aegis Cipher" },
         { file: "Credential_Management.png", label: "Credential Management" },
         { file: "Credential_Management_Editor.png", label: "Credential Management Editor" },
-        { file: "Assembly_List.png", label: "Assembly List" },
-        { file: "Assembly_Editor.png", label: "Assembly Editor" },
-        { file: "Ansible_Playbook_Recap.png", label: "Ansible Playbook Recap" },
         { file: "Site_List.png", label: "Site List" },
-        { file: "Scheduled_Job_List.png", label: "Scheduled Job List" },
         { file: "Log_Management_Raw.png", label: "Log Management - Raw" },
         { file: "Log_Management.png", label: "Log Management" },
-        { file: "Device_List.png", label: "Device List" },
         { file: "Device_Approval_Queue.png", label: "Device Approval Queue" },
         { file: "Workflow_Editor.png", label: "Workflow Editor" },
-        { file: "Scheduled_Job_History.png", label: "Scheduled Job History" },
-        { file: "Scheduled_Job_Editor.png", label: "Scheduled Job Editor" },
         { file: "Github_API_Token.png", label: "GitHub API Token" },
-        { file: "Device_Remote_Shell.png", label: "Device Remote Shell" },
         { file: "Device_Filter_List.png", label: "Device Filter List" },
-        { file: "Device_Filter_Editor.png", label: "Device Filter Editor" },
-        { file: "Device_Details.png", label: "Device Details" }
+        { file: "Device_Filter_Editor.png", label: "Device Filter Editor" }
       ].map(function (item) {
         return {
           src: screenshotBase + "/" + item.file,
@@ -1319,7 +1313,7 @@
       const contentTabs = Array.from(document.querySelectorAll("[data-content-target]"));
       const contentPanels = Array.from(document.querySelectorAll("[data-content-panel]"));
       const contentTabHost = document.getElementById("content-tabs");
-      const NAV_CONTENT_KEYS = ["features", "roadmap", "screenshots"];
+      const NAV_CONTENT_KEYS = ["features", "roadmap"];
 
       function setContentTab(target) {
         contentTabs.forEach(function (tab) {
@@ -1344,7 +1338,7 @@
         });
       });
 
-      const navContentLinks = Array.from(document.querySelectorAll('.nav a[href="#features"], .nav a[href="#roadmap"], .nav a[href="#screenshots"]'));
+      const navContentLinks = Array.from(document.querySelectorAll('.nav a[href="#features"], .nav a[href="#roadmap"]'));
       navContentLinks.forEach(function (link) {
         link.addEventListener("click", function (event) {
           event.preventDefault();
