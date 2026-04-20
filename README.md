@@ -7,8 +7,6 @@ The project was originally created to consolidate the functionality of multiple 
 ## A Note on Development Pace
 I'm the sole maintainer of this project and still learning as I go while working a full-time IT job. Progress is iterative, and parts of the system are occasionally reworked as better architectural approaches emerge.
 
----
-
 ## Documentation
 - Human-friendly docs live in `Docs/` with a top-level index at `Docs/index.md`
 - The same files also include **Codex Agent** sections with deeper implementation details
@@ -17,10 +15,7 @@ I'm the sole maintainer of this project and still learning as I go while working
   - `Docs/getting-started.md`
   - `Docs/architecture-overview.md`
 
----
-
 # System Requirements
-
 Borealis currently runs as a single-node Linux Engine deployment that bundles the Python API/runtime, PostgreSQL, Traefik, WebSockets, scheduling, and automation services onto one host. Because of that, the Engine will use the resources you give it in a few predictable ways:
 
 - **CPU**:
