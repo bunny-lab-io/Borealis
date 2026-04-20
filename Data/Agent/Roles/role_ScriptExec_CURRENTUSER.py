@@ -48,6 +48,7 @@ TRAY_POPUP_MARGIN = 0
 TRAY_POPUP_WIDTH = 440
 TRAY_HEADER_ICON_SIZE = 106
 TRAY_POPUP_RADIUS = 24
+TRAY_POPUP_SHELL_RADIUS = 34
 
 
 def _popup_palette(tone: str) -> Dict[str, str]:
@@ -692,7 +693,7 @@ class _TrayStatusPopup(QtWidgets.QWidget if QtWidgets is not None else object):
             return
         rect.adjust(0.5, 0.5, -0.5, -0.5)
         path = QtGui.QPainterPath()
-        path.addRoundedRect(rect, float(TRAY_POPUP_RADIUS), float(TRAY_POPUP_RADIUS))
+        path.addRoundedRect(rect, float(TRAY_POPUP_SHELL_RADIUS), float(TRAY_POPUP_SHELL_RADIUS))
         self.setMask(QtGui.QRegion(path.toFillPolygon().toPolygon()))
 
     def resizeEvent(self, event: Any) -> None:
