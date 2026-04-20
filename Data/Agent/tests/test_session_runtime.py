@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import Data.Agent.session_runtime as session_runtime
 from Data.Agent.session_runtime import (
     SESSION_TARGET_ALL,
     _PendingJob,
     SessionHelperBroker,
+    _listener_address,
     build_currentuser_dispatch_fields,
     normalize_session_target,
 )
@@ -52,3 +54,38 @@ def test_broker_aggregates_multi_session_results() -> None:
     assert "boom-b" in aggregated["stderr"]
     assert aggregated["context"]["session_target"] == "all_active_sessions"
     assert len(aggregated["context"]["session_results"]) == 2
+
+
+def test_listener_address_accepts_unique_suffix() -> None:
+    address = _listener_address(7, "abc123")
+
+    assert "7" in address
+    assert "abc123" in address
+
+
+def test_ensure_helper_logs_listener_create_failure_instead_of_raising(monkeypatch) -> None:
+    logged = []
+    broker = SessionHelperBroker(
+        loop=None,
+        log=lambda message: logged.append(str(message)),
+        emit_quick_job_result=lambda _payload: None,
+        http_client_factory=None,
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise PermissionError("Access is denied")
+
+    monkeypatch.setattr(session_runtime, "Listener", _boom)
+
+    broker._ensure_helper(
+        9,
+        {
+            "session_id": 9,
+            "username": "nicole",
+            "state": "active",
+            "state_code": "active",
+            "eligible_for_interactive": True,
+        },
+    )
+
+    assert any("listener create failed" in entry for entry in logged)

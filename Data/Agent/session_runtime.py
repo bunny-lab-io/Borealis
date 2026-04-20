@@ -91,10 +91,15 @@ def _connection_family() -> str:
     return "AF_PIPE" if IS_WINDOWS else "AF_UNIX"
 
 
-def _listener_address(session_id: int) -> str:
+def _listener_address(session_id: int, suffix: str = "") -> str:
+    normalized_suffix = _clean_text(suffix)
+    if normalized_suffix:
+        normalized_suffix = "".join(ch for ch in normalized_suffix if ch.isalnum() or ch in ("-", "_"))
     if IS_WINDOWS:
-        return rf"\\.\pipe\Borealis_SessionHelper_{int(session_id)}"
-    return os.path.join(tempfile.gettempdir(), f"borealis_session_helper_{int(session_id)}.sock")
+        base = rf"\\.\pipe\Borealis_SessionHelper_{int(session_id)}"
+        return f"{base}_{normalized_suffix}" if normalized_suffix else base
+    base = os.path.join(tempfile.gettempdir(), f"borealis_session_helper_{int(session_id)}")
+    return f"{base}_{normalized_suffix}.sock" if normalized_suffix else f"{base}.sock"
 
 
 def _helper_command(
@@ -620,7 +625,8 @@ class SessionHelperBroker:
                 helper.session = dict(session)
                 if helper.ready():
                     return
-        address = _listener_address(session_id)
+        address_suffix = f"{os.getpid()}_{int(time.time())}_{secrets.token_hex(4)}"
+        address = _listener_address(session_id, address_suffix)
         auth_token = base64.urlsafe_b64encode(secrets.token_bytes(18)).decode("ascii")
         helper = _HelperState(session_id=session_id, session=dict(session), address=address, auth_token=auth_token)
         try:
@@ -628,7 +634,18 @@ class SessionHelperBroker:
                 os.unlink(address)
         except Exception:
             pass
-        listener = Listener(address, family=_connection_family(), authkey=auth_token.encode("utf-8"))
+        try:
+            listener = Listener(address, family=_connection_family(), authkey=auth_token.encode("utf-8"))
+        except Exception as exc:
+            helper.last_error = f"listener_create_failed: {exc}"
+            self._log(
+                "session helper session_id={0} listener create failed address={1} error={2}".format(
+                    session_id,
+                    address,
+                    exc,
+                )
+            )
+            return
         helper.listener = listener
         helper.launched_at = int(time.time())
         with self._lock:

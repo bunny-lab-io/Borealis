@@ -170,7 +170,7 @@ def _read_json(path: Path) -> Dict[str, Any]:
 
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     _ensure_dir(path.parent)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     temp_path.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     temp_path.replace(path)
 
