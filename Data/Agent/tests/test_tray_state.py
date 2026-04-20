@@ -125,9 +125,12 @@ def test_build_tray_view_connected_state(tmp_path: Path) -> None:
     labels = [entry["label"] for entry in view["menu_entries"] if entry.get("type") != "separator"]
 
     assert view["overall_status"] == "Connected"
+    assert view["connection_status"] == "Healthy"
     assert view["security_status"] == "Secure connection"
     assert view["activity_status"] == "Idle"
     assert view["wireguard_status"] == "Ready"
+    assert view["helper_session_status"] == "Loaded Successfully"
+    assert view["release_channel_label"] == "Unknown"
     assert view["tooltip"] == "Borealis Agent"
     assert labels == [
         "Borealis Agent",
@@ -162,6 +165,7 @@ def test_build_tray_view_starting_state_uses_busy_activity(tmp_path: Path) -> No
     )
 
     assert view["overall_status"] == "Starting up"
+    assert view["connection_status"] == "Checking"
     assert view["security_status"] == "Checking connection"
     assert view["activity_status"] == "Remote shell active"
     assert view["wireguard_status"] == "Starting"
@@ -296,6 +300,62 @@ def test_build_tray_view_with_live_current_session_ignores_stale_current_snapsho
     assert view["security_status"] == "Secure connection"
 
 
+def test_build_tray_view_treats_live_helper_session_as_connected_without_auth_bootstrap(tmp_path: Path) -> None:
+    start = _setup_start_path(tmp_path)
+    current = _snapshot("currentuser", now=200, started_at=60)
+    system = _snapshot(
+        "system",
+        now=200,
+        started_at=60,
+        auth_at=181,
+        heartbeat_at=191,
+        role_health=_wireguard_role("healthy", "Persistent tunnel active."),
+    )
+
+    view = tray_state.build_tray_view(
+        current_snapshot=current,
+        system_snapshot=system,
+        current_session_active=True,
+        busy_snapshot={"busy": False, "reasons": [], "entries": []},
+        now=220,
+        start=start,
+    )
+
+    assert view["overall_status"] == "Connected"
+    assert view["connection_status"] == "Healthy"
+    assert view["security_status"] == "Secure connection"
+
+
+def test_build_tray_view_reads_release_channel_from_update_status(monkeypatch, tmp_path: Path) -> None:
+    start = _setup_start_path(tmp_path)
+    monkeypatch.setattr(
+        tray_state,
+        "read_update_status",
+        lambda: {"effective_channel": "unstable"},
+    )
+
+    current = _snapshot("currentuser", now=200, started_at=60, auth_at=180, heartbeat_at=190)
+    system = _snapshot(
+        "system",
+        now=200,
+        started_at=60,
+        auth_at=181,
+        heartbeat_at=191,
+        role_health=_wireguard_role("healthy", "Persistent tunnel active."),
+    )
+
+    view = tray_state.build_tray_view(
+        current_snapshot=current,
+        system_snapshot=system,
+        busy_snapshot={"busy": False, "reasons": [], "entries": []},
+        now=220,
+        start=start,
+    )
+
+    assert view["release_channel"] == "unstable"
+    assert view["release_channel_label"] == "Unstable"
+
+
 def test_support_detail_order_is_fixed(tmp_path: Path) -> None:
     start = _setup_start_path(tmp_path)
     current = _snapshot("currentuser", now=200, started_at=60, auth_at=180, heartbeat_at=190)
@@ -323,10 +383,12 @@ def test_support_detail_order_is_fixed(tmp_path: Path) -> None:
     assert labels == [
         "Device",
         "Status",
+        "Connection",
         "Security",
         "Connected to",
         "Last check-in",
         "Activity",
+        "Release Channel",
         "WireGuard",
         "Build",
         "Agent ID",

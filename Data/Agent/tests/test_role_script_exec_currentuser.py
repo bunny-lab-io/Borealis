@@ -139,7 +139,7 @@ def test_bottom_right_anchor_falls_back_to_margin_when_popup_is_large() -> None:
         margin=18,
     )
 
-    assert (x, y) == (18, 18)
+    assert (x, y) == (0, 0)
 
 
 def test_open_logs_folder_uses_subprocess_on_non_windows(monkeypatch) -> None:

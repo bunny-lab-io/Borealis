@@ -16,11 +16,12 @@ except Exception:
     agent_logs_root = None
 
 try:
-    from update_state import get_busy_snapshot, read_installed_build_id, read_repo_build_id
+    from update_state import get_busy_snapshot, read_installed_build_id, read_repo_build_id, read_update_status
 except Exception:
     get_busy_snapshot = None
     read_installed_build_id = None
     read_repo_build_id = None
+    read_update_status = None
 
 
 SCHEMA_VERSION = 1
@@ -41,6 +42,13 @@ _ACTIVITY_LABELS = {
     "remote_shell": "Remote shell active",
     "vnc_session": "Remote desktop active",
 }
+
+
+def _title_case_channel(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return "Unknown"
+    return text.replace("_", " ").replace("-", " ").title()
 
 
 def normalize_service_mode(value: Any) -> str:
@@ -527,6 +535,13 @@ def build_tray_view(
     device_name = str(hostname or socket.gethostname() or "Unknown Device").strip() or "Unknown Device"
     resolved_guid = str(agent_guid or read_agent_guid(start)).strip()
     resolved_build_id = str(build_id or read_build_id() or "").strip()
+    update_status = read_update_status() if callable(read_update_status) else {}
+    effective_channel = str(
+        update_status.get("effective_channel")
+        or update_status.get("target_channel")
+        or update_status.get("channel")
+        or ""
+    ).strip().lower()
     configured_server_url = read_configured_server_url(start)
     configured_server_host = extract_server_host(configured_server_url)
     current_fresh = bool(current) and snapshot_is_fresh(current, now=timestamp)
@@ -534,8 +549,12 @@ def build_tray_view(
     current_live = current_fresh or (bool(current_session_active) and bool(current))
     current_booting = bool(current) and snapshot_in_boot_grace(current, now=timestamp)
     system_booting = bool(system) and snapshot_in_boot_grace(system, now=timestamp)
+    current_mode = normalize_service_mode(current.get("service_mode") or "currentuser")
     current_has_initial_contact = bool(int(current.get("last_auth_success_at") or 0) and int(current.get("last_heartbeat_success_at") or 0))
+    if current_mode == "currentuser" and current_live:
+        current_has_initial_contact = True
     system_has_initial_contact = bool(int(system.get("last_auth_success_at") or 0) and int(system.get("last_heartbeat_success_at") or 0))
+    system_socket_connected = bool(system.get("socket_connected"))
     wireguard = wireguard_summary(system)
     flags = _status_problem_flags(current, system)
     current_issue = (not current and not current_booting) or (current and not current_live and not current_booting)
@@ -586,6 +605,32 @@ def build_tray_view(
     last_check_in = format_relative_time(last_check_in_at, now=timestamp)
     activity_status = activity_label_from_snapshot(busy)
 
+    if current_live:
+        helper_session_status = "Loaded Successfully"
+        helper_session_status_code = "healthy"
+    elif current_booting or bool(current_session_active):
+        helper_session_status = "Loading"
+        helper_session_status_code = "neutral"
+    else:
+        helper_session_status = "Unavailable"
+        helper_session_status_code = "warning"
+
+    if (
+        overall_status == "Connected"
+        and security_status == "Secure connection"
+        and system_socket_connected
+        and wireguard["status_code"] == "healthy"
+        and helper_session_status_code == "healthy"
+    ):
+        connection_status = "Healthy"
+        connection_status_code = "healthy"
+    elif overall_status in {"Starting up", "Restarting"} or wireguard["status_code"] in {"recovering", "pending"}:
+        connection_status = "Checking"
+        connection_status_code = "neutral"
+    else:
+        connection_status = "Needs Attention"
+        connection_status_code = "warning"
+
     warnings: List[str] = []
     if not current and not current_booting:
         warnings.append("User session helper status is unavailable.")
@@ -625,6 +670,8 @@ def build_tray_view(
         "build_id": resolved_build_id or "Unknown",
         "agent_guid": resolved_guid or "Unknown",
         "overall_status": overall_status,
+        "connection_status": connection_status,
+        "connection_status_code": connection_status_code,
         "security_status": security_status,
         "activity_status": activity_status,
         "connected_host": connected_host,
@@ -633,6 +680,11 @@ def build_tray_view(
         "wireguard_status": wireguard["label"],
         "wireguard_detail": wireguard["detail"],
         "wireguard_status_code": wireguard["status_code"],
+        "system_socket_connected": system_socket_connected,
+        "helper_session_status": helper_session_status,
+        "helper_session_status_code": helper_session_status_code,
+        "release_channel": effective_channel,
+        "release_channel_label": _title_case_channel(effective_channel),
         "warnings": warnings,
         "current_snapshot": current,
         "system_snapshot": system,
@@ -669,10 +721,12 @@ def build_support_details(view: Mapping[str, Any]) -> List[Dict[str, str]]:
     return [
         {"label": "Device", "value": str(view.get("device_name") or "Unknown Device")},
         {"label": "Status", "value": str(view.get("overall_status") or "Unknown")},
+        {"label": "Connection", "value": str(view.get("connection_status") or "Unknown")},
         {"label": "Security", "value": str(view.get("security_status") or "Checking connection")},
         {"label": "Connected to", "value": str(view.get("connected_host") or "Not configured")},
         {"label": "Last check-in", "value": str(view.get("last_check_in") or "Never")},
         {"label": "Activity", "value": str(view.get("activity_status") or "Idle")},
+        {"label": "Release Channel", "value": str(view.get("release_channel_label") or "Unknown")},
         {"label": "WireGuard", "value": str(view.get("wireguard_status") or "Unavailable")},
         {"label": "Build", "value": str(view.get("build_id") or "Unknown")},
         {"label": "Agent ID", "value": str(view.get("agent_guid") or "Unknown")},
