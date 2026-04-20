@@ -483,7 +483,7 @@ Get-ScheduledTask -TaskName $task | Out-Null
         return -999, '', str(e)
 
 
-class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
+class _TrayStatusPopup(QtWidgets.QWidget if QtWidgets is not None else object):
     def __init__(self, role: "Role") -> None:
         if not _supports_qt_ui():
             return
@@ -524,6 +524,11 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
             "WidgetAttribute.WA_StyledBackground",
             getattr(QtCore.Qt, "WA_StyledBackground", None),
         )
+        no_system_background_attr = qt_enum(
+            QtCore.Qt,
+            "WidgetAttribute.WA_NoSystemBackground",
+            getattr(QtCore.Qt, "WA_NoSystemBackground", None),
+        )
         delete_close_attr = qt_enum(
             QtCore.Qt,
             "WidgetAttribute.WA_DeleteOnClose",
@@ -533,6 +538,8 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
             self.setAttribute(translucent_attr, True)
         if styled_attr is not None:
             self.setAttribute(styled_attr, True)
+        if no_system_background_attr is not None:
+            self.setAttribute(no_system_background_attr, True)
         if delete_close_attr is not None:
             self.setAttribute(delete_close_attr, False)
         self.setFocusPolicy(
@@ -545,7 +552,7 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
         self.setObjectName("TrayPopupShell")
         self.setMinimumWidth(TRAY_POPUP_WIDTH)
         self.setMaximumWidth(TRAY_POPUP_WIDTH)
-        self.setStyleSheet("QFrame#TrayPopupShell { background: transparent; border: none; }")
+        self.setStyleSheet("QWidget#TrayPopupShell { background: transparent; border: none; }")
         app = QtWidgets.QApplication.instance()
         if app is not None:
             try:
