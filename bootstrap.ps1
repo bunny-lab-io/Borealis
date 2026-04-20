@@ -8,6 +8,9 @@ $ErrorActionPreference = 'Stop'
 $defaultInstallDir = if ($env:BOREALIS_INSTALL_DIR) { $env:BOREALIS_INSTALL_DIR } else { 'C:\Borealis' }
 $defaultRepoUrl = if ($env:BOREALIS_BOOTSTRAP_REPO_URL) { $env:BOREALIS_BOOTSTRAP_REPO_URL } else { 'https://github.com/bunny-lab-io/Borealis.git' }
 $defaultRepoRef = if ($env:BOREALIS_BOOTSTRAP_REF) { $env:BOREALIS_BOOTSTRAP_REF } else { 'main' }
+$defaultReleaseChannel = if ($env:BOREALIS_BOOTSTRAP_RELEASE_CHANNEL) { $env:BOREALIS_BOOTSTRAP_RELEASE_CHANNEL } else { 'unstable' }
+$defaultStableRef = if ($env:BOREALIS_BOOTSTRAP_STABLE_REF) { $env:BOREALIS_BOOTSTRAP_STABLE_REF } else { '' }
+$defaultUnstableRef = if ($env:BOREALIS_BOOTSTRAP_UNSTABLE_REF) { $env:BOREALIS_BOOTSTRAP_UNSTABLE_REF } else { $defaultRepoRef }
 $defaultGitZipUrl = if ($env:BOREALIS_BOOTSTRAP_GIT_ZIP_URL) { $env:BOREALIS_BOOTSTRAP_GIT_ZIP_URL } else { 'https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip' }
 $defaultGitZipPath = if ($env:BOREALIS_BOOTSTRAP_GIT_ZIP_PATH) { $env:BOREALIS_BOOTSTRAP_GIT_ZIP_PATH } else { Join-Path $env:TEMP 'BorealisBootstrap_MinGit.zip' }
 $defaultGitCacheDir = if ($env:BOREALIS_BOOTSTRAP_GIT_DIR) {
@@ -20,7 +23,9 @@ $defaultGitCacheDir = if ($env:BOREALIS_BOOTSTRAP_GIT_DIR) {
 
 $installDir = $defaultInstallDir
 $repoUrl = $defaultRepoUrl
-$repoRef = $defaultRepoRef
+$repoRef = if ($env:BOREALIS_BOOTSTRAP_REF) { $env:BOREALIS_BOOTSTRAP_REF } else { '' }
+$repoRefExplicit = -not [string]::IsNullOrWhiteSpace($repoRef)
+$releaseChannel = $defaultReleaseChannel
 $gitZipUrl = $defaultGitZipUrl
 $gitZipPath = $defaultGitZipPath
 $gitCacheDir = $defaultGitCacheDir
@@ -45,13 +50,15 @@ function Show-Usage {
 Usage: bootstrap.ps1 [bootstrap options] [Borealis.ps1 options]
 
 Bootstrap options:
-  --install-dir <path>   Install location (default: C:\Borealis)
-  --repo-url <url>       Git repository URL (default: https://github.com/bunny-lab-io/Borealis.git)
-  --ref <name>           Git ref/branch/tag/commit to deploy (default: main)
-  --git-zip-url <url>    Portable Git ZIP URL
-  --git-zip-path <path>  Portable Git ZIP cache path
-  --git-dir <path>       Portable Git extraction directory
-  -h, --help             Show this help
+  --install-dir <path>                 Install location (default: C:\Borealis)
+  --repo-url <url>                     Git repository URL (default: https://github.com/bunny-lab-io/Borealis.git)
+  --release-channel <stable|unstable>  Select the deploy channel (default: unstable)
+  --repo-branch <name>                 Git branch to deploy for testing; alias for --ref
+  --ref <name>                         Git ref/branch/tag/commit to deploy; overrides release-channel
+  --git-zip-url <url>                  Portable Git ZIP URL
+  --git-zip-path <path>                Portable Git ZIP cache path
+  --git-dir <path>                     Portable Git extraction directory
+  -h, --help                           Show this help
 
 Any other arguments are forwarded to Borealis.ps1.
 Common forwarded options:
@@ -61,6 +68,10 @@ Common forwarded options:
 
 Windows agent bootstrap always forwards -NewEngine so rerunning bootstrap
 clears persisted Engine trust and enrollment tokens before Borealis.ps1 starts.
+
+Channel resolution:
+  unstable -> main (or BOREALIS_BOOTSTRAP_UNSTABLE_REF)
+  stable   -> latest numeric Git tag from the repository (or BOREALIS_BOOTSTRAP_STABLE_REF)
 '@ | Write-Host
 }
 
@@ -119,6 +130,21 @@ function Normalize-BorealisArgument {
         default {
             return [pscustomobject]@{ NextIndex = $Index; Handled = $false }
         }
+    }
+}
+
+function Normalize-ReleaseChannel {
+    param(
+        [string]$Value
+    )
+
+    $rawValue = if ($null -eq $Value) { '' } else { [string]$Value }
+    $normalized = $rawValue.Trim().ToLowerInvariant()
+    switch ($normalized) {
+        '' { return 'unstable' }
+        'stable' { return 'stable' }
+        'unstable' { return 'unstable' }
+        default { throw "Unsupported release channel '$Value'. Use stable or unstable." }
     }
 }
 
@@ -570,10 +596,93 @@ function Sync-BorealisRepository {
     Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @($cleanArgs.ToArray())
 }
 
+function Resolve-StableReleaseTag {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$GitExe,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryUrl
+    )
+
+    $lines = Invoke-GitCommand -GitExe $GitExe -Arguments @('ls-remote', '--tags', '--refs', $RepositoryUrl)
+    $candidates = New-Object System.Collections.Generic.List[string]
+    foreach ($line in @($lines)) {
+        $text = [string]$line
+        if ($text -match 'refs/tags/([0-9]+(?:\.[0-9]+)*)$') {
+            $candidates.Add($Matches[1])
+        }
+    }
+    if ($candidates.Count -eq 0) {
+        return ''
+    }
+    return ($candidates.ToArray() | Sort-Object { [version]$_ } -Descending | Select-Object -First 1)
+}
+
+function Resolve-RepositoryRef {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$GitExe,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryUrl,
+
+        [string]$ReleaseChannel,
+
+        [string]$ExplicitRef,
+
+        [string]$StableRefOverride = '',
+
+        [string]$UnstableRef = 'main'
+    )
+
+    $normalizedChannel = Normalize-ReleaseChannel -Value $ReleaseChannel
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitRef)) {
+        return [pscustomobject]@{
+            Ref = $ExplicitRef.Trim()
+            ReleaseChannel = $normalizedChannel
+        }
+    }
+
+    if ($normalizedChannel -eq 'stable') {
+        if (-not [string]::IsNullOrWhiteSpace($StableRefOverride)) {
+            Write-Host ("[i] Resolved stable release channel to configured ref '{0}'" -f $StableRefOverride)
+            return [pscustomobject]@{
+                Ref = $StableRefOverride.Trim()
+                ReleaseChannel = $normalizedChannel
+            }
+        }
+
+        $stableTag = Resolve-StableReleaseTag -GitExe $GitExe -RepositoryUrl $RepositoryUrl
+        if (-not [string]::IsNullOrWhiteSpace($stableTag)) {
+            Write-Host ("[i] Resolved stable release channel to latest tag '{0}'" -f $stableTag)
+            return [pscustomobject]@{
+                Ref = $stableTag.Trim()
+                ReleaseChannel = $normalizedChannel
+            }
+        }
+
+        $fallbackRef = if ([string]::IsNullOrWhiteSpace($UnstableRef)) { 'main' } else { $UnstableRef.Trim() }
+        Write-Host ("[!] Stable release channel could not resolve a remote release tag; falling back to '{0}'." -f $fallbackRef) -ForegroundColor Yellow
+        return [pscustomobject]@{
+            Ref = $fallbackRef
+            ReleaseChannel = $normalizedChannel
+        }
+    }
+
+    $resolvedUnstableRef = if ([string]::IsNullOrWhiteSpace($UnstableRef)) { 'main' } else { $UnstableRef.Trim() }
+    Write-Host ("[i] Resolved unstable release channel to ref '{0}'" -f $resolvedUnstableRef)
+    return [pscustomobject]@{
+        Ref = $resolvedUnstableRef
+        ReleaseChannel = $normalizedChannel
+    }
+}
+
 $rawArgs = @($args)
 for ($i = 0; $i -lt $rawArgs.Count; $i++) {
     $token = [string]$rawArgs[$i]
     $normalized = $token.ToLowerInvariant()
+    $handledBootstrapOption = $false
 
     switch -Regex ($normalized) {
         '^(-h|--help|-help|/\?)$' {
@@ -584,37 +693,51 @@ for ($i = 0; $i -lt $rawArgs.Count; $i++) {
             $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--install-dir'
             $installDir = $result.Value
             $i = $result.NextIndex
-            continue
+            $handledBootstrapOption = $true
+            break
         }
         '^(--repo-url|-repo-url|-repourl)(=.*)?$' {
             $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--repo-url'
             $repoUrl = $result.Value
             $i = $result.NextIndex
-            continue
+            $handledBootstrapOption = $true
+            break
         }
-        '^(--ref|--branch|-ref|-branch)(=.*)?$' {
+        '^(--release-channel|--release_channel|-release-channel|-releasechannel)(=.*)?$' {
+            $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--release-channel'
+            $releaseChannel = $result.Value
+            $i = $result.NextIndex
+            $handledBootstrapOption = $true
+            break
+        }
+        '^(--ref|--branch|--repo-branch|--repo_branch|-ref|-branch|-repo-branch|-repobranch)(=.*)?$' {
             $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--ref'
             $repoRef = $result.Value
+            $repoRefExplicit = $true
             $i = $result.NextIndex
-            continue
+            $handledBootstrapOption = $true
+            break
         }
         '^(--git-zip-url|-git-zip-url|-gitzipurl)(=.*)?$' {
             $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--git-zip-url'
             $gitZipUrl = $result.Value
             $i = $result.NextIndex
-            continue
+            $handledBootstrapOption = $true
+            break
         }
         '^(--git-zip-path|-git-zip-path|-gitzippath)(=.*)?$' {
             $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--git-zip-path'
             $gitZipPath = $result.Value
             $i = $result.NextIndex
-            continue
+            $handledBootstrapOption = $true
+            break
         }
         '^(--git-dir|-git-dir|-gitdir)(=.*)?$' {
             $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--git-dir'
             $gitCacheDir = $result.Value
             $i = $result.NextIndex
-            continue
+            $handledBootstrapOption = $true
+            break
         }
         '^(--zip-url|-zip-url|-zipurl)(=.*)?$' {
             throw 'ZIP-based repository bootstrap is no longer supported. Use --repo-url/--ref.'
@@ -622,6 +745,10 @@ for ($i = 0; $i -lt $rawArgs.Count; $i++) {
         '^(--zip-path|-zip-path|-zippath)(=.*)?$' {
             throw 'ZIP-based repository bootstrap is no longer supported. Use --repo-url/--ref.'
         }
+    }
+
+    if ($handledBootstrapOption) {
+        continue
     }
 
     $normalizedResult = Normalize-BorealisArgument -Token $token -Index $i -SourceArgs $rawArgs
@@ -663,9 +790,7 @@ if ($resolvedInstallDir -ne $installDir) {
 if ([string]::IsNullOrWhiteSpace($repoUrl)) {
     throw 'Repository URL cannot be empty.'
 }
-if ([string]::IsNullOrWhiteSpace($repoRef)) {
-    throw 'Repository ref cannot be empty.'
-}
+Normalize-ReleaseChannel -Value $releaseChannel | Out-Null
 
 try {
     try {
@@ -680,6 +805,19 @@ try {
 
     Stop-BorealisPythonProcesses -DestinationPath $installDir
 
+    $resolvedRef = Resolve-RepositoryRef `
+        -GitExe $gitExe `
+        -RepositoryUrl $repoUrl `
+        -ReleaseChannel $releaseChannel `
+        -ExplicitRef $repoRef `
+        -StableRefOverride $defaultStableRef `
+        -UnstableRef $defaultUnstableRef
+    $repoRef = [string]$resolvedRef.Ref
+    $releaseChannel = [string]$resolvedRef.ReleaseChannel
+    if ([string]::IsNullOrWhiteSpace($repoRef)) {
+        throw 'Repository ref cannot be empty.'
+    }
+
     Write-Host "[i] Syncing Borealis repository into $installDir"
     Sync-BorealisRepository -GitExe $gitExe -RepositoryUrl $repoUrl -Ref $repoRef -DestinationPath $installDir -PreserveDirectories @('Agent')
 
@@ -689,6 +827,8 @@ try {
     }
 
     $env:BOREALIS_BOOTSTRAP_NEW_ENGINE = '1'
+    $env:BOREALIS_BOOTSTRAP_RELEASE_CHANNEL = $releaseChannel
+    $env:BOREALIS_BOOTSTRAP_RESOLVED_REF = $repoRef
     $invokeArgs = New-Object System.Collections.Generic.List[string]
     $invokeArgs.Add('-Agent')
     if (-not [string]::IsNullOrWhiteSpace($forwardedServerUrl)) {

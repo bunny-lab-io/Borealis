@@ -437,6 +437,7 @@ class Role:
         self._listener_registered = True
         hooks = getattr(self.ctx, 'hooks', {}) or {}
         log_agent_hook = hooks.get('log_agent')
+        dispatch_currentuser_hook = hooks.get('dispatch_currentuser_quick_job')
 
         def _log(message: str, *, error: bool = False) -> None:
             if callable(log_agent_hook):
@@ -456,11 +457,37 @@ class Role:
                 if target and target != hostname.lower():
                     return
                 run_mode = (payload.get('run_mode') or 'current_user').lower()
-                if run_mode != 'system':
-                    return
                 job_id = payload.get('job_id')
                 script_type = (payload.get('script_type') or '').lower()
                 job_label = job_id if job_id is not None else 'unknown'
+                if run_mode in {'currentuser', 'current_user', 'interactive', 'user'}:
+                    if not callable(dispatch_currentuser_hook):
+                        await sio.emit(
+                            'quick_job_result',
+                            {
+                                'job_id': job_id,
+                                'status': 'Failed',
+                                'stdout': '',
+                                'stderr': 'Current-user dispatch broker is unavailable.',
+                                'context': payload.get('context') if isinstance(payload.get('context'), dict) else {},
+                            },
+                        )
+                        return
+                    accepted, error_text = dispatch_currentuser_hook(payload)
+                    if not accepted:
+                        await sio.emit(
+                            'quick_job_result',
+                            {
+                                'job_id': job_id,
+                                'status': 'Failed',
+                                'stdout': '',
+                                'stderr': error_text or 'Current-user dispatch failed.',
+                                'context': payload.get('context') if isinstance(payload.get('context'), dict) else {},
+                            },
+                        )
+                    return
+                if run_mode != 'system':
+                    return
                 _log(f"quick_job_run(system) received payload job_id={job_label}")
                 context = payload.get('context') if isinstance(payload, dict) else None
 

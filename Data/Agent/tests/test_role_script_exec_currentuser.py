@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import types
 from pathlib import Path
 
@@ -94,7 +95,9 @@ def test_copy_support_details_uses_clipboard(monkeypatch) -> None:
     role = role_module.Role.__new__(role_module.Role)
     role._copy_support_details({"support_text": "Device: workstation-01"})
 
-    assert clipboard.text == "Device: workstation-01"
+    assert "Device: workstation-01" in clipboard.text
+    assert "Engine Trust: Checking Trust..." in clipboard.text
+    assert "Websocket Connection: Disconnected" in clipboard.text
 
 
 def test_build_status_details_text_includes_wireguard_and_logs() -> None:
@@ -103,14 +106,50 @@ def test_build_status_details_text_includes_wireguard_and_logs() -> None:
     text = role._build_status_details_text(
         {
             "support_text": "Device: workstation-01\nStatus: Connected",
+            "security_status": "Secure connection",
+            "system_socket_connected": True,
+            "wireguard_status": "Connected",
+            "helper_session_status": "Running",
             "wireguard_detail": "Persistent tunnel active.",
             "logs_dir": "/tmp/Agent/Logs",
         }
     )
 
     assert "Device: workstation-01" in text
+    assert "Engine Trust: Secure (TLS + Ed25519)" in text
+    assert "Websocket Connection: Connected" in text
+    assert "WireGuard VPN Tunnel: Connected" in text
+    assert "Interactive User Session: Running" in text
     assert "WireGuard Detail: Persistent tunnel active." in text
     assert "Logs Folder: /tmp/Agent/Logs" in text
+
+
+def test_bottom_right_anchor_keeps_popup_inside_margin() -> None:
+    x, y = role_module._bottom_right_anchor(
+        100,
+        50,
+        800,
+        600,
+        320,
+        240,
+        margin=18,
+    )
+
+    assert (x, y) == (562, 392)
+
+
+def test_bottom_right_anchor_falls_back_to_margin_when_popup_is_large() -> None:
+    x, y = role_module._bottom_right_anchor(
+        0,
+        0,
+        300,
+        200,
+        480,
+        260,
+        margin=18,
+    )
+
+    assert (x, y) == (0, 0)
 
 
 def test_open_logs_folder_uses_subprocess_on_non_windows(monkeypatch) -> None:
@@ -210,3 +249,57 @@ def test_restart_agent_on_windows_exits_after_requesting_restart(monkeypatch, tm
     assert tray_state.load_restart_request("currentuser", start=start)["service_mode"] == "currentuser"
     assert tray_state.load_restart_request("system", start=start)["service_mode"] == "system"
     assert calls == ["refresh", "exit"]
+
+
+def test_register_events_uses_helper_handler_when_present() -> None:
+    registered = {}
+
+    role = role_module.Role.__new__(role_module.Role)
+    role.ctx = type(
+        "Ctx",
+        (),
+        {
+            "sio": object(),
+            "hooks": {
+                "register_local_helper_handler": lambda handler: registered.setdefault("handler", handler),
+            },
+        },
+    )()
+    role._listener_registered = False
+
+    role.register_events()
+
+    assert role._listener_registered is True
+    assert callable(registered.get("handler"))
+
+
+def test_handle_quick_job_run_trusts_broker_verified_payload(monkeypatch) -> None:
+    async def _fake_ps(content, env_map, timeout_seconds):
+        return 0, "hello from helper", ""
+
+    monkeypatch.setattr(role_module, "_run_powershell_script_content", _fake_ps)
+
+    role = role_module.Role.__new__(role_module.Role)
+    role.ctx = type("Ctx", (), {"hooks": {}})()
+    role._listener_registered = True
+
+    payload = {
+        "job_id": 14,
+        "target_hostname": "",
+        "script_type": "powershell",
+        "run_mode": "currentuser",
+        "script_content": "V3JpdGUtT3V0cHV0ICdoZWxsbycK",
+        "script_encoding": "base64",
+        "broker_verified": True,
+        "context": {"source": "test"},
+    }
+
+    result = asyncio.run(role._handle_quick_job_run(payload))
+
+    assert result == {
+        "job_id": 14,
+        "status": "Success",
+        "stdout": "hello from helper",
+        "stderr": "",
+        "context": {"source": "test"},
+    }

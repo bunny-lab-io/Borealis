@@ -8,6 +8,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Agents send heartbeats and inventory payloads to the Engine.
 - The Engine stores device summaries and detailed hardware, software, and cached service data in PostgreSQL.
 - Online status is derived from `last_seen` (online if the heartbeat is within ~5 minutes).
+- Session inventory now also carries helper-specific readiness data such as `eligible_for_interactive`, `helper_ready`, `helper_pid`, and `helper_last_seen_at` so Borealis can validate current-user execution targets.
 
 ## Sites and Enrollment Codes
 - Sites group devices for organizational and targeting purposes.
@@ -57,7 +58,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 ## API Endpoints
 - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
 - `POST /api/agent/details` (Device Authenticated) - inventory and cached service payloads.
-- `GET /api/agents` (Token Authenticated) - online collectors grouped by context.
+- `GET /api/agents` (Token Authenticated) - online collectors keyed by agent identity, with upgraded hosts advertising helper-backed current-user capability on their SYSTEM record instead of registering a second Borealis socket.
 - `GET /api/devices` (Token Authenticated) - device summary list.
 - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - site-scoped hostname search for the shared header search UI.
 - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID.
@@ -123,6 +124,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `/api/agent/details` stores full inventory payloads for memory, network, storage, software, cpu, and services.
 - JSON blobs are serialized into PostgreSQL text columns and rehydrated for UI.
 - Installed software is also normalized into `device_software_inventory` so filters can match name, source, and version reliably.
+- Session inventory enrichment from the agent broker flows through `Data/Agent/Roles/role_DeviceAudit.py` and `Data/Engine/services/API/devices/session_inventory.py`, so Device Details can distinguish a merely logged-in session from a helper-ready interactive session.
 - Service inventory is cached in the `devices.services` JSON blob and merged with pending operator actions until a fresh agent snapshot confirms the desired state.
 - Manual agent update requests from the Device Summary action menu call `POST /api/device/update-agent/<hostname>` and are delivered over the device's SYSTEM Socket.IO channel as `agent_update_request`.
 - The agent does not launch `Update.ps1` / `Update.sh` directly for that request anymore; it starts the existing local AutoUpdater scheduler path instead so manual and scheduled updates use the same execution flow.

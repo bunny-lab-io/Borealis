@@ -38,6 +38,7 @@ from ....db import dbapi as sqlite3
 from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
 from ...filters.matcher import DeviceFilterMatcher
+from ..devices.session_dispatch import build_currentuser_dispatch_fields
 from .targets import normalize_targets_for_save
 
 _WINRM_USERNAME_VAR = "__borealis_winrm_username"
@@ -660,6 +661,50 @@ def _aggregate_statuses(statuses: Sequence[Any]) -> str:
     if RUN_STATUS_SKIPPED in normalized:
         return RUN_STATUS_SKIPPED
     return next(iter(normalized))
+
+
+def _resolve_activity_history_insert_id(
+    cur,
+    *,
+    hostname: Any,
+    script_path: Any,
+    script_name: Any,
+    script_type: Any,
+    ran_at: Any,
+) -> Optional[int]:
+    lastrowid = getattr(cur, "lastrowid", None)
+    try:
+        if lastrowid not in (None, ""):
+            return int(lastrowid)
+    except Exception:
+        pass
+    try:
+        cur.execute(
+            """
+            SELECT id
+              FROM activity_history
+             WHERE hostname=?
+               AND script_path=?
+               AND script_name=?
+               AND script_type=?
+               AND ran_at=?
+             ORDER BY id DESC
+             LIMIT 1
+            """,
+            (
+                str(hostname or ""),
+                str(script_path or ""),
+                str(script_name or ""),
+                str(script_type or ""),
+                int(ran_at or 0),
+            ),
+        )
+        row = cur.fetchone()
+        if row and row[0] is not None:
+            return int(row[0])
+    except Exception:
+        return None
+    return None
 
 
 def _all_skipped_for_reason(
@@ -1539,7 +1584,14 @@ class JobScheduler:
                         "",
                     ),
                 )
-                act_id = cur.lastrowid
+                act_id = _resolve_activity_history_insert_id(
+                    cur,
+                    hostname=str(hostname),
+                    script_path=rel_norm,
+                    script_name=friendly_name,
+                    script_type="ansible",
+                    ran_at=now,
+                )
                 conn.commit()
             finally:
                 conn.close()
@@ -1746,7 +1798,14 @@ class JobScheduler:
                         "",
                     ),
                 )
-                act_id = cur.lastrowid
+                act_id = _resolve_activity_history_insert_id(
+                    cur,
+                    hostname=str(hostname),
+                    script_path=path_norm,
+                    script_name=friendly_name,
+                    script_type=stype,
+                    ran_at=now,
+                )
                 conn.commit()
             finally:
                 conn.close()
@@ -1767,6 +1826,12 @@ class JobScheduler:
                 "admin_user": "",
                 "admin_pass": "",
             }
+            payload.update(
+                build_currentuser_dispatch_fields(
+                    run_mode=normalized_run_mode,
+                    session_target="all_active_sessions",
+                )
+            )
             if signature_b64:
                 payload["signature"] = signature_b64
             if sig_alg:
@@ -3099,7 +3164,7 @@ class JobScheduler:
                         "resolved_connection": str(row.get("resolved_connection") or "").strip(),
                         "resolution_status": "",
                         "resolution_reason": "",
-                        "eligible_statuses": [],
+                        "eligible_runs": [],
                         "run_ids": set(),
                         "started_ts": [],
                         "finished_ts": [],
@@ -3125,7 +3190,14 @@ class JobScheduler:
                         group["resolution_status"] = resolution_status
                         group["resolution_reason"] = str(row.get("resolution_reason") or "").strip()
                     continue
-                group["eligible_statuses"].append(str(row.get("run_status") or "").strip())
+                group["eligible_runs"].append(
+                    {
+                        "id": int(row.get("run_id") or 0),
+                        "status": str(row.get("run_status") or "").strip(),
+                        "started_ts": row.get("started_ts"),
+                        "finished_ts": row.get("finished_ts"),
+                    }
+                )
                 if not group.get("resolution_status"):
                     group["resolution_status"] = RESOLUTION_STATUS_ELIGIBLE
                     group["resolution_reason"] = ""
@@ -3143,8 +3215,8 @@ class JobScheduler:
                 "total_targets": len(grouped),
             }
             for group_key, group in grouped.items():
-                if group["eligible_statuses"]:
-                    status = _aggregate_statuses(group["eligible_statuses"])
+                if group["eligible_runs"]:
+                    status = max(group["eligible_runs"], key=_host_run_priority).get("status") or RUN_STATUS_PENDING
                 elif group.get("resolution_status") in {RESOLUTION_STATUS_SKIPPED, RESOLUTION_STATUS_UNRESOLVED}:
                     status = RUN_STATUS_SKIPPED
                 else:
@@ -4359,7 +4431,14 @@ class JobScheduler:
                         "",
                     ),
                 )
-                act_id = cur.lastrowid
+                act_id = _resolve_activity_history_insert_id(
+                    cur,
+                    hostname=ENGINE_LOCAL_ALIAS,
+                    script_path=rel_norm,
+                    script_name=friendly_name,
+                    script_type="ansible",
+                    ran_at=now,
+                )
                 conn.commit()
             finally:
                 conn.close()

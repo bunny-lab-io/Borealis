@@ -58,6 +58,23 @@ def test_agent_socket_registry_unregister_cleans_host_mode_routes() -> None:
     assert registry.emit_to_host("LAB-OPERATOR-01", "system", "quick_job_run", {"job_id": 3}) is False
 
 
+def test_agent_socket_registry_falls_back_to_system_socket_for_helper_backed_currentuser() -> None:
+    socketio = _FakeSocketIO()
+    registry = AgentSocketRegistry(socketio, _FakeLogger())
+
+    registry.register(
+        "LAB-AIO-02_ABCDEF01-0000-0000-0000-000000000001_SYSTEM",
+        "sid-system",
+        service_mode="system",
+        helper_contexts=["currentuser"],
+    )
+
+    assert registry.is_host_mode_registered("LAB-AIO-02", "currentuser") is True
+    assert registry.get_agent_id_for_host_mode("LAB-AIO-02", "currentuser").endswith("_SYSTEM")
+    assert registry.emit_to_host("LAB-AIO-02", "currentuser", "quick_job_run", {"job_id": 9}) is True
+    assert socketio.events == [("quick_job_run", {"job_id": 9}, "sid-system")]
+
+
 def test_operator_presence_registry_tracks_distinct_sessions() -> None:
     registry = OperatorPresenceRegistry()
 

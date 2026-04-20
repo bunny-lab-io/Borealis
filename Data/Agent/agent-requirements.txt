@@ -8,7 +8,7 @@ aiohttp
 cryptography
 
 # GUI-related dependencies (Qt for GUI components)
-PyQt5
+PySide6
 qasync
 
 # Computer Vision & OCR Dependencies

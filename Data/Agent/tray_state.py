@@ -16,11 +16,12 @@ except Exception:
     agent_logs_root = None
 
 try:
-    from update_state import get_busy_snapshot, read_installed_build_id, read_repo_build_id
+    from update_state import get_busy_snapshot, read_installed_build_id, read_repo_build_id, read_update_status
 except Exception:
     get_busy_snapshot = None
     read_installed_build_id = None
     read_repo_build_id = None
+    read_update_status = None
 
 
 SCHEMA_VERSION = 1
@@ -41,6 +42,13 @@ _ACTIVITY_LABELS = {
     "remote_shell": "Remote shell active",
     "vnc_session": "Remote desktop active",
 }
+
+
+def _title_case_channel(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return "Unknown"
+    return text.replace("_", " ").replace("-", " ").title()
 
 
 def normalize_service_mode(value: Any) -> str:
@@ -170,7 +178,7 @@ def _read_json(path: Path) -> Dict[str, Any]:
 
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     _ensure_dir(path.parent)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     temp_path.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     temp_path.replace(path)
 
@@ -194,6 +202,8 @@ def build_default_snapshot(
         "updated_at": timestamp,
         "server_url": normalized_server_url,
         "server_host": extract_server_host(normalized_server_url),
+        "site_id": None,
+        "site_name": "",
         "guid_present": False,
         "verify_enabled": True,
         "socket_connected": False,
@@ -213,6 +223,11 @@ def load_status_snapshot(service_mode: Any, *, start: Optional[Path] = None) -> 
     payload["service_mode"] = normalize_service_mode(payload.get("service_mode") or service_mode)
     payload.setdefault("server_url", "")
     payload["server_host"] = extract_server_host(payload.get("server_url")) or str(payload.get("server_host") or "").strip()
+    payload["site_name"] = str(payload.get("site_name") or "").strip()
+    try:
+        payload["site_id"] = int(payload.get("site_id")) if payload.get("site_id") is not None else None
+    except Exception:
+        payload["site_id"] = None
     if not isinstance(payload.get("role_health"), dict):
         payload["role_health"] = dict(_DEFAULT_ROLE_HEALTH)
     return payload
@@ -240,6 +255,11 @@ def write_status_snapshot(
     merged["service_mode"] = normalized_mode
     merged["updated_at"] = timestamp
     merged["server_host"] = extract_server_host(merged.get("server_url")) or str(merged.get("server_host") or "").strip()
+    merged["site_name"] = str(merged.get("site_name") or "").strip()
+    try:
+        merged["site_id"] = int(merged.get("site_id")) if merged.get("site_id") is not None else None
+    except Exception:
+        merged["site_id"] = None
     if not isinstance(merged.get("role_health"), dict):
         merged["role_health"] = dict(_DEFAULT_ROLE_HEALTH)
     _write_json_atomic(status_path(normalized_mode, start), merged)
@@ -422,7 +442,7 @@ def wireguard_summary(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, str]:
     status_code = str(role.get("status_code") or role.get("status") or "").strip().lower() or "unknown"
     detail = str(role.get("detail") or "").strip()
     if status_code == "healthy":
-        return {"status_code": status_code, "label": "Ready", "detail": detail or "WireGuard tunnel is ready."}
+        return {"status_code": status_code, "label": "Connected", "detail": detail or "WireGuard tunnel is connected."}
     if status_code in {"recovering", "pending"}:
         return {"status_code": status_code, "label": "Starting", "detail": detail or "WireGuard is still starting."}
     if status_code == "unhealthy":
@@ -527,6 +547,13 @@ def build_tray_view(
     device_name = str(hostname or socket.gethostname() or "Unknown Device").strip() or "Unknown Device"
     resolved_guid = str(agent_guid or read_agent_guid(start)).strip()
     resolved_build_id = str(build_id or read_build_id() or "").strip()
+    update_status = read_update_status() if callable(read_update_status) else {}
+    effective_channel = str(
+        update_status.get("effective_channel")
+        or update_status.get("target_channel")
+        or update_status.get("channel")
+        or ""
+    ).strip().lower()
     configured_server_url = read_configured_server_url(start)
     configured_server_host = extract_server_host(configured_server_url)
     current_fresh = bool(current) and snapshot_is_fresh(current, now=timestamp)
@@ -534,8 +561,12 @@ def build_tray_view(
     current_live = current_fresh or (bool(current_session_active) and bool(current))
     current_booting = bool(current) and snapshot_in_boot_grace(current, now=timestamp)
     system_booting = bool(system) and snapshot_in_boot_grace(system, now=timestamp)
+    current_mode = normalize_service_mode(current.get("service_mode") or "currentuser")
     current_has_initial_contact = bool(int(current.get("last_auth_success_at") or 0) and int(current.get("last_heartbeat_success_at") or 0))
+    if current_mode == "currentuser" and current_live:
+        current_has_initial_contact = True
     system_has_initial_contact = bool(int(system.get("last_auth_success_at") or 0) and int(system.get("last_heartbeat_success_at") or 0))
+    system_socket_connected = bool(system.get("socket_connected"))
     wireguard = wireguard_summary(system)
     flags = _status_problem_flags(current, system)
     current_issue = (not current and not current_booting) or (current and not current_live and not current_booting)
@@ -579,12 +610,50 @@ def build_tray_view(
         or configured_server_host
         or "Not configured"
     )
+    site_name = (
+        str(current.get("site_name") or "").strip()
+        or str(system.get("site_name") or "").strip()
+    )
+    site_id = current.get("site_id")
+    if site_id is None:
+        site_id = system.get("site_id")
+    try:
+        site_id = int(site_id) if site_id is not None else None
+    except Exception:
+        site_id = None
     last_check_in_at = max(
         int(current.get("last_heartbeat_success_at") or 0),
         int(system.get("last_heartbeat_success_at") or 0),
     )
     last_check_in = format_relative_time(last_check_in_at, now=timestamp)
+    last_heartbeat_value = f"{max(0, timestamp - last_check_in_at)}s" if last_check_in_at > 0 else "Never"
     activity_status = activity_label_from_snapshot(busy)
+
+    if current_live:
+        helper_session_status = "Running"
+        helper_session_status_code = "healthy"
+    elif current_booting or bool(current_session_active):
+        helper_session_status = "Loading"
+        helper_session_status_code = "neutral"
+    else:
+        helper_session_status = "Unavailable"
+        helper_session_status_code = "warning"
+
+    if (
+        overall_status == "Connected"
+        and security_status == "Secure connection"
+        and system_socket_connected
+        and wireguard["status_code"] == "healthy"
+        and helper_session_status_code == "healthy"
+    ):
+        connection_status = "Healthy"
+        connection_status_code = "healthy"
+    elif overall_status in {"Starting up", "Restarting"} or wireguard["status_code"] in {"recovering", "pending"}:
+        connection_status = "Checking"
+        connection_status_code = "neutral"
+    else:
+        connection_status = "Needs Attention"
+        connection_status_code = "warning"
 
     warnings: List[str] = []
     if not current and not current_booting:
@@ -625,14 +694,24 @@ def build_tray_view(
         "build_id": resolved_build_id or "Unknown",
         "agent_guid": resolved_guid or "Unknown",
         "overall_status": overall_status,
+        "connection_status": connection_status,
+        "connection_status_code": connection_status_code,
         "security_status": security_status,
         "activity_status": activity_status,
         "connected_host": connected_host,
+        "site_name": site_name,
+        "site_id": site_id,
         "last_check_in": last_check_in,
         "last_check_in_at": last_check_in_at,
+        "last_heartbeat_value": last_heartbeat_value,
         "wireguard_status": wireguard["label"],
         "wireguard_detail": wireguard["detail"],
         "wireguard_status_code": wireguard["status_code"],
+        "system_socket_connected": system_socket_connected,
+        "helper_session_status": helper_session_status,
+        "helper_session_status_code": helper_session_status_code,
+        "release_channel": effective_channel,
+        "release_channel_label": _title_case_channel(effective_channel),
         "warnings": warnings,
         "current_snapshot": current,
         "system_snapshot": system,
@@ -668,11 +747,14 @@ def build_support_details(view: Mapping[str, Any]) -> List[Dict[str, str]]:
     warning_text = "; ".join(str(item).strip() for item in warnings if str(item).strip()) or "None"
     return [
         {"label": "Device", "value": str(view.get("device_name") or "Unknown Device")},
+        {"label": "Site", "value": str(view.get("site_name") or "Not Configured")},
         {"label": "Status", "value": str(view.get("overall_status") or "Unknown")},
+        {"label": "Connection", "value": str(view.get("connection_status") or "Unknown")},
         {"label": "Security", "value": str(view.get("security_status") or "Checking connection")},
         {"label": "Connected to", "value": str(view.get("connected_host") or "Not configured")},
         {"label": "Last check-in", "value": str(view.get("last_check_in") or "Never")},
         {"label": "Activity", "value": str(view.get("activity_status") or "Idle")},
+        {"label": "Release Channel", "value": str(view.get("release_channel_label") or "Unknown")},
         {"label": "WireGuard", "value": str(view.get("wireguard_status") or "Unavailable")},
         {"label": "Build", "value": str(view.get("build_id") or "Unknown")},
         {"label": "Agent ID", "value": str(view.get("agent_guid") or "Unknown")},

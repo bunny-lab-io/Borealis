@@ -215,6 +215,7 @@ def test_workflow_script_dispatch_includes_signature_payload(tmp_path: Path) -> 
     assert payload["signature"] == base64.b64encode(b"signed-workflow-payload").decode("ascii")
     assert payload["sig_alg"] == "ed25519"
     assert payload["signing_key"] == "workflow-public-key"
+    assert payload["target_context"] == "system"
 
 
 def test_workflow_validation_rejects_legacy_generic_wiring(tmp_path: Path) -> None:

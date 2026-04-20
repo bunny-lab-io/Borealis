@@ -26,6 +26,7 @@ from ..API.assemblies.execution import (
     _rewrite_script_for_dispatch,
     prepare_variable_context,
 )
+from ..API.devices.session_dispatch import build_currentuser_dispatch_fields
 from ..ansible import EngineAnsibleRunner
 from ..assemblies.service import AssemblyRuntimeService
 from ..filters.matcher import DeviceFilterMatcher
@@ -3463,6 +3464,12 @@ class WorkflowRuntimeService:
             "admin_pass": "",
             "context": dict(context or {}),
         }
+        payload.update(
+            build_currentuser_dispatch_fields(
+                run_mode=run_mode,
+                session_target="all_active_sessions",
+            )
+        )
         if signature_b64:
             payload["signature"] = signature_b64
             payload["sig_alg"] = "ed25519"

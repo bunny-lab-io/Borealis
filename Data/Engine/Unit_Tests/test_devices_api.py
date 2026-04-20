@@ -518,6 +518,28 @@ def test_list_agents(engine_harness: EngineTestHarness) -> None:
     assert first_agent["agent_id"] == "test-device-agent"
 
 
+def test_list_agents_includes_helper_contexts_for_upgraded_system_socket(engine_harness: EngineTestHarness) -> None:
+    client = _client_with_admin_session(engine_harness)
+    engine_harness.context.agent_socket_registry = SimpleNamespace(
+        snapshot=lambda: {
+            "test-device-agent": {
+                "agent_id": "test-device-agent",
+                "hostname": "test-device",
+                "service_mode": "system",
+                "helper_contexts": ["currentuser"],
+            }
+        }
+    )
+
+    response = client.get("/api/agents")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert isinstance(payload, dict)
+    first_agent = next(iter(payload.values()))
+    assert first_agent["hostname"] == "test-device"
+    assert first_agent["helper_contexts"] == ["currentuser"]
+
+
 def test_device_details(engine_harness: EngineTestHarness) -> None:
     client = _client_with_admin_session(engine_harness)
     response = client.get("/api/device/details/test-device")
@@ -672,6 +694,25 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
         {"name": "Contoso.App", "version": "1.2.0", "source": "windows_store", "metadata": {}},
         {"name": "Google Chrome", "version": "124.0.6367.92", "source": "local_installed", "metadata": {}},
     ]
+
+
+def test_agent_heartbeat_returns_assigned_site(engine_harness: EngineTestHarness) -> None:
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/agent/heartbeat",
+        headers=_device_headers(),
+        json={
+            "hostname": "test-device",
+            "service_mode": "system",
+            "metrics": {},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["site_name"] == "Main Lab"
+    assert payload["site_id"] == 1
 
 
 def test_device_list_views_lifecycle(engine_harness: EngineTestHarness) -> None:
@@ -855,10 +896,12 @@ def test_vpn_service_status_marks_peer_transport_recovering_when_handshake_never
     service, wg, _socketio, _service_events = _build_vpn_service()
     payload = service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
     service.mark_transport_required("agent-1", reason="shell_connect")
+    probe_age = max(40.0, float(WIREGUARD_KEEPALIVE_SECONDS) + 10.0)
     with service._lock:
         session = service._sessions_by_agent["agent-1"]
-        session.created_at = time.time() - 10
-        session.last_activity = time.time() - 10
+        session.created_at = time.time() - probe_age
+        session.last_activity = time.time() - probe_age
+        session.last_transport_probe_at = time.time() - probe_age
     wg.peer_health_overrides[payload["client_public_key"]] = {
         "healthy": False,
         "reason": "no_handshake",
@@ -1053,10 +1096,12 @@ def test_vpn_service_watchdog_recovers_when_peer_transport_is_unhealthy() -> Non
     service, wg, _socketio, service_events = _build_vpn_service()
     payload = service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
     service.mark_transport_required("agent-1", reason="shell_connect")
+    probe_age = max(40.0, float(WIREGUARD_KEEPALIVE_SECONDS) + 10.0)
     with service._lock:
         session = service._sessions_by_agent["agent-1"]
-        session.created_at = time.time() - 10
-        session.last_activity = time.time() - 10
+        session.created_at = time.time() - probe_age
+        session.last_activity = time.time() - probe_age
+        session.last_transport_probe_at = time.time() - probe_age
     wg.peer_health_overrides[payload["client_public_key"]] = {
         "healthy": False,
         "reason": "no_handshake",

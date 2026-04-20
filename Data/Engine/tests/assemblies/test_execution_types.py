@@ -106,6 +106,7 @@ def test_quick_run_accepts_batch_and_bash(
     assert service_mode == "system"
     assert event_name == "quick_job_run"
     assert dispatched["script_type"] == script_type
+    assert dispatched["target_context"] == "system"
     decoded_content = base64.b64decode(dispatched["script_content"]).decode("utf-8")
     assert decoded_content == script_body.replace("\r\n", "\n")
     assert any(event_name == "device_activity_changed" for event_name, _payload, _to in socket_events)
@@ -119,3 +120,57 @@ def test_quick_run_accepts_batch_and_bash(
         assert row[1] == "Running"
     finally:
         conn.close()
+
+
+def test_quick_run_currentuser_includes_session_target_metadata(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _admin_client(engine_harness)
+    create_response = client.post(
+        "/api/assemblies",
+        json={
+            "domain": "user",
+            "assembly_type": "script",
+            "assembly_subtype": "powershell",
+            "display_name": "Current User Quick Run",
+            "summary": "currentuser quick run coverage",
+            "payload": _script_document(
+                name="Current User Quick Run",
+                script_type="powershell",
+                script_body="Write-Output 'hello'\n",
+            ),
+        },
+    )
+    assert create_response.status_code == 201
+    assembly_guid = create_response.get_json()["assembly_guid"]
+
+    targeted_events = []
+    monkeypatch.setattr(
+        engine_harness.context,
+        "emit_host_service_event",
+        lambda hostname, service_mode, event, payload: (
+            targeted_events.append((hostname, service_mode, event, payload)) or True
+        ),
+    )
+
+    response = client.post(
+        "/api/scripts/quick_run",
+        json={
+            "assembly_guid": assembly_guid,
+            "hostnames": ["test-device"],
+            "run_mode": "currentuser",
+            "session_target": "specific_session",
+            "target_session_id": 4,
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(targeted_events) == 1
+    hostname, service_mode, event_name, payload = targeted_events[0]
+    assert hostname == "test-device"
+    assert service_mode == "currentuser"
+    assert event_name == "quick_job_run"
+    assert payload["target_context"] == "currentuser"
+    assert payload["session_target"] == "specific_session"
+    assert payload["target_session_id"] == 4

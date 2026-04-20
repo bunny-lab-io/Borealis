@@ -103,60 +103,44 @@ def run_elevated_powershell(paths, ps_content, log_name):
     return 0
 
 
-def ensure_user_logon_task(paths):
-    """Ensure per-user scheduled task that launches the helper at logon.
-    Task name: "Borealis Agent"
-    """
-    task_name = "Borealis Agent"
-    pyw = paths.get("venv_pythonw") or paths["venv_python"]
-    cmd = f'"{pyw}" -W ignore::SyntaxWarning "{paths["agent_script"]}"'
-    # Try create non-elevated
-    q = run(["schtasks.exe", "/Query", "/TN", task_name], capture=True)
-    if q.returncode == 0:
+def remove_legacy_user_logon_task(paths):
+    """Remove the retired per-user helper scheduled task if it still exists."""
+    task_names = ["Borealis Agent (UserHelper)"]
+    for task_name in task_names:
+        q = run(["schtasks.exe", "/Query", "/TN", task_name], capture=True)
+        if q.returncode != 0:
+            continue
         d = run(["schtasks.exe", "/Delete", "/TN", task_name, "/F"], capture=True)
-        if d.returncode != 0:
-            pass
-    c = run(["schtasks.exe", "/Create", "/SC", "ONLOGON", "/TN", task_name, "/TR", cmd, "/F", "/RL", "LIMITED"], capture=True)
-    if c.returncode == 0:
-        run(["schtasks.exe", "/Run", "/TN", task_name], capture=True)
-        return True
-    # Elevated fallback using ScheduledTasks cmdlets for better reliability
-    ps = f"""
+        if d.returncode == 0:
+            continue
+        ps = f"""
 $ErrorActionPreference='Continue'
-$task = "{task_name}"
-$py   = "{pyw}"
-$arg  = "-W ignore::SyntaxWarning {paths['agent_script']}"
-try {{ Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
-$action = New-ScheduledTaskAction -Execute $py -Argument $arg
-$trigger= New-ScheduledTaskTrigger -AtLogOn
-$settings = New-ScheduledTaskSettingsSet -Hidden -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-Register-ScheduledTask -TaskName $task -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
-Start-ScheduledTask -TaskName $task | Out-Null
+try {{ Unregister-ScheduledTask -TaskName "{task_name}" -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
 """
-    rc = run_elevated_powershell(paths, ps, "Borealis_CollectorTask_Install.log")
-    return rc == 0
+        rc = run_elevated_powershell(paths, ps, "Borealis_CollectorTask_Install.log")
+        if rc != 0:
+            return False
+    return True
 
 
 def ensure_all():
     paths = project_paths()
     ensure_dirs(paths)
-    ok = ensure_user_logon_task(paths)
+    ok = remove_legacy_user_logon_task(paths)
     return 0 if ok else 1
 
 
 def main(argv):
     if len(argv) <= 1:
-        print("Usage: agent_deployment.py [ensure-all|task-ensure|task-remove]")
+        print("Usage: agent_deployment.py [ensure-all|task-remove]")
         return 2
     cmd = argv[1].lower()
     paths = project_paths()
     ensure_dirs(paths)
     if cmd == "ensure-all":
         return ensure_all()
-    if cmd == "task-ensure":
-        return 0 if ensure_user_logon_task(paths) else 1
     if cmd == "task-remove":
-        return run(["schtasks.exe", "/Delete", "/TN", "Borealis Agent", "/F"]).returncode
+        return run(["schtasks.exe", "/Delete", "/TN", "Borealis Agent (UserHelper)", "/F"]).returncode
     print(f"Unknown command: {cmd}")
     return 2
 

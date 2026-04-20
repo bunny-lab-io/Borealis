@@ -15,7 +15,7 @@ Explain how Borealis is structured and how the core components interact end to e
 ## How the Pieces Talk
 - Enrollment: agent calls `/api/agent/enroll/request` and `/api/agent/enroll/poll`, operator approves, Engine issues tokens and cert bundle.
 - Inventory: agent posts `/api/agent/heartbeat` and `/api/agent/details`, Engine updates device records.
-- Quick jobs: operator calls `/api/scripts/quick_run`, Engine emits `quick_job_run` over Socket.IO, agent executes and returns `quick_job_result`.
+- Quick jobs: operator calls `/api/scripts/quick_run`, Engine emits `quick_job_run` over the SYSTEM socket, and the SYSTEM broker either executes locally or forwards current-user work into a session helper before returning `quick_job_result`.
 - Scheduled jobs: scheduler reads jobs from DB, resolves targets (including filters), then emits quick jobs.
 - VPN tunnels: agent calls `/api/agent/vpn/ensure`, Engine emits `vpn_tunnel_start`, agent keeps WireGuard client online.
 - Remote shell: UI uses Socket.IO `vpn_shell_*` events, Engine bridges to agent TCP shell over WireGuard.
@@ -57,14 +57,16 @@ None on this page. See [API Reference](api-reference.md).
 - VPN orchestration: `Data/Engine/services/VPN/` (WireGuard server and tunnel lifecycle).
 - Remote desktop proxy: `Data/Engine/services/RemoteDesktop/` (VNC WebSocket proxy).
 - Filters and targeting: `Data/Engine/services/filters/matcher.py` (used by scheduled jobs and filter counts).
-- Agent roles: `Data/Agent/Roles/` (script exec, screenshot, WireGuard tunnel, remote PowerShell, etc).
+- Agent broker/runtime split: `Data/Agent/agent.py` (SYSTEM socket owner) plus `Data/Agent/session_runtime.py` (per-session helper broker and local IPC).
+- Agent roles: `Data/Agent/Roles/` (script exec, device audit, WireGuard tunnel, remote shell, VNC, and legacy interactive-only roles).
 
 ### End-to-end flow examples (use these to debug)
 - Quick job:
   1) UI calls `/api/scripts/quick_run` with script path + hostnames.
-  2) Engine signs script and emits `quick_job_run`.
-  3) Agent role executes and posts `quick_job_result` over Socket.IO.
-  4) Engine updates `activity_history` and emits `device_activity_changed`.
+  2) Engine signs the script, sets `target_context`, and emits `quick_job_run` to the host's SYSTEM socket.
+  3) The SYSTEM broker either executes the SYSTEM role locally or routes current-user work into one or more session helpers over local IPC.
+  4) The SYSTEM runtime posts `quick_job_result` over Socket.IO.
+  5) Engine updates `activity_history` and emits `device_activity_changed`.
 - VPN shell:
   1) UI calls `/api/shell/establish` to ensure shell readiness.
   2) Agent WireGuard role keeps the tunnel online; agent shell role listens on TCP 47002.
@@ -82,5 +84,6 @@ None on this page. See [API Reference](api-reference.md).
 
 ### Interaction points to remember
 - REST for inventory, enrollment, and admin actions.
-- Socket.IO for realtime job results, VPN shell, and notifications.
+- Socket.IO for realtime job results, VPN shell, and notifications, with the supported Windows agent model exposing one SYSTEM socket per host.
+- Local IPC inside the agent for SYSTEM-to-helper current-user dispatch; helpers do not open their own Engine socket.
 - WireGuard for remote protocol transport (shell, VNC, future protocols).

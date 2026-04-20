@@ -27,6 +27,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing aide
 
 from ...assemblies.service import AssemblyRuntimeService
 from ...auth import RequestAuthContext, UserSiteAccessManager
+from ..devices.session_dispatch import build_currentuser_dispatch_fields
 
 def _normalize_script_relpath(rel_path: Any) -> Optional[str]:
     """Return a canonical Scripts-relative path or ``None`` when invalid."""
@@ -419,6 +420,8 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
         rel_path_normalized = _normalize_script_relpath(rel_path_input)
         hostnames = _normalize_hostnames(data.get("hostnames"))
         run_mode = (data.get("run_mode") or "system").strip().lower()
+        session_target = data.get("session_target")
+        target_session_id = data.get("target_session_id")
         admin_user = str(data.get("admin_user") or "").strip()
         admin_pass = str(data.get("admin_pass") or "").strip()
 
@@ -612,6 +615,13 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                     "admin_user": admin_user,
                     "admin_pass": admin_pass,
                 }
+                payload.update(
+                    build_currentuser_dispatch_fields(
+                        run_mode=run_mode,
+                        session_target=session_target,
+                        target_session_id=target_session_id,
+                    )
+                )
                 if signature_b64:
                     payload["signature"] = signature_b64
                     payload["sig_alg"] = "ed25519"

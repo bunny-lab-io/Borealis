@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import html
 import asyncio
 import contextlib
 import tempfile
@@ -8,14 +9,18 @@ import uuid
 import base64
 import shutil
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    from PyQt5 import QtCore, QtGui, QtWidgets
-except Exception:  # pragma: no cover - import guard for headless tests
-    QtCore = None
-    QtGui = None
-    QtWidgets = None
+    from qt_compat import QtCore, QtGui, QtWidgets, qt_enum
+except Exception:  # pragma: no cover - fallback for runtime path issues
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    base_dir = _Path(__file__).resolve().parents[1]
+    if str(base_dir) not in _sys.path:
+        _sys.path.insert(0, str(base_dir))
+    from qt_compat import QtCore, QtGui, QtWidgets, qt_enum
 
 try:
     import tray_state
@@ -35,10 +40,67 @@ except Exception:
     busy_activity = None
 
 ROLE_NAME = 'script_exec_currentuser'
-ROLE_CONTEXTS = ['interactive']
+ROLE_CONTEXTS = ['interactive', 'helper']
 
 
 IS_WINDOWS = os.name == 'nt'
+TRAY_POPUP_MARGIN = 0
+TRAY_POPUP_WIDTH = 440
+TRAY_HEADER_ICON_SIZE = 106
+TRAY_POPUP_RADIUS = 24
+TRAY_POPUP_SHELL_RADIUS = 34
+
+
+def _popup_palette(tone: str) -> Dict[str, str]:
+    normalized = str(tone or "healthy").strip().lower() or "healthy"
+    palettes = {
+        "healthy": {
+            "accent": "#38d39f",
+            "accent_soft": "rgba(56, 211, 159, 0.16)",
+            "accent_border": "rgba(56, 211, 159, 0.42)",
+        },
+        "neutral": {
+            "accent": "#69b7ff",
+            "accent_soft": "rgba(105, 183, 255, 0.16)",
+            "accent_border": "rgba(105, 183, 255, 0.42)",
+        },
+        "warning": {
+            "accent": "#f0b34c",
+            "accent_soft": "rgba(240, 179, 76, 0.16)",
+            "accent_border": "rgba(240, 179, 76, 0.42)",
+        },
+        "error": {
+            "accent": "#f06f6f",
+            "accent_soft": "rgba(240, 111, 111, 0.16)",
+            "accent_border": "rgba(240, 111, 111, 0.42)",
+        },
+    }
+    return palettes.get(normalized, palettes["healthy"])
+
+
+def _bottom_right_anchor(
+    left: int,
+    top: int,
+    width: int,
+    height: int,
+    popup_width: int,
+    popup_height: int,
+    *,
+    margin: int = TRAY_POPUP_MARGIN,
+) -> Tuple[int, int]:
+    max_x = int(left) + int(width) - int(popup_width)
+    max_y = int(top) + int(height) - int(popup_height)
+    x = max(int(left), min(max_x - int(margin), max_x))
+    y = max(int(top), min(max_y - int(margin), max_y))
+    return x, y
+
+
+def _warning_lines(view: Dict[str, Any]) -> List[str]:
+    return [str(item).strip() for item in (view.get("warnings") or []) if str(item).strip()]
+
+
+def _supports_qt_ui() -> bool:
+    return QtWidgets is not None and QtGui is not None and QtCore is not None
 
 
 def _background_process_popen_kwargs(cwd: str) -> Dict[str, Any]:
@@ -424,13 +486,513 @@ Get-ScheduledTask -TaskName $task | Out-Null
         return -999, '', str(e)
 
 
+class _TrayStatusPopup(QtWidgets.QWidget if QtWidgets is not None else object):
+    def __init__(self, role: "Role") -> None:
+        if not _supports_qt_ui():
+            return
+        super().__init__(None)
+        self._role = role
+        self._feedback_timer = QtCore.QTimer(self)
+        self._feedback_timer.setSingleShot(True)
+        self._feedback_timer.timeout.connect(self._clear_feedback)
+
+        tool_flag = qt_enum(QtCore.Qt, "WindowType.Tool", getattr(QtCore.Qt, "Tool", 0))
+        frameless_flag = qt_enum(
+            QtCore.Qt,
+            "WindowType.FramelessWindowHint",
+            getattr(QtCore.Qt, "FramelessWindowHint", 0),
+        )
+        stays_on_top_flag = qt_enum(
+            QtCore.Qt,
+            "WindowType.WindowStaysOnTopHint",
+            getattr(QtCore.Qt, "WindowStaysOnTopHint", 0),
+        )
+        no_drop_shadow_flag = qt_enum(
+            QtCore.Qt,
+            "WindowType.NoDropShadowWindowHint",
+            getattr(QtCore.Qt, "NoDropShadowWindowHint", None),
+        )
+        window_flags = tool_flag | frameless_flag | stays_on_top_flag
+        if no_drop_shadow_flag is not None:
+            window_flags |= no_drop_shadow_flag
+        self.setWindowFlags(window_flags)
+
+        translucent_attr = qt_enum(
+            QtCore.Qt,
+            "WidgetAttribute.WA_TranslucentBackground",
+            getattr(QtCore.Qt, "WA_TranslucentBackground", None),
+        )
+        styled_attr = qt_enum(
+            QtCore.Qt,
+            "WidgetAttribute.WA_StyledBackground",
+            getattr(QtCore.Qt, "WA_StyledBackground", None),
+        )
+        no_system_background_attr = qt_enum(
+            QtCore.Qt,
+            "WidgetAttribute.WA_NoSystemBackground",
+            getattr(QtCore.Qt, "WA_NoSystemBackground", None),
+        )
+        delete_close_attr = qt_enum(
+            QtCore.Qt,
+            "WidgetAttribute.WA_DeleteOnClose",
+            getattr(QtCore.Qt, "WA_DeleteOnClose", None),
+        )
+        if translucent_attr is not None:
+            self.setAttribute(translucent_attr, True)
+        if styled_attr is not None:
+            self.setAttribute(styled_attr, True)
+        if no_system_background_attr is not None:
+            self.setAttribute(no_system_background_attr, True)
+        if delete_close_attr is not None:
+            self.setAttribute(delete_close_attr, False)
+        self.setFocusPolicy(
+            qt_enum(
+                QtCore.Qt,
+                "FocusPolicy.StrongFocus",
+                getattr(QtCore.Qt, "StrongFocus", 0),
+            )
+        )
+        self.setObjectName("TrayPopupShell")
+        self.setMinimumWidth(TRAY_POPUP_WIDTH)
+        self.setMaximumWidth(TRAY_POPUP_WIDTH)
+        self.setStyleSheet("QWidget#TrayPopupShell { background: transparent; border: none; }")
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            try:
+                app.installEventFilter(self)
+            except Exception:
+                pass
+
+        root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+
+        self._panel = QtWidgets.QFrame(self)
+        self._panel.setObjectName("TrayPopupPanel")
+        panel_layout = QtWidgets.QVBoxLayout(self._panel)
+        panel_layout.setContentsMargins(20, 20, 20, 18)
+        panel_layout.setSpacing(16)
+
+        header = QtWidgets.QHBoxLayout()
+        header.setSpacing(18)
+        header.setAlignment(
+            qt_enum(QtCore.Qt, "AlignmentFlag.AlignVCenter", getattr(QtCore.Qt, "AlignVCenter", 0))
+        )
+        self._icon_label = QtWidgets.QLabel(self._panel)
+        self._icon_label.setFixedSize(TRAY_HEADER_ICON_SIZE, TRAY_HEADER_ICON_SIZE)
+        self._icon_label.setAlignment(
+            qt_enum(QtCore.Qt, "AlignmentFlag.AlignCenter", getattr(QtCore.Qt, "AlignCenter", 0))
+        )
+        header.addWidget(
+            self._icon_label,
+            0,
+            qt_enum(QtCore.Qt, "AlignmentFlag.AlignVCenter", getattr(QtCore.Qt, "AlignVCenter", 0)),
+        )
+
+        title_layout = QtWidgets.QVBoxLayout()
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(4)
+        self._title_label = QtWidgets.QLabel("Borealis Agent", self._panel)
+        self._title_label.setObjectName("TrayPopupTitle")
+        self._title_label.setWordWrap(True)
+        self._subtitle_label = QtWidgets.QLabel("", self._panel)
+        self._subtitle_label.setObjectName("TrayPopupSubtitle")
+        self._subtitle_label.setWordWrap(True)
+        self._subtitle_label.setTextFormat(
+            qt_enum(
+                QtCore.Qt,
+                "TextFormat.RichText",
+                getattr(QtCore.Qt, "RichText", 1),
+            )
+        )
+        self._subtitle_label.setTextInteractionFlags(
+            qt_enum(
+                QtCore.Qt,
+                "TextInteractionFlag.LinksAccessibleByMouse",
+                getattr(QtCore.Qt, "LinksAccessibleByMouse", 0),
+            )
+        )
+        self._subtitle_label.setOpenExternalLinks(True)
+        title_layout.addStretch(1)
+        title_layout.addWidget(self._title_label)
+        title_layout.addWidget(self._subtitle_label)
+        title_layout.addStretch(1)
+        header.addLayout(title_layout, 1)
+        panel_layout.addLayout(header)
+
+        self._checks_card = QtWidgets.QFrame(self._panel)
+        self._checks_card.setObjectName("TrayPopupCard")
+        checks_layout = QtWidgets.QVBoxLayout(self._checks_card)
+        checks_layout.setContentsMargins(16, 16, 16, 16)
+        checks_layout.setSpacing(10)
+        self._checks_title = QtWidgets.QLabel("Connection Health", self._checks_card)
+        self._checks_title.setObjectName("TrayPopupSectionTitle")
+        checks_layout.addWidget(self._checks_title)
+        self._checks_subtitle = QtWidgets.QLabel("", self._checks_card)
+        self._checks_subtitle.setObjectName("TrayPopupSectionSubtitle")
+        self._checks_subtitle.setWordWrap(True)
+        checks_layout.addWidget(self._checks_subtitle)
+        self._check_values: Dict[str, Any] = {}
+        for label in (
+            "Engine Trust",
+            "Websocket Connection",
+            "WireGuard VPN Tunnel",
+            "Interactive User Session",
+            "Last Heartbeat",
+        ):
+            self._check_values[label] = self._add_check_row(checks_layout, label)
+        panel_layout.addWidget(self._checks_card)
+
+        self._warning_card = QtWidgets.QFrame(self._panel)
+        self._warning_card.setObjectName("TrayPopupWarningCard")
+        warning_layout = QtWidgets.QVBoxLayout(self._warning_card)
+        warning_layout.setContentsMargins(16, 14, 16, 14)
+        warning_layout.setSpacing(8)
+        self._warning_title = QtWidgets.QLabel("Attention Needed", self._warning_card)
+        self._warning_title.setObjectName("TrayPopupSectionTitle")
+        self._warning_body = QtWidgets.QLabel("", self._warning_card)
+        self._warning_body.setObjectName("TrayPopupWarningText")
+        self._warning_body.setWordWrap(True)
+        warning_layout.addWidget(self._warning_title)
+        warning_layout.addWidget(self._warning_body)
+        panel_layout.addWidget(self._warning_card)
+
+        restart_row = QtWidgets.QHBoxLayout()
+        restart_row.setSpacing(12)
+        self._restart_button = QtWidgets.QPushButton("Restart Agent", self._panel)
+        self._restart_button.setObjectName("TrayPopupPrimaryButton")
+        self._restart_button.clicked.connect(self._role._restart_agent)
+        restart_row.addWidget(self._restart_button)
+        panel_layout.addLayout(restart_row)
+
+        action_row = QtWidgets.QHBoxLayout()
+        action_row.setSpacing(12)
+        copy_button = QtWidgets.QPushButton("Copy Support Details", self._panel)
+        copy_button.setObjectName("TrayPopupButton")
+        copy_button.clicked.connect(self._copy_support_details)
+        open_logs_button = QtWidgets.QPushButton("Open Logs Folder", self._panel)
+        open_logs_button.setObjectName("TrayPopupButton")
+        open_logs_button.clicked.connect(self._open_logs_folder)
+        action_row.addWidget(copy_button, 1)
+        action_row.addWidget(open_logs_button, 1)
+        panel_layout.addLayout(action_row)
+
+        self._feedback_label = QtWidgets.QLabel("", self._panel)
+        self._feedback_label.setObjectName("TrayPopupFeedback")
+        self._feedback_label.setVisible(False)
+        panel_layout.addWidget(self._feedback_label)
+
+        root.addWidget(self._panel)
+
+        self.apply_view({})
+
+    def _sync_window_mask(self) -> None:
+        if QtGui is None or QtCore is None:
+            return
+        rect = QtCore.QRectF(self.rect())
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+        rect.adjust(0.5, 0.5, -0.5, -0.5)
+        path = QtGui.QPainterPath()
+        path.addRoundedRect(rect, float(TRAY_POPUP_SHELL_RADIUS), float(TRAY_POPUP_SHELL_RADIUS))
+        self.setMask(QtGui.QRegion(path.toFillPolygon().toPolygon()))
+
+    def resizeEvent(self, event: Any) -> None:
+        resize_event = getattr(super(), "resizeEvent", None)
+        if callable(resize_event):
+            resize_event(event)
+        self._sync_window_mask()
+
+    def focusOutEvent(self, event: Any) -> None:
+        focus_out_event = getattr(super(), "focusOutEvent", None)
+        if callable(focus_out_event):
+            focus_out_event(event)
+        try:
+            if self.isVisible():
+                self.hide()
+        except Exception:
+            pass
+
+    def eventFilter(self, watched: Any, event: Any) -> bool:
+        try:
+            if not self.isVisible() or QtCore is None:
+                return False
+            event_type = int(event.type())
+            mouse_press_types = {
+                int(qt_enum(QtCore.QEvent, "Type.MouseButtonPress", getattr(QtCore.QEvent, "MouseButtonPress", -1))),
+                int(qt_enum(QtCore.QEvent, "Type.MouseButtonDblClick", getattr(QtCore.QEvent, "MouseButtonDblClick", -1))),
+                int(qt_enum(QtCore.QEvent, "Type.NonClientAreaMouseButtonPress", getattr(QtCore.QEvent, "NonClientAreaMouseButtonPress", -1))),
+            }
+            deactivate_types = {
+                int(qt_enum(QtCore.QEvent, "Type.WindowDeactivate", getattr(QtCore.QEvent, "WindowDeactivate", -1))),
+                int(qt_enum(QtCore.QEvent, "Type.ApplicationDeactivate", getattr(QtCore.QEvent, "ApplicationDeactivate", -1))),
+            }
+            if event_type in deactivate_types:
+                self.hide()
+                return False
+            if event_type in mouse_press_types:
+                point = None
+                if hasattr(event, "globalPosition"):
+                    try:
+                        point = event.globalPosition().toPoint()
+                    except Exception:
+                        point = None
+                if point is None and hasattr(event, "globalPos"):
+                    try:
+                        point = event.globalPos()
+                    except Exception:
+                        point = None
+                if point is not None and not self.frameGeometry().contains(point):
+                    self.hide()
+        except Exception:
+            return False
+        return False
+
+    def _add_check_row(self, layout: Any, label: str) -> Any:
+        row = QtWidgets.QHBoxLayout()
+        row.setSpacing(14)
+        title = QtWidgets.QLabel(label, self._checks_card)
+        title.setObjectName("TrayPopupDetailLabel")
+        value = QtWidgets.QLabel("", self._checks_card)
+        value.setObjectName("TrayPopupCheckValue")
+        value.setAlignment(
+            qt_enum(
+                QtCore.Qt,
+                "AlignmentFlag.AlignRight",
+                getattr(QtCore.Qt, "AlignRight", 0),
+            )
+            | qt_enum(
+                QtCore.Qt,
+                "AlignmentFlag.AlignVCenter",
+                getattr(QtCore.Qt, "AlignVCenter", 0),
+            )
+        )
+        row.addWidget(title, 1)
+        row.addWidget(value, 0)
+        layout.addLayout(row)
+        return value
+
+    def _copy_support_details(self) -> None:
+        view = self._role._last_tray_view or self._role._load_tray_view()
+        self._role._copy_support_details(view)
+        self.flash_feedback("Support details copied.")
+
+    def _open_logs_folder(self) -> None:
+        view = self._role._last_tray_view or self._role._load_tray_view()
+        self._role._open_logs_folder(view)
+        self.flash_feedback("Logs folder request sent.")
+
+    def flash_feedback(self, message: str) -> None:
+        return
+
+    def _clear_feedback(self) -> None:
+        return
+
+    def _set_check_status(self, widget: Any, text: str, status_code: str) -> None:
+        color_map = {
+            "healthy": "#38d39f",
+            "neutral": "#69b7ff",
+            "warning": "#f0b34c",
+            "error": "#f06f6f",
+        }
+        widget.setText(text)
+        widget.setStyleSheet(
+            f"color: {color_map.get(status_code, '#eef4ff')}; font-size: 13px; font-weight: 700;"
+        )
+
+    def apply_view(self, view: Dict[str, Any]) -> None:
+        current_view = dict(view or {})
+        palette = _popup_palette(current_view.get("icon_tone"))
+        self._panel.setStyleSheet(
+            f"""
+            QFrame#TrayPopupPanel {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #07111d, stop:1 #0d1728);
+                border: 1px solid rgba(68, 92, 122, 0.16);
+                border-radius: {TRAY_POPUP_RADIUS}px;
+            }}
+            QFrame#TrayPopupCard, QFrame#TrayPopupChip {{
+                background-color: rgba(11, 20, 35, 0.88);
+                border: 1px solid rgba(68, 92, 122, 0.18);
+                border-radius: 16px;
+            }}
+            QFrame#TrayPopupWarningCard {{
+                background-color: rgba(33, 18, 16, 0.92);
+                border: 1px solid rgba(240, 111, 111, 0.28);
+                border-radius: 16px;
+            }}
+            QLabel#TrayPopupTitle {{
+                color: #f8fafc;
+                font-size: 24px;
+                font-weight: 700;
+            }}
+            QLabel#TrayPopupSubtitle {{
+                color: #69b7ff;
+                font-size: 13px;
+                font-weight: 600;
+            }}
+            QLabel#TrayPopupChipLabel, QLabel#TrayPopupDetailLabel {{
+                color: #8ea4b8;
+                font-size: 12px;
+                font-weight: 700;
+            }}
+            QLabel#TrayPopupSectionTitle {{
+                color: #eef4ff;
+                font-size: 17px;
+                font-weight: 800;
+            }}
+            QLabel#TrayPopupSectionSubtitle {{
+                color: #7d8ba1;
+                font-size: 11px;
+                font-weight: 600;
+                padding-bottom: 6px;
+            }}
+            QLabel#TrayPopupChipValue {{
+                color: #eef4ff;
+                font-size: 14px;
+                font-weight: 600;
+            }}
+            QLabel#TrayPopupFootnote {{
+                color: #7d8ba1;
+                font-size: 11px;
+                padding-top: 6px;
+            }}
+            QLabel#TrayPopupWarningText {{
+                color: #fce8e8;
+                font-size: 13px;
+            }}
+            QLabel#TrayPopupFeedback {{
+                color: {palette["accent"]};
+                font-size: 13px;
+                font-weight: 700;
+            }}
+            QPushButton#TrayPopupPrimaryButton {{
+                background-color: {palette["accent"]};
+                border: none;
+                border-radius: 12px;
+                color: #06111d;
+                font-size: 15px;
+                font-weight: 700;
+                min-height: 42px;
+                padding: 0 16px;
+            }}
+            QPushButton#TrayPopupPrimaryButton:disabled {{
+                background-color: rgba(84, 112, 146, 0.3);
+                color: #7d8ba1;
+            }}
+            QPushButton#TrayPopupPrimaryButton:hover:!disabled {{
+                background-color: #ffffff;
+            }}
+            QPushButton#TrayPopupButton {{
+                background-color: rgba(15, 25, 42, 0.95);
+                border: 1px solid rgba(84, 112, 146, 0.24);
+                border-radius: 12px;
+                color: #dce7f7;
+                font-size: 13px;
+                font-weight: 600;
+                min-height: 38px;
+                padding: 0 14px;
+            }}
+            QPushButton#TrayPopupButton:hover {{
+                border-color: {palette["accent_border"]};
+                color: #ffffff;
+            }}
+            """
+        )
+        self._title_label.setText(str(current_view.get("device_name") or "Borealis Agent"))
+        engine_host = str(current_view.get("connected_host") or "Not configured").strip() or "Not configured"
+        if engine_host != "Not configured":
+            engine_href = f"https://{engine_host}"
+            engine_url_text = (
+                f'Engine: <a href="{html.escape(engine_href, quote=True)}" '
+                f'style="color:#69b7ff; text-decoration:none;">{html.escape(engine_host)}</a>'
+            )
+        else:
+            engine_url_text = "Engine: Not configured"
+        self._subtitle_label.setText(engine_url_text)
+        self._subtitle_label.setVisible(True)
+        self._checks_subtitle.clear()
+        self._checks_subtitle.setVisible(False)
+
+        security_status = str(current_view.get("security_status") or "Checking connection")
+        if security_status == "Secure connection":
+            security_text = "Secure (TLS + Ed25519)"
+            security_code = "healthy"
+        elif security_status in {"Checking connection"}:
+            security_text = "Checking Trust..."
+            security_code = "neutral"
+        elif security_status in {"Certificate trust issue", "Sign-in problem"}:
+            security_text = security_status
+            security_code = "error"
+        else:
+            security_text = security_status
+            security_code = "warning"
+        self._set_check_status(self._check_values["Engine Trust"], security_text, security_code)
+
+        socket_connected = bool(current_view.get("system_socket_connected"))
+        if socket_connected:
+            websocket_text = "Connected"
+            websocket_code = "healthy"
+        elif str(current_view.get("overall_status") or "").strip().lower() in {"starting up", "restarting"}:
+            websocket_text = "Connecting"
+            websocket_code = "neutral"
+        else:
+            websocket_text = "Disconnected"
+            websocket_code = "warning"
+        self._set_check_status(
+            self._check_values["Websocket Connection"],
+            websocket_text,
+            websocket_code,
+        )
+        self._set_check_status(
+            self._check_values["WireGuard VPN Tunnel"],
+            str(current_view.get("wireguard_status") or "Unavailable"),
+            str(current_view.get("wireguard_status_code") or "warning"),
+        )
+        self._set_check_status(
+            self._check_values["Interactive User Session"],
+            str(current_view.get("helper_session_status") or "Unavailable"),
+            str(current_view.get("helper_session_status_code") or "warning"),
+        )
+        heartbeat_value = str(current_view.get("last_heartbeat_value") or "Never")
+        heartbeat_code = "healthy" if int(current_view.get("last_check_in_at") or 0) > 0 else (
+            "neutral" if str(current_view.get("overall_status") or "").strip().lower() in {"starting up", "restarting"} else "warning"
+        )
+        self._set_check_status(
+            self._check_values["Last Heartbeat"],
+            heartbeat_value,
+            heartbeat_code,
+        )
+        warnings = _warning_lines(current_view)
+        self._warning_card.setVisible(bool(warnings))
+        self._warning_body.setText("\n".join(f"• {item}" for item in warnings))
+        restarting = str(current_view.get("overall_status") or "").strip().lower() == "restarting"
+        self._restart_button.setEnabled(not restarting)
+        self._restart_button.setText("Restart Requested" if restarting else "Restart Agent")
+
+        tray_icon = getattr(self._role, "_base_tray_icon", None)
+        if tray_icon is None:
+            try:
+                if self._role.tray is not None:
+                    tray_icon = self._role.tray.icon()
+            except Exception:
+                tray_icon = None
+        if tray_icon is not None:
+            try:
+                pixmap = tray_icon.pixmap(TRAY_HEADER_ICON_SIZE, TRAY_HEADER_ICON_SIZE)
+                if not pixmap.isNull():
+                    self._icon_label.setPixmap(pixmap)
+                    return
+            except Exception:
+                pass
+        self._icon_label.clear()
+
+
 class Role:
     def __init__(self, ctx):
         self.ctx = ctx
         self.role_health_label = "Script Execution - CURRENTUSER"
         self._listener_registered = False
         self.tray = None
-        self._tray_menu = None
+        self._tray_popup = None
         self._tray_timer = None
         self._tray_icon_cache: Dict[str, Any] = {}
         self._base_tray_icon = None
@@ -465,152 +1027,204 @@ class Role:
             },
         }
 
+    def _log(self, message: str, *, error: bool = False) -> None:
+        hooks = getattr(self.ctx, "hooks", {}) or {}
+        log_agent_hook = hooks.get("log_agent")
+        if callable(log_agent_hook):
+            try:
+                log_agent_hook(message)
+                if error:
+                    log_agent_hook(message, fname="agent.error.log")
+            except Exception:
+                pass
+
+    def _result_payload(
+        self,
+        *,
+        payload: Dict[str, Any],
+        job_id: Any,
+        status: str,
+        stdout: str = "",
+        stderr: str = "",
+    ) -> Dict[str, Any]:
+        result = {
+            "job_id": job_id,
+            "status": status,
+            "stdout": stdout,
+            "stderr": stderr,
+        }
+        context = payload.get("context") if isinstance(payload, dict) else None
+        if isinstance(context, dict):
+            result["context"] = dict(context)
+        return result
+
+    async def _handle_quick_job_run(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        try:
+            import socket
+
+            hostname = socket.gethostname()
+            target = (payload.get("target_hostname") or "").strip().lower()
+            if target and target != hostname.lower():
+                return None
+
+            job_id = payload.get("job_id")
+            script_type = (payload.get("script_type") or "").lower()
+            run_mode = (payload.get("run_mode") or "current_user").lower()
+            if run_mode == "system":
+                return None
+
+            job_label = job_id if job_id is not None else "unknown"
+            self._log(f"quick_job_run(currentuser) received payload job_id={job_label}")
+
+            script_bytes = decode_script_bytes(payload.get("script_content"), payload.get("script_encoding"))
+            if script_bytes is None:
+                self._log(f"quick_job_run(currentuser) invalid script payload job_id={job_label}", error=True)
+                return self._result_payload(
+                    payload=payload,
+                    job_id=job_id,
+                    status="Failed",
+                    stderr="Invalid script payload (unable to decode)",
+                )
+
+            broker_verified = bool(payload.get("broker_verified"))
+            if not broker_verified:
+                signature_b64 = payload.get("signature")
+                sig_alg = (payload.get("sig_alg") or "ed25519").lower()
+                signing_key = payload.get("signing_key")
+                if sig_alg and sig_alg not in ("ed25519", "eddsa"):
+                    self._log(
+                        f"quick_job_run(currentuser) unsupported signature algorithm job_id={job_label} alg={sig_alg}",
+                        error=True,
+                    )
+                    return self._result_payload(
+                        payload=payload,
+                        job_id=job_id,
+                        status="Failed",
+                        stderr=f"Unsupported script signature algorithm: {sig_alg}",
+                    )
+                if not isinstance(signature_b64, str) or not signature_b64.strip():
+                    self._log(f"quick_job_run(currentuser) missing signature job_id={job_label}", error=True)
+                    return self._result_payload(
+                        payload=payload,
+                        job_id=job_id,
+                        status="Failed",
+                        stderr="Missing script signature; rejecting payload",
+                    )
+                http_client_fn = getattr(self.ctx, "hooks", {}).get("http_client") if hasattr(self.ctx, "hooks") else None
+                client = http_client_fn() if callable(http_client_fn) else None
+                if client is None:
+                    self._log(f"quick_job_run(currentuser) missing http_client hook job_id={job_label}", error=True)
+                    return self._result_payload(
+                        payload=payload,
+                        job_id=job_id,
+                        status="Failed",
+                        stderr="Signature verification unavailable (client missing)",
+                    )
+                if not verify_and_store_script_signature(client, script_bytes, signature_b64, signing_key):
+                    self._log(f"quick_job_run(currentuser) signature verification failed job_id={job_label}", error=True)
+                    return self._result_payload(
+                        payload=payload,
+                        job_id=job_id,
+                        status="Failed",
+                        stderr="Rejected script payload due to invalid signature",
+                    )
+                self._log(f"quick_job_run(currentuser) signature verified job_id={job_label}")
+
+            content = script_bytes.decode("utf-8", errors="replace")
+            raw_env = payload.get("environment")
+            env_map = _sanitize_env_map(raw_env)
+            variables = payload.get("variables") if isinstance(payload.get("variables"), list) else []
+            for var in variables:
+                if not isinstance(var, dict):
+                    continue
+                name = str(var.get("name") or "").strip()
+                if not name:
+                    continue
+                key = _canonical_env_key(name)
+                if key in env_map:
+                    continue
+                default_val = var.get("default")
+                if isinstance(default_val, bool):
+                    env_map[key] = "True" if default_val else "False"
+                elif default_val is None:
+                    env_map[key] = ""
+                else:
+                    env_map[key] = str(default_val)
+            env_map = _apply_variable_aliases(env_map, variables)
+            try:
+                timeout_seconds = max(0, int(payload.get("timeout_seconds") or 0))
+            except Exception:
+                timeout_seconds = 0
+
+            busy_ctx = (
+                busy_activity(
+                    "quick_job_currentuser",
+                    metadata={
+                        "job_id": str(job_label),
+                        "script_type": script_type or "unknown",
+                    },
+                )
+                if callable(busy_activity)
+                else contextlib.nullcontext()
+            )
+            with busy_ctx:
+                if script_type == "powershell":
+                    rc, out, err = await _run_powershell_script_content(content, env_map, timeout_seconds)
+                elif script_type == "batch":
+                    rc, out, err = await _run_batch_local(content, env_map, timeout_seconds)
+                elif script_type == "bash":
+                    rc, out, err = await _run_bash_local(content, env_map, timeout_seconds)
+                else:
+                    return self._result_payload(
+                        payload=payload,
+                        job_id=job_id,
+                        status="Failed",
+                        stderr=f"Unsupported type: {script_type}",
+                    )
+            return self._result_payload(
+                payload=payload,
+                job_id=job_id,
+                status="Success" if rc == 0 else "Failed",
+                stdout=out,
+                stderr=err,
+            )
+        except Exception as exc:
+            return self._result_payload(
+                payload=payload if isinstance(payload, dict) else {},
+                job_id=payload.get("job_id") if isinstance(payload, dict) else None,
+                status="Failed",
+                stderr=str(exc),
+            )
+
     def register_events(self):
         sio = self.ctx.sio
         self._listener_registered = True
         hooks = getattr(self.ctx, 'hooks', {}) or {}
-        log_agent_hook = hooks.get('log_agent')
+        helper_register = hooks.get("register_local_helper_handler")
+        if callable(helper_register):
+            helper_register(self._handle_quick_job_run)
+            return
 
-        def _log(message: str, *, error: bool = False) -> None:
-            if callable(log_agent_hook):
-                try:
-                    log_agent_hook(message)
-                    if error:
-                        log_agent_hook(message, fname='agent.error.log')
-                except Exception:
-                    pass
-
-        @sio.on('quick_job_run')
+        @sio.on("quick_job_run")
         async def _on_quick_job_run(payload):
+            result = await self._handle_quick_job_run(payload if isinstance(payload, dict) else {})
+            if not isinstance(result, dict):
+                return
             try:
-                import socket
-                hostname = socket.gethostname()
-                target = (payload.get('target_hostname') or '').strip().lower()
-                if not target or target != hostname.lower():
-                    return
-                job_id = payload.get('job_id')
-                script_type = (payload.get('script_type') or '').lower()
-                run_mode = (payload.get('run_mode') or 'current_user').lower()
-                if run_mode == 'system':
-                    return
-                job_label = job_id if job_id is not None else 'unknown'
-                _log(f"quick_job_run(currentuser) received payload job_id={job_label}")
-                context = payload.get('context') if isinstance(payload, dict) else None
-
-                def _result_payload(job_value, status_value, stdout_value="", stderr_value=""):
-                    result = {
-                        'job_id': job_value,
-                        'status': status_value,
-                        'stdout': stdout_value,
-                        'stderr': stderr_value,
-                    }
-                    if isinstance(context, dict):
-                        result['context'] = context
-                    return result
-
-                script_bytes = decode_script_bytes(payload.get('script_content'), payload.get('script_encoding'))
-                if script_bytes is None:
-                    _log(f"quick_job_run(currentuser) invalid script payload job_id={job_label}", error=True)
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Invalid script payload (unable to decode)'))
-                    return
-                signature_b64 = payload.get('signature')
-                sig_alg = (payload.get('sig_alg') or 'ed25519').lower()
-                signing_key = payload.get('signing_key')
-                if sig_alg and sig_alg not in ('ed25519', 'eddsa'):
-                    _log(f"quick_job_run(currentuser) unsupported signature algorithm job_id={job_label} alg={sig_alg}", error=True)
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', f'Unsupported script signature algorithm: {sig_alg}'))
-                    return
-                if not isinstance(signature_b64, str) or not signature_b64.strip():
-                    _log(f"quick_job_run(currentuser) missing signature job_id={job_label}", error=True)
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Missing script signature; rejecting payload'))
-                    return
-                http_client_fn = getattr(self.ctx, 'hooks', {}).get('http_client') if hasattr(self.ctx, 'hooks') else None
-                client = http_client_fn() if callable(http_client_fn) else None
-                if client is None:
-                    _log(f"quick_job_run(currentuser) missing http_client hook job_id={job_label}", error=True)
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Signature verification unavailable (client missing)'))
-                    return
-                if not verify_and_store_script_signature(client, script_bytes, signature_b64, signing_key):
-                    _log(f"quick_job_run(currentuser) signature verification failed job_id={job_label}", error=True)
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Rejected script payload due to invalid signature'))
-                    return
-                _log(f"quick_job_run(currentuser) signature verified job_id={job_label}")
-                content = script_bytes.decode('utf-8', errors='replace')
-                raw_env = payload.get('environment')
-                env_map = _sanitize_env_map(raw_env)
-                variables = payload.get('variables') if isinstance(payload.get('variables'), list) else []
-                for var in variables:
-                    if not isinstance(var, dict):
-                        continue
-                    name = str(var.get('name') or '').strip()
-                    if not name:
-                        continue
-                    key = _canonical_env_key(name)
-                    if key in env_map:
-                        continue
-                    default_val = var.get('default')
-                    if isinstance(default_val, bool):
-                        env_map[key] = "True" if default_val else "False"
-                    elif default_val is None:
-                        env_map[key] = ""
-                    else:
-                        env_map[key] = str(default_val)
-                env_map = _apply_variable_aliases(env_map, variables)
-                try:
-                    timeout_seconds = max(0, int(payload.get('timeout_seconds') or 0))
-                except Exception:
-                    timeout_seconds = 0
-                busy_ctx = (
-                    busy_activity(
-                        'quick_job_currentuser',
-                        metadata={
-                            'job_id': str(job_label),
-                            'script_type': script_type or 'unknown',
-                        },
-                    )
-                    if callable(busy_activity)
-                    else contextlib.nullcontext()
-                )
-                with busy_ctx:
-                    if script_type == 'powershell':
-                        rc, out, err = await _run_powershell_via_user_task(content, env_map, timeout_seconds)
-                        if rc == -999:
-                            rc, out, err = await _run_powershell_script_content(content, env_map, timeout_seconds)
-                    elif script_type == 'batch':
-                        rc, out, err = await _run_batch_local(content, env_map, timeout_seconds)
-                    elif script_type == 'bash':
-                        rc, out, err = await _run_bash_local(content, env_map, timeout_seconds)
-                    else:
-                        await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', f'Unsupported type: {script_type}'))
-                        return
-                    status = 'Success' if rc == 0 else 'Failed'
-                    await sio.emit('quick_job_result', _result_payload(job_id, status, out, err))
-            except Exception as e:
-                try:
-                    context = payload.get('context') if isinstance(payload, dict) else None
-                    result = {
-                        'job_id': payload.get('job_id') if isinstance(payload, dict) else None,
-                        'status': 'Failed',
-                        'stdout': '',
-                        'stderr': str(e),
-                    }
-                    if isinstance(context, dict):
-                        result['context'] = context
-                    await sio.emit('quick_job_result', result)
-                except Exception:
-                    pass
+                await sio.emit("quick_job_result", result)
+            except Exception:
+                pass
 
     def _setup_tray(self):
-        if QtWidgets is None or QtGui is None or QtCore is None:
+        if not _supports_qt_ui():
             return
         app = QtWidgets.QApplication.instance()
         if app is None:
             return
         self._base_tray_icon = self._load_base_tray_icon(app)
         self.tray = QtWidgets.QSystemTrayIcon(self._base_tray_icon)
-        self._tray_menu = QtWidgets.QMenu()
-        self._tray_menu.aboutToShow.connect(self._refresh_tray_view)
-        self.tray.setContextMenu(self._tray_menu)
+        self.tray.setToolTip("Borealis Agent")
+        self.tray.activated.connect(self._handle_tray_activation)
         self._tray_timer = QtCore.QTimer(self.tray)
         self._tray_timer.setInterval(15000)
         self._tray_timer.timeout.connect(self._refresh_tray_view)
@@ -621,14 +1235,17 @@ class Role:
     def _restart_agent(self):
         if QtWidgets is None:
             return
-        confirm = QtWidgets.QMessageBox.question(
-            None,
+        message_box = getattr(QtWidgets, "QMessageBox", None)
+        if message_box is None:
+            return
+        confirm = message_box.question(
+            getattr(self, "_tray_popup", None),
             "Restart Borealis Agent",
             "Restart the Borealis Agent now?\n\nRemote support activity may pause briefly while the agent reconnects.\n\nPlease wait up to 1 minute for the agent restart request to trigger.",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No,
+            message_box.Yes | message_box.No,
+            message_box.No,
         )
-        if confirm != QtWidgets.QMessageBox.Yes:
+        if confirm != message_box.Yes:
             return
         try:
             tray_state.request_restart(
@@ -665,6 +1282,11 @@ class Role:
         except Exception:
             pass
         try:
+            if self._tray_popup is not None:
+                self._tray_popup.hide()
+        except Exception:
+            pass
+        try:
             if self.tray is not None:
                 self.tray.hide()
         except Exception:
@@ -679,7 +1301,15 @@ class Role:
         except Exception:
             icon = None
         if icon is None:
-            icon = app.style().standardIcon(QtWidgets.QStyle.SP_ComputerIcon)
+            standard_icon = qt_enum(
+                QtWidgets.QStyle,
+                "StandardPixmap.SP_ComputerIcon",
+                getattr(QtWidgets.QStyle, "SP_ComputerIcon", None),
+            )
+            if standard_icon is not None:
+                icon = app.style().standardIcon(standard_icon)
+        if icon is None:
+            icon = QtGui.QIcon()
         return icon
 
     def _load_tray_view(self) -> Dict[str, Any]:
@@ -706,27 +1336,18 @@ class Role:
         return view
 
     def _refresh_tray_view(self):
-        if self.tray is None or self._tray_menu is None:
+        if self.tray is None:
             return
         view = self._load_tray_view()
         self._last_tray_view = view
         self._apply_tray_icon(view)
         self.tray.setToolTip(str(view.get("tooltip") or "Borealis Agent"))
-        self._tray_menu.clear()
-        for entry in view.get("menu_entries") or []:
-            entry_type = str(entry.get("type") or "").strip().lower()
-            if entry_type == "separator":
-                self._tray_menu.addSeparator()
-                continue
-            action = self._tray_menu.addAction(str(entry.get("label") or ""))
-            action.setEnabled(bool(entry.get("enabled")))
-            if not bool(entry.get("enabled")):
-                continue
-            key = str(entry.get("key") or "").strip()
-            if key == "view_status_details":
-                action.triggered.connect(self._show_status_details)
-            elif key == "restart_agent":
-                action.triggered.connect(self._restart_agent)
+        if self._tray_popup is not None and self._tray_popup.isVisible():
+            self._tray_popup.apply_view(view)
+            self._tray_popup.adjustSize()
+            self._tray_popup.resize(self._tray_popup.sizeHint())
+            self._tray_popup._sync_window_mask()
+            self._position_tray_popup()
 
     def _apply_tray_icon(self, view: Dict[str, Any]) -> None:
         if self.tray is None or self._base_tray_icon is None or QtGui is None:
@@ -754,7 +1375,13 @@ class Role:
             return
         canvas = QtGui.QPixmap(pixmap)
         painter = QtGui.QPainter(canvas)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        antialias_hint = qt_enum(
+            QtGui.QPainter,
+            "RenderHint.Antialiasing",
+            getattr(QtGui.QPainter, "Antialiasing", None),
+        )
+        if antialias_hint is not None:
+            painter.setRenderHint(antialias_hint, True)
         painter.setPen(QtGui.QPen(QtGui.QColor("#0f172a"), 2))
         painter.setBrush(QtGui.QBrush(QtGui.QColor(badge_color)))
         painter.drawEllipse(canvas.width() - 14, canvas.height() - 14, 12, 12)
@@ -764,33 +1391,29 @@ class Role:
         self.tray.setIcon(icon)
 
     def _show_status_details(self):
-        if QtWidgets is None:
-            return
-        view = self._last_tray_view or self._load_tray_view()
-        dialog = QtWidgets.QDialog()
-        dialog.setWindowTitle("Borealis Agent Status")
-        dialog.setMinimumWidth(460)
-        layout = QtWidgets.QVBoxLayout(dialog)
-        details_box = QtWidgets.QPlainTextEdit(dialog)
-        details_box.setReadOnly(True)
-        details_box.setPlainText(self._build_status_details_text(view))
-        layout.addWidget(details_box)
-        button_row = QtWidgets.QHBoxLayout()
-        copy_button = QtWidgets.QPushButton("Copy Support Details", dialog)
-        copy_button.clicked.connect(lambda: self._copy_support_details(view))
-        open_logs_button = QtWidgets.QPushButton("Open Logs Folder", dialog)
-        open_logs_button.clicked.connect(lambda: self._open_logs_folder(view))
-        close_button = QtWidgets.QPushButton("Close", dialog)
-        close_button.clicked.connect(dialog.accept)
-        button_row.addWidget(copy_button)
-        button_row.addWidget(open_logs_button)
-        button_row.addStretch(1)
-        button_row.addWidget(close_button)
-        layout.addLayout(button_row)
-        dialog.exec_()
+        self._show_tray_popup()
 
     def _build_status_details_text(self, view: Dict[str, Any]) -> str:
         lines = [str(view.get("support_text") or "").strip()]
+        security_status = str(view.get("security_status") or "Checking connection")
+        if security_status == "Secure connection":
+            security_text = "Secure (TLS + Ed25519)"
+        elif security_status == "Checking connection":
+            security_text = "Checking Trust..."
+        else:
+            security_text = security_status
+        socket_connected = bool(view.get("system_socket_connected"))
+        if socket_connected:
+            websocket_text = "Connected"
+        elif str(view.get("overall_status") or "").strip().lower() in {"starting up", "restarting"}:
+            websocket_text = "Connecting"
+        else:
+            websocket_text = "Disconnected"
+        lines.append("")
+        lines.append(f"Engine Trust: {security_text}")
+        lines.append(f"Websocket Connection: {websocket_text}")
+        lines.append(f"WireGuard VPN Tunnel: {str(view.get('wireguard_status') or 'Unavailable')}")
+        lines.append(f"Interactive User Session: {str(view.get('helper_session_status') or 'Unavailable')}")
         wireguard_detail = str(view.get("wireguard_detail") or "").strip()
         if wireguard_detail:
             lines.append("")
@@ -809,7 +1432,7 @@ class Role:
         clipboard = app.clipboard()
         if clipboard is None:
             return
-        clipboard.setText(str(view.get("support_text") or ""))
+        clipboard.setText(self._build_status_details_text(view))
 
     def _open_logs_folder(self, view: Dict[str, Any]) -> None:
         logs_dir = str(view.get("logs_dir") or "").strip()
@@ -822,6 +1445,97 @@ class Role:
             subprocess.Popen(["xdg-open", logs_dir])
         except Exception:
             return
+
+    def _ensure_tray_popup(self):
+        if not _supports_qt_ui():
+            return None
+        if self._tray_popup is None:
+            self._tray_popup = _TrayStatusPopup(self)
+        return self._tray_popup
+
+    def _handle_tray_activation(self, reason: Any) -> None:
+        tray_icon_type = getattr(QtWidgets, "QSystemTrayIcon", None)
+        if tray_icon_type is None:
+            return
+        trigger_reason = qt_enum(
+            tray_icon_type,
+            "ActivationReason.Trigger",
+            getattr(tray_icon_type, "Trigger", None),
+        )
+        context_reason = qt_enum(
+            tray_icon_type,
+            "ActivationReason.Context",
+            getattr(tray_icon_type, "Context", None),
+        )
+        double_click_reason = qt_enum(
+            tray_icon_type,
+            "ActivationReason.DoubleClick",
+            getattr(tray_icon_type, "DoubleClick", None),
+        )
+        if reason not in {trigger_reason, context_reason, double_click_reason}:
+            return
+        popup = self._ensure_tray_popup()
+        if popup is None:
+            return
+        if popup.isVisible():
+            popup.hide()
+            return
+        self._show_tray_popup()
+
+    def _show_tray_popup(self) -> None:
+        popup = self._ensure_tray_popup()
+        if popup is None:
+            return
+        latest_view = self._load_tray_view()
+        self._last_tray_view = latest_view
+        self._apply_tray_icon(latest_view)
+        if self.tray is not None:
+            self.tray.setToolTip(str(latest_view.get("tooltip") or "Borealis Agent"))
+        popup.show()
+        popup.apply_view(latest_view)
+        popup.adjustSize()
+        popup.resize(popup.sizeHint())
+        popup._sync_window_mask()
+        self._position_tray_popup()
+        raise_window = getattr(popup, "raise_", None) or getattr(popup, "raise", None)
+        if callable(raise_window):
+            raise_window()
+        popup.activateWindow()
+
+    def _position_tray_popup(self) -> None:
+        popup = self._tray_popup
+        if popup is None or QtGui is None or QtWidgets is None:
+            return
+        screen = None
+        try:
+            qgui_app = getattr(QtGui, "QGuiApplication", None)
+            if qgui_app is not None and hasattr(QtGui, "QCursor"):
+                screen = qgui_app.screenAt(QtGui.QCursor.pos())
+        except Exception:
+            screen = None
+        if screen is None:
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                try:
+                    screen = app.primaryScreen()
+                except Exception:
+                    screen = None
+        if screen is None:
+            return
+        available_geometry = screen.availableGeometry()
+        screen_geometry = screen.geometry()
+        popup.adjustSize()
+        size_hint = popup.sizeHint()
+        popup.resize(size_hint)
+        x, y = _bottom_right_anchor(
+            screen_geometry.x(),
+            available_geometry.y(),
+            screen_geometry.width(),
+            available_geometry.height(),
+            popup.width(),
+            popup.height(),
+        )
+        popup.move(x, y)
 
     def _spawn_currentuser_agent(self) -> bool:
         try:

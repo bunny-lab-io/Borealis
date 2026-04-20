@@ -49,12 +49,12 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/agent/details` (Device Authenticated) - full hardware, inventory, and cached service payload.
 - `POST /api/agent/script/request` (Device Authenticated) - request work or idle signal.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
-- `GET /api/agents` (Token Authenticated) - list online collectors by hostname/context.
+- `GET /api/agents` (Token Authenticated) - list online collectors, with upgraded hosts advertising helper-backed current-user capability on their SYSTEM record via `helper_contexts`.
 - `GET /api/devices` (Token Authenticated) - device summary list, scoped to the operator's assigned sites unless the operator is an admin.
 - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - hostname search matches for the shared header search, scoped to the operator's assigned sites unless the operator is an admin.
 - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID, site-scoped for operators.
 - `POST /api/devices/<guid>/purge` (Admin) - purge a device, revoke stale trust state, remove current-known references, and rewrite scheduled-job targets that referenced the device.
-- `GET /api/device/details/<hostname>` (Token Authenticated) - full device details, site-scoped for operators.
+- `GET /api/device/details/<hostname>` (Token Authenticated) - full device details, site-scoped for operators, including normalized session inventory with helper readiness fields.
 - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory for an in-scope device.
 - `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service on an in-scope device.
 - `POST /api/device/update-agent/<hostname>` (Token Authenticated) - ask an in-scope device to start its local AutoUpdater task immediately.
@@ -123,7 +123,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/assemblies/<assembly_guid>/export` (Token Authenticated) - export legacy JSON.
 - `POST /api/assemblies/<assembly_guid>/official-update` (Admin) - update one official Aurora assembly from the active catalog.
 - `POST /api/assemblies/official/update-all` (Admin) - sync all official Aurora assemblies, including newly added catalog entries.
-- `POST /api/scripts/quick_run` (Token Authenticated) - quick agent-side script job (`powershell`, `batch`, or `bash`, depending on the target agent platform/runtime) for in-scope devices only.
+- `POST /api/scripts/quick_run` (Token Authenticated) - quick agent-side script job (`powershell`, `batch`, or `bash`, depending on the target agent platform/runtime) for in-scope devices only; current-user runs may also specify `session_target` (`all_active_sessions` or `specific_session`) plus `target_session_id`.
 - `GET /api/device/activity/<hostname>` (Token Authenticated) - device activity history for an in-scope device.
 - `DELETE /api/device/activity/<hostname>` (Token Authenticated) - clear activity history.
 - `GET /api/device/activity/job/<int:job_id>` (Token Authenticated) - activity record details for an in-scope device activity.

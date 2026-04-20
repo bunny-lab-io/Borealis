@@ -51,7 +51,7 @@ try {
     Write-RestartLog ("Queued Borealis task restart helper with InitialDelaySeconds={0}, RetryIntervalSeconds={1}, MaxWaitSeconds={2}." -f $InitialDelaySeconds, $RetryIntervalSeconds, $MaxWaitSeconds)
     if ($InitialDelaySeconds -gt 0) { Start-Sleep -Seconds $InitialDelaySeconds }
 
-    $pendingTasks = @('Borealis Agent', 'Borealis Agent (UserHelper)')
+    $pendingTasks = @('Borealis Agent')
     $deadline = (Get-Date).AddSeconds([Math]::Max(1, $MaxWaitSeconds))
 
     while ($pendingTasks.Count -gt 0 -and (Get-Date) -lt $deadline) {

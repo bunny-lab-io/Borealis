@@ -2032,53 +2032,8 @@ function Ensure-AgentTasks {
     $sysTrigger = New-ScheduledTaskTrigger -AtStartup
     Register-ScheduledTask -TaskName 'Borealis Agent' -Action $sysAction -Trigger $sysTrigger -Settings $taskSettings -Principal $principalSystem -Force | Out-Null
     try { Start-ScheduledTask -TaskName 'Borealis Agent' | Out-Null } catch {}
-
-    # Optional user-session helper for interactive roles (tray, overlays)
-    $helperName = 'Borealis Agent (UserHelper)'
-    $usrArg     = ('"{0}" --config CURRENTUSER' -f $agentPy)
-    $usrAction  = New-ScheduledTaskAction -Execute $pyw -Argument $usrArg -WorkingDirectory (Split-Path $agentPy -Parent)
-    $usrTrig    = New-ScheduledTaskTrigger -AtLogOn
-    $currentUser = $null
-    try {
-        $existingTask = Get-ScheduledTask -TaskName $helperName -ErrorAction SilentlyContinue
-        if ($existingTask -and $existingTask.Principal -and $existingTask.Principal.UserId) {
-            $candidateUser = ([string]$existingTask.Principal.UserId).Trim()
-            if ($candidateUser -and $candidateUser -notmatch '^(SYSTEM|NT AUTHORITY\\SYSTEM)$') {
-                $currentUser = $candidateUser
-            }
-        }
-    } catch {}
-    if (-not $currentUser) {
-        try {
-            $consoleUser = (Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
-            if ($consoleUser -and $consoleUser.Trim()) {
-                $currentUser = $consoleUser.Trim()
-            }
-        } catch {}
-    }
-    if (-not $currentUser) {
-        try {
-            $explorerOwner = Get-Process explorer -IncludeUserName -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty UserName
-            if ($explorerOwner -and $explorerOwner.Trim()) {
-                $currentUser = $explorerOwner.Trim()
-            }
-        } catch {}
-    }
-    if (-not $currentUser) {
-        try {
-            $identityUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-            if ($identityUser -and $identityUser.Trim() -and $identityUser -notmatch '^(SYSTEM|NT AUTHORITY\\SYSTEM)$') {
-                $currentUser = $identityUser.Trim()
-            }
-        } catch {}
-    }
-    if ($currentUser -and $currentUser -notmatch '^(SYSTEM|NT AUTHORITY\\SYSTEM)$') {
-        $usrPrin = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
-        Register-ScheduledTask -TaskName $helperName -Action $usrAction -Trigger $usrTrig -Settings $taskSettings -Principal $usrPrin -Force | Out-Null
-        try { Start-ScheduledTask -TaskName $helperName | Out-Null } catch {}
-    } else {
-        Write-AgentLog -FileName 'Install.log' -Message '[TASKS] Unable to resolve an interactive user principal for Borealis Agent (UserHelper); leaving the existing task unchanged.'
-    }
+    try { Unregister-ScheduledTask -TaskName 'Borealis Agent (UserHelper)' -Confirm:$false -ErrorAction SilentlyContinue | Out-Null } catch {}
+    try { schtasks.exe /Delete /TN 'Borealis Agent (UserHelper)' /F 2>$null | Out-Null } catch {}
 
     $autoUpdaterName = 'Borealis Agent (AutoUpdater)'
     $hourlyTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Hours 1) -RandomDelay (New-TimeSpan -Minutes 15)
@@ -2232,11 +2187,13 @@ function InstallOrUpdate-BorealisAgent {
                 (Join-Path $agentSourceRoot 'Borealis.ico'),
                 (Join-Path $agentSourceRoot 'fcntl_stub.py'),
                 (Join-Path $agentSourceRoot 'launch_service.ps1'),
+                (Join-Path $agentSourceRoot 'qt_compat.py'),
                 (Join-Path $agentSourceRoot 'role_health.py'),
                 (Join-Path $agentSourceRoot 'role_manager.py'),
                 (Join-Path $agentSourceRoot 'runtime_paths.py'),
                 (Join-Path $agentSourceRoot 'restart_agent_tasks.ps1'),
                 (Join-Path $agentSourceRoot 'security.py'),
+                (Join-Path $agentSourceRoot 'session_runtime.py'),
                 (Join-Path $agentSourceRoot 'signature_utils.py'),
                 (Join-Path $agentSourceRoot 'sitecustomize.py'),
                 (Join-Path $agentSourceRoot 'termios_stub.py'),

@@ -6,7 +6,16 @@ from io import BytesIO
 import base64
 import traceback
 
-from PyQt5 import QtCore, QtGui, QtWidgets
+try:
+    from qt_compat import QtCore, QtGui, QtWidgets
+except Exception:
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    base_dir = _Path(__file__).resolve().parents[1]
+    if str(base_dir) not in _sys.path:
+        _sys.path.insert(0, str(base_dir))
+    from qt_compat import QtCore, QtGui, QtWidgets
 from PIL import ImageGrab
 import importlib.util
 

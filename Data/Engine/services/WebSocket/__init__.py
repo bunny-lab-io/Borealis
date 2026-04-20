@@ -54,6 +54,22 @@ def _normalize_service_mode(value: Any) -> str:
     return ""
 
 
+def _normalize_helper_contexts(value: Any) -> tuple[str, ...]:
+    contexts = []
+    if isinstance(value, (list, tuple, set)):
+        candidates = list(value)
+    else:
+        candidates = [value]
+    seen = set()
+    for candidate in candidates:
+        normalized = _normalize_service_mode(candidate)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        contexts.append(normalized)
+    return tuple(contexts)
+
+
 _AGENT_ID_HOST_PATTERN = re.compile(
     r"^(?P<hostname>.+)_(?P<guid>[0-9A-F-]+)_(?P<context>[A-Z0-9_-]+)$",
     re.IGNORECASE,
@@ -130,8 +146,17 @@ class AgentSocketRegistry:
         self._agent_by_sid: Dict[str, str] = {}
         self._sid_by_host_mode: Dict[tuple[str, str], str] = {}
         self._host_mode_by_sid: Dict[str, tuple[str, str]] = {}
+        self._meta_by_sid: Dict[str, Dict[str, Any]] = {}
 
-    def register(self, agent_id: str, sid: str, *, service_mode: str = "", hostname: str = "") -> None:
+    def register(
+        self,
+        agent_id: str,
+        sid: str,
+        *,
+        service_mode: str = "",
+        hostname: str = "",
+        helper_contexts: Any = None,
+    ) -> None:
         if not agent_id or not sid:
             return
         previous = self._sid_by_agent.get(agent_id)
@@ -154,6 +179,24 @@ class AgentSocketRegistry:
                 self._host_mode_by_sid.pop(prior_sid, None)
             self._sid_by_host_mode[route] = sid
             self._host_mode_by_sid[sid] = route
+        self._meta_by_sid[sid] = {
+            "hostname": host_key,
+            "service_mode": mode_key,
+            "helper_contexts": _normalize_helper_contexts(helper_contexts),
+        }
+
+    def snapshot(self) -> Dict[str, Dict[str, Any]]:
+        snapshot: Dict[str, Dict[str, Any]] = {}
+        for agent_id, sid in self._sid_by_agent.items():
+            meta = self._meta_by_sid.get(sid, {})
+            snapshot[str(agent_id)] = {
+                "agent_id": str(agent_id),
+                "sid": str(sid),
+                "hostname": str(meta.get("hostname") or ""),
+                "service_mode": str(meta.get("service_mode") or ""),
+                "helper_contexts": list(_normalize_helper_contexts(meta.get("helper_contexts"))),
+            }
+        return snapshot
 
     def unregister(self, sid: str) -> Optional[str]:
         agent_id = self._agent_by_sid.pop(sid, None)
@@ -162,24 +205,33 @@ class AgentSocketRegistry:
         route = self._host_mode_by_sid.pop(sid, None)
         if route and self._sid_by_host_mode.get(route) == sid:
             self._sid_by_host_mode.pop(route, None)
+        self._meta_by_sid.pop(sid, None)
         return agent_id
+
+    def _resolve_sid_for_host_mode(self, hostname: str, service_mode: str) -> str:
+        host_key = _normalize_host_key(hostname)
+        mode_key = _normalize_service_mode(service_mode)
+        if not host_key or not mode_key:
+            return ""
+        direct_sid = self._sid_by_host_mode.get((host_key, mode_key))
+        if direct_sid:
+            return direct_sid
+        if mode_key == "currentuser":
+            system_sid = self._sid_by_host_mode.get((host_key, "system"))
+            system_meta = self._meta_by_sid.get(system_sid or "") if system_sid else None
+            helper_contexts = _normalize_helper_contexts((system_meta or {}).get("helper_contexts"))
+            if system_sid and "currentuser" in helper_contexts:
+                return system_sid
+        return ""
 
     def is_registered(self, agent_id: str) -> bool:
         return bool(self._sid_by_agent.get(agent_id))
 
     def is_host_mode_registered(self, hostname: str, service_mode: str) -> bool:
-        host_key = _normalize_host_key(hostname)
-        mode_key = _normalize_service_mode(service_mode)
-        if not host_key or not mode_key:
-            return False
-        return bool(self._sid_by_host_mode.get((host_key, mode_key)))
+        return bool(self._resolve_sid_for_host_mode(hostname, service_mode))
 
     def get_agent_id_for_host_mode(self, hostname: str, service_mode: str) -> str:
-        host_key = _normalize_host_key(hostname)
-        mode_key = _normalize_service_mode(service_mode)
-        if not host_key or not mode_key:
-            return ""
-        sid = self._sid_by_host_mode.get((host_key, mode_key))
+        sid = self._resolve_sid_for_host_mode(hostname, service_mode)
         if not sid:
             return ""
         return str(self._agent_by_sid.get(sid) or "")
@@ -196,11 +248,7 @@ class AgentSocketRegistry:
             return False
 
     def emit_to_host(self, hostname: str, service_mode: str, event: str, payload: Any) -> bool:
-        host_key = _normalize_host_key(hostname)
-        mode_key = _normalize_service_mode(service_mode)
-        if not host_key or not mode_key:
-            return False
-        sid = self._sid_by_host_mode.get((host_key, mode_key))
+        sid = self._resolve_sid_for_host_mode(hostname, service_mode)
         if not sid:
             return False
         try:
@@ -684,10 +732,17 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
         agent_id = ""
         service_mode = ""
         hostname = ""
+        helper_contexts = ()
         if isinstance(data, dict):
             agent_id = str(data.get("agent_id") or "").strip()
             service_mode = str(data.get("service_mode") or "").strip().lower()
             hostname = str(data.get("hostname") or "").strip()
+            helper_contexts = _normalize_helper_contexts(
+                data.get("helper_contexts")
+                or (data.get("capabilities") or {}).get("helper_contexts")
+                if isinstance(data.get("capabilities"), dict)
+                else data.get("helper_contexts")
+            )
         elif isinstance(data, str):
             agent_id = data.strip()
         if not agent_id:
@@ -706,19 +761,22 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
             request.sid,
             service_mode=service_mode,
             hostname=inferred_hostname,
+            helper_contexts=helper_contexts,
         )
         agent_logger.info(
-            "Agent socket registered agent_id=%s hostname=%s service_mode=%s sid=%s",
+            "Agent socket registered agent_id=%s hostname=%s service_mode=%s helper_contexts=%s sid=%s",
             agent_id,
             inferred_hostname,
             service_mode,
+            ",".join(helper_contexts) if helper_contexts else "-",
             request.sid,
         )
         _tunnel_log(
-            "vpn_agent_socket_register agent_id={0} hostname={1} service_mode={2} sid={3} remote={4}".format(
+            "vpn_agent_socket_register agent_id={0} hostname={1} service_mode={2} helper_contexts={3} sid={4} remote={5}".format(
                 agent_id,
                 inferred_hostname or "-",
                 service_mode or "-",
+                ",".join(helper_contexts) if helper_contexts else "-",
                 request.sid,
                 _remote_addr() or "-",
             )
