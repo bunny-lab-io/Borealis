@@ -213,10 +213,8 @@ const AGENT_HEALTH_KIND = Object.freeze({
 
 const AGENT_HEALTH_PRESENTATION_BY_KEY = Object.freeze({
   deviceaudit: { label: "Device Auditor", kind: AGENT_HEALTH_KIND.role },
-  macro: { label: "Macro Automation", kind: AGENT_HEALTH_KIND.role },
   remoteshell: { label: "Remote Shell", kind: AGENT_HEALTH_KIND.role },
   remoteshellservice: { label: "Remote Shell", kind: AGENT_HEALTH_KIND.role },
-  screenshot: { label: "Screenshot Capture", kind: AGENT_HEALTH_KIND.role },
   servicecontrol: { label: "Service Control", kind: AGENT_HEALTH_KIND.role },
   scriptexeccurrentuser: { label: "Script Execution - CURRENTUSER", kind: AGENT_HEALTH_KIND.role },
   scriptexecsystem: { label: "Script Execution - SYSTEM", kind: AGENT_HEALTH_KIND.role },
@@ -227,6 +225,10 @@ const AGENT_HEALTH_PRESENTATION_BY_KEY = Object.freeze({
   wireguardservice: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
   wireguardvpn: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
 });
+
+const LEGACY_AGENT_HEALTH_KEYS = Object.freeze(
+  new Set(["macro", "macroautomation", "screenshot", "screenshotcapture"])
+);
 
 function compactAgentHealthKey(value) {
   return String(value || "")
@@ -2935,14 +2937,17 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         detailsMap: item?.details && typeof item.details === "object" ? item.details : {},
       };
     });
-    const labelCounts = normalizedItems.reduce((acc, item) => {
+    const visibleItems = normalizedItems.filter(
+      (item) => !LEGACY_AGENT_HEALTH_KEYS.has(String(item.presentationKey || "").trim().toLowerCase())
+    );
+    const labelCounts = visibleItems.reduce((acc, item) => {
       const key = `${item.healthKind}:${String(item.baseLabel || "").trim().toLowerCase()}`;
       if (key !== `${item.healthKind}:`) {
         acc[key] = (acc[key] || 0) + 1;
       }
       return acc;
     }, {});
-    return normalizedItems
+    return visibleItems
       .map((item) => {
         const labelKey = `${item.healthKind}:${String(item.baseLabel || "").trim().toLowerCase()}`;
         const name =

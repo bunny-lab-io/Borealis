@@ -183,13 +183,13 @@ def merge_agent_role_health(
     existing = normalize_agent_role_health(existing_raw)
     normalized_context = _normalize_context(incoming_context)
     incoming = normalize_agent_role_health(incoming_raw, default_context=normalized_context)
-    replace_contexts = {normalized_context} if normalized_context and normalized_context != "unknown" else set()
-    if not replace_contexts:
-        replace_contexts = {
-            _normalize_context(item.get("context"))
-            for item in incoming.get("roles") or []
-            if _normalize_context(item.get("context")) != "unknown"
-        }
+    replace_contexts = {
+        _normalize_context(item.get("context"))
+        for item in incoming.get("roles") or []
+        if _normalize_context(item.get("context")) != "unknown"
+    }
+    if normalized_context and normalized_context != "unknown":
+        replace_contexts.add(normalized_context)
     kept_roles = [
         item
         for item in (existing.get("roles") or [])
