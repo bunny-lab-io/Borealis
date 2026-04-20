@@ -44,7 +44,7 @@ ROLE_CONTEXTS = ['interactive', 'helper']
 
 IS_WINDOWS = os.name == 'nt'
 TRAY_POPUP_MARGIN = 0
-TRAY_POPUP_WIDTH = 508
+TRAY_POPUP_WIDTH = 516
 
 
 def _popup_palette(tone: str) -> Dict[str, str]:
@@ -492,7 +492,7 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
         self._feedback_timer.setSingleShot(True)
         self._feedback_timer.timeout.connect(self._clear_feedback)
 
-        popup_flag = qt_enum(QtCore.Qt, "WindowType.Popup", getattr(QtCore.Qt, "Popup", 0))
+        tool_flag = qt_enum(QtCore.Qt, "WindowType.Tool", getattr(QtCore.Qt, "Tool", 0))
         frameless_flag = qt_enum(
             QtCore.Qt,
             "WindowType.FramelessWindowHint",
@@ -508,7 +508,7 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
             "WindowType.NoDropShadowWindowHint",
             getattr(QtCore.Qt, "NoDropShadowWindowHint", None),
         )
-        window_flags = popup_flag | frameless_flag | stays_on_top_flag
+        window_flags = tool_flag | frameless_flag | stays_on_top_flag
         if no_drop_shadow_flag is not None:
             window_flags |= no_drop_shadow_flag
         self.setWindowFlags(window_flags)
@@ -551,16 +551,21 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
         header = QtWidgets.QHBoxLayout()
         header.setSpacing(16)
         self._icon_label = QtWidgets.QLabel(self._panel)
-        self._icon_label.setFixedSize(76, 76)
+        self._icon_label.setFixedSize(164, 164)
         self._icon_label.setAlignment(
             qt_enum(QtCore.Qt, "AlignmentFlag.AlignCenter", getattr(QtCore.Qt, "AlignCenter", 0))
         )
-        header.addWidget(self._icon_label, 0)
+        header.addWidget(
+            self._icon_label,
+            0,
+            qt_enum(QtCore.Qt, "AlignmentFlag.AlignTop", getattr(QtCore.Qt, "AlignTop", 0)),
+        )
 
         title_layout = QtWidgets.QVBoxLayout()
-        title_layout.setSpacing(4)
+        title_layout.setSpacing(6)
         self._title_label = QtWidgets.QLabel("Borealis Agent", self._panel)
         self._title_label.setObjectName("TrayPopupTitle")
+        self._title_label.setWordWrap(True)
         self._subtitle_label = QtWidgets.QLabel("", self._panel)
         self._subtitle_label.setObjectName("TrayPopupSubtitle")
         self._subtitle_label.setWordWrap(True)
@@ -589,7 +594,7 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
         self._check_values: Dict[str, Any] = {}
         for label in (
             "Engine Trust",
-            "Engine <--> Agent WebSocket",
+            "Websocket Connection",
             "WireGuard VPN Tunnel",
             "Interactive User Session",
             "Last Heartbeat",
@@ -649,15 +654,12 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
         self.apply_view({})
 
     def _sync_window_mask(self) -> None:
-        if QtGui is None or QtCore is None:
-            return
-        rect = QtCore.QRectF(self.rect())
-        if rect.width() <= 0 or rect.height() <= 0:
-            return
-        rect.adjust(0.5, 0.5, -0.5, -0.5)
-        path = QtGui.QPainterPath()
-        path.addRoundedRect(rect, 24.0, 24.0)
-        self.setMask(QtGui.QRegion(path.toFillPolygon().toPolygon()))
+        clear_mask = getattr(self, "clearMask", None)
+        if callable(clear_mask):
+            try:
+                clear_mask()
+            except Exception:
+                pass
 
     def resizeEvent(self, event: Any) -> None:
         resize_event = getattr(super(), "resizeEvent", None)
@@ -824,8 +826,13 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
         )
         self._title_label.setText(str(current_view.get("device_name") or "Borealis Agent"))
         site_name = str(current_view.get("site_name") or "").strip()
+        site_id = current_view.get("site_id")
+        if not site_name and site_id is not None:
+            site_name = f"Site {site_id}"
+        if not site_name:
+            site_name = "Site Not Configured"
         self._subtitle_label.setText(site_name)
-        self._subtitle_label.setVisible(bool(site_name))
+        self._subtitle_label.setVisible(True)
         self._activity_value.setText(str(current_view.get("activity_status") or "Idle"))
         self._release_value.setText(str(current_view.get("release_channel_label") or "Unknown"))
 
@@ -855,7 +862,7 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
             websocket_text = "Disconnected"
             websocket_code = "warning"
         self._set_check_status(
-            self._check_values["Engine <--> Agent WebSocket"],
+            self._check_values["Websocket Connection"],
             websocket_text,
             websocket_code,
         )
@@ -899,7 +906,7 @@ class _TrayStatusPopup(QtWidgets.QFrame if QtWidgets is not None else object):
             tray_icon = getattr(self._role, "_base_tray_icon", None)
         if tray_icon is not None:
             try:
-                pixmap = tray_icon.pixmap(76, 76)
+                pixmap = tray_icon.pixmap(164, 164)
                 if not pixmap.isNull():
                     self._icon_label.setPixmap(pixmap)
                     return
@@ -1333,7 +1340,7 @@ class Role:
             websocket_text = "Disconnected"
         lines.append("")
         lines.append(f"Engine Trust: {security_text}")
-        lines.append(f"Engine <--> Agent WebSocket: {websocket_text}")
+        lines.append(f"Websocket Connection: {websocket_text}")
         lines.append(f"WireGuard VPN Tunnel: {str(view.get('wireguard_status') or 'Unavailable')}")
         lines.append(f"Interactive User Session: {str(view.get('helper_session_status') or 'Unavailable')}")
         wireguard_detail = str(view.get("wireguard_detail") or "").strip()
@@ -1413,12 +1420,12 @@ class Role:
         self._apply_tray_icon(latest_view)
         if self.tray is not None:
             self.tray.setToolTip(str(latest_view.get("tooltip") or "Borealis Agent"))
+        popup.show()
         popup.apply_view(latest_view)
         popup.adjustSize()
         popup.resize(popup.sizeHint())
         popup._sync_window_mask()
         self._position_tray_popup()
-        popup.show()
         raise_window = getattr(popup, "raise_", None) or getattr(popup, "raise", None)
         if callable(raise_window):
             raise_window()
@@ -1444,17 +1451,18 @@ class Role:
                     screen = None
         if screen is None:
             return
-        geometry = screen.availableGeometry()
+        available_geometry = screen.availableGeometry()
+        screen_geometry = screen.geometry()
         popup.adjustSize()
         size_hint = popup.sizeHint()
         popup.resize(size_hint)
         x, y = _bottom_right_anchor(
-            geometry.x(),
-            geometry.y(),
-            geometry.width(),
-            geometry.height(),
-            size_hint.width(),
-            size_hint.height(),
+            screen_geometry.x(),
+            available_geometry.y(),
+            screen_geometry.width(),
+            available_geometry.height(),
+            popup.width(),
+            popup.height(),
         )
         popup.move(x, y)
 

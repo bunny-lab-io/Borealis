@@ -614,6 +614,13 @@ def build_tray_view(
         str(current.get("site_name") or "").strip()
         or str(system.get("site_name") or "").strip()
     )
+    site_id = current.get("site_id")
+    if site_id is None:
+        site_id = system.get("site_id")
+    try:
+        site_id = int(site_id) if site_id is not None else None
+    except Exception:
+        site_id = None
     last_check_in_at = max(
         int(current.get("last_heartbeat_success_at") or 0),
         int(system.get("last_heartbeat_success_at") or 0),
@@ -693,6 +700,7 @@ def build_tray_view(
         "activity_status": activity_status,
         "connected_host": connected_host,
         "site_name": site_name,
+        "site_id": site_id,
         "last_check_in": last_check_in,
         "last_check_in_at": last_check_in_at,
         "last_heartbeat_value": last_heartbeat_value,

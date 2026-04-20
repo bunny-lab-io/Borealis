@@ -38,6 +38,7 @@ def _snapshot(
     socket_connected: bool = True,
     verify_enabled: bool = True,
     site_name: str = "",
+    site_id: int | None = None,
 ) -> dict:
     snapshot = tray_state.build_default_snapshot(
         service_mode,
@@ -55,6 +56,7 @@ def _snapshot(
     snapshot["socket_connected"] = socket_connected
     snapshot["verify_enabled"] = verify_enabled
     snapshot["site_name"] = site_name
+    snapshot["site_id"] = site_id
     snapshot["updated_at"] = now
     return snapshot
 
@@ -131,6 +133,7 @@ def test_build_tray_view_connected_state(tmp_path: Path) -> None:
     assert view["security_status"] == "Secure connection"
     assert view["activity_status"] == "Idle"
     assert view["site_name"] == "Bunny Lab HQ"
+    assert view["site_id"] is None
     assert view["wireguard_status"] == "Connected"
     assert view["helper_session_status"] == "Running"
     assert view["last_heartbeat_value"] == "29s"
@@ -261,6 +264,30 @@ def test_build_tray_view_uses_configured_server_host_when_snapshots_are_missing(
     )
 
     assert view["connected_host"] == "borealis.example.com"
+
+
+def test_build_tray_view_carries_site_id_when_name_is_missing(tmp_path: Path) -> None:
+    start = _setup_start_path(tmp_path)
+    current = _snapshot("currentuser", now=200, started_at=60, auth_at=180, heartbeat_at=190, site_id=17)
+    system = _snapshot(
+        "system",
+        now=200,
+        started_at=60,
+        auth_at=181,
+        heartbeat_at=191,
+        role_health=_wireguard_role("healthy", "Persistent tunnel active."),
+    )
+
+    view = tray_state.build_tray_view(
+        current_snapshot=current,
+        system_snapshot=system,
+        busy_snapshot={"busy": False, "reasons": [], "entries": []},
+        now=220,
+        start=start,
+    )
+
+    assert view["site_name"] == ""
+    assert view["site_id"] == 17
 
 
 def test_build_tray_view_with_one_missing_snapshot_stays_starting(tmp_path: Path) -> None:
