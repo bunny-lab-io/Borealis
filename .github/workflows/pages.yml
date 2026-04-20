@@ -10,20 +10,35 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/configure-pages@v5
-      - run: |
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+
+      - name: Prepare site
+        run: |
           mkdir -p site
           cp -R Docs/website/. site/
-      - uses: actions/upload-pages-artifact@v4
+          cp Data/Engine/web-interface/public/Borealis_Logo_Full.png site/
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site
-      - id: deployment
-        uses: actions/deploy-pages@v4
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v5
