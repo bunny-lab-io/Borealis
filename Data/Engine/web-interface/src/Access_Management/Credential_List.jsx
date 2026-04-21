@@ -201,6 +201,7 @@ export default function CredentialList() {
   const [rows, setRows] = useState([]);
   const [githubTokenState, setGithubTokenState] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [githubLoading, setGithubLoading] = useState(false);
   const [error, setError] = useState("");
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
@@ -440,15 +441,30 @@ export default function CredentialList() {
     setLoading(true);
     setError("");
     try {
-      const [credentialsResp, githubResp] = await Promise.all([
-        fetch("/api/credentials", { cache: "no-store", credentials: "include" }),
-        fetch("/api/github/token", { cache: "no-store", credentials: "include" }),
-      ]);
+      const credentialsResp = await fetch("/api/credentials", { cache: "no-store", credentials: "include" });
       const data = await credentialsResp.json().catch(() => ({}));
       if (!credentialsResp.ok) throw new Error(data?.message || data?.error || `HTTP ${credentialsResp.status}`);
       const list = Array.isArray(data?.credentials) ? data.credentials : [];
-      const githubData = await githubResp.json().catch(() => ({}));
       setRows(sortCredentialRows(list));
+    } catch (err) {
+      setRows([]);
+      setError(String(err.message || err));
+    } finally {
+      setLoading(false);
+    }
+  }, [sortCredentialRows]);
+
+  const fetchGithubTokenState = useCallback(async () => {
+    setGithubLoading(true);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 8000);
+    try {
+      const githubResp = await fetch("/api/github/token", {
+        cache: "no-store",
+        credentials: "include",
+        signal: controller.signal,
+      });
+      const githubData = await githubResp.json().catch(() => ({}));
       setGithubTokenState(
         githubResp.ok
           ? githubData
@@ -461,17 +477,28 @@ export default function CredentialList() {
             }
       );
     } catch (err) {
-      setRows([]);
-      setGithubTokenState(null);
-      setError(String(err.message || err));
+      const timedOut = err?.name === "AbortError";
+      setGithubTokenState({
+        valid: false,
+        status: "error",
+        checked_at: Math.floor(Date.now() / 1000),
+        message: timedOut ? "GitHub token status check timed out." : String(err?.message || err),
+        token: "",
+      });
     } finally {
-      setLoading(false);
+      window.clearTimeout(timeoutId);
+      setGithubLoading(false);
     }
-  }, [sortCredentialRows]);
+  }, []);
+
+  const refreshCredentialPage = useCallback(async () => {
+    await fetchCredentials();
+    void fetchGithubTokenState();
+  }, [fetchCredentials, fetchGithubTokenState]);
 
   useEffect(() => {
-    fetchCredentials();
-  }, [fetchCredentials]);
+    refreshCredentialPage();
+  }, [refreshCredentialPage]);
 
   const handleCreate = useCallback(() => {
     if (!canMutateCredentials) return;
@@ -512,7 +539,7 @@ export default function CredentialList() {
         throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
       }
       setDeleteTarget(null);
-      await fetchCredentials();
+      await refreshCredentialPage();
     } catch (err) {
       setError(String(err.message || err));
     } finally {
@@ -531,7 +558,7 @@ export default function CredentialList() {
     }
     setEditorOpen(false);
     setEditingCredential(null);
-    await fetchCredentials();
+    await refreshCredentialPage();
   };
 
   const banners = useMemo(() => {
@@ -551,6 +578,16 @@ export default function CredentialList() {
           `Aegis Cipher was force reset. ${subjects} lost stored secret material and must be updated before dependent jobs can be safely re-enabled. Operator account recovery requirements are tracked from User Management.`,
       });
     }
+    const githubStatusError =
+      String(githubTokenState?.status || "").toLowerCase() === "error"
+        ? String(githubTokenState?.message || "").trim()
+        : "";
+    if (githubStatusError) {
+      next.push({
+        severity: "warning",
+        message: `GitHub token status could not be refreshed. ${githubStatusError}`,
+      });
+    }
     if (!error) return next;
     if (String(error).includes("HTTP 404")) {
       next.push({
@@ -564,7 +601,7 @@ export default function CredentialList() {
       message: `Unable to load credentials: ${error}`,
     });
     return next;
-  }, [error, githubTokenRow, rows]);
+  }, [error, githubTokenRow, githubTokenState, rows]);
 
   const pageHeaderActions = useMemo(() => {
     const actions = [
@@ -573,8 +610,8 @@ export default function CredentialList() {
         label: "Refresh",
         icon: <RefreshIcon />,
         tone: "secondary",
-        loading,
-        onClick: fetchCredentials,
+        loading: loading || githubLoading,
+        onClick: refreshCredentialPage,
       },
     ];
 
@@ -590,7 +627,7 @@ export default function CredentialList() {
 
     actions.push(newCredentialAction);
     return actions;
-  }, [canMutateCredentials, fetchCredentials, handleCreate, loading]);
+  }, [canMutateCredentials, githubLoading, handleCreate, loading, refreshCredentialPage]);
 
   const menuItems = useMemo(() => {
     if (menuRow?.row_kind === "aegis") {

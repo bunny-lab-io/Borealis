@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from typing import Any, Dict
 
 import pytest
@@ -212,6 +213,58 @@ def _mock_github_verify_ok(monkeypatch: pytest.MonkeyPatch) -> None:
         return DummyResponse(200, {"commit": {"sha": "abc123"}})
 
     monkeypatch.setattr(github_integration.requests, "get", fake_get)
+
+
+def test_github_http_get_uses_subprocess_transport_when_eventlet_present(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    integration = engine_harness.context.github_integration
+
+    class DummyResponse:
+        status_code = 200
+        headers = {"X-RateLimit-Limit": "5000"}
+        text = ""
+
+        def json(self) -> Dict[str, Any]:
+            return {"commit": {"sha": "abc123"}}
+
+    def fail_requests_get(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("requests.get should be bypassed when eventlet is active")
+
+    def fake_subprocess(url: str, *, headers: Dict[str, str], timeout: int) -> DummyResponse:
+        assert url == "https://api.github.com/repos/bunny-lab-io/Borealis/branches/main"
+        assert headers["Accept"] == "application/vnd.github+json"
+        assert timeout == 20
+        return DummyResponse()
+
+    monkeypatch.setattr(github_integration, "_eventlet_tpool", object())
+    monkeypatch.setattr(github_integration.requests, "get", fail_requests_get)
+    monkeypatch.setattr(integration, "_http_get_subprocess", fake_subprocess)
+
+    payload = integration.verify_token("ghp_test")
+
+    assert payload["valid"] is True
+    assert payload["status"] == "ok"
+
+
+def test_github_http_get_subprocess_times_out_cleanly(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    integration = engine_harness.context.github_integration
+
+    def fake_run(*_args: Any, **kwargs: Any) -> Any:
+        raise subprocess.TimeoutExpired(cmd="python", timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(github_integration.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        integration._http_get_subprocess(
+            "https://api.github.com/repos/bunny-lab-io/Borealis/branches/main",
+            headers={"Accept": "application/vnd.github+json"},
+            timeout=20,
+        )
 
 
 def test_github_token_get_without_value(engine_harness: EngineTestHarness) -> None:

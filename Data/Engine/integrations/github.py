@@ -502,12 +502,9 @@ class GitHubIntegration:
         )
 
     def _http_get(self, url: str, *, headers: Dict[str, str], timeout: int) -> Any:
+        if _eventlet_tpool is not None:
+            return self._http_get_subprocess(url, headers=headers, timeout=timeout)
         try:
-            if _eventlet_tpool is not None:
-                try:
-                    return _eventlet_tpool.execute(requests.get, url, headers=headers, timeout=timeout)
-                except Exception:
-                    pass
             return requests.get(url, headers=headers, timeout=timeout)
         except Exception:
             return self._http_get_subprocess(url, headers=headers, timeout=timeout)
@@ -538,11 +535,15 @@ except Exception as exc:
     sys.stdout.write(json.dumps(error_payload))
     sys.exit(1)
 """
-        proc = subprocess.run(
-            [sys.executable, "-c", script, url, json.dumps(headers), str(float(timeout))],
-            capture_output=True,
-            text=True,
-        )
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", script, url, json.dumps(headers), str(float(timeout))],
+                capture_output=True,
+                text=True,
+                timeout=max(float(timeout) + 5.0, 5.0),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"GitHub subprocess request timed out after {timeout}s") from exc
         output = proc.stdout.strip() or proc.stderr.strip()
         try:
             data = json.loads(output or "{}")
