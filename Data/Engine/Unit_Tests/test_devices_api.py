@@ -953,6 +953,162 @@ def test_agent_details_persists_software_icon_assets(engine_harness: EngineTestH
     ]
 
 
+def test_agent_details_accepts_session_and_process_shape_upgrade_without_blocking_software_metadata(
+    engine_harness: EngineTestHarness,
+) -> None:
+    icon_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7+qD4AAAAASUVORK5CYII="
+    )
+    icon_hash = hashlib.sha256(icon_bytes).hexdigest()
+    icon_base64 = base64.b64encode(icon_bytes).decode("ascii")
+
+    client = engine_harness.app.test_client()
+    first_response = client.post(
+        "/api/agent/details",
+        json={
+            "hostname": "test-device",
+            "agent_hash": "hash-123",
+            "details": {
+                "summary": {
+                    "hostname": "test-device",
+                    "last_seen": 1_700_000_803,
+                    "operating_system": "Windows 11 Pro",
+                },
+                "sessions": [
+                    {
+                        "session_id": 1,
+                        "username": "operator",
+                        "session_name": "Console",
+                        "state": "Active",
+                    }
+                ],
+                "processes": [
+                    {
+                        "name": "explorer.exe",
+                        "count": 1,
+                    }
+                ],
+            },
+        },
+        headers=_device_headers(),
+    )
+    assert first_response.status_code == 200
+
+    second_response = client.post(
+        "/api/agent/details",
+        json={
+            "hostname": "test-device",
+            "agent_hash": "hash-123",
+            "details": {
+                "summary": {
+                    "hostname": "test-device",
+                    "last_seen": 1_700_000_804,
+                    "operating_system": "Windows 11 Pro",
+                },
+                "sessions": [
+                    {
+                        "session_id": 1,
+                        "username": "operator",
+                        "session_name": "Console",
+                        "state": "Active",
+                    }
+                ],
+                "processes": [
+                    {
+                        "name": "explorer.exe",
+                        "count": 1,
+                    }
+                ],
+                "software": [
+                    {
+                        "name": "Contoso Agent",
+                        "version": "3.1.4",
+                        "source": "local_installed",
+                        "metadata": {
+                            "estimated_size_kb": 654321,
+                            "display_icon": r"C:\Program Files\Contoso\contoso.exe,0",
+                            "icon_hash": icon_hash,
+                        },
+                    }
+                ],
+                "software_icon_payloads": [
+                    {
+                        "icon_hash": icon_hash,
+                        "mime_type": "image/png",
+                        "data_base64": icon_base64,
+                    }
+                ],
+            },
+        },
+        headers=_device_headers(),
+    )
+    assert second_response.status_code == 200
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT icon_hash, icon_bytes FROM software_icon_assets WHERE icon_hash = ?",
+            (icon_hash,),
+        )
+        icon_row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert icon_row is not None
+    assert icon_row[0] == icon_hash
+    assert bytes(icon_row[1]) == icon_bytes
+
+    admin_client = _client_with_admin_session(engine_harness)
+    detail_response = admin_client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.get_json()
+    assert detail_payload["sessions"] == [
+        {
+            "eligible_for_interactive": True,
+            "helper_last_seen_at": 0,
+            "helper_pid": 0,
+            "helper_ready": False,
+            "is_rdp": False,
+            "protocol": "console",
+            "session_id": 1,
+            "session_name": "Console",
+            "state": "Active",
+            "state_code": "active",
+            "username": "operator",
+        }
+    ]
+    assert detail_payload["processes"] == [
+        {
+            "count": 1,
+            "name": "explorer.exe",
+        }
+    ]
+    assert detail_payload["software"] == [
+        {
+            "name": "Contoso Agent",
+            "version": "3.1.4",
+            "source": "local_installed",
+            "metadata": {
+                "estimated_size_kb": 654321,
+                "display_icon": r"C:\Program Files\Contoso\contoso.exe,0",
+                "icon_hash": icon_hash,
+            },
+            "uninstall": {
+                "supported": False,
+                "reason": "This software row does not expose a usable uninstall command yet.",
+                "summary": "",
+                "strategy": "",
+                "rule_id": "",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+
 def test_device_software_icon_endpoint_serves_cached_asset(engine_harness: EngineTestHarness) -> None:
     icon_bytes = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7+qD4AAAAASUVORK5CYII="

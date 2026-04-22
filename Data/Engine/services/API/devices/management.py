@@ -204,10 +204,13 @@ def _is_empty(value: Any) -> bool:
 
 
 def _deep_merge_preserve(prev: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
-    out: Dict[str, Any] = dict(prev or {})
-    for key, value in (incoming or {}).items():
+    existing = prev if isinstance(prev, dict) else {}
+    incoming_map = incoming if isinstance(incoming, dict) else {}
+    out: Dict[str, Any] = dict(existing)
+    for key, value in incoming_map.items():
         if isinstance(value, dict):
-            out[key] = _deep_merge_preserve(out.get(key) or {}, value)
+            prior_value = out.get(key)
+            out[key] = _deep_merge_preserve(prior_value if isinstance(prior_value, dict) else {}, value)
         elif isinstance(value, list):
             if value:
                 out[key] = value
