@@ -1046,8 +1046,6 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
   const ActiveTrackedIcon = activeTrackedTheme.Icon;
   const activeTrackedProgressVariant = getTrackedUninstallProgressVariant(activeTrackedUninstall?.status);
   const activeTrackedProgressValue = getTrackedUninstallProgressValue(activeTrackedUninstall?.status);
-  const activeTrackedDetail = summarizeUninstallOutput(activeTrackedUninstall);
-
   return (
     <Box
       sx={{
@@ -1111,7 +1109,7 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
             }
             subtitle={
               activeTrackedUninstall
-                ? `Live activity tracking for ${activeTrackedUninstall.hostname || hostname || "this device"}. Borealis tracks job state here and records the full command output in Activity History.`
+                ? "Full command output can be found in Activity History."
                 : "Borealis is tracking the uninstall job."
             }
           />
@@ -1221,40 +1219,12 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
                   </Typography>
                 </Box>
               </Box>
-              {activeTrackedDetail ? (
-                <Box
-                  sx={{
-                    p: 1.4,
-                    borderRadius: 2.25,
-                    border: `1px solid ${MAGIC_UI.panelBorder}`,
-                    background: "rgba(4,7,17,0.6)",
-                  }}
-                >
-                  <Typography sx={{ fontSize: "0.78rem", fontWeight: 700, color: MAGIC_UI.textMuted, letterSpacing: 0.24 }}>
-                    Latest Output
-                  </Typography>
-                  <Typography sx={{ mt: 0.55, color: MAGIC_UI.textBright, fontSize: "0.88rem", lineHeight: 1.5 }}>
-                    {activeTrackedDetail}
-                  </Typography>
-                </Box>
-              ) : null}
             </Box>
           ) : null}
         </DialogContent>
         <DialogActions sx={DIALOG_ACTIONS_SX}>
           <Button sx={DIALOG_BUTTON_SX} onClick={() => setProgressDialogJobId("")}>
             {isTrackedUninstallTerminal(activeTrackedUninstall?.status) ? "Close" : "Hide"}
-          </Button>
-          <Button
-            sx={DIALOG_PRIMARY_BUTTON_SX}
-            onClick={() => {
-              if (activeTrackedUninstall?.jobId) {
-                void loadTrackedUninstallStatus(activeTrackedUninstall.jobId);
-              }
-            }}
-            disabled={!activeTrackedUninstall?.jobId || isTrackedUninstallTerminal(activeTrackedUninstall?.status)}
-          >
-            Refresh Status
           </Button>
         </DialogActions>
       </Dialog>
