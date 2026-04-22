@@ -36,6 +36,8 @@ _WINDOWS_PRODUCT_CODE_IN_TEXT_RE = re.compile(
 _WINDOWS_QUIET_SWITCH_RE = re.compile(
     r"(?i)(^|\s)(/quiet|/qn|/qb!?|/passive|/s(\s|$)|/silent|/verysilent|--silent|--quiet|/suppressmsgboxes)(\s|$)"
 )
+_STEAM_UNINSTALL_PROTOCOL_RE = re.compile(r"(?i)\bsteam://uninstall/(?P<app_id>\d+)\b")
+_STEAM_LIBRARY_PATH_RE = re.compile(r"(?i)(^|[\\/])steamapps[\\/]+common([\\/]|$)")
 _WINDOWS_QUOTED_COMMAND_RE = re.compile(r'^\s*"(?P<exe>[^"]+)"\s*(?P<args>.*)$')
 _WINDOWS_COMMAND_WITH_EXTENSION_RE = re.compile(
     r"^\s*(?P<exe>(?:(?:[A-Za-z]:|\\\\[^\\\/]+\\[^\\\/]+)[^\r\n\"]*?\.(?:exe|com|cmd|bat|msi|ps1)|[^\\/\s\"']+\.(?:exe|com|cmd|bat|msi|ps1)))\s*(?P<args>.*)$",
@@ -125,7 +127,15 @@ def software_metadata(entry: Any) -> Dict[str, Any]:
         metadata = {str(key): value for key, value in raw_metadata.items() if normalize_text(key)}
     for key, value in entry.items():
         key_text = normalize_text(key)
-        if key_text in {"name", "version", "source", "metadata", "uninstall"}:
+        if key_text in {
+            "name",
+            "version",
+            "source",
+            "metadata",
+            "uninstall",
+            "distribution_platform",
+            "distribution_app_id",
+        }:
             continue
         if not _metadata_value_present(value):
             continue
@@ -272,6 +282,22 @@ def _join_windows_path(base: Any, *parts: str) -> str:
     if not clean_parts:
         return normalized_base
     return normalized_base + "\\" + "\\".join(clean_parts)
+
+
+def detect_software_distribution(entry: Dict[str, Any]) -> Dict[str, str]:
+    if not isinstance(entry, dict):
+        return {"platform": "", "app_id": ""}
+    metadata = software_metadata(entry)
+    source = normalize_software_source(entry.get("source"))
+    if source != "local_installed":
+        return {"platform": "", "app_id": ""}
+    uninstall_string = normalize_text(metadata.get("uninstall_string"))
+    install_location = _trim_windows_path(metadata.get("install_location"))
+    match = _STEAM_UNINSTALL_PROTOCOL_RE.search(uninstall_string)
+    app_id = normalize_text(match.group("app_id")) if match else ""
+    if match or _STEAM_LIBRARY_PATH_RE.search(install_location):
+        return {"platform": "steam", "app_id": app_id}
+    return {"platform": "", "app_id": ""}
 
 
 def _unsupported(reason: str) -> Dict[str, Any]:
@@ -427,6 +453,7 @@ def _resolve_windows_install_location_rule(entry: Dict[str, Any], metadata: Dict
 def resolve_windows_uninstall_plan(entry: Dict[str, Any]) -> Dict[str, Any]:
     metadata = software_metadata(entry)
     source = normalize_software_source(entry.get("source"))
+    distribution = detect_software_distribution(entry)
 
     if source == "windows_store":
         package_family_name = normalize_text(metadata.get("package_family_name"))
@@ -452,6 +479,9 @@ def resolve_windows_uninstall_plan(entry: Dict[str, Any]) -> Dict[str, Any]:
 
     if source != "local_installed":
         return _unsupported("This software source is not part of the first Windows uninstall release.")
+
+    if distribution.get("platform") == "steam":
+        return _unsupported("Steam manages this title, and Borealis does not yet have a verified unattended uninstall path.")
 
     quiet_uninstall_string = normalize_text(metadata.get("quiet_uninstall_string"))
     uninstall_string = normalize_text(metadata.get("uninstall_string"))
@@ -573,6 +603,11 @@ def enrich_software_entry_with_uninstall(entry: Dict[str, Any], operating_system
         "source": normalize_software_source(entry.get("source")),
         "metadata": dict(software_metadata(entry)),
     }
+    distribution = detect_software_distribution(entry)
+    if distribution.get("platform"):
+        enriched["distribution_platform"] = distribution["platform"]
+    if distribution.get("app_id"):
+        enriched["distribution_app_id"] = distribution["app_id"]
     enriched["uninstall"] = resolve_software_uninstall_capability(enriched, operating_system)
     return enriched
 

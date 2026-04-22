@@ -32,6 +32,16 @@ const ACTION_BUTTON_SX = {
   },
 };
 
+const SOFTWARE_DISTRIBUTION_ICON_SX = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  minWidth: 16,
+  color: "#8fbfff",
+  fontSize: "0.9rem",
+  filter: "drop-shadow(0 0 8px rgba(59,130,246,0.2))",
+};
+
 const SOFTWARE_FILTER_OPTIONS = [
   { key: "locally_installed", label: "Locally Installed" },
   { key: "windows_store", label: "Windows Store" },
@@ -42,6 +52,8 @@ const WINDOWS_GUID_RE = /^\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-f
 const WINDOWS_GUID_IN_TEXT_RE = /\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}/;
 const WINDOWS_QUIET_SWITCH_RE =
   /(^|\s)(\/quiet|\/qn|\/qb!?|\/passive|\/s(\s|$)|\/silent|\/verysilent|--silent|--quiet|\/suppressmsgboxes)(\s|$)/i;
+const STEAM_UNINSTALL_PROTOCOL_RE = /\bsteam:\/\/uninstall\/(?<appId>\d+)\b/i;
+const STEAM_LIBRARY_PATH_RE = /(^|[\\/])steamapps[\\/]+common([\\/]|$)/i;
 
 function getSoftwareMetadata(row = {}) {
   const metadata =
@@ -49,7 +61,11 @@ function getSoftwareMetadata(row = {}) {
       ? { ...row.metadata }
       : {};
   return Object.entries(row || {}).reduce((accumulator, [key, value]) => {
-    if (["name", "version", "source", "metadata", "uninstall"].includes(key)) {
+    if (
+      ["name", "version", "source", "metadata", "uninstall", "distribution_platform", "distribution_app_id"].includes(
+        key
+      )
+    ) {
       return accumulator;
     }
     if (value == null || value === "" || (Array.isArray(value) && value.length === 0)) {
@@ -70,6 +86,25 @@ function getSoftwareMetadata(row = {}) {
     }
     return accumulator;
   }, metadata);
+}
+
+function getSoftwareDistribution(row = {}) {
+  const platform = String(row?.distribution_platform || "").trim().toLowerCase();
+  const appId = String(row?.distribution_app_id || "").trim();
+  if (platform) {
+    return { platform, appId };
+  }
+  const metadata = getSoftwareMetadata(row);
+  const uninstallString = String(metadata?.uninstall_string || "").trim();
+  const installLocation = trimWindowsPath(metadata?.install_location || "");
+  const steamMatch = uninstallString.match(STEAM_UNINSTALL_PROTOCOL_RE);
+  if (steamMatch || STEAM_LIBRARY_PATH_RE.test(installLocation)) {
+    return {
+      platform: "steam",
+      appId: String(steamMatch?.groups?.appId || steamMatch?.[1] || "").trim(),
+    };
+  }
+  return { platform: "", appId: "" };
 }
 
 function splitWindowsCommandLine(commandLine = "") {
@@ -106,6 +141,10 @@ function trimWindowsPath(value = "") {
 function deriveFallbackUninstallCapability(row = {}) {
   const source = String(row?.source || "").trim().toLowerCase();
   const metadata = getSoftwareMetadata(row);
+  const distribution = getSoftwareDistribution(row);
+  if (distribution.platform === "steam") {
+    return { supported: false, reason: "", summary: "" };
+  }
   if (["windows_store", "appx", "ms_store", "store"].includes(source)) {
     const packageFamilyName = String(metadata?.package_family_name || "").trim();
     const nonRemovable = metadata?.non_removable;
@@ -186,6 +225,42 @@ function buildSoftwareActionKey(row = {}) {
     String(row?.version || "").trim().toLowerCase(),
     String(row?.source || "").trim().toLowerCase(),
   ].join("::");
+}
+
+function SoftwareNameCell({ row = {} }) {
+  const distribution = getSoftwareDistribution(row);
+  const isSteam = distribution.platform === "steam";
+  return (
+    <Box
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 1,
+        minWidth: 0,
+      }}
+    >
+      {isSteam ? (
+        <Box
+          component="span"
+          sx={SOFTWARE_DISTRIBUTION_ICON_SX}
+          title={distribution.appId ? `Steam-managed title (AppID ${distribution.appId})` : "Steam-managed title"}
+        >
+          <i className="fa-brands fa-steam" aria-hidden="true" />
+        </Box>
+      ) : null}
+      <Box
+        component="span"
+        sx={{
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {String(row?.name || "—").trim() || "—"}
+      </Box>
+    </Box>
+  );
 }
 
 function getUninstallCapability(row = {}, hostname = "") {
@@ -356,6 +431,7 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         flex: 1.2,
         minWidth: 240,
         filter: "agTextColumnFilter",
+        cellRenderer: (params) => <SoftwareNameCell row={params.data} />,
       },
       {
         field: "version",

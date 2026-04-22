@@ -1149,6 +1149,120 @@ def test_device_software_uninstall_supports_install_location_derived_windows_rul
     ]
 
 
+def test_device_software_uninstall_marks_steam_protocol_titles_as_unsupported(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Garry's Mod",
+                "version": "",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Facepunch Studios",
+                    "install_location": "F:\\SteamLibrary\\steamapps\\common\\GarrysMod",
+                    "uninstall_string": '"C:\\Program Files (x86)\\Steam\\steam.exe" steam://uninstall/4000',
+                },
+            }
+        ],
+    )
+
+    detail_response = client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software = detail_response.get_json()["software"]
+    assert software == [
+        {
+            "name": "Garry's Mod",
+            "version": "",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Facepunch Studios",
+                "install_location": "F:\\SteamLibrary\\steamapps\\common\\GarrysMod",
+                "uninstall_string": '"C:\\Program Files (x86)\\Steam\\steam.exe" steam://uninstall/4000',
+            },
+            "distribution_platform": "steam",
+            "distribution_app_id": "4000",
+            "uninstall": {
+                "supported": False,
+                "reason": "Steam manages this title, and Borealis does not yet have a verified unattended uninstall path.",
+                "summary": "",
+                "strategy": "",
+                "rule_id": "",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+    response = client.post(
+        "/api/device/software/test-device/uninstall",
+        json={
+            "name": "Garry's Mod",
+            "version": "",
+            "source": "local_installed",
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["error"] == "software_uninstall_unsupported"
+    assert (
+        payload["message"]
+        == "Steam manages this title, and Borealis does not yet have a verified unattended uninstall path."
+    )
+
+
+def test_device_software_uninstall_marks_install_location_only_steam_titles_as_unsupported(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Abiotic Factor",
+                "version": "",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Deep Field Games",
+                    "install_location": "F:\\SteamLibrary\\steamapps\\common\\AbioticFactor",
+                },
+            }
+        ],
+    )
+
+    detail_response = client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software = detail_response.get_json()["software"]
+    assert software == [
+        {
+            "name": "Abiotic Factor",
+            "version": "",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Deep Field Games",
+                "install_location": "F:\\SteamLibrary\\steamapps\\common\\AbioticFactor",
+            },
+            "distribution_platform": "steam",
+            "uninstall": {
+                "supported": False,
+                "reason": "Steam manages this title, and Borealis does not yet have a verified unattended uninstall path.",
+                "summary": "",
+                "strategy": "",
+                "rule_id": "",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+
 def test_agent_heartbeat_returns_assigned_site(engine_harness: EngineTestHarness) -> None:
     client = engine_harness.app.test_client()
     response = client.post(
