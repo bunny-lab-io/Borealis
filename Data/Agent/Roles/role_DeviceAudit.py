@@ -12,6 +12,7 @@ import string
 import asyncio
 import re
 import ipaddress
+import tempfile
 
 try:
     import psutil  # type: ignore
@@ -616,25 +617,54 @@ def collect_summary(CONFIG):
 def _ps_json(cmd: str, timeout: int = 60):
     try:
         out = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True, timeout=timeout)
-        txt = out.stdout or ""
-        if txt.strip():
-            try:
-                data = json.loads(txt)
-                return data
-            except Exception:
-                # Sometimes PS emits BOM or warnings; try to find JSON block
-                try:
-                    start = txt.find('[{')
-                    if start == -1:
-                        start = txt.find('{')
-                    end = txt.rfind('}')
-                    if start != -1 and end != -1 and end > start:
-                        return json.loads(txt[start:end+1])
-                except Exception:
-                    pass
-        return None
+        return _parse_ps_json_output(out.stdout or "")
     except Exception:
         return None
+
+
+def _parse_ps_json_output(text: str):
+    txt = str(text or "")
+    if txt.strip():
+        try:
+            data = json.loads(txt)
+            return data
+        except Exception:
+            try:
+                start = txt.find('[{')
+                if start == -1:
+                    start = txt.find('{')
+                end = txt.rfind('}')
+                if start != -1 and end != -1 and end > start:
+                    return json.loads(txt[start:end+1])
+            except Exception:
+                pass
+    return None
+
+
+def _ps_json_file(script_text: str, timeout: int = 60):
+    script_path = ''
+    try:
+        temp_dir = os.path.join(tempfile.gettempdir(), "Borealis", "device_audit")
+        os.makedirs(temp_dir, exist_ok=True)
+        fd, script_path = tempfile.mkstemp(prefix="ps_json_", suffix=".ps1", dir=temp_dir, text=True)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(str(script_text or ""))
+
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_path],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return _parse_ps_json_output(out.stdout or "")
+    except Exception:
+        return None
+    finally:
+        try:
+            if script_path and os.path.isfile(script_path):
+                os.remove(script_path)
+        except Exception:
+            pass
 
 
 _DISPLAY_ICON_QUOTED_RE = re.compile(r'^\s*"(?P<path>[^"]+)"\s*(?:,\s*(?P<index>-?\d+))?\s*$')
@@ -745,6 +775,7 @@ public static class BorealisIconExtractor
 
     public static byte[] ExtractPngBytes(string fileName, int iconIndex)
     {
+        fileName = Environment.ExpandEnvironmentVariables(fileName ?? string.Empty).Trim().Trim('"');
         if (string.IsNullOrWhiteSpace(fileName) || !File.Exists(fileName))
         {
             return null;
@@ -769,7 +800,26 @@ public static class BorealisIconExtractor
             uint count = ExtractIconEx(fileName, iconIndex, large, small, 1);
             if (count == 0)
             {
-                return null;
+                try
+                {
+                    using (var associatedIcon = Icon.ExtractAssociatedIcon(fileName))
+                    {
+                        if (associatedIcon == null)
+                        {
+                            return null;
+                        }
+                        using (var bitmap = associatedIcon.ToBitmap())
+                        using (var stream = new MemoryStream())
+                        {
+                            bitmap.Save(stream, ImageFormat.Png);
+                            return stream.ToArray();
+                        }
+                    }
+                }
+                catch
+                {
+                    return null;
+                }
             }
 
             IntPtr handle = large[0] != IntPtr.Zero ? large[0] : small[0];
@@ -816,7 +866,7 @@ foreach ($spec in ($specs | Where-Object { $_ -and $_.hint -and $_.path })) {
 $results | ConvertTo-Json -Depth 4 -Compress
 """
     timeout = max(120, min(300, 30 + (len(specs) * 2)))
-    data = _ps_json(ps, timeout=timeout)
+    data = _ps_json_file(ps, timeout=timeout)
     if isinstance(data, dict):
         data = [data]
     payloads = {}
@@ -2282,6 +2332,18 @@ class Role:
         interval_sec = 300  # post heartbeat/details every 5 minutes
         while True:
             try:
+                hooks = self.ctx.hooks if isinstance(getattr(self.ctx, 'hooks', None), dict) else {}
+                log_agent_hook = hooks.get('log_agent')
+
+                def _log_icon_status(message: str, *, error: bool = False) -> None:
+                    if callable(log_agent_hook):
+                        try:
+                            log_agent_hook(message)
+                            if error:
+                                log_agent_hook(message, fname='agent.error.log')
+                        except Exception:
+                            pass
+
                 # Determine audit refresh interval (minutes), default 30
                 try:
                     refresh_min = int(self.ctx.config.data.get('audit_interval_minutes', 5))
@@ -2301,6 +2363,15 @@ class Role:
                         pass
                     try:
                         software_rows = details.get('software') if isinstance(details.get('software'), list) else []
+                        icon_candidate_count = 0
+                        for row in software_rows:
+                            if not isinstance(row, dict):
+                                continue
+                            if str(row.get('source') or '').strip().lower() != 'local_installed':
+                                continue
+                            metadata = row.get('metadata') if isinstance(row.get('metadata'), dict) else {}
+                            if _normalize_display_icon_hint(metadata.get('display_icon')):
+                                icon_candidate_count += 1
                         icon_signature = _software_icon_signature(software_rows)
                         previous_icon_hash_by_key = (
                             self._last_software_icon_hash_by_key
@@ -2315,8 +2386,15 @@ class Role:
                         self._last_software_icon_hash_by_key = icon_hash_by_key
                         if icon_payloads:
                             details['software_icon_payloads'] = icon_payloads
-                    except Exception:
-                        pass
+                            _log_icon_status(
+                                f"device_audit software icon extraction attached payloads={len(icon_payloads)} rows={len(icon_hash_by_key)} candidates={icon_candidate_count}"
+                            )
+                        elif icon_candidate_count:
+                            _log_icon_status(
+                                f"device_audit software icon extraction yielded no payloads candidates={icon_candidate_count}"
+                            )
+                    except Exception as exc:
+                        _log_icon_status(f"device_audit software icon extraction failed: {exc}", error=True)
                     if details:
                         self._last_details = details
                         self._refresh_ts = now

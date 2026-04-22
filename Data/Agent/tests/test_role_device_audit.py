@@ -173,3 +173,37 @@ def test_extract_windows_icon_payloads_by_hint_batches_large_requests(monkeypatc
             "data_base64": base64.b64encode(r"C:\Program Files\Northwind\northwind.exe,0".encode("utf-8")).decode("ascii"),
         },
     }
+
+
+def test_extract_windows_icon_payload_batch_uses_file_backed_powershell_runner(monkeypatch) -> None:
+    observed = {}
+
+    def fake_ps_json_file(script_text: str, timeout: int = 60):
+        observed["script"] = script_text
+        observed["timeout"] = timeout
+        return {
+            "hint": r"C:\Program Files\Contoso\contoso.exe,0",
+            "mime_type": "image/png",
+            "data_base64": base64.b64encode(b"contoso-icon").decode("ascii"),
+        }
+
+    monkeypatch.setattr(device_audit, "_ps_json_file", fake_ps_json_file)
+
+    payloads = device_audit._extract_windows_icon_payload_batch(
+        [
+            {
+                "hint": r"C:\Program Files\Contoso\contoso.exe,0",
+                "path": r"C:\Program Files\Contoso\contoso.exe",
+                "index": 0,
+            }
+        ]
+    )
+
+    assert "[BorealisIconExtractor]::ExtractPngBytes" in observed["script"]
+    assert observed["timeout"] >= 120
+    assert payloads == {
+        r"C:\Program Files\Contoso\contoso.exe,0": {
+            "mime_type": "image/png",
+            "data_base64": base64.b64encode(b"contoso-icon").decode("ascii"),
+        }
+    }
