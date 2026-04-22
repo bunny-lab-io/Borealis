@@ -1018,6 +1018,11 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         sortable: false,
         filter: false,
         suppressHeaderMenuButton: true,
+        cellStyle: {
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        },
         cellRenderer: (params) => (
           <ActionCell
             data={params.data}
