@@ -1101,63 +1101,6 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
             <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
               <Box
                 sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 1.5,
-                  p: 1.5,
-                  borderRadius: 2.5,
-                  border: `1px solid ${activeTrackedTheme.border}`,
-                  background: `linear-gradient(135deg, ${activeTrackedTheme.accent} 0%, rgba(7,12,24,0.18) 100%)`,
-                }}
-              >
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1.2, minWidth: 0 }}>
-                  <Box
-                    sx={{
-                      width: 34,
-                      height: 34,
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      borderRadius: "50%",
-                      color: activeTrackedTheme.color,
-                      background: "rgba(5,10,24,0.66)",
-                      border: `1px solid ${activeTrackedTheme.border}`,
-                    }}
-                  >
-                    <ActiveTrackedIcon sx={{ fontSize: 20 }} />
-                  </Box>
-                  <Box sx={{ minWidth: 0 }}>
-                    <Typography sx={{ fontWeight: 700, color: MAGIC_UI.textBright, lineHeight: 1.2 }}>
-                      {activeTrackedTheme.label}
-                    </Typography>
-                    <Typography sx={{ mt: 0.35, fontSize: "0.84rem", color: MAGIC_UI.textMuted }}>
-                      {activeTrackedTheme.helper}
-                    </Typography>
-                  </Box>
-                </Box>
-                <Box
-                  component="span"
-                  sx={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    px: 1.35,
-                    py: 0.45,
-                    borderRadius: 999,
-                    fontSize: "0.78rem",
-                    fontWeight: 700,
-                    color: activeTrackedTheme.color,
-                    border: `1px solid ${activeTrackedTheme.border}`,
-                    background: "rgba(5,10,24,0.72)",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {activeTrackedTheme.label}
-                </Box>
-              </Box>
-              <Box
-                sx={{
                   p: 1.6,
                   borderRadius: 2.5,
                   border: `1px solid ${MAGIC_UI.panelBorder}`,
