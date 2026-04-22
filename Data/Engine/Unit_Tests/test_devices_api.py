@@ -720,6 +720,17 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
             "version": "1.2.0",
             "source": "windows_store",
             "metadata": {"package_family_name": "Contoso.App_1234567890abc"},
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Windows Store package uninstall.",
+                "strategy": "windows_store",
+                "rule_id": "metadata_windows_store",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "Contoso.App_1234567890abc",
+            },
         },
         {
             "name": "Google Chrome",
@@ -729,6 +740,17 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
                 "quiet_uninstall_string": '"C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe" --uninstall --multi-install --chrome --system-level --force-uninstall',
                 "uninstall_string": "MsiExec.exe /I{11111111-2222-3333-4444-555555555555}",
                 "product_code": "{11111111-2222-3333-4444-555555555555}",
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Uses the registry quiet uninstall string.",
+                "strategy": "direct_command",
+                "rule_id": "metadata_quiet_uninstall_string",
+                "quiet_uninstall_string": '"C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe" --uninstall --multi-install --chrome --system-level --force-uninstall',
+                "uninstall_string": "MsiExec.exe /I{11111111-2222-3333-4444-555555555555}",
+                "product_code": "{11111111-2222-3333-4444-555555555555}",
+                "package_family_name": "",
             },
         },
     ]
@@ -744,9 +766,8 @@ def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHa
                 "version": "124.0.6367.92",
                 "source": "local_installed",
                 "metadata": {
-                    "quiet_uninstall_string": '"C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe" --uninstall --force-uninstall',
-                    "uninstall_string": "MsiExec.exe /I{11111111-2222-3333-4444-555555555555}",
-                    "product_code": "{11111111-2222-3333-4444-555555555555}",
+                    "publisher": "Google LLC",
+                    "uninstall_string": "C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe --uninstall --multi-install --chrome --system-level",
                 },
             }
         ],
@@ -785,6 +806,11 @@ def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHa
     payload = response.get_json()
     assert payload["status"] == "queued"
     assert payload["software"]["name"] == "Google Chrome"
+    assert payload["uninstall"] == {
+        "strategy": "direct_command",
+        "summary": "Chrome setup.exe uninstall can be forced silent.",
+        "rule_id": "chrome_setup_force_uninstall",
+    }
     assert len(targeted_events) == 1
     hostname, service_mode, event_name, dispatched = targeted_events[0]
     assert hostname == "test-device"
@@ -794,6 +820,10 @@ def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHa
     assert dispatched["target_context"] == "system"
     assert dispatched["environment"]["SOFTWARE_NAME"] == "Google Chrome"
     assert dispatched["environment"]["SOFTWARE_SOURCE"] == "local_installed"
+    assert (
+        dispatched["environment"]["QUIET_UNINSTALL_STRING"]
+        == '"C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe" --uninstall --multi-install --chrome --system-level --force-uninstall'
+    )
     assert "Invoke-LocalInstalledUninstall" in base64.b64decode(dispatched["script_content"]).decode("utf-8")
     assert any(event_name == "device_activity_changed" for event_name, _payload, _to in socket_events)
 
@@ -839,6 +869,66 @@ def test_device_software_uninstall_requires_supported_metadata(engine_harness: E
     assert response.status_code == 400
     payload = response.get_json()
     assert payload["error"] == "software_uninstall_unsupported"
+
+
+def test_device_software_uninstall_rejects_non_removable_windows_store_package(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Microsoft.LockApp",
+                "version": "10.0.0.0",
+                "source": "windows_store",
+                "metadata": {
+                    "package_family_name": "Microsoft.LockApp_cw5n1h2txyewy",
+                    "non_removable": True,
+                },
+            }
+        ],
+    )
+
+    detail_response = client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software = detail_response.get_json()["software"]
+    assert software == [
+        {
+            "name": "Microsoft.LockApp",
+            "version": "10.0.0.0",
+            "source": "windows_store",
+            "metadata": {
+                "package_family_name": "Microsoft.LockApp_cw5n1h2txyewy",
+                "non_removable": True,
+            },
+            "uninstall": {
+                "supported": False,
+                "reason": "Windows marks this Store package as non-removable.",
+                "summary": "",
+                "strategy": "",
+                "rule_id": "",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+    response = client.post(
+        "/api/device/software/test-device/uninstall",
+        json={
+            "name": "Microsoft.LockApp",
+            "version": "10.0.0.0",
+            "source": "windows_store",
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["error"] == "software_uninstall_unsupported"
+    assert payload["message"] == "Windows marks this Store package as non-removable."
 
 
 def test_agent_heartbeat_returns_assigned_site(engine_harness: EngineTestHarness) -> None:

@@ -8,7 +8,16 @@ def test_collect_software_includes_windows_uninstall_metadata(monkeypatch) -> No
 
     def fake_ps_json(script: str, timeout: int = 120):
         if "Get-AppxPackage" in script:
-            return []
+            return [
+                {
+                    "Name": "Contoso.App",
+                    "Version": "3.0.0",
+                    "Publisher": "CN=Contoso",
+                    "InstallLocation": r"C:\Program Files\WindowsApps\Contoso.App",
+                    "PackageFamilyName": "Contoso.App_1234567890abc",
+                    "NonRemovable": True,
+                }
+            ]
         return [
             {
                 "DisplayName": "Contoso Agent",
@@ -41,5 +50,16 @@ def test_collect_software_includes_windows_uninstall_metadata(monkeypatch) -> No
                 "product_code": "{11111111-2222-3333-4444-555555555555}",
                 "windows_installer": True,
             },
-        }
+        },
+        {
+            "name": "Contoso.App",
+            "version": "3.0.0",
+            "source": "windows_store",
+            "metadata": {
+                "publisher": "CN=Contoso",
+                "install_location": r"C:\Program Files\WindowsApps\Contoso.App",
+                "package_family_name": "Contoso.App_1234567890abc",
+                "non_removable": True,
+            },
+        },
     ]

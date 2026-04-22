@@ -39,49 +39,28 @@ function buildSoftwareActionKey(row = {}) {
   ].join("::");
 }
 
-function getSoftwareMetadata(row = {}) {
-  return row?.metadata && typeof row.metadata === "object" ? row.metadata : {};
-}
-
-function getUninstallEligibility(row = {}, operatingSystem = "", hostname = "") {
+function getUninstallCapability(row = {}, hostname = "") {
   if (!hostname) {
     return { supported: false, reason: "The selected device is missing a hostname." };
   }
-  const osText = String(operatingSystem || "").trim().toLowerCase();
-  if (!osText) {
-    return { supported: false, reason: "Borealis has not received the device platform yet." };
-  }
-  if (!osText.includes("windows")) {
-    return { supported: false, reason: "Windows uninstall support ships first. Linux support comes next." };
-  }
-
-  const source = String(row?.source || "").trim().toLowerCase();
-  const metadata = getSoftwareMetadata(row);
-  if (source === "windows_store") {
+  const uninstall = row?.uninstall && typeof row.uninstall === "object" ? row.uninstall : null;
+  if (uninstall) {
     return {
-      supported: Boolean(String(metadata?.package_family_name || "").trim() || String(row?.name || "").trim()),
-      reason: "This Windows Store entry does not include enough package metadata yet.",
+      supported: Boolean(uninstall.supported),
+      reason: String(uninstall.reason || "").trim(),
+      summary: String(uninstall.summary || "").trim(),
     };
-  }
-  if (source !== "local_installed") {
-    return { supported: false, reason: "This software source is not part of the first Windows uninstall release." };
-  }
-  if (
-    String(metadata?.quiet_uninstall_string || "").trim() ||
-    String(metadata?.uninstall_string || "").trim() ||
-    String(metadata?.product_code || "").trim()
-  ) {
-    return { supported: true, reason: "" };
   }
   return {
     supported: false,
-    reason: "This software row does not expose a usable uninstall command yet.",
+    reason: "Borealis has not resolved uninstall capability for this software row yet.",
+    summary: "",
   };
 }
 
-function ActionCell({ data, operatingSystem, hostname, busyKey, onRequestUninstall }) {
+function ActionCell({ data, hostname, busyKey, onRequestUninstall }) {
   const row = data || {};
-  const eligibility = getUninstallEligibility(row, operatingSystem, hostname);
+  const eligibility = getUninstallCapability(row, hostname);
   const rowKey = buildSoftwareActionKey(row);
   const busy = rowKey === busyKey;
   const disabled = busy || !eligibility.supported;
@@ -111,7 +90,7 @@ function ActionCell({ data, operatingSystem, hostname, busyKey, onRequestUninsta
   return button;
 }
 
-export default function InstalledSoftwareTab({ softwareRows = [], hostname = "", operatingSystem = "" }) {
+export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" }) {
   const [softwareSearch, setSoftwareSearch] = useState("");
   const [busyActionKey, setBusyActionKey] = useState("");
   const [confirmRow, setConfirmRow] = useState(null);
@@ -214,14 +193,13 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "",
           <ActionCell
             data={params.data}
             hostname={hostname}
-            operatingSystem={operatingSystem}
             busyKey={busyActionKey}
             onRequestUninstall={requestUninstall}
           />
         ),
       },
     ],
-    [busyActionKey, hostname, operatingSystem, requestUninstall]
+    [busyActionKey, hostname, requestUninstall]
   );
 
   const getSoftwareRowId = useCallback(

@@ -760,12 +760,12 @@ $list = @()
 try {
   $list = Get-AppxPackage -AllUsers -ErrorAction Stop |
     Where-Object { -not $_.IsFramework -and -not $_.IsResourcePackage } |
-    Select-Object Name, Version, Publisher, InstallLocation, PackageFamilyName
+    Select-Object Name, Version, Publisher, InstallLocation, PackageFamilyName, NonRemovable
 } catch {
   try {
     $list = Get-AppxPackage -ErrorAction SilentlyContinue |
       Where-Object { -not $_.IsFramework -and -not $_.IsResourcePackage } |
-      Select-Object Name, Version, Publisher, InstallLocation, PackageFamilyName
+      Select-Object Name, Version, Publisher, InstallLocation, PackageFamilyName, NonRemovable
   } catch {}
 }
 $list | Sort-Object Name -Unique | ConvertTo-Json -Depth 3
@@ -788,6 +788,9 @@ $list | Sort-Object Name -Unique | ConvertTo-Json -Depth 3
                 family_name = str(it.get('PackageFamilyName') or '').strip()
                 if family_name:
                     metadata['package_family_name'] = family_name
+                non_removable = it.get('NonRemovable')
+                if non_removable not in (None, ''):
+                    metadata['non_removable'] = bool(non_removable)
                 payload = {'name': name, 'version': ver, 'source': 'windows_store'}
                 if metadata:
                     payload['metadata'] = metadata

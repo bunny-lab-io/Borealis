@@ -57,6 +57,10 @@ from .agent_role_health import (
     normalize_agent_role_health,
     serialize_agent_role_health,
 )
+from .software_uninstall import (
+    enrich_software_inventory_with_uninstall,
+    normalize_software_inventory as _shared_normalize_software_inventory,
+)
 from .process_inventory import normalize_device_processes, serialize_device_processes
 from .session_inventory import normalize_device_sessions, serialize_device_sessions
 from .service_inventory import (
@@ -251,44 +255,7 @@ def _normalize_software_source(value: Any) -> str:
 
 
 def _normalize_software_inventory(raw: Any) -> List[Dict[str, Any]]:
-    entries = raw if isinstance(raw, list) else []
-    normalized: List[Dict[str, Any]] = []
-    seen: set[Tuple[str, str, str]] = set()
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        name = _clean_device_str(entry.get("name"))
-        if not name:
-            continue
-        version = _clean_device_str(entry.get("version")) or ""
-        source = _normalize_software_source(entry.get("source"))
-        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
-        if not metadata:
-            metadata = {
-                str(key): value
-                for key, value in entry.items()
-                if key not in {"name", "version", "source", "metadata"} and value not in (None, "", [], {})
-            }
-        key = (name.strip().lower(), version.strip().lower(), source)
-        if key in seen:
-            continue
-        seen.add(key)
-        normalized.append(
-            {
-                "name": name,
-                "version": version,
-                "source": source,
-                "metadata": metadata if isinstance(metadata, dict) else {},
-            }
-        )
-    normalized.sort(
-        key=lambda item: (
-            str(item.get("name") or "").lower(),
-            str(item.get("source") or "").lower(),
-            str(item.get("version") or "").lower(),
-        )
-    )
-    return normalized
+    return _shared_normalize_software_inventory(raw)
 
 
 def _sync_device_software_inventory(cur: sqlite3.Cursor, device_guid: Optional[str], software_entries: Any) -> None:
@@ -833,11 +800,15 @@ class DeviceManagementService:
             "agent_update_error": mapping.get("agent_update_error") or "",
             "agent_update_source": mapping.get("agent_update_source") or "",
         }
+        software_rows = enrich_software_inventory_with_uninstall(
+            _normalize_software_inventory(_safe_json(mapping.get("software"), [])),
+            summary.get("operating_system") or "",
+        )
         details = {
             "summary": summary,
             "memory": _safe_json(mapping.get("memory"), []),
             "network": _safe_json(mapping.get("network"), []),
-            "software": _normalize_software_inventory(_safe_json(mapping.get("software"), [])),
+            "software": software_rows,
             "services": services_payload.get("services") or [],
             "storage": _safe_json(mapping.get("storage"), []),
             "cpu": _safe_json(mapping.get("cpu"), {}),

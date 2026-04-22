@@ -40,13 +40,13 @@ Status: active
 Owner: Engine + Agent + WebUI
 Date Added: 2026-04-21
 Summary: Windows software uninstall v1 falls back to pattern-based silent-command derivation when inventory lacks a true quiet uninstall string.
-Impact: Operators can queue many common Windows uninstalls directly from Device Details, but some products still cannot be removed silently unless the registry exposes `QuietUninstallString` or a recognizable installer pattern.
+Impact: Operators can queue many common Windows uninstalls directly from Device Details, but some products still cannot be removed silently unless the registry exposes `QuietUninstallString` or matches a bounded Borealis uninstall rule.
 Root Cause: Windows uninstall inventory is vendor-defined, and many entries expose only interactive `UninstallString` values without a standardized silent equivalent.
-Current Mitigation: `role_DeviceAudit.py` now persists uninstall metadata, the Installed Software tab only enables `Uninstall` when Borealis has enough metadata, and `Data/Engine/services/API/devices/services.py` limits fallback silent derivation to MSI product codes plus common Inno Setup and Squirrel patterns before failing with a clear operator-visible error.
+Current Mitigation: `role_DeviceAudit.py` now persists uninstall metadata plus AppX `non_removable`, the Engine resolves a per-row uninstall capability object when device details are loaded, the Installed Software tab only trusts that backend capability, and `Data/Engine/services/API/devices/software_uninstall.py` limits fallback silent derivation to MSI product codes, built-in installer patterns, and a small explicit rule catalog before failing with a clear operator-visible reason.
 Removal Criteria: Borealis gains broader installer-family detection or a richer uninstall metadata pipeline that can derive silent commands reliably without pattern heuristics.
-Files: `Data/Agent/Roles/role_DeviceAudit.py`, `Data/Engine/services/API/devices/services.py`, `Data/Engine/web-interface/src/Devices/Tabs/Installed_Software.jsx`
-Evidence: The uninstall quick-job path now prefers `QuietUninstallString`, then MSI product codes, and otherwise recognizes only a bounded set of silent uninstall patterns (`unins*.exe`, `Update.exe`) before rejecting unsupported entries.
-Next Step: Expand the supported installer-family map with test coverage, or persist installer classification from the agent so the Engine does not need to infer quiet flags from raw registry strings.
+Files: `Data/Agent/Roles/role_DeviceAudit.py`, `Data/Engine/services/API/devices/software_uninstall.py`, `Data/Engine/services/API/devices/services.py`, `Data/Engine/web-interface/src/Devices/Tabs/Installed_Software.jsx`
+Evidence: The uninstall resolver now prefers `QuietUninstallString`, MSI product codes, and existing quiet flags, then falls back to built-in installer families (`unins*.exe`, `Update.exe`) plus a small rule catalog for known vendor patterns such as 7-Zip, Mozilla/Betterbird helper uninstallers, IrfanView, Edge, and Chrome. Windows Store packages marked `non_removable` are explicitly blocked.
+Next Step: Expand the supported installer-family map with test coverage using real fleet inventory, or persist installer classification from the agent so the Engine does not need to infer quiet flags from raw registry strings.
 GitHub Issue: not yet
 
 ID: TD-20260419-01
