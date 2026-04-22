@@ -38,6 +38,94 @@ const SOFTWARE_FILTER_OPTIONS = [
   { key: "snap_package", label: "Snap Package" },
 ];
 
+const WINDOWS_GUID_RE = /^\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}$/;
+const WINDOWS_GUID_IN_TEXT_RE = /\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}/;
+const WINDOWS_QUIET_SWITCH_RE =
+  /(^|\s)(\/quiet|\/qn|\/qb!?|\/passive|\/s(\s|$)|\/silent|\/verysilent|--silent|--quiet|\/suppressmsgboxes)(\s|$)/i;
+
+function getSoftwareMetadata(row = {}) {
+  return row?.metadata && typeof row.metadata === "object" ? row.metadata : {};
+}
+
+function splitWindowsCommandLine(commandLine = "") {
+  const text = String(commandLine || "").trim();
+  if (!text) return null;
+  const quotedMatch = text.match(/^\s*"([^"]+)"\s*(.*)$/);
+  if (quotedMatch) {
+    return {
+      filePath: String(quotedMatch[1] || "").trim(),
+      arguments: String(quotedMatch[2] || "").trim(),
+    };
+  }
+  const extensionMatch = text.match(
+    /^\s*((?:(?:[A-Za-z]:|\\\\[^\\/]+\\[^\\/]+)[^\r\n"]*?\.(?:exe|com|cmd|bat|msi|ps1)|[^\\/\s"]+\.(?:exe|com|cmd|bat|msi|ps1)))\s*(.*)$/i
+  );
+  if (extensionMatch) {
+    return {
+      filePath: String(extensionMatch[1] || "").trim(),
+      arguments: String(extensionMatch[2] || "").trim(),
+    };
+  }
+  const parts = text.split(/\s+/, 2);
+  if (!parts.length) return null;
+  return {
+    filePath: String(parts[0] || "").trim(),
+    arguments: String(parts[1] || "").trim(),
+  };
+}
+
+function deriveFallbackUninstallCapability(row = {}) {
+  const source = String(row?.source || "").trim().toLowerCase();
+  const metadata = getSoftwareMetadata(row);
+  if (["windows_store", "appx", "ms_store", "store"].includes(source)) {
+    const packageFamilyName = String(metadata?.package_family_name || "").trim();
+    const nonRemovable = metadata?.non_removable;
+    if (nonRemovable === false && packageFamilyName) {
+      return { supported: true, reason: "", summary: "Windows Store package uninstall." };
+    }
+    return { supported: false, reason: "", summary: "" };
+  }
+
+  if (!["local_installed", "installed", "registry", "local", "uninstall_registry"].includes(source)) {
+    return { supported: false, reason: "", summary: "" };
+  }
+
+  const quietUninstallString = String(metadata?.quiet_uninstall_string || "").trim();
+  const uninstallString = String(metadata?.uninstall_string || "").trim();
+  const productCode = String(metadata?.product_code || "").trim();
+  if (quietUninstallString) {
+    return { supported: true, reason: "", summary: "Uses the registry quiet uninstall string." };
+  }
+  if (WINDOWS_GUID_RE.test(productCode) || WINDOWS_GUID_IN_TEXT_RE.test(uninstallString)) {
+    return { supported: true, reason: "", summary: "Uses MSI uninstall metadata." };
+  }
+  if (WINDOWS_QUIET_SWITCH_RE.test(uninstallString)) {
+    return { supported: true, reason: "", summary: "The uninstall string already includes quiet flags." };
+  }
+  const parsed = splitWindowsCommandLine(uninstallString);
+  const executableName = String(parsed?.filePath || "")
+    .split("\\")
+    .pop()
+    ?.trim()
+    .toLowerCase();
+  const existingArguments = String(parsed?.arguments || "").trim();
+  if (parsed && executableName?.startsWith("unins")) {
+    return { supported: true, reason: "", summary: "Derived Inno Setup silent uninstall." };
+  }
+  if (parsed && executableName === "update.exe") {
+    return { supported: true, reason: "", summary: "Derived Squirrel-style silent uninstall." };
+  }
+  if (
+    parsed &&
+    executableName === "setup.exe" &&
+    /\b--uninstall\b/i.test(existingArguments) &&
+    /(google chrome|microsoft edge|webview2 runtime)/i.test(String(row?.name || ""))
+  ) {
+    return { supported: true, reason: "", summary: "Derived setup.exe uninstall." };
+  }
+  return { supported: false, reason: "", summary: "" };
+}
+
 function buildSoftwareActionKey(row = {}) {
   return [
     String(row?.name || "").trim().toLowerCase(),
@@ -47,9 +135,6 @@ function buildSoftwareActionKey(row = {}) {
 }
 
 function getUninstallCapability(row = {}, hostname = "") {
-  if (!hostname) {
-    return { supported: false, reason: "The selected device is missing a hostname." };
-  }
   const uninstall = row?.uninstall && typeof row.uninstall === "object" ? row.uninstall : null;
   if (uninstall) {
     return {
@@ -57,6 +142,13 @@ function getUninstallCapability(row = {}, hostname = "") {
       reason: String(uninstall.reason || "").trim(),
       summary: String(uninstall.summary || "").trim(),
     };
+  }
+  const fallback = deriveFallbackUninstallCapability(row);
+  if (fallback.supported) {
+    return fallback;
+  }
+  if (!hostname) {
+    return { supported: false, reason: "The selected device is missing a hostname.", summary: "" };
   }
   return {
     supported: false,
