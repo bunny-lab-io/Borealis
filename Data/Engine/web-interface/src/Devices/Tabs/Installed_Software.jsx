@@ -44,7 +44,22 @@ const WINDOWS_QUIET_SWITCH_RE =
   /(^|\s)(\/quiet|\/qn|\/qb!?|\/passive|\/s(\s|$)|\/silent|\/verysilent|--silent|--quiet|\/suppressmsgboxes)(\s|$)/i;
 
 function getSoftwareMetadata(row = {}) {
-  return row?.metadata && typeof row.metadata === "object" ? row.metadata : {};
+  if (row?.metadata && typeof row.metadata === "object" && Object.keys(row.metadata).length > 0) {
+    return row.metadata;
+  }
+  return Object.entries(row || {}).reduce((metadata, [key, value]) => {
+    if (["name", "version", "source", "metadata", "uninstall"].includes(key)) {
+      return metadata;
+    }
+    if (value == null || value === "" || (Array.isArray(value) && value.length === 0)) {
+      return metadata;
+    }
+    if (typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0) {
+      return metadata;
+    }
+    metadata[key] = value;
+    return metadata;
+  }, {});
 }
 
 function splitWindowsCommandLine(commandLine = "") {
@@ -135,15 +150,18 @@ function buildSoftwareActionKey(row = {}) {
 }
 
 function getUninstallCapability(row = {}, hostname = "") {
+  const fallback = deriveFallbackUninstallCapability(row);
   const uninstall = row?.uninstall && typeof row.uninstall === "object" ? row.uninstall : null;
   if (uninstall) {
+    if (!uninstall.supported && fallback.supported) {
+      return fallback;
+    }
     return {
       supported: Boolean(uninstall.supported),
       reason: String(uninstall.reason || "").trim(),
       summary: String(uninstall.summary || "").trim(),
     };
   }
-  const fallback = deriveFallbackUninstallCapability(row);
   if (fallback.supported) {
     return fallback;
   }
