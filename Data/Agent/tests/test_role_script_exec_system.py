@@ -38,7 +38,9 @@ def _make_role(fake_sio: _FakeSio):
     )()
     role.role_health_label = "Script Execution - SYSTEM"
     role._listener_registered = False
-    role._system_job_lock = asyncio.Lock()
+    role._system_queue_locks = {
+        "software_uninstall": asyncio.Lock(),
+    }
     role._system_job_tasks = set()
     return role
 
@@ -92,7 +94,7 @@ def test_register_events_returns_without_blocking_on_system_job(monkeypatch) -> 
     asyncio.run(_run_test())
 
 
-def test_register_events_serializes_back_to_back_system_jobs(monkeypatch) -> None:
+def test_register_events_serializes_back_to_back_software_uninstalls(monkeypatch) -> None:
     fake_sio = _FakeSio()
     role = _make_role(fake_sio)
 
@@ -128,6 +130,7 @@ def test_register_events_serializes_back_to_back_system_jobs(monkeypatch) -> Non
         "script_content": "job-one",
         "script_encoding": "utf-8",
         "signature": "valid-signature",
+        "context": {"assembly_source": "device_software_uninstall"},
     }
     payload_two = {
         "job_id": 52,
@@ -137,6 +140,7 @@ def test_register_events_serializes_back_to_back_system_jobs(monkeypatch) -> Non
         "script_content": "job-two",
         "script_encoding": "utf-8",
         "signature": "valid-signature",
+        "context": {"assembly_source": "device_software_uninstall"},
     }
 
     async def _run_test():
@@ -155,3 +159,69 @@ def test_register_events_serializes_back_to_back_system_jobs(monkeypatch) -> Non
 
     assert start_one < end_one
     assert start_two >= end_one
+
+
+def test_register_events_does_not_block_generic_system_jobs_behind_uninstall(monkeypatch) -> None:
+    fake_sio = _FakeSio()
+    role = _make_role(fake_sio)
+
+    monkeypatch.setattr(
+        role_module,
+        "decode_script_bytes",
+        lambda raw, encoding: str(raw or "").encode("utf-8"),
+    )
+    monkeypatch.setattr(role_module, "verify_and_store_script_signature", lambda *args, **kwargs: True)
+
+    run_log = []
+
+    def _slow_powershell(content, *args, **kwargs):
+        run_log.append(("start", content, time.perf_counter()))
+        if content == "uninstall-job":
+            time.sleep(0.08)
+        else:
+            time.sleep(0.01)
+        run_log.append(("end", content, time.perf_counter()))
+        return 0, f"done:{content}", ""
+
+    monkeypatch.setattr(role_module, "_run_powershell_via_system_task", _slow_powershell)
+    monkeypatch.setattr(role_module, "_run_powershell_script_content", _slow_powershell)
+
+    role.register_events()
+    handler = fake_sio.handlers["quick_job_run"]
+
+    uninstall_payload = {
+        "job_id": 61,
+        "target_hostname": "",
+        "script_type": "powershell",
+        "run_mode": "system",
+        "script_content": "uninstall-job",
+        "script_encoding": "utf-8",
+        "signature": "valid-signature",
+        "context": {"assembly_source": "device_software_uninstall"},
+    }
+    generic_payload = {
+        "job_id": 62,
+        "target_hostname": "",
+        "script_type": "powershell",
+        "run_mode": "system",
+        "script_content": "generic-job",
+        "script_encoding": "utf-8",
+        "signature": "valid-signature",
+    }
+
+    async def _run_test():
+        await handler(uninstall_payload)
+        await handler(generic_payload)
+        await asyncio.sleep(0.16)
+
+    asyncio.run(_run_test())
+
+    emitted_job_ids = [payload["job_id"] for event_name, payload in fake_sio.emitted if event_name == "quick_job_result"]
+    assert sorted(emitted_job_ids) == [61, 62]
+
+    uninstall_start = next(ts for stage, content, ts in run_log if stage == "start" and content == "uninstall-job")
+    uninstall_end = next(ts for stage, content, ts in run_log if stage == "end" and content == "uninstall-job")
+    generic_start = next(ts for stage, content, ts in run_log if stage == "start" and content == "generic-job")
+
+    assert uninstall_start < uninstall_end
+    assert generic_start < uninstall_end

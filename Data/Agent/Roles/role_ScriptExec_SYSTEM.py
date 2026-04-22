@@ -408,8 +408,22 @@ class Role:
         self.ctx = ctx
         self.role_health_label = "Script Execution - SYSTEM"
         self._listener_registered = False
-        self._system_job_lock = asyncio.Lock()
+        self._system_queue_locks = {
+            'software_uninstall': asyncio.Lock(),
+        }
         self._system_job_tasks = set()
+
+    def _resolve_system_queue_key(self, payload) -> str:
+        if not isinstance(payload, dict):
+            return ''
+        context = payload.get('context') if isinstance(payload.get('context'), dict) else {}
+        assembly_source = str(context.get('assembly_source') or '').strip().lower()
+        if assembly_source == 'device_software_uninstall':
+            return 'software_uninstall'
+        script_path = str(payload.get('script_path') or '').replace('\\', '/').strip().lower()
+        if script_path.endswith('scripts/internal/software_uninstall.ps1'):
+            return 'software_uninstall'
+        return ''
 
     def health_report(self) -> dict:
         if not self._listener_registered:
@@ -537,12 +551,19 @@ class Role:
                 except Exception:
                     timeout_seconds = 0
 
-                queue_wait = self._system_job_lock.locked()
+                queue_key = self._resolve_system_queue_key(payload)
+                queue_lock = self._system_queue_locks.get(queue_key) if queue_key else None
+                queue_wait = bool(queue_lock and queue_lock.locked())
                 if queue_wait:
-                    _log(f"quick_job_run(system) queued behind active job job_id={job_label}")
+                    _log(
+                        f"quick_job_run(system) queued behind active {queue_key} job job_id={job_label}"
+                    )
 
-                async with self._system_job_lock:
-                    _log(f"quick_job_run(system) executing payload job_id={job_label} queued={queue_wait}")
+                async def _execute_system_job():
+                    _log(
+                        f"quick_job_run(system) executing payload job_id={job_label} "
+                        f"queued={queue_wait} queue_key={queue_key or 'none'}"
+                    )
 
                     def _run_system_job():
                         busy_ctx = (
@@ -551,6 +572,7 @@ class Role:
                                 metadata={
                                     'job_id': str(job_label),
                                     'script_type': script_type or 'unknown',
+                                    'queue_key': queue_key or 'none',
                                 },
                             )
                             if callable(busy_activity)
@@ -580,6 +602,12 @@ class Role:
                         return
                     status = 'Success' if rc == 0 else 'Failed'
                     await sio.emit('quick_job_result', _result_payload(job_id, status, out, err))
+
+                if queue_lock is not None:
+                    async with queue_lock:
+                        await _execute_system_job()
+                else:
+                    await _execute_system_job()
             except Exception as e:
                 context = payload.get('context') if isinstance(payload, dict) else None
 
