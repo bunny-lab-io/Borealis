@@ -57,11 +57,11 @@ const SOFTWARE_DISTRIBUTION_ICON_SX = {
 const SOFTWARE_ICON_IMAGE_SX = {
   width: 27,
   height: 27,
-  borderRadius: 6,
   objectFit: "contain",
   flexShrink: 0,
-  background: "rgba(15,23,42,0.72)",
-  border: "1px solid rgba(148,163,184,0.18)",
+  borderRadius: 0,
+  background: "transparent",
+  border: "none",
 };
 
 const SOFTWARE_DISTRIBUTION_BADGE_SX = {
