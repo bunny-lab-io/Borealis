@@ -408,6 +408,22 @@ class Role:
         self.ctx = ctx
         self.role_health_label = "Script Execution - SYSTEM"
         self._listener_registered = False
+        self._system_queue_locks = {
+            'software_uninstall': asyncio.Lock(),
+        }
+        self._system_job_tasks = set()
+
+    def _resolve_system_queue_key(self, payload) -> str:
+        if not isinstance(payload, dict):
+            return ''
+        context = payload.get('context') if isinstance(payload.get('context'), dict) else {}
+        assembly_source = str(context.get('assembly_source') or '').strip().lower()
+        if assembly_source == 'device_software_uninstall':
+            return 'software_uninstall'
+        script_path = str(payload.get('script_path') or '').replace('\\', '/').strip().lower()
+        if script_path.endswith('scripts/internal/software_uninstall.ps1'):
+            return 'software_uninstall'
+        return ''
 
     def health_report(self) -> dict:
         if not self._listener_registered:
@@ -445,6 +461,169 @@ class Role:
                     log_agent_hook(message)
                     if error:
                         log_agent_hook(message, fname='agent.error.log')
+                except Exception:
+                    pass
+
+        def _track_background_job(task: "asyncio.Task[None]") -> None:
+            self._system_job_tasks.add(task)
+
+            def _cleanup(done: "asyncio.Task[None]") -> None:
+                self._system_job_tasks.discard(done)
+                if done.cancelled():
+                    return
+                try:
+                    done.result()
+                except Exception as exc:
+                    _log(f"quick_job_run(system) background task failed: {exc}", error=True)
+
+            task.add_done_callback(_cleanup)
+
+        async def _handle_system_quick_job(payload):
+            try:
+                job_id = payload.get('job_id')
+                script_type = (payload.get('script_type') or '').lower()
+                job_label = job_id if job_id is not None else 'unknown'
+                context = payload.get('context') if isinstance(payload, dict) else None
+
+                def _result_payload(job_value, status_value, stdout_value="", stderr_value=""):
+                    result = {
+                        'job_id': job_value,
+                        'status': status_value,
+                        'stdout': stdout_value,
+                        'stderr': stderr_value,
+                    }
+                    if isinstance(context, dict):
+                        result['context'] = context
+                    return result
+
+                script_bytes = decode_script_bytes(payload.get('script_content'), payload.get('script_encoding'))
+                if script_bytes is None:
+                    _log(f"quick_job_run(system) invalid script payload job_id={job_label}", error=True)
+                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Invalid script payload (unable to decode)'))
+                    return
+
+                signature_b64 = payload.get('signature')
+                sig_alg = (payload.get('sig_alg') or 'ed25519').lower()
+                signing_key = payload.get('signing_key')
+                if sig_alg and sig_alg not in ('ed25519', 'eddsa'):
+                    _log(f"quick_job_run(system) unsupported signature algorithm job_id={job_label} alg={sig_alg}", error=True)
+                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', f'Unsupported script signature algorithm: {sig_alg}'))
+                    return
+                if not isinstance(signature_b64, str) or not signature_b64.strip():
+                    _log(f"quick_job_run(system) missing signature job_id={job_label}", error=True)
+                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Missing script signature; rejecting payload'))
+                    return
+                http_client_fn = getattr(self.ctx, 'hooks', {}).get('http_client') if hasattr(self.ctx, 'hooks') else None
+                client = http_client_fn() if callable(http_client_fn) else None
+                if client is None:
+                    _log(f"quick_job_run(system) missing http_client hook job_id={job_label}", error=True)
+                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Signature verification unavailable (client missing)'))
+                    return
+                if not verify_and_store_script_signature(client, script_bytes, signature_b64, signing_key):
+                    _log(f"quick_job_run(system) signature verification failed job_id={job_label}", error=True)
+                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Rejected script payload due to invalid signature'))
+                    return
+                _log(f"quick_job_run(system) signature verified job_id={job_label}")
+
+                content = script_bytes.decode('utf-8', errors='replace')
+                raw_env = payload.get('environment')
+                env_map = _sanitize_env_map(raw_env)
+                variables = payload.get('variables') if isinstance(payload.get('variables'), list) else []
+                for var in variables:
+                    if not isinstance(var, dict):
+                        continue
+                    name = str(var.get('name') or '').strip()
+                    if not name:
+                        continue
+                    key = _canonical_env_key(name)
+                    if key in env_map:
+                        continue
+                    default_val = var.get('default')
+                    if isinstance(default_val, bool):
+                        env_map[key] = "True" if default_val else "False"
+                    elif default_val is None:
+                        env_map[key] = ""
+                    else:
+                        env_map[key] = str(default_val)
+                env_map = _apply_variable_aliases(env_map, variables)
+                try:
+                    timeout_seconds = max(0, int(payload.get('timeout_seconds') or 0))
+                except Exception:
+                    timeout_seconds = 0
+
+                queue_key = self._resolve_system_queue_key(payload)
+                queue_lock = self._system_queue_locks.get(queue_key) if queue_key else None
+                queue_wait = bool(queue_lock and queue_lock.locked())
+                if queue_wait:
+                    _log(
+                        f"quick_job_run(system) queued behind active {queue_key} job job_id={job_label}"
+                    )
+
+                async def _execute_system_job():
+                    _log(
+                        f"quick_job_run(system) executing payload job_id={job_label} "
+                        f"queued={queue_wait} queue_key={queue_key or 'none'}"
+                    )
+
+                    def _run_system_job():
+                        busy_ctx = (
+                            busy_activity(
+                                'quick_job_system',
+                                metadata={
+                                    'job_id': str(job_label),
+                                    'script_type': script_type or 'unknown',
+                                    'queue_key': queue_key or 'none',
+                                },
+                            )
+                            if callable(busy_activity)
+                            else contextlib.nullcontext()
+                        )
+                        with busy_ctx:
+                            if script_type == 'powershell':
+                                if os.name == 'nt':
+                                    rc, out, err = _run_powershell_via_system_task(content, env_map, timeout_seconds)
+                                    if rc == -999:
+                                        rc, out, err = _run_powershell_script_content(content, env_map, timeout_seconds)
+                                else:
+                                    rc, out, err = _run_powershell_script_content(content, env_map, timeout_seconds)
+                            elif script_type == 'batch':
+                                rc, out, err = _run_batch_script_content(content, env_map, timeout_seconds)
+                            elif script_type == 'bash':
+                                rc, out, err = _run_bash_script_content(content, env_map, timeout_seconds)
+                            else:
+                                return None, '', f"Unsupported type: {script_type}"
+                            return rc, out, err
+
+                        return -1, '', 'System quick job execution did not run.'
+
+                    rc, out, err = await asyncio.to_thread(_run_system_job)
+                    if rc is None:
+                        await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', err))
+                        return
+                    status = 'Success' if rc == 0 else 'Failed'
+                    await sio.emit('quick_job_result', _result_payload(job_id, status, out, err))
+
+                if queue_lock is not None:
+                    async with queue_lock:
+                        await _execute_system_job()
+                else:
+                    await _execute_system_job()
+            except Exception as e:
+                context = payload.get('context') if isinstance(payload, dict) else None
+
+                def _error_payload(job_value, message):
+                    result = {
+                        'job_id': job_value,
+                        'status': 'Failed',
+                        'stdout': '',
+                        'stderr': message,
+                    }
+                    if isinstance(context, dict):
+                        result['context'] = context
+                    return result
+
+                try:
+                    await sio.emit('quick_job_result', _error_payload(payload.get('job_id') if isinstance(payload, dict) else None, str(e)))
                 except Exception:
                     pass
 
@@ -489,99 +668,7 @@ class Role:
                 if run_mode != 'system':
                     return
                 _log(f"quick_job_run(system) received payload job_id={job_label}")
-                context = payload.get('context') if isinstance(payload, dict) else None
-
-                def _result_payload(job_value, status_value, stdout_value="", stderr_value=""):
-                    result = {
-                        'job_id': job_value,
-                        'status': status_value,
-                        'stdout': stdout_value,
-                        'stderr': stderr_value,
-                    }
-                    if isinstance(context, dict):
-                        result['context'] = context
-                    return result
-
-                script_bytes = decode_script_bytes(payload.get('script_content'), payload.get('script_encoding'))
-                if script_bytes is None:
-                    _log(f"quick_job_run(system) invalid script payload job_id={job_label}", error=True)
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Invalid script payload (unable to decode)'))
-                    return
-                signature_b64 = payload.get('signature')
-                sig_alg = (payload.get('sig_alg') or 'ed25519').lower()
-                signing_key = payload.get('signing_key')
-                if sig_alg and sig_alg not in ('ed25519', 'eddsa'):
-                    _log(f"quick_job_run(system) unsupported signature algorithm job_id={job_label} alg={sig_alg}", error=True)
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', f'Unsupported script signature algorithm: {sig_alg}'))
-                    return
-                if not isinstance(signature_b64, str) or not signature_b64.strip():
-                    _log(f"quick_job_run(system) missing signature job_id={job_label}", error=True)
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Missing script signature; rejecting payload'))
-                    return
-                http_client_fn = getattr(self.ctx, 'hooks', {}).get('http_client') if hasattr(self.ctx, 'hooks') else None
-                client = http_client_fn() if callable(http_client_fn) else None
-                if client is None:
-                    _log(f"quick_job_run(system) missing http_client hook job_id={job_label}", error=True)
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Signature verification unavailable (client missing)'))
-                    return
-                if not verify_and_store_script_signature(client, script_bytes, signature_b64, signing_key):
-                    _log(f"quick_job_run(system) signature verification failed job_id={job_label}", error=True)
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Rejected script payload due to invalid signature'))
-                    return
-                _log(f"quick_job_run(system) signature verified job_id={job_label}")
-                content = script_bytes.decode('utf-8', errors='replace')
-                raw_env = payload.get('environment')
-                env_map = _sanitize_env_map(raw_env)
-                variables = payload.get('variables') if isinstance(payload.get('variables'), list) else []
-                for var in variables:
-                    if not isinstance(var, dict):
-                        continue
-                    name = str(var.get('name') or '').strip()
-                    if not name:
-                        continue
-                    key = _canonical_env_key(name)
-                    if key in env_map:
-                        continue
-                    default_val = var.get('default')
-                    if isinstance(default_val, bool):
-                        env_map[key] = "True" if default_val else "False"
-                    elif default_val is None:
-                        env_map[key] = ""
-                    else:
-                        env_map[key] = str(default_val)
-                env_map = _apply_variable_aliases(env_map, variables)
-                try:
-                    timeout_seconds = max(0, int(payload.get('timeout_seconds') or 0))
-                except Exception:
-                    timeout_seconds = 0
-                busy_ctx = (
-                    busy_activity(
-                        'quick_job_system',
-                        metadata={
-                            'job_id': str(job_label),
-                            'script_type': script_type or 'unknown',
-                        },
-                    )
-                    if callable(busy_activity)
-                    else contextlib.nullcontext()
-                )
-                with busy_ctx:
-                    if script_type == 'powershell':
-                        if os.name == 'nt':
-                            rc, out, err = _run_powershell_via_system_task(content, env_map, timeout_seconds)
-                            if rc == -999:
-                                rc, out, err = _run_powershell_script_content(content, env_map, timeout_seconds)
-                        else:
-                            rc, out, err = _run_powershell_script_content(content, env_map, timeout_seconds)
-                    elif script_type == 'batch':
-                        rc, out, err = _run_batch_script_content(content, env_map, timeout_seconds)
-                    elif script_type == 'bash':
-                        rc, out, err = _run_bash_script_content(content, env_map, timeout_seconds)
-                    else:
-                        await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', f"Unsupported type: {script_type}"))
-                        return
-                    status = 'Success' if rc == 0 else 'Failed'
-                    await sio.emit('quick_job_result', _result_payload(job_id, status, out, err))
+                _track_background_job(asyncio.create_task(_handle_system_quick_job(payload if isinstance(payload, dict) else {})))
             except Exception as e:
                 context = payload.get('context') if isinstance(payload, dict) else None
                 def _error_payload(job_value, message):

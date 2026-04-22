@@ -6,6 +6,9 @@
 # ======================================================
 
 from __future__ import annotations
+import base64
+import hashlib
+import json
 import logging
 import threading
 import time
@@ -15,7 +18,6 @@ from types import SimpleNamespace
 
 import pytest
 from Data.Engine.auth import jwt_service as jwt_service_module
-from Data.Engine.integrations import github as github_integration
 from Data.Engine.services.API.devices import management as device_management
 from Data.Engine.services.API.devices import routes as device_routes
 from Data.Engine.services.API.devices.service_inventory import serialize_device_services
@@ -54,6 +56,8 @@ def _device_headers_for_guid(guid: str) -> dict:
 
 
 def _patch_repo_call(monkeypatch: pytest.MonkeyPatch, calls: dict) -> None:
+    from Data.Engine.integrations import github as github_integration
+
     class DummyResponse:
         def __init__(self, status_code: int, payload: Any):
             self.status_code = status_code
@@ -100,6 +104,19 @@ def _set_test_device_services(engine_harness: EngineTestHarness, payload: Any) -
         cur.execute(
             "UPDATE devices SET services = ? WHERE hostname = ?",
             (serialize_device_services(payload), "test-device"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _set_test_device_software(engine_harness: EngineTestHarness, payload: Any) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE devices SET software = ? WHERE hostname = ?",
+            (json.dumps(payload or []), "test-device"),
         )
         conn.commit()
     finally:
@@ -652,11 +669,31 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
                         "name": "Google Chrome",
                         "version": "124.0.6367.92",
                         "source": "local_installed",
+                        "metadata": {
+                            "estimated_size_kb": 987654,
+                            "display_icon": r"C:\Program Files\Google\Chrome\Application\chrome.exe,0",
+                            "quiet_uninstall_string": '"C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe" --uninstall --multi-install --chrome --system-level --force-uninstall',
+                            "uninstall_string": "MsiExec.exe /I{11111111-2222-3333-4444-555555555555}",
+                            "product_code": "{11111111-2222-3333-4444-555555555555}",
+                        },
                     },
                     {
                         "name": "Contoso.App",
                         "version": "1.2.0",
                         "source": "windows_store",
+                        "metadata": {
+                            "package_family_name": "Contoso.App_1234567890abc",
+                            "non_removable": False,
+                        },
+                    },
+                    {
+                        "name": "1527c705-839a-4832-9118-54d4Bd6a0c89",
+                        "version": "10.0.19640.1000",
+                        "source": "windows_store",
+                        "metadata": {
+                            "package_family_name": "1527c705-839a-4832-9118-54d4Bd6a0c89_cw5n1h2txyewy",
+                            "non_removable": True,
+                        },
                     },
                 ],
             },
@@ -691,8 +728,834 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
     assert detail_response.status_code == 200
     software = detail_response.get_json()["software"]
     assert software == [
-        {"name": "Contoso.App", "version": "1.2.0", "source": "windows_store", "metadata": {}},
-        {"name": "Google Chrome", "version": "124.0.6367.92", "source": "local_installed", "metadata": {}},
+        {
+            "name": "Contoso.App",
+            "version": "1.2.0",
+            "source": "windows_store",
+            "metadata": {
+                "package_family_name": "Contoso.App_1234567890abc",
+                "non_removable": False,
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Windows Store package uninstall.",
+                "strategy": "windows_store",
+                "rule_id": "metadata_windows_store",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "Contoso.App_1234567890abc",
+            },
+        },
+        {
+            "name": "Google Chrome",
+            "version": "124.0.6367.92",
+            "source": "local_installed",
+            "metadata": {
+                "estimated_size_kb": 987654,
+                "display_icon": r"C:\Program Files\Google\Chrome\Application\chrome.exe,0",
+                "quiet_uninstall_string": '"C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe" --uninstall --multi-install --chrome --system-level --force-uninstall',
+                "uninstall_string": "MsiExec.exe /I{11111111-2222-3333-4444-555555555555}",
+                "product_code": "{11111111-2222-3333-4444-555555555555}",
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Uses the registry quiet uninstall string.",
+                "strategy": "direct_command",
+                "rule_id": "metadata_quiet_uninstall_string",
+                "quiet_uninstall_string": '"C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe" --uninstall --multi-install --chrome --system-level --force-uninstall',
+                "uninstall_string": "MsiExec.exe /I{11111111-2222-3333-4444-555555555555}",
+                "product_code": "{11111111-2222-3333-4444-555555555555}",
+                "package_family_name": "",
+            },
+        },
+    ]
+
+
+def test_agent_details_merge_top_level_software_metadata_into_existing_metadata(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/agent/details",
+        json={
+            "hostname": "test-device",
+            "agent_hash": "hash-123",
+            "details": {
+                "summary": {
+                    "hostname": "test-device",
+                    "last_seen": 1_700_000_801,
+                    "operating_system": "Windows 11 Pro",
+                },
+                "software": [
+                    {
+                        "name": "7-Zip 25.01 (x64)",
+                        "version": "25.01",
+                        "source": "local_installed",
+                        "metadata": {
+                            "publisher": "Igor Pavlov",
+                            "install_location": "C:\\Program Files\\7-Zip\\",
+                        },
+                        "estimated_size_kb": 123456,
+                        "display_icon": r"C:\Program Files\7-Zip\7zFM.exe,0",
+                        "uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe"',
+                        "quiet_uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe" /S',
+                    }
+                ],
+            },
+        },
+        headers=_device_headers(),
+    )
+    assert response.status_code == 200
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT software FROM devices WHERE hostname = ?", ("test-device",))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert json.loads(row[0]) == [
+        {
+            "name": "7-Zip 25.01 (x64)",
+            "version": "25.01",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Igor Pavlov",
+                "install_location": "C:\\Program Files\\7-Zip\\",
+                "estimated_size_kb": 123456,
+                "display_icon": r"C:\Program Files\7-Zip\7zFM.exe,0",
+                "uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe"',
+                "quiet_uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe" /S',
+            },
+        }
+    ]
+
+    admin_client = _client_with_admin_session(engine_harness)
+    detail_response = admin_client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    assert detail_response.get_json()["software"] == [
+        {
+            "name": "7-Zip 25.01 (x64)",
+            "version": "25.01",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Igor Pavlov",
+                "install_location": "C:\\Program Files\\7-Zip\\",
+                "estimated_size_kb": 123456,
+                "display_icon": r"C:\Program Files\7-Zip\7zFM.exe,0",
+                "uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe"',
+                "quiet_uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe" /S',
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Uses the registry quiet uninstall string.",
+                "strategy": "direct_command",
+                "rule_id": "metadata_quiet_uninstall_string",
+                "quiet_uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe" /S',
+                "uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe"',
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+
+def test_agent_details_persists_software_icon_assets(engine_harness: EngineTestHarness) -> None:
+    icon_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7+qD4AAAAASUVORK5CYII="
+    )
+    icon_hash = hashlib.sha256(icon_bytes).hexdigest()
+    icon_base64 = base64.b64encode(icon_bytes).decode("ascii")
+
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/agent/details",
+        json={
+            "hostname": "test-device",
+            "agent_hash": "hash-123",
+            "details": {
+                "summary": {
+                    "hostname": "test-device",
+                    "last_seen": 1_700_000_802,
+                    "operating_system": "Windows 11 Pro",
+                },
+                "software": [
+                    {
+                        "name": "Contoso Agent",
+                        "version": "3.1.4",
+                        "source": "local_installed",
+                        "metadata": {
+                            "display_icon": r"C:\Program Files\Contoso\contoso.exe,0",
+                            "icon_hash": icon_hash,
+                        },
+                    }
+                ],
+                "software_icon_payloads": [
+                    {
+                        "icon_hash": icon_hash,
+                        "mime_type": "image/png",
+                        "data_base64": icon_base64,
+                    }
+                ],
+            },
+        },
+        headers=_device_headers(),
+    )
+    assert response.status_code == 200
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT icon_hash, mime_type, icon_bytes, byte_size FROM software_icon_assets WHERE icon_hash = ?",
+            (icon_hash,),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row[0] == icon_hash
+    assert row[1] == "image/png"
+    assert bytes(row[2]) == icon_bytes
+    assert row[3] == len(icon_bytes)
+
+    admin_client = _client_with_admin_session(engine_harness)
+    detail_response = admin_client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    assert detail_response.get_json()["software"] == [
+        {
+            "name": "Contoso Agent",
+            "version": "3.1.4",
+            "source": "local_installed",
+            "metadata": {
+                "display_icon": r"C:\Program Files\Contoso\contoso.exe,0",
+                "icon_hash": icon_hash,
+            },
+            "uninstall": {
+                "supported": False,
+                "reason": "This software row does not expose a usable uninstall command yet.",
+                "summary": "",
+                "strategy": "",
+                "rule_id": "",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+
+def test_agent_details_accepts_session_and_process_shape_upgrade_without_blocking_software_metadata(
+    engine_harness: EngineTestHarness,
+) -> None:
+    icon_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7+qD4AAAAASUVORK5CYII="
+    )
+    icon_hash = hashlib.sha256(icon_bytes).hexdigest()
+    icon_base64 = base64.b64encode(icon_bytes).decode("ascii")
+
+    client = engine_harness.app.test_client()
+    first_response = client.post(
+        "/api/agent/details",
+        json={
+            "hostname": "test-device",
+            "agent_hash": "hash-123",
+            "details": {
+                "summary": {
+                    "hostname": "test-device",
+                    "last_seen": 1_700_000_803,
+                    "operating_system": "Windows 11 Pro",
+                },
+                "sessions": [
+                    {
+                        "session_id": 1,
+                        "username": "operator",
+                        "session_name": "Console",
+                        "state": "Active",
+                    }
+                ],
+                "processes": [
+                    {
+                        "name": "explorer.exe",
+                        "count": 1,
+                    }
+                ],
+            },
+        },
+        headers=_device_headers(),
+    )
+    assert first_response.status_code == 200
+
+    second_response = client.post(
+        "/api/agent/details",
+        json={
+            "hostname": "test-device",
+            "agent_hash": "hash-123",
+            "details": {
+                "summary": {
+                    "hostname": "test-device",
+                    "last_seen": 1_700_000_804,
+                    "operating_system": "Windows 11 Pro",
+                },
+                "sessions": [
+                    {
+                        "session_id": 1,
+                        "username": "operator",
+                        "session_name": "Console",
+                        "state": "Active",
+                    }
+                ],
+                "processes": [
+                    {
+                        "name": "explorer.exe",
+                        "count": 1,
+                    }
+                ],
+                "software": [
+                    {
+                        "name": "Contoso Agent",
+                        "version": "3.1.4",
+                        "source": "local_installed",
+                        "metadata": {
+                            "estimated_size_kb": 654321,
+                            "display_icon": r"C:\Program Files\Contoso\contoso.exe,0",
+                            "icon_hash": icon_hash,
+                        },
+                    }
+                ],
+                "software_icon_payloads": [
+                    {
+                        "icon_hash": icon_hash,
+                        "mime_type": "image/png",
+                        "data_base64": icon_base64,
+                    }
+                ],
+            },
+        },
+        headers=_device_headers(),
+    )
+    assert second_response.status_code == 200
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT icon_hash, icon_bytes FROM software_icon_assets WHERE icon_hash = ?",
+            (icon_hash,),
+        )
+        icon_row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert icon_row is not None
+    assert icon_row[0] == icon_hash
+    assert bytes(icon_row[1]) == icon_bytes
+
+    admin_client = _client_with_admin_session(engine_harness)
+    detail_response = admin_client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.get_json()
+    assert detail_payload["sessions"] == [
+        {
+            "eligible_for_interactive": True,
+            "helper_last_seen_at": 0,
+            "helper_pid": 0,
+            "helper_ready": False,
+            "is_rdp": False,
+            "protocol": "console",
+            "session_id": 1,
+            "session_name": "Console",
+            "state": "Active",
+            "state_code": "active",
+            "username": "operator",
+        }
+    ]
+    assert detail_payload["processes"] == [
+        {
+            "count": 1,
+            "name": "explorer.exe",
+        }
+    ]
+    assert detail_payload["software"] == [
+        {
+            "name": "Contoso Agent",
+            "version": "3.1.4",
+            "source": "local_installed",
+            "metadata": {
+                "estimated_size_kb": 654321,
+                "display_icon": r"C:\Program Files\Contoso\contoso.exe,0",
+                "icon_hash": icon_hash,
+            },
+            "uninstall": {
+                "supported": False,
+                "reason": "This software row does not expose a usable uninstall command yet.",
+                "summary": "",
+                "strategy": "",
+                "rule_id": "",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+
+def test_device_software_icon_endpoint_serves_cached_asset(engine_harness: EngineTestHarness) -> None:
+    icon_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7+qD4AAAAASUVORK5CYII="
+    )
+    icon_hash = hashlib.sha256(icon_bytes).hexdigest()
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO software_icon_assets (
+                icon_hash,
+                mime_type,
+                icon_bytes,
+                byte_size,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                icon_hash,
+                "image/png",
+                icon_bytes,
+                len(icon_bytes),
+                1_700_000_800,
+                1_700_000_800,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _client_with_admin_session(engine_harness)
+    response = client.get(f"/api/device/software/icon/{icon_hash}")
+
+    assert response.status_code == 200
+    assert response.mimetype == "image/png"
+    assert response.data == icon_bytes
+
+
+def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Google Chrome",
+                "version": "124.0.6367.92",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Google LLC",
+                    "uninstall_string": "C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe --uninstall --multi-install --chrome --system-level",
+                },
+            }
+        ],
+    )
+
+    targeted_events: list[tuple[str, str, str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        engine_harness.context,
+        "has_host_service_socket",
+        lambda hostname, mode: hostname == "test-device" and mode == "system",
+    )
+    monkeypatch.setattr(
+        engine_harness.context,
+        "emit_host_service_event",
+        lambda hostname, service_mode, event, payload: (
+            targeted_events.append((hostname, service_mode, event, payload)) or True
+        ),
+    )
+    socket_events: list[tuple[str, Any, str]] = []
+    monkeypatch.setattr(
+        engine_harness.context.socketio,
+        "emit",
+        lambda event, payload, to=None: socket_events.append((event, payload, to)),
+    )
+
+    response = client.post(
+        "/api/device/software/test-device/uninstall",
+        json={
+            "name": "Google Chrome",
+            "version": "124.0.6367.92",
+            "source": "local_installed",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "queued"
+    assert payload["software"]["name"] == "Google Chrome"
+    assert payload["uninstall"] == {
+        "strategy": "direct_command",
+        "summary": "Chrome setup.exe uninstall can be forced silent.",
+        "rule_id": "chrome_setup_force_uninstall",
+    }
+    assert len(targeted_events) == 1
+    hostname, service_mode, event_name, dispatched = targeted_events[0]
+    assert hostname == "test-device"
+    assert service_mode == "system"
+    assert event_name == "quick_job_run"
+    assert dispatched["script_type"] == "powershell"
+    assert dispatched["target_context"] == "system"
+    assert dispatched["environment"]["SOFTWARE_NAME"] == "Google Chrome"
+    assert dispatched["environment"]["SOFTWARE_SOURCE"] == "local_installed"
+    assert (
+        dispatched["environment"]["QUIET_UNINSTALL_STRING"]
+        == '"C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe" --uninstall --multi-install --chrome --system-level --force-uninstall'
+    )
+    assert "Invoke-LocalInstalledUninstall" in base64.b64decode(dispatched["script_content"]).decode("utf-8")
+    assert any(event_name == "device_activity_changed" for event_name, _payload, _to in socket_events)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT script_name, script_path, script_type, status FROM activity_history ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row == (
+        "Uninstall - Google Chrome",
+        "Scripts/Internal/Software_Uninstall.ps1",
+        "powershell",
+        "Running",
+    )
+
+
+def test_device_software_uninstall_requires_supported_metadata(engine_harness: EngineTestHarness) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Odd Vendor App",
+                "version": "1.0.0",
+                "source": "local_installed",
+                "metadata": {},
+            }
+        ],
+    )
+
+    response = client.post(
+        "/api/device/software/test-device/uninstall",
+        json={
+            "name": "Odd Vendor App",
+            "version": "1.0.0",
+            "source": "local_installed",
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["error"] == "software_uninstall_unsupported"
+
+
+def test_device_software_uninstall_rejects_non_removable_windows_store_package(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Microsoft.LockApp",
+                "version": "10.0.0.0",
+                "source": "windows_store",
+                "metadata": {
+                    "package_family_name": "Microsoft.LockApp_cw5n1h2txyewy",
+                    "non_removable": True,
+                },
+            }
+        ],
+    )
+
+    detail_response = client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software = detail_response.get_json()["software"]
+    assert software == [
+        {
+            "name": "Microsoft.LockApp",
+            "version": "10.0.0.0",
+            "source": "windows_store",
+            "metadata": {
+                "package_family_name": "Microsoft.LockApp_cw5n1h2txyewy",
+                "non_removable": True,
+            },
+            "uninstall": {
+                "supported": False,
+                "reason": "Windows marks this Store package as non-removable.",
+                "summary": "",
+                "strategy": "",
+                "rule_id": "",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+    response = client.post(
+        "/api/device/software/test-device/uninstall",
+        json={
+            "name": "Microsoft.LockApp",
+            "version": "10.0.0.0",
+            "source": "windows_store",
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["error"] == "software_uninstall_unsupported"
+    assert payload["message"] == "Windows marks this Store package as non-removable."
+
+
+def test_device_software_uninstall_supports_windows_store_package_family_without_removability_hint(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Clipchamp.Clipchamp",
+                "version": "4.5.10020.0",
+                "source": "windows_store",
+                "metadata": {
+                    "package_family_name": "Clipchamp.Clipchamp_yxz26nhyzhsrt",
+                },
+            }
+        ],
+    )
+
+    detail_response = client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software = detail_response.get_json()["software"]
+    assert software == [
+        {
+            "name": "Clipchamp.Clipchamp",
+            "version": "4.5.10020.0",
+            "source": "windows_store",
+            "metadata": {
+                "package_family_name": "Clipchamp.Clipchamp_yxz26nhyzhsrt",
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Windows Store package uninstall.",
+                "strategy": "windows_store",
+                "rule_id": "metadata_windows_store_family_name",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "Clipchamp.Clipchamp_yxz26nhyzhsrt",
+            },
+        }
+    ]
+
+
+def test_device_software_uninstall_supports_install_location_derived_windows_rules(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "7-Zip 25.01 (x64)",
+                "version": "25.01",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Igor Pavlov",
+                    "install_location": "C:\\Program Files\\7-Zip\\",
+                },
+            },
+            {
+                "name": "Mozilla Firefox (x64 en-US)",
+                "version": "149.0.2",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Mozilla",
+                    "install_location": "C:\\Program Files\\Mozilla Firefox",
+                },
+            },
+        ],
+    )
+
+    detail_response = client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software = detail_response.get_json()["software"]
+    assert software == [
+        {
+            "name": "7-Zip 25.01 (x64)",
+            "version": "25.01",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Igor Pavlov",
+                "install_location": "C:\\Program Files\\7-Zip\\",
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Derived 7-Zip uninstall from install location.",
+                "strategy": "direct_command",
+                "rule_id": "install_location_7zip",
+                "quiet_uninstall_string": '"C:\\Program Files\\7-Zip\\Uninstall.exe" /S',
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        },
+        {
+            "name": "Mozilla Firefox (x64 en-US)",
+            "version": "149.0.2",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Mozilla",
+                "install_location": "C:\\Program Files\\Mozilla Firefox",
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Derived Firefox uninstall from install location.",
+                "strategy": "direct_command",
+                "rule_id": "install_location_firefox_helper",
+                "quiet_uninstall_string": '"C:\\Program Files\\Mozilla Firefox\\uninstall\\helper.exe" /S',
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        },
+    ]
+
+
+def test_device_software_uninstall_marks_steam_protocol_titles_as_unsupported(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Garry's Mod",
+                "version": "",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Facepunch Studios",
+                    "install_location": "F:\\SteamLibrary\\steamapps\\common\\GarrysMod",
+                    "uninstall_string": '"C:\\Program Files (x86)\\Steam\\steam.exe" steam://uninstall/4000',
+                },
+            }
+        ],
+    )
+
+    detail_response = client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software = detail_response.get_json()["software"]
+    assert software == [
+        {
+            "name": "Garry's Mod",
+            "version": "",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Facepunch Studios",
+                "install_location": "F:\\SteamLibrary\\steamapps\\common\\GarrysMod",
+                "uninstall_string": '"C:\\Program Files (x86)\\Steam\\steam.exe" steam://uninstall/4000',
+            },
+            "distribution_platform": "steam",
+            "distribution_app_id": "4000",
+            "uninstall": {
+                "supported": False,
+                "reason": "Steam manages this title, and Borealis does not yet have a verified unattended uninstall path.",
+                "summary": "",
+                "strategy": "",
+                "rule_id": "",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+    response = client.post(
+        "/api/device/software/test-device/uninstall",
+        json={
+            "name": "Garry's Mod",
+            "version": "",
+            "source": "local_installed",
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["error"] == "software_uninstall_unsupported"
+    assert (
+        payload["message"]
+        == "Steam manages this title, and Borealis does not yet have a verified unattended uninstall path."
+    )
+
+
+def test_device_software_uninstall_marks_install_location_only_steam_titles_as_unsupported(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Abiotic Factor",
+                "version": "",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Deep Field Games",
+                    "install_location": "F:\\SteamLibrary\\steamapps\\common\\AbioticFactor",
+                },
+            }
+        ],
+    )
+
+    detail_response = client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software = detail_response.get_json()["software"]
+    assert software == [
+        {
+            "name": "Abiotic Factor",
+            "version": "",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Deep Field Games",
+                "install_location": "F:\\SteamLibrary\\steamapps\\common\\AbioticFactor",
+            },
+            "distribution_platform": "steam",
+            "uninstall": {
+                "supported": False,
+                "reason": "Steam manages this title, and Borealis does not yet have a verified unattended uninstall path.",
+                "summary": "",
+                "strategy": "",
+                "rule_id": "",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
     ]
 
 

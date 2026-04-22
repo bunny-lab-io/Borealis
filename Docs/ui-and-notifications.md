@@ -63,7 +63,7 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - The `Preview` tab is part of the primary authoring flow and resolves current targets before save.
 - The `Targets` tab uses 3-character minimum typeahead search panels for devices and saved filters instead of large autocomplete dropdowns.
 - Alerts is a separate incident queue so operators can work alerts without opening the underlying policy editor.
-- Alerts and Device Filters use the shared pill-style count slider pattern for queue/state filters instead of the older Material tab rail.
+- Alerts, Device Filters, and other grid-first pages use the shared Filter Slider pattern for queue/state/source filters instead of the older Material tab rail.
 - Alerts starts in an unfiltered all-alerts view; clicking a status pill applies that queue filter, and clicking the same pill again clears it back to all alerts.
 - Alerts relies on AG Grid's built-in column filters rather than a page-level custom filter bar.
 - Device Summary includes a `Watchdogs` tab so operators can acknowledge incidents, suppress a watchdog for one device, or launch a prefilled device-scoped watchdog draft.
@@ -164,6 +164,17 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - AG Grid treatment: Quartz theme with matte navy headers, subtle alternating row opacity, cyan/magenta interaction glows, rounded wrappers, soft borders, inset selection glows.
 - Default grid cell padding: keep roughly 18px on the left edge and 12px on the right for standard cells (12px/9px for `auto-col-tight`) so text never hugs a column edge. Target the center + pinned containers so both regions stay aligned.
 - Overlays/menus: `rgba(8,12,24,0.96)` canvas, blurred backdrops, thin steel borders; bright typography; deep blue glass inputs; cyan confirm, mauve destructive accents.
+
+#### Filter Slider
+- Official name: `Filter Slider`.
+- Purpose: a compact segmented control for switching between a small number of mutually exclusive grid views such as queue states, lifecycle states, or source categories.
+- Placement: render it at the top-left of the `stack` area on `grid_with_stack` pages or at the top-left of the local control row above a tabbed grid. Pair it with a short summary on the right when space allows.
+- Visual treatment: use the rounded glass shell with `4px` inner padding, inactive transparent pills, active cyan-to-violet gradient pill, and inline count chips shown inside each segment when counts are useful.
+- Labels: keep labels short and mixed case, for example `Active`, `Archived`, `Windows Store`, or `Locally Installed`.
+- Counts: show live counts when the page has them; `0` is acceptable for placeholder categories that are not fully implemented yet.
+- Selection behavior: pages may default to the highest-signal view when one is clearly preferred, but clicking the currently active segment should clear the filter and return the page to an unfiltered all-items view.
+- Summary copy: use a short sentence to the right of the control, for example `Showing 14 active filters` or `Showing 32 locally installed entries`.
+- Current implementation note: many pages still use a helper named `CountSliderGroup`. Treat that helper as the current code implementation of the Filter Slider pattern until Borealis consolidates it under the new name.
 
 #### Dialog Boxes and Confirmation Modals
 - Treat dialogs as compact glass overlays, not miniature pages. Use the same dark glass canvas as other overlays: blurred backdrop, thin steel border, rounded corners, and bright typography on a navy-violet surface.

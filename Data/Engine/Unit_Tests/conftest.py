@@ -176,6 +176,14 @@ CREATE TABLE IF NOT EXISTS device_software_inventory (
     captured_at INTEGER NOT NULL,
     metadata_json TEXT
 );
+CREATE TABLE IF NOT EXISTS software_icon_assets (
+    icon_hash TEXT PRIMARY KEY,
+    mime_type TEXT NOT NULL,
+    icon_bytes BLOB NOT NULL,
+    byte_size INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS scheduled_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,

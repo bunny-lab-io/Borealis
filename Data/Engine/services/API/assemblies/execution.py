@@ -390,11 +390,258 @@ def _normalize_hostnames(value: Any) -> List[str]:
     return hosts
 
 
+def dispatch_inline_quick_job(
+    adapters: "EngineServiceAdapters",
+    *,
+    hostnames: List[str],
+    doc: Dict[str, Any],
+    script_path: str,
+    requested_by: str,
+    variable_overrides: Optional[Dict[str, Any]] = None,
+    run_mode: str = "system",
+    session_target: Any = None,
+    target_session_id: Any = None,
+    admin_user: str = "",
+    admin_pass: str = "",
+    assembly_source: str = "runtime",
+    assembly_guid: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized_hosts = [str(host or "").strip() for host in (hostnames or []) if str(host or "").strip()]
+    if not normalized_hosts:
+        raise ValueError("Missing hostnames[]")
+
+    script_type = _normalize_agent_script_type(doc.get("type"))
+    if script_type not in _SUPPORTED_AGENT_SCRIPT_TYPES:
+        raise ValueError(
+            f"Unsupported script type '{script_type}'. "
+            "Agent quick jobs currently support PowerShell, Batch, and Bash."
+        )
+
+    content = doc.get("script") or ""
+    doc_variables = doc.get("variables") if isinstance(doc.get("variables"), list) else []
+    env_map, variables, literal_lookup = prepare_variable_context(doc_variables, variable_overrides or {})
+    normalized_script = _rewrite_script_for_dispatch(content, script_type, literal_lookup)
+    script_bytes = normalized_script.encode("utf-8")
+    encoded_content = (
+        base64.b64encode(script_bytes).decode("ascii")
+        if script_bytes or normalized_script == ""
+        else ""
+    )
+
+    signature_b64 = ""
+    signing_key_b64 = ""
+    script_signer = adapters.script_signer
+    if script_signer is not None:
+        try:
+            signature_raw = script_signer.sign(script_bytes)
+            signature_b64 = base64.b64encode(signature_raw).decode("ascii")
+            signing_key_b64 = script_signer.public_base64_spki()
+        except Exception:
+            signature_b64 = ""
+            signing_key_b64 = ""
+
+    try:
+        timeout_seconds = max(0, int(doc.get("timeout_seconds") or 0))
+    except Exception:
+        timeout_seconds = 0
+
+    script_path_normalized = (
+        _normalize_script_relpath(script_path)
+        or str(script_path or "").replace("\\", "/").strip()
+        or "Scripts/Internal/Inline.ps1"
+    )
+    friendly_name = (doc.get("name") or "").strip()
+    if not friendly_name:
+        friendly_name = os.path.basename(script_path_normalized)
+
+    socketio = getattr(adapters.context, "socketio", None)
+    if socketio is None:
+        raise RuntimeError("Realtime transport unavailable; cannot dispatch quick job.")
+
+    emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
+    target_service_mode = _normalize_target_service_mode(run_mode)
+    service_log = getattr(adapters, "service_log", None)
+    now = int(time.time())
+    results: List[Dict[str, Any]] = []
+
+    def _write_service_log(message: str, *, level: str = "INFO") -> None:
+        if not callable(service_log):
+            return
+        try:
+            service_log("assemblies", message, level=level)
+        except Exception:
+            pass
+
+    def _mark_activity_failed(job_id: int, failure_text: str) -> None:
+        conn = None
+        try:
+            conn = adapters.db_conn_factory()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE activity_history SET status=?, stderr=? WHERE id=?",
+                ("Failed", failure_text, int(job_id)),
+            )
+            conn.commit()
+        except Exception:
+            if conn is not None:
+                conn.rollback()
+            raise
+        finally:
+            if conn is not None:
+                conn.close()
+
+    activity_rows: List[tuple[str, int]] = []
+    conn = None
+    try:
+        conn = adapters.db_conn_factory()
+        cur = conn.cursor()
+        for host in normalized_hosts:
+            cur.execute(
+                """
+                INSERT INTO activity_history(hostname, script_path, script_name, script_type, ran_at, status, stdout, stderr)
+                VALUES(?,?,?,?,?,?,?,?)
+                """,
+                (
+                    host,
+                    script_path_normalized,
+                    friendly_name,
+                    script_type,
+                    now,
+                    "Running",
+                    "",
+                    "",
+                ),
+            )
+            activity_rows.append((host, int(cur.lastrowid or 0)))
+        conn.commit()
+    except Exception:
+        if conn is not None:
+            conn.rollback()
+        raise
+    finally:
+        if conn is not None:
+            conn.close()
+
+    for host, job_id in activity_rows:
+        payload = {
+            "job_id": job_id,
+            "target_hostname": host,
+            "script_type": script_type,
+            "script_name": friendly_name,
+            "script_path": script_path_normalized,
+            "script_content": encoded_content,
+            "script_encoding": "base64",
+            "environment": env_map,
+            "variables": variables,
+            "timeout_seconds": timeout_seconds,
+            "files": doc.get("files") if isinstance(doc.get("files"), list) else [],
+            "run_mode": run_mode,
+            "admin_user": admin_user,
+            "admin_pass": admin_pass,
+        }
+        payload.update(
+            build_currentuser_dispatch_fields(
+                run_mode=run_mode,
+                session_target=session_target,
+                target_session_id=target_session_id,
+            )
+        )
+        if signature_b64:
+            payload["signature"] = signature_b64
+            payload["sig_alg"] = "ed25519"
+        if signing_key_b64:
+            payload["signing_key"] = signing_key_b64
+        context_block = payload.setdefault("context", {})
+        context_block["assembly_source"] = assembly_source
+        if assembly_guid:
+            context_block["assembly_guid"] = assembly_guid
+
+        emitted = False
+        delivery_mode = "broadcast"
+        if target_service_mode and callable(emit_host_service_event):
+            emitted = bool(
+                emit_host_service_event(
+                    host,
+                    target_service_mode,
+                    "quick_job_run",
+                    payload,
+                )
+            )
+            delivery_mode = f"targeted:{target_service_mode}"
+        else:
+            socketio.emit("quick_job_run", payload)
+            emitted = True
+
+        if not emitted and target_service_mode and callable(emit_host_service_event):
+            failure_text = (
+                f"No {target_service_mode} agent socket is registered for host {host}; "
+                "unable to dispatch quick job."
+            )
+            _mark_activity_failed(job_id, failure_text)
+            try:
+                socketio.emit(
+                    "device_activity_changed",
+                    {
+                        "hostname": host,
+                        "activity_id": job_id,
+                        "change": "updated",
+                        "source": "quick_job",
+                    },
+                )
+            except Exception:
+                pass
+            results.append(
+                {
+                    "hostname": host,
+                    "job_id": job_id,
+                    "status": "Failed",
+                    "error": failure_text,
+                }
+            )
+            _write_service_log(
+                (
+                    f"quick job dispatch failed hostname={host} path={script_path_normalized} "
+                    f"run_mode={run_mode} source={assembly_source} requested_by={requested_by} "
+                    f"delivery={delivery_mode} error={failure_text}"
+                ),
+                level="ERROR",
+            )
+            continue
+
+        try:
+            socketio.emit(
+                "device_activity_changed",
+                {
+                    "hostname": host,
+                    "activity_id": job_id,
+                    "change": "created",
+                    "source": "quick_job",
+                },
+            )
+        except Exception:
+            pass
+
+        results.append({"hostname": host, "job_id": job_id, "status": "Running"})
+        _write_service_log(
+            (
+                f"quick job queued hostname={host} path={script_path_normalized} "
+                f"run_mode={run_mode} source={assembly_source} requested_by={requested_by} "
+                f"delivery={delivery_mode} script_type={script_type}"
+            ),
+        )
+
+    return {
+        "results": results,
+        "script_name": friendly_name,
+        "script_path": script_path_normalized,
+        "script_type": script_type,
+    }
+
+
 def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
     """Register quick execution endpoints for assemblies."""
 
     blueprint = Blueprint("assemblies_execution", __name__)
-    service_log = adapters.service_log
     assembly_cache = adapters.context.assembly_cache
     if assembly_cache is None:
         raise RuntimeError("Assembly cache is not initialised; ensure Engine bootstrap executed.")
@@ -499,8 +746,6 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                 }
             ), 400
 
-        content = doc.get("script") or ""
-        doc_variables = doc.get("variables") if isinstance(doc.get("variables"), list) else []
         overrides_raw = data.get("variable_values")
         overrides: Dict[str, Any] = {}
         if isinstance(overrides_raw, dict):
@@ -510,207 +755,30 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                     continue
                 overrides[name] = val
 
-        env_map, variables, literal_lookup = prepare_variable_context(doc_variables, overrides)
-        normalized_script = _rewrite_script_for_dispatch(content, script_type, literal_lookup)
-        script_bytes = normalized_script.encode("utf-8")
-        encoded_content = (
-            base64.b64encode(script_bytes).decode("ascii")
-            if script_bytes or normalized_script == ""
-            else ""
-        )
-
-        signature_b64 = ""
-        signing_key_b64 = ""
-        script_signer = adapters.script_signer
-        if script_signer is not None:
-            try:
-                signature_raw = script_signer.sign(script_bytes)
-                signature_b64 = base64.b64encode(signature_raw).decode("ascii")
-                signing_key_b64 = script_signer.public_base64_spki()
-            except Exception:
-                signature_b64 = ""
-                signing_key_b64 = ""
-
         try:
-            timeout_seconds = max(0, int(doc.get("timeout_seconds") or 0))
-        except Exception:
-            timeout_seconds = 0
-
-        friendly_name = (doc.get("name") or "").strip()
-        if not friendly_name:
-            friendly_name = os.path.basename(rel_path_canonical)
-        now = int(time.time())
-        results: List[Dict[str, Any]] = []
-        socketio = getattr(adapters.context, "socketio", None)
-        if socketio is None:
-            return jsonify({"error": "Realtime transport unavailable; cannot dispatch quick job."}), 500
-        emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
-        target_service_mode = _normalize_target_service_mode(run_mode)
-
-        def _mark_activity_failed(job_id: int, failure_text: str) -> None:
-            conn = None
-            try:
-                conn = adapters.db_conn_factory()
-                cur = conn.cursor()
-                cur.execute(
-                    "UPDATE activity_history SET status=?, stderr=? WHERE id=?",
-                    ("Failed", failure_text, int(job_id)),
-                )
-                conn.commit()
-            except Exception:
-                if conn is not None:
-                    conn.rollback()
-                raise
-            finally:
-                if conn is not None:
-                    conn.close()
-
-        activity_rows: List[tuple[str, int]] = []
-        conn = None
-        try:
-            conn = adapters.db_conn_factory()
-            cur = conn.cursor()
-            for host in hostnames:
-                cur.execute(
-                    """
-                    INSERT INTO activity_history(hostname, script_path, script_name, script_type, ran_at, status, stdout, stderr)
-                    VALUES(?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        host,
-                        rel_path_canonical.replace(os.sep, "/"),
-                        friendly_name,
-                        script_type,
-                        now,
-                        "Running",
-                        "",
-                        "",
-                    ),
-                )
-                activity_rows.append((host, int(cur.lastrowid or 0)))
-            conn.commit()
-        except Exception as exc:
-            if conn is not None:
-                conn.rollback()
+            dispatch = dispatch_inline_quick_job(
+                adapters,
+                hostnames=hostnames,
+                doc=doc,
+                script_path=rel_path_canonical,
+                requested_by=username,
+                variable_overrides=overrides,
+                run_mode=run_mode,
+                session_target=session_target,
+                target_session_id=target_session_id,
+                admin_user=admin_user,
+                admin_pass=admin_pass,
+                assembly_source=assembly_source,
+                assembly_guid=assembly_guid,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 500
-        finally:
-            if conn is not None:
-                conn.close()
-
-        try:
-            for host, job_id in activity_rows:
-                payload = {
-                    "job_id": job_id,
-                    "target_hostname": host,
-                    "script_type": script_type,
-                    "script_name": friendly_name,
-                    "script_path": rel_path_canonical.replace(os.sep, "/"),
-                    "script_content": encoded_content,
-                    "script_encoding": "base64",
-                    "environment": env_map,
-                    "variables": variables,
-                    "timeout_seconds": timeout_seconds,
-                    "files": doc.get("files") if isinstance(doc.get("files"), list) else [],
-                    "run_mode": run_mode,
-                    "admin_user": admin_user,
-                    "admin_pass": admin_pass,
-                }
-                payload.update(
-                    build_currentuser_dispatch_fields(
-                        run_mode=run_mode,
-                        session_target=session_target,
-                        target_session_id=target_session_id,
-                    )
-                )
-                if signature_b64:
-                    payload["signature"] = signature_b64
-                    payload["sig_alg"] = "ed25519"
-                if signing_key_b64:
-                    payload["signing_key"] = signing_key_b64
-                context_block = payload.setdefault("context", {})
-                context_block["assembly_source"] = assembly_source
-                if assembly_guid:
-                    context_block["assembly_guid"] = assembly_guid
-
-                emitted = False
-                delivery_mode = "broadcast"
-                if target_service_mode and callable(emit_host_service_event):
-                    emitted = bool(
-                        emit_host_service_event(
-                            host,
-                            target_service_mode,
-                            "quick_job_run",
-                            payload,
-                        )
-                    )
-                    delivery_mode = f"targeted:{target_service_mode}"
-                else:
-                    socketio.emit("quick_job_run", payload)
-                    emitted = True
-
-                if not emitted and target_service_mode and callable(emit_host_service_event):
-                    failure_text = (
-                        f"No {target_service_mode} agent socket is registered for host {host}; "
-                        "unable to dispatch quick job."
-                    )
-                    _mark_activity_failed(job_id, failure_text)
-                    try:
-                        socketio.emit(
-                            "device_activity_changed",
-                            {
-                                "hostname": host,
-                                "activity_id": job_id,
-                                "change": "updated",
-                                "source": "quick_job",
-                            },
-                        )
-                    except Exception:
-                        pass
-                    results.append(
-                        {
-                            "hostname": host,
-                            "job_id": job_id,
-                            "status": "Failed",
-                            "error": failure_text,
-                        }
-                    )
-                    service_log(
-                        "assemblies",
-                        (
-                            f"quick job dispatch failed hostname={host} path={rel_path_canonical} "
-                            f"run_mode={run_mode} source={assembly_source} requested_by={username} "
-                            f"delivery={delivery_mode} error={failure_text}"
-                        ),
-                        level="ERROR",
-                    )
-                    continue
-
-                try:
-                    socketio.emit(
-                        "device_activity_changed",
-                        {
-                            "hostname": host,
-                            "activity_id": job_id,
-                            "change": "created",
-                            "source": "quick_job",
-                        },
-                    )
-                except Exception:
-                    pass
-
-                results.append({"hostname": host, "job_id": job_id, "status": "Running"})
-                service_log(
-                    "assemblies",
-                    (
-                        f"quick job queued hostname={host} path={rel_path_canonical} "
-                        f"run_mode={run_mode} source={assembly_source} requested_by={username} "
-                        f"delivery={delivery_mode} script_type={script_type}"
-                    ),
-                )
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 
-        return jsonify({"results": results})
+        return jsonify({"results": dispatch["results"]})
 
     @blueprint.route("/api/device/activity/<hostname>", methods=["GET", "DELETE"])
     def device_activity(hostname: str):

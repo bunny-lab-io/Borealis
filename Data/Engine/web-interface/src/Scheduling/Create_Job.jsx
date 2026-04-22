@@ -9,6 +9,7 @@ import {
   InputBase,
   Button,
   IconButton,
+  Tooltip,
   Checkbox,
   FormControlLabel,
   MenuItem,
@@ -23,6 +24,7 @@ import {
 import {
   Add as AddIcon,
   Delete as DeleteIcon,
+  ContentCopy as ContentCopyIcon,
   FilterList as FilterListIcon,
   PendingActions as PendingActionsIcon,
   WarningAmberRounded as WarningAmberRoundedIcon,
@@ -3001,7 +3003,16 @@ export default function CreateJob() {
   const [outputSections, setOutputSections] = useState([]);
   const [outputLoading, setOutputLoading] = useState(false);
   const [outputError, setOutputError] = useState("");
+  const [copiedOutputKey, setCopiedOutputKey] = useState("");
+  const outputCopyResetRef = useRef(null);
   const [clearingHistory, setClearingHistory] = useState(false);
+
+  useEffect(() => () => {
+    if (outputCopyResetRef.current) {
+      clearTimeout(outputCopyResetRef.current);
+      outputCopyResetRef.current = null;
+    }
+  }, []);
 
   const loadHistory = useCallback(async () => {
     if (!editing) return;
@@ -3498,20 +3509,77 @@ export default function CreateJob() {
     }
   }, []);
 
-  const handleViewDeviceOutput = useCallback(async (row, mode = "stdout") => {
+  const copyTextToClipboard = useCallback(async (value, promptTitle = "Copy text") => {
+    const normalizedValue = String(value ?? "");
+    if (!normalizedValue) {
+      return false;
+    }
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(normalizedValue);
+        return true;
+      }
+      throw new Error("clipboard_unavailable");
+    } catch {
+      if (typeof window !== "undefined" && typeof window.prompt === "function") {
+        window.prompt(promptTitle, normalizedValue);
+      }
+      return false;
+    }
+  }, []);
+
+  const handleCopyOutputSection = useCallback(async (section) => {
+    const content = String(section?.content ?? "");
+    if (!content) {
+      await sendNotification({
+        title: "No Output Available",
+        message: "This output panel does not contain any text to copy.",
+        icon: "warning",
+        variant: "warning",
+      });
+      return;
+    }
+
+    const sectionLabel = String(section?.title || outputTitle || "output").trim() || "output";
+    const copied = await copyTextToClipboard(content, `Copy ${sectionLabel}`);
+    if (copied) {
+      setCopiedOutputKey(String(section?.key || ""));
+      if (outputCopyResetRef.current) {
+        clearTimeout(outputCopyResetRef.current);
+      }
+      outputCopyResetRef.current = setTimeout(() => {
+        setCopiedOutputKey("");
+        outputCopyResetRef.current = null;
+      }, 1400);
+      await sendNotification({
+        title: "Output Copied",
+        message: `Copied <b>${sectionLabel}</b> to the clipboard.`,
+        icon: "done",
+        variant: "info",
+      });
+      return;
+    }
+
+    await sendNotification({
+      title: "Manual Copy Required",
+      message: `Clipboard access was blocked, so Borealis opened a manual copy prompt for <b>${sectionLabel}</b>.`,
+      icon: "warning",
+      variant: "warning",
+    });
+  }, [copyTextToClipboard, outputTitle, sendNotification]);
+
+  const loadDeviceOutputSections = useCallback(async (row, mode = "stdout") => {
     if (!row) return;
     const label = mode === "stderr" ? "StdErr" : "StdOut";
     const activities = Array.isArray(row.activities) ? row.activities : [];
     const relevant = activities.filter((act) => (mode === "stderr" ? act.has_stderr : act.has_stdout));
-    setOutputTitle(`${label} - ${row.hostname || ""}`);
-    setOutputSections([]);
-    setOutputError("");
-    setOutputLoading(true);
-    setOutputOpen(true);
     if (!relevant.length) {
-      setOutputError(`No ${label} available for this device.`);
-      setOutputLoading(false);
-      return;
+      return {
+        label,
+        hostname: row.hostname || "",
+        sections: [],
+        error: `No ${label} available for this device.`,
+      };
     }
     const sections = [];
     for (const act of relevant) {
@@ -3529,12 +3597,76 @@ export default function CreateJob() {
         content,
       });
     }
-    if (!sections.length) {
-      setOutputError(`No ${label} available for this device.`);
-    }
-    setOutputSections(sections);
-    setOutputLoading(false);
+    return {
+      label,
+      hostname: row.hostname || "",
+      sections,
+      error: sections.length ? "" : `No ${label} available for this device.`,
+    };
   }, [inferLanguage, loadActivity]);
+
+  const handleViewDeviceOutput = useCallback(async (row, mode = "stdout") => {
+    if (!row) return;
+    const label = mode === "stderr" ? "StdErr" : "StdOut";
+    setOutputTitle(`${label} - ${row.hostname || ""}`);
+    setOutputSections([]);
+    setOutputError("");
+    setOutputLoading(true);
+    setCopiedOutputKey("");
+    setOutputOpen(true);
+    const result = await loadDeviceOutputSections(row, mode);
+    setOutputSections(Array.isArray(result?.sections) ? result.sections : []);
+    setOutputError(String(result?.error || ""));
+    setOutputLoading(false);
+  }, [loadDeviceOutputSections]);
+
+  const handleCopyDeviceOutput = useCallback(async (row, mode = "stdout") => {
+    if (!row) return;
+    const result = await loadDeviceOutputSections(row, mode);
+    const label = String(result?.label || (mode === "stderr" ? "StdErr" : "StdOut"));
+    const hostname = String(result?.hostname || row?.hostname || "").trim();
+    const sections = Array.isArray(result?.sections) ? result.sections : [];
+    if (!sections.length) {
+      await sendNotification({
+        title: "No Output Available",
+        message: result?.error || `No ${label} available for <b>${hostname || "this device"}</b>.`,
+        icon: "warning",
+        variant: "warning",
+      });
+      return;
+    }
+
+    const copyLabel = `${label}${hostname ? ` - ${hostname}` : ""}`;
+    const combinedContent =
+      sections.length === 1
+        ? String(sections[0]?.content ?? "")
+        : sections
+            .map((section) => {
+              const title = String(section?.title || "Output").trim() || "Output";
+              const path = String(section?.path || "").trim();
+              const heading = path ? `${title} (${path})` : title;
+              return `===== ${heading} =====\n${String(section?.content ?? "")}`;
+            })
+            .join("\n\n");
+
+    const copied = await copyTextToClipboard(combinedContent, `Copy ${copyLabel}`);
+    if (copied) {
+      await sendNotification({
+        title: "Output Copied",
+        message: `Copied <b>${copyLabel}</b> to the clipboard.`,
+        icon: "done",
+        variant: "info",
+      });
+      return;
+    }
+
+    await sendNotification({
+      title: "Manual Copy Required",
+      message: `Clipboard access was blocked, so Borealis opened a manual copy prompt for <b>${copyLabel}</b>.`,
+      icon: "warning",
+      variant: "warning",
+    });
+  }, [copyTextToClipboard, loadDeviceOutputSections, sendNotification]);
 
   const jobHistoryGridComponents = useMemo(
     () => ({
@@ -3553,30 +3685,63 @@ export default function CreateJob() {
         const row = params.data;
         if (!row) return null;
         return (
-          <Box sx={{ display: "flex", gap: 1, justifyContent: "flex-start", width: "100%" }}>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, justifyContent: "flex-start", width: "100%", flexWrap: "wrap" }}>
             {row.hasStdOut ? (
-              <Button
-                size="small"
-                sx={{ color: MAGIC_UI.accentA, textTransform: "none", minWidth: 0, p: 0 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  params.context?.viewOutput?.(row.raw, "stdout");
-                }}
-              >
-                StdOut
-              </Button>
+              <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.25 }}>
+                <Button
+                  size="small"
+                  sx={{ color: MAGIC_UI.accentA, textTransform: "none", minWidth: 0, p: 0 }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    params.context?.viewOutput?.(row.raw, "stdout");
+                  }}
+                >
+                  StdOut
+                </Button>
+                <Tooltip title="Copy StdOut">
+                  <IconButton
+                    size="small"
+                    sx={{ color: MAGIC_UI.accentA, p: 0.35 }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void params.context?.copyOutput?.(row.raw, "stdout");
+                    }}
+                  >
+                    <ContentCopyIcon sx={{ fontSize: 15 }} />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            ) : null}
+            {row.hasStdOut && row.hasStdErr ? (
+              <Typography component="span" variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
+                /
+              </Typography>
             ) : null}
             {row.hasStdErr ? (
-              <Button
-                size="small"
-                sx={{ color: "#fb7185", textTransform: "none", minWidth: 0, p: 0 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  params.context?.viewOutput?.(row.raw, "stderr");
-                }}
-              >
-                StdErr
-              </Button>
+              <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.25 }}>
+                <Button
+                  size="small"
+                  sx={{ color: "#fb7185", textTransform: "none", minWidth: 0, p: 0 }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    params.context?.viewOutput?.(row.raw, "stderr");
+                  }}
+                >
+                  StdErr
+                </Button>
+                <Tooltip title="Copy StdErr">
+                  <IconButton
+                    size="small"
+                    sx={{ color: "#fb7185", p: 0.35 }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void params.context?.copyOutput?.(row.raw, "stderr");
+                    }}
+                  >
+                    <ContentCopyIcon sx={{ fontSize: 15 }} />
+                  </IconButton>
+                </Tooltip>
+              </Box>
             ) : null}
           </Box>
         );
@@ -4524,7 +4689,7 @@ export default function CreateJob() {
                       columnDefs={jobHistoryGridColumnDefs}
                       defaultColDef={jobHistoryGridDefaultColDef}
                       components={jobHistoryGridComponents}
-                      context={{ viewOutput: handleViewDeviceOutput }}
+                      context={{ viewOutput: handleViewDeviceOutput, copyOutput: handleCopyDeviceOutput }}
                       suppressCellFocus
                       headerHeight={44}
                       rowHeight={50}
@@ -4663,6 +4828,7 @@ export default function CreateJob() {
                       border: `1px solid ${MAGIC_UI.panelBorder}`,
                       borderRadius: 2,
                       bgcolor: "rgba(4,7,17,0.65)",
+                      position: "relative",
                       display: "flex",
                       flexDirection: "column",
                       flex: outputSections.length === 1 ? 1 : "0 0 auto",
@@ -4688,11 +4854,59 @@ export default function CreateJob() {
                     }}
                   >
                     <Box
+                      sx={{
+                        position: "absolute",
+                        top: 10,
+                        right: 10,
+                        zIndex: 1,
+                      }}
+                    >
+                      <Tooltip
+                        title={
+                          section.content
+                            ? copiedOutputKey === section.key
+                              ? "Copied"
+                              : "Copy output"
+                            : "No output to copy"
+                        }
+                      >
+                        <span>
+                          <IconButton
+                            size="small"
+                            disabled={!section.content}
+                            onClick={() => {
+                              void handleCopyOutputSection(section);
+                            }}
+                            sx={{
+                              color: copiedOutputKey === section.key ? MAGIC_UI.accentC : MAGIC_UI.textMuted,
+                              backgroundColor: "rgba(2,6,23,0.58)",
+                              border: "1px solid rgba(148,163,184,0.2)",
+                              "&:hover": {
+                                backgroundColor: "rgba(8,15,33,0.82)",
+                                color: copiedOutputKey === section.key ? MAGIC_UI.accentC : MAGIC_UI.textBright,
+                              },
+                              "&.Mui-disabled": {
+                                color: "rgba(148,163,184,0.42)",
+                                borderColor: "rgba(148,163,184,0.12)",
+                              },
+                            }}
+                          >
+                            {copiedOutputKey === section.key ? (
+                              <CheckIcon fontSize="small" />
+                            ) : (
+                              <ContentCopyIcon fontSize="small" />
+                            )}
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    </Box>
+                    <Box
                       component="pre"
                       className={`language-${section.lang || "markup"}`}
                       sx={{
                         m: 0,
                         p: 1.5,
+                        pr: 5.5,
                         minHeight: outputSections.length === 1 ? "100%" : 160,
                         backgroundColor: "transparent !important",
                         background: "transparent !important",

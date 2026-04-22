@@ -33,6 +33,7 @@ def apply_all(conn: sqlite3.Connection) -> None:
     _ensure_refresh_token_table(conn)
     _ensure_device_approval_table(conn)
     _ensure_watchdog_tables(conn)
+    _ensure_software_icon_assets_table(conn)
     device_purge_state.ensure_table(conn)
 
     conn.commit()
@@ -430,6 +431,22 @@ def _ensure_watchdog_tables(conn: sqlite3.Connection) -> None:
         """
         CREATE UNIQUE INDEX IF NOT EXISTS uq_watchdog_device_state_identity
             ON watchdog_device_state(watchdog_id, hostname)
+        """
+    )
+
+
+def _ensure_software_icon_assets_table(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS software_icon_assets (
+            icon_hash TEXT PRIMARY KEY,
+            mime_type TEXT NOT NULL,
+            icon_bytes BLOB NOT NULL,
+            byte_size INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )
         """
     )
 
