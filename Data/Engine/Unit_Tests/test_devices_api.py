@@ -6,6 +6,8 @@
 # ======================================================
 
 from __future__ import annotations
+import base64
+import json
 import logging
 import threading
 import time
@@ -15,7 +17,6 @@ from types import SimpleNamespace
 
 import pytest
 from Data.Engine.auth import jwt_service as jwt_service_module
-from Data.Engine.integrations import github as github_integration
 from Data.Engine.services.API.devices import management as device_management
 from Data.Engine.services.API.devices import routes as device_routes
 from Data.Engine.services.API.devices.service_inventory import serialize_device_services
@@ -54,6 +55,8 @@ def _device_headers_for_guid(guid: str) -> dict:
 
 
 def _patch_repo_call(monkeypatch: pytest.MonkeyPatch, calls: dict) -> None:
+    from Data.Engine.integrations import github as github_integration
+
     class DummyResponse:
         def __init__(self, status_code: int, payload: Any):
             self.status_code = status_code
@@ -100,6 +103,19 @@ def _set_test_device_services(engine_harness: EngineTestHarness, payload: Any) -
         cur.execute(
             "UPDATE devices SET services = ? WHERE hostname = ?",
             (serialize_device_services(payload), "test-device"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _set_test_device_software(engine_harness: EngineTestHarness, payload: Any) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE devices SET software = ? WHERE hostname = ?",
+            (json.dumps(payload or []), "test-device"),
         )
         conn.commit()
     finally:
@@ -652,11 +668,19 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
                         "name": "Google Chrome",
                         "version": "124.0.6367.92",
                         "source": "local_installed",
+                        "metadata": {
+                            "quiet_uninstall_string": '"C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe" --uninstall --multi-install --chrome --system-level --force-uninstall',
+                            "uninstall_string": "MsiExec.exe /I{11111111-2222-3333-4444-555555555555}",
+                            "product_code": "{11111111-2222-3333-4444-555555555555}",
+                        },
                     },
                     {
                         "name": "Contoso.App",
                         "version": "1.2.0",
                         "source": "windows_store",
+                        "metadata": {
+                            "package_family_name": "Contoso.App_1234567890abc",
+                        },
                     },
                 ],
             },
@@ -691,9 +715,130 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
     assert detail_response.status_code == 200
     software = detail_response.get_json()["software"]
     assert software == [
-        {"name": "Contoso.App", "version": "1.2.0", "source": "windows_store", "metadata": {}},
-        {"name": "Google Chrome", "version": "124.0.6367.92", "source": "local_installed", "metadata": {}},
+        {
+            "name": "Contoso.App",
+            "version": "1.2.0",
+            "source": "windows_store",
+            "metadata": {"package_family_name": "Contoso.App_1234567890abc"},
+        },
+        {
+            "name": "Google Chrome",
+            "version": "124.0.6367.92",
+            "source": "local_installed",
+            "metadata": {
+                "quiet_uninstall_string": '"C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe" --uninstall --multi-install --chrome --system-level --force-uninstall',
+                "uninstall_string": "MsiExec.exe /I{11111111-2222-3333-4444-555555555555}",
+                "product_code": "{11111111-2222-3333-4444-555555555555}",
+            },
+        },
     ]
+
+
+def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Google Chrome",
+                "version": "124.0.6367.92",
+                "source": "local_installed",
+                "metadata": {
+                    "quiet_uninstall_string": '"C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe" --uninstall --force-uninstall',
+                    "uninstall_string": "MsiExec.exe /I{11111111-2222-3333-4444-555555555555}",
+                    "product_code": "{11111111-2222-3333-4444-555555555555}",
+                },
+            }
+        ],
+    )
+
+    targeted_events: list[tuple[str, str, str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        engine_harness.context,
+        "has_host_service_socket",
+        lambda hostname, mode: hostname == "test-device" and mode == "system",
+    )
+    monkeypatch.setattr(
+        engine_harness.context,
+        "emit_host_service_event",
+        lambda hostname, service_mode, event, payload: (
+            targeted_events.append((hostname, service_mode, event, payload)) or True
+        ),
+    )
+    socket_events: list[tuple[str, Any, str]] = []
+    monkeypatch.setattr(
+        engine_harness.context.socketio,
+        "emit",
+        lambda event, payload, to=None: socket_events.append((event, payload, to)),
+    )
+
+    response = client.post(
+        "/api/device/software/test-device/uninstall",
+        json={
+            "name": "Google Chrome",
+            "version": "124.0.6367.92",
+            "source": "local_installed",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "queued"
+    assert payload["software"]["name"] == "Google Chrome"
+    assert len(targeted_events) == 1
+    hostname, service_mode, event_name, dispatched = targeted_events[0]
+    assert hostname == "test-device"
+    assert service_mode == "system"
+    assert event_name == "quick_job_run"
+    assert dispatched["script_type"] == "powershell"
+    assert dispatched["target_context"] == "system"
+    assert dispatched["environment"]["SOFTWARE_NAME"] == "Google Chrome"
+    assert dispatched["environment"]["SOFTWARE_SOURCE"] == "local_installed"
+    assert "Invoke-LocalInstalledUninstall" in base64.b64decode(dispatched["script_content"]).decode("utf-8")
+    assert any(event_name == "device_activity_changed" for event_name, _payload, _to in socket_events)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT script_name, script_path, script_type, status FROM activity_history ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row == (
+        "Uninstall - Google Chrome",
+        "Scripts/Internal/Software_Uninstall.ps1",
+        "powershell",
+        "Running",
+    )
+
+
+def test_device_software_uninstall_requires_supported_metadata(engine_harness: EngineTestHarness) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Odd Vendor App",
+                "version": "1.0.0",
+                "source": "local_installed",
+                "metadata": {},
+            }
+        ],
+    )
+
+    response = client.post(
+        "/api/device/software/test-device/uninstall",
+        json={
+            "name": "Odd Vendor App",
+            "version": "1.0.0",
+            "source": "local_installed",
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["error"] == "software_uninstall_unsupported"
 
 
 def test_agent_heartbeat_returns_assigned_site(engine_harness: EngineTestHarness) -> None:

@@ -713,7 +713,7 @@ $list = @()
 foreach ($p in $paths) {
   try {
     $list += Get-ItemProperty -Path $p -ErrorAction SilentlyContinue |
-      Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation, InstallDate
+      Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation, InstallDate, UninstallString, QuietUninstallString, WindowsInstaller, PSChildName
   } catch {}
 }
 $list = $list | Where-Object { $_.DisplayName -and ("$($_.DisplayName)".Trim().Length -gt 0) }
@@ -738,6 +738,18 @@ $list | Sort-Object DisplayName -Unique | ConvertTo-Json -Depth 2
             install_date = str(it.get('InstallDate') or '').strip()
             if install_date:
                 metadata['install_date'] = install_date
+            uninstall_string = str(it.get('UninstallString') or '').strip()
+            if uninstall_string:
+                metadata['uninstall_string'] = uninstall_string
+            quiet_uninstall_string = str(it.get('QuietUninstallString') or '').strip()
+            if quiet_uninstall_string:
+                metadata['quiet_uninstall_string'] = quiet_uninstall_string
+            product_code = str(it.get('PSChildName') or '').strip()
+            if product_code:
+                metadata['product_code'] = product_code
+            windows_installer = it.get('WindowsInstaller')
+            if windows_installer not in (None, ''):
+                metadata['windows_installer'] = bool(windows_installer)
             payload = {'name': name, 'version': ver, 'source': 'local_installed'}
             if metadata:
                 payload['metadata'] = metadata
@@ -830,6 +842,31 @@ $list | Sort-Object Name -Unique | ConvertTo-Json -Depth 3
                                 install_location, _ = winreg.QueryValueEx(sk, 'InstallLocation')
                                 if install_location:
                                     metadata['install_location'] = str(install_location).strip()
+                            except Exception:
+                                pass
+                            try:
+                                install_date, _ = winreg.QueryValueEx(sk, 'InstallDate')
+                                if install_date:
+                                    metadata['install_date'] = str(install_date).strip()
+                            except Exception:
+                                pass
+                            try:
+                                uninstall_string, _ = winreg.QueryValueEx(sk, 'UninstallString')
+                                if uninstall_string:
+                                    metadata['uninstall_string'] = str(uninstall_string).strip()
+                            except Exception:
+                                pass
+                            try:
+                                quiet_uninstall_string, _ = winreg.QueryValueEx(sk, 'QuietUninstallString')
+                                if quiet_uninstall_string:
+                                    metadata['quiet_uninstall_string'] = str(quiet_uninstall_string).strip()
+                            except Exception:
+                                pass
+                            if sub:
+                                metadata['product_code'] = str(sub).strip()
+                            try:
+                                windows_installer, _ = winreg.QueryValueEx(sk, 'WindowsInstaller')
+                                metadata['windows_installer'] = bool(windows_installer)
                             except Exception:
                                 pass
                             payload = {

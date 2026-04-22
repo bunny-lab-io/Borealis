@@ -66,6 +66,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details.
 - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory.
 - `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service.
+- `POST /api/device/software/<hostname>/uninstall` (Token Authenticated) - queue a silent uninstall quick job for a supported installed-software row on an in-scope Windows device.
 - `POST /api/device/update-agent/<hostname>` (Token Authenticated) - ask a device to start its local AutoUpdater task immediately.
 - `POST /api/device/description/<hostname>` (Token Authenticated) - update description.
 - `GET /api/device_list_views` (Token Authenticated) - list saved views.
@@ -124,6 +125,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `/api/agent/details` stores full inventory payloads for memory, network, storage, software, cpu, and services.
 - JSON blobs are serialized into PostgreSQL text columns and rehydrated for UI.
 - Installed software is also normalized into `device_software_inventory` so filters can match name, source, and version reliably.
+- The Installed Software tab now also exposes a row-level `Uninstall` action for supported Windows software entries. Borealis queues that work through the signed quick-job path in SYSTEM context, so uninstall output lands in `activity_history` and the row disappears after the next successful device software inventory refresh.
 - Session inventory enrichment from the agent broker flows through `Data/Agent/Roles/role_DeviceAudit.py` and `Data/Engine/services/API/devices/session_inventory.py`, so Device Details can distinguish a merely logged-in session from a helper-ready interactive session.
 - Service inventory is cached in the `devices.services` JSON blob and merged with pending operator actions until a fresh agent snapshot confirms the desired state.
 - Manual agent update requests from the Device Summary action menu call `POST /api/device/update-agent/<hostname>` and are delivered over the device's SYSTEM Socket.IO channel as `agent_update_request`.

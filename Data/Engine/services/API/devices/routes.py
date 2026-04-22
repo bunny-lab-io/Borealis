@@ -121,11 +121,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         repaired_agent_id = str(agent_id or "").strip()
         if not normalized or not repaired_agent_id:
             return
-        normalized_guid = normalize_guid(ctx.guid)
-        guid_lookup = normalized_guid or str(ctx.guid or "").strip()
         conn = db_conn_factory()
-        site_id = None
-        site_name = ""
         try:
             cur = conn.cursor()
             cur.execute(

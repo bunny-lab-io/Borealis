@@ -2505,7 +2505,13 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     );
   };
 
-  const renderSoftware = () => <InstalledSoftwareTab softwareRows={softwareRows} />;
+  const renderSoftware = () => (
+    <InstalledSoftwareTab
+      softwareRows={softwareRows}
+      hostname={activityHostname}
+      operatingSystem={summary.operating_system || meta.operatingSystem || ""}
+    />
+  );
 
   const renderServicesTab = () => (
     <Box

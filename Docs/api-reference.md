@@ -57,6 +57,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details, site-scoped for operators, including normalized session inventory with helper readiness fields.
 - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory for an in-scope device.
 - `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service on an in-scope device.
+- `POST /api/device/software/<hostname>/uninstall` (Token Authenticated) - queue a silent uninstall quick job for a supported installed-software row on an in-scope Windows device.
 - `POST /api/device/update-agent/<hostname>` (Token Authenticated) - ask an in-scope device to start its local AutoUpdater task immediately.
 - `POST /api/device/description/<hostname>` (Token Authenticated) - update description for an in-scope device.
 - `GET /api/device_list_views` (Token Authenticated) - list saved device views.

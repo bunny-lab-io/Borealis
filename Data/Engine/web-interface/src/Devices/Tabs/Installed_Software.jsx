@@ -1,16 +1,175 @@
-import React, { useCallback, useMemo, useState } from "react";
-import { Box, TextField } from "@mui/material";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Box, Button, TextField, Tooltip } from "@mui/material";
 import { AgGridReact } from "ag-grid-react";
+import { ConfirmDeleteDialog } from "../../Dialogs.jsx";
+import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 import {
   DEFAULT_GRID_COL_DEF,
   DEVICE_DETAILS_GRID_THEME,
-  DEVICE_GRID_STYLE,
   GridShell,
   MAGIC_UI,
 } from "./Shared.jsx";
 
-export default function InstalledSoftwareTab({ softwareRows = [] }) {
+const ACTION_BUTTON_SX = {
+  minWidth: 118,
+  minHeight: 34,
+  borderRadius: 999,
+  px: 1.8,
+  textTransform: "none",
+  fontWeight: 600,
+  color: MAGIC_UI.textBright,
+  border: "1px solid rgba(148,163,184,0.36)",
+  background: "rgba(5,10,24,0.82)",
+  "&:hover": {
+    background: "rgba(9,16,34,0.94)",
+    borderColor: "rgba(125,211,252,0.46)",
+  },
+  "&.Mui-disabled": {
+    color: "rgba(148,163,184,0.76)",
+    borderColor: "rgba(148,163,184,0.22)",
+    background: "rgba(15,23,42,0.42)",
+  },
+};
+
+function buildSoftwareActionKey(row = {}) {
+  return [
+    String(row?.name || "").trim().toLowerCase(),
+    String(row?.version || "").trim().toLowerCase(),
+    String(row?.source || "").trim().toLowerCase(),
+  ].join("::");
+}
+
+function getSoftwareMetadata(row = {}) {
+  return row?.metadata && typeof row.metadata === "object" ? row.metadata : {};
+}
+
+function getUninstallEligibility(row = {}, operatingSystem = "", hostname = "") {
+  if (!hostname) {
+    return { supported: false, reason: "The selected device is missing a hostname." };
+  }
+  const osText = String(operatingSystem || "").trim().toLowerCase();
+  if (!osText) {
+    return { supported: false, reason: "Borealis has not received the device platform yet." };
+  }
+  if (!osText.includes("windows")) {
+    return { supported: false, reason: "Windows uninstall support ships first. Linux support comes next." };
+  }
+
+  const source = String(row?.source || "").trim().toLowerCase();
+  const metadata = getSoftwareMetadata(row);
+  if (source === "windows_store") {
+    return {
+      supported: Boolean(String(metadata?.package_family_name || "").trim() || String(row?.name || "").trim()),
+      reason: "This Windows Store entry does not include enough package metadata yet.",
+    };
+  }
+  if (source !== "local_installed") {
+    return { supported: false, reason: "This software source is not part of the first Windows uninstall release." };
+  }
+  if (
+    String(metadata?.quiet_uninstall_string || "").trim() ||
+    String(metadata?.uninstall_string || "").trim() ||
+    String(metadata?.product_code || "").trim()
+  ) {
+    return { supported: true, reason: "" };
+  }
+  return {
+    supported: false,
+    reason: "This software row does not expose a usable uninstall command yet.",
+  };
+}
+
+function ActionCell({ data, operatingSystem, hostname, busyKey, onRequestUninstall }) {
+  const row = data || {};
+  const eligibility = getUninstallEligibility(row, operatingSystem, hostname);
+  const rowKey = buildSoftwareActionKey(row);
+  const busy = rowKey === busyKey;
+  const disabled = busy || !eligibility.supported;
+  const buttonLabel = busy ? "Queueing..." : "Uninstall";
+  const button = (
+    <span>
+      <Button
+        size="small"
+        disabled={disabled}
+        onClick={() => {
+          if (disabled) return;
+          onRequestUninstall?.(row);
+        }}
+        sx={ACTION_BUTTON_SX}
+      >
+        {buttonLabel}
+      </Button>
+    </span>
+  );
+  if (!eligibility.supported && eligibility.reason) {
+    return (
+      <Tooltip title={eligibility.reason} placement="top">
+        {button}
+      </Tooltip>
+    );
+  }
+  return button;
+}
+
+export default function InstalledSoftwareTab({ softwareRows = [], hostname = "", operatingSystem = "" }) {
   const [softwareSearch, setSoftwareSearch] = useState("");
+  const [busyActionKey, setBusyActionKey] = useState("");
+  const [confirmRow, setConfirmRow] = useState(null);
+  const notifyOperator = useAppNotifications();
+
+  useEffect(() => {
+    if (!busyActionKey) return;
+    const stillExists = softwareRows.some((row) => buildSoftwareActionKey(row) === busyActionKey);
+    if (!stillExists) {
+      setBusyActionKey("");
+    }
+  }, [busyActionKey, softwareRows]);
+
+  const requestUninstall = useCallback(
+    (row) => {
+      setConfirmRow(row || null);
+    },
+    []
+  );
+
+  const confirmUninstall = useCallback(async () => {
+    const row = confirmRow;
+    const rowKey = buildSoftwareActionKey(row || {});
+    if (!row || !rowKey || !hostname || rowKey === busyActionKey) return;
+    setBusyActionKey(rowKey);
+    try {
+      const response = await fetch(`/api/device/software/${encodeURIComponent(hostname)}/uninstall`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: row?.name || "",
+          version: row?.version || "",
+          source: row?.source || "",
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
+      }
+      setConfirmRow(null);
+      await notifyOperator({
+        title: "Software Uninstall Queued",
+        message: `Queued a silent uninstall for <b>${String(row?.name || "Software")}</b> on <b>${hostname}</b>. Check Activity History for output.`,
+        icon: "info",
+        variant: "success",
+      });
+    } catch (err) {
+      await notifyOperator({
+        title: "Software Uninstall Failed",
+        message: `Could not queue the uninstall on <b>${hostname || "this device"}</b>: ${String(err?.message || err)}`,
+        icon: "error",
+        variant: "error",
+      });
+    } finally {
+      setBusyActionKey("");
+    }
+  }, [busyActionKey, confirmRow, hostname, notifyOperator]);
 
   const softwareColumnDefs = useMemo(
     () => [
@@ -43,12 +202,31 @@ export default function InstalledSoftwareTab({ softwareRows = [] }) {
           return params.value || "—";
         },
       },
+      {
+        field: "action",
+        headerName: "Action",
+        width: 170,
+        minWidth: 150,
+        sortable: false,
+        filter: false,
+        suppressHeaderMenuButton: true,
+        cellRenderer: (params) => (
+          <ActionCell
+            data={params.data}
+            hostname={hostname}
+            operatingSystem={operatingSystem}
+            busyKey={busyActionKey}
+            onRequestUninstall={requestUninstall}
+          />
+        ),
+      },
     ],
-    []
+    [busyActionKey, hostname, operatingSystem, requestUninstall]
   );
 
   const getSoftwareRowId = useCallback(
-    (params) => `${params.data?.name || "software"}-${params.data?.version || ""}-${params.rowIndex}`,
+    (params) =>
+      `${params.data?.name || "software"}-${params.data?.version || ""}-${params.data?.source || ""}-${params.rowIndex}`,
     []
   );
 
@@ -92,6 +270,24 @@ export default function InstalledSoftwareTab({ softwareRows = [] }) {
           theme={DEVICE_DETAILS_GRID_THEME}
         />
       </GridShell>
+      <ConfirmDeleteDialog
+        open={Boolean(confirmRow)}
+        onCancel={() => {
+          if (busyActionKey) return;
+          setConfirmRow(null);
+        }}
+        onConfirm={confirmUninstall}
+        title="Uninstall Software"
+        confirmLabel={busyActionKey ? "Queueing..." : "Uninstall"}
+        confirmDisabled={Boolean(busyActionKey)}
+        message={
+          confirmRow
+            ? `Borealis will ask ${hostname || "this device"} to silently uninstall ${confirmRow.name}${
+                confirmRow.version ? ` ${confirmRow.version}` : ""
+              }. Output will be recorded in Activity History.`
+            : ""
+        }
+      />
     </Box>
   );
 }
