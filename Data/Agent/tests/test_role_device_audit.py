@@ -121,3 +121,55 @@ def test_attach_windows_software_icons_adds_icon_hash_and_deduped_payloads(monke
         "contoso agent::2.4.1::local_installed": expected_hash,
         "contoso agent tools::2.4.1::local_installed": expected_hash,
     }
+
+
+def test_extract_windows_icon_payloads_by_hint_batches_large_requests(monkeypatch) -> None:
+    monkeypatch.setattr(device_audit.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(device_audit, "_SOFTWARE_ICON_EXTRACTION_BATCH_SIZE", 2)
+
+    observed_batches = []
+
+    def fake_extract_batch(specs):
+        observed_batches.append([item["hint"] for item in specs])
+        return {
+            str(item["hint"]): {
+                "mime_type": "image/png",
+                "data_base64": base64.b64encode(str(item["hint"]).encode("utf-8")).decode("ascii"),
+            }
+            for item in specs
+        }
+
+    monkeypatch.setattr(device_audit, "_extract_windows_icon_payload_batch", fake_extract_batch)
+
+    payloads = device_audit._extract_windows_icon_payloads_by_hint(
+        [
+            r"C:\Program Files\Contoso\contoso.exe,0",
+            r"C:\Program Files\Fabrikam\fabrikam.exe,0",
+            r"C:\Program Files\Northwind\northwind.exe,0",
+            r"C:\Program Files\Contoso\contoso.exe,0",
+        ]
+    )
+
+    assert observed_batches == [
+        [
+            r"C:\Program Files\Contoso\contoso.exe,0",
+            r"C:\Program Files\Fabrikam\fabrikam.exe,0",
+        ],
+        [
+            r"C:\Program Files\Northwind\northwind.exe,0",
+        ],
+    ]
+    assert payloads == {
+        r"C:\Program Files\Contoso\contoso.exe,0": {
+            "mime_type": "image/png",
+            "data_base64": base64.b64encode(r"C:\Program Files\Contoso\contoso.exe,0".encode("utf-8")).decode("ascii"),
+        },
+        r"C:\Program Files\Fabrikam\fabrikam.exe,0": {
+            "mime_type": "image/png",
+            "data_base64": base64.b64encode(r"C:\Program Files\Fabrikam\fabrikam.exe,0".encode("utf-8")).decode("ascii"),
+        },
+        r"C:\Program Files\Northwind\northwind.exe,0": {
+            "mime_type": "image/png",
+            "data_base64": base64.b64encode(r"C:\Program Files\Northwind\northwind.exe,0".encode("utf-8")).decode("ascii"),
+        },
+    }

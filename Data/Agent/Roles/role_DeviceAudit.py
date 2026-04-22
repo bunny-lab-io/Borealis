@@ -642,6 +642,7 @@ _DISPLAY_ICON_RESOURCE_RE = re.compile(
     r'^\s*(?P<path>.+?\.(?:exe|dll|ico|icl|cpl|ocx|scr))\s*(?:,\s*(?P<index>-?\d+))?\s*$',
     re.IGNORECASE,
 )
+_SOFTWARE_ICON_EXTRACTION_BATCH_SIZE = 40
 
 
 def _software_row_key(row: dict) -> str:
@@ -709,21 +710,7 @@ def _software_icon_signature(rows) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _extract_windows_icon_payloads_by_hint(hints) -> dict:
-    if platform.system().lower() != 'windows':
-        return {}
-    specs = []
-    for hint in (hints or []):
-        parsed = _parse_display_icon_resource(hint)
-        if not parsed:
-            continue
-        specs.append(
-            {
-                'hint': parsed['hint'],
-                'path': parsed['file_path'],
-                'index': int(parsed.get('icon_index') or 0),
-            }
-        )
+def _extract_windows_icon_payload_batch(specs) -> dict:
     if not specs:
         return {}
     try:
@@ -844,6 +831,40 @@ $results | ConvertTo-Json -Depth 4 -Compress
                 'mime_type': mime_type,
                 'data_base64': data_base64,
             }
+    return payloads
+
+
+def _extract_windows_icon_payloads_by_hint(hints) -> dict:
+    if platform.system().lower() != 'windows':
+        return {}
+    specs = []
+    seen_hints = set()
+    for hint in (hints or []):
+        parsed = _parse_display_icon_resource(hint)
+        if not parsed:
+            continue
+        normalized_hint = str(parsed.get('hint') or '').strip()
+        if not normalized_hint or normalized_hint in seen_hints:
+            continue
+        seen_hints.add(normalized_hint)
+        specs.append(
+            {
+                'hint': normalized_hint,
+                'path': parsed['file_path'],
+                'index': int(parsed.get('icon_index') or 0),
+            }
+        )
+    if not specs:
+        return {}
+
+    payloads = {}
+    batch_size = max(1, int(_SOFTWARE_ICON_EXTRACTION_BATCH_SIZE or 1))
+    for start in range(0, len(specs), batch_size):
+        batch = specs[start:start + batch_size]
+        try:
+            payloads.update(_extract_windows_icon_payload_batch(batch))
+        except Exception:
+            continue
     return payloads
 
 
