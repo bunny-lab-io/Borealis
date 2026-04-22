@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Box, Button, TextField, Tooltip } from "@mui/material";
+import { Box, Button, TextField } from "@mui/material";
 import { AgGridReact } from "ag-grid-react";
 import { ConfirmDeleteDialog } from "../../Dialogs.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
@@ -61,11 +61,15 @@ function getUninstallCapability(row = {}, hostname = "") {
 function ActionCell({ data, hostname, busyKey, onRequestUninstall }) {
   const row = data || {};
   const eligibility = getUninstallCapability(row, hostname);
+  if (!eligibility.supported) {
+    return null;
+  }
   const rowKey = buildSoftwareActionKey(row);
   const busy = rowKey === busyKey;
-  const disabled = busy || !eligibility.supported;
+  const disabled = busy;
   const buttonLabel = busy ? "Queueing..." : "Uninstall";
-  const button = (
+
+  return (
     <span>
       <Button
         size="small"
@@ -80,14 +84,6 @@ function ActionCell({ data, hostname, busyKey, onRequestUninstall }) {
       </Button>
     </span>
   );
-  if (!eligibility.supported && eligibility.reason) {
-    return (
-      <Tooltip title={eligibility.reason} placement="top">
-        {button}
-      </Tooltip>
-    );
-  }
-  return button;
 }
 
 export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" }) {
