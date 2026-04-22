@@ -48,16 +48,16 @@ const SOFTWARE_DISTRIBUTION_ICON_SX = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  minWidth: 16,
+  minWidth: 24,
   color: "#8fbfff",
-  fontSize: "0.9rem",
+  fontSize: "1.3rem",
   filter: "drop-shadow(0 0 8px rgba(59,130,246,0.2))",
 };
 
 const SOFTWARE_ICON_IMAGE_SX = {
-  width: 18,
-  height: 18,
-  borderRadius: 4,
+  width: 27,
+  height: 27,
+  borderRadius: 6,
   objectFit: "contain",
   flexShrink: 0,
   background: "rgba(15,23,42,0.72)",
@@ -66,8 +66,8 @@ const SOFTWARE_ICON_IMAGE_SX = {
 
 const SOFTWARE_DISTRIBUTION_BADGE_SX = {
   ...SOFTWARE_DISTRIBUTION_ICON_SX,
-  minWidth: 14,
-  fontSize: "0.78rem",
+  minWidth: 18,
+  fontSize: "1rem",
   color: "#8fbfff",
 };
 
