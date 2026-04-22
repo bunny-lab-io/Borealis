@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CheckCircleOutlineRoundedIcon from "@mui/icons-material/CheckCircleOutlineRounded";
-import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import ErrorOutlineRoundedIcon from "@mui/icons-material/ErrorOutlineRounded";
 import AutorenewRoundedIcon from "@mui/icons-material/AutorenewRounded";
 import {
@@ -10,7 +9,6 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  IconButton,
   LinearProgress,
   Tooltip,
   Typography,
@@ -84,46 +82,6 @@ const STEAM_ACTION_BADGE_SX = {
   border: "1px solid rgba(148,163,184,0.28)",
   background: "rgba(5,10,24,0.74)",
   cursor: "help",
-};
-
-const UNINSTALL_COMMAND_CONTAINER_SX = {
-  display: "inline-flex",
-  alignItems: "center",
-  width: "100%",
-  maxWidth: "100%",
-  minWidth: 0,
-  gap: 0.5,
-  px: 0.75,
-  py: 0.35,
-  borderRadius: 1.5,
-  border: "1px solid rgba(148,163,184,0.22)",
-  background: "rgba(5,10,24,0.82)",
-};
-
-const UNINSTALL_COMMAND_CODE_SX = {
-  flex: 1,
-  minWidth: 0,
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-  fontFamily: '"IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
-  fontSize: "0.72rem",
-  color: "#cfe5ff",
-  userSelect: "text",
-};
-
-const UNINSTALL_COMMAND_COPY_BUTTON_SX = {
-  flexShrink: 0,
-  width: 26,
-  height: 26,
-  borderRadius: 1.25,
-  color: "rgba(203,213,225,0.92)",
-  border: "1px solid rgba(148,163,184,0.22)",
-  background: "rgba(15,23,42,0.68)",
-  "&:hover": {
-    background: "rgba(20,34,56,0.92)",
-    color: MAGIC_UI.textBright,
-  },
 };
 
 const SOFTWARE_FILTER_OPTIONS = [
@@ -500,34 +458,6 @@ function getUninstallCommandPreview(row = {}) {
   return "";
 }
 
-async function writeTextToClipboard(value = "") {
-  const normalizedValue = String(value || "");
-  if (!normalizedValue) {
-    throw new Error("Nothing to copy.");
-  }
-  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(normalizedValue);
-    return;
-  }
-  if (typeof document === "undefined") {
-    throw new Error("Clipboard access is unavailable in this browser.");
-  }
-  const textarea = document.createElement("textarea");
-  textarea.value = normalizedValue;
-  textarea.setAttribute("readonly", "readonly");
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  textarea.style.pointerEvents = "none";
-  document.body.appendChild(textarea);
-  textarea.select();
-  textarea.setSelectionRange(0, textarea.value.length);
-  const copied = document.execCommand("copy");
-  document.body.removeChild(textarea);
-  if (!copied) {
-    throw new Error("Clipboard access is unavailable in this browser.");
-  }
-}
-
 function resolveSoftwareFilterCategory(source = "") {
   const normalizedSource = String(source || "").trim().toLowerCase();
   if (normalizedSource === "windows_store" || normalizedSource === "appx") {
@@ -651,9 +581,27 @@ function ActionCell({ data, hostname, busyKey, onRequestUninstall }) {
   const busy = rowKey === busyKey;
   const disabled = busy;
   const buttonLabel = busy ? "Queueing..." : "Uninstall";
+  const uninstallCommand = getUninstallCommandPreview(row);
+  const tooltipTitle = uninstallCommand || "Borealis will send the resolved uninstall command to the agent.";
 
   return (
-    <span>
+    <Tooltip
+      title={tooltipTitle}
+      placement="top"
+      slotProps={{
+        tooltip: {
+          sx: {
+            maxWidth: 520,
+            fontFamily: '"IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+            fontSize: "0.72rem",
+            lineHeight: 1.45,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          },
+        },
+      }}
+    >
+      <span>
       <Button
         size="small"
         disabled={disabled}
@@ -665,36 +613,8 @@ function ActionCell({ data, hostname, busyKey, onRequestUninstall }) {
       >
         {buttonLabel}
       </Button>
-    </span>
-  );
-}
-
-function UninstallCommandCell({ data, onCopyCommand }) {
-  const row = data || {};
-  const commandPreview = getUninstallCommandPreview(row);
-  if (!commandPreview) {
-    return null;
-  }
-
-  return (
-    <Box sx={UNINSTALL_COMMAND_CONTAINER_SX}>
-      <Box component="code" title={commandPreview} sx={UNINSTALL_COMMAND_CODE_SX}>
-        {commandPreview}
-      </Box>
-      <Tooltip title="Copy uninstall command" placement="top">
-        <IconButton
-          size="small"
-          aria-label="Copy uninstall command"
-          onClick={(event) => {
-            event.stopPropagation();
-            onCopyCommand?.(commandPreview, row);
-          }}
-          sx={UNINSTALL_COMMAND_COPY_BUTTON_SX}
-        >
-          <ContentCopyRoundedIcon sx={{ fontSize: 15 }} />
-        </IconButton>
-      </Tooltip>
-    </Box>
+      </span>
+    </Tooltip>
   );
 }
 
@@ -812,29 +732,6 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
       setConfirmRow(row || null);
     },
     []
-  );
-
-  const copyUninstallCommand = useCallback(
-    async (commandPreview, row = {}) => {
-      try {
-        await writeTextToClipboard(commandPreview);
-        const softwareLabel = String(row?.name || "Software").trim() || "Software";
-        await notifyOperator({
-          title: "Uninstall Command Copied",
-          message: `Copied the uninstall command for <b>${softwareLabel}</b> to the clipboard.`,
-          icon: "info",
-          variant: "success",
-        });
-      } catch (error) {
-        await notifyOperator({
-          title: "Clipboard Copy Failed",
-          message: String(error?.message || error || "Borealis could not copy the uninstall command."),
-          icon: "error",
-          variant: "error",
-        });
-      }
-    },
-    [notifyOperator]
   );
 
   const confirmUninstall = useCallback(async () => {
@@ -997,18 +894,6 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         },
       },
       {
-        colId: "uninstall_command",
-        headerName: "Uninstall Command",
-        flex: 1.1,
-        minWidth: 320,
-        sortable: false,
-        filter: "agTextColumnFilter",
-        valueGetter: (params) => getUninstallCommandPreview(params.data),
-        cellRenderer: (params) => (
-          <UninstallCommandCell data={params.data} onCopyCommand={copyUninstallCommand} />
-        ),
-      },
-      {
         field: "action",
         headerName: "Action",
         width: 170,
@@ -1031,7 +916,7 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         ),
       },
     ],
-    [busyActionKey, copyUninstallCommand, hostname, requestUninstall]
+    [busyActionKey, hostname, requestUninstall]
   );
 
   const getSoftwareRowId = useCallback(
@@ -1062,11 +947,32 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
           onChange={setSoftwareFilterMode}
         />
       </Box>
-      <GridShell sx={{ flexGrow: 1, minHeight: 360 }}>
+      <GridShell
+        sx={{
+          flexGrow: 1,
+          minHeight: 360,
+          "--ag-row-hover-color": "rgba(73,156,196,0.2)",
+          "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
+          "& .ag-row-hover": {
+            backgroundColor: "rgba(73,156,196,0.2) !important",
+          },
+          "& .ag-row-selected": {
+            backgroundColor: "rgba(125,211,252,0.2) !important",
+            boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+          },
+        }}
+      >
         <AgGridReact
           rowData={filteredSoftwareRows}
           columnDefs={softwareColumnDefs}
           defaultColDef={DEFAULT_GRID_COL_DEF}
+          rowSelection={{
+            mode: "singleRow",
+            checkboxes: false,
+            headerCheckbox: false,
+            enableClickSelection: true,
+          }}
+          suppressCellFocus
           pagination
           paginationPageSize={100}
           paginationPageSizeSelector={[20, 50, 100]}
