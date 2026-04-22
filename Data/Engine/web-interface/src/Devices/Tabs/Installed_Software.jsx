@@ -1,7 +1,19 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Box, Button, Typography } from "@mui/material";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import CheckCircleOutlineRoundedIcon from "@mui/icons-material/CheckCircleOutlineRounded";
+import ErrorOutlineRoundedIcon from "@mui/icons-material/ErrorOutlineRounded";
+import AutorenewRoundedIcon from "@mui/icons-material/AutorenewRounded";
+import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, LinearProgress, Typography } from "@mui/material";
 import { AgGridReact } from "ag-grid-react";
 import { ConfirmDeleteDialog } from "../../Dialogs.jsx";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_PRIMARY_BUTTON_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../../DialogStyles.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 import { CountSliderGroup } from "../../Automation/Watchdogs/shared.jsx";
 import {
@@ -72,6 +84,46 @@ const WINDOWS_QUIET_SWITCH_RE =
 const STEAM_UNINSTALL_PROTOCOL_RE = /\bsteam:\/\/uninstall\/(?<appId>\d+)\b/i;
 const STEAM_LIBRARY_PATH_RE = /(^|[\\/])steamapps[\\/]+common([\\/]|$)/i;
 const SIZE_UNITS = ["KB", "MB", "GB", "TB"];
+const UNINSTALL_JOB_TERMINAL_STATUSES = new Set(["success", "failed"]);
+
+const UNINSTALL_STATUS_THEME = {
+  queued: {
+    label: "Queued",
+    color: "#8fbfff",
+    accent: "rgba(96,165,250,0.18)",
+    border: "rgba(96,165,250,0.34)",
+    progress: "linear-gradient(90deg, rgba(125,211,252,0.88) 0%, rgba(96,165,250,0.9) 100%)",
+    helper: "Borealis queued the uninstall job and is waiting for the device to start it.",
+    Icon: AutorenewRoundedIcon,
+  },
+  running: {
+    label: "Running",
+    color: "#7dd3fc",
+    accent: "rgba(34,211,238,0.16)",
+    border: "rgba(34,211,238,0.32)",
+    progress: "linear-gradient(90deg, rgba(125,211,252,0.92) 0%, rgba(192,132,252,0.92) 100%)",
+    helper: "The device is actively running the uninstall. Borealis will update this panel when the job finishes.",
+    Icon: AutorenewRoundedIcon,
+  },
+  success: {
+    label: "Complete",
+    color: "#86efac",
+    accent: "rgba(34,197,94,0.16)",
+    border: "rgba(74,222,128,0.34)",
+    progress: "linear-gradient(90deg, rgba(110,255,187,0.92) 0%, rgba(52,211,153,0.94) 100%)",
+    helper: "The uninstall finished successfully. Full output remains available in Activity History.",
+    Icon: CheckCircleOutlineRoundedIcon,
+  },
+  failed: {
+    label: "Failed",
+    color: "#fda4af",
+    accent: "rgba(244,63,94,0.16)",
+    border: "rgba(251,113,133,0.34)",
+    progress: "linear-gradient(90deg, rgba(251,113,133,0.92) 0%, rgba(248,113,113,0.94) 100%)",
+    helper: "The uninstall finished with an error. Review the captured output in Activity History for the full command log.",
+    Icon: ErrorOutlineRoundedIcon,
+  },
+};
 
 function getSoftwareMetadata(row = {}) {
   const metadata =
@@ -400,6 +452,66 @@ function formatEstimatedSizeKb(sizeKb) {
   return `${value.toFixed(decimals)} ${SIZE_UNITS[unitIndex]}`;
 }
 
+function normalizeTrackedUninstallStatus(rawStatus = "") {
+  const normalized = String(rawStatus || "").trim().toLowerCase();
+  if (!normalized) return "Queued";
+  if (normalized === "queued" || normalized === "pending" || normalized === "created") return "Queued";
+  if (normalized === "running" || normalized === "started" || normalized === "in_progress") return "Running";
+  if (normalized === "success" || normalized === "completed" || normalized === "complete") return "Success";
+  if (normalized === "failed" || normalized === "error" || normalized === "timeout" || normalized === "timed_out") {
+    return "Failed";
+  }
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function isTrackedUninstallTerminal(status = "") {
+  return UNINSTALL_JOB_TERMINAL_STATUSES.has(String(status || "").trim().toLowerCase());
+}
+
+function getTrackedUninstallProgressVariant(status = "") {
+  return isTrackedUninstallTerminal(status) ? "determinate" : "indeterminate";
+}
+
+function getTrackedUninstallProgressValue(status = "") {
+  if (!isTrackedUninstallTerminal(status)) return undefined;
+  return 100;
+}
+
+function getTrackedUninstallTheme(status = "") {
+  const normalized = String(status || "").trim().toLowerCase();
+  return UNINSTALL_STATUS_THEME[normalized] || UNINSTALL_STATUS_THEME.queued;
+}
+
+function summarizeUninstallOutput(job = {}) {
+  const stdoutLines = String(job?.stdout || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const stderrLines = String(job?.stderr || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const detail =
+    String(job?.status || "").trim().toLowerCase() === "failed"
+      ? stderrLines[0] || stdoutLines[stdoutLines.length - 1] || ""
+      : stdoutLines[stdoutLines.length - 1] || stderrLines[0] || "";
+  return detail.length > 220 ? `${detail.slice(0, 217)}...` : detail;
+}
+
+function mergeTrackedUninstall(previousJob = {}, patch = {}) {
+  const nextPatch = patch && typeof patch === "object" ? patch : {};
+  return {
+    ...previousJob,
+    ...nextPatch,
+    status: normalizeTrackedUninstallStatus(nextPatch.status ?? previousJob.status),
+    stdout:
+      nextPatch.stdout == null ? String(previousJob.stdout || "") : String(nextPatch.stdout || ""),
+    stderr:
+      nextPatch.stderr == null ? String(previousJob.stderr || "") : String(nextPatch.stderr || ""),
+    updatedAt: Date.now(),
+  };
+}
+
 function ActionCell({ data, hostname, busyKey, onRequestUninstall }) {
   const row = data || {};
   const eligibility = getUninstallCapability(row, hostname);
@@ -432,7 +544,12 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
   const [busyActionKey, setBusyActionKey] = useState("");
   const [confirmRow, setConfirmRow] = useState(null);
   const [softwareFilterMode, setSoftwareFilterMode] = useState("locally_installed");
+  const [trackedUninstalls, setTrackedUninstalls] = useState([]);
+  const [progressDialogJobId, setProgressDialogJobId] = useState("");
   const notifyOperator = useAppNotifications();
+  const uninstallStatusRequestsRef = useRef(new Set());
+  const uninstallCompletionToastsRef = useRef(new Set());
+  const normalizedHostname = useMemo(() => String(hostname || "").trim(), [hostname]);
 
   useEffect(() => {
     if (!busyActionKey) return;
@@ -473,6 +590,72 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
     [softwareFilterMode]
   );
 
+  const activeTrackedUninstall = useMemo(
+    () =>
+      trackedUninstalls.find((job) => String(job?.jobId || "") === String(progressDialogJobId || "")) || null,
+    [progressDialogJobId, trackedUninstalls]
+  );
+
+  const upsertTrackedUninstall = useCallback(
+    (jobId, patch) => {
+      const normalizedJobId = Number(jobId || 0);
+      if (!Number.isFinite(normalizedJobId) || normalizedJobId <= 0) return;
+      setTrackedUninstalls((previous) => {
+        const index = previous.findIndex((job) => Number(job?.jobId || 0) === normalizedJobId);
+        const baseJob =
+          index >= 0
+            ? previous[index]
+            : {
+                jobId: normalizedJobId,
+                hostname: normalizedHostname,
+                softwareName: "",
+                softwareVersion: "",
+                softwareSource: "",
+                strategySummary: "",
+                status: "Queued",
+                stdout: "",
+                stderr: "",
+                queuedAt: Date.now(),
+                updatedAt: Date.now(),
+              };
+        const nextJob = mergeTrackedUninstall(baseJob, patch);
+        const remaining = previous.filter((job) => Number(job?.jobId || 0) !== normalizedJobId);
+        return [nextJob, ...remaining].slice(0, 12);
+      });
+    },
+    [normalizedHostname]
+  );
+
+  const loadTrackedUninstallStatus = useCallback(
+    async (jobId) => {
+      const normalizedJobId = Number(jobId || 0);
+      if (!Number.isFinite(normalizedJobId) || normalizedJobId <= 0) return;
+      if (uninstallStatusRequestsRef.current.has(normalizedJobId)) return;
+      uninstallStatusRequestsRef.current.add(normalizedJobId);
+      try {
+        const response = await fetch(`/api/device/activity/job/${encodeURIComponent(normalizedJobId)}`, {
+          credentials: "include",
+        });
+        if (!response.ok) {
+          return;
+        }
+        const payload = await response.json().catch(() => ({}));
+        upsertTrackedUninstall(normalizedJobId, {
+          hostname: String(payload?.hostname || normalizedHostname || ""),
+          status: payload?.status,
+          stdout: payload?.stdout,
+          stderr: payload?.stderr,
+          ranAt: Number(payload?.ran_at || 0) || 0,
+        });
+      } catch (error) {
+        console.warn("Failed to load uninstall activity status", error);
+      } finally {
+        uninstallStatusRequestsRef.current.delete(normalizedJobId);
+      }
+    },
+    [normalizedHostname, upsertTrackedUninstall]
+  );
+
   const requestUninstall = useCallback(
     (row) => {
       setConfirmRow(row || null);
@@ -500,10 +683,26 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
       if (!response.ok) {
         throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
       }
+      const jobId = Number(payload?.job_id || 0);
+      if (Number.isFinite(jobId) && jobId > 0) {
+        upsertTrackedUninstall(jobId, {
+          hostname: String(payload?.hostname || normalizedHostname || hostname || ""),
+          softwareName: String(payload?.software?.name || row?.name || "Software"),
+          softwareVersion: String(payload?.software?.version || row?.version || ""),
+          softwareSource: String(payload?.software?.source || row?.source || ""),
+          strategySummary: String(payload?.uninstall?.summary || ""),
+          status: "Queued",
+          stdout: "",
+          stderr: "",
+          queuedAt: Date.now(),
+        });
+        setProgressDialogJobId(String(jobId));
+        void loadTrackedUninstallStatus(jobId);
+      }
       setConfirmRow(null);
       await notifyOperator({
-        title: "Software Uninstall Queued",
-        message: `Queued a silent uninstall for <b>${String(row?.name || "Software")}</b> on <b>${hostname}</b>. Check Activity History for output.`,
+        title: "Software Uninstall Started",
+        message: `Borealis started tracking the uninstall for <b>${String(row?.name || "Software")}</b> on <b>${hostname}</b>. A live progress panel is now open.`,
         icon: "info",
         variant: "success",
       });
@@ -517,7 +716,70 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
     } finally {
       setBusyActionKey("");
     }
-  }, [busyActionKey, confirmRow, hostname, notifyOperator]);
+  }, [busyActionKey, confirmRow, hostname, loadTrackedUninstallStatus, normalizedHostname, notifyOperator, upsertTrackedUninstall]);
+
+  useEffect(() => {
+    const activeJobIds = trackedUninstalls
+      .filter((job) => !isTrackedUninstallTerminal(job?.status))
+      .map((job) => Number(job?.jobId || 0))
+      .filter((jobId) => Number.isFinite(jobId) && jobId > 0);
+    if (!activeJobIds.length) return undefined;
+    const pollStatuses = () => {
+      activeJobIds.forEach((jobId) => {
+        void loadTrackedUninstallStatus(jobId);
+      });
+    };
+    pollStatuses();
+    const timer = window.setInterval(pollStatuses, 4000);
+    return () => window.clearInterval(timer);
+  }, [loadTrackedUninstallStatus, trackedUninstalls]);
+
+  useEffect(() => {
+    const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
+    if (!socket || !normalizedHostname || !trackedUninstalls.length) return undefined;
+    const trackedJobIds = new Set(
+      trackedUninstalls
+        .map((job) => Number(job?.jobId || 0))
+        .filter((jobId) => Number.isFinite(jobId) && jobId > 0)
+    );
+    if (!trackedJobIds.size) return undefined;
+    const expectedHost = normalizedHostname.toLowerCase();
+    const handleActivityChanged = (payload = {}) => {
+      const payloadHost = String(payload?.hostname || "").trim().toLowerCase();
+      const activityId = Number(payload?.activity_id || 0);
+      if (!payloadHost || payloadHost !== expectedHost || !trackedJobIds.has(activityId)) return;
+      upsertTrackedUninstall(activityId, {
+        status: payload?.status || payload?.change,
+      });
+      void loadTrackedUninstallStatus(activityId);
+    };
+    socket.on("device_activity_changed", handleActivityChanged);
+    return () => {
+      socket.off("device_activity_changed", handleActivityChanged);
+    };
+  }, [loadTrackedUninstallStatus, normalizedHostname, trackedUninstalls, upsertTrackedUninstall]);
+
+  useEffect(() => {
+    trackedUninstalls.forEach((job) => {
+      const jobId = Number(job?.jobId || 0);
+      if (!Number.isFinite(jobId) || jobId <= 0) return;
+      if (!isTrackedUninstallTerminal(job?.status)) return;
+      if (uninstallCompletionToastsRef.current.has(jobId)) return;
+      uninstallCompletionToastsRef.current.add(jobId);
+      const detail = summarizeUninstallOutput(job);
+      const succeeded = String(job?.status || "").trim().toLowerCase() === "success";
+      const softwareLabel = String(job?.softwareName || "Software").trim() || "Software";
+      const hostLabel = String(job?.hostname || normalizedHostname || hostname || "this device").trim() || "this device";
+      void notifyOperator({
+        title: succeeded ? "Software Uninstall Complete" : "Software Uninstall Failed",
+        message: succeeded
+          ? `The uninstall for <b>${softwareLabel}</b> on <b>${hostLabel}</b> finished.${detail ? ` ${detail}` : ""}`
+          : `The uninstall for <b>${softwareLabel}</b> on <b>${hostLabel}</b> failed.${detail ? ` ${detail}` : ""}`,
+        icon: succeeded ? "success" : "error",
+        variant: succeeded ? "success" : "error",
+      });
+    });
+  }, [hostname, normalizedHostname, notifyOperator, trackedUninstalls]);
 
   const softwareColumnDefs = useMemo(
     () => [
@@ -587,6 +849,12 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
     []
   );
 
+  const activeTrackedTheme = getTrackedUninstallTheme(activeTrackedUninstall?.status);
+  const ActiveTrackedIcon = activeTrackedTheme.Icon;
+  const activeTrackedProgressVariant = getTrackedUninstallProgressVariant(activeTrackedUninstall?.status);
+  const activeTrackedProgressValue = getTrackedUninstallProgressValue(activeTrackedUninstall?.status);
+  const activeTrackedDetail = summarizeUninstallOutput(activeTrackedUninstall);
+
   return (
     <Box
       sx={{
@@ -649,6 +917,169 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
             : ""
         }
       />
+      <Dialog
+        open={Boolean(activeTrackedUninstall)}
+        onClose={() => setProgressDialogJobId("")}
+        fullWidth
+        maxWidth="sm"
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
+      >
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title={
+              activeTrackedUninstall
+                ? `Uninstalling ${activeTrackedUninstall.softwareName || "Software"}`
+                : "Uninstalling Software"
+            }
+            subtitle={
+              activeTrackedUninstall
+                ? `Live activity tracking for ${activeTrackedUninstall.hostname || hostname || "this device"}. Borealis tracks job state here and records the full command output in Activity History.`
+                : "Borealis is tracking the uninstall job."
+            }
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
+          {activeTrackedUninstall ? (
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 1.5,
+                  p: 1.5,
+                  borderRadius: 2.5,
+                  border: `1px solid ${activeTrackedTheme.border}`,
+                  background: `linear-gradient(135deg, ${activeTrackedTheme.accent} 0%, rgba(7,12,24,0.18) 100%)`,
+                }}
+              >
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1.2, minWidth: 0 }}>
+                  <Box
+                    sx={{
+                      width: 34,
+                      height: 34,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      borderRadius: "50%",
+                      color: activeTrackedTheme.color,
+                      background: "rgba(5,10,24,0.66)",
+                      border: `1px solid ${activeTrackedTheme.border}`,
+                    }}
+                  >
+                    <ActiveTrackedIcon sx={{ fontSize: 20 }} />
+                  </Box>
+                  <Box sx={{ minWidth: 0 }}>
+                    <Typography sx={{ fontWeight: 700, color: MAGIC_UI.textBright, lineHeight: 1.2 }}>
+                      {activeTrackedTheme.label}
+                    </Typography>
+                    <Typography sx={{ mt: 0.35, fontSize: "0.84rem", color: MAGIC_UI.textMuted }}>
+                      {activeTrackedTheme.helper}
+                    </Typography>
+                  </Box>
+                </Box>
+                <Box
+                  component="span"
+                  sx={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    px: 1.35,
+                    py: 0.45,
+                    borderRadius: 999,
+                    fontSize: "0.78rem",
+                    fontWeight: 700,
+                    color: activeTrackedTheme.color,
+                    border: `1px solid ${activeTrackedTheme.border}`,
+                    background: "rgba(5,10,24,0.72)",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {activeTrackedTheme.label}
+                </Box>
+              </Box>
+              <Box
+                sx={{
+                  p: 1.6,
+                  borderRadius: 2.5,
+                  border: `1px solid ${MAGIC_UI.panelBorder}`,
+                  background: "rgba(5,10,24,0.72)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 1.2,
+                }}
+              >
+                <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2, flexWrap: "wrap" }}>
+                  <Typography sx={{ color: MAGIC_UI.textBright, fontWeight: 600 }}>
+                    {activeTrackedUninstall.softwareName || "Software"}
+                    {activeTrackedUninstall.softwareVersion ? ` ${activeTrackedUninstall.softwareVersion}` : ""}
+                  </Typography>
+                  <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.84rem" }}>
+                    Job #{activeTrackedUninstall.jobId}
+                  </Typography>
+                </Box>
+                <LinearProgress
+                  variant={activeTrackedProgressVariant}
+                  value={activeTrackedProgressValue}
+                  sx={{
+                    height: 9,
+                    borderRadius: 999,
+                    backgroundColor: "rgba(148,163,184,0.16)",
+                    overflow: "hidden",
+                    "& .MuiLinearProgress-bar": {
+                      borderRadius: 999,
+                      backgroundImage: activeTrackedTheme.progress,
+                    },
+                  }}
+                />
+                <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2, flexWrap: "wrap" }}>
+                  <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.84rem" }}>
+                    {activeTrackedUninstall.strategySummary || "Borealis is using the resolved silent uninstall path for this software."}
+                  </Typography>
+                  <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.84rem" }}>
+                    {isTrackedUninstallTerminal(activeTrackedUninstall.status)
+                      ? "Finished"
+                      : "Waiting for completion..."}
+                  </Typography>
+                </Box>
+              </Box>
+              {activeTrackedDetail ? (
+                <Box
+                  sx={{
+                    p: 1.4,
+                    borderRadius: 2.25,
+                    border: `1px solid ${MAGIC_UI.panelBorder}`,
+                    background: "rgba(4,7,17,0.6)",
+                  }}
+                >
+                  <Typography sx={{ fontSize: "0.78rem", fontWeight: 700, color: MAGIC_UI.textMuted, letterSpacing: 0.24 }}>
+                    Latest Output
+                  </Typography>
+                  <Typography sx={{ mt: 0.55, color: MAGIC_UI.textBright, fontSize: "0.88rem", lineHeight: 1.5 }}>
+                    {activeTrackedDetail}
+                  </Typography>
+                </Box>
+              ) : null}
+            </Box>
+          ) : null}
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button sx={DIALOG_BUTTON_SX} onClick={() => setProgressDialogJobId("")}>
+            {isTrackedUninstallTerminal(activeTrackedUninstall?.status) ? "Close" : "Hide"}
+          </Button>
+          <Button
+            sx={DIALOG_PRIMARY_BUTTON_SX}
+            onClick={() => {
+              if (activeTrackedUninstall?.jobId) {
+                void loadTrackedUninstallStatus(activeTrackedUninstall.jobId);
+              }
+            }}
+            disabled={!activeTrackedUninstall?.jobId || isTrackedUninstallTerminal(activeTrackedUninstall?.status)}
+          >
+            Refresh Status
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
