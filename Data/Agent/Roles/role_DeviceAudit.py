@@ -1,6 +1,8 @@
 import os
 import sys
 import json
+import base64
+import hashlib
 import time
 import socket
 import platform
@@ -633,6 +635,274 @@ def _ps_json(cmd: str, timeout: int = 60):
         return None
     except Exception:
         return None
+
+
+_DISPLAY_ICON_QUOTED_RE = re.compile(r'^\s*"(?P<path>[^"]+)"\s*(?:,\s*(?P<index>-?\d+))?\s*$')
+_DISPLAY_ICON_RESOURCE_RE = re.compile(
+    r'^\s*(?P<path>.+?\.(?:exe|dll|ico|icl|cpl|ocx|scr))\s*(?:,\s*(?P<index>-?\d+))?\s*$',
+    re.IGNORECASE,
+)
+
+
+def _software_row_key(row: dict) -> str:
+    try:
+        return "::".join(
+            [
+                str(row.get('name') or '').strip().lower(),
+                str(row.get('version') or '').strip().lower(),
+                str(row.get('source') or '').strip().lower(),
+            ]
+        )
+    except Exception:
+        return ''
+
+
+def _normalize_display_icon_hint(value) -> str:
+    try:
+        text = str(value or '').strip()
+    except Exception:
+        return ''
+    return text
+
+
+def _parse_display_icon_resource(value) -> dict | None:
+    text = _normalize_display_icon_hint(value)
+    if not text:
+        return None
+    match = _DISPLAY_ICON_QUOTED_RE.match(text)
+    if match:
+        file_path = str(match.group('path') or '').strip()
+        if file_path:
+            try:
+                index = int(str(match.group('index') or '0').strip())
+            except Exception:
+                index = 0
+            return {'hint': text, 'file_path': file_path, 'icon_index': index}
+    match = _DISPLAY_ICON_RESOURCE_RE.match(text)
+    if match:
+        file_path = str(match.group('path') or '').strip().rstrip(',')
+        if file_path:
+            try:
+                index = int(str(match.group('index') or '0').strip())
+            except Exception:
+                index = 0
+            return {'hint': text, 'file_path': file_path, 'icon_index': index}
+    return None
+
+
+def _software_icon_signature(rows) -> str:
+    entries = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        metadata = row.get('metadata') if isinstance(row.get('metadata'), dict) else {}
+        entries.append(
+            {
+                'key': _software_row_key(row),
+                'display_icon': _normalize_display_icon_hint(metadata.get('display_icon')),
+            }
+        )
+    try:
+        encoded = json.dumps(entries, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    except Exception:
+        encoded = repr(entries).encode('utf-8', errors='ignore')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _extract_windows_icon_payloads_by_hint(hints) -> dict:
+    if platform.system().lower() != 'windows':
+        return {}
+    specs = []
+    for hint in (hints or []):
+        parsed = _parse_display_icon_resource(hint)
+        if not parsed:
+            continue
+        specs.append(
+            {
+                'hint': parsed['hint'],
+                'path': parsed['file_path'],
+                'index': int(parsed.get('icon_index') or 0),
+            }
+        )
+    if not specs:
+        return {}
+    try:
+        specs_json = json.dumps(specs)
+    except Exception:
+        return {}
+    ps = r"""
+$specs = @'
+""" + specs_json + r"""
+'@ | ConvertFrom-Json
+Add-Type -AssemblyName System.Drawing
+Add-Type @"
+using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Runtime.InteropServices;
+
+public static class BorealisIconExtractor
+{
+    [DllImport("Shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint ExtractIconEx(
+        string szFileName,
+        int nIconIndex,
+        IntPtr[] phiconLarge,
+        IntPtr[] phiconSmall,
+        uint nIcons
+    );
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool DestroyIcon(IntPtr hIcon);
+
+    public static byte[] ExtractPngBytes(string fileName, int iconIndex)
+    {
+        if (string.IsNullOrWhiteSpace(fileName) || !File.Exists(fileName))
+        {
+            return null;
+        }
+
+        string extension = Path.GetExtension(fileName).ToLowerInvariant();
+        if (extension == ".ico")
+        {
+            using (var icon = new Icon(fileName))
+            using (var bitmap = icon.ToBitmap())
+            using (var stream = new MemoryStream())
+            {
+                bitmap.Save(stream, ImageFormat.Png);
+                return stream.ToArray();
+            }
+        }
+
+        IntPtr[] large = new IntPtr[1];
+        IntPtr[] small = new IntPtr[1];
+        try
+        {
+            uint count = ExtractIconEx(fileName, iconIndex, large, small, 1);
+            if (count == 0)
+            {
+                return null;
+            }
+
+            IntPtr handle = large[0] != IntPtr.Zero ? large[0] : small[0];
+            if (handle == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            using (var icon = (Icon)Icon.FromHandle(handle).Clone())
+            using (var bitmap = icon.ToBitmap())
+            using (var stream = new MemoryStream())
+            {
+                bitmap.Save(stream, ImageFormat.Png);
+                return stream.ToArray();
+            }
+        }
+        finally
+        {
+            if (large[0] != IntPtr.Zero)
+            {
+                DestroyIcon(large[0]);
+            }
+            if (small[0] != IntPtr.Zero)
+            {
+                DestroyIcon(small[0]);
+            }
+        }
+    }
+}
+"@
+$results = @()
+foreach ($spec in ($specs | Where-Object { $_ -and $_.hint -and $_.path })) {
+  try {
+    $bytes = [BorealisIconExtractor]::ExtractPngBytes([string]$spec.path, [int]$spec.index)
+    if ($bytes -and $bytes.Length -gt 0) {
+      $results += [PSCustomObject]@{
+        hint = [string]$spec.hint
+        mime_type = 'image/png'
+        data_base64 = [Convert]::ToBase64String($bytes)
+      }
+    }
+  } catch {}
+}
+$results | ConvertTo-Json -Depth 4 -Compress
+"""
+    timeout = max(120, min(300, 30 + (len(specs) * 2)))
+    data = _ps_json(ps, timeout=timeout)
+    if isinstance(data, dict):
+        data = [data]
+    payloads = {}
+    for item in (data or []):
+        if not isinstance(item, dict):
+            continue
+        hint = _normalize_display_icon_hint(item.get('hint'))
+        mime_type = str(item.get('mime_type') or '').strip().lower() or 'image/png'
+        data_base64 = str(item.get('data_base64') or '').strip()
+        if hint and data_base64:
+            payloads[hint] = {
+                'mime_type': mime_type,
+                'data_base64': data_base64,
+            }
+    return payloads
+
+
+def attach_windows_software_icons(rows, previous_icon_hash_by_key=None):
+    if platform.system().lower() != 'windows':
+        return [], {}
+    icon_hash_by_key = {
+        str(key): str(value).strip().lower()
+        for key, value in ((previous_icon_hash_by_key or {}) or {}).items()
+        if str(key).strip() and str(value or '').strip()
+    }
+    pending_by_hint = {}
+    for row in (rows or []):
+        if not isinstance(row, dict):
+            continue
+        source = str(row.get('source') or '').strip().lower()
+        if source != 'local_installed':
+            continue
+        metadata = row.get('metadata') if isinstance(row.get('metadata'), dict) else {}
+        row_key = _software_row_key(row)
+        if not row_key:
+            continue
+        cached_icon_hash = icon_hash_by_key.get(row_key)
+        if cached_icon_hash:
+            metadata['icon_hash'] = cached_icon_hash
+            row['metadata'] = metadata
+            continue
+        hint = _normalize_display_icon_hint(metadata.get('display_icon'))
+        if not hint:
+            continue
+        pending_by_hint.setdefault(hint, []).append((row, metadata, row_key))
+
+    extracted_by_hint = _extract_windows_icon_payloads_by_hint(list(pending_by_hint.keys()))
+    icon_payloads_by_hash = {}
+    for hint, matches in pending_by_hint.items():
+        payload = extracted_by_hint.get(hint)
+        if not payload:
+            continue
+        try:
+            icon_bytes = base64.b64decode(str(payload.get('data_base64') or '').strip(), validate=True)
+        except Exception:
+            continue
+        if not icon_bytes:
+            continue
+        icon_hash = hashlib.sha256(icon_bytes).hexdigest()
+        icon_payloads_by_hash.setdefault(
+            icon_hash,
+            {
+                'icon_hash': icon_hash,
+                'mime_type': str(payload.get('mime_type') or 'image/png').strip().lower() or 'image/png',
+                'data_base64': base64.b64encode(icon_bytes).decode('ascii'),
+            },
+        )
+        for row, metadata, row_key in matches:
+            metadata['icon_hash'] = icon_hash
+            row['metadata'] = metadata
+            icon_hash_by_key[row_key] = icon_hash
+
+    return list(icon_payloads_by_hash.values()), icon_hash_by_key
 
 
 def collect_software():
@@ -1938,6 +2208,8 @@ class Role:
         self._ext_ip_ts = 0
         self._refresh_ts = 0
         self._last_details = None
+        self._last_software_icon_signature = ''
+        self._last_software_icon_hash_by_key = {}
         # OS is collected dynamically; do not persist in config
         # Start periodic reporter
         try:
@@ -2006,6 +2278,24 @@ class Role:
                         details = self._normalize_details(details)
                     except Exception:
                         pass
+                    try:
+                        software_rows = details.get('software') if isinstance(details.get('software'), list) else []
+                        icon_signature = _software_icon_signature(software_rows)
+                        previous_icon_hash_by_key = (
+                            self._last_software_icon_hash_by_key
+                            if icon_signature == self._last_software_icon_signature
+                            else {}
+                        )
+                        icon_payloads, icon_hash_by_key = attach_windows_software_icons(
+                            software_rows,
+                            previous_icon_hash_by_key=previous_icon_hash_by_key,
+                        )
+                        self._last_software_icon_signature = icon_signature
+                        self._last_software_icon_hash_by_key = icon_hash_by_key
+                        if icon_payloads:
+                            details['software_icon_payloads'] = icon_payloads
+                    except Exception:
+                        pass
                     if details:
                         self._last_details = details
                         self._refresh_ts = now
@@ -2042,6 +2332,11 @@ class Role:
                     else:
                         try:
                             await client.async_post_json("/api/agent/details", payload, require_auth=True)
+                            try:
+                                if isinstance(details_to_send, dict):
+                                    details_to_send.pop('software_icon_payloads', None)
+                            except Exception:
+                                pass
                             await asyncio.sleep(interval_sec)
                             continue
                         except Exception:
@@ -2054,7 +2349,13 @@ class Role:
                         continue
                     url = base_url + '/api/agent/details'
                     async with aiohttp.ClientSession() as session:
-                        await session.post(url, json=payload, timeout=10)
+                        async with session.post(url, json=payload, timeout=10) as response:
+                            response.raise_for_status()
+                        try:
+                            if isinstance(details_to_send, dict):
+                                details_to_send.pop('software_icon_payloads', None)
+                        except Exception:
+                            pass
             except Exception:
                 pass
             await asyncio.sleep(interval_sec)

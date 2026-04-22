@@ -61,6 +61,7 @@ from .software_uninstall import (
     enrich_software_inventory_with_uninstall,
     normalize_software_inventory as _shared_normalize_software_inventory,
 )
+from .software_icons import normalize_software_icon_payloads, upsert_software_icon_assets
 from .process_inventory import normalize_device_processes, serialize_device_processes
 from .session_inventory import normalize_device_sessions, serialize_device_sessions
 from .service_inventory import (
@@ -1171,6 +1172,7 @@ class DeviceManagementService:
             details["sessions"] = normalize_device_sessions(details.get("sessions"))
         if "processes" in details:
             details["processes"] = normalize_device_processes(details.get("processes"))
+        software_icon_payloads = normalize_software_icon_payloads(details.pop("software_icon_payloads", None))
 
         hostname = _clean_device_str(payload.get("hostname"))
         if not hostname:
@@ -1389,6 +1391,8 @@ class DeviceManagementService:
             services_changed = serialize_device_services(existing_services_raw) != serialize_device_services(
                 merged_services_payload
             )
+            if software_icon_payloads:
+                upsert_software_icon_assets(cur, software_icon_payloads)
 
             _device_upsert(
                 cur,

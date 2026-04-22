@@ -3,6 +3,7 @@
 # Description: Device service inventory and operator-triggered control endpoints.
 #
 # API Endpoints (if applicable):
+# - GET /api/device/software/icon/<icon_hash> (Token Authenticated) - Serves a cached installed-software icon asset by hash.
 # - GET /api/device/services/<hostname> (Token Authenticated) - Returns cached service inventory for an in-scope device.
 # - POST /api/device/services/<hostname>/action (Token Authenticated) - Start, stop, or restart a named service on an in-scope device.
 # - POST /api/device/software/<hostname>/uninstall (Token Authenticated) - Queues a silent uninstall quick job for a supported software row on an in-scope Windows device.
@@ -12,14 +13,16 @@
 """Device service inventory and operator-triggered control endpoints for the Borealis Engine."""
 from __future__ import annotations
 
+from io import BytesIO
 import textwrap
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
 
 from ...auth import UserSiteAccessManager
 from ..assemblies.execution import dispatch_inline_quick_job
+from .software_icons import load_software_icon_asset, normalize_software_icon_hash
 from .software_uninstall import (
     find_software_entry,
     normalize_text,
@@ -390,6 +393,31 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
             except Exception:
                 logger.debug("agent_socket_registry lookup failed agent_id=%s", agent_id, exc_info=True)
         return False
+
+    @blueprint.route("/api/device/software/icon/<icon_hash>", methods=["GET"])
+    def get_software_icon(icon_hash: str):
+        requirement = _require_login(app)
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+
+        normalized_hash = normalize_software_icon_hash(icon_hash)
+        if not normalized_hash:
+            return jsonify({"error": "not found"}), 404
+
+        asset = load_software_icon_asset(adapters.db_conn_factory, normalized_hash)
+        if asset is None or not asset.get("icon_bytes"):
+            return jsonify({"error": "not found"}), 404
+
+        response = send_file(
+            BytesIO(asset["icon_bytes"]),
+            mimetype=asset.get("mime_type") or "image/png",
+            download_name=f"{normalized_hash}.png",
+            max_age=86400,
+            etag=normalized_hash,
+        )
+        response.headers["Cache-Control"] = "private, max-age=86400"
+        return response
 
     @blueprint.route("/api/device/services/<hostname>", methods=["GET"])
     def get_device_services(hostname: str):

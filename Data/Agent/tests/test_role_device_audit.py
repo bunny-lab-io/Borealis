@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+
 from Data.Agent.Roles import role_DeviceAudit as device_audit
 
 
@@ -67,3 +70,54 @@ def test_collect_software_includes_windows_uninstall_metadata(monkeypatch) -> No
             },
         },
     ]
+
+
+def test_attach_windows_software_icons_adds_icon_hash_and_deduped_payloads(monkeypatch) -> None:
+    monkeypatch.setattr(device_audit.platform, "system", lambda: "Windows")
+    icon_png = base64.b64encode(b"png-icon-bytes").decode("ascii")
+
+    def fake_extract(hints):
+        return {
+            r"C:\Program Files\Contoso\contoso.exe,0": {
+                "mime_type": "image/png",
+                "data_base64": icon_png,
+            }
+        }
+
+    monkeypatch.setattr(device_audit, "_extract_windows_icon_payloads_by_hint", fake_extract)
+
+    rows = [
+        {
+            "name": "Contoso Agent",
+            "version": "2.4.1",
+            "source": "local_installed",
+            "metadata": {
+                "display_icon": r"C:\Program Files\Contoso\contoso.exe,0",
+            },
+        },
+        {
+            "name": "Contoso Agent Tools",
+            "version": "2.4.1",
+            "source": "local_installed",
+            "metadata": {
+                "display_icon": r"C:\Program Files\Contoso\contoso.exe,0",
+            },
+        },
+    ]
+
+    payloads, icon_hash_by_key = device_audit.attach_windows_software_icons(rows)
+
+    expected_hash = hashlib.sha256(b"png-icon-bytes").hexdigest()
+    assert payloads == [
+        {
+            "icon_hash": expected_hash,
+            "mime_type": "image/png",
+            "data_base64": icon_png,
+        }
+    ]
+    assert rows[0]["metadata"]["icon_hash"] == expected_hash
+    assert rows[1]["metadata"]["icon_hash"] == expected_hash
+    assert icon_hash_by_key == {
+        "contoso agent::2.4.1::local_installed": expected_hash,
+        "contoso agent tools::2.4.1::local_installed": expected_hash,
+    }

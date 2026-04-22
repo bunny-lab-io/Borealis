@@ -42,6 +42,23 @@ const SOFTWARE_DISTRIBUTION_ICON_SX = {
   filter: "drop-shadow(0 0 8px rgba(59,130,246,0.2))",
 };
 
+const SOFTWARE_ICON_IMAGE_SX = {
+  width: 18,
+  height: 18,
+  borderRadius: 4,
+  objectFit: "contain",
+  flexShrink: 0,
+  background: "rgba(15,23,42,0.72)",
+  border: "1px solid rgba(148,163,184,0.18)",
+};
+
+const SOFTWARE_DISTRIBUTION_BADGE_SX = {
+  ...SOFTWARE_DISTRIBUTION_ICON_SX,
+  minWidth: 14,
+  fontSize: "0.78rem",
+  color: "#8fbfff",
+};
+
 const SOFTWARE_FILTER_OPTIONS = [
   { key: "locally_installed", label: "Locally Installed" },
   { key: "windows_store", label: "Windows Store" },
@@ -228,9 +245,67 @@ function buildSoftwareActionKey(row = {}) {
   ].join("::");
 }
 
-function SoftwareNameCell({ row = {} }) {
+function getSoftwareIconHash(row = {}) {
+  const metadata = getSoftwareMetadata(row);
+  return String(metadata?.icon_hash || "").trim().toLowerCase();
+}
+
+function buildSoftwareIconUrl(iconHash = "") {
+  const normalizedHash = String(iconHash || "").trim().toLowerCase();
+  return normalizedHash ? `/api/device/software/icon/${encodeURIComponent(normalizedHash)}` : "";
+}
+
+function SoftwareIconGlyph({ row = {} }) {
   const distribution = getSoftwareDistribution(row);
   const isSteam = distribution.platform === "steam";
+  const iconHash = getSoftwareIconHash(row);
+  const [iconFailed, setIconFailed] = useState(false);
+
+  useEffect(() => {
+    setIconFailed(false);
+  }, [iconHash]);
+
+  const iconUrl = useMemo(() => buildSoftwareIconUrl(iconHash), [iconHash]);
+  const showImage = Boolean(iconUrl) && !iconFailed;
+  const showSteamBadge = isSteam && (showImage || !iconHash);
+
+  if (!showImage && !showSteamBadge) {
+    return null;
+  }
+
+  return (
+    <Box
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: showImage && showSteamBadge ? 0.5 : 0,
+        flexShrink: 0,
+      }}
+    >
+      {showImage ? (
+        <Box
+          component="img"
+          src={iconUrl}
+          alt=""
+          loading="lazy"
+          onError={() => setIconFailed(true)}
+          sx={SOFTWARE_ICON_IMAGE_SX}
+        />
+      ) : null}
+      {showSteamBadge ? (
+        <Box
+          component="span"
+          sx={showImage ? SOFTWARE_DISTRIBUTION_BADGE_SX : SOFTWARE_DISTRIBUTION_ICON_SX}
+          title={distribution.appId ? `Steam-managed title (AppID ${distribution.appId})` : "Steam-managed title"}
+        >
+          <i className="fa-brands fa-steam" aria-hidden="true" />
+        </Box>
+      ) : null}
+    </Box>
+  );
+}
+
+function SoftwareNameCell({ row = {} }) {
   return (
     <Box
       sx={{
@@ -240,15 +315,7 @@ function SoftwareNameCell({ row = {} }) {
         minWidth: 0,
       }}
     >
-      {isSteam ? (
-        <Box
-          component="span"
-          sx={SOFTWARE_DISTRIBUTION_ICON_SX}
-          title={distribution.appId ? `Steam-managed title (AppID ${distribution.appId})` : "Steam-managed title"}
-        >
-          <i className="fa-brands fa-steam" aria-hidden="true" />
-        </Box>
-      ) : null}
+      <SoftwareIconGlyph row={row} />
       <Box
         component="span"
         sx={{

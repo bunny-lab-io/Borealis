@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 import base64
+import hashlib
 import json
 import logging
 import threading
@@ -863,6 +864,135 @@ def test_agent_details_merge_top_level_software_metadata_into_existing_metadata(
             },
         }
     ]
+
+
+def test_agent_details_persists_software_icon_assets(engine_harness: EngineTestHarness) -> None:
+    icon_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7+qD4AAAAASUVORK5CYII="
+    )
+    icon_hash = hashlib.sha256(icon_bytes).hexdigest()
+    icon_base64 = base64.b64encode(icon_bytes).decode("ascii")
+
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/agent/details",
+        json={
+            "hostname": "test-device",
+            "agent_hash": "hash-123",
+            "details": {
+                "summary": {
+                    "hostname": "test-device",
+                    "last_seen": 1_700_000_802,
+                    "operating_system": "Windows 11 Pro",
+                },
+                "software": [
+                    {
+                        "name": "Contoso Agent",
+                        "version": "3.1.4",
+                        "source": "local_installed",
+                        "metadata": {
+                            "display_icon": r"C:\Program Files\Contoso\contoso.exe,0",
+                            "icon_hash": icon_hash,
+                        },
+                    }
+                ],
+                "software_icon_payloads": [
+                    {
+                        "icon_hash": icon_hash,
+                        "mime_type": "image/png",
+                        "data_base64": icon_base64,
+                    }
+                ],
+            },
+        },
+        headers=_device_headers(),
+    )
+    assert response.status_code == 200
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT icon_hash, mime_type, icon_bytes, byte_size FROM software_icon_assets WHERE icon_hash = ?",
+            (icon_hash,),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row[0] == icon_hash
+    assert row[1] == "image/png"
+    assert bytes(row[2]) == icon_bytes
+    assert row[3] == len(icon_bytes)
+
+    admin_client = _client_with_admin_session(engine_harness)
+    detail_response = admin_client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    assert detail_response.get_json()["software"] == [
+        {
+            "name": "Contoso Agent",
+            "version": "3.1.4",
+            "source": "local_installed",
+            "metadata": {
+                "display_icon": r"C:\Program Files\Contoso\contoso.exe,0",
+                "icon_hash": icon_hash,
+            },
+            "uninstall": {
+                "supported": False,
+                "reason": "This software row does not expose a usable uninstall command yet.",
+                "summary": "",
+                "strategy": "",
+                "rule_id": "",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+
+def test_device_software_icon_endpoint_serves_cached_asset(engine_harness: EngineTestHarness) -> None:
+    icon_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7+qD4AAAAASUVORK5CYII="
+    )
+    icon_hash = hashlib.sha256(icon_bytes).hexdigest()
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO software_icon_assets (
+                icon_hash,
+                mime_type,
+                icon_bytes,
+                byte_size,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                icon_hash,
+                "image/png",
+                icon_bytes,
+                len(icon_bytes),
+                1_700_000_800,
+                1_700_000_800,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _client_with_admin_session(engine_harness)
+    response = client.get(f"/api/device/software/icon/{icon_hash}")
+
+    assert response.status_code == 200
+    assert response.mimetype == "image/png"
+    assert response.data == icon_bytes
 
 
 def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
