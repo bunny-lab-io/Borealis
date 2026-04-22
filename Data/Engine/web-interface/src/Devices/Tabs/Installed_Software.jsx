@@ -1,8 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CheckCircleOutlineRoundedIcon from "@mui/icons-material/CheckCircleOutlineRounded";
+import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import ErrorOutlineRoundedIcon from "@mui/icons-material/ErrorOutlineRounded";
 import AutorenewRoundedIcon from "@mui/icons-material/AutorenewRounded";
-import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, LinearProgress, Typography } from "@mui/material";
+import {
+  Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  IconButton,
+  LinearProgress,
+  Tooltip,
+  Typography,
+} from "@mui/material";
 import { AgGridReact } from "ag-grid-react";
 import { ConfirmDeleteDialog } from "../../Dialogs.jsx";
 import {
@@ -64,11 +76,54 @@ const SOFTWARE_ICON_IMAGE_SX = {
   border: "none",
 };
 
-const SOFTWARE_DISTRIBUTION_BADGE_SX = {
+const STEAM_ACTION_BADGE_SX = {
   ...SOFTWARE_DISTRIBUTION_ICON_SX,
-  minWidth: 18,
-  fontSize: "1rem",
-  color: "#8fbfff",
+  minWidth: 34,
+  minHeight: 34,
+  borderRadius: 999,
+  border: "1px solid rgba(148,163,184,0.28)",
+  background: "rgba(5,10,24,0.74)",
+  cursor: "help",
+};
+
+const UNINSTALL_COMMAND_CONTAINER_SX = {
+  display: "inline-flex",
+  alignItems: "center",
+  width: "100%",
+  maxWidth: "100%",
+  minWidth: 0,
+  gap: 0.5,
+  px: 0.75,
+  py: 0.35,
+  borderRadius: 1.5,
+  border: "1px solid rgba(148,163,184,0.22)",
+  background: "rgba(5,10,24,0.82)",
+};
+
+const UNINSTALL_COMMAND_CODE_SX = {
+  flex: 1,
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  fontFamily: '"IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+  fontSize: "0.72rem",
+  color: "#cfe5ff",
+  userSelect: "text",
+};
+
+const UNINSTALL_COMMAND_COPY_BUTTON_SX = {
+  flexShrink: 0,
+  width: 26,
+  height: 26,
+  borderRadius: 1.25,
+  color: "rgba(203,213,225,0.92)",
+  border: "1px solid rgba(148,163,184,0.22)",
+  background: "rgba(15,23,42,0.68)",
+  "&:hover": {
+    background: "rgba(20,34,56,0.92)",
+    color: MAGIC_UI.textBright,
+  },
 };
 
 const SOFTWARE_FILTER_OPTIONS = [
@@ -175,6 +230,10 @@ function getSoftwareDistribution(row = {}) {
     };
   }
   return { platform: "", appId: "" };
+}
+
+function escapePowerShellSingleQuoted(value = "") {
+  return String(value || "").replace(/'/g, "''");
 }
 
 function splitWindowsCommandLine(commandLine = "") {
@@ -308,8 +367,6 @@ function buildSoftwareIconUrl(iconHash = "") {
 }
 
 function SoftwareIconGlyph({ row = {} }) {
-  const distribution = getSoftwareDistribution(row);
-  const isSteam = distribution.platform === "steam";
   const iconHash = getSoftwareIconHash(row);
   const [iconFailed, setIconFailed] = useState(false);
 
@@ -319,41 +376,19 @@ function SoftwareIconGlyph({ row = {} }) {
 
   const iconUrl = useMemo(() => buildSoftwareIconUrl(iconHash), [iconHash]);
   const showImage = Boolean(iconUrl) && !iconFailed;
-  const showSteamBadge = isSteam && (showImage || !iconHash);
-
-  if (!showImage && !showSteamBadge) {
+  if (!showImage) {
     return null;
   }
 
   return (
     <Box
-      sx={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: showImage && showSteamBadge ? 0.5 : 0,
-        flexShrink: 0,
-      }}
-    >
-      {showImage ? (
-        <Box
-          component="img"
-          src={iconUrl}
-          alt=""
-          loading="lazy"
-          onError={() => setIconFailed(true)}
-          sx={SOFTWARE_ICON_IMAGE_SX}
-        />
-      ) : null}
-      {showSteamBadge ? (
-        <Box
-          component="span"
-          sx={showImage ? SOFTWARE_DISTRIBUTION_BADGE_SX : SOFTWARE_DISTRIBUTION_ICON_SX}
-          title={distribution.appId ? `Steam-managed title (AppID ${distribution.appId})` : "Steam-managed title"}
-        >
-          <i className="fa-brands fa-steam" aria-hidden="true" />
-        </Box>
-      ) : null}
-    </Box>
+      component="img"
+      src={iconUrl}
+      alt=""
+      loading="lazy"
+      onError={() => setIconFailed(true)}
+      sx={SOFTWARE_ICON_IMAGE_SX}
+    />
   );
 }
 
@@ -407,6 +442,91 @@ function getUninstallCapability(row = {}, hostname = "") {
     reason: "Borealis has not resolved uninstall capability for this software row yet.",
     summary: "",
   };
+}
+
+function getUninstallCommandPreview(row = {}) {
+  const distribution = getSoftwareDistribution(row);
+  if (distribution.platform === "steam") {
+    return "";
+  }
+
+  const metadata = getSoftwareMetadata(row);
+  const uninstall = row?.uninstall && typeof row.uninstall === "object" ? row.uninstall : null;
+  const fallback = deriveFallbackUninstallCapability(row);
+  const uninstallSupported = uninstall ? Boolean(uninstall.supported) || fallback.supported : fallback.supported;
+  if (!uninstallSupported) {
+    return "";
+  }
+
+  const quietUninstallString = String(
+    uninstall?.quiet_uninstall_string || metadata?.quiet_uninstall_string || ""
+  ).trim();
+  if (quietUninstallString) {
+    return quietUninstallString;
+  }
+
+  const productCode = String(uninstall?.product_code || metadata?.product_code || "").trim();
+  if (WINDOWS_GUID_RE.test(productCode)) {
+    return `msiexec.exe /x ${productCode.toUpperCase()} /qn /norestart`;
+  }
+
+  const uninstallString = String(uninstall?.uninstall_string || metadata?.uninstall_string || "").trim();
+  const guidMatch = uninstallString.match(WINDOWS_GUID_IN_TEXT_RE);
+  if (guidMatch?.[0]) {
+    return `msiexec.exe /x ${String(guidMatch[0]).toUpperCase()} /qn /norestart`;
+  }
+
+  if (WINDOWS_QUIET_SWITCH_RE.test(uninstallString)) {
+    return uninstallString;
+  }
+
+  const source = String(row?.source || "").trim().toLowerCase();
+  if (["windows_store", "appx", "ms_store", "store"].includes(source)) {
+    const packageFamilyName = String(
+      uninstall?.package_family_name || metadata?.package_family_name || ""
+    ).trim();
+    if (packageFamilyName) {
+      return `Get-AppxPackage -AllUsers | Where-Object { $_.PackageFamilyName -eq '${escapePowerShellSingleQuoted(
+        packageFamilyName
+      )}' } | Remove-AppxPackage -AllUsers`;
+    }
+    const softwareName = String(row?.name || "").trim();
+    if (softwareName) {
+      return `Get-AppxPackage -AllUsers | Where-Object { $_.Name -eq '${escapePowerShellSingleQuoted(
+        softwareName
+      )}' } | Remove-AppxPackage -AllUsers`;
+    }
+  }
+
+  return "";
+}
+
+async function writeTextToClipboard(value = "") {
+  const normalizedValue = String(value || "");
+  if (!normalizedValue) {
+    throw new Error("Nothing to copy.");
+  }
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(normalizedValue);
+    return;
+  }
+  if (typeof document === "undefined") {
+    throw new Error("Clipboard access is unavailable in this browser.");
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = normalizedValue;
+  textarea.setAttribute("readonly", "readonly");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.appendChild(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  if (!copied) {
+    throw new Error("Clipboard access is unavailable in this browser.");
+  }
 }
 
 function resolveSoftwareFilterCategory(source = "") {
@@ -515,7 +635,17 @@ function mergeTrackedUninstall(previousJob = {}, patch = {}) {
 function ActionCell({ data, hostname, busyKey, onRequestUninstall }) {
   const row = data || {};
   const eligibility = getUninstallCapability(row, hostname);
+  const distribution = getSoftwareDistribution(row);
   if (!eligibility.supported) {
+    if (distribution.platform === "steam") {
+      return (
+        <Tooltip title="Software needs to be uninstalled via Steam directly." placement="top">
+          <Box component="span" sx={STEAM_ACTION_BADGE_SX}>
+            <i className="fa-brands fa-steam" aria-hidden="true" />
+          </Box>
+        </Tooltip>
+      );
+    }
     return null;
   }
   const rowKey = buildSoftwareActionKey(row);
@@ -537,6 +667,35 @@ function ActionCell({ data, hostname, busyKey, onRequestUninstall }) {
         {buttonLabel}
       </Button>
     </span>
+  );
+}
+
+function UninstallCommandCell({ data, onCopyCommand }) {
+  const row = data || {};
+  const commandPreview = getUninstallCommandPreview(row);
+  if (!commandPreview) {
+    return null;
+  }
+
+  return (
+    <Box sx={UNINSTALL_COMMAND_CONTAINER_SX}>
+      <Box component="code" title={commandPreview} sx={UNINSTALL_COMMAND_CODE_SX}>
+        {commandPreview}
+      </Box>
+      <Tooltip title="Copy uninstall command" placement="top">
+        <IconButton
+          size="small"
+          aria-label="Copy uninstall command"
+          onClick={(event) => {
+            event.stopPropagation();
+            onCopyCommand?.(commandPreview, row);
+          }}
+          sx={UNINSTALL_COMMAND_COPY_BUTTON_SX}
+        >
+          <ContentCopyRoundedIcon sx={{ fontSize: 15 }} />
+        </IconButton>
+      </Tooltip>
+    </Box>
   );
 }
 
@@ -582,12 +741,6 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         ? softwareRows.filter((row) => resolveSoftwareFilterCategory(row?.source) === softwareFilterMode)
         : softwareRows,
     [softwareFilterMode, softwareRows]
-  );
-
-  const activeFilterLabel = useMemo(
-    () =>
-      SOFTWARE_FILTER_OPTIONS.find((option) => option.key === softwareFilterMode)?.label || "",
-    [softwareFilterMode]
   );
 
   const activeTrackedUninstall = useMemo(
@@ -661,6 +814,29 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
       setConfirmRow(row || null);
     },
     []
+  );
+
+  const copyUninstallCommand = useCallback(
+    async (commandPreview, row = {}) => {
+      try {
+        await writeTextToClipboard(commandPreview);
+        const softwareLabel = String(row?.name || "Software").trim() || "Software";
+        await notifyOperator({
+          title: "Uninstall Command Copied",
+          message: `Copied the uninstall command for <b>${softwareLabel}</b> to the clipboard.`,
+          icon: "info",
+          variant: "success",
+        });
+      } catch (error) {
+        await notifyOperator({
+          title: "Clipboard Copy Failed",
+          message: String(error?.message || error || "Borealis could not copy the uninstall command."),
+          icon: "error",
+          variant: "error",
+        });
+      }
+    },
+    [notifyOperator]
   );
 
   const confirmUninstall = useCallback(async () => {
@@ -823,6 +999,18 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         },
       },
       {
+        colId: "uninstall_command",
+        headerName: "Uninstall Command",
+        flex: 1.1,
+        minWidth: 320,
+        sortable: false,
+        filter: "agTextColumnFilter",
+        valueGetter: (params) => getUninstallCommandPreview(params.data),
+        cellRenderer: (params) => (
+          <UninstallCommandCell data={params.data} onCopyCommand={copyUninstallCommand} />
+        ),
+      },
+      {
         field: "action",
         headerName: "Action",
         width: 170,
@@ -840,7 +1028,7 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         ),
       },
     ],
-    [busyActionKey, hostname, requestUninstall]
+    [busyActionKey, copyUninstallCommand, hostname, requestUninstall]
   );
 
   const getSoftwareRowId = useCallback(
@@ -865,27 +1053,12 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         minHeight: 0,
       }}
     >
-      <Box
-        sx={{
-          display: "flex",
-          flexWrap: "wrap",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 1.5,
-        }}
-      >
-        <CountSliderGroup
-          options={SOFTWARE_FILTER_OPTIONS}
-          activeKey={softwareFilterMode}
-          counts={softwareFilterCounts}
-          onChange={setSoftwareFilterMode}
-        />
-        <Typography variant="body2" sx={{ color: "rgba(155, 163, 180, 0.96)" }}>
-          {softwareFilterMode
-            ? `Showing ${filteredSoftwareRows.length} ${activeFilterLabel.toLowerCase()} entr${filteredSoftwareRows.length === 1 ? "y" : "ies"}`
-            : `Showing all ${filteredSoftwareRows.length} software entr${filteredSoftwareRows.length === 1 ? "y" : "ies"}`}
-        </Typography>
-      </Box>
+      <CountSliderGroup
+        options={SOFTWARE_FILTER_OPTIONS}
+        activeKey={softwareFilterMode}
+        counts={softwareFilterCounts}
+        onChange={setSoftwareFilterMode}
+      />
       <GridShell sx={{ flexGrow: 1, minHeight: 360 }}>
         <AgGridReact
           rowData={filteredSoftwareRows}
