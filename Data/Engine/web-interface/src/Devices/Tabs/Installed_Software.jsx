@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Box, Button, TextField } from "@mui/material";
+import { Box, Button, TextField, Typography } from "@mui/material";
 import { AgGridReact } from "ag-grid-react";
 import { ConfirmDeleteDialog } from "../../Dialogs.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
+import { CountSliderGroup } from "../../Automation/Watchdogs/shared.jsx";
 import {
   DEFAULT_GRID_COL_DEF,
   DEVICE_DETAILS_GRID_THEME,
@@ -31,6 +32,12 @@ const ACTION_BUTTON_SX = {
   },
 };
 
+const SOFTWARE_FILTER_OPTIONS = [
+  { key: "locally_installed", label: "Locally Installed" },
+  { key: "windows_store", label: "Windows Store" },
+  { key: "snap_package", label: "Snap Package" },
+];
+
 function buildSoftwareActionKey(row = {}) {
   return [
     String(row?.name || "").trim().toLowerCase(),
@@ -56,6 +63,20 @@ function getUninstallCapability(row = {}, hostname = "") {
     reason: "Borealis has not resolved uninstall capability for this software row yet.",
     summary: "",
   };
+}
+
+function resolveSoftwareFilterCategory(source = "") {
+  const normalizedSource = String(source || "").trim().toLowerCase();
+  if (normalizedSource === "windows_store" || normalizedSource === "appx") {
+    return "windows_store";
+  }
+  if (normalizedSource === "snap" || normalizedSource === "snap_package") {
+    return "snap_package";
+  }
+  if (["local_installed", "installed", "registry", "dpkg", "rpm"].includes(normalizedSource)) {
+    return "locally_installed";
+  }
+  return "locally_installed";
 }
 
 function ActionCell({ data, hostname, busyKey, onRequestUninstall }) {
@@ -90,6 +111,7 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
   const [softwareSearch, setSoftwareSearch] = useState("");
   const [busyActionKey, setBusyActionKey] = useState("");
   const [confirmRow, setConfirmRow] = useState(null);
+  const [softwareFilterMode, setSoftwareFilterMode] = useState("locally_installed");
   const notifyOperator = useAppNotifications();
 
   useEffect(() => {
@@ -99,6 +121,34 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
       setBusyActionKey("");
     }
   }, [busyActionKey, softwareRows]);
+
+  const softwareFilterCounts = useMemo(
+    () =>
+      softwareRows.reduce(
+        (counts, row) => {
+          const category = resolveSoftwareFilterCategory(row?.source);
+          counts[category] = (counts[category] || 0) + 1;
+          return counts;
+        },
+        {
+          locally_installed: 0,
+          windows_store: 0,
+          snap_package: 0,
+        }
+      ),
+    [softwareRows]
+  );
+
+  const filteredSoftwareRows = useMemo(
+    () => softwareRows.filter((row) => resolveSoftwareFilterCategory(row?.source) === softwareFilterMode),
+    [softwareFilterMode, softwareRows]
+  );
+
+  const activeFilterLabel = useMemo(
+    () =>
+      SOFTWARE_FILTER_OPTIONS.find((option) => option.key === softwareFilterMode)?.label || "Locally Installed",
+    [softwareFilterMode]
+  );
 
   const requestUninstall = useCallback(
     (row) => {
@@ -214,25 +264,58 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         minHeight: 0,
       }}
     >
-      <TextField
-        size="small"
-        placeholder="Search software..."
-        value={softwareSearch}
-        onChange={(event) => setSoftwareSearch(event.target.value)}
+      <Box
         sx={{
-          maxWidth: 320,
-          input: { color: "#fff" },
-          "& .MuiOutlinedInput-root": {
-            backgroundColor: "rgba(4,7,17,0.65)",
-            "& fieldset": { borderColor: "rgba(148,163,184,0.45)" },
-            "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
-          },
-          "& .MuiInputLabel-root": { color: MAGIC_UI.textMuted },
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 1.5,
         }}
-      />
+      >
+        <CountSliderGroup
+          options={SOFTWARE_FILTER_OPTIONS}
+          activeKey={softwareFilterMode}
+          counts={softwareFilterCounts}
+          onChange={(nextMode) => {
+            if (nextMode) {
+              setSoftwareFilterMode(nextMode);
+            }
+          }}
+        />
+        <Typography variant="body2" sx={{ color: "rgba(155, 163, 180, 0.96)" }}>
+          {`Showing ${filteredSoftwareRows.length} ${activeFilterLabel.toLowerCase()} entr${filteredSoftwareRows.length === 1 ? "y" : "ies"}`}
+        </Typography>
+      </Box>
+      <Box
+        sx={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 1.5,
+        }}
+      >
+        <TextField
+          size="small"
+          placeholder="Search software..."
+          value={softwareSearch}
+          onChange={(event) => setSoftwareSearch(event.target.value)}
+          sx={{
+            maxWidth: 320,
+            input: { color: "#fff" },
+            "& .MuiOutlinedInput-root": {
+              backgroundColor: "rgba(4,7,17,0.65)",
+              "& fieldset": { borderColor: "rgba(148,163,184,0.45)" },
+              "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
+            },
+            "& .MuiInputLabel-root": { color: MAGIC_UI.textMuted },
+          }}
+        />
+      </Box>
       <GridShell sx={{ flexGrow: 1, minHeight: 360 }}>
         <AgGridReact
-          rowData={softwareRows}
+          rowData={filteredSoftwareRows}
           columnDefs={softwareColumnDefs}
           defaultColDef={DEFAULT_GRID_COL_DEF}
           pagination
