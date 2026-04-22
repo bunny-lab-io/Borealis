@@ -752,113 +752,78 @@ $specs = @'
 """ + specs_json + r"""
 '@ | ConvertFrom-Json
 Add-Type -AssemblyName System.Drawing
-Add-Type @"
-using System;
-using System.Drawing;
-using System.Drawing.Imaging;
-using System.IO;
-using System.Runtime.InteropServices;
+function Get-BorealisIconPayload {
+  param(
+    [string]$FileName,
+    [int]$IconIndex
+  )
 
-public static class BorealisIconExtractor
-{
-    [DllImport("Shell32.dll", CharSet = CharSet.Unicode)]
-    private static extern uint ExtractIconEx(
-        string szFileName,
-        int nIconIndex,
-        IntPtr[] phiconLarge,
-        IntPtr[] phiconSmall,
-        uint nIcons
-    );
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool DestroyIcon(IntPtr hIcon);
-
-    public static byte[] ExtractPngBytes(string fileName, int iconIndex)
-    {
-        fileName = Environment.ExpandEnvironmentVariables(fileName ?? string.Empty).Trim().Trim('"');
-        if (string.IsNullOrWhiteSpace(fileName) || !File.Exists(fileName))
-        {
-            return null;
-        }
-
-        string extension = Path.GetExtension(fileName).ToLowerInvariant();
-        if (extension == ".ico")
-        {
-            using (var icon = new Icon(fileName))
-            using (var bitmap = icon.ToBitmap())
-            using (var stream = new MemoryStream())
-            {
-                bitmap.Save(stream, ImageFormat.Png);
-                return stream.ToArray();
-            }
-        }
-
-        IntPtr[] large = new IntPtr[1];
-        IntPtr[] small = new IntPtr[1];
-        try
-        {
-            uint count = ExtractIconEx(fileName, iconIndex, large, small, 1);
-            if (count == 0)
-            {
-                try
-                {
-                    using (var associatedIcon = Icon.ExtractAssociatedIcon(fileName))
-                    {
-                        if (associatedIcon == null)
-                        {
-                            return null;
-                        }
-                        using (var bitmap = associatedIcon.ToBitmap())
-                        using (var stream = new MemoryStream())
-                        {
-                            bitmap.Save(stream, ImageFormat.Png);
-                            return stream.ToArray();
-                        }
-                    }
-                }
-                catch
-                {
-                    return null;
-                }
-            }
-
-            IntPtr handle = large[0] != IntPtr.Zero ? large[0] : small[0];
-            if (handle == IntPtr.Zero)
-            {
-                return null;
-            }
-
-            using (var icon = (Icon)Icon.FromHandle(handle).Clone())
-            using (var bitmap = icon.ToBitmap())
-            using (var stream = new MemoryStream())
-            {
-                bitmap.Save(stream, ImageFormat.Png);
-                return stream.ToArray();
-            }
-        }
-        finally
-        {
-            if (large[0] != IntPtr.Zero)
-            {
-                DestroyIcon(large[0]);
-            }
-            if (small[0] != IntPtr.Zero)
-            {
-                DestroyIcon(small[0]);
-            }
-        }
+  try {
+    $expanded = [Environment]::ExpandEnvironmentVariables([string]$FileName)
+    if (-not $expanded) {
+      return $null
     }
+    $expanded = $expanded.Trim().Trim('"')
+    if (-not $expanded -or -not (Test-Path -LiteralPath $expanded)) {
+      return $null
+    }
+
+    $extension = [System.IO.Path]::GetExtension($expanded).ToLowerInvariant()
+    if ($extension -eq '.ico') {
+      $rawBytes = [System.IO.File]::ReadAllBytes($expanded)
+      if ($rawBytes -and $rawBytes.Length -gt 0) {
+        return [PSCustomObject]@{
+          mime_type = 'image/vnd.microsoft.icon'
+          data_base64 = [Convert]::ToBase64String($rawBytes)
+        }
+      }
+    }
+
+    $icon = $null
+    try {
+      $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($expanded)
+    } catch {
+      $icon = $null
+    }
+    if ($null -eq $icon) {
+      return $null
+    }
+
+    $bitmap = $null
+    $stream = $null
+    try {
+      $bitmap = $icon.ToBitmap()
+      if ($null -eq $bitmap) {
+        return $null
+      }
+      $stream = New-Object System.IO.MemoryStream
+      $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+      $pngBytes = $stream.ToArray()
+      if (-not $pngBytes -or $pngBytes.Length -le 0) {
+        return $null
+      }
+      return [PSCustomObject]@{
+        mime_type = 'image/png'
+        data_base64 = [Convert]::ToBase64String($pngBytes)
+      }
+    } finally {
+      if ($stream) { $stream.Dispose() }
+      if ($bitmap) { $bitmap.Dispose() }
+      if ($icon) { $icon.Dispose() }
+    }
+  } catch {
+    return $null
+  }
 }
-"@
 $results = @()
 foreach ($spec in ($specs | Where-Object { $_ -and $_.hint -and $_.path })) {
   try {
-    $bytes = [BorealisIconExtractor]::ExtractPngBytes([string]$spec.path, [int]$spec.index)
-    if ($bytes -and $bytes.Length -gt 0) {
+    $payload = Get-BorealisIconPayload -FileName ([string]$spec.path) -IconIndex ([int]$spec.index)
+    if ($payload -and $payload.data_base64) {
       $results += [PSCustomObject]@{
         hint = [string]$spec.hint
-        mime_type = 'image/png'
-        data_base64 = [Convert]::ToBase64String($bytes)
+        mime_type = [string]$payload.mime_type
+        data_base64 = [string]$payload.data_base64
       }
     }
   } catch {}

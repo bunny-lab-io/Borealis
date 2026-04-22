@@ -199,7 +199,8 @@ def test_extract_windows_icon_payload_batch_uses_file_backed_powershell_runner(m
         ]
     )
 
-    assert "[BorealisIconExtractor]::ExtractPngBytes" in observed["script"]
+    assert "Get-BorealisIconPayload" in observed["script"]
+    assert "ExtractAssociatedIcon" in observed["script"]
     assert observed["timeout"] >= 120
     assert payloads == {
         r"C:\Program Files\Contoso\contoso.exe,0": {
