@@ -106,8 +106,32 @@ def normalize_software_source(value: Any) -> str:
     return _SOFTWARE_SOURCE_ALIASES.get(normalized, normalized or "local_installed")
 
 
+def _metadata_value_present(value: Any) -> bool:
+    if value is None:
+        return False
+    if value == "":
+        return False
+    if isinstance(value, (list, tuple, set, dict)) and not value:
+        return False
+    return True
+
+
 def software_metadata(entry: Any) -> Dict[str, Any]:
-    return entry.get("metadata") if isinstance(entry, dict) and isinstance(entry.get("metadata"), dict) else {}
+    if not isinstance(entry, dict):
+        return {}
+    metadata: Dict[str, Any] = {}
+    raw_metadata = entry.get("metadata")
+    if isinstance(raw_metadata, dict):
+        metadata = {str(key): value for key, value in raw_metadata.items() if normalize_text(key)}
+    for key, value in entry.items():
+        key_text = normalize_text(key)
+        if key_text in {"name", "version", "source", "metadata", "uninstall"}:
+            continue
+        if not _metadata_value_present(value):
+            continue
+        if not _metadata_value_present(metadata.get(key_text)):
+            metadata[key_text] = value
+    return metadata
 
 
 def normalize_software_inventory(raw: Any) -> List[Dict[str, Any]]:
@@ -124,13 +148,7 @@ def normalize_software_inventory(raw: Any) -> List[Dict[str, Any]]:
         source = normalize_software_source(entry.get("source"))
         if source == "windows_store" and _WINDOWS_STORE_GUID_NAME_RE.match(name):
             continue
-        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
-        if not metadata:
-            metadata = {
-                str(key): value
-                for key, value in entry.items()
-                if key not in {"name", "version", "source", "metadata"} and value not in (None, "", [], {})
-            }
+        metadata = software_metadata(entry)
         key = (name.lower(), version.lower(), source)
         if key in seen:
             continue

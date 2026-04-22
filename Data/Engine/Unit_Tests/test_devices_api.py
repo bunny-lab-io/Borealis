@@ -769,6 +769,92 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
     ]
 
 
+def test_agent_details_merge_top_level_software_metadata_into_existing_metadata(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/agent/details",
+        json={
+            "hostname": "test-device",
+            "agent_hash": "hash-123",
+            "details": {
+                "summary": {
+                    "hostname": "test-device",
+                    "last_seen": 1_700_000_801,
+                    "operating_system": "Windows 11 Pro",
+                },
+                "software": [
+                    {
+                        "name": "7-Zip 25.01 (x64)",
+                        "version": "25.01",
+                        "source": "local_installed",
+                        "metadata": {
+                            "publisher": "Igor Pavlov",
+                            "install_location": "C:\\Program Files\\7-Zip\\",
+                        },
+                        "uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe"',
+                        "quiet_uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe" /S',
+                    }
+                ],
+            },
+        },
+        headers=_device_headers(),
+    )
+    assert response.status_code == 200
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT software FROM devices WHERE hostname = ?", ("test-device",))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert json.loads(row[0]) == [
+        {
+            "name": "7-Zip 25.01 (x64)",
+            "version": "25.01",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Igor Pavlov",
+                "install_location": "C:\\Program Files\\7-Zip\\",
+                "uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe"',
+                "quiet_uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe" /S',
+            },
+        }
+    ]
+
+    admin_client = _client_with_admin_session(engine_harness)
+    detail_response = admin_client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    assert detail_response.get_json()["software"] == [
+        {
+            "name": "7-Zip 25.01 (x64)",
+            "version": "25.01",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Igor Pavlov",
+                "install_location": "C:\\Program Files\\7-Zip\\",
+                "uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe"',
+                "quiet_uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe" /S',
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Uses the registry quiet uninstall string.",
+                "strategy": "direct_command",
+                "rule_id": "metadata_quiet_uninstall_string",
+                "quiet_uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe" /S',
+                "uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe"',
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+
 def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
     client = _client_with_admin_session(engine_harness)
     _set_test_device_software(

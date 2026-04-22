@@ -44,22 +44,32 @@ const WINDOWS_QUIET_SWITCH_RE =
   /(^|\s)(\/quiet|\/qn|\/qb!?|\/passive|\/s(\s|$)|\/silent|\/verysilent|--silent|--quiet|\/suppressmsgboxes)(\s|$)/i;
 
 function getSoftwareMetadata(row = {}) {
-  if (row?.metadata && typeof row.metadata === "object" && Object.keys(row.metadata).length > 0) {
-    return row.metadata;
-  }
-  return Object.entries(row || {}).reduce((metadata, [key, value]) => {
+  const metadata =
+    row?.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+      ? { ...row.metadata }
+      : {};
+  return Object.entries(row || {}).reduce((accumulator, [key, value]) => {
     if (["name", "version", "source", "metadata", "uninstall"].includes(key)) {
-      return metadata;
+      return accumulator;
     }
     if (value == null || value === "" || (Array.isArray(value) && value.length === 0)) {
-      return metadata;
+      return accumulator;
     }
     if (typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0) {
-      return metadata;
+      return accumulator;
     }
-    metadata[key] = value;
-    return metadata;
-  }, {});
+    if (
+      accumulator[key] == null ||
+      accumulator[key] === "" ||
+      (Array.isArray(accumulator[key]) && accumulator[key].length === 0) ||
+      (typeof accumulator[key] === "object" &&
+        !Array.isArray(accumulator[key]) &&
+        Object.keys(accumulator[key] || {}).length === 0)
+    ) {
+      accumulator[key] = value;
+    }
+    return accumulator;
+  }, metadata);
 }
 
 function splitWindowsCommandLine(commandLine = "") {
