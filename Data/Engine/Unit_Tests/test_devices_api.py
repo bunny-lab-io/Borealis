@@ -683,6 +683,15 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
                             "non_removable": False,
                         },
                     },
+                    {
+                        "name": "1527c705-839a-4832-9118-54d4Bd6a0c89",
+                        "version": "10.0.19640.1000",
+                        "source": "windows_store",
+                        "metadata": {
+                            "package_family_name": "1527c705-839a-4832-9118-54d4Bd6a0c89_cw5n1h2txyewy",
+                            "non_removable": True,
+                        },
+                    },
                 ],
             },
         },

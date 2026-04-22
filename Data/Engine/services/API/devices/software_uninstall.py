@@ -27,6 +27,9 @@ _SOFTWARE_SOURCE_ALIASES = {
 _WINDOWS_PRODUCT_CODE_RE = re.compile(
     r"^\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}$"
 )
+_WINDOWS_STORE_GUID_NAME_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 _WINDOWS_PRODUCT_CODE_IN_TEXT_RE = re.compile(
     r"\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}"
 )
@@ -119,6 +122,8 @@ def normalize_software_inventory(raw: Any) -> List[Dict[str, Any]]:
             continue
         version = normalize_text(entry.get("version"))
         source = normalize_software_source(entry.get("source"))
+        if source == "windows_store" and _WINDOWS_STORE_GUID_NAME_RE.match(name):
+            continue
         metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
         if not metadata:
             metadata = {
