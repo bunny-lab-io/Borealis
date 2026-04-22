@@ -680,6 +680,7 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
                         "source": "windows_store",
                         "metadata": {
                             "package_family_name": "Contoso.App_1234567890abc",
+                            "non_removable": False,
                         },
                     },
                 ],
@@ -719,7 +720,10 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
             "name": "Contoso.App",
             "version": "1.2.0",
             "source": "windows_store",
-            "metadata": {"package_family_name": "Contoso.App_1234567890abc"},
+            "metadata": {
+                "package_family_name": "Contoso.App_1234567890abc",
+                "non_removable": False,
+            },
             "uninstall": {
                 "supported": True,
                 "reason": "",

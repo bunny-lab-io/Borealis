@@ -140,13 +140,16 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
   );
 
   const filteredSoftwareRows = useMemo(
-    () => softwareRows.filter((row) => resolveSoftwareFilterCategory(row?.source) === softwareFilterMode),
+    () =>
+      softwareFilterMode
+        ? softwareRows.filter((row) => resolveSoftwareFilterCategory(row?.source) === softwareFilterMode)
+        : softwareRows,
     [softwareFilterMode, softwareRows]
   );
 
   const activeFilterLabel = useMemo(
     () =>
-      SOFTWARE_FILTER_OPTIONS.find((option) => option.key === softwareFilterMode)?.label || "Locally Installed",
+      SOFTWARE_FILTER_OPTIONS.find((option) => option.key === softwareFilterMode)?.label || "",
     [softwareFilterMode]
   );
 
@@ -277,14 +280,12 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
           options={SOFTWARE_FILTER_OPTIONS}
           activeKey={softwareFilterMode}
           counts={softwareFilterCounts}
-          onChange={(nextMode) => {
-            if (nextMode) {
-              setSoftwareFilterMode(nextMode);
-            }
-          }}
+          onChange={setSoftwareFilterMode}
         />
         <Typography variant="body2" sx={{ color: "rgba(155, 163, 180, 0.96)" }}>
-          {`Showing ${filteredSoftwareRows.length} ${activeFilterLabel.toLowerCase()} entr${filteredSoftwareRows.length === 1 ? "y" : "ies"}`}
+          {softwareFilterMode
+            ? `Showing ${filteredSoftwareRows.length} ${activeFilterLabel.toLowerCase()} entr${filteredSoftwareRows.length === 1 ? "y" : "ies"}`
+            : `Showing all ${filteredSoftwareRows.length} software entr${filteredSoftwareRows.length === 1 ? "y" : "ies"}`}
         </Typography>
       </Box>
       <Box

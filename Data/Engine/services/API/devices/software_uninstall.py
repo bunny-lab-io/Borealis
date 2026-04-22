@@ -314,14 +314,16 @@ def resolve_windows_uninstall_plan(entry: Dict[str, Any]) -> Dict[str, Any]:
         non_removable = coerce_optional_bool(metadata.get("non_removable"))
         if non_removable is True:
             return _unsupported("Windows marks this Store package as non-removable.")
-        if package_family_name or normalize_text(entry.get("name")):
+        if non_removable is False and package_family_name:
             return _supported(
                 strategy="windows_store",
                 summary="Windows Store package uninstall.",
                 rule_id="metadata_windows_store",
                 package_family_name=package_family_name,
             )
-        return _unsupported("This Windows Store entry does not include enough package metadata yet.")
+        if not package_family_name:
+            return _unsupported("This Windows Store entry does not include enough package metadata yet.")
+        return _unsupported("Borealis has not confirmed whether Windows marks this Store package as removable yet.")
 
     if source != "local_installed":
         return _unsupported("This software source is not part of the first Windows uninstall release.")

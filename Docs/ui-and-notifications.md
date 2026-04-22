@@ -172,7 +172,7 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - Visual treatment: use the rounded glass shell with `4px` inner padding, inactive transparent pills, active cyan-to-violet gradient pill, and inline count chips shown inside each segment when counts are useful.
 - Labels: keep labels short and mixed case, for example `Active`, `Archived`, `Windows Store`, or `Locally Installed`.
 - Counts: show live counts when the page has them; `0` is acceptable for placeholder categories that are not fully implemented yet.
-- Selection behavior: pages should default to the highest-signal view when one is clearly preferred. Allow toggle-to-all only when an unfiltered combined view is genuinely useful for that page; otherwise keep one segment selected at all times.
+- Selection behavior: pages may default to the highest-signal view when one is clearly preferred, but clicking the currently active segment should clear the filter and return the page to an unfiltered all-items view.
 - Summary copy: use a short sentence to the right of the control, for example `Showing 14 active filters` or `Showing 32 locally installed entries`.
 - Current implementation note: many pages still use a helper named `CountSliderGroup`. Treat that helper as the current code implementation of the Filter Slider pattern until Borealis consolidates it under the new name.
 
