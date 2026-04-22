@@ -129,7 +129,6 @@ const UNINSTALL_COMMAND_COPY_BUTTON_SX = {
 const SOFTWARE_FILTER_OPTIONS = [
   { key: "locally_installed", label: "Locally Installed" },
   { key: "windows_store", label: "Windows Store" },
-  { key: "snap_package", label: "Snap Package" },
 ];
 
 const WINDOWS_GUID_RE = /^\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}$/;
@@ -729,7 +728,6 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         {
           locally_installed: 0,
           windows_store: 0,
-          snap_package: 0,
         }
       ),
     [softwareRows]
@@ -1056,12 +1054,14 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         minHeight: 0,
       }}
     >
-      <CountSliderGroup
-        options={SOFTWARE_FILTER_OPTIONS}
-        activeKey={softwareFilterMode}
-        counts={softwareFilterCounts}
-        onChange={setSoftwareFilterMode}
-      />
+      <Box sx={{ alignSelf: "flex-start" }}>
+        <CountSliderGroup
+          options={SOFTWARE_FILTER_OPTIONS}
+          activeKey={softwareFilterMode}
+          counts={softwareFilterCounts}
+          onChange={setSoftwareFilterMode}
+        />
+      </Box>
       <GridShell sx={{ flexGrow: 1, minHeight: 360 }}>
         <AgGridReact
           rowData={filteredSoftwareRows}
