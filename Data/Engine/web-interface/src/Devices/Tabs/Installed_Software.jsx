@@ -84,6 +84,33 @@ const STEAM_ACTION_BADGE_SX = {
   cursor: "help",
 };
 
+const SOFTWARE_SOURCE_BADGE_META = {
+  locally_installed: {
+    label: "Locally Installed",
+    textColor: "#89c2ff",
+    backgroundColor: "rgba(88, 166, 255, 0.16)",
+    borderColor: "rgba(88, 166, 255, 0.45)",
+  },
+  windows_store: {
+    label: "Windows Store",
+    textColor: "#8fdaa2",
+    backgroundColor: "rgba(56, 161, 105, 0.16)",
+    borderColor: "rgba(56, 161, 105, 0.4)",
+  },
+  dpkg: {
+    label: "DPKG",
+    textColor: "#d4b5ff",
+    backgroundColor: "rgba(180, 137, 255, 0.18)",
+    borderColor: "rgba(180, 137, 255, 0.38)",
+  },
+  rpm: {
+    label: "RPM",
+    textColor: "#d4b5ff",
+    backgroundColor: "rgba(180, 137, 255, 0.18)",
+    borderColor: "rgba(180, 137, 255, 0.38)",
+  },
+};
+
 const SOFTWARE_FILTER_OPTIONS = [
   { key: "locally_installed", label: "Locally Installed" },
   { key: "windows_store", label: "Windows Store" },
@@ -470,6 +497,61 @@ function resolveSoftwareFilterCategory(source = "") {
     return "locally_installed";
   }
   return "locally_installed";
+}
+
+function getSoftwareSourceMeta(source = "") {
+  const normalizedSource = String(source || "").trim().toLowerCase();
+  if (normalizedSource === "windows_store" || normalizedSource === "appx") {
+    return SOFTWARE_SOURCE_BADGE_META.windows_store;
+  }
+  if (normalizedSource === "dpkg") {
+    return SOFTWARE_SOURCE_BADGE_META.dpkg;
+  }
+  if (normalizedSource === "rpm") {
+    return SOFTWARE_SOURCE_BADGE_META.rpm;
+  }
+  if (["local_installed", "installed", "registry", "local", "uninstall_registry"].includes(normalizedSource)) {
+    return SOFTWARE_SOURCE_BADGE_META.locally_installed;
+  }
+  return {
+    label: source || "Unknown",
+    textColor: "#96a3b6",
+    backgroundColor: "rgba(150, 163, 182, 0.14)",
+    borderColor: "rgba(150, 163, 182, 0.32)",
+  };
+}
+
+function SoftwareSourceCell({ row = {} }) {
+  const meta = getSoftwareSourceMeta(row?.source);
+  return (
+    <Box
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        borderRadius: 999,
+        px: "6px",
+        py: "2px",
+        fontSize: 11,
+        fontWeight: 500,
+        color: meta.textColor,
+        border: `1px solid ${meta.borderColor}`,
+        backgroundColor: meta.backgroundColor,
+        textTransform: "none",
+      }}
+    >
+      <Typography
+        component="span"
+        sx={{
+          fontSize: 11,
+          color: meta.textColor,
+          lineHeight: 1,
+          fontWeight: 500,
+        }}
+      >
+        {meta.label}
+      </Typography>
+    </Box>
+  );
 }
 
 function parseEstimatedSizeKb(value) {
@@ -884,14 +966,8 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         width: 180,
         minWidth: 160,
         filter: "agTextColumnFilter",
-        valueFormatter: (params) => {
-          const value = String(params.value || "").trim().toLowerCase();
-          if (value === "local_installed") return "Locally Installed";
-          if (value === "windows_store") return "Windows Store";
-          if (value === "dpkg") return "DPKG";
-          if (value === "rpm") return "RPM";
-          return params.value || "—";
-        },
+        valueGetter: (params) => getSoftwareSourceMeta(params.data?.source).label,
+        cellRenderer: (params) => <SoftwareSourceCell row={params.data} />,
       },
       {
         field: "action",
