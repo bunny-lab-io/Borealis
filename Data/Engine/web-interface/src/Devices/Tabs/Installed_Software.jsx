@@ -54,6 +54,7 @@ const WINDOWS_QUIET_SWITCH_RE =
   /(^|\s)(\/quiet|\/qn|\/qb!?|\/passive|\/s(\s|$)|\/silent|\/verysilent|--silent|--quiet|\/suppressmsgboxes)(\s|$)/i;
 const STEAM_UNINSTALL_PROTOCOL_RE = /\bsteam:\/\/uninstall\/(?<appId>\d+)\b/i;
 const STEAM_LIBRARY_PATH_RE = /(^|[\\/])steamapps[\\/]+common([\\/]|$)/i;
+const SIZE_UNITS = ["KB", "MB", "GB", "TB"];
 
 function getSoftwareMetadata(row = {}) {
   const metadata =
@@ -303,6 +304,35 @@ function resolveSoftwareFilterCategory(source = "") {
   return "locally_installed";
 }
 
+function parseEstimatedSizeKb(value) {
+  if (value == null || value === "" || typeof value === "boolean") return null;
+  const normalizedValue =
+    typeof value === "number" ? value : Number.parseInt(String(value).trim().replace(/,/g, ""), 10);
+  if (!Number.isFinite(normalizedValue) || normalizedValue <= 0) return null;
+  return normalizedValue;
+}
+
+function getEstimatedSizeKb(row = {}) {
+  const metadata = getSoftwareMetadata(row);
+  return parseEstimatedSizeKb(metadata?.estimated_size_kb);
+}
+
+function formatEstimatedSizeKb(sizeKb) {
+  const normalizedSizeKb = parseEstimatedSizeKb(sizeKb);
+  if (normalizedSizeKb == null) return "—";
+  if (normalizedSizeKb < 1024) {
+    return `${Math.round(normalizedSizeKb).toLocaleString()} KB`;
+  }
+  let value = normalizedSizeKb;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < SIZE_UNITS.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const decimals = value >= 10 ? 0 : 1;
+  return `${value.toFixed(decimals)} ${SIZE_UNITS[unitIndex]}`;
+}
+
 function ActionCell({ data, hostname, busyKey, onRequestUninstall }) {
   const row = data || {};
   const eligibility = getUninstallCapability(row, hostname);
@@ -439,6 +469,15 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         width: 180,
         minWidth: 160,
         filter: "agTextColumnFilter",
+      },
+      {
+        colId: "size",
+        headerName: "Size",
+        width: 140,
+        minWidth: 130,
+        filter: "agNumberColumnFilter",
+        valueGetter: (params) => getEstimatedSizeKb(params.data),
+        valueFormatter: (params) => formatEstimatedSizeKb(params.value),
       },
       {
         field: "source",

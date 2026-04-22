@@ -669,6 +669,7 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
                         "version": "124.0.6367.92",
                         "source": "local_installed",
                         "metadata": {
+                            "estimated_size_kb": 987654,
                             "quiet_uninstall_string": '"C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe" --uninstall --multi-install --chrome --system-level --force-uninstall',
                             "uninstall_string": "MsiExec.exe /I{11111111-2222-3333-4444-555555555555}",
                             "product_code": "{11111111-2222-3333-4444-555555555555}",
@@ -750,6 +751,7 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
             "version": "124.0.6367.92",
             "source": "local_installed",
             "metadata": {
+                "estimated_size_kb": 987654,
                 "quiet_uninstall_string": '"C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe" --uninstall --multi-install --chrome --system-level --force-uninstall',
                 "uninstall_string": "MsiExec.exe /I{11111111-2222-3333-4444-555555555555}",
                 "product_code": "{11111111-2222-3333-4444-555555555555}",
@@ -793,6 +795,7 @@ def test_agent_details_merge_top_level_software_metadata_into_existing_metadata(
                             "publisher": "Igor Pavlov",
                             "install_location": "C:\\Program Files\\7-Zip\\",
                         },
+                        "estimated_size_kb": 123456,
                         "uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe"',
                         "quiet_uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe" /S',
                     }
@@ -820,6 +823,7 @@ def test_agent_details_merge_top_level_software_metadata_into_existing_metadata(
             "metadata": {
                 "publisher": "Igor Pavlov",
                 "install_location": "C:\\Program Files\\7-Zip\\",
+                "estimated_size_kb": 123456,
                 "uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe"',
                 "quiet_uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe" /S',
             },
@@ -837,6 +841,7 @@ def test_agent_details_merge_top_level_software_metadata_into_existing_metadata(
             "metadata": {
                 "publisher": "Igor Pavlov",
                 "install_location": "C:\\Program Files\\7-Zip\\",
+                "estimated_size_kb": 123456,
                 "uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe"',
                 "quiet_uninstall_string": r'"C:\Program Files\7-Zip\Uninstall.exe" /S',
             },

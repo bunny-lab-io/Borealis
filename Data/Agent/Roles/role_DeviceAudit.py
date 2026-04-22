@@ -665,6 +665,15 @@ def collect_software():
             ),
         )
 
+    def _coerce_estimated_size_kb(raw_value):
+        if raw_value in (None, '') or isinstance(raw_value, bool):
+            return None
+        try:
+            size_kb = int(str(raw_value).strip().replace(',', ''))
+        except Exception:
+            return None
+        return size_kb if size_kb > 0 else None
+
     if plat == 'linux':
         packages = []
         try:
@@ -713,7 +722,7 @@ $list = @()
 foreach ($p in $paths) {
   try {
     $list += Get-ItemProperty -Path $p -ErrorAction SilentlyContinue |
-      Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation, InstallDate, UninstallString, QuietUninstallString, WindowsInstaller, PSChildName
+      Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation, InstallDate, EstimatedSize, UninstallString, QuietUninstallString, WindowsInstaller, PSChildName
   } catch {}
 }
 $list = $list | Where-Object { $_.DisplayName -and ("$($_.DisplayName)".Trim().Length -gt 0) }
@@ -738,6 +747,9 @@ $list | Sort-Object DisplayName -Unique | ConvertTo-Json -Depth 2
             install_date = str(it.get('InstallDate') or '').strip()
             if install_date:
                 metadata['install_date'] = install_date
+            estimated_size_kb = _coerce_estimated_size_kb(it.get('EstimatedSize'))
+            if estimated_size_kb is not None:
+                metadata['estimated_size_kb'] = estimated_size_kb
             uninstall_string = str(it.get('UninstallString') or '').strip()
             if uninstall_string:
                 metadata['uninstall_string'] = uninstall_string
@@ -851,6 +863,13 @@ $list | Sort-Object Name -Unique | ConvertTo-Json -Depth 3
                                 install_date, _ = winreg.QueryValueEx(sk, 'InstallDate')
                                 if install_date:
                                     metadata['install_date'] = str(install_date).strip()
+                            except Exception:
+                                pass
+                            try:
+                                estimated_size_kb, _ = winreg.QueryValueEx(sk, 'EstimatedSize')
+                                normalized_estimated_size_kb = _coerce_estimated_size_kb(estimated_size_kb)
+                                if normalized_estimated_size_kb is not None:
+                                    metadata['estimated_size_kb'] = normalized_estimated_size_kb
                             except Exception:
                                 pass
                             try:
