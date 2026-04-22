@@ -260,6 +260,20 @@ def canonicalize_windows_command(command_line: Any, *, extra_args: Optional[List
     return build_windows_command(parsed["file_path"], parsed["arguments"], extra_args=extra_args)
 
 
+def _trim_windows_path(path: Any) -> str:
+    return normalize_text(path).rstrip("\\/")
+
+
+def _join_windows_path(base: Any, *parts: str) -> str:
+    normalized_base = _trim_windows_path(base)
+    clean_parts = [normalize_text(part).strip("\\/") for part in parts if normalize_text(part)]
+    if not normalized_base:
+        return "\\".join(clean_parts)
+    if not clean_parts:
+        return normalized_base
+    return normalized_base + "\\" + "\\".join(clean_parts)
+
+
 def _unsupported(reason: str) -> Dict[str, Any]:
     return {
         "supported": False,
@@ -328,6 +342,88 @@ def _match_windows_rule(entry: Dict[str, Any], uninstall_string: str, executable
     return None
 
 
+def _resolve_windows_install_location_rule(entry: Dict[str, Any], metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    name = normalize_text(entry.get("name"))
+    name_lower = name.lower()
+    publisher = normalize_text(metadata.get("publisher")).lower()
+    install_location = _trim_windows_path(metadata.get("install_location"))
+    version = normalize_text(entry.get("version"))
+
+    if install_location and "igor pavlov" in publisher and "7-zip" in name_lower:
+        return _supported(
+            strategy="direct_command",
+            summary="Derived 7-Zip uninstall from install location.",
+            rule_id="install_location_7zip",
+            quiet_uninstall_string=build_windows_command(
+                _join_windows_path(install_location, "Uninstall.exe"),
+                "",
+                extra_args=["/S"],
+            ),
+        )
+
+    if install_location and "betterbird project" in publisher and "betterbird" in name_lower:
+        return _supported(
+            strategy="direct_command",
+            summary="Derived Betterbird uninstall from install location.",
+            rule_id="install_location_betterbird_helper",
+            quiet_uninstall_string=build_windows_command(
+                _join_windows_path(install_location, "uninstall", "helper.exe"),
+                "",
+                extra_args=["/S"],
+            ),
+        )
+
+    if install_location and "mozilla" in publisher and "firefox" in name_lower:
+        return _supported(
+            strategy="direct_command",
+            summary="Derived Firefox uninstall from install location.",
+            rule_id="install_location_firefox_helper",
+            quiet_uninstall_string=build_windows_command(
+                _join_windows_path(install_location, "uninstall", "helper.exe"),
+                "",
+                extra_args=["/S"],
+            ),
+        )
+
+    if install_location and "irfan skiljan" in publisher and "irfanview" in name_lower:
+        return _supported(
+            strategy="direct_command",
+            summary="Derived IrfanView uninstall from install location.",
+            rule_id="install_location_irfanview",
+            quiet_uninstall_string=build_windows_command(
+                _join_windows_path(install_location, "iv_uninstall.exe"),
+                "",
+                extra_args=["/silent"],
+            ),
+        )
+
+    if install_location and "microsoft corporation" in publisher and version:
+        if "microsoft edge webview2 runtime" in name_lower:
+            return _supported(
+                strategy="direct_command",
+                summary="Derived WebView2 uninstall from install location and version.",
+                rule_id="install_location_edge_webview_setup",
+                quiet_uninstall_string=build_windows_command(
+                    _join_windows_path(install_location, version, "Installer", "setup.exe"),
+                    "",
+                    extra_args=["--uninstall", "--msedgewebview", "--system-level", "--force-uninstall"],
+                ),
+            )
+        if name_lower == "microsoft edge":
+            return _supported(
+                strategy="direct_command",
+                summary="Derived Edge uninstall from install location and version.",
+                rule_id="install_location_edge_setup",
+                quiet_uninstall_string=build_windows_command(
+                    _join_windows_path(install_location, version, "Installer", "setup.exe"),
+                    "",
+                    extra_args=["--uninstall", "--msedge", "--system-level", "--force-uninstall"],
+                ),
+            )
+
+    return None
+
+
 def resolve_windows_uninstall_plan(entry: Dict[str, Any]) -> Dict[str, Any]:
     metadata = software_metadata(entry)
     source = normalize_software_source(entry.get("source"))
@@ -344,9 +440,15 @@ def resolve_windows_uninstall_plan(entry: Dict[str, Any]) -> Dict[str, Any]:
                 rule_id="metadata_windows_store",
                 package_family_name=package_family_name,
             )
+        if package_family_name:
+            return _supported(
+                strategy="windows_store",
+                summary="Windows Store package uninstall.",
+                rule_id="metadata_windows_store_family_name",
+                package_family_name=package_family_name,
+            )
         if not package_family_name:
             return _unsupported("This Windows Store entry does not include enough package metadata yet.")
-        return _unsupported("Borealis has not confirmed whether Windows marks this Store package as removable yet.")
 
     if source != "local_installed":
         return _unsupported("This software source is not part of the first Windows uninstall release.")
@@ -443,6 +545,10 @@ def resolve_windows_uninstall_plan(entry: Dict[str, Any]) -> Dict[str, Any]:
             ),
             uninstall_string=uninstall_string,
         )
+
+    install_location_rule = _resolve_windows_install_location_rule(entry, metadata)
+    if install_location_rule is not None:
+        return install_location_rule
 
     if uninstall_string:
         return _unsupported("Borealis could not derive a silent uninstall command for this software yet.")

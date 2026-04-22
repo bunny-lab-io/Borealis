@@ -1030,6 +1030,125 @@ def test_device_software_uninstall_rejects_non_removable_windows_store_package(
     assert payload["message"] == "Windows marks this Store package as non-removable."
 
 
+def test_device_software_uninstall_supports_windows_store_package_family_without_removability_hint(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Clipchamp.Clipchamp",
+                "version": "4.5.10020.0",
+                "source": "windows_store",
+                "metadata": {
+                    "package_family_name": "Clipchamp.Clipchamp_yxz26nhyzhsrt",
+                },
+            }
+        ],
+    )
+
+    detail_response = client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software = detail_response.get_json()["software"]
+    assert software == [
+        {
+            "name": "Clipchamp.Clipchamp",
+            "version": "4.5.10020.0",
+            "source": "windows_store",
+            "metadata": {
+                "package_family_name": "Clipchamp.Clipchamp_yxz26nhyzhsrt",
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Windows Store package uninstall.",
+                "strategy": "windows_store",
+                "rule_id": "metadata_windows_store_family_name",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "Clipchamp.Clipchamp_yxz26nhyzhsrt",
+            },
+        }
+    ]
+
+
+def test_device_software_uninstall_supports_install_location_derived_windows_rules(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "7-Zip 25.01 (x64)",
+                "version": "25.01",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Igor Pavlov",
+                    "install_location": "C:\\Program Files\\7-Zip\\",
+                },
+            },
+            {
+                "name": "Mozilla Firefox (x64 en-US)",
+                "version": "149.0.2",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Mozilla",
+                    "install_location": "C:\\Program Files\\Mozilla Firefox",
+                },
+            },
+        ],
+    )
+
+    detail_response = client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software = detail_response.get_json()["software"]
+    assert software == [
+        {
+            "name": "7-Zip 25.01 (x64)",
+            "version": "25.01",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Igor Pavlov",
+                "install_location": "C:\\Program Files\\7-Zip\\",
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Derived 7-Zip uninstall from install location.",
+                "strategy": "direct_command",
+                "rule_id": "install_location_7zip",
+                "quiet_uninstall_string": '"C:\\Program Files\\7-Zip\\Uninstall.exe" /S',
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        },
+        {
+            "name": "Mozilla Firefox (x64 en-US)",
+            "version": "149.0.2",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Mozilla",
+                "install_location": "C:\\Program Files\\Mozilla Firefox",
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Derived Firefox uninstall from install location.",
+                "strategy": "direct_command",
+                "rule_id": "install_location_firefox_helper",
+                "quiet_uninstall_string": '"C:\\Program Files\\Mozilla Firefox\\uninstall\\helper.exe" /S',
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        },
+    ]
+
+
 def test_agent_heartbeat_returns_assigned_site(engine_harness: EngineTestHarness) -> None:
     client = engine_harness.app.test_client()
     response = client.post(

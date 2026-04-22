@@ -99,13 +99,17 @@ function splitWindowsCommandLine(commandLine = "") {
   };
 }
 
+function trimWindowsPath(value = "") {
+  return String(value || "").trim().replace(/[\\/]+$/, "");
+}
+
 function deriveFallbackUninstallCapability(row = {}) {
   const source = String(row?.source || "").trim().toLowerCase();
   const metadata = getSoftwareMetadata(row);
   if (["windows_store", "appx", "ms_store", "store"].includes(source)) {
     const packageFamilyName = String(metadata?.package_family_name || "").trim();
     const nonRemovable = metadata?.non_removable;
-    if (nonRemovable === false && packageFamilyName) {
+    if (nonRemovable !== true && packageFamilyName) {
       return { supported: true, reason: "", summary: "Windows Store package uninstall." };
     }
     return { supported: false, reason: "", summary: "" };
@@ -118,6 +122,10 @@ function deriveFallbackUninstallCapability(row = {}) {
   const quietUninstallString = String(metadata?.quiet_uninstall_string || "").trim();
   const uninstallString = String(metadata?.uninstall_string || "").trim();
   const productCode = String(metadata?.product_code || "").trim();
+  const installLocation = trimWindowsPath(metadata?.install_location || "");
+  const publisher = String(metadata?.publisher || "").trim().toLowerCase();
+  const softwareName = String(row?.name || "").trim().toLowerCase();
+  const version = String(row?.version || "").trim();
   if (quietUninstallString) {
     return { supported: true, reason: "", summary: "Uses the registry quiet uninstall string." };
   }
@@ -147,6 +155,27 @@ function deriveFallbackUninstallCapability(row = {}) {
     /(google chrome|microsoft edge|webview2 runtime)/i.test(String(row?.name || ""))
   ) {
     return { supported: true, reason: "", summary: "Derived setup.exe uninstall." };
+  }
+  if (installLocation && publisher.includes("igor pavlov") && softwareName.includes("7-zip")) {
+    return { supported: true, reason: "", summary: "Derived 7-Zip uninstall from install location." };
+  }
+  if (
+    installLocation &&
+    ((publisher.includes("mozilla") && softwareName.includes("firefox")) ||
+      (publisher.includes("betterbird project") && softwareName.includes("betterbird")))
+  ) {
+    return { supported: true, reason: "", summary: "Derived helper.exe uninstall from install location." };
+  }
+  if (installLocation && publisher.includes("irfan skiljan") && softwareName.includes("irfanview")) {
+    return { supported: true, reason: "", summary: "Derived IrfanView uninstall from install location." };
+  }
+  if (
+    installLocation &&
+    version &&
+    publisher.includes("microsoft corporation") &&
+    (softwareName === "microsoft edge" || softwareName.includes("microsoft edge webview2 runtime"))
+  ) {
+    return { supported: true, reason: "", summary: "Derived Edge uninstall from install location and version." };
   }
   return { supported: false, reason: "", summary: "" };
 }
