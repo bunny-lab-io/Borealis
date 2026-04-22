@@ -1068,7 +1068,7 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
           columnDefs={softwareColumnDefs}
           defaultColDef={DEFAULT_GRID_COL_DEF}
           pagination
-          paginationPageSize={20}
+          paginationPageSize={100}
           paginationPageSizeSelector={[20, 50, 100]}
           animateRows
           getRowId={getSoftwareRowId}
