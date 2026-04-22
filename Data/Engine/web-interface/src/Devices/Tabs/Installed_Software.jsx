@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Box, Button, TextField, Typography } from "@mui/material";
+import { Box, Button, Typography } from "@mui/material";
 import { AgGridReact } from "ag-grid-react";
 import { ConfirmDeleteDialog } from "../../Dialogs.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
@@ -362,7 +362,6 @@ function ActionCell({ data, hostname, busyKey, onRequestUninstall }) {
 }
 
 export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" }) {
-  const [softwareSearch, setSoftwareSearch] = useState("");
   const [busyActionKey, setBusyActionKey] = useState("");
   const [confirmRow, setConfirmRow] = useState(null);
   const [softwareFilterMode, setSoftwareFilterMode] = useState("locally_installed");
@@ -552,32 +551,6 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
             : `Showing all ${filteredSoftwareRows.length} software entr${filteredSoftwareRows.length === 1 ? "y" : "ies"}`}
         </Typography>
       </Box>
-      <Box
-        sx={{
-          display: "flex",
-          flexWrap: "wrap",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 1.5,
-        }}
-      >
-        <TextField
-          size="small"
-          placeholder="Search software..."
-          value={softwareSearch}
-          onChange={(event) => setSoftwareSearch(event.target.value)}
-          sx={{
-            maxWidth: 320,
-            input: { color: "#fff" },
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "rgba(4,7,17,0.65)",
-              "& fieldset": { borderColor: "rgba(148,163,184,0.45)" },
-              "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
-            },
-            "& .MuiInputLabel-root": { color: MAGIC_UI.textMuted },
-          }}
-        />
-      </Box>
       <GridShell sx={{ flexGrow: 1, minHeight: 360 }}>
         <AgGridReact
           rowData={filteredSoftwareRows}
@@ -587,7 +560,6 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
           paginationPageSize={20}
           paginationPageSizeSelector={[20, 50, 100]}
           animateRows
-          quickFilterText={softwareSearch}
           getRowId={getSoftwareRowId}
           theme={DEVICE_DETAILS_GRID_THEME}
         />

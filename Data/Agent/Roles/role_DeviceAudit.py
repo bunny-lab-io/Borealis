@@ -722,7 +722,7 @@ $list = @()
 foreach ($p in $paths) {
   try {
     $list += Get-ItemProperty -Path $p -ErrorAction SilentlyContinue |
-      Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation, InstallDate, EstimatedSize, UninstallString, QuietUninstallString, WindowsInstaller, PSChildName
+      Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation, InstallDate, EstimatedSize, DisplayIcon, UninstallString, QuietUninstallString, WindowsInstaller, PSChildName
   } catch {}
 }
 $list = $list | Where-Object { $_.DisplayName -and ("$($_.DisplayName)".Trim().Length -gt 0) }
@@ -750,6 +750,9 @@ $list | Sort-Object DisplayName -Unique | ConvertTo-Json -Depth 2
             estimated_size_kb = _coerce_estimated_size_kb(it.get('EstimatedSize'))
             if estimated_size_kb is not None:
                 metadata['estimated_size_kb'] = estimated_size_kb
+            display_icon = str(it.get('DisplayIcon') or '').strip()
+            if display_icon:
+                metadata['display_icon'] = display_icon
             uninstall_string = str(it.get('UninstallString') or '').strip()
             if uninstall_string:
                 metadata['uninstall_string'] = uninstall_string
@@ -870,6 +873,12 @@ $list | Sort-Object Name -Unique | ConvertTo-Json -Depth 3
                                 normalized_estimated_size_kb = _coerce_estimated_size_kb(estimated_size_kb)
                                 if normalized_estimated_size_kb is not None:
                                     metadata['estimated_size_kb'] = normalized_estimated_size_kb
+                            except Exception:
+                                pass
+                            try:
+                                display_icon, _ = winreg.QueryValueEx(sk, 'DisplayIcon')
+                                if display_icon:
+                                    metadata['display_icon'] = str(display_icon).strip()
                             except Exception:
                                 pass
                             try:
