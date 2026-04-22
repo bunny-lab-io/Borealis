@@ -764,7 +764,7 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
                 softwareName: "",
                 softwareVersion: "",
                 softwareSource: "",
-                strategySummary: "",
+                commandPreview: "",
                 status: "Queued",
                 stdout: "",
                 stderr: "",
@@ -843,7 +843,7 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
           softwareName: String(payload?.software?.name || row?.name || "Software"),
           softwareVersion: String(payload?.software?.version || row?.version || ""),
           softwareSource: String(payload?.software?.source || row?.source || ""),
-          strategySummary: String(payload?.uninstall?.summary || ""),
+          commandPreview: getUninstallCommandPreview(row),
           status: "Queued",
           stdout: "",
           stderr: "",
@@ -1002,9 +1002,9 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
   );
 
   const activeTrackedTheme = getTrackedUninstallTheme(activeTrackedUninstall?.status);
-  const ActiveTrackedIcon = activeTrackedTheme.Icon;
   const activeTrackedProgressVariant = getTrackedUninstallProgressVariant(activeTrackedUninstall?.status);
   const activeTrackedProgressValue = getTrackedUninstallProgressValue(activeTrackedUninstall?.status);
+  const activeTrackedCommandPreview = String(activeTrackedUninstall?.commandPreview || "").trim();
   return (
     <Box
       sx={{
@@ -1133,10 +1133,7 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
                     },
                   }}
                 />
-                <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2, flexWrap: "wrap" }}>
-                  <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.84rem" }}>
-                    {activeTrackedUninstall.strategySummary || "Borealis is using the resolved silent uninstall path for this software."}
-                  </Typography>
+                <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 2, flexWrap: "wrap" }}>
                   <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.84rem" }}>
                     {isTrackedUninstallTerminal(activeTrackedUninstall.status)
                       ? "Finished"
@@ -1147,7 +1144,31 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
             </Box>
           ) : null}
         </DialogContent>
-        <DialogActions sx={DIALOG_ACTIONS_SX}>
+        <DialogActions
+          sx={{
+            ...DIALOG_ACTIONS_SX,
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 1.25,
+          }}
+        >
+          <Box
+            component="code"
+            title={activeTrackedCommandPreview}
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontFamily: '"IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+              fontSize: "0.72rem",
+              color: "rgba(148,163,184,0.94)",
+              pr: 1.5,
+            }}
+          >
+            {activeTrackedCommandPreview || ""}
+          </Box>
           <Button sx={DIALOG_BUTTON_SX} onClick={() => setProgressDialogJobId("")}>
             {isTrackedUninstallTerminal(activeTrackedUninstall?.status) ? "Close" : "Hide"}
           </Button>
