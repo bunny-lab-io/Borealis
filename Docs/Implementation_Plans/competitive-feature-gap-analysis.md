@@ -14,7 +14,7 @@ Turn the provided RMM competitor CSV into a Borealis roadmap analysis that is gr
 - Lens: roadmap priorities for the current Borealis single-node MSP/production target, not a pure procurement scorecard.
 
 ## Quick Conclusion
-Borealis already has real strengths in automation, remote access, and product security. The biggest roadmap gaps are the features MSPs use every day to replace incumbent RMM stacks:
+Borealis already has real strengths in automation, remote access, product security, and Windows software management. The biggest roadmap gaps are the features MSPs use every day to replace incumbent RMM stacks:
 
 1. Patch management
 2. Integrations and ecosystem depth
@@ -44,6 +44,7 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | Remote desktop | Shipped | `Docs/vpn-and-remote-access.md`, `Docs/architecture-overview.md` | Same-origin VNC/noVNC is a real product surface. |
 | PowerShell / script execution | Shipped | `Docs/assemblies.md`, `Docs/agent-runtime.md`, `README.md` | Borealis supports quick jobs, scheduled jobs, and signed PowerShell/Batch/Bash execution. |
 | Service inventory and service control | Shipped | `Docs/device-management.md`, `Docs/api-reference.md` | Device APIs expose cached services plus start/stop/restart actions. |
+| Installed software inventory, uninstall, and software override governance | Shipped | `Docs/device-management.md`, `Docs/api-reference.md`, `Docs/Software Management/adding-software-to-icon-overrides.md`, `Docs/Software Management/adding-software-to-uninstall-overrides.md`, `Docs/Software Management/adding-software-to-uninstall-blocklist.md` | Borealis now has a first-class Installed Software surface with row-level uninstall, global icon overrides, global uninstall overrides, uninstall block/unblock, on-demand `Query Software Changes`, and uninstall progress/history in Activity History. |
 | Processes | Partial but still a gap | `Docs/watchdogs.md`, `Data/Engine/services/API/devices/process_inventory.py` | Borealis collects process snapshots for watchdog evaluation, but there is no documented operator-facing process manager UI or action surface. |
 | Screenshot / quick visual capture | Partial but still a gap | `Docs/agent-runtime.md` | `role_currentuser_node_screenshot.py` still exists, but the docs explicitly mark screenshot and macro roles as legacy interactive-only roles outside the supported helper-backed runtime. |
 | Macro / UI automation | Partial but still a gap | `Docs/agent-runtime.md` | Same issue as screenshot: `role_currentuser_macros.py` exists, but it is not part of the supported helper-backed path. |
@@ -51,7 +52,6 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | File Manager / file transfer | Absent | `Docs/device-management.md`, `Docs/api-reference.md` | Borealis documents remote shell, VNC, services, and activity history, but no remote file browser or transfer feature. |
 | Local user and group management | Absent | `Docs/device-management.md`, `Docs/api-reference.md` | No dedicated device account-management feature was found. |
 | Startup management | Absent | `Docs/device-management.md`, `Docs/api-reference.md` | No startup-item management APIs or UI were found. |
-| App uninstall surface | Absent | `Docs/device-management.md`, `Docs/api-reference.md` | Software inventory exists, but there is no click-to-uninstall product surface. |
 | Technician/end-user chat | Absent | `Docs/ui-and-notifications.md`, `Docs/api-reference.md` | Borealis has operator toast notifications, not remote chat. |
 
 ### Automation and Policy Management
@@ -65,6 +65,7 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | System/company/endpoint policy layer | Partial but still a gap | `Docs/device-management.md`, `Docs/scheduled-jobs.md`, `Docs/watchdogs.md` | Borealis has sites, filters, jobs, and watchdog scopes, but not a named RMM policy-management layer for baseline configuration, patching, or software policy. |
 | Auto-assign policies by search/filter | Partial but still a gap | `Docs/device-management.md`, `Docs/scheduled-jobs.md` | Filter-based targeting exists, but not policy auto-assignment as a first-class feature. |
 | Local/domain account automation | Partial but still a gap | `Docs/api-reference.md`, `Docs/scheduled-jobs.md` | Scripts and Ansible can do this indirectly, but Borealis does not productize it as account automation. |
+| Software install/deploy policy | Absent | `Docs/device-management.md`, `Docs/api-reference.md`, `Docs/assemblies.md` | Borealis can inventory, uninstall, and govern uninstall behavior, but it does not yet ship a first-class software deployment/catalog/policy surface for installing or enforcing software at scale. |
 
 ### Patch Management
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
@@ -75,6 +76,12 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | macOS patching | Absent | `Docs/api-reference.md`, `README.md` | No macOS patch product surface was found. |
 | Linux patching | Absent | `Docs/api-reference.md`, `Docs/engine-runtime.md` | Engine-side automation exists, but there is no Borealis patching product for Linux endpoints. |
 | WUA monitoring / remediation | Absent | `Docs/api-reference.md`, `Docs/device-management.md` | No Windows Update monitoring/remediation surface was found. |
+
+### Software Management Delta Since The Initial Matrix Pass
+- Borealis now has a real Windows software-management surface instead of just passive inventory.
+- Operators can uninstall supported software directly from the Installed Software tab, track uninstall work in Activity History, and request an immediate software refresh with `Query Software Changes`.
+- Operators can also self-govern global icon overrides, uninstall overrides, uninstall blocks, and uninstall unblocks directly from the WebUI, with hotloaded JSON-backed rule stores that survive Engine restaging.
+- These additions reduce the old “uninstall apps” gap materially, but they do not yet close the larger patching/deployment/compliance gaps that mainstream RMM platforms bundle under software management.
 
 ### Platform Coverage
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
@@ -132,7 +139,8 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
   - Borealis already has the execution substrate needed to implement it: agent execution, scheduling, watchdogs, filters, RBAC, and Ansible.
 - Current Borealis position:
   - Borealis can automate patching through scripts or Ansible in an ad hoc way.
-  - Borealis does not yet ship patch inventory, approval workflows, maintenance windows, deployment policy, reboot orchestration, compliance reporting, or WUA-style status tracking.
+  - Borealis now has a meaningful Installed Software control surface for inventory, uninstall, override governance, and immediate software refresh.
+  - Borealis still does not ship patch inventory, approval workflows, maintenance windows, deployment policy, reboot orchestration, compliance reporting, or WUA-style status tracking.
 - Immediate product implication:
   - Patching is the most leverage-rich way to turn Borealis from a strong automation/remote-access platform into a real incumbent RMM replacement.
 
@@ -152,6 +160,7 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
   - The matrix shows strong competitor coverage for event logs, file management, processes, uninstall, and related device-admin surfaces.
 - Current Borealis position:
   - Borealis already has excellent remote shell, VNC, and service control.
+  - Borealis now also has a usable software-management surface with uninstall actions, override/block governance, and Activity History visibility.
   - It does not yet productize the rest of the background-control tool belt.
   - Legacy screenshot/macro roles do not close this gap because they are explicitly outside the supported runtime path.
 - Immediate product implication:
@@ -196,6 +205,7 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 - Network-device/SNMP coverage is absent.
 - Local/domain user-account automation is not productized.
 - Process inventory exists internally, but the operator process-manager surface is still missing.
+- Software deployment/install policy remains absent even though software uninstall and override governance now exist.
 - Reporting/export exists in pieces, but not as a first-class reporting product.
 
 ## Current Differentiators
@@ -211,6 +221,12 @@ Borealis is not starting from zero. Several areas already compare well, and thes
   - `Docs/vpn-and-remote-access.md`
   - `Docs/scheduled-jobs.md`
   - `README.md`
+- Windows software inventory, uninstall, and override governance:
+  - `Docs/device-management.md`
+  - `Docs/api-reference.md`
+  - `Docs/Software Management/adding-software-to-icon-overrides.md`
+  - `Docs/Software Management/adding-software-to-uninstall-overrides.md`
+  - `Docs/Software Management/adding-software-to-uninstall-blocklist.md`
 - Aegis, MFA, passkeys, short-lived tokens, and code signing:
   - `Docs/security-and-trust.md`
   - `Docs/engine-runtime.md`
@@ -239,8 +255,13 @@ If Borealis chooses to close the top gaps, the public interface surface will lik
   - process inspection and termination
   - event logs
   - local user/group management
-  - software removal
   - startup/session tooling
+
+### Software Management
+- Patch inventory/status APIs per device and per software/update class.
+- Software deployment/catalog APIs for install, update, and removal policy at scale.
+- Approval, deferral, reboot-behavior, and maintenance-window models for updates.
+- Fleet-wide software compliance and reporting views for outdated, blocked, overridden, and missing software.
 
 ### Reporting and MSP Packaging
 - Report-generation and export APIs.
