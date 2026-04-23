@@ -10,7 +10,9 @@ from typing import Any, Dict, Optional, Tuple
 
 try:
     from Roles.system_software_management import build_software_inventory_snapshot
-except Exception:  # pragma: no cover - package import fallback
+except ModuleNotFoundError as exc:  # pragma: no cover - package import fallback
+    if not str(getattr(exc, "name", "") or "").startswith("Roles"):
+        raise
     from Data.Agent.Roles.system_software_management import build_software_inventory_snapshot
 
 

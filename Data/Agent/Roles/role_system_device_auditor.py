@@ -2359,6 +2359,8 @@ class Role:
                     else:
                         try:
                             await client.async_post_json("/api/agent/details", payload, require_auth=True)
+                        except Exception:
+                            pass
                         try:
                             if isinstance(details_to_send, dict):
                                 details_to_send.pop('software_icon_payloads', None)
@@ -2366,8 +2368,6 @@ class Role:
                             pass
                         await asyncio.sleep(interval_sec)
                         continue
-                        except Exception:
-                            pass
 
                 if aiohttp is not None:
                     base_url = (get_url() or '').rstrip('/')

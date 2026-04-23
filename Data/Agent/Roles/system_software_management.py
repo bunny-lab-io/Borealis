@@ -11,7 +11,9 @@ try:
     )
     from Roles.role_system_device_auditor import attach_windows_software_icons as _legacy_attach_windows_software_icons  # type: ignore
     from Roles.role_system_device_auditor import collect_software as _legacy_collect_software  # type: ignore
-except Exception:  # pragma: no cover - package import fallback
+except ModuleNotFoundError as exc:  # pragma: no cover - package import fallback
+    if not str(getattr(exc, "name", "") or "").startswith("Roles"):
+        raise
     from Data.Agent.Roles.role_system_device_auditor import (  # type: ignore
         _normalize_display_icon_hint as _legacy_normalize_display_icon_hint,
     )

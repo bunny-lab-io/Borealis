@@ -40,7 +40,9 @@ try:
     from Roles.currentuser_tray_ui import bottom_right_anchor as tray_bottom_right_anchor
     from Roles.currentuser_tray_ui import popup_palette as tray_popup_palette
     from Roles.currentuser_tray_ui import warning_lines as tray_warning_lines
-except Exception:  # pragma: no cover - package import fallback
+except ModuleNotFoundError as exc:  # pragma: no cover - package import fallback
+    if not str(getattr(exc, "name", "") or "").startswith("Roles"):
+        raise
     from Data.Agent.Roles.currentuser_script_execution import build_env_map as build_env_map_helper
     from Data.Agent.Roles.currentuser_script_execution import run_currentuser_script as run_currentuser_script_helper
     from Data.Agent.Roles.currentuser_tray_ui import bottom_right_anchor as tray_bottom_right_anchor

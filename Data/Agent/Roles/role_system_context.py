@@ -15,7 +15,9 @@ try:
     from Roles.system_script_execution import build_env_map as build_env_map_helper
     from Roles.system_script_execution import run_system_script as run_system_script_helper
     from Roles.system_task_orchestration import LaneCoordinator, resolve_system_lane
-except Exception:  # pragma: no cover - package import fallback
+except ModuleNotFoundError as exc:  # pragma: no cover - package import fallback
+    if not str(getattr(exc, "name", "") or "").startswith("Roles"):
+        raise
     from Data.Agent.Roles.system_script_execution import build_env_map as build_env_map_helper
     from Data.Agent.Roles.system_script_execution import run_system_script as run_system_script_helper
     from Data.Agent.Roles.system_task_orchestration import LaneCoordinator, resolve_system_lane
