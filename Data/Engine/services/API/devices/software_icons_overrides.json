@@ -2,12 +2,7 @@
   "windows_icon_overrides": [
     {
       "rule_id": "icon_override_adobe_acrobat_64_bit",
-      "source": "local_installed",
       "name": "Adobe Acrobat (64-bit)",
-      "version": "26.001.21431",
-      "publisher_contains_any": ["Adobe"],
-      "product_code": "{AC76BA86-1033-FF00-7760-BC15014EA700}",
-      "install_location_contains_any": ["C:\\Program Files\\Adobe\\Acrobat DC"],
       "display_icon": "C:\\Program Files\\Adobe\\Acrobat DC\\Acrobat\\Acrobat.exe,0"
     }
   ]

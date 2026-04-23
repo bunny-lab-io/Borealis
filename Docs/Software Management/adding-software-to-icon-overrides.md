@@ -26,10 +26,7 @@ Explain how to add file-backed icon-location overrides for installed software wh
   "windows_icon_overrides": [
     {
       "rule_id": "icon_override_contoso_agent",
-      "source": "local_installed",
       "name": "Contoso Agent",
-      "version": "2.4.1",
-      "publisher_contains_any": ["Contoso Ltd"],
       "display_icon": "C:\\Program Files\\Contoso Agent\\branding\\agent.ico"
     }
   ]
@@ -43,7 +40,6 @@ Clear-icon rules are also supported:
   "windows_icon_overrides": [
     {
       "rule_id": "icon_override_contoso_agent_blank",
-      "source": "local_installed",
       "name": "Contoso Agent",
       "clear_icon": true
     }
@@ -52,18 +48,9 @@ Clear-icon rules are also supported:
 ```
 
 ## Supported Match Fields
-- `source`
-  Exact source match after Borealis normalization. Use `local_installed` for normal Windows registry software rows.
 - `name`
   Exact software-name match, case-insensitive.
-- `version`
-  Exact software-version match, case-insensitive.
-- `publisher_contains_any`
-  Optional substring list matched against the software row publisher.
-- `name_contains_any`
-  Optional substring list matched against the software row name.
-- `install_location_contains_any`
-  Optional substring list matched against `metadata.install_location`.
+  Borealis icon overrides now match by exact software name only. Version, publisher, source, and install-location fields are intentionally ignored for icon overrides.
 
 ## Required Action Field
 - `display_icon`
@@ -97,10 +84,7 @@ Clear-icon rules are also supported:
   "windows_icon_overrides": [
     {
       "rule_id": "icon_override_fedora_media_writer",
-      "source": "local_installed",
       "name": "Fedora Media Writer",
-      "version": "5.2.8",
-      "publisher_contains_any": ["Fedora Project"],
       "display_icon": "C:\\Program Files\\Fedora Media Writer\\mediawriter.exe,0"
     }
   ]
@@ -118,20 +102,14 @@ Clear-icon rules are also supported:
 - Prefer the operator-created hotloaded rule in `software_icons_overrides.json` as the source of truth when asked to make an icon override official.
 - If the operator has not saved a rule yet, gather the needed values from the current software row in `GET /api/device/details/<hostname>` or from the Installed Software UI:
   - `name`
-  - `version`
-  - `source`
-  - `publisher`
-  - `install_location`
   - any verified icon resource path the operator tested manually
 - Candidate icon paths shown in the UI are heuristics, not proof. Verify the file/resource path before keeping it in the official JSON file.
-- If the rule already works in production, prefer tightening the existing match fields instead of inventing a brand-new duplicate rule.
+- If the rule already works in production, prefer updating the existing same-name rule instead of inventing a brand-new duplicate rule.
 
 ### Recommended authoring rules
 - Start with the exact `name` from the software row.
-- Keep `version` only when the icon path is version-specific.
-- Keep `publisher_contains_any` when the title name is generic or when there are likely multiple rows with similar names.
-- Use `install_location_contains_any` when the path is the most stable discriminator.
-- Prefer the narrowest rule that still survives normal version churn.
+- Do not add `version`, `publisher_contains_any`, `source`, or install-location match fields for icon overrides. Borealis intentionally keeps icon matching name-only so overrides survive normal version churn.
+- Reuse the existing rule ID shape `icon_override_<software_name_slug>`.
 
 ### Implementation references
 - Engine override loader: `Data/Engine/services/API/devices/software_icons.py`

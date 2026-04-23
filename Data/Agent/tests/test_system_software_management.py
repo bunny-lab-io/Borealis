@@ -25,10 +25,7 @@ def test_apply_software_icon_overrides_replaces_display_icon_and_preserves_origi
         [
             {
                 "rule_id": "icon_override_contoso_agent",
-                "source": "local_installed",
                 "name": "Contoso Agent",
-                "version": "2.4.1",
-                "publisher_contains_any": ["Contoso Ltd"],
                 "display_icon": r"C:\Program Files\Contoso Agent\branding\agent.ico",
             }
         ],
@@ -61,9 +58,7 @@ def test_apply_software_icon_overrides_can_clear_icon_and_preserve_original() ->
         [
             {
                 "rule_id": "icon_override_contoso_agent_clear",
-                "source": "local_installed",
                 "name": "Contoso Agent",
-                "version": "2.4.1",
                 "clear_icon": True,
             }
         ],

@@ -89,6 +89,9 @@ def upsert_software_icon_override(rule: Dict[str, Any]) -> Dict[str, Any]:
     rule_id = normalize_text((rule or {}).get("rule_id"))
     if not rule_id:
         raise ValueError("rule_id is required")
+    name = normalize_text((rule or {}).get("name"))
+    if not name:
+        raise ValueError("name is required")
     clear_icon = _coerce_bool((rule or {}).get("clear_icon") or (rule or {}).get("remove_icon"))
     display_icon = ""
     if not clear_icon:
@@ -100,31 +103,24 @@ def upsert_software_icon_override(rule: Dict[str, Any]) -> Dict[str, Any]:
 
     normalized_rule: Dict[str, Any] = {
         "rule_id": rule_id,
+        "name": name,
     }
     if clear_icon:
         normalized_rule["clear_icon"] = True
     else:
         normalized_rule["display_icon"] = display_icon
-    for key in ("source", "name", "version", "product_code"):
-        value = normalize_text((rule or {}).get(key))
-        if value:
-            normalized_rule[key] = value
-    for key in ("publisher_contains_any", "name_contains_any", "install_location_contains_any"):
-        raw_values = (rule or {}).get(key)
-        if isinstance(raw_values, list):
-            values = [normalize_text(item) for item in raw_values if normalize_text(item)]
-            if values:
-                normalized_rule[key] = values
 
     with _SOFTWARE_ICON_OVERRIDES_WRITE_LOCK:
         payload = {
             "windows_icon_overrides": load_software_icon_overrides(),
         }
         rows = [dict(item) for item in payload["windows_icon_overrides"] if isinstance(item, dict)]
+        normalized_name = name.lower()
         replaced = False
         next_rows: List[Dict[str, Any]] = []
         for existing in rows:
-            if normalize_text(existing.get("rule_id")) == rule_id:
+            existing_name = normalize_text(existing.get("name")).lower()
+            if normalize_text(existing.get("rule_id")) == rule_id or (existing_name and existing_name == normalized_name):
                 next_rows.append(dict(normalized_rule))
                 replaced = True
             else:

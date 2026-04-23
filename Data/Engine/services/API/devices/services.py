@@ -348,13 +348,13 @@ def _coerce_bool_flag(value: Any) -> bool:
     return normalize_text(value).lower() in {"1", "true", "yes", "on"}
 
 
-def _build_software_rule_id(prefix: str, software_entry: Dict[str, Any]) -> str:
+def _build_software_rule_id(prefix: str, software_entry: Dict[str, Any], *, include_version: bool = True) -> str:
     tokens = [
         _slugify_software_token(prefix),
         _slugify_software_token(software_entry.get("name") or "software"),
     ]
-    version_token = _slugify_software_token(software_entry.get("version"))
-    if version_token:
+    version_token = _slugify_software_token(software_entry.get("version")) if include_version else ""
+    if include_version and version_token:
         tokens.append(version_token)
     return "_".join(token for token in tokens if token)
 
@@ -378,6 +378,12 @@ def _build_software_rule_match_base(software_entry: Dict[str, Any]) -> Dict[str,
     if install_location:
         payload["install_location_contains_any"] = [install_location]
     return payload
+
+
+def _build_software_icon_rule_match_base(software_entry: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "name": normalize_text((software_entry or {}).get("name")),
+    }
 
 
 def register_services(app, adapters: "EngineServiceAdapters") -> None:
@@ -822,8 +828,8 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
             )
 
         rule = {
-            "rule_id": _build_software_rule_id("icon_override", software_entry or {}),
-            **_build_software_rule_match_base(software_entry or {}),
+            "rule_id": _build_software_rule_id("icon_override", software_entry or {}, include_version=False),
+            **_build_software_icon_rule_match_base(software_entry or {}),
         }
         if clear_icon:
             rule["clear_icon"] = True

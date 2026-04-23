@@ -1900,10 +1900,7 @@ def test_agent_software_management_overrides_endpoint_returns_icon_overrides(
         "windows_icon_overrides": [
             {
                 "rule_id": "icon_override_contoso_agent",
-                "source": "local_installed",
                 "name": "Contoso Agent",
-                "version": "2.4.1",
-                "publisher_contains_any": ["Contoso Ltd"],
                 "display_icon": r"C:\Program Files\Contoso Agent\branding\agent.ico",
             }
         ]
@@ -1982,6 +1979,7 @@ def test_device_software_icon_override_persists_rule_and_requests_refresh(
     payload = response.get_json()
     assert payload["status"] == "ok"
     assert payload["refresh_requested"] is True
+    assert payload["rule"]["rule_id"] == "icon_override_adobe_acrobat_64_bit"
     assert payload["rule"]["display_icon"] == r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe,0"
     assert payload["rule"]["name"] == "Adobe Acrobat (64-bit)"
     assert len(targeted_events) == 1
@@ -2000,12 +1998,7 @@ def test_device_software_icon_override_persists_rule_and_requests_refresh(
     assert override_payload["windows_icon_overrides"] == [
         {
             "rule_id": payload["rule"]["rule_id"],
-            "source": "local_installed",
             "name": "Adobe Acrobat (64-bit)",
-            "version": "26.001.21431",
-            "publisher_contains_any": ["Adobe"],
-            "product_code": "{AC76BA86-1033-FF00-7760-BC15014EA700}",
-            "install_location_contains_any": ["C:\\Program Files\\Adobe\\Acrobat DC"],
             "display_icon": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe,0",
         }
     ]
@@ -2083,15 +2076,79 @@ def test_device_software_icon_override_can_clear_icon_and_request_refresh(
     assert override_payload["windows_icon_overrides"] == [
         {
             "rule_id": payload["rule"]["rule_id"],
-            "source": "local_installed",
             "name": "Adobe Acrobat (64-bit)",
-            "version": "26.001.21431",
-            "publisher_contains_any": ["Adobe"],
-            "product_code": "{AC76BA86-1033-FF00-7760-BC15014EA700}",
-            "install_location_contains_any": ["C:\\Program Files\\Adobe\\Acrobat DC"],
             "clear_icon": True,
         }
     ]
+
+
+def test_device_software_icon_override_replaces_legacy_same_name_rule(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    override_path = tmp_path / "software_icons_overrides.json"
+    override_path.write_text(
+        json.dumps(
+            {
+                "windows_icon_overrides": [
+                    {
+                        "rule_id": "icon_override_adobe_acrobat_64_bit_26_001_11111",
+                        "name": "Adobe Acrobat (64-bit)",
+                        "version": "26.001.11111",
+                        "publisher_contains_any": ["Adobe"],
+                        "display_icon": r"C:\Program Files\Adobe\Acrobat DC\Old\Acrobat.exe,0",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_PATH", override_path)
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_icons_module,
+        "_SOFTWARE_ICON_OVERRIDES_CACHE",
+        {"windows_icon_overrides": []},
+    )
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Adobe Acrobat (64-bit)",
+                "version": "26.001.21431",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Adobe",
+                    "install_location": "C:\\Program Files\\Adobe\\Acrobat DC\\",
+                },
+            }
+        ],
+    )
+
+    response = client.post(
+        "/api/device/software/test-device/icon-override",
+        json={
+            "name": "Adobe Acrobat (64-bit)",
+            "version": "26.001.21431",
+            "source": "local_installed",
+            "display_icon": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
+        },
+    )
+
+    assert response.status_code == 200
+
+    persisted = json.loads(override_path.read_text(encoding="utf-8"))
+    assert persisted == {
+        "windows_icon_overrides": [
+            {
+                "rule_id": "icon_override_adobe_acrobat_64_bit",
+                "name": "Adobe Acrobat (64-bit)",
+                "display_icon": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe,0",
+            }
+        ]
+    }
 
 
 def test_device_software_uninstall_override_hotloads_into_detail_enrichment(

@@ -35,15 +35,6 @@ def _software_metadata(row: Any) -> Dict[str, Any]:
     return row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
 
 
-def _matches_any_substring(value: Any, candidates: Any) -> bool:
-    value_lower = _clean_text(value).lower()
-    for item in candidates or []:
-        needle = _clean_text(item).lower()
-        if needle and needle in value_lower:
-            return True
-    return False
-
-
 def _parse_ps_json_output(text: str):
     txt = str(text or "")
     if txt.strip():
@@ -370,37 +361,12 @@ def _extract_windows_icon_payloads_by_hint(hints: Any) -> dict:
 
 
 def _software_matches_icon_override(row: Dict[str, Any], rule: Dict[str, Any]) -> bool:
-    metadata = _software_metadata(row)
-    source = _clean_text(row.get("source")).lower()
     name = _clean_text(row.get("name"))
-    version = _clean_text(row.get("version"))
-    publisher = _clean_text(metadata.get("publisher"))
-    install_location = _clean_text(metadata.get("install_location"))
-
-    expected_source = _clean_text(rule.get("source")).lower()
-    if expected_source and expected_source != source:
-        return False
 
     expected_name = _clean_text(rule.get("name"))
-    if expected_name and expected_name.lower() != name.lower():
+    if not expected_name:
         return False
-
-    expected_version = _clean_text(rule.get("version"))
-    if expected_version and expected_version.lower() != version.lower():
-        return False
-
-    publishers = rule.get("publisher_contains_any") if isinstance(rule.get("publisher_contains_any"), list) else []
-    if publishers and not _matches_any_substring(publisher, publishers):
-        return False
-
-    names = rule.get("name_contains_any") if isinstance(rule.get("name_contains_any"), list) else []
-    if names and not _matches_any_substring(name, names):
-        return False
-
-    install_markers = (
-        rule.get("install_location_contains_any") if isinstance(rule.get("install_location_contains_any"), list) else []
-    )
-    if install_markers and not _matches_any_substring(install_location, install_markers):
+    if expected_name.lower() != name.lower():
         return False
 
     return True
