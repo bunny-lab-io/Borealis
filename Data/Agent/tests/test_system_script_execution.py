@@ -15,6 +15,18 @@ def test_build_wrapped_script_can_disable_background_job() -> None:
     assert "& $__BorealisScript" in wrapped
 
 
+def test_build_wrapped_script_uses_supported_job_timeout_cleanup() -> None:
+    wrapped = exec_module._build_wrapped_script(
+        "Write-Output 'hello'",
+        {},
+        30,
+    )
+
+    assert "Stop-Job $job -Force" not in wrapped
+    assert "Stop-Job -Job $job -ErrorAction SilentlyContinue | Out-Null" in wrapped
+    assert "Remove-Job -Job $job -Force -ErrorAction SilentlyContinue | Out-Null" in wrapped
+
+
 def test_run_system_script_disables_background_job_when_progress_callback_present(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

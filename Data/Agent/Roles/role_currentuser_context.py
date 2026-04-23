@@ -261,7 +261,8 @@ def _build_wrapped_script(content: str, env_map: Dict[str, str], timeout_seconds
             f"if (Wait-Job -Job $job -Timeout {timeout_seconds}) {{\n"
             "  Receive-Job $job\n"
             "} else {\n"
-            "  Stop-Job $job -Force\n"
+            "  Stop-Job -Job $job -ErrorAction SilentlyContinue | Out-Null\n"
+            "  Remove-Job -Job $job -Force -ErrorAction SilentlyContinue | Out-Null\n"
             f"  throw \"Script timed out after {timeout_seconds} seconds\"\n"
             "}\n"
         )
