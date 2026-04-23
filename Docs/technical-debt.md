@@ -42,9 +42,9 @@ Date Added: 2026-04-22
 Summary: Borealis now blocks Fedora Media Writer's registry `QuietUninstallString` because the vendor-provided `/S` command still shows an interactive confirmation prompt.
 Impact: Operators no longer get a misleading queued/running uninstall for Fedora Media Writer, but Borealis now carries a product-specific uninstall blocklist entry until a verified unattended command is found.
 Root Cause: Windows uninstall metadata is vendor-defined, and Fedora Media Writer 5.2.8 registers `"C:\Program Files\Fedora Media Writer\uninstall.exe" /S` as `QuietUninstallString` even though manual validation still opens a confirmation prompt instead of uninstalling silently.
-Current Mitigation: `Data/Engine/services/API/devices/software_uninstall.py` matches Fedora Media Writer's known-bad quiet metadata and returns an unsupported uninstall capability with a clear operator-visible reason rather than dispatching the command to the agent.
+Current Mitigation: `Data/Engine/services/API/devices/software_uninstall.py` now loads `Data/Engine/services/API/devices/uninstall_blocklist.json`, matches Fedora Media Writer's known-bad quiet metadata, and returns an unsupported uninstall capability with a clear operator-visible reason rather than dispatching the command to the agent.
 Removal Criteria: Borealis verifies a truly unattended Fedora Media Writer uninstall command or upstream fixes the registered quiet uninstall metadata so the existing resolver can trust it again.
-Files: `Data/Engine/services/API/devices/software_uninstall.py`, `Data/Engine/Unit_Tests/test_devices_api.py`
+Files: `Data/Engine/services/API/devices/software_uninstall.py`, `Data/Engine/services/API/devices/uninstall_blocklist.json`, `Data/Engine/Unit_Tests/test_devices_api.py`
 Evidence: Manual admin execution of `"C:\Program Files\Fedora Media Writer\uninstall.exe" /S` still prompted `Do you want to uninstall Fedora Media Writer?`, while Borealis previously treated that same registry value as an unattended uninstall path.
 Next Step: Validate whether the bundled Qt/maintenance tool supports a documented headless uninstall mode for Fedora Media Writer, and replace the blocklist entry with a verified command if so.
 GitHub Issue: not yet

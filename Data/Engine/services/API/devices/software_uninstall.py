@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -93,20 +95,13 @@ _WINDOWS_UNINSTALL_RULES: List[Dict[str, Any]] = [
     },
 ]
 
-_WINDOWS_QUIET_UNINSTALL_BLOCKLIST: List[Dict[str, Any]] = [
-    {
-        "rule_id": "fedora_media_writer_quiet_string_interactive",
-        "source": "local_installed",
-        "publisher_contains_any": ["fedora project"],
-        "name_contains_any": ["fedora media writer"],
-        "exe_names": ["uninstall.exe"],
-        "quiet_args_any": ["/s"],
-        "reason": (
-            "Fedora Media Writer's registered QuietUninstallString still prompts for confirmation. "
-            "Borealis blocks automated uninstall for this title until a verified unattended command is known."
-        ),
-    },
-]
+logger = logging.getLogger(__name__)
+
+_UNINSTALL_BLOCKLIST_PATH = Path(__file__).resolve().with_name("uninstall_blocklist.json")
+_UNINSTALL_BLOCKLIST_CACHE_MTIME_NS: Optional[int] = None
+_UNINSTALL_BLOCKLIST_CACHE: Dict[str, List[Dict[str, Any]]] = {
+    "windows_quiet_uninstall_blocklist": [],
+}
 
 
 def normalize_text(value: Any) -> str:
@@ -116,6 +111,57 @@ def normalize_text(value: Any) -> str:
         return str(value).strip()
     except Exception:
         return ""
+
+
+def _normalize_blocklist_rows(value: Any) -> List[Dict[str, Any]]:
+    rows = value if isinstance(value, list) else []
+    normalized: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        normalized.append({str(key): item for key, item in row.items() if normalize_text(key)})
+    return normalized
+
+
+def _load_uninstall_blocklist() -> Dict[str, List[Dict[str, Any]]]:
+    global _UNINSTALL_BLOCKLIST_CACHE_MTIME_NS, _UNINSTALL_BLOCKLIST_CACHE
+
+    try:
+        current_mtime_ns = _UNINSTALL_BLOCKLIST_PATH.stat().st_mtime_ns
+    except OSError:
+        current_mtime_ns = None
+
+    if current_mtime_ns is not None and _UNINSTALL_BLOCKLIST_CACHE_MTIME_NS == current_mtime_ns:
+        return _UNINSTALL_BLOCKLIST_CACHE
+
+    next_cache = {
+        "windows_quiet_uninstall_blocklist": [],
+    }
+    if current_mtime_ns is None:
+        _UNINSTALL_BLOCKLIST_CACHE = next_cache
+        _UNINSTALL_BLOCKLIST_CACHE_MTIME_NS = None
+        return _UNINSTALL_BLOCKLIST_CACHE
+
+    try:
+        with _UNINSTALL_BLOCKLIST_PATH.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception as exc:
+        logger.warning("Failed to load uninstall blocklist from %s: %s", _UNINSTALL_BLOCKLIST_PATH, exc)
+        _UNINSTALL_BLOCKLIST_CACHE_MTIME_NS = current_mtime_ns
+        return _UNINSTALL_BLOCKLIST_CACHE
+
+    if isinstance(payload, dict):
+        next_cache["windows_quiet_uninstall_blocklist"] = _normalize_blocklist_rows(
+            payload.get("windows_quiet_uninstall_blocklist")
+        )
+    else:
+        logger.warning("Uninstall blocklist payload is not an object: %s", _UNINSTALL_BLOCKLIST_PATH)
+        _UNINSTALL_BLOCKLIST_CACHE_MTIME_NS = current_mtime_ns
+        return _UNINSTALL_BLOCKLIST_CACHE
+
+    _UNINSTALL_BLOCKLIST_CACHE = next_cache
+    _UNINSTALL_BLOCKLIST_CACHE_MTIME_NS = current_mtime_ns
+    return _UNINSTALL_BLOCKLIST_CACHE
 
 
 def normalize_software_source(value: Any) -> str:
@@ -391,8 +437,9 @@ def _match_blocked_quiet_uninstall(entry: Dict[str, Any], quiet_uninstall_string
     parsed = split_windows_command_line(quiet_uninstall_string)
     executable_name = normalize_text((parsed or {}).get("executable_name")).lower()
     arguments = normalize_text((parsed or {}).get("arguments"))
+    blocklist = _load_uninstall_blocklist()
 
-    for rule in _WINDOWS_QUIET_UNINSTALL_BLOCKLIST:
+    for rule in blocklist.get("windows_quiet_uninstall_blocklist") or []:
         if normalize_software_source(rule.get("source")) != source:
             continue
         publishers = [normalize_text(item).lower() for item in rule.get("publisher_contains_any") or [] if normalize_text(item)]
