@@ -58,6 +58,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 ## API Endpoints
 - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
 - `POST /api/agent/details` (Device Authenticated) - inventory and cached service payloads.
+- `GET /api/agent/software-management/overrides` (Device Authenticated) - file-backed icon override rules used by the agent software-management inventory path.
 - `GET /api/agents` (Token Authenticated) - online collectors keyed by agent identity, with upgraded hosts advertising helper-backed current-user capability on their SYSTEM record instead of registering a second Borealis socket.
 - `GET /api/devices` (Token Authenticated) - device summary list.
 - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - site-scoped hostname search for the shared header search UI.
@@ -113,6 +114,9 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - [Device Alerts](device-alerts.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
 - [API Reference](api-reference.md)
+- [Software Icon Overrides](Software%20Management/adding-software-to-icon-overrides.md)
+- [Software Uninstall Overrides](Software%20Management/adding-software-to-uninstall-overrides.md)
+- [Software Uninstall Blocklist](Software%20Management/adding-software-to-uninstall-blocklist.md)
 
 ## Codex Agent (Detailed)
 ### Key files and services
@@ -126,6 +130,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - JSON blobs are serialized into PostgreSQL text columns and rehydrated for UI.
 - Installed software is also normalized into `device_software_inventory` so filters can match name, source, and version reliably.
 - The Installed Software tab now also exposes a row-level `Uninstall` action for supported Windows software entries. Borealis queues that work through the signed quick-job path in SYSTEM context, so uninstall output lands in `activity_history` and the row disappears after the next successful device software inventory refresh.
+- Operators can right-click a software name in the Installed Software tab to copy a `borealis_software_debug_v1` payload to the clipboard. That payload is the intended source material for icon overrides, uninstall overrides, and uninstall blocklist additions.
 - Session inventory enrichment from the agent broker flows through `Data/Agent/Roles/role_system_device_auditor.py` and `Data/Engine/services/API/devices/session_inventory.py`, so Device Details can distinguish a merely logged-in session from a helper-ready interactive session.
 - Service inventory is cached in the `devices.services` JSON blob and merged with pending operator actions until a fresh agent snapshot confirms the desired state.
 - Manual agent update requests from the Device Summary action menu call `POST /api/device/update-agent/<hostname>` and are delivered over the device's SYSTEM Socket.IO channel as `agent_update_request`.

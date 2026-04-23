@@ -48,6 +48,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
 - `POST /api/agent/details` (Device Authenticated) - full hardware, inventory, and cached service payload.
 - `POST /api/agent/script/request` (Device Authenticated) - request work or idle signal.
+- `GET /api/agent/software-management/overrides` (Device Authenticated) - file-backed software icon override rules used by the agent `software_management` role during inventory refresh.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
 - `GET /api/agents` (Token Authenticated) - list online collectors, with upgraded hosts advertising helper-backed current-user capability on their SYSTEM record via `helper_contexts`.
 - `GET /api/devices` (Token Authenticated) - device summary list, scoped to the operator's assigned sites unless the operator is an admin.
@@ -185,6 +186,9 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 - [Assemblies and Quick Jobs](assemblies.md)
 - [Scheduled Jobs](scheduled-jobs.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
+- [Software Icon Overrides](Software%20Management/adding-software-to-icon-overrides.md)
+- [Software Uninstall Overrides](Software%20Management/adding-software-to-uninstall-overrides.md)
+- [Software Uninstall Blocklist](Software%20Management/adding-software-to-uninstall-blocklist.md)
 
 ## Codex Agent (Detailed)
 ### Where endpoints are defined

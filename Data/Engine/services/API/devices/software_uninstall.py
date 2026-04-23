@@ -98,9 +98,14 @@ _WINDOWS_UNINSTALL_RULES: List[Dict[str, Any]] = [
 logger = logging.getLogger(__name__)
 
 _UNINSTALL_BLOCKLIST_PATH = Path(__file__).resolve().with_name("software_uninstall_blocklist.json")
+_UNINSTALL_OVERRIDES_PATH = Path(__file__).resolve().with_name("software_uninstall_overrides.json")
 _UNINSTALL_BLOCKLIST_CACHE_MTIME_NS: Optional[int] = None
 _UNINSTALL_BLOCKLIST_CACHE: Dict[str, List[Dict[str, Any]]] = {
     "windows_quiet_uninstall_blocklist": [],
+}
+_UNINSTALL_OVERRIDES_CACHE_MTIME_NS: Optional[int] = None
+_UNINSTALL_OVERRIDES_CACHE: Dict[str, List[Dict[str, Any]]] = {
+    "windows_uninstall_overrides": [],
 }
 
 
@@ -114,6 +119,16 @@ def normalize_text(value: Any) -> str:
 
 
 def _normalize_blocklist_rows(value: Any) -> List[Dict[str, Any]]:
+    rows = value if isinstance(value, list) else []
+    normalized: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        normalized.append({str(key): item for key, item in row.items() if normalize_text(key)})
+    return normalized
+
+
+def _normalize_uninstall_override_rows(value: Any) -> List[Dict[str, Any]]:
     rows = value if isinstance(value, list) else []
     normalized: List[Dict[str, Any]] = []
     for row in rows:
@@ -162,6 +177,47 @@ def _load_uninstall_blocklist() -> Dict[str, List[Dict[str, Any]]]:
     _UNINSTALL_BLOCKLIST_CACHE = next_cache
     _UNINSTALL_BLOCKLIST_CACHE_MTIME_NS = current_mtime_ns
     return _UNINSTALL_BLOCKLIST_CACHE
+
+
+def _load_uninstall_overrides() -> Dict[str, List[Dict[str, Any]]]:
+    global _UNINSTALL_OVERRIDES_CACHE_MTIME_NS, _UNINSTALL_OVERRIDES_CACHE
+
+    try:
+        current_mtime_ns = _UNINSTALL_OVERRIDES_PATH.stat().st_mtime_ns
+    except OSError:
+        current_mtime_ns = None
+
+    if current_mtime_ns is not None and _UNINSTALL_OVERRIDES_CACHE_MTIME_NS == current_mtime_ns:
+        return _UNINSTALL_OVERRIDES_CACHE
+
+    next_cache = {
+        "windows_uninstall_overrides": [],
+    }
+    if current_mtime_ns is None:
+        _UNINSTALL_OVERRIDES_CACHE = next_cache
+        _UNINSTALL_OVERRIDES_CACHE_MTIME_NS = None
+        return _UNINSTALL_OVERRIDES_CACHE
+
+    try:
+        with _UNINSTALL_OVERRIDES_PATH.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception as exc:
+        logger.warning("Failed to load uninstall overrides from %s: %s", _UNINSTALL_OVERRIDES_PATH, exc)
+        _UNINSTALL_OVERRIDES_CACHE_MTIME_NS = current_mtime_ns
+        return _UNINSTALL_OVERRIDES_CACHE
+
+    if isinstance(payload, dict):
+        next_cache["windows_uninstall_overrides"] = _normalize_uninstall_override_rows(
+            payload.get("windows_uninstall_overrides")
+        )
+    else:
+        logger.warning("Uninstall overrides payload is not an object: %s", _UNINSTALL_OVERRIDES_PATH)
+        _UNINSTALL_OVERRIDES_CACHE_MTIME_NS = current_mtime_ns
+        return _UNINSTALL_OVERRIDES_CACHE
+
+    _UNINSTALL_OVERRIDES_CACHE = next_cache
+    _UNINSTALL_OVERRIDES_CACHE_MTIME_NS = current_mtime_ns
+    return _UNINSTALL_OVERRIDES_CACHE
 
 
 def normalize_software_source(value: Any) -> str:
@@ -403,58 +459,118 @@ def _matches_any_substring(value: str, candidates: List[str]) -> bool:
     return any(normalize_text(item).lower() in value_lower for item in candidates if normalize_text(item))
 
 
-def _match_windows_rule(entry: Dict[str, Any], uninstall_string: str, executable_name: str) -> Optional[Dict[str, Any]]:
+def _software_matches_rule(
+    entry: Dict[str, Any],
+    rule: Dict[str, Any],
+    *,
+    executable_name: str = "",
+    uninstall_text: str = "",
+    quiet_arguments: str = "",
+) -> bool:
     metadata = software_metadata(entry)
     source = normalize_software_source(entry.get("source"))
     name = normalize_text(entry.get("name"))
+    version = normalize_text(entry.get("version"))
     publisher = normalize_text(metadata.get("publisher"))
-    uninstall_lower = uninstall_string.lower()
-    exe_name = executable_name.lower()
+    install_location = _trim_windows_path(metadata.get("install_location"))
+    product_code = normalize_text(metadata.get("product_code"))
+    exe_name = normalize_text(executable_name).lower()
+    uninstall_lower = normalize_text(uninstall_text).lower()
+
+    expected_source_raw = normalize_text(rule.get("source")).lower()
+    expected_source = _SOFTWARE_SOURCE_ALIASES.get(expected_source_raw, expected_source_raw)
+    if expected_source and expected_source != source:
+        return False
+
+    exact_name = normalize_text(rule.get("name"))
+    if exact_name and exact_name.lower() != name.lower():
+        return False
+
+    exact_version = normalize_text(rule.get("version"))
+    if exact_version and exact_version.lower() != version.lower():
+        return False
+
+    exact_product_code = normalize_text(rule.get("product_code"))
+    if exact_product_code and exact_product_code.upper() != product_code.upper():
+        return False
+
+    publishers = [normalize_text(item).lower() for item in rule.get("publisher_contains_any") or [] if normalize_text(item)]
+    if publishers and not any(item in publisher.lower() for item in publishers):
+        return False
+
+    names = [normalize_text(item).lower() for item in rule.get("name_contains_any") or [] if normalize_text(item)]
+    if names and not any(item in name.lower() for item in names):
+        return False
+
+    install_markers = [
+        normalize_text(item).lower() for item in rule.get("install_location_contains_any") or [] if normalize_text(item)
+    ]
+    if install_markers and not any(item in install_location.lower() for item in install_markers):
+        return False
+
+    exe_names = [normalize_text(item).lower() for item in rule.get("exe_names") or [] if normalize_text(item)]
+    if exe_names and exe_name not in exe_names:
+        return False
+
+    uninstall_markers = [normalize_text(item).lower() for item in rule.get("uninstall_contains_any") or [] if normalize_text(item)]
+    if uninstall_markers and not any(item in uninstall_lower for item in uninstall_markers):
+        return False
+
+    quiet_args = [normalize_text(item) for item in rule.get("quiet_args_any") or [] if normalize_text(item)]
+    if quiet_args and not any(option_present(quiet_arguments, item) for item in quiet_args):
+        return False
+
+    return True
+
+
+def _match_windows_rule(entry: Dict[str, Any], uninstall_string: str, executable_name: str) -> Optional[Dict[str, Any]]:
     for rule in _WINDOWS_UNINSTALL_RULES:
-        if normalize_software_source(rule.get("source")) != source:
-            continue
-        publishers = [normalize_text(item).lower() for item in rule.get("publisher_contains_any") or [] if normalize_text(item)]
-        if publishers and not any(item in publisher.lower() for item in publishers):
-            continue
-        names = [normalize_text(item).lower() for item in rule.get("name_contains_any") or [] if normalize_text(item)]
-        if names and not any(item in name.lower() for item in names):
-            continue
-        exe_names = [normalize_text(item).lower() for item in rule.get("exe_names") or [] if normalize_text(item)]
-        if exe_names and exe_name not in exe_names:
-            continue
-        uninstall_markers = [normalize_text(item).lower() for item in rule.get("uninstall_contains_any") or [] if normalize_text(item)]
-        if uninstall_markers and not any(item in uninstall_lower for item in uninstall_markers):
-            continue
-        return rule
+        if _software_matches_rule(
+            entry,
+            rule,
+            executable_name=executable_name,
+            uninstall_text=uninstall_string,
+        ):
+            return rule
     return None
 
 
 def _match_blocked_quiet_uninstall(entry: Dict[str, Any], quiet_uninstall_string: str) -> Optional[Dict[str, Any]]:
-    metadata = software_metadata(entry)
-    source = normalize_software_source(entry.get("source"))
-    name = normalize_text(entry.get("name"))
-    publisher = normalize_text(metadata.get("publisher"))
     parsed = split_windows_command_line(quiet_uninstall_string)
     executable_name = normalize_text((parsed or {}).get("executable_name")).lower()
     arguments = normalize_text((parsed or {}).get("arguments"))
     blocklist = _load_uninstall_blocklist()
 
     for rule in blocklist.get("windows_quiet_uninstall_blocklist") or []:
-        if normalize_software_source(rule.get("source")) != source:
-            continue
-        publishers = [normalize_text(item).lower() for item in rule.get("publisher_contains_any") or [] if normalize_text(item)]
-        if publishers and not any(item in publisher.lower() for item in publishers):
-            continue
-        names = [normalize_text(item).lower() for item in rule.get("name_contains_any") or [] if normalize_text(item)]
-        if names and not any(item in name.lower() for item in names):
-            continue
-        exe_names = [normalize_text(item).lower() for item in rule.get("exe_names") or [] if normalize_text(item)]
-        if exe_names and executable_name not in exe_names:
-            continue
-        quiet_args = [normalize_text(item) for item in rule.get("quiet_args_any") or [] if normalize_text(item)]
-        if quiet_args and not any(option_present(arguments, item) for item in quiet_args):
-            continue
-        return rule
+        if _software_matches_rule(
+            entry,
+            rule,
+            executable_name=executable_name,
+            uninstall_text=quiet_uninstall_string,
+            quiet_arguments=arguments,
+        ):
+            return rule
+    return None
+
+
+def _match_windows_uninstall_override(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    metadata = software_metadata(entry)
+    quiet_uninstall_string = normalize_text(metadata.get("quiet_uninstall_string"))
+    uninstall_string = normalize_text(metadata.get("uninstall_string"))
+    parsed = split_windows_command_line(quiet_uninstall_string or uninstall_string)
+    executable_name = normalize_text((parsed or {}).get("executable_name"))
+    arguments = normalize_text((parsed or {}).get("arguments"))
+    overrides = _load_uninstall_overrides()
+
+    for rule in overrides.get("windows_uninstall_overrides") or []:
+        if _software_matches_rule(
+            entry,
+            rule,
+            executable_name=executable_name,
+            uninstall_text=quiet_uninstall_string or uninstall_string,
+            quiet_arguments=arguments,
+        ):
+            return rule
     return None
 
 
@@ -576,6 +692,41 @@ def resolve_windows_uninstall_plan(entry: Dict[str, Any]) -> Dict[str, Any]:
     quiet_uninstall_string = normalize_text(metadata.get("quiet_uninstall_string"))
     uninstall_string = normalize_text(metadata.get("uninstall_string"))
     product_code = normalize_text(metadata.get("product_code"))
+    uninstall_override = _match_windows_uninstall_override(entry)
+
+    if uninstall_override is not None:
+        strategy = normalize_text(uninstall_override.get("strategy")).lower() or "direct_command"
+        rule_id = normalize_text(uninstall_override.get("rule_id"))
+        summary = normalize_text(uninstall_override.get("summary")) or "Uses a custom uninstall override."
+        override_quiet_string = normalize_text(uninstall_override.get("quiet_uninstall_string"))
+        override_uninstall_string = normalize_text(uninstall_override.get("uninstall_string")) or uninstall_string
+        override_product_code = normalize_text(uninstall_override.get("product_code"))
+        override_package_family_name = normalize_text(uninstall_override.get("package_family_name"))
+
+        if strategy == "direct_command" and override_quiet_string:
+            return _supported(
+                strategy="direct_command",
+                summary=summary,
+                rule_id=rule_id,
+                quiet_uninstall_string=canonicalize_windows_command(override_quiet_string),
+                uninstall_string=override_uninstall_string,
+                product_code=override_product_code,
+            )
+        if strategy == "msi_product_code" and _WINDOWS_PRODUCT_CODE_RE.match(override_product_code):
+            return _supported(
+                strategy="msi_product_code",
+                summary=summary,
+                rule_id=rule_id,
+                uninstall_string=override_uninstall_string,
+                product_code=override_product_code.upper(),
+            )
+        if strategy == "windows_store" and override_package_family_name:
+            return _supported(
+                strategy="windows_store",
+                summary=summary,
+                rule_id=rule_id,
+                package_family_name=override_package_family_name,
+            )
 
     if quiet_uninstall_string:
         blocked_quiet_rule = _match_blocked_quiet_uninstall(entry, quiet_uninstall_string)

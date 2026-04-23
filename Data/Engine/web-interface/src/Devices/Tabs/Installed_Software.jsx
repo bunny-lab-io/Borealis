@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Box,
   Button,
+  Menu,
+  MenuItem,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -374,14 +376,20 @@ function SoftwareIconGlyph({ row = {} }) {
   );
 }
 
-function SoftwareNameCell({ row = {} }) {
+function SoftwareNameCell({ row = {}, onOpenContextMenu }) {
   return (
     <Box
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenContextMenu?.(event, row);
+      }}
       sx={{
         display: "inline-flex",
         alignItems: "center",
         gap: 1,
         minWidth: 0,
+        cursor: "context-menu",
       }}
     >
       <SoftwareIconGlyph row={row} />
@@ -481,6 +489,136 @@ function getUninstallCommandPreview(row = {}) {
   }
 
   return "";
+}
+
+function slugifySoftwareToken(value = "") {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function buildSoftwareRuleId(prefix = "", row = {}) {
+  const baseName = slugifySoftwareToken(row?.name || "software") || "software";
+  return [String(prefix || "").trim(), baseName].filter(Boolean).join("_");
+}
+
+function buildSoftwareMatchHints(row = {}) {
+  const metadata = getSoftwareMetadata(row);
+  const match = {
+    source: String(row?.source || "").trim().toLowerCase() || "local_installed",
+    name: String(row?.name || "").trim(),
+  };
+  const version = String(row?.version || "").trim();
+  const publisher = String(metadata?.publisher || "").trim();
+  const productCode = String(metadata?.product_code || "").trim();
+  const installLocation = trimWindowsPath(metadata?.install_location || "");
+  if (version) match.version = version;
+  if (publisher) match.publisher_contains_any = [publisher];
+  if (productCode) match.product_code = productCode;
+  if (installLocation) match.install_location_contains_any = [installLocation];
+  return match;
+}
+
+function buildSoftwareDebugPayload(row = {}, hostname = "") {
+  const metadata = getSoftwareMetadata(row);
+  const uninstall = row?.uninstall && typeof row.uninstall === "object" ? row.uninstall : {};
+  const distribution = getSoftwareDistribution(row);
+  const quietUninstallString = String(metadata?.quiet_uninstall_string || "").trim();
+  const uninstallString = String(metadata?.uninstall_string || "").trim();
+  const commandPreview = getUninstallCommandPreview(row);
+  const iconHash = getSoftwareIconHash(row);
+  const matchHints = buildSoftwareMatchHints(row);
+  const parsedQuiet = splitWindowsCommandLine(quietUninstallString);
+  const parsedUninstall = splitWindowsCommandLine(uninstallString);
+  const quietArgs = String(parsedQuiet?.arguments || "").trim();
+  const uninstallArgs = String(parsedUninstall?.arguments || "").trim();
+  const quietArgTokens = quietArgs ? quietArgs.split(/\s+/).filter(Boolean) : [];
+  const displayIcon = String(metadata?.display_icon || "").trim();
+
+  return {
+    schema: "borealis_software_debug_v1",
+    generated_at: new Date().toISOString(),
+    hostname: String(hostname || "").trim(),
+    software: {
+      name: String(row?.name || "").trim(),
+      version: String(row?.version || "").trim(),
+      source: String(row?.source || "").trim().toLowerCase() || "local_installed",
+      distribution_platform: String(distribution?.platform || "").trim(),
+      distribution_app_id: String(distribution?.appId || "").trim(),
+      uninstall_capability: uninstall,
+      uninstall_command_preview: commandPreview,
+      icon_hash: iconHash,
+      icon_url: buildSoftwareIconUrl(iconHash),
+      metadata,
+    },
+    file_targets: {
+      icon_overrides: "Data/Engine/services/API/devices/software_icons_overrides.json",
+      uninstall_overrides: "Data/Engine/services/API/devices/software_uninstall_overrides.json",
+      uninstall_blocklist: "Data/Engine/services/API/devices/software_uninstall_blocklist.json",
+    },
+    suggested_entries: {
+      icon_override: {
+        rule_id: buildSoftwareRuleId("icon_override", row),
+        ...matchHints,
+        display_icon:
+          String(metadata?.display_icon_override || "").trim() ||
+          displayIcon ||
+          String(metadata?.display_icon_original || "").trim() ||
+          trimWindowsPath(metadata?.install_location || ""),
+        notes: "Set display_icon to a verified EXE, DLL, ICO, or resource path such as C:\\Program Files\\Vendor\\App\\app.exe,0.",
+      },
+      uninstall_override: {
+        rule_id: buildSoftwareRuleId("uninstall_override", row),
+        ...matchHints,
+        strategy: "direct_command",
+        quiet_uninstall_string:
+          String(uninstall?.quiet_uninstall_string || "").trim() ||
+          quietUninstallString ||
+          commandPreview ||
+          uninstallString,
+        uninstall_string: uninstallString,
+        summary: `Custom uninstall override for ${String(row?.name || "software").trim() || "software"}.`,
+      },
+      uninstall_blocklist: {
+        rule_id: buildSoftwareRuleId("uninstall_block", row),
+        source: String(row?.source || "").trim().toLowerCase() || "local_installed",
+        name_contains_any: [String(row?.name || "").trim()].filter(Boolean),
+        publisher_contains_any: [String(metadata?.publisher || "").trim().toLowerCase()].filter(Boolean),
+        exe_names: [
+          String(parsedQuiet?.executable_name || "").trim().toLowerCase() ||
+            String(parsedUninstall?.executable_name || "").trim().toLowerCase(),
+        ].filter(Boolean),
+        quiet_args_any: quietArgTokens.length ? quietArgTokens : [],
+        reason: "Replace this text with the observed reason the registered silent uninstall cannot be trusted.",
+      },
+    },
+    codex_notes: {
+      intent:
+        "Use this payload to create a software icon override, uninstall override, or uninstall blocklist entry without re-querying the device.",
+      docs: [
+        "Docs/Software Management/adding-software-to-icon-overrides.md",
+        "Docs/Software Management/adding-software-to-uninstall-overrides.md",
+        "Docs/Software Management/adding-software-to-uninstall-blocklist.md",
+      ],
+      review_fields: {
+        display_icon,
+        quiet_uninstall_string: quietUninstallString,
+        uninstall_string: uninstallString,
+        install_location: String(metadata?.install_location || "").trim(),
+        product_code: String(metadata?.product_code || "").trim(),
+        package_family_name: String(metadata?.package_family_name || "").trim(),
+        publisher: String(metadata?.publisher || "").trim(),
+        original_display_icon: String(metadata?.original_display_icon || "").trim(),
+        display_icon_override: String(metadata?.display_icon_override || "").trim(),
+      },
+      parsed_commands: {
+        quiet_uninstall: parsedQuiet || null,
+        uninstall: parsedUninstall || null,
+      },
+    },
+  };
 }
 
 function resolveSoftwareFilterCategory(source = "") {
@@ -644,6 +782,12 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
   const [softwareFilterMode, setSoftwareFilterMode] = useState("locally_installed");
   const [trackedUninstalls, setTrackedUninstalls] = useState([]);
   const [progressDialogJobId, setProgressDialogJobId] = useState("");
+  const [softwareDebugMenu, setSoftwareDebugMenu] = useState({
+    open: false,
+    top: 0,
+    left: 0,
+    row: null,
+  });
   const notifyOperator = useAppNotifications();
   const uninstallStatusRequestsRef = useRef(new Set());
   const uninstallCompletionToastsRef = useRef(new Set());
@@ -651,6 +795,70 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
   const trackedUninstallHydratedRef = useRef(false);
   const [trackedUninstallsLoaded, setTrackedUninstallsLoaded] = useState(false);
   const normalizedHostname = useMemo(() => String(hostname || "").trim(), [hostname]);
+
+  const copyTextToClipboard = useCallback(async (value, promptTitle = "Copy text") => {
+    const normalizedValue = String(value || "").trim();
+    if (!normalizedValue) return false;
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(normalizedValue);
+        return true;
+      }
+    } catch {
+      // Fall back to prompt below.
+    }
+    try {
+      window.prompt(promptTitle, normalizedValue);
+    } catch {
+      // Ignore prompt failures.
+    }
+    return false;
+  }, []);
+
+  const handleOpenSoftwareDebugMenu = useCallback((event, row) => {
+    setSoftwareDebugMenu({
+      open: true,
+      top: Number(event?.clientY || 0),
+      left: Number(event?.clientX || 0),
+      row: row || null,
+    });
+  }, []);
+
+  const handleCloseSoftwareDebugMenu = useCallback(() => {
+    setSoftwareDebugMenu({
+      open: false,
+      top: 0,
+      left: 0,
+      row: null,
+    });
+  }, []);
+
+  const handleCopySoftwareDebugInformation = useCallback(async () => {
+    const row = softwareDebugMenu?.row || null;
+    handleCloseSoftwareDebugMenu();
+    if (!row) return;
+    const payload = buildSoftwareDebugPayload(row, normalizedHostname);
+    const copied = await copyTextToClipboard(
+      JSON.stringify(payload, null, 2),
+      "Copy software debug information"
+    );
+    if (copied) {
+      await notifyOperator({
+        title: "Software Debug Info Copied",
+        message: "Software debug information saved to clipboard.",
+        icon: "info",
+        variant: "success",
+      });
+      return;
+    }
+    await notifyOperator({
+      title: "Manual Copy Required",
+      message:
+        "Clipboard access was blocked, so Borealis opened a manual copy prompt for the software debug information.",
+      icon: "warning",
+      variant: "warning",
+    });
+  }, [copyTextToClipboard, handleCloseSoftwareDebugMenu, normalizedHostname, notifyOperator, softwareDebugMenu]);
 
   useEffect(() => {
     uninstallCompletionToastsRef.current = readTrackedUninstallToastIds(normalizedHostname);
@@ -1005,7 +1213,9 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         flex: 1.2,
         minWidth: 240,
         filter: "agTextColumnFilter",
-        cellRenderer: (params) => <SoftwareNameCell row={params.data} />,
+        cellRenderer: (params) => (
+          <SoftwareNameCell row={params.data} onOpenContextMenu={handleOpenSoftwareDebugMenu} />
+        ),
       },
       {
         field: "version",
@@ -1055,7 +1265,7 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         ),
       },
     ],
-    [busyActionKey, hostname, requestUninstall]
+    [busyActionKey, handleOpenSoftwareDebugMenu, hostname, requestUninstall]
   );
 
   const getSoftwareRowId = useCallback(
@@ -1116,6 +1326,40 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
           theme={DEVICE_DETAILS_GRID_THEME}
         />
       </GridShell>
+      <Menu
+        open={Boolean(softwareDebugMenu?.open)}
+        onClose={handleCloseSoftwareDebugMenu}
+        anchorReference="anchorPosition"
+        anchorPosition={
+          softwareDebugMenu?.open
+            ? {
+                top: Number(softwareDebugMenu?.top || 0),
+                left: Number(softwareDebugMenu?.left || 0),
+              }
+            : undefined
+        }
+        PaperProps={{
+          sx: {
+            bgcolor: "rgba(8,12,24,0.96)",
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            backdropFilter: "blur(14px)",
+            borderRadius: 2,
+            minWidth: 260,
+          },
+        }}
+      >
+        <MenuItem
+          onClick={() => {
+            void handleCopySoftwareDebugInformation();
+          }}
+          sx={{
+            fontSize: 13,
+            color: MAGIC_UI.textBright,
+          }}
+        >
+          Copy software debug information
+        </MenuItem>
+      </Menu>
       <ConfirmDeleteDialog
         open={Boolean(confirmRow)}
         onCancel={() => {

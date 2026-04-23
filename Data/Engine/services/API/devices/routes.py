@@ -5,6 +5,7 @@
 # API Endpoints (if applicable):
 # - POST /api/agent/heartbeat (Device Authenticated) - Updates device last-seen metadata and inventory snapshots.
 # - POST /api/agent/script/request (Device Authenticated) - Provides script execution payloads or idle signals to agents.
+# - GET /api/agent/software-management/overrides (Device Authenticated) - Returns file-backed software-management override hints for agent-side inventory/icon collection.
 # - POST /api/agent/vpn/ensure (Device Authenticated) - Ensures persistent WireGuard tunnel material.
 # - POST /api/agent/vnc/ensure (Device Authenticated) - Ensures VNC readiness and refreshes the Engine's cached agent VNC credential.
 # ======================================================
@@ -23,6 +24,7 @@ from ....auth.device_auth import AGENT_CONTEXT_HEADER, require_device_auth
 from ....auth.guid_utils import normalize_guid
 from ....public_endpoints import wireguard_endpoint
 from ...RemoteDesktop.vnc_sessions import ensure_vnc_collaboration_manager
+from .software_icons import load_software_icon_overrides
 from .agent_role_health import merge_agent_role_health, normalize_agent_role_health, serialize_agent_role_health
 from .tunnel import _get_tunnel_service, _guid_from_agent_id, _load_device_agent_binding, _resolve_requested_agent_id
 
@@ -477,6 +479,18 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                 "poll_after_ms": 30000,
                 "sig_alg": "ed25519",
                 "signing_key": signing_key,
+            }
+        )
+
+    @blueprint.route("/api/agent/software-management/overrides", methods=["GET"])
+    @require_device_auth(auth_manager)
+    def software_management_overrides():
+        ctx = _auth_context()
+        if ctx is None:
+            return jsonify({"error": "auth_context_missing"}), 500
+        return jsonify(
+            {
+                "windows_icon_overrides": load_software_icon_overrides(),
             }
         )
 

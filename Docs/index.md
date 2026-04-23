@@ -31,6 +31,11 @@ This page is the navigation hub for the Borealis documentation set. The knowledg
 - [VPN and Remote Access](vpn-and-remote-access.md)
 - [Logging and Operations](logging-and-operations.md)
 
+### Software Management
+- [Software Icon Overrides](Software%20Management/adding-software-to-icon-overrides.md)
+- [Software Uninstall Blocklist](Software%20Management/adding-software-to-uninstall-blocklist.md)
+- [Software Uninstall Overrides](Software%20Management/adding-software-to-uninstall-overrides.md)
+
 ### UI and API
 - [UI and Notifications](ui-and-notifications.md)
 - [Migrating Pages to React Router](migrating-pages-to-react-router.md)

@@ -21,6 +21,8 @@ from Data.Engine import database as engine_database
 from Data.Engine.auth import jwt_service as jwt_service_module
 from Data.Engine.services.API.devices import management as device_management
 from Data.Engine.services.API.devices import routes as device_routes
+from Data.Engine.services.API.devices import software_icons as software_icons_module
+from Data.Engine.services.API.devices import software_uninstall as software_uninstall_module
 from Data.Engine.services.API.devices.service_inventory import serialize_device_services
 from Data.Engine.services.API.devices import tunnel as tunnel_api
 from Data.Engine.services.VPN.vpn_tunnel_service import (
@@ -1559,6 +1561,86 @@ def test_device_software_uninstall_supports_install_location_derived_windows_rul
     ]
 
 
+def test_device_software_uninstall_applies_file_override(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    override_path = tmp_path / "software_uninstall_overrides.json"
+    override_path.write_text(
+        json.dumps(
+            {
+                "windows_uninstall_overrides": [
+                    {
+                        "rule_id": "uninstall_override_fedora_media_writer",
+                        "source": "local_installed",
+                        "name": "Fedora Media Writer",
+                        "version": "5.2.8",
+                        "publisher_contains_any": ["Fedora Project"],
+                        "strategy": "direct_command",
+                        "quiet_uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe" remove --confirm-command',
+                        "summary": "Uses a verified Fedora Media Writer unattended uninstall command override.",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(software_uninstall_module, "_UNINSTALL_OVERRIDES_PATH", override_path)
+    monkeypatch.setattr(software_uninstall_module, "_UNINSTALL_OVERRIDES_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_uninstall_module,
+        "_UNINSTALL_OVERRIDES_CACHE",
+        {"windows_uninstall_overrides": []},
+    )
+
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Fedora Media Writer",
+                "version": "5.2.8",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Fedora Project",
+                    "install_location": "C:\\Program Files\\Fedora Media Writer",
+                    "quiet_uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe" /S',
+                    "uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe"',
+                },
+            }
+        ],
+    )
+
+    detail_response = client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software = detail_response.get_json()["software"]
+    assert software == [
+        {
+            "name": "Fedora Media Writer",
+            "version": "5.2.8",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Fedora Project",
+                "install_location": "C:\\Program Files\\Fedora Media Writer",
+                "quiet_uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe" /S',
+                "uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe"',
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Uses a verified Fedora Media Writer unattended uninstall command override.",
+                "strategy": "direct_command",
+                "rule_id": "uninstall_override_fedora_media_writer",
+                "quiet_uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe" remove --confirm-command',
+                "uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe"',
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+
 def test_device_software_uninstall_blocks_known_interactive_quiet_string(
     engine_harness: EngineTestHarness,
 ) -> None:
@@ -1761,6 +1843,44 @@ def test_agent_heartbeat_returns_assigned_site(engine_harness: EngineTestHarness
     assert payload["status"] == "ok"
     assert payload["site_name"] == "Main Lab"
     assert payload["site_id"] == 1
+
+
+def test_agent_software_management_overrides_endpoint_returns_icon_overrides(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    override_path = tmp_path / "software_icons_overrides.json"
+    override_payload = {
+        "windows_icon_overrides": [
+            {
+                "rule_id": "icon_override_contoso_agent",
+                "source": "local_installed",
+                "name": "Contoso Agent",
+                "version": "2.4.1",
+                "publisher_contains_any": ["Contoso Ltd"],
+                "display_icon": r"C:\Program Files\Contoso Agent\branding\agent.ico",
+            }
+        ]
+    }
+    override_path.write_text(json.dumps(override_payload), encoding="utf-8")
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_PATH", override_path)
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_icons_module,
+        "_SOFTWARE_ICON_OVERRIDES_CACHE",
+        {"windows_icon_overrides": []},
+    )
+
+    client = engine_harness.app.test_client()
+    response = client.get(
+        "/api/agent/software-management/overrides",
+        headers=_device_headers(),
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload == override_payload
 
 
 def test_device_list_views_lifecycle(engine_harness: EngineTestHarness) -> None:

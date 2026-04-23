@@ -28,9 +28,11 @@ def _make_role() -> software_role.Role:
     role._last_refresh_at = 0
     role._last_software_count = 0
     role._last_icon_payload_count = 0
+    role._last_icon_override_count = 0
     role._fast_poll_until = 0.0
     role._last_software_icon_signature = ""
     role._last_software_icon_hash_by_key = {}
+    role._icon_overrides = []
     role._supported = True
     role._unsupported_reason = ""
     role.role_health_label = "Software Management"
@@ -89,6 +91,7 @@ def test_collect_and_publish_refreshes_icon_signature_cache(monkeypatch) -> None
     role = _make_role()
     published = []
     role._publish_snapshot = lambda snapshot: published.append(snapshot)
+    role._fetch_icon_overrides = lambda: [{"rule_id": "icon_override_contoso"}]
 
     monkeypatch.setattr(
         software_role,
@@ -108,3 +111,25 @@ def test_collect_and_publish_refreshes_icon_signature_cache(monkeypatch) -> None
     assert role._last_software_icon_hash_by_key == {
         "contoso agent::2.4.1::local_installed": "hash-1"
     }
+
+
+def test_collect_and_publish_passes_icon_overrides_to_snapshot_builder(monkeypatch) -> None:
+    role = _make_role()
+    role._publish_snapshot = lambda snapshot: None
+    role._fetch_icon_overrides = lambda: [{"rule_id": "icon_override_contoso"}]
+    captured = {}
+
+    def _fake_build_snapshot(**kwargs):
+        captured.update(kwargs)
+        return {
+            "software": [],
+            "software_icon_payloads": [],
+            "software_icon_hash_by_key": {},
+            "software_icon_signature": "",
+        }
+
+    monkeypatch.setattr(software_role, "build_software_inventory_snapshot", _fake_build_snapshot)
+
+    role._collect_and_publish()
+
+    assert captured["icon_overrides"] == [{"rule_id": "icon_override_contoso"}]

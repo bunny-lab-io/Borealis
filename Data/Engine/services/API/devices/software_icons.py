@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
+import logging
 import re
+from pathlib import Path
 import time
 from typing import Any, Dict, List, Optional
 
@@ -16,6 +19,13 @@ _ALLOWED_SOFTWARE_ICON_MIME_TYPES = {
     "image/vnd.microsoft.icon",
 }
 _MAX_SOFTWARE_ICON_BYTES = 512 * 1024
+_SOFTWARE_ICON_OVERRIDES_PATH = Path(__file__).resolve().with_name("software_icons_overrides.json")
+_SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS: Optional[int] = None
+_SOFTWARE_ICON_OVERRIDES_CACHE: Dict[str, List[Dict[str, Any]]] = {
+    "windows_icon_overrides": [],
+}
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_text(value: Any) -> str:
@@ -23,6 +33,55 @@ def normalize_text(value: Any) -> str:
         return str(value or "").strip()
     except Exception:
         return ""
+
+
+def _normalize_icon_override_rows(value: Any) -> List[Dict[str, Any]]:
+    rows = value if isinstance(value, list) else []
+    normalized: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        normalized.append({str(key): item for key, item in row.items() if normalize_text(key)})
+    return normalized
+
+
+def load_software_icon_overrides() -> List[Dict[str, Any]]:
+    global _SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS, _SOFTWARE_ICON_OVERRIDES_CACHE
+
+    try:
+        current_mtime_ns = _SOFTWARE_ICON_OVERRIDES_PATH.stat().st_mtime_ns
+    except OSError:
+        current_mtime_ns = None
+
+    if current_mtime_ns is not None and _SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS == current_mtime_ns:
+        return list(_SOFTWARE_ICON_OVERRIDES_CACHE.get("windows_icon_overrides") or [])
+
+    next_cache = {
+        "windows_icon_overrides": [],
+    }
+    if current_mtime_ns is None:
+        _SOFTWARE_ICON_OVERRIDES_CACHE = next_cache
+        _SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS = None
+        return list(_SOFTWARE_ICON_OVERRIDES_CACHE["windows_icon_overrides"])
+
+    try:
+        with _SOFTWARE_ICON_OVERRIDES_PATH.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception as exc:
+        logger.warning("Failed to load software icon overrides from %s: %s", _SOFTWARE_ICON_OVERRIDES_PATH, exc)
+        _SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS = current_mtime_ns
+        return list(_SOFTWARE_ICON_OVERRIDES_CACHE.get("windows_icon_overrides") or [])
+
+    if isinstance(payload, dict):
+        next_cache["windows_icon_overrides"] = _normalize_icon_override_rows(payload.get("windows_icon_overrides"))
+    else:
+        logger.warning("Software icon overrides payload is not an object: %s", _SOFTWARE_ICON_OVERRIDES_PATH)
+        _SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS = current_mtime_ns
+        return list(_SOFTWARE_ICON_OVERRIDES_CACHE.get("windows_icon_overrides") or [])
+
+    _SOFTWARE_ICON_OVERRIDES_CACHE = next_cache
+    _SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS = current_mtime_ns
+    return list(_SOFTWARE_ICON_OVERRIDES_CACHE["windows_icon_overrides"])
 
 
 def normalize_software_icon_hash(value: Any) -> str:

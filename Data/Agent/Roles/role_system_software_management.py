@@ -59,9 +59,11 @@ class Role:
         self._last_refresh_at = 0
         self._last_software_count = 0
         self._last_icon_payload_count = 0
+        self._last_icon_override_count = 0
         self._fast_poll_until = 0.0
         self._last_software_icon_signature = ""
         self._last_software_icon_hash_by_key: Dict[str, str] = {}
+        self._icon_overrides: list[Dict[str, Any]] = []
         self._supported, self._unsupported_reason = self._detect_support()
         if self._supported:
             self._thread = threading.Thread(target=self._poll_loop, daemon=True)
@@ -108,6 +110,35 @@ class Role:
             self._last_error = message
         self._log(message, error=True)
 
+    def _fetch_icon_overrides(self) -> list[Dict[str, Any]]:
+        if not IS_WINDOWS:
+            return []
+        client = self._http_client()
+        if client is None:
+            return list(self._icon_overrides)
+        try:
+            client.ensure_authenticated()
+            client.refresh_base_url()
+            response = client.session.get(
+                f"{client.base_url}/api/agent/software-management/overrides",
+                headers=client.auth_headers(),
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json() if response.headers.get("Content-Type", "").lower().startswith("application/json") else {}
+            rows = payload.get("windows_icon_overrides") if isinstance(payload, dict) else []
+            if not isinstance(rows, list):
+                rows = []
+            normalized = [dict(item) for item in rows if isinstance(item, dict)]
+            with self._lock:
+                self._icon_overrides = normalized
+                self._last_icon_override_count = len(normalized)
+            return list(normalized)
+        except Exception as exc:
+            self._log(f"Software icon overrides fetch failed: {exc}", error=True)
+            with self._lock:
+                return list(self._icon_overrides)
+
     def _publish_snapshot(self, snapshot: Dict[str, Any]) -> None:
         client = self._http_client()
         if client is None:
@@ -141,9 +172,11 @@ class Role:
             self._last_error = ""
 
     def _collect_and_publish(self) -> None:
+        icon_overrides = self._fetch_icon_overrides()
         snapshot = build_software_inventory_snapshot(
             previous_icon_hash_by_key=self._last_software_icon_hash_by_key,
             previous_signature=self._last_software_icon_signature,
+            icon_overrides=icon_overrides,
         )
         self._last_software_icon_signature = str(snapshot.get("software_icon_signature") or "")
         hash_by_key = snapshot.get("software_icon_hash_by_key")
@@ -185,10 +218,12 @@ class Role:
             last_refresh_at = self._last_refresh_at
             software_count = self._last_software_count
             icon_payload_count = self._last_icon_payload_count
+            icon_override_count = self._last_icon_override_count
         details = {
             "running_status": "Running" if thread_alive else "Stopped",
             "software_count": str(software_count),
             "icon_payload_count": str(icon_payload_count),
+            "icon_override_count": str(icon_override_count),
             "last_refresh_at": str(last_refresh_at or 0),
         }
         if last_error:
