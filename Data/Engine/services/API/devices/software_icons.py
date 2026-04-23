@@ -37,6 +37,13 @@ def normalize_text(value: Any) -> str:
         return ""
 
 
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = normalize_text(value).lower()
+    return text in {"1", "true", "yes", "on"}
+
+
 def _normalize_icon_override_rows(value: Any) -> List[Dict[str, Any]]:
     rows = value if isinstance(value, list) else []
     normalized: List[Dict[str, Any]] = []
@@ -82,16 +89,22 @@ def upsert_software_icon_override(rule: Dict[str, Any]) -> Dict[str, Any]:
     rule_id = normalize_text((rule or {}).get("rule_id"))
     if not rule_id:
         raise ValueError("rule_id is required")
-    display_icon = canonicalize_software_icon_override_resource(
-        (rule or {}).get("display_icon") or (rule or {}).get("icon_location")
-    )
-    if not display_icon:
+    clear_icon = _coerce_bool((rule or {}).get("clear_icon") or (rule or {}).get("remove_icon"))
+    display_icon = ""
+    if not clear_icon:
+        display_icon = canonicalize_software_icon_override_resource(
+            (rule or {}).get("display_icon") or (rule or {}).get("icon_location")
+        )
+    if not clear_icon and not display_icon:
         raise ValueError("display_icon must be a valid EXE, DLL, ICO, or icon resource path")
 
     normalized_rule: Dict[str, Any] = {
         "rule_id": rule_id,
-        "display_icon": display_icon,
     }
+    if clear_icon:
+        normalized_rule["clear_icon"] = True
+    else:
+        normalized_rule["display_icon"] = display_icon
     for key in ("source", "name", "version", "product_code"):
         value = normalize_text((rule or {}).get(key))
         if value:

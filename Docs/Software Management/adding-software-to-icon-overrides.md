@@ -14,7 +14,7 @@ Explain how to add file-backed icon-location overrides for installed software wh
 1. Open the device `Installed Software` tab.
 2. Right-click the software name.
 3. Click `Create Global Icon Override`.
-4. Choose a suggested icon candidate or enter a verified `.ico`, `.exe`, `.dll`, or resource path manually.
+4. Choose a suggested icon candidate, enter a verified `.ico`, `.exe`, `.dll`, or resource path manually, or check `Remove the icon entirely` if you intentionally want Borealis to blank the icon.
 5. Save the override.
 6. Borealis writes the rule into `software_icons_overrides.json`, hotloads it immediately, and requests a software inventory refresh for that device.
 7. Use `Query Software Changes` when you want to force a fresh software snapshot instead of waiting for the normal poll cadence.
@@ -31,6 +31,21 @@ Explain how to add file-backed icon-location overrides for installed software wh
       "version": "2.4.1",
       "publisher_contains_any": ["Contoso Ltd"],
       "display_icon": "C:\\Program Files\\Contoso Agent\\branding\\agent.ico"
+    }
+  ]
+}
+```
+
+Clear-icon rules are also supported:
+
+```json
+{
+  "windows_icon_overrides": [
+    {
+      "rule_id": "icon_override_contoso_agent_blank",
+      "source": "local_installed",
+      "name": "Contoso Agent",
+      "clear_icon": true
     }
   ]
 }
@@ -53,6 +68,8 @@ Explain how to add file-backed icon-location overrides for installed software wh
 ## Required Action Field
 - `display_icon`
   Verified icon resource string to hand back to the agent. This can be an `.ico`, `.exe`, `.dll`, or a Windows resource string such as `C:\Program Files\Vendor\App\app.exe,0`.
+- `clear_icon`
+  Optional boolean flag. When `true`, Borealis intentionally blanks the icon for matching rows instead of extracting one.
 
 ## Behavior Notes
 - The first matching rule wins.
@@ -64,6 +81,8 @@ Explain how to add file-backed icon-location overrides for installed software wh
   - `metadata.original_display_icon`
   - `metadata.display_icon_override`
   - `metadata.display_icon_override_rule_id`
+- Clear-icon overrides also set:
+  - `metadata.display_icon_override_cleared`
 - The new icon appears after the next `software_management` inventory refresh from the agent.
 
 ## Manual File Workflow

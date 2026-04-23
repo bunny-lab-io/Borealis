@@ -119,6 +119,12 @@ def _normalize_display_icon_hint(value: Any) -> str:
 normalize_display_icon_hint = _normalize_display_icon_hint
 
 
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return _clean_text(value).lower() in {"1", "true", "yes", "on"}
+
+
 def _parse_display_icon_resource(value: Any) -> dict | None:
     text = _normalize_display_icon_hint(value)
     if not text:
@@ -154,6 +160,7 @@ def _software_icon_signature(rows: Any) -> str:
             {
                 "key": _software_row_key(row),
                 "display_icon": _normalize_display_icon_hint(metadata.get("display_icon")),
+                "display_icon_override_cleared": _coerce_bool(metadata.get("display_icon_override_cleared")),
             }
         )
     try:
@@ -410,17 +417,21 @@ def apply_software_icon_overrides(rows: Any, overrides: Any) -> List[Dict[str, A
         for rule in normalized_overrides:
             if not isinstance(rule, dict):
                 continue
-            display_icon = normalize_display_icon_hint(rule.get("display_icon") or rule.get("icon_location"))
-            if not display_icon:
-                continue
             if not _software_matches_icon_override(row, rule):
                 continue
+            clear_icon = _coerce_bool(rule.get("clear_icon") or rule.get("remove_icon"))
+            display_icon = normalize_display_icon_hint(rule.get("display_icon") or rule.get("icon_location"))
+            if not clear_icon and not display_icon:
+                continue
             original_display_icon = _clean_text(metadata.get("display_icon"))
-            if original_display_icon and original_display_icon != display_icon and not metadata.get("original_display_icon"):
+            if original_display_icon and (clear_icon or original_display_icon != display_icon) and not metadata.get("original_display_icon"):
                 metadata["original_display_icon"] = original_display_icon
-            metadata["display_icon"] = display_icon
-            metadata["display_icon_override"] = display_icon
+            metadata["display_icon"] = "" if clear_icon else display_icon
+            metadata["display_icon_override"] = "" if clear_icon else display_icon
             metadata["display_icon_override_rule_id"] = _clean_text(rule.get("rule_id"))
+            metadata["display_icon_override_cleared"] = bool(clear_icon)
+            if clear_icon:
+                metadata.pop("icon_hash", None)
             break
     return normalized_rows
 
@@ -447,6 +458,11 @@ def attach_windows_software_icons(
         metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
         row_key = _software_row_key(row)
         if not row_key:
+            continue
+        if _coerce_bool(metadata.get("display_icon_override_cleared")):
+            metadata.pop("icon_hash", None)
+            row["metadata"] = metadata
+            icon_hash_by_key.pop(row_key, None)
             continue
         cached_icon_hash = icon_hash_by_key.get(row_key)
         if cached_icon_hash:

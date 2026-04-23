@@ -41,6 +41,43 @@ def test_apply_software_icon_overrides_replaces_display_icon_and_preserves_origi
     assert metadata["display_icon_override_rule_id"] == "icon_override_contoso_agent"
 
 
+def test_apply_software_icon_overrides_can_clear_icon_and_preserve_original() -> None:
+    rows = [
+        {
+            "name": "Contoso Agent",
+            "version": "2.4.1",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Contoso Ltd",
+                "install_location": r"C:\Program Files\Contoso Agent",
+                "display_icon": r"C:\Program Files\Contoso Agent\agent.exe,0",
+                "icon_hash": "deadbeef",
+            },
+        }
+    ]
+
+    updated = software_management.apply_software_icon_overrides(
+        rows,
+        [
+            {
+                "rule_id": "icon_override_contoso_agent_clear",
+                "source": "local_installed",
+                "name": "Contoso Agent",
+                "version": "2.4.1",
+                "clear_icon": True,
+            }
+        ],
+    )
+
+    metadata = updated[0]["metadata"]
+    assert metadata["display_icon"] == ""
+    assert metadata["original_display_icon"] == r"C:\Program Files\Contoso Agent\agent.exe,0"
+    assert metadata["display_icon_override"] == ""
+    assert metadata["display_icon_override_rule_id"] == "icon_override_contoso_agent_clear"
+    assert metadata["display_icon_override_cleared"] is True
+    assert "icon_hash" not in metadata
+
+
 def test_collect_software_includes_windows_uninstall_metadata(monkeypatch) -> None:
     monkeypatch.setattr(software_management.platform, "system", lambda: "Windows")
 
@@ -156,6 +193,34 @@ def test_attach_windows_software_icons_adds_icon_hash_and_deduped_payloads(monke
         "contoso agent::2.4.1::local_installed": expected_hash,
         "contoso agent tools::2.4.1::local_installed": expected_hash,
     }
+
+
+def test_attach_windows_software_icons_drops_cached_hash_when_icon_is_cleared(monkeypatch) -> None:
+    monkeypatch.setattr(software_management.platform, "system", lambda: "Windows")
+
+    rows = [
+        {
+            "name": "Contoso Agent",
+            "version": "2.4.1",
+            "source": "local_installed",
+            "metadata": {
+                "display_icon": "",
+                "display_icon_override_cleared": True,
+                "icon_hash": "stalehash",
+            },
+        }
+    ]
+
+    payloads, icon_hash_by_key = software_management.attach_windows_software_icons(
+        rows,
+        previous_icon_hash_by_key={
+            "contoso agent::2.4.1::local_installed": "stalehash",
+        },
+    )
+
+    assert payloads == []
+    assert icon_hash_by_key == {}
+    assert "icon_hash" not in rows[0]["metadata"]
 
 
 def test_extract_windows_icon_payloads_by_hint_batches_large_requests(monkeypatch) -> None:

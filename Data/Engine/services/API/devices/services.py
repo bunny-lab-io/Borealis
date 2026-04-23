@@ -342,6 +342,12 @@ def _slugify_software_token(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "_", normalize_text(value).lower()).strip("_")
 
 
+def _coerce_bool_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return normalize_text(value).lower() in {"1", "true", "yes", "on"}
+
+
 def _build_software_rule_id(prefix: str, software_entry: Dict[str, Any]) -> str:
     tokens = [
         _slugify_software_token(prefix),
@@ -798,10 +804,13 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify(payload), status
 
         body = request.get_json(silent=True) or {}
-        display_icon = canonicalize_software_icon_override_resource(
-            body.get("display_icon") or body.get("icon_location")
-        )
-        if not display_icon:
+        clear_icon = _coerce_bool_flag(body.get("clear_icon") or body.get("remove_icon"))
+        display_icon = ""
+        if not clear_icon:
+            display_icon = canonicalize_software_icon_override_resource(
+                body.get("display_icon") or body.get("icon_location")
+            )
+        if not clear_icon and not display_icon:
             return (
                 jsonify(
                     {
@@ -815,8 +824,11 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
         rule = {
             "rule_id": _build_software_rule_id("icon_override", software_entry or {}),
             **_build_software_rule_match_base(software_entry or {}),
-            "display_icon": display_icon,
         }
+        if clear_icon:
+            rule["clear_icon"] = True
+        else:
+            rule["display_icon"] = display_icon
         try:
             persisted_rule = upsert_software_icon_override(rule)
         except ValueError as exc:

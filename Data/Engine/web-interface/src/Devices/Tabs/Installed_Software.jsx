@@ -2,10 +2,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Box,
   Button,
+  Checkbox,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
   Menu,
   MenuItem,
   TextField,
@@ -644,11 +646,23 @@ function getUninstallCommandPreview(row = {}) {
 
 function getCurrentSoftwareIconOverride(row = {}) {
   const metadata = getSoftwareMetadata(row);
+  if (isSoftwareIconCleared(row)) {
+    return "";
+  }
   return [
     String(metadata?.display_icon_override || "").trim(),
     String(metadata?.display_icon || "").trim(),
     String(metadata?.original_display_icon || "").trim(),
   ].find((value) => isLikelyWindowsIconResource(value)) || "";
+}
+
+function isSoftwareIconCleared(row = {}) {
+  const metadata = getSoftwareMetadata(row);
+  const flag = metadata?.display_icon_override_cleared;
+  if (typeof flag === "boolean") {
+    return flag;
+  }
+  return ["1", "true", "yes", "on"].includes(String(flag || "").trim().toLowerCase());
 }
 
 function buildIconOverrideDialogState(row = {}) {
@@ -657,10 +671,12 @@ function buildIconOverrideDialogState(row = {}) {
   const parsedUninstall = splitWindowsCommandLine(String(metadata?.uninstall_string || "").trim());
   const candidates = buildSuggestedIconCandidates(row, parsedQuiet, parsedUninstall);
   const currentDisplayIcon = getCurrentSoftwareIconOverride(row);
+  const clearIcon = isSoftwareIconCleared(row);
   return {
-    selectedCandidate: currentDisplayIcon && candidates.includes(currentDisplayIcon) ? currentDisplayIcon : "",
-    manualPath: currentDisplayIcon || "",
+    selectedCandidate: !clearIcon && currentDisplayIcon && candidates.includes(currentDisplayIcon) ? currentDisplayIcon : "",
+    manualPath: clearIcon ? "" : currentDisplayIcon || "",
     candidates,
+    clearIcon,
   };
 }
 
@@ -879,6 +895,7 @@ export default function InstalledSoftwareTab({
     selectedCandidate: "",
     manualPath: "",
     candidatePaths: [],
+    clearIcon: false,
     applicationPath: "",
     arguments: "",
     reason: "",
@@ -929,6 +946,7 @@ export default function InstalledSoftwareTab({
       selectedCandidate: "",
       manualPath: "",
       candidatePaths: [],
+      clearIcon: false,
       applicationPath: "",
       arguments: "",
       reason: "",
@@ -960,6 +978,7 @@ export default function InstalledSoftwareTab({
           selectedCandidate: nextState.selectedCandidate,
           manualPath: nextState.manualPath,
           candidatePaths: nextState.candidates,
+          clearIcon: nextState.clearIcon,
           applicationPath: "",
           arguments: "",
           reason: "",
@@ -978,6 +997,7 @@ export default function InstalledSoftwareTab({
           selectedCandidate: "",
           manualPath: "",
           candidatePaths: [],
+          clearIcon: false,
           applicationPath: nextState.applicationPath,
           arguments: nextState.arguments,
           reason: "",
@@ -994,6 +1014,7 @@ export default function InstalledSoftwareTab({
         selectedCandidate: "",
         manualPath: "",
         candidatePaths: [],
+        clearIcon: false,
         applicationPath: "",
         arguments: "",
         reason: "",
@@ -1021,10 +1042,11 @@ export default function InstalledSoftwareTab({
     let refreshOptions = { burst: false };
 
     if (kind === "icon_override") {
+      const clearIcon = Boolean(softwareActionDialog?.clearIcon);
       const selectedPath =
         String(softwareActionDialog?.manualPath || "").trim() ||
         String(softwareActionDialog?.selectedCandidate || "").trim();
-      if (!selectedPath) {
+      if (!clearIcon && !selectedPath) {
         await notifyOperator({
           title: "Icon Override Required",
           message: "Choose a suggested icon path or enter one manually before saving.",
@@ -1036,7 +1058,7 @@ export default function InstalledSoftwareTab({
       endpoint = `/api/device/software/${encodeURIComponent(normalizedHostname)}/icon-override`;
       body = {
         ...payload,
-        display_icon: selectedPath,
+        ...(clearIcon ? { clear_icon: true } : { display_icon: selectedPath }),
       };
       refreshOptions = { burst: true };
     } else if (kind === "uninstall_override") {
@@ -1201,6 +1223,7 @@ export default function InstalledSoftwareTab({
             String(metadata?.display_icon_override || "").trim(),
             String(metadata?.display_icon || "").trim(),
             String(metadata?.original_display_icon || "").trim(),
+            String(metadata?.display_icon_override_cleared || "").trim(),
           ].join("|");
         })
         .join("||"),
@@ -1612,7 +1635,7 @@ export default function InstalledSoftwareTab({
   const softwareActionDialogSubtitle = useMemo(() => {
     switch (softwareActionDialogKind) {
       case "icon_override":
-        return "Choose a candidate icon resource or enter a verified EXE, DLL, or ICO path. If no icon index is provided, Borealis uses icon index 0.";
+        return "Choose a candidate icon resource, enter a verified EXE, DLL, or ICO path, or remove the icon entirely. If no icon index is provided, Borealis uses icon index 0.";
       case "uninstall_override":
         return "Provide the executable path and arguments Borealis should trust globally for this software uninstall.";
       case "uninstall_block":
@@ -1798,6 +1821,7 @@ export default function InstalledSoftwareTab({
                   fullWidth
                   label="Suggested Icon Candidates"
                   value={softwareActionDialog?.selectedCandidate || ""}
+                  disabled={Boolean(softwareActionDialog?.clearIcon)}
                   onChange={(event) => {
                     const nextValue = String(event.target.value || "");
                     setSoftwareActionDialog((current) => ({
@@ -1820,6 +1844,7 @@ export default function InstalledSoftwareTab({
                   fullWidth
                   label="Manual Icon Resource Path"
                   value={softwareActionDialog?.manualPath || ""}
+                  disabled={Boolean(softwareActionDialog?.clearIcon)}
                   onChange={(event) => {
                     const nextValue = String(event.target.value || "");
                     setSoftwareActionDialog((current) => ({ ...current, manualPath: nextValue }));
@@ -1933,23 +1958,64 @@ export default function InstalledSoftwareTab({
             ) : null}
           </Box>
         </DialogContent>
-        <DialogActions sx={DIALOG_ACTIONS_SX}>
-          <Button
-            onClick={handleCloseSoftwareActionDialog}
-            disabled={Boolean(softwareActionDialog?.submitting)}
-            sx={DIALOG_BUTTON_SX}
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={() => {
-              void submitSoftwareAction();
-            }}
-            disabled={Boolean(softwareActionDialog?.submitting)}
-            sx={DIALOG_BUTTON_SX}
-          >
-            {softwareActionDialog?.submitting ? "Saving..." : softwareActionDialogConfirmLabel}
-          </Button>
+        <DialogActions sx={{ ...DIALOG_ACTIONS_SX, justifyContent: "space-between", gap: 1 }}>
+          {softwareActionDialogKind === "icon_override" ? (
+            <FormControlLabel
+              sx={{
+                mr: "auto",
+                color: "rgba(191,219,254,0.9)",
+                "& .MuiFormControlLabel-label": {
+                  fontSize: "0.88rem",
+                },
+              }}
+              control={
+                <Checkbox
+                  checked={Boolean(softwareActionDialog?.clearIcon)}
+                  disabled={Boolean(softwareActionDialog?.submitting)}
+                  onChange={(event) => {
+                    const checked = Boolean(event.target.checked);
+                    setSoftwareActionDialog((current) => ({
+                      ...current,
+                      clearIcon: checked,
+                      ...(checked
+                        ? {
+                            selectedCandidate: "",
+                            manualPath: "",
+                          }
+                        : {}),
+                    }));
+                  }}
+                  sx={{
+                    color: "rgba(148,163,184,0.72)",
+                    "&.Mui-checked": {
+                      color: "#7dd3fc",
+                    },
+                  }}
+                />
+              }
+              label="Remove the icon entirely"
+            />
+          ) : (
+            <Box sx={{ mr: "auto" }} />
+          )}
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <Button
+              onClick={handleCloseSoftwareActionDialog}
+              disabled={Boolean(softwareActionDialog?.submitting)}
+              sx={DIALOG_BUTTON_SX}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                void submitSoftwareAction();
+              }}
+              disabled={Boolean(softwareActionDialog?.submitting)}
+              sx={DIALOG_BUTTON_SX}
+            >
+              {softwareActionDialog?.submitting ? "Saving..." : softwareActionDialogConfirmLabel}
+            </Button>
+          </Box>
         </DialogActions>
       </Dialog>
       <ConfirmDeleteDialog
