@@ -154,16 +154,6 @@ def _attributes_for_path(name: str, path_value: str, stat_result, *, is_dir: boo
     return attributes
 
 
-def _directory_has_children(path_value: str) -> bool:
-    try:
-        with os.scandir(path_value) as scan:
-            for _entry in scan:
-                return True
-    except Exception:
-        return False
-    return False
-
-
 def _entry_from_path(path_value: str, *, parent_path: str = "", force_name: str = "") -> Dict[str, Any]:
     normalized = _normalize_requested_path(path_value)
     stat_result = _safe_lstat(normalized)
@@ -184,7 +174,7 @@ def _entry_from_path(path_value: str, *, parent_path: str = "", force_name: str 
         "size_bytes": 0 if is_dir else int(getattr(stat_result, "st_size", 0) or 0),
         "modified_at": int(getattr(stat_result, "st_mtime", 0) or 0),
         "attributes": attributes,
-        "has_children": bool(is_dir and not is_symlink and _directory_has_children(normalized)),
+        "has_children": bool(is_dir and not is_symlink),
         "is_hidden": "hidden" in attributes,
     }
 

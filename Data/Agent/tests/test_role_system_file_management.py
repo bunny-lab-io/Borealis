@@ -72,6 +72,39 @@ def test_file_management_children_marks_directory_symlink_non_expandable(tmp_pat
     asyncio.run(_run_test())
 
 
+def test_file_management_children_does_not_probe_nested_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_sio = _FakeSio()
+    role = _make_role(fake_sio)
+    role.register_events()
+    handler = fake_sio.handlers["file_management_request"]
+
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    (folder / "nested.txt").write_text("hello", encoding="utf-8")
+    (tmp_path / "plain.txt").write_text("world", encoding="utf-8")
+
+    original_scandir = role_module.os.scandir
+
+    def _guarded_scandir(path):
+        if os.fspath(path) == os.fspath(folder):
+            raise AssertionError("children listing should not recurse into nested directories")
+        return original_scandir(path)
+
+    monkeypatch.setattr(role_module.os, "scandir", _guarded_scandir)
+
+    async def _run_test():
+        response = await handler({"action": "children", "path": str(tmp_path)})
+        assert response["ok"] is True
+        entries = {entry["name"]: entry for entry in response["entries"]}
+        assert entries["folder"]["kind"] == "directory"
+        assert entries["folder"]["has_children"] is True
+        assert entries["plain.txt"]["kind"] == "file"
+
+    asyncio.run(_run_test())
+
+
 def test_file_management_handler_rejects_root_rename() -> None:
     fake_sio = _FakeSio()
     role = _make_role(fake_sio)

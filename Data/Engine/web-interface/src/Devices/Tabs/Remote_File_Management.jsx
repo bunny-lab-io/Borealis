@@ -963,7 +963,7 @@ export default function RemoteFileManagement({ device }) {
           const row = params?.data || {};
           const expanded = params?.context?.expandedPaths?.has(row.path);
           const isLoading = params?.context?.loadingPaths?.has(row.path);
-          const canExpand = isDirectory(row) && Boolean(row?.has_children);
+          const canExpand = isDirectory(row);
           const IconComponent =
             row?.kind === "directory"
               ? expanded
