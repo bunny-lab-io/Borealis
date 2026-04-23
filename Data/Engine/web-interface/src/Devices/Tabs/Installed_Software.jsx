@@ -621,7 +621,7 @@ function buildSoftwareDebugPayload(row = {}, hostname = "") {
         "Docs/Software Management/adding-software-to-uninstall-blocklist.md",
       ],
       review_fields: {
-        display_icon,
+        display_icon: displayIcon,
         quiet_uninstall_string: quietUninstallString,
         uninstall_string: uninstallString,
         install_location: String(metadata?.install_location || "").trim(),
@@ -905,13 +905,23 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
       });
       return;
     }
-    const payload = buildSoftwareDebugPayload(row, normalizedHostname);
-    const softwareName = String(row?.name || "").trim() || "Software";
-    setSoftwareDebugDialog({
-      open: true,
-      title: `Software Debug Information - ${softwareName}`,
-      content: JSON.stringify(payload, null, 2),
-    });
+    try {
+      const payload = buildSoftwareDebugPayload(row, normalizedHostname);
+      const softwareName = String(row?.name || "").trim() || "Software";
+      setSoftwareDebugDialog({
+        open: true,
+        title: `Software Debug Information - ${softwareName}`,
+        content: JSON.stringify(payload, null, 2),
+      });
+    } catch (error) {
+      console.warn("Failed to build software debug payload", error);
+      await notifyOperator({
+        title: "Software Debug Info Failed",
+        message: "Borealis could not build the software debug payload for this row.",
+        icon: "error",
+        variant: "error",
+      });
+    }
   }, [handleCloseSoftwareDebugMenu, normalizedHostname, notifyOperator, softwareDebugMenu]);
 
   const handleCopyDisplayedSoftwareDebugInformation = useCallback(async () => {
