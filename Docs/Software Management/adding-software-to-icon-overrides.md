@@ -99,6 +99,7 @@ Explain how to add file-backed icon-location overrides for installed software wh
   - `software.metadata.display_icon`
   - `software.metadata.original_display_icon`
   - `suggested_entries.icon_override`
+- If `suggested_entries.icon_override.display_icon` is blank, Borealis did not find a confirmed icon resource string. In that case, review `suggested_entries.icon_override.candidate_display_icon_paths` and verify one of those paths manually before using it.
 - If the copied payload already contains `display_icon_override`, treat that as the current active override value.
 
 ### Recommended authoring rules

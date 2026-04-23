@@ -218,6 +218,83 @@ function trimWindowsPath(value = "") {
   return String(value || "").trim().replace(/[\\/]+$/, "");
 }
 
+function isLikelyWindowsIconResource(value = "") {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  return /^\s*"?.+?\.(?:exe|dll|ico|icl|cpl|ocx|scr)"?\s*(?:,\s*-?\d+)?\s*$/i.test(text);
+}
+
+function toWindowsResourceCandidate(filePath = "", iconIndex = 0) {
+  const normalizedPath = trimWindowsPath(String(filePath || "").replace(/\//g, "\\"));
+  if (!normalizedPath) return "";
+  if (!/\.(?:exe|dll|ico|icl|cpl|ocx|scr)$/i.test(normalizedPath)) return "";
+  if (/\.ico$/i.test(normalizedPath)) {
+    return normalizedPath;
+  }
+  return `${normalizedPath},${Number.isFinite(Number(iconIndex)) ? Number(iconIndex) : 0}`;
+}
+
+function pushUniqueText(list, value) {
+  const normalizedValue = String(value || "").trim();
+  if (!normalizedValue) return;
+  if (!list.includes(normalizedValue)) {
+    list.push(normalizedValue);
+  }
+}
+
+function buildSoftwareNamePathTokens(name = "") {
+  const baseName = String(name || "").trim();
+  if (!baseName) return [];
+  const variants = [];
+  const withoutParens = baseName.replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s+/g, " ").trim();
+  const sanitized = withoutParens.replace(/[<>:"/\\|?*]/g, "").trim();
+  pushUniqueText(variants, baseName);
+  pushUniqueText(variants, withoutParens);
+  pushUniqueText(variants, sanitized);
+  for (const candidate of [...variants]) {
+    pushUniqueText(variants, candidate.replace(/\s+/g, ""));
+    pushUniqueText(variants, candidate.replace(/\s+/g, "_"));
+    pushUniqueText(variants, candidate.replace(/\s+/g, "-"));
+  }
+  return variants.filter(Boolean);
+}
+
+function buildSuggestedIconCandidates(row = {}, parsedQuiet = null, parsedUninstall = null) {
+  const metadata = getSoftwareMetadata(row);
+  const candidates = [];
+  const installLocation = trimWindowsPath(metadata?.install_location || "");
+
+  const addCommandCandidate = (parsedCommand) => {
+    const rawPath = String(parsedCommand?.filePath || "").trim();
+    if (!rawPath) return;
+    if (/^(?:[a-z]:\\|\\\\)/i.test(rawPath)) {
+      pushUniqueText(candidates, toWindowsResourceCandidate(rawPath, 0));
+      return;
+    }
+    if (!installLocation) return;
+    if (!/\.(?:exe|dll|ico|icl|cpl|ocx|scr)$/i.test(rawPath)) return;
+    pushUniqueText(candidates, toWindowsResourceCandidate(`${installLocation}\\${rawPath}`, 0));
+  };
+
+  addCommandCandidate(parsedQuiet);
+  addCommandCandidate(parsedUninstall);
+
+  if (installLocation) {
+    const installLeaf = installLocation.split(/[/\\]+/).filter(Boolean).pop() || "";
+    const nameTokens = buildSoftwareNamePathTokens(row?.name || "");
+    const pathTokens = [];
+    for (const token of nameTokens) {
+      pushUniqueText(pathTokens, token);
+    }
+    pushUniqueText(pathTokens, installLeaf);
+    for (const token of pathTokens) {
+      pushUniqueText(candidates, toWindowsResourceCandidate(`${installLocation}\\${token}.exe`, 0));
+    }
+  }
+
+  return candidates.filter(Boolean).slice(0, 8);
+}
+
 function deriveFallbackUninstallCapability(row = {}) {
   const source = String(row?.source || "").trim().toLowerCase();
   const metadata = getSoftwareMetadata(row);
@@ -554,6 +631,14 @@ function buildSoftwareDebugPayload(row = {}, hostname = "") {
   const uninstallArgs = String(parsedUninstall?.arguments || "").trim();
   const quietArgTokens = quietArgs ? quietArgs.split(/\s+/).filter(Boolean) : [];
   const displayIcon = String(metadata?.display_icon || "").trim();
+  const originalDisplayIcon = String(metadata?.display_icon_original || "").trim();
+  const displayIconOverride = String(metadata?.display_icon_override || "").trim();
+  const suggestedIconCandidates = buildSuggestedIconCandidates(row, parsedQuiet, parsedUninstall);
+  const iconOverrideDisplayIcon = [
+    displayIconOverride,
+    displayIcon,
+    originalDisplayIcon,
+  ].find((value) => isLikelyWindowsIconResource(value)) || "";
 
   return {
     schema: "borealis_software_debug_v1",
@@ -580,12 +665,10 @@ function buildSoftwareDebugPayload(row = {}, hostname = "") {
       icon_override: {
         rule_id: buildSoftwareRuleId("icon_override", row),
         ...matchHints,
-        display_icon:
-          String(metadata?.display_icon_override || "").trim() ||
-          displayIcon ||
-          String(metadata?.display_icon_original || "").trim() ||
-          trimWindowsPath(metadata?.install_location || ""),
-        notes: "Set display_icon to a verified EXE, DLL, ICO, or resource path such as C:\\Program Files\\Vendor\\App\\app.exe,0.",
+        display_icon: iconOverrideDisplayIcon,
+        candidate_display_icon_paths: suggestedIconCandidates,
+        notes:
+          "Set display_icon to a verified EXE, DLL, ICO, or resource path such as C:\\Program Files\\Vendor\\App\\app.exe,0. Borealis does not treat install-location folders as valid icon resources.",
       },
       uninstall_override: {
         rule_id: buildSoftwareRuleId("uninstall_override", row),
@@ -628,8 +711,9 @@ function buildSoftwareDebugPayload(row = {}, hostname = "") {
         product_code: String(metadata?.product_code || "").trim(),
         package_family_name: String(metadata?.package_family_name || "").trim(),
         publisher: String(metadata?.publisher || "").trim(),
-        original_display_icon: String(metadata?.original_display_icon || "").trim(),
-        display_icon_override: String(metadata?.display_icon_override || "").trim(),
+        original_display_icon: originalDisplayIcon,
+        display_icon_override: displayIconOverride,
+        candidate_display_icon_paths: suggestedIconCandidates,
       },
       parsed_commands: {
         quiet_uninstall: parsedQuiet || null,
