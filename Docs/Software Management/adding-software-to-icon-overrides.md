@@ -17,7 +17,7 @@ Explain how to add file-backed icon-location overrides for installed software wh
 4. Choose a suggested icon candidate or enter a verified `.ico`, `.exe`, `.dll`, or resource path manually.
 5. Save the override.
 6. Borealis writes the rule into `software_icons_overrides.json`, hotloads it immediately, and requests a software inventory refresh for that device.
-7. Use `Query Software Updates` when you want to force a fresh software snapshot instead of waiting for the normal poll cadence.
+7. Use `Query Software Changes` when you want to force a fresh software snapshot instead of waiting for the normal poll cadence.
 8. After the override behaves correctly, commit `software_icons_overrides.json` to Git if you want to make the rule official for all Borealis users.
 
 ## JSON Shape
@@ -70,7 +70,7 @@ Explain how to add file-backed icon-location overrides for installed software wh
 1. Open `software_icons_overrides.json`.
 2. Add or update a rule under `windows_icon_overrides`.
 3. Save the file.
-4. Wait for the next agent software-management override fetch or trigger `Query Software Updates` from the Installed Software tab.
+4. Wait for the next agent software-management override fetch or trigger `Query Software Changes` from the Installed Software tab.
 
 ## Example
 ```json

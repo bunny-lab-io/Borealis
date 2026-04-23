@@ -19,7 +19,7 @@ Explain how to provide file-backed custom uninstall plans when Windows registry 
 4. Enter the application path and any arguments Borealis should run for unattended uninstall.
 5. Save the override.
 6. Borealis writes the rule into `software_uninstall_overrides.json` and hotloads it immediately.
-7. Test the uninstall from the same software row. If you also changed icon behavior, you can use `Query Software Updates` to force a fresh software snapshot.
+7. Test the uninstall from the same software row. If you also changed icon behavior, you can use `Query Software Changes` to force a fresh software snapshot.
 8. Commit `software_uninstall_overrides.json` to Git later when the override should become an official shipped rule.
 
 ## JSON Shape

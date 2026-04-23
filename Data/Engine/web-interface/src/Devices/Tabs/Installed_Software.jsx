@@ -1135,14 +1135,14 @@ export default function InstalledSoftwareTab({
       requestSoftwareDataRefresh({ burst: true });
       await notifyOperator({
         title: "Software Refresh Requested",
-        message: `Borealis queued a software refresh for <b>${normalizedHostname}</b>. Updated inventory should start appearing shortly.`,
+        message: `Borealis queued a software change query for <b>${normalizedHostname}</b>. Updated inventory should start appearing shortly.`,
         icon: "success",
         variant: "success",
       });
     } catch (error) {
       await notifyOperator({
         title: "Software Refresh Failed",
-        message: `Borealis could not query software updates for <b>${normalizedHostname || "this device"}</b>: ${String(error?.message || error)}`,
+        message: `Borealis could not query software changes for <b>${normalizedHostname || "this device"}</b>: ${String(error?.message || error)}`,
         icon: "error",
         variant: "error",
       });
@@ -1671,7 +1671,7 @@ export default function InstalledSoftwareTab({
           startIcon={<RefreshRoundedIcon />}
           sx={PRIMARY_REFRESH_BUTTON_SX}
         >
-          {softwareRefreshBusy ? "Querying..." : "Query Software Updates"}
+          {softwareRefreshBusy ? "Querying..." : "Query Software Changes"}
         </Button>
       </Box>
       <GridShell

@@ -776,7 +776,7 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
                 jsonify(
                     {
                         "error": "agent_unavailable",
-                        "message": "The agent SYSTEM socket is not available to query software updates right now.",
+                        "message": "The agent SYSTEM socket is not available to query software changes right now.",
                         **refresh_payload,
                     }
                 ),
