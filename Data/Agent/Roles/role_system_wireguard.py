@@ -56,7 +56,7 @@ except Exception:  # pragma: no cover - fallback for runtime path issues
         sys.path.insert(0, str(base_dir))
     from signature_utils import verify_and_store_script_signature
 
-ROLE_NAME = "WireGuardTunnel"
+ROLE_NAME = "wireguard"
 ROLE_CONTEXTS = ["system"]
 TUNNEL_NAME = "Borealis"
 TUNNEL_DISPLAY_NAME = "Borealis"

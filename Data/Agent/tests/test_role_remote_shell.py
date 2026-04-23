@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import Data.Agent.Roles.role_RemoteShell as remote_shell_role
+import Data.Agent.Roles.role_system_remote_shell as remote_shell_role
 
 
 class _FakeConn:

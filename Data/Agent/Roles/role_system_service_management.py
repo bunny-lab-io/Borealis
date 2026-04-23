@@ -9,7 +9,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 
-ROLE_NAME = "service_control"
+ROLE_NAME = "service_management"
 ROLE_CONTEXTS = ["system"]
 
 IS_WINDOWS = os.name == "nt"
@@ -110,7 +110,7 @@ def _linux_status_code(active_state: str, sub_state: str) -> str:
 class Role:
     def __init__(self, ctx) -> None:
         self.ctx = ctx
-        self.role_health_label = "Service Control"
+        self.role_health_label = "Service Management"
         hooks = getattr(ctx, "hooks", {}) or {}
         self._log_hook = hooks.get("log_agent")
         self._http_client_factory = hooks.get("http_client")
@@ -325,7 +325,7 @@ class Role:
             self._wakeup.wait(timeout)
             self._wakeup.clear()
 
-    def _action_worker(self, service_name: str, action: str, requested_by: str) -> None:
+    def run_action(self, service_name: str, action: str, requested_by: str) -> None:
         try:
             self._log(
                 "Service control request action={0} service_name={1} requested_by={2}".format(
@@ -349,27 +349,11 @@ class Role:
             self._record_error(f"Post-action service refresh failed: {exc}")
         self._request_boost()
 
-    def register_events(self) -> None:
-        sio = self.ctx.sio
+    def request_action(self, service_name: str, action: str, requested_by: str) -> None:
+        self.run_action(service_name, action, requested_by)
 
-        @sio.on("service_control_action")
-        async def _service_control_action(payload):
-            if not isinstance(payload, dict):
-                return
-            target_agent = _clean_text(payload.get("agent_id"))
-            if target_agent and target_agent != _clean_text(self.ctx.agent_id):
-                return
-            action = _normalize_action(payload.get("action"))
-            service_name = _clean_text(payload.get("service_name"))
-            requested_by = _clean_text(payload.get("requested_by"))
-            if not action or not service_name:
-                return
-            worker = threading.Thread(
-                target=self._action_worker,
-                args=(service_name, action, requested_by),
-                daemon=True,
-            )
-            worker.start()
+    def register_events(self) -> None:
+        return None
 
     def health_report(self) -> Dict[str, Any]:
         if not self._supported:

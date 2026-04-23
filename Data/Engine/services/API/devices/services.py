@@ -300,6 +300,22 @@ def _build_windows_uninstall_doc(software_entry: Dict[str, Any], uninstall_plan:
     }
 
 
+def _software_uninstall_command_preview(uninstall_plan: Dict[str, Any]) -> str:
+    quiet_command = normalize_text(uninstall_plan.get("quiet_uninstall_string"))
+    if quiet_command:
+        return quiet_command
+    uninstall_command = normalize_text(uninstall_plan.get("uninstall_string"))
+    if uninstall_command:
+        return uninstall_command
+    product_code = normalize_text(uninstall_plan.get("product_code"))
+    if product_code:
+        return f"msiexec.exe /x {product_code} /qn /norestart"
+    package_family_name = normalize_text(uninstall_plan.get("package_family_name"))
+    if package_family_name:
+        return f"Remove-AppxPackage -AllUsers ({package_family_name})"
+    return ""
+
+
 def register_services(app, adapters: "EngineServiceAdapters") -> None:
     blueprint = Blueprint("device_services", __name__)
     logger = adapters.context.logger.getChild("device_services.api")
@@ -661,6 +677,7 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
             )
 
         uninstall_doc = _build_windows_uninstall_doc(software_entry, uninstall_plan)
+        uninstall_command_preview = _software_uninstall_command_preview(uninstall_plan)
         try:
             dispatch = dispatch_inline_quick_job(
                 adapters,
@@ -670,6 +687,17 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
                 requested_by=operator_id,
                 run_mode="system",
                 assembly_source="device_software_uninstall",
+                queue_lane="software_management",
+                activity_kind="software_uninstall",
+                activity_metadata={
+                    "software_name": normalize_text(software_entry.get("name")),
+                    "software_version": normalize_text(software_entry.get("version")),
+                    "software_source": normalize_software_source(software_entry.get("source")),
+                    "uninstall_strategy": normalize_text(uninstall_plan.get("strategy")),
+                    "uninstall_summary": normalize_text(uninstall_plan.get("summary")),
+                    "uninstall_rule_id": normalize_text(uninstall_plan.get("rule_id")),
+                    "command_preview": uninstall_command_preview,
+                },
             )
         except ValueError as exc:
             return jsonify({"error": "dispatch_invalid", "message": str(exc)}), 400
@@ -680,7 +708,7 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "dispatch_failed", "message": str(exc)}), 500
 
         result = dispatch["results"][0] if dispatch.get("results") else {}
-        if str(result.get("status") or "").strip().lower() != "running":
+        if str(result.get("status") or "").strip().lower() not in {"queued", "running"}:
             return (
                 jsonify(
                     {
@@ -720,6 +748,7 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
                         "strategy": normalize_text(uninstall_plan.get("strategy")),
                         "summary": normalize_text(uninstall_plan.get("summary")),
                         "rule_id": normalize_text(uninstall_plan.get("rule_id")),
+                        "command_preview": uninstall_command_preview,
                     },
                 }
             ),

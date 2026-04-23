@@ -15,6 +15,17 @@ STATUS_LABELS = {
     "unknown": "Unknown",
 }
 
+ROLE_NAME_ALIASES = {
+    "script_exec_system": "context_system",
+    "script_exec_currentuser": "context_currentuser",
+    "device_audit": "device_auditor",
+    "service_control": "service_management",
+    "remoteshell": "remote_shell",
+    "wireguardtunnel": "wireguard",
+    "macro": "macros",
+    "screenshot": "node_screenshot",
+}
+
 
 def _clean_text(value: Any) -> str:
     if value is None:
@@ -81,6 +92,14 @@ def _normalize_status_code(value: Any) -> str:
     return "unknown"
 
 
+def _normalize_role_name(value: Any) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+    lowered = text.lower()
+    return ROLE_NAME_ALIASES.get(lowered, text)
+
+
 def _humanize_role_name(value: Any) -> str:
     text = _clean_text(value)
     if not text:
@@ -128,7 +147,7 @@ def normalize_agent_role_health(raw: Any, *, default_context: Optional[str] = No
     for item in payload.get("roles") or []:
         if not isinstance(item, dict):
             continue
-        role_name = (
+        role_name = _normalize_role_name(
             _clean_text(item.get("role_name"))
             or _clean_text(item.get("role"))
             or _clean_text(item.get("name"))
@@ -138,7 +157,7 @@ def normalize_agent_role_health(raw: Any, *, default_context: Optional[str] = No
         if not role_name:
             continue
         context = _normalize_context(item.get("context") or normalized_context)
-        role_id = _clean_text(item.get("role_id")) or f"{context}:{role_name}"
+        role_id = f"{context}:{role_name}"
         status_code = _normalize_status_code(item.get("status_code") or item.get("status"))
         last_checked_at = _coerce_int(
             item.get("last_checked_at") or item.get("checked_at") or reported_at,

@@ -17,6 +17,7 @@ from typing import Any
 from types import SimpleNamespace
 
 import pytest
+from Data.Engine import database as engine_database
 from Data.Engine.auth import jwt_service as jwt_service_module
 from Data.Engine.services.API.devices import management as device_management
 from Data.Engine.services.API.devices import routes as device_routes
@@ -1201,11 +1202,10 @@ def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHa
     payload = response.get_json()
     assert payload["status"] == "queued"
     assert payload["software"]["name"] == "Google Chrome"
-    assert payload["uninstall"] == {
-        "strategy": "direct_command",
-        "summary": "Chrome setup.exe uninstall can be forced silent.",
-        "rule_id": "chrome_setup_force_uninstall",
-    }
+    assert payload["uninstall"]["strategy"] == "direct_command"
+    assert payload["uninstall"]["summary"] == "Chrome setup.exe uninstall can be forced silent."
+    assert payload["uninstall"]["rule_id"] == "chrome_setup_force_uninstall"
+    assert "setup.exe" in payload["uninstall"]["command_preview"]
     assert len(targeted_events) == 1
     hostname, service_mode, event_name, dispatched = targeted_events[0]
     assert hostname == "test-device"
@@ -1225,7 +1225,14 @@ def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHa
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:
         cur = conn.cursor()
-        cur.execute("SELECT script_name, script_path, script_type, status FROM activity_history ORDER BY id DESC LIMIT 1")
+        cur.execute(
+            """
+            SELECT script_name, script_path, script_type, status, queue_lane, activity_kind
+              FROM activity_history
+             ORDER BY id DESC
+             LIMIT 1
+            """
+        )
         row = cur.fetchone()
     finally:
         conn.close()
@@ -1234,7 +1241,9 @@ def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHa
         "Uninstall - Google Chrome",
         "Scripts/Internal/Software_Uninstall.ps1",
         "powershell",
-        "Running",
+        "Queued",
+        "software_management",
+        "software_uninstall",
     )
 
 
@@ -1264,6 +1273,111 @@ def test_device_software_uninstall_requires_supported_metadata(engine_harness: E
     assert response.status_code == 400
     payload = response.get_json()
     assert payload["error"] == "software_uninstall_unsupported"
+
+
+def test_quick_job_progress_updates_activity_history_and_broadcasts(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    socket_client = engine_harness.context.socketio.test_client(
+        engine_harness.app,
+        flask_test_client=client,
+    )
+    assert socket_client.is_connected()
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        engine_database._ensure_activity_history(conn, logger=None)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO activity_history(
+                hostname,
+                script_path,
+                script_name,
+                script_type,
+                ran_at,
+                status,
+                stdout,
+                stderr,
+                queue_lane,
+                activity_kind,
+                metadata_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "test-device",
+                "Scripts/Internal/Software_Uninstall.ps1",
+                "Uninstall - Contoso Agent",
+                "powershell",
+                1_777_000_000,
+                "Queued",
+                "",
+                "",
+                "software_management",
+                "software_uninstall",
+                json.dumps({"software_name": "Contoso Agent"}),
+            ),
+        )
+        activity_id = int(cur.lastrowid)
+        conn.commit()
+    finally:
+        conn.close()
+
+    socket_client.emit(
+        "quick_job_progress",
+        {
+            "job_id": activity_id,
+            "status": "Running",
+            "queue_lane": "software_management",
+            "activity_kind": "software_uninstall",
+            "metadata": {
+                "software_name": "Contoso Agent",
+                "command_preview": "setup.exe --uninstall --force-uninstall",
+            },
+            "stdout": "Starting uninstall\n",
+            "append_output": True,
+        },
+    )
+
+    received = socket_client.get_received()
+    assert any(
+        item.get("name") == "device_activity_changed"
+        and item.get("args")
+        and item["args"][0].get("activity_id") == activity_id
+        and item["args"][0].get("queue_lane") == "software_management"
+        and item["args"][0].get("activity_kind") == "software_uninstall"
+        and item["args"][0].get("status") == "Running"
+        for item in received
+    )
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT status, stdout, queue_lane, activity_kind, metadata_json, started_at, updated_at, finished_at
+              FROM activity_history
+             WHERE id=?
+            """,
+            (activity_id,),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+        socket_client.disconnect()
+
+    assert row is not None
+    assert row[0] == "Running"
+    assert row[1] == "Starting uninstall\n"
+    assert row[2] == "software_management"
+    assert row[3] == "software_uninstall"
+    metadata = json.loads(row[4] or "{}")
+    assert metadata["software_name"] == "Contoso Agent"
+    assert metadata["command_preview"] == "setup.exe --uninstall --force-uninstall"
+    assert int(row[5] or 0) > 0
+    assert int(row[6] or 0) > 0
+    assert row[7] in (None, 0, "0")
 
 
 def test_device_software_uninstall_rejects_non_removable_windows_store_package(

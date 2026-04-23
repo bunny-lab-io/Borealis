@@ -4,7 +4,7 @@ import asyncio
 import time
 import types
 
-import Data.Agent.Roles.role_ScriptExec_SYSTEM as role_module
+import Data.Agent.Roles.role_system_context as role_module
 
 
 class _FakeSio:
@@ -36,12 +36,10 @@ def _make_role(fake_sio: _FakeSio):
             },
         },
     )()
-    role.role_health_label = "Script Execution - SYSTEM"
+    role.role_health_label = "System Context"
     role._listener_registered = False
-    role._system_queue_locks = {
-        "software_uninstall": asyncio.Lock(),
-    }
     role._system_job_tasks = set()
+    role._lane_coordinator = None
     return role
 
 
@@ -56,8 +54,7 @@ def test_register_events_returns_without_blocking_on_system_job(monkeypatch) -> 
         time.sleep(0.08)
         return 0, "finished", ""
 
-    monkeypatch.setattr(role_module, "_run_powershell_via_system_task", _slow_powershell)
-    monkeypatch.setattr(role_module, "_run_powershell_script_content", _slow_powershell)
+    monkeypatch.setattr(role_module, "run_system_script_helper", _slow_powershell)
 
     role.register_events()
     handler = fake_sio.handlers["quick_job_run"]
@@ -77,19 +74,18 @@ def test_register_events_returns_without_blocking_on_system_job(monkeypatch) -> 
         await asyncio.wait_for(handler(payload), timeout=0.03)
         elapsed = time.perf_counter() - started
         assert elapsed < 0.03
-        assert fake_sio.emitted == []
+        assert all(event_name != "quick_job_result" for event_name, _payload in fake_sio.emitted)
         await asyncio.sleep(0.12)
-        assert fake_sio.emitted == [
-            (
-                "quick_job_result",
-                {
-                    "job_id": 41,
-                    "status": "Success",
-                    "stdout": "finished",
-                    "stderr": "",
-                },
-            )
-        ]
+        assert ("quick_job_progress", {"job_id": 41, "status": "Running"}) in fake_sio.emitted
+        assert (
+            "quick_job_result",
+            {
+                "job_id": 41,
+                "status": "Success",
+                "stdout": "finished",
+                "stderr": "",
+            },
+        ) in fake_sio.emitted
 
     asyncio.run(_run_test())
 
@@ -107,7 +103,7 @@ def test_register_events_serializes_back_to_back_software_uninstalls(monkeypatch
 
     run_log = []
 
-    def _slow_powershell(content, *args, **kwargs):
+    def _slow_powershell(*, content, progress_callback=None, **kwargs):
         run_log.append(("start", content, time.perf_counter()))
         if content == "job-one":
             time.sleep(0.07)
@@ -116,8 +112,7 @@ def test_register_events_serializes_back_to_back_software_uninstalls(monkeypatch
         run_log.append(("end", content, time.perf_counter()))
         return 0, f"done:{content}", ""
 
-    monkeypatch.setattr(role_module, "_run_powershell_via_system_task", _slow_powershell)
-    monkeypatch.setattr(role_module, "_run_powershell_script_content", _slow_powershell)
+    monkeypatch.setattr(role_module, "run_system_script_helper", _slow_powershell)
 
     role.register_events()
     handler = fake_sio.handlers["quick_job_run"]
@@ -152,6 +147,14 @@ def test_register_events_serializes_back_to_back_software_uninstalls(monkeypatch
 
     emitted_job_ids = [payload["job_id"] for event_name, payload in fake_sio.emitted if event_name == "quick_job_result"]
     assert emitted_job_ids == [51, 52]
+    progress_events = [
+        payload
+        for event_name, payload in fake_sio.emitted
+        if event_name == "quick_job_progress"
+    ]
+    assert any(payload["job_id"] == 51 and payload["status"] == "Running" for payload in progress_events)
+    assert any(payload["job_id"] == 52 and payload["status"] == "Queued" for payload in progress_events)
+    assert any(payload["job_id"] == 52 and payload["status"] == "Running" for payload in progress_events)
 
     start_one = next(ts for stage, content, ts in run_log if stage == "start" and content == "job-one")
     end_one = next(ts for stage, content, ts in run_log if stage == "end" and content == "job-one")
@@ -174,7 +177,7 @@ def test_register_events_does_not_block_generic_system_jobs_behind_uninstall(mon
 
     run_log = []
 
-    def _slow_powershell(content, *args, **kwargs):
+    def _slow_powershell(*, content, progress_callback=None, **kwargs):
         run_log.append(("start", content, time.perf_counter()))
         if content == "uninstall-job":
             time.sleep(0.08)
@@ -183,8 +186,7 @@ def test_register_events_does_not_block_generic_system_jobs_behind_uninstall(mon
         run_log.append(("end", content, time.perf_counter()))
         return 0, f"done:{content}", ""
 
-    monkeypatch.setattr(role_module, "_run_powershell_via_system_task", _slow_powershell)
-    monkeypatch.setattr(role_module, "_run_powershell_script_content", _slow_powershell)
+    monkeypatch.setattr(role_module, "run_system_script_helper", _slow_powershell)
 
     role.register_events()
     handler = fake_sio.handlers["quick_job_run"]

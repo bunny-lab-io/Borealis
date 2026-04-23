@@ -5,7 +5,7 @@ import types
 from pathlib import Path
 
 import Data.Agent.tray_state as tray_state
-import Data.Agent.Roles.role_ScriptExec_CURRENTUSER as role_module
+import Data.Agent.Roles.role_currentuser_context as role_module
 
 
 class _FakeClipboard:
@@ -167,7 +167,7 @@ def test_spawn_currentuser_agent_uses_currentuser_config(monkeypatch) -> None:
     monkeypatch.setattr(
         role_module,
         "__file__",
-        "/runtime/Borealis/Roles/role_ScriptExec_CURRENTUSER.py",
+        "/runtime/Borealis/Roles/role_currentuser_context.py",
         raising=False,
     )
     monkeypatch.setattr(
@@ -274,10 +274,10 @@ def test_register_events_uses_helper_handler_when_present() -> None:
 
 
 def test_handle_quick_job_run_trusts_broker_verified_payload(monkeypatch) -> None:
-    async def _fake_ps(content, env_map, timeout_seconds):
+    async def _fake_ps(*, script_type, content, env_map, timeout_seconds):
         return 0, "hello from helper", ""
 
-    monkeypatch.setattr(role_module, "_run_powershell_script_content", _fake_ps)
+    monkeypatch.setattr(role_module, "run_currentuser_script_helper", _fake_ps)
 
     role = role_module.Role.__new__(role_module.Role)
     role.ctx = type("Ctx", (), {"hooks": {}})()

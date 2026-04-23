@@ -94,6 +94,18 @@ def _ensure_activity_history(conn: sqlite3.Connection, *, logger: Optional[loggi
             )
             """
         )
+        cur.execute("PRAGMA table_info(activity_history)")
+        columns = {str(row[1]) for row in cur.fetchall() or [] if len(row) > 1}
+        for column_name, sql in (
+            ("queue_lane", "ALTER TABLE activity_history ADD COLUMN queue_lane TEXT"),
+            ("activity_kind", "ALTER TABLE activity_history ADD COLUMN activity_kind TEXT"),
+            ("metadata_json", "ALTER TABLE activity_history ADD COLUMN metadata_json TEXT"),
+            ("started_at", "ALTER TABLE activity_history ADD COLUMN started_at INTEGER"),
+            ("updated_at", "ALTER TABLE activity_history ADD COLUMN updated_at INTEGER"),
+            ("finished_at", "ALTER TABLE activity_history ADD COLUMN finished_at INTEGER"),
+        ):
+            if column_name not in columns:
+                cur.execute(sql)
     except Exception as exc:
         if logger:
             logger.error("Failed to ensure activity_history table: %s", exc, exc_info=True)

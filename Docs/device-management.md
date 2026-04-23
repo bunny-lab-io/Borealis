@@ -126,7 +126,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - JSON blobs are serialized into PostgreSQL text columns and rehydrated for UI.
 - Installed software is also normalized into `device_software_inventory` so filters can match name, source, and version reliably.
 - The Installed Software tab now also exposes a row-level `Uninstall` action for supported Windows software entries. Borealis queues that work through the signed quick-job path in SYSTEM context, so uninstall output lands in `activity_history` and the row disappears after the next successful device software inventory refresh.
-- Session inventory enrichment from the agent broker flows through `Data/Agent/Roles/role_DeviceAudit.py` and `Data/Engine/services/API/devices/session_inventory.py`, so Device Details can distinguish a merely logged-in session from a helper-ready interactive session.
+- Session inventory enrichment from the agent broker flows through `Data/Agent/Roles/role_system_device_auditor.py` and `Data/Engine/services/API/devices/session_inventory.py`, so Device Details can distinguish a merely logged-in session from a helper-ready interactive session.
 - Service inventory is cached in the `devices.services` JSON blob and merged with pending operator actions until a fresh agent snapshot confirms the desired state.
 - Manual agent update requests from the Device Summary action menu call `POST /api/device/update-agent/<hostname>` and are delivered over the device's SYSTEM Socket.IO channel as `agent_update_request`.
 - The agent does not launch `Update.ps1` / `Update.sh` directly for that request anymore; it starts the existing local AutoUpdater scheduler path instead so manual and scheduled updates use the same execution flow.

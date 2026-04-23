@@ -56,8 +56,7 @@ def test_merge_agent_role_health_replaces_all_contexts_present_in_incoming_paylo
     merged = merge_agent_role_health(existing, incoming, incoming_context="system")
     role_ids = {str(item.get("role_id") or "") for item in merged.get("roles") or []}
 
-    assert "system:script_exec_system" in role_ids
-    assert "currentuser:script_exec_currentuser" in role_ids
-    assert "currentuser:macro" not in role_ids
-    assert "currentuser:screenshot" not in role_ids
-
+    assert "system:context_system" in role_ids
+    assert "currentuser:context_currentuser" in role_ids
+    assert "currentuser:macros" not in role_ids
+    assert "currentuser:node_screenshot" not in role_ids

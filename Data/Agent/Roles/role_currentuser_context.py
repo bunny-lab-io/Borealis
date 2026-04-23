@@ -35,11 +35,23 @@ except Exception:  # pragma: no cover - fallback for runtime path issues
 
 from signature_utils import decode_script_bytes, verify_and_store_script_signature
 try:
+    from Roles.currentuser_script_execution import build_env_map as build_env_map_helper
+    from Roles.currentuser_script_execution import run_currentuser_script as run_currentuser_script_helper
+    from Roles.currentuser_tray_ui import bottom_right_anchor as tray_bottom_right_anchor
+    from Roles.currentuser_tray_ui import popup_palette as tray_popup_palette
+    from Roles.currentuser_tray_ui import warning_lines as tray_warning_lines
+except Exception:  # pragma: no cover - package import fallback
+    from Data.Agent.Roles.currentuser_script_execution import build_env_map as build_env_map_helper
+    from Data.Agent.Roles.currentuser_script_execution import run_currentuser_script as run_currentuser_script_helper
+    from Data.Agent.Roles.currentuser_tray_ui import bottom_right_anchor as tray_bottom_right_anchor
+    from Data.Agent.Roles.currentuser_tray_ui import popup_palette as tray_popup_palette
+    from Data.Agent.Roles.currentuser_tray_ui import warning_lines as tray_warning_lines
+try:
     from update_state import busy_activity
 except Exception:
     busy_activity = None
 
-ROLE_NAME = 'script_exec_currentuser'
+ROLE_NAME = 'context_currentuser'
 ROLE_CONTEXTS = ['interactive', 'helper']
 
 
@@ -801,7 +813,7 @@ class _TrayStatusPopup(QtWidgets.QWidget if QtWidgets is not None else object):
 
     def apply_view(self, view: Dict[str, Any]) -> None:
         current_view = dict(view or {})
-        palette = _popup_palette(current_view.get("icon_tone"))
+        palette = tray_popup_palette(current_view.get("icon_tone"))
         self._panel.setStyleSheet(
             f"""
             QFrame#TrayPopupPanel {{
@@ -961,7 +973,7 @@ class _TrayStatusPopup(QtWidgets.QWidget if QtWidgets is not None else object):
             heartbeat_value,
             heartbeat_code,
         )
-        warnings = _warning_lines(current_view)
+        warnings = tray_warning_lines(current_view)
         self._warning_card.setVisible(bool(warnings))
         self._warning_body.setText("\n".join(f"• {item}" for item in warnings))
         restarting = str(current_view.get("overall_status") or "").strip().lower() == "restarting"
@@ -989,7 +1001,7 @@ class _TrayStatusPopup(QtWidgets.QWidget if QtWidgets is not None else object):
 class Role:
     def __init__(self, ctx):
         self.ctx = ctx
-        self.role_health_label = "Script Execution - CURRENTUSER"
+        self.role_health_label = "Current User Context"
         self._listener_registered = False
         self.tray = None
         self._tray_popup = None
@@ -1131,26 +1143,7 @@ class Role:
                 self._log(f"quick_job_run(currentuser) signature verified job_id={job_label}")
 
             content = script_bytes.decode("utf-8", errors="replace")
-            raw_env = payload.get("environment")
-            env_map = _sanitize_env_map(raw_env)
-            variables = payload.get("variables") if isinstance(payload.get("variables"), list) else []
-            for var in variables:
-                if not isinstance(var, dict):
-                    continue
-                name = str(var.get("name") or "").strip()
-                if not name:
-                    continue
-                key = _canonical_env_key(name)
-                if key in env_map:
-                    continue
-                default_val = var.get("default")
-                if isinstance(default_val, bool):
-                    env_map[key] = "True" if default_val else "False"
-                elif default_val is None:
-                    env_map[key] = ""
-                else:
-                    env_map[key] = str(default_val)
-            env_map = _apply_variable_aliases(env_map, variables)
+            env_map = build_env_map_helper(payload.get("environment"), payload.get("variables"))
             try:
                 timeout_seconds = max(0, int(payload.get("timeout_seconds") or 0))
             except Exception:
@@ -1168,18 +1161,18 @@ class Role:
                 else contextlib.nullcontext()
             )
             with busy_ctx:
-                if script_type == "powershell":
-                    rc, out, err = await _run_powershell_script_content(content, env_map, timeout_seconds)
-                elif script_type == "batch":
-                    rc, out, err = await _run_batch_local(content, env_map, timeout_seconds)
-                elif script_type == "bash":
-                    rc, out, err = await _run_bash_local(content, env_map, timeout_seconds)
-                else:
+                rc, out, err = await run_currentuser_script_helper(
+                    script_type=script_type,
+                    content=content,
+                    env_map=env_map,
+                    timeout_seconds=timeout_seconds,
+                )
+                if rc == -1 and not out and err.startswith("Unsupported type:"):
                     return self._result_payload(
                         payload=payload,
                         job_id=job_id,
                         status="Failed",
-                        stderr=f"Unsupported type: {script_type}",
+                        stderr=err,
                     )
             return self._result_payload(
                 payload=payload,
@@ -1527,7 +1520,7 @@ class Role:
         popup.adjustSize()
         size_hint = popup.sizeHint()
         popup.resize(size_hint)
-        x, y = _bottom_right_anchor(
+        x, y = tray_bottom_right_anchor(
             screen_geometry.x(),
             available_geometry.y(),
             screen_geometry.width(),

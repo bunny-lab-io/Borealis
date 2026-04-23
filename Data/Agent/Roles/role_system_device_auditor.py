@@ -25,7 +25,7 @@ except Exception:
     aiohttp = None
 
 
-ROLE_NAME = 'device_audit'
+ROLE_NAME = 'device_auditor'
 ROLE_CONTEXTS = ['system']
 SESSION_INVENTORY_ENRICHER = None
 
@@ -2222,7 +2222,6 @@ def _build_details_fallback() -> dict:
 
     details = {
         'summary': summary,
-        'software': collect_software(),
         'memory': collect_memory(),
         'storage': collect_storage(),
         'network': network,
@@ -2235,7 +2234,7 @@ def _build_details_fallback() -> dict:
 class Role:
     def __init__(self, ctx):
         self.ctx = ctx
-        self.role_health_label = "Device Audit"
+        self.role_health_label = "Device Auditor"
         try:
             globals()['SESSION_INVENTORY_ENRICHER'] = (getattr(ctx, 'hooks', {}) or {}).get('session_inventory_enricher')
         except Exception:
@@ -2244,8 +2243,6 @@ class Role:
         self._ext_ip_ts = 0
         self._refresh_ts = 0
         self._last_details = None
-        self._last_software_icon_signature = ''
-        self._last_software_icon_hash_by_key = {}
         # OS is collected dynamically; do not persist in config
         # Start periodic reporter
         try:
@@ -2326,40 +2323,6 @@ class Role:
                         details = self._normalize_details(details)
                     except Exception:
                         pass
-                    try:
-                        software_rows = details.get('software') if isinstance(details.get('software'), list) else []
-                        icon_candidate_count = 0
-                        for row in software_rows:
-                            if not isinstance(row, dict):
-                                continue
-                            if str(row.get('source') or '').strip().lower() != 'local_installed':
-                                continue
-                            metadata = row.get('metadata') if isinstance(row.get('metadata'), dict) else {}
-                            if _normalize_display_icon_hint(metadata.get('display_icon')):
-                                icon_candidate_count += 1
-                        icon_signature = _software_icon_signature(software_rows)
-                        previous_icon_hash_by_key = (
-                            self._last_software_icon_hash_by_key
-                            if icon_signature == self._last_software_icon_signature
-                            else {}
-                        )
-                        icon_payloads, icon_hash_by_key = attach_windows_software_icons(
-                            software_rows,
-                            previous_icon_hash_by_key=previous_icon_hash_by_key,
-                        )
-                        self._last_software_icon_signature = icon_signature
-                        self._last_software_icon_hash_by_key = icon_hash_by_key
-                        if icon_payloads:
-                            details['software_icon_payloads'] = icon_payloads
-                            _log_icon_status(
-                                f"device_audit software icon extraction attached payloads={len(icon_payloads)} rows={len(icon_hash_by_key)} candidates={icon_candidate_count}"
-                            )
-                        elif icon_candidate_count:
-                            _log_icon_status(
-                                f"device_audit software icon extraction yielded no payloads candidates={icon_candidate_count}"
-                            )
-                    except Exception as exc:
-                        _log_icon_status(f"device_audit software icon extraction failed: {exc}", error=True)
                     if details:
                         self._last_details = details
                         self._refresh_ts = now
@@ -2396,13 +2359,13 @@ class Role:
                     else:
                         try:
                             await client.async_post_json("/api/agent/details", payload, require_auth=True)
-                            try:
-                                if isinstance(details_to_send, dict):
-                                    details_to_send.pop('software_icon_payloads', None)
-                            except Exception:
-                                pass
-                            await asyncio.sleep(interval_sec)
-                            continue
+                        try:
+                            if isinstance(details_to_send, dict):
+                                details_to_send.pop('software_icon_payloads', None)
+                        except Exception:
+                            pass
+                        await asyncio.sleep(interval_sec)
+                        continue
                         except Exception:
                             pass
 

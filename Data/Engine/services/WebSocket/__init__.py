@@ -22,6 +22,12 @@ from ...db import dbapi as sqlite3
 from ...database import initialise_engine_database
 from ...security import signing
 from ...server import EngineContext
+from ..activity_history import (
+    get_activity_history_row,
+    normalize_activity_status,
+    status_is_terminal,
+    update_activity_history_row,
+)
 from ..VPN import WireGuardServerConfig, WireGuardServerManager, VpnTunnelService
 from .vpn_shell import VpnShellBridge
 
@@ -488,6 +494,223 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
             return forwarded.split(",")[0].strip()
         return (request.remote_addr or "").strip()
 
+    def _resolve_scheduled_run_context(
+        cursor: Any,
+        *,
+        job_id: int,
+        context_info: Optional[Dict[str, Any]],
+    ) -> tuple[Optional[int], Optional[int]]:
+        try:
+            cursor.execute(
+                "SELECT run_id FROM scheduled_job_run_activity WHERE activity_id=?",
+                (job_id,),
+            )
+            link = cursor.fetchone()
+        except sqlite3.Error:
+            link = None
+
+        run_id: Optional[int] = None
+        scheduled_ts_ctx: Optional[int] = None
+        if link:
+            try:
+                run_id = int(link[0])
+            except Exception:
+                run_id = None
+
+        if run_id is None and context_info:
+            ctx_run = context_info.get("scheduled_job_run_id") or context_info.get("run_id")
+            try:
+                if ctx_run is not None:
+                    run_id = int(ctx_run)
+            except (TypeError, ValueError):
+                run_id = None
+            try:
+                if context_info.get("scheduled_ts") is not None:
+                    scheduled_ts_ctx = int(context_info.get("scheduled_ts"))
+            except (TypeError, ValueError):
+                scheduled_ts_ctx = None
+        return run_id, scheduled_ts_ctx
+
+    def _update_scheduled_run_state(
+        cursor: Any,
+        *,
+        run_id: Optional[int],
+        scheduled_ts_ctx: Optional[int],
+        status: str,
+        activity_id: int,
+        context_info: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if run_id is None:
+            if context_info:
+                adapters.service_log(
+                    "scheduled_jobs",
+                    f"scheduled run update skipped (no run_id) activity_id={activity_id} status={status} context={context_info}",
+                    level="WARNING",
+                )
+            return
+        ts_now = _now_ts()
+        normalized_status = normalize_activity_status(status, default="Failed")
+        lowered = normalized_status.lower()
+        try:
+            if lowered == "running":
+                cursor.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status='Running',
+                           started_ts=COALESCE(started_ts, ?),
+                           updated_at=?
+                     WHERE id=?
+                    """,
+                    (ts_now, ts_now, run_id),
+                )
+            elif lowered == "queued":
+                cursor.execute(
+                    "UPDATE scheduled_job_runs SET updated_at=? WHERE id=?",
+                    (ts_now, run_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=COALESCE(finished_ts, ?),
+                           updated_at=?
+                     WHERE id=?
+                    """,
+                    (normalized_status, ts_now, ts_now, run_id),
+                )
+            if scheduled_ts_ctx is not None:
+                cursor.execute(
+                    "UPDATE scheduled_job_runs SET scheduled_ts=COALESCE(scheduled_ts, ?) WHERE id=?",
+                    (scheduled_ts_ctx, run_id),
+                )
+            adapters.service_log(
+                "scheduled_jobs",
+                f"scheduled run update run_id={run_id} activity_id={activity_id} status={normalized_status}",
+            )
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.debug(
+                "quick_job progress update failed for activity_id=%s run_id=%s: %s",
+                activity_id,
+                run_id,
+                exc,
+            )
+
+    @socket_server.on("quick_job_progress")
+    def _handle_quick_job_progress(data: Any) -> None:
+        if not isinstance(data, dict):
+            logger.debug("quick_job_progress payload ignored (non-dict): %r", data)
+            return
+
+        job_id_raw = data.get("job_id")
+        try:
+            job_id = int(job_id_raw)
+        except (TypeError, ValueError):
+            logger.debug("quick_job_progress missing valid job_id: %r", job_id_raw)
+            return
+
+        normalized_status = normalize_activity_status(data.get("status"), default="Running")
+        stdout = data.get("stdout")
+        stderr = data.get("stderr")
+        append_output = bool(data.get("append_output"))
+        queue_lane = _normalize_text(data.get("queue_lane"))
+        activity_kind = _normalize_text(data.get("activity_kind"))
+        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else None
+        ctx_payload = data.get("context")
+        context_info: Optional[Dict[str, Any]] = ctx_payload if isinstance(ctx_payload, dict) else None
+        ts_now = _now_ts()
+
+        conn: Optional[sqlite3.Connection] = None
+        cursor = None
+        broadcast_payload: Optional[Dict[str, Any]] = None
+
+        try:
+            conn = adapters.db_conn_factory()
+            cursor = conn.cursor()
+            existing_row = get_activity_history_row(conn, job_id)
+            existing_metadata = existing_row.get("metadata") if isinstance(existing_row, dict) else {}
+            merged_metadata = dict(existing_metadata) if isinstance(existing_metadata, dict) else {}
+            if metadata:
+                merged_metadata.update(metadata)
+            if isinstance(context_info, dict):
+                for key in ("assembly_source", "assembly_guid", "scheduled_job_id", "scheduled_job_run_id", "scheduled_ts"):
+                    if key in context_info and context_info.get(key) not in (None, ""):
+                        merged_metadata.setdefault(key, context_info.get(key))
+            update_kwargs: Dict[str, Any] = {
+                "status": normalized_status,
+                "updated_at": ts_now,
+            }
+            if stdout is not None:
+                update_kwargs["stdout"] = stdout
+            if stderr is not None:
+                update_kwargs["stderr"] = stderr
+            if append_output:
+                update_kwargs["append_output"] = True
+            if queue_lane:
+                update_kwargs["queue_lane"] = queue_lane
+            if activity_kind:
+                update_kwargs["activity_kind"] = activity_kind
+            if merged_metadata:
+                update_kwargs["metadata"] = merged_metadata
+            if normalized_status.lower() == "running":
+                update_kwargs["started_at"] = ts_now
+            if status_is_terminal(normalized_status):
+                update_kwargs["finished_at"] = ts_now
+            rowcount = update_activity_history_row(conn, job_id, **update_kwargs)
+            if rowcount == 0:
+                logger.debug("quick_job_progress missing activity_history row for job_id=%s", job_id)
+
+            run_id, scheduled_ts_ctx = _resolve_scheduled_run_context(cursor, job_id=job_id, context_info=context_info)
+            _update_scheduled_run_state(
+                cursor,
+                run_id=run_id,
+                scheduled_ts_ctx=scheduled_ts_ctx,
+                status=normalized_status,
+                activity_id=job_id,
+                context_info=context_info,
+            )
+            conn.commit()
+
+            row = get_activity_history_row(conn, job_id)
+            if row and row.get("hostname"):
+                broadcast_payload = {
+                    "activity_id": int(row["id"]),
+                    "hostname": row.get("hostname"),
+                    "status": row.get("status") or normalized_status,
+                    "queue_lane": row.get("queue_lane") or queue_lane,
+                    "activity_kind": row.get("activity_kind") or activity_kind,
+                    "change": "updated",
+                    "source": "quick_job_progress",
+                }
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning(
+                "quick_job_progress handler error for job_id=%s: %s",
+                job_id,
+                exc,
+                exc_info=True,
+            )
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+        if broadcast_payload:
+            try:
+                socket_server.emit("device_activity_changed", broadcast_payload)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                logger.debug(
+                    "Failed to emit device_activity_changed for progress job_id=%s: %s",
+                    job_id,
+                    exc,
+                )
+
     @socket_server.on("quick_job_result")
     def _handle_quick_job_result(data: Any) -> None:
         if not isinstance(data, dict):
@@ -515,106 +738,48 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
         try:
             conn = adapters.db_conn_factory()
             cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE activity_history SET status=?, stdout=?, stderr=? WHERE id=?",
-                (status, stdout, stderr, job_id),
-            )
-            if cursor.rowcount == 0:
+            existing_row = get_activity_history_row(conn, job_id)
+            existing_metadata = existing_row.get("metadata") if isinstance(existing_row, dict) else {}
+            merged_metadata = dict(existing_metadata) if isinstance(existing_metadata, dict) else {}
+            if isinstance(context_info, dict):
+                for key in ("assembly_source", "assembly_guid", "scheduled_job_id", "scheduled_job_run_id", "scheduled_ts"):
+                    if key in context_info and context_info.get(key) not in (None, ""):
+                        merged_metadata.setdefault(key, context_info.get(key))
+            result_ts = _now_ts()
+            update_kwargs: Dict[str, Any] = {
+                "status": status,
+                "stdout": stdout,
+                "stderr": stderr,
+                "updated_at": result_ts,
+                "finished_at": result_ts,
+            }
+            if merged_metadata:
+                update_kwargs["metadata"] = merged_metadata
+            rowcount = update_activity_history_row(conn, job_id, **update_kwargs)
+            if rowcount == 0:
                 logger.debug("quick_job_result missing activity_history row for job_id=%s", job_id)
+            run_id, scheduled_ts_ctx = _resolve_scheduled_run_context(cursor, job_id=job_id, context_info=context_info)
+            _update_scheduled_run_state(
+                cursor,
+                run_id=run_id,
+                scheduled_ts_ctx=scheduled_ts_ctx,
+                status=status,
+                activity_id=job_id,
+                context_info=context_info,
+            )
             conn.commit()
 
-            try:
-                cursor.execute(
-                    "SELECT run_id FROM scheduled_job_run_activity WHERE activity_id=?",
-                    (job_id,),
-                )
-                link = cursor.fetchone()
-            except sqlite3.Error:
-                link = None
-
-            run_id: Optional[int] = None
-            scheduled_ts_ctx: Optional[int] = None
-            if link:
-                try:
-                    run_id = int(link[0])
-                except Exception:
-                    run_id = None
-
-            if run_id is None and context_info:
-                ctx_run = context_info.get("scheduled_job_run_id") or context_info.get("run_id")
-                try:
-                    if ctx_run is not None:
-                        run_id = int(ctx_run)
-                except (TypeError, ValueError):
-                    run_id = None
-                try:
-                    if context_info.get("scheduled_ts") is not None:
-                        scheduled_ts_ctx = int(context_info.get("scheduled_ts"))
-                except (TypeError, ValueError):
-                    scheduled_ts_ctx = None
-
-            if run_id is not None:
-                ts_now = _now_ts()
-                try:
-                    if status.lower() == "running":
-                        cursor.execute(
-                            "UPDATE scheduled_job_runs SET status='Running', updated_at=? WHERE id=?",
-                            (ts_now, run_id),
-                        )
-                    else:
-                        cursor.execute(
-                            """
-                            UPDATE scheduled_job_runs
-                               SET status=?,
-                                   finished_ts=COALESCE(finished_ts, ?),
-                                   updated_at=?
-                             WHERE id=?
-                            """,
-                            (status, ts_now, ts_now, run_id),
-                        )
-                    if scheduled_ts_ctx is not None:
-                        cursor.execute(
-                            "UPDATE scheduled_job_runs SET scheduled_ts=COALESCE(scheduled_ts, ?) WHERE id=?",
-                            (scheduled_ts_ctx, run_id),
-                        )
-                    conn.commit()
-                    adapters.service_log(
-                        "scheduled_jobs",
-                        f"scheduled run update run_id={run_id} activity_id={job_id} status={status}",
-                    )
-                except Exception as exc:  # pragma: no cover - defensive guard
-                    logger.debug(
-                        "quick_job_result failed to update scheduled_job_runs for job_id=%s run_id=%s: %s",
-                        job_id,
-                        run_id,
-                        exc,
-                    )
-            elif context_info:
-                adapters.service_log(
-                    "scheduled_jobs",
-                    f"scheduled run update skipped (no run_id) activity_id={job_id} status={status} context={context_info}",
-                    level="WARNING",
-                )
-
-            try:
-                cursor.execute(
-                    "SELECT id, hostname, status FROM activity_history WHERE id=?",
-                    (job_id,),
-                )
-                row = cursor.fetchone()
-            except sqlite3.Error:
-                row = None
-
-            if row:
-                hostname = (row[1] or "").strip()
-                if hostname:
-                    broadcast_payload = {
-                        "activity_id": int(row[0]),
-                        "hostname": hostname,
-                        "status": row[2] or status,
-                        "change": "updated",
-                        "source": "quick_job",
-                    }
+            row = get_activity_history_row(conn, job_id)
+            if row and row.get("hostname"):
+                broadcast_payload = {
+                    "activity_id": int(row["id"]),
+                    "hostname": row.get("hostname"),
+                    "status": row.get("status") or status,
+                    "queue_lane": row.get("queue_lane") or "",
+                    "activity_kind": row.get("activity_kind") or "",
+                    "change": "updated",
+                    "source": "quick_job",
+                }
 
             adapters.service_log(
                 "assemblies",

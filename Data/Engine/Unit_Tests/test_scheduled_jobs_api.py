@@ -3871,6 +3871,6 @@ def test_scheduled_job_dispatch_accepts_batch_and_bash(
         cur.execute("SELECT script_type, status FROM activity_history ORDER BY id DESC LIMIT 1")
         row = cur.fetchone()
         assert row[0] == script_type
-        assert row[1] == "Running"
+        assert row[1] == "Queued"
     finally:
         conn.close()

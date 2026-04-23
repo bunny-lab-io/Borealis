@@ -3,7 +3,7 @@ import asyncio
 import importlib.util
 
 
-ROLE_NAME = 'macro'
+ROLE_NAME = 'macros'
 ROLE_CONTEXTS = ['interactive']
 
 
@@ -45,7 +45,9 @@ class Role:
         self.tasks.clear()
 
     def on_config(self, roles_cfg):
-        macro_roles = [r for r in roles_cfg if (r.get('role') == 'macro')]
+        macro_roles = [
+            r for r in roles_cfg if (r.get('role') in {'macro', 'macros'})
+        ]
         new_ids = {r.get('node_id') for r in macro_roles if r.get('node_id')}
         old_ids = set(self.tasks.keys())
         removed = old_ids - new_ids

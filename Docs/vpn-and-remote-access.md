@@ -84,9 +84,9 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - VNC proxy: `Data/Engine/services/RemoteDesktop/vnc_proxy.py`.
 
 ### Core Agent files
-- WireGuard client role: `Data/Agent/Roles/role_WireGuardTunnel.py`.
-- Remote shell role: `Data/Agent/Roles/role_RemoteShell.py`.
-- VNC role: `Data/Agent/Roles/role_VNC.py`.
+- WireGuard client role: `Data/Agent/Roles/role_system_wireguard.py`.
+- Remote shell role: `Data/Agent/Roles/role_system_remote_shell.py`.
+- VNC role: `Data/Agent/Roles/role_system_vnc.py`.
 
 ### Config paths
 - Engine WireGuard config: `Engine/WireGuard/borealis-wg.conf`.
@@ -191,9 +191,9 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - `GET /api/vnc/sessions` -> list active VNC collaboration sessions.
 
 #### 4) Agent components
-- Tunnel lifecycle: `Data/Agent/Roles/role_WireGuardTunnel.py`
+- Tunnel lifecycle: `Data/Agent/Roles/role_system_wireguard.py`
   - Validates orchestration tokens, starts WireGuard client service, keeps the tunnel persistent, and retries same-session service recovery when the watchdog finds the Windows WireGuard service stopped.
-- Shell server: `Data/Agent/Roles/role_RemoteShell.py`
+- Shell server: `Data/Agent/Roles/role_system_remote_shell.py`
 - TCP PowerShell server bound to `0.0.0.0:47002`, restricted to VPN subnet (10.255.x.x).
 - Logging: `Agent/Logs/VPN_Tunnel/tunnel.log` (tunnel lifecycle) and `Agent/Logs/VPN_Tunnel/remote_shell.log` (shell I/O).
 
@@ -245,7 +245,7 @@ This section consolidates the troubleshooting context and environment notes for 
 - No idle teardown; tunnels and firewall rules stay in place while the agent is running.
 
 #### Recent changes (current repo state)
-- Data/Agent/Roles/role_WireGuardTunnel.py
+- Data/Agent/Roles/role_system_wireguard.py
   - Lazy client init (avoid side effects on import).
   - Service name fix: WireGuard tunnel service is "WireGuardTunnel$Borealis".
   - Endpoint override: if Engine sends localhost, use host from server_url.txt and port from the token.
@@ -265,7 +265,7 @@ This section consolidates the troubleshooting context and environment notes for 
   - Adds readiness probes, idle shell keepalive pings, output timing diagnostics, and transport confirmations on shell output.
   - Tracks explicit close reasons (`close_request`, `superseded_sid`, `superseded_agent_session`, `ready_probe_failed`) so intentional closes no longer look like transport errors.
   - Replaces superseded shell sessions for the same browser SID or agent instead of allowing overlapping stale sessions to linger.
-- Data/Agent/Roles/role_RemoteShell.py
+- Data/Agent/Roles/role_system_remote_shell.py
   - Replaces line-buffered Windows pipe reads with `PeekNamedPipe`-based chunk reads for interactive PowerShell output.
   - Propagates `session_id` into shell control and data frames for Engine/agent log correlation.
   - Logs readiness pongs and idle keepalive pongs separately and throttles idle keepalive log spam on the agent.
@@ -284,8 +284,8 @@ Note: Data/Agent changes only apply after Borealis.ps1 re-stages the agent under
 - Shell timing investigation should rely on `vpn_shell_output_timing`, `vpn_shell_ready_pong`, `vpn_shell_closed`, agent-side `session_id`, and tunnel-side `shell_keepalive` / watchdog recovery events rather than browser symptoms alone.
 
 #### Key paths
-- Agent WireGuard role: Data/Agent/Roles/role_WireGuardTunnel.py
-- Agent VPN shell role: Data/Agent/Roles/role_RemoteShell.py
+- Agent WireGuard role: Data/Agent/Roles/role_system_wireguard.py
+- Agent VPN shell role: Data/Agent/Roles/role_system_remote_shell.py
 - Engine WireGuard manager: Data/Engine/services/VPN/wireguard_server.py
 - Engine tunnel service: Data/Engine/services/VPN/vpn_tunnel_service.py
 - Engine shell bridge: Data/Engine/services/WebSocket/vpn_shell.py
@@ -318,7 +318,7 @@ Note: Data/Agent changes only apply after Borealis.ps1 re-stages the agent under
   - Z:\Agent\Borealis\Settings\WireGuard\Borealis.conf
 
 #### Current blockers and next steps
-1) Re-stage the agent runtime after `role_RemoteShell.py`, `role_WireGuardTunnel.py`, or `role_VNC.py` changes so the runtime copy matches `Data/Agent/`.
+1) Re-stage the agent runtime after `role_system_remote_shell.py`, `role_system_wireguard.py`, or `role_system_vnc.py` changes so the runtime copy matches `Data/Agent/`.
 2) For shell regressions, correlate `Engine/Logs/VPN_Tunnel/remote_shell.log` with `Z:\Agent\Logs\VPN_Tunnel\remote_shell.log` by `session_id` before assuming browser-side buffering.
 3) For VNC regressions on weaker hosts, capture `vnc_connect_retry`, `vnc_backend_connect`, `vpn_transport_recovery_request`, and `vpn_transport_watchdog_recovery` from `Engine/Logs/VPN_Tunnel/tunnel.log` before changing shell code paths.
 4) If issues persist, confirm `Agent\Borealis\Settings\WireGuard\Borealis.conf` still has a valid [Peer], verify `Test-NetConnection -ComputerName <agent_vpn_ip> -Port 47002`, and re-check WireGuard service state on both ends.

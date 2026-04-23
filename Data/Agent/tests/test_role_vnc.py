@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from pathlib import Path
 
-import Data.Agent.Roles.role_VNC as vnc_role
+import Data.Agent.Roles.role_system_vnc as vnc_role
 
 
 class _CompletedProcess:
