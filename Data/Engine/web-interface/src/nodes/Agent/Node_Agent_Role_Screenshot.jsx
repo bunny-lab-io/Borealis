@@ -107,7 +107,7 @@ const AgentScreenshotNode = ({ id, data }) => {
     const targetMode = modeRaw === "system" ? "system" : "currentuser";
     return {
       node_id: id,
-      role: "screenshot",
+      role: "node_screenshot",
       interval,
       visible,
       alias,

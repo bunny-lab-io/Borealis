@@ -24,8 +24,15 @@ import {
   MAGIC_UI,
   gridFontFamily,
 } from "./Shared.jsx";
+import UninstallProgressDialog from "./Uninstall_Progress_Dialog.jsx";
 
 const HISTORY_STATUS_THEME = {
+  queued: {
+    text: "#8fbfff",
+    background: "rgba(96,165,250,0.14)",
+    border: "1px solid rgba(96,165,250,0.34)",
+    dot: "#8fbfff",
+  },
   running: {
     text: "#58a6ff",
     background: "rgba(88,166,255,0.15)",
@@ -93,6 +100,49 @@ const StatusPillCell = React.memo(function StatusPillCell(props) {
   );
 });
 
+const HistoryTaskCell = React.memo(function HistoryTaskCell(props) {
+  const row = props.data || {};
+  const onOpenUninstall = props.context?.onOpenUninstall;
+  const label = String(props?.value || row?.script_display_name || row?.script_name || "Activity").trim() || "Activity";
+  const isUninstall = String(row?.activity_kind || "").trim().toLowerCase() === "software_uninstall";
+  if (!isUninstall) {
+    return (
+      <Box
+        component="span"
+        sx={{
+          display: "inline-block",
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {label}
+      </Box>
+    );
+  }
+  return (
+    <Button
+      size="small"
+      onClick={() => onOpenUninstall && onOpenUninstall(row)}
+      sx={{
+        p: 0,
+        minWidth: 0,
+        justifyContent: "flex-start",
+        textTransform: "none",
+        color: "#dbeafe",
+        fontWeight: 600,
+        "&:hover": {
+          backgroundColor: "transparent",
+          color: "#dbeafe",
+        },
+      }}
+    >
+      {label}
+    </Button>
+  );
+});
+
 const HistoryActionsCell = React.memo(function HistoryActionsCell(props) {
   const row = props.data || {};
   const onViewOutput = props.context?.onViewOutput;
@@ -124,6 +174,7 @@ const HistoryActionsCell = React.memo(function HistoryActionsCell(props) {
 const GRID_COMPONENTS = {
   StatusPillCell,
   HistoryActionsCell,
+  HistoryTaskCell,
 };
 
 export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) {
@@ -133,12 +184,14 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
   const [outputContent, setOutputContent] = useState("");
   const [outputLang, setOutputLang] = useState("powershell");
   const [assemblyNameMap, setAssemblyNameMap] = useState({});
+  const [selectedUninstallJob, setSelectedUninstallJob] = useState(null);
+  const [selectedUninstallJobId, setSelectedUninstallJobId] = useState(0);
 
   const normalizedHostname = useMemo(() => String(hostname || "").trim(), [hostname]);
 
   const formatTimestamp = useCallback((epochSec) => {
     const ts = Number(epochSec || 0);
-    if (!ts) return "unknown";
+    if (!ts) return "—";
     const date = new Date(ts * 1000);
     const mm = String(date.getMonth() + 1).padStart(2, "0");
     const dd = String(date.getDate()).padStart(2, "0");
@@ -156,6 +209,35 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
     if (value === "reverse_tunnel" || value === "vpn_tunnel") return "Reverse VPN Tunnel";
     return "Script";
   }, []);
+
+  const buildUninstallDialogJob = useCallback(
+    (payload = {}) => {
+      const metadata = payload?.metadata && typeof payload.metadata === "object" ? payload.metadata : {};
+      return {
+        jobId: Number(payload?.id || 0) || 0,
+        hostname: String(payload?.hostname || normalizedHostname || "").trim(),
+        softwareName:
+          String(metadata?.software_name || "").trim() ||
+          (String(payload?.script_name || "").trim().toLowerCase().startsWith("uninstall - ")
+            ? String(payload?.script_name || "").trim().slice("Uninstall - ".length).trim()
+            : ""),
+        softwareVersion: String(metadata?.software_version || "").trim(),
+        softwareSource: String(metadata?.software_source || "").trim(),
+        commandPreview: String(metadata?.command_preview || "").trim(),
+        status: payload?.status,
+        stdout: String(payload?.stdout || ""),
+        stderr: String(payload?.stderr || ""),
+        queueLane: String(payload?.queue_lane || "").trim(),
+        activityKind: String(payload?.activity_kind || "").trim(),
+        ranAt: Number(payload?.ran_at || 0) || 0,
+        queuedAt: Number(payload?.ran_at || 0) || 0,
+        startedAt: Number(payload?.started_at || 0) || 0,
+        updatedAt: Number(payload?.updated_at || 0) || 0,
+        finishedAt: Number(payload?.finished_at || 0) || 0,
+      };
+    },
+    [normalizedHostname]
+  );
 
   useEffect(() => {
     let canceled = false;
@@ -284,7 +366,7 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
       {
         headerName: "Activity",
         field: "script_type",
-        minWidth: 180,
+        minWidth: 170,
         valueGetter: (params) => formatScriptType(params.data?.script_type),
       },
       {
@@ -293,13 +375,37 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
         flex: 1.2,
         minWidth: 240,
         filter: "agTextColumnFilter",
+        cellRenderer: "HistoryTaskCell",
       },
       {
-        headerName: "Ran On",
+        headerName: "Lane",
+        field: "queue_lane",
+        width: 180,
+        valueFormatter: (params) =>
+          String(params.value || "")
+            .replace(/_/g, " ")
+            .replace(/\b\w/g, (ch) => ch.toUpperCase()) || "General",
+      },
+      {
+        headerName: "Queued",
         field: "ran_at",
-        width: 210,
+        width: 190,
         valueFormatter: (params) => formatTimestamp(params.value),
         sort: "desc",
+        comparator: (a, b) => (a || 0) - (b || 0),
+      },
+      {
+        headerName: "Started",
+        field: "started_at",
+        width: 190,
+        valueFormatter: (params) => formatTimestamp(params.value),
+        comparator: (a, b) => (a || 0) - (b || 0),
+      },
+      {
+        headerName: "Updated",
+        field: "updated_at",
+        width: 190,
+        valueFormatter: (params) => formatTimestamp(params.value),
         comparator: (a, b) => (a || 0) - (b || 0),
       },
       {
@@ -357,6 +463,39 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
     [resolveAssemblyName]
   );
 
+  const handleOpenUninstall = useCallback(
+    async (row) => {
+      const jobId = Number(row?.id || row?.jobId || 0);
+      if (!Number.isFinite(jobId) || jobId <= 0) return;
+      try {
+        const resp = await fetch(`/api/device/activity/job/${jobId}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const payload = await resp.json().catch(() => ({}));
+        setSelectedUninstallJobId(jobId);
+        setSelectedUninstallJob(buildUninstallDialogJob(payload));
+      } catch (error) {
+        console.warn("Failed to load uninstall activity", error);
+      }
+    },
+    [buildUninstallDialogJob]
+  );
+
+  useEffect(() => {
+    const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
+    if (!socket || !normalizedHostname || !selectedUninstallJobId) return undefined;
+    const expectedHost = normalizedHostname.toLowerCase();
+    const handleActivityChanged = (payload = {}) => {
+      const payloadHost = String(payload?.hostname || "").trim().toLowerCase();
+      const activityId = Number(payload?.activity_id || 0);
+      if (!payloadHost || payloadHost !== expectedHost || activityId !== Number(selectedUninstallJobId || 0)) return;
+      void handleOpenUninstall({ id: activityId });
+    };
+    socket.on("device_activity_changed", handleActivityChanged);
+    return () => {
+      socket.off("device_activity_changed", handleActivityChanged);
+    };
+  }, [handleOpenUninstall, normalizedHostname, selectedUninstallJobId]);
+
   const historyDisplayRows = useMemo(
     () =>
       (historyRows || []).map((row) => ({
@@ -371,8 +510,9 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
   const historyGridContext = useMemo(
     () => ({
       onViewOutput: handleViewOutput,
+      onOpenUninstall: handleOpenUninstall,
     }),
-    [handleViewOutput]
+    [handleOpenUninstall, handleViewOutput]
   );
 
   return (
@@ -455,6 +595,14 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
           </Button>
         </DialogActions>
       </Dialog>
+      <UninstallProgressDialog
+        open={Boolean(selectedUninstallJob)}
+        job={selectedUninstallJob}
+        onClose={() => {
+          setSelectedUninstallJob(null);
+          setSelectedUninstallJobId(0);
+        }}
+      />
     </>
   );
 }

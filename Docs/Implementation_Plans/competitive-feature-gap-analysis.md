@@ -45,8 +45,8 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | PowerShell / script execution | Shipped | `Docs/assemblies.md`, `Docs/agent-runtime.md`, `README.md` | Borealis supports quick jobs, scheduled jobs, and signed PowerShell/Batch/Bash execution. |
 | Service inventory and service control | Shipped | `Docs/device-management.md`, `Docs/api-reference.md` | Device APIs expose cached services plus start/stop/restart actions. |
 | Processes | Partial but still a gap | `Docs/watchdogs.md`, `Data/Engine/services/API/devices/process_inventory.py` | Borealis collects process snapshots for watchdog evaluation, but there is no documented operator-facing process manager UI or action surface. |
-| Screenshot / quick visual capture | Partial but still a gap | `Docs/agent-runtime.md` | `role_Screenshot.py` still exists, but the docs explicitly mark screenshot and macro roles as legacy interactive-only roles outside the supported helper-backed runtime. |
-| Macro / UI automation | Partial but still a gap | `Docs/agent-runtime.md` | Same issue as screenshot: legacy code exists, but it is not part of the supported path. |
+| Screenshot / quick visual capture | Partial but still a gap | `Docs/agent-runtime.md` | `role_currentuser_node_screenshot.py` still exists, but the docs explicitly mark screenshot and macro roles as legacy interactive-only roles outside the supported helper-backed runtime. |
+| Macro / UI automation | Partial but still a gap | `Docs/agent-runtime.md` | Same issue as screenshot: `role_currentuser_macros.py` exists, but it is not part of the supported helper-backed path. |
 | Event Viewer | Absent | `Docs/device-management.md`, `Docs/api-reference.md` | No event-log/Event Viewer APIs or documented UI surface were found. |
 | File Manager / file transfer | Absent | `Docs/device-management.md`, `Docs/api-reference.md` | Borealis documents remote shell, VNC, services, and activity history, but no remote file browser or transfer feature. |
 | Local user and group management | Absent | `Docs/device-management.md`, `Docs/api-reference.md` | No dedicated device account-management feature was found. |

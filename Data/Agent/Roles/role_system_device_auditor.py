@@ -25,7 +25,7 @@ except Exception:
     aiohttp = None
 
 
-ROLE_NAME = 'device_audit'
+ROLE_NAME = 'device_auditor'
 ROLE_CONTEXTS = ['system']
 SESSION_INVENTORY_ENRICHER = None
 
@@ -667,581 +667,46 @@ def _ps_json_file(script_text: str, timeout: int = 60):
             pass
 
 
-_DISPLAY_ICON_QUOTED_RE = re.compile(r'^\s*"(?P<path>[^"]+)"\s*(?:,\s*(?P<index>-?\d+))?\s*$')
-_DISPLAY_ICON_RESOURCE_RE = re.compile(
-    r'^\s*(?P<path>.+?\.(?:exe|dll|ico|icl|cpl|ocx|scr))\s*(?:,\s*(?P<index>-?\d+))?\s*$',
-    re.IGNORECASE,
-)
-_SOFTWARE_ICON_EXTRACTION_BATCH_SIZE = 40
-
-
-def _software_row_key(row: dict) -> str:
+def _software_management_helpers():
+    # Keep legacy imports working while software inventory/icon logic lives in system_software_management.
     try:
-        return "::".join(
-            [
-                str(row.get('name') or '').strip().lower(),
-                str(row.get('version') or '').strip().lower(),
-                str(row.get('source') or '').strip().lower(),
-            ]
-        )
-    except Exception:
-        return ''
+        from Roles import system_software_management as helpers  # type: ignore
+    except ModuleNotFoundError as exc:
+        if not str(getattr(exc, 'name', '') or '').startswith('Roles'):
+            raise
+        from Data.Agent.Roles import system_software_management as helpers  # type: ignore
+    return helpers
 
 
 def _normalize_display_icon_hint(value) -> str:
-    try:
-        text = str(value or '').strip()
-    except Exception:
-        return ''
-    return text
+    return _software_management_helpers()._normalize_display_icon_hint(value)
 
 
-def _parse_display_icon_resource(value) -> dict | None:
-    text = _normalize_display_icon_hint(value)
-    if not text:
-        return None
-    match = _DISPLAY_ICON_QUOTED_RE.match(text)
-    if match:
-        file_path = str(match.group('path') or '').strip()
-        if file_path:
-            try:
-                index = int(str(match.group('index') or '0').strip())
-            except Exception:
-                index = 0
-            return {'hint': text, 'file_path': file_path, 'icon_index': index}
-    match = _DISPLAY_ICON_RESOURCE_RE.match(text)
-    if match:
-        file_path = str(match.group('path') or '').strip().rstrip(',')
-        if file_path:
-            try:
-                index = int(str(match.group('index') or '0').strip())
-            except Exception:
-                index = 0
-            return {'hint': text, 'file_path': file_path, 'icon_index': index}
-    return None
+def _parse_display_icon_resource(value):
+    return _software_management_helpers()._parse_display_icon_resource(value)
 
 
-def _software_icon_signature(rows) -> str:
-    entries = []
-    for row in rows or []:
-        if not isinstance(row, dict):
-            continue
-        metadata = row.get('metadata') if isinstance(row.get('metadata'), dict) else {}
-        entries.append(
-            {
-                'key': _software_row_key(row),
-                'display_icon': _normalize_display_icon_hint(metadata.get('display_icon')),
-            }
-        )
-    try:
-        encoded = json.dumps(entries, sort_keys=True, separators=(',', ':')).encode('utf-8')
-    except Exception:
-        encoded = repr(entries).encode('utf-8', errors='ignore')
-    return hashlib.sha256(encoded).hexdigest()
+def _software_icon_signature(rows):
+    return _software_management_helpers()._software_icon_signature(rows)
 
 
-def _extract_windows_icon_payload_batch(specs) -> dict:
-    if not specs:
-        return {}
-    try:
-        specs_json = json.dumps(specs)
-    except Exception:
-        return {}
-    ps = r"""
-$specs = @'
-""" + specs_json + r"""
-'@ | ConvertFrom-Json
-Add-Type -AssemblyName System.Drawing
-function Get-BorealisIconPayload {
-  param(
-    [string]$FileName,
-    [int]$IconIndex
-  )
-
-  try {
-    $expanded = [Environment]::ExpandEnvironmentVariables([string]$FileName)
-    if (-not $expanded) {
-      return $null
-    }
-    $expanded = $expanded.Trim().Trim('"')
-    if (-not $expanded -or -not (Test-Path -LiteralPath $expanded)) {
-      return $null
-    }
-
-    $extension = [System.IO.Path]::GetExtension($expanded).ToLowerInvariant()
-    if ($extension -eq '.ico') {
-      $rawBytes = [System.IO.File]::ReadAllBytes($expanded)
-      if ($rawBytes -and $rawBytes.Length -gt 0) {
-        return [PSCustomObject]@{
-          mime_type = 'image/vnd.microsoft.icon'
-          data_base64 = [Convert]::ToBase64String($rawBytes)
-        }
-      }
-    }
-
-    $icon = $null
-    try {
-      $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($expanded)
-    } catch {
-      $icon = $null
-    }
-    if ($null -eq $icon) {
-      return $null
-    }
-
-    $bitmap = $null
-    $stream = $null
-    try {
-      $bitmap = $icon.ToBitmap()
-      if ($null -eq $bitmap) {
-        return $null
-      }
-      $stream = New-Object System.IO.MemoryStream
-      $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-      $pngBytes = $stream.ToArray()
-      if (-not $pngBytes -or $pngBytes.Length -le 0) {
-        return $null
-      }
-      return [PSCustomObject]@{
-        mime_type = 'image/png'
-        data_base64 = [Convert]::ToBase64String($pngBytes)
-      }
-    } finally {
-      if ($stream) { $stream.Dispose() }
-      if ($bitmap) { $bitmap.Dispose() }
-      if ($icon) { $icon.Dispose() }
-    }
-  } catch {
-    return $null
-  }
-}
-$results = @()
-foreach ($spec in ($specs | Where-Object { $_ -and $_.hint -and $_.path })) {
-  try {
-    $payload = Get-BorealisIconPayload -FileName ([string]$spec.path) -IconIndex ([int]$spec.index)
-    if ($payload -and $payload.data_base64) {
-      $results += [PSCustomObject]@{
-        hint = [string]$spec.hint
-        mime_type = [string]$payload.mime_type
-        data_base64 = [string]$payload.data_base64
-      }
-    }
-  } catch {}
-}
-$results | ConvertTo-Json -Depth 4 -Compress
-"""
-    timeout = max(120, min(300, 30 + (len(specs) * 2)))
-    data = _ps_json_file(ps, timeout=timeout)
-    if isinstance(data, dict):
-        data = [data]
-    payloads = {}
-    for item in (data or []):
-        if not isinstance(item, dict):
-            continue
-        hint = _normalize_display_icon_hint(item.get('hint'))
-        mime_type = str(item.get('mime_type') or '').strip().lower() or 'image/png'
-        data_base64 = str(item.get('data_base64') or '').strip()
-        if hint and data_base64:
-            payloads[hint] = {
-                'mime_type': mime_type,
-                'data_base64': data_base64,
-            }
-    return payloads
+def _extract_windows_icon_payload_batch(specs):
+    return _software_management_helpers()._extract_windows_icon_payload_batch(specs)
 
 
-def _extract_windows_icon_payloads_by_hint(hints) -> dict:
-    if platform.system().lower() != 'windows':
-        return {}
-    specs = []
-    seen_hints = set()
-    for hint in (hints or []):
-        parsed = _parse_display_icon_resource(hint)
-        if not parsed:
-            continue
-        normalized_hint = str(parsed.get('hint') or '').strip()
-        if not normalized_hint or normalized_hint in seen_hints:
-            continue
-        seen_hints.add(normalized_hint)
-        specs.append(
-            {
-                'hint': normalized_hint,
-                'path': parsed['file_path'],
-                'index': int(parsed.get('icon_index') or 0),
-            }
-        )
-    if not specs:
-        return {}
-
-    payloads = {}
-    batch_size = max(1, int(_SOFTWARE_ICON_EXTRACTION_BATCH_SIZE or 1))
-    for start in range(0, len(specs), batch_size):
-        batch = specs[start:start + batch_size]
-        try:
-            payloads.update(_extract_windows_icon_payload_batch(batch))
-        except Exception:
-            continue
-    return payloads
+def _extract_windows_icon_payloads_by_hint(hints):
+    return _software_management_helpers()._extract_windows_icon_payloads_by_hint(hints)
 
 
 def attach_windows_software_icons(rows, previous_icon_hash_by_key=None):
-    if platform.system().lower() != 'windows':
-        return [], {}
-    icon_hash_by_key = {
-        str(key): str(value).strip().lower()
-        for key, value in ((previous_icon_hash_by_key or {}) or {}).items()
-        if str(key).strip() and str(value or '').strip()
-    }
-    pending_by_hint = {}
-    for row in (rows or []):
-        if not isinstance(row, dict):
-            continue
-        source = str(row.get('source') or '').strip().lower()
-        if source != 'local_installed':
-            continue
-        metadata = row.get('metadata') if isinstance(row.get('metadata'), dict) else {}
-        row_key = _software_row_key(row)
-        if not row_key:
-            continue
-        cached_icon_hash = icon_hash_by_key.get(row_key)
-        if cached_icon_hash:
-            metadata['icon_hash'] = cached_icon_hash
-            row['metadata'] = metadata
-            continue
-        hint = _normalize_display_icon_hint(metadata.get('display_icon'))
-        if not hint:
-            continue
-        pending_by_hint.setdefault(hint, []).append((row, metadata, row_key))
-
-    extracted_by_hint = _extract_windows_icon_payloads_by_hint(list(pending_by_hint.keys()))
-    icon_payloads_by_hash = {}
-    for hint, matches in pending_by_hint.items():
-        payload = extracted_by_hint.get(hint)
-        if not payload:
-            continue
-        try:
-            icon_bytes = base64.b64decode(str(payload.get('data_base64') or '').strip(), validate=True)
-        except Exception:
-            continue
-        if not icon_bytes:
-            continue
-        icon_hash = hashlib.sha256(icon_bytes).hexdigest()
-        icon_payloads_by_hash.setdefault(
-            icon_hash,
-            {
-                'icon_hash': icon_hash,
-                'mime_type': str(payload.get('mime_type') or 'image/png').strip().lower() or 'image/png',
-                'data_base64': base64.b64encode(icon_bytes).decode('ascii'),
-            },
-        )
-        for row, metadata, row_key in matches:
-            metadata['icon_hash'] = icon_hash
-            row['metadata'] = metadata
-            icon_hash_by_key[row_key] = icon_hash
-
-    return list(icon_payloads_by_hash.values()), icon_hash_by_key
+    return _software_management_helpers().attach_windows_software_icons(
+        rows,
+        previous_icon_hash_by_key=previous_icon_hash_by_key,
+    )
 
 
 def collect_software():
-    plat = platform.system().lower()
-    def _dedupe_and_sort(rows):
-        deduped = {}
-        for row in rows or []:
-            if not isinstance(row, dict):
-                continue
-            name = str(row.get('name') or '').strip()
-            if not name:
-                continue
-            version = str(row.get('version') or '').strip()
-            source = str(row.get('source') or 'local_installed').strip().lower() or 'local_installed'
-            payload = {
-                'name': name,
-                'version': version,
-                'source': source,
-            }
-            metadata = row.get('metadata') if isinstance(row.get('metadata'), dict) else {}
-            if metadata:
-                payload['metadata'] = metadata
-            deduped[(name.lower(), version.lower(), source)] = payload
-        return sorted(
-            deduped.values(),
-            key=lambda item: (
-                str(item.get('name') or '').lower(),
-                str(item.get('source') or '').lower(),
-                str(item.get('version') or '').lower(),
-            ),
-        )
-
-    def _coerce_estimated_size_kb(raw_value):
-        if raw_value in (None, '') or isinstance(raw_value, bool):
-            return None
-        try:
-            size_kb = int(str(raw_value).strip().replace(',', ''))
-        except Exception:
-            return None
-        return size_kb if size_kb > 0 else None
-
-    if plat == 'linux':
-        packages = []
-        try:
-            if shutil.which('dpkg-query'):
-                out = subprocess.run(
-                    ['dpkg-query', '-W', '-f=${Package}\t${Version}\n'],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                for line in (out.stdout or '').splitlines():
-                    parts = line.split('\t', 1)
-                    name = (parts[0] if parts else '').strip()
-                    version = (parts[1] if len(parts) > 1 else '').strip()
-                    if name:
-                        packages.append({'name': name, 'version': version, 'source': 'dpkg'})
-            elif shutil.which('rpm'):
-                out = subprocess.run(
-                    ['rpm', '-qa', '--qf', '%{NAME}\t%{VERSION}-%{RELEASE}\n'],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                for line in (out.stdout or '').splitlines():
-                    parts = line.split('\t', 1)
-                    name = (parts[0] if parts else '').strip()
-                    version = (parts[1] if len(parts) > 1 else '').strip()
-                    if name:
-                        packages.append({'name': name, 'version': version, 'source': 'rpm'})
-        except Exception:
-            packages = []
-
-        return _dedupe_and_sort(packages)
-
-    if plat != 'windows':
-        return []
-    # 1) Try PowerShell registry scrape (fast when ConvertTo-Json is available)
-    try:
-        ps = r"""
-$paths = @(
-  'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-  'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
-  'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
-)
-$list = @()
-foreach ($p in $paths) {
-  try {
-    $list += Get-ItemProperty -Path $p -ErrorAction SilentlyContinue |
-      Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation, InstallDate, EstimatedSize, DisplayIcon, UninstallString, QuietUninstallString, WindowsInstaller, PSChildName
-  } catch {}
-}
-$list = $list | Where-Object { $_.DisplayName -and ("$($_.DisplayName)".Trim().Length -gt 0) }
-$list | Sort-Object DisplayName -Unique | ConvertTo-Json -Depth 2
-"""
-        data = _ps_json(ps, timeout=120)
-        out = []
-        if isinstance(data, dict):
-            data = [data]
-        for it in (data or []):
-            name = str(it.get('DisplayName') or '').strip()
-            if not name:
-                continue
-            ver = str(it.get('DisplayVersion') or '').strip()
-            metadata = {}
-            publisher = str(it.get('Publisher') or '').strip()
-            if publisher:
-                metadata['publisher'] = publisher
-            install_location = str(it.get('InstallLocation') or '').strip()
-            if install_location:
-                metadata['install_location'] = install_location
-            install_date = str(it.get('InstallDate') or '').strip()
-            if install_date:
-                metadata['install_date'] = install_date
-            estimated_size_kb = _coerce_estimated_size_kb(it.get('EstimatedSize'))
-            if estimated_size_kb is not None:
-                metadata['estimated_size_kb'] = estimated_size_kb
-            display_icon = str(it.get('DisplayIcon') or '').strip()
-            if display_icon:
-                metadata['display_icon'] = display_icon
-            uninstall_string = str(it.get('UninstallString') or '').strip()
-            if uninstall_string:
-                metadata['uninstall_string'] = uninstall_string
-            quiet_uninstall_string = str(it.get('QuietUninstallString') or '').strip()
-            if quiet_uninstall_string:
-                metadata['quiet_uninstall_string'] = quiet_uninstall_string
-            product_code = str(it.get('PSChildName') or '').strip()
-            if product_code:
-                metadata['product_code'] = product_code
-            windows_installer = it.get('WindowsInstaller')
-            if windows_installer not in (None, ''):
-                metadata['windows_installer'] = bool(windows_installer)
-            payload = {'name': name, 'version': ver, 'source': 'local_installed'}
-            if metadata:
-                payload['metadata'] = metadata
-            out.append(payload)
-        try:
-            appx_ps = r"""
-$list = @()
-try {
-  $list = Get-AppxPackage -AllUsers -ErrorAction Stop |
-    Where-Object { -not $_.IsFramework -and -not $_.IsResourcePackage } |
-    Select-Object Name, Version, Publisher, InstallLocation, PackageFamilyName, NonRemovable
-} catch {
-  try {
-    $list = Get-AppxPackage -ErrorAction SilentlyContinue |
-      Where-Object { -not $_.IsFramework -and -not $_.IsResourcePackage } |
-      Select-Object Name, Version, Publisher, InstallLocation, PackageFamilyName, NonRemovable
-  } catch {}
-}
-$list | Sort-Object Name -Unique | ConvertTo-Json -Depth 3
-"""
-            appx_data = _ps_json(appx_ps, timeout=120)
-            if isinstance(appx_data, dict):
-                appx_data = [appx_data]
-            for it in (appx_data or []):
-                name = str(it.get('Name') or '').strip()
-                if not name:
-                    continue
-                ver = str(it.get('Version') or '').strip()
-                metadata = {}
-                publisher = str(it.get('Publisher') or '').strip()
-                if publisher:
-                    metadata['publisher'] = publisher
-                install_location = str(it.get('InstallLocation') or '').strip()
-                if install_location:
-                    metadata['install_location'] = install_location
-                family_name = str(it.get('PackageFamilyName') or '').strip()
-                if family_name:
-                    metadata['package_family_name'] = family_name
-                non_removable = it.get('NonRemovable')
-                if non_removable not in (None, ''):
-                    metadata['non_removable'] = bool(non_removable)
-                payload = {'name': name, 'version': ver, 'source': 'windows_store'}
-                if metadata:
-                    payload['metadata'] = metadata
-                out.append(payload)
-        except Exception:
-            pass
-        if out:
-            return _dedupe_and_sort(out)
-    except Exception:
-        pass
-
-    # 2) Fallback: read registry directly via Python winreg (works on Win7+)
-    try:
-        try:
-            import winreg  # type: ignore
-        except Exception:
-            return []
-
-        def _enum_uninstall(root, path, wow_flag=0):
-            items = []
-            try:
-                key = winreg.OpenKey(root, path, 0, winreg.KEY_READ | wow_flag)
-            except Exception:
-                return items
-            try:
-                i = 0
-                while True:
-                    try:
-                        sub = winreg.EnumKey(key, i)
-                    except OSError:
-                        break
-                    i += 1
-                    try:
-                        sk = winreg.OpenKey(key, sub, 0, winreg.KEY_READ | wow_flag)
-                        try:
-                            name, _ = winreg.QueryValueEx(sk, 'DisplayName')
-                        except Exception:
-                            name = ''
-                        if name and str(name).strip():
-                            try:
-                                ver, _ = winreg.QueryValueEx(sk, 'DisplayVersion')
-                            except Exception:
-                                ver = ''
-                            metadata = {}
-                            try:
-                                publisher, _ = winreg.QueryValueEx(sk, 'Publisher')
-                                if publisher:
-                                    metadata['publisher'] = str(publisher).strip()
-                            except Exception:
-                                pass
-                            try:
-                                install_location, _ = winreg.QueryValueEx(sk, 'InstallLocation')
-                                if install_location:
-                                    metadata['install_location'] = str(install_location).strip()
-                            except Exception:
-                                pass
-                            try:
-                                install_date, _ = winreg.QueryValueEx(sk, 'InstallDate')
-                                if install_date:
-                                    metadata['install_date'] = str(install_date).strip()
-                            except Exception:
-                                pass
-                            try:
-                                estimated_size_kb, _ = winreg.QueryValueEx(sk, 'EstimatedSize')
-                                normalized_estimated_size_kb = _coerce_estimated_size_kb(estimated_size_kb)
-                                if normalized_estimated_size_kb is not None:
-                                    metadata['estimated_size_kb'] = normalized_estimated_size_kb
-                            except Exception:
-                                pass
-                            try:
-                                display_icon, _ = winreg.QueryValueEx(sk, 'DisplayIcon')
-                                if display_icon:
-                                    metadata['display_icon'] = str(display_icon).strip()
-                            except Exception:
-                                pass
-                            try:
-                                uninstall_string, _ = winreg.QueryValueEx(sk, 'UninstallString')
-                                if uninstall_string:
-                                    metadata['uninstall_string'] = str(uninstall_string).strip()
-                            except Exception:
-                                pass
-                            try:
-                                quiet_uninstall_string, _ = winreg.QueryValueEx(sk, 'QuietUninstallString')
-                                if quiet_uninstall_string:
-                                    metadata['quiet_uninstall_string'] = str(quiet_uninstall_string).strip()
-                            except Exception:
-                                pass
-                            if sub:
-                                metadata['product_code'] = str(sub).strip()
-                            try:
-                                windows_installer, _ = winreg.QueryValueEx(sk, 'WindowsInstaller')
-                                metadata['windows_installer'] = bool(windows_installer)
-                            except Exception:
-                                pass
-                            payload = {
-                                'name': str(name).strip(),
-                                'version': str(ver or '').strip(),
-                                'source': 'local_installed',
-                            }
-                            if metadata:
-                                payload['metadata'] = metadata
-                            items.append(payload)
-                    except Exception:
-                        continue
-            except Exception:
-                pass
-            return items
-
-        HKLM = getattr(winreg, 'HKEY_LOCAL_MACHINE')
-        HKCU = getattr(winreg, 'HKEY_CURRENT_USER')
-        WOW64_64 = getattr(winreg, 'KEY_WOW64_64KEY', 0)
-        WOW64_32 = getattr(winreg, 'KEY_WOW64_32KEY', 0)
-        paths = [
-            (HKLM, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", WOW64_64),
-            (HKLM, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", WOW64_32),
-            (HKLM, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall", 0),
-            (HKCU, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", 0),
-        ]
-        merged = {}
-        for root, path, flag in paths:
-            for it in _enum_uninstall(root, path, flag):
-                name_key = (it.get('name') or '').lower()
-                if not name_key:
-                    continue
-                key = (name_key, (it.get('version') or '').lower(), (it.get('source') or 'local_installed'))
-                if key not in merged:
-                    merged[key] = it
-        return _dedupe_and_sort(list(merged.values()))
-    except Exception:
-        return []
+    return _software_management_helpers().collect_software()
 
 
 def collect_memory():
@@ -2222,7 +1687,6 @@ def _build_details_fallback() -> dict:
 
     details = {
         'summary': summary,
-        'software': collect_software(),
         'memory': collect_memory(),
         'storage': collect_storage(),
         'network': network,
@@ -2235,7 +1699,7 @@ def _build_details_fallback() -> dict:
 class Role:
     def __init__(self, ctx):
         self.ctx = ctx
-        self.role_health_label = "Device Audit"
+        self.role_health_label = "Device Auditor"
         try:
             globals()['SESSION_INVENTORY_ENRICHER'] = (getattr(ctx, 'hooks', {}) or {}).get('session_inventory_enricher')
         except Exception:
@@ -2244,8 +1708,6 @@ class Role:
         self._ext_ip_ts = 0
         self._refresh_ts = 0
         self._last_details = None
-        self._last_software_icon_signature = ''
-        self._last_software_icon_hash_by_key = {}
         # OS is collected dynamically; do not persist in config
         # Start periodic reporter
         try:
@@ -2326,40 +1788,6 @@ class Role:
                         details = self._normalize_details(details)
                     except Exception:
                         pass
-                    try:
-                        software_rows = details.get('software') if isinstance(details.get('software'), list) else []
-                        icon_candidate_count = 0
-                        for row in software_rows:
-                            if not isinstance(row, dict):
-                                continue
-                            if str(row.get('source') or '').strip().lower() != 'local_installed':
-                                continue
-                            metadata = row.get('metadata') if isinstance(row.get('metadata'), dict) else {}
-                            if _normalize_display_icon_hint(metadata.get('display_icon')):
-                                icon_candidate_count += 1
-                        icon_signature = _software_icon_signature(software_rows)
-                        previous_icon_hash_by_key = (
-                            self._last_software_icon_hash_by_key
-                            if icon_signature == self._last_software_icon_signature
-                            else {}
-                        )
-                        icon_payloads, icon_hash_by_key = attach_windows_software_icons(
-                            software_rows,
-                            previous_icon_hash_by_key=previous_icon_hash_by_key,
-                        )
-                        self._last_software_icon_signature = icon_signature
-                        self._last_software_icon_hash_by_key = icon_hash_by_key
-                        if icon_payloads:
-                            details['software_icon_payloads'] = icon_payloads
-                            _log_icon_status(
-                                f"device_audit software icon extraction attached payloads={len(icon_payloads)} rows={len(icon_hash_by_key)} candidates={icon_candidate_count}"
-                            )
-                        elif icon_candidate_count:
-                            _log_icon_status(
-                                f"device_audit software icon extraction yielded no payloads candidates={icon_candidate_count}"
-                            )
-                    except Exception as exc:
-                        _log_icon_status(f"device_audit software icon extraction failed: {exc}", error=True)
                     if details:
                         self._last_details = details
                         self._refresh_ts = now
@@ -2396,15 +1824,15 @@ class Role:
                     else:
                         try:
                             await client.async_post_json("/api/agent/details", payload, require_auth=True)
-                            try:
-                                if isinstance(details_to_send, dict):
-                                    details_to_send.pop('software_icon_payloads', None)
-                            except Exception:
-                                pass
-                            await asyncio.sleep(interval_sec)
-                            continue
                         except Exception:
                             pass
+                        try:
+                            if isinstance(details_to_send, dict):
+                                details_to_send.pop('software_icon_payloads', None)
+                        except Exception:
+                            pass
+                        await asyncio.sleep(interval_sec)
+                        continue
 
                 if aiohttp is not None:
                     base_url = (get_url() or '').rstrip('/')

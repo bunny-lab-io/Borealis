@@ -677,10 +677,10 @@ class SessionHelperBroker:
         )
         if ready:
             return {
-                "role_name": "script_exec_currentuser",
+                "role_name": "context_currentuser",
                 "context": "currentuser",
                 "status": "healthy",
-                "role_label": "Script Execution - CURRENTUSER",
+                "role_label": "Current User Context",
                 "detail": f"{len(ready)} interactive helper session(s) ready.",
                 "details": {
                     "running_status": "Ready",
@@ -694,10 +694,10 @@ class SessionHelperBroker:
             }
         if eligible:
             return {
-                "role_name": "script_exec_currentuser",
+                "role_name": "context_currentuser",
                 "context": "currentuser",
                 "status": "recovering",
-                "role_label": "Script Execution - CURRENTUSER",
+                "role_label": "Current User Context",
                 "detail": "Interactive sessions are present, but helper connections are still warming up.",
                 "details": {
                     "running_status": "Recovering",
@@ -711,10 +711,10 @@ class SessionHelperBroker:
                 },
             }
         return {
-            "role_name": "script_exec_currentuser",
+            "role_name": "context_currentuser",
             "context": "currentuser",
             "status": "pending",
-            "role_label": "Script Execution - CURRENTUSER",
+            "role_label": "Current User Context",
             "detail": "No interactive user sessions are currently eligible.",
             "details": {
                 "running_status": "Waiting",
@@ -729,10 +729,10 @@ class SessionHelperBroker:
 
     def session_inventory_payload(self) -> Dict[str, Any]:
         try:
-            from Roles.role_DeviceAudit import collect_sessions  # type: ignore
+            from Roles.role_system_device_auditor import collect_sessions  # type: ignore
         except Exception:
             try:
-                from Data.Agent.Roles.role_DeviceAudit import collect_sessions  # type: ignore
+                from Data.Agent.Roles.role_system_device_auditor import collect_sessions  # type: ignore
             except Exception:
                 collect_sessions = None
         raw_payload = collect_sessions() if callable(collect_sessions) else {"reported_at": int(time.time()), "sessions": []}

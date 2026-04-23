@@ -12,12 +12,22 @@ from typing import Dict, List, Optional
 
 from signature_utils import decode_script_bytes, verify_and_store_script_signature
 try:
+    from Roles.system_script_execution import build_env_map as build_env_map_helper
+    from Roles.system_script_execution import run_system_script as run_system_script_helper
+    from Roles.system_task_orchestration import LaneCoordinator, resolve_system_lane
+except ModuleNotFoundError as exc:  # pragma: no cover - package import fallback
+    if not str(getattr(exc, "name", "") or "").startswith("Roles"):
+        raise
+    from Data.Agent.Roles.system_script_execution import build_env_map as build_env_map_helper
+    from Data.Agent.Roles.system_script_execution import run_system_script as run_system_script_helper
+    from Data.Agent.Roles.system_task_orchestration import LaneCoordinator, resolve_system_lane
+try:
     from update_state import busy_activity
 except Exception:
     busy_activity = None
 
 
-ROLE_NAME = 'script_exec_system'
+ROLE_NAME = 'context_system'
 ROLE_CONTEXTS = ['system']
 
 
@@ -184,7 +194,8 @@ def _build_wrapped_script(content: str, env_map: Dict[str, str], timeout_seconds
             f"if (Wait-Job -Job $job -Timeout {timeout_seconds}) {{\n"
             "  Receive-Job $job\n"
             "} else {\n"
-            "  Stop-Job $job -Force\n"
+            "  Stop-Job -Job $job -ErrorAction SilentlyContinue | Out-Null\n"
+            "  Remove-Job -Job $job -Force -ErrorAction SilentlyContinue | Out-Null\n"
             f"  throw \"Script timed out after {timeout_seconds} seconds\"\n"
             "}\n"
         )
@@ -406,24 +417,13 @@ Get-ScheduledTask -TaskName $task | Out-Null
 class Role:
     def __init__(self, ctx):
         self.ctx = ctx
-        self.role_health_label = "Script Execution - SYSTEM"
+        self.role_health_label = "System Context"
         self._listener_registered = False
-        self._system_queue_locks = {
-            'software_uninstall': asyncio.Lock(),
-        }
         self._system_job_tasks = set()
+        self._lane_coordinator = None
 
     def _resolve_system_queue_key(self, payload) -> str:
-        if not isinstance(payload, dict):
-            return ''
-        context = payload.get('context') if isinstance(payload.get('context'), dict) else {}
-        assembly_source = str(context.get('assembly_source') or '').strip().lower()
-        if assembly_source == 'device_software_uninstall':
-            return 'software_uninstall'
-        script_path = str(payload.get('script_path') or '').replace('\\', '/').strip().lower()
-        if script_path.endswith('scripts/internal/software_uninstall.ps1'):
-            return 'software_uninstall'
-        return ''
+        return resolve_system_lane(payload, event_name='quick_job_run')
 
     def health_report(self) -> dict:
         if not self._listener_registered:
@@ -437,14 +437,17 @@ class Role:
                     'listener_state': 'Not Registered',
                 },
             }
+        coordinator = self._lane_coordinator
+        lane_details = coordinator.snapshot() if coordinator is not None else {}
         return {
             'status': 'healthy',
             'role_label': self.role_health_label,
-            'detail': 'Quick job listener ready for SYSTEM script execution.',
+            'detail': 'SYSTEM context listeners are ready for orchestration and local execution.',
             'details': {
                 'running_status': 'Ready',
                 'execution_context': 'SYSTEM',
                 'listener_state': 'Registered',
+                **lane_details,
             },
         }
 
@@ -454,6 +457,9 @@ class Role:
         hooks = getattr(self.ctx, 'hooks', {}) or {}
         log_agent_hook = hooks.get('log_agent')
         dispatch_currentuser_hook = hooks.get('dispatch_currentuser_quick_job')
+        request_service_action_hook = hooks.get('request_system_service_action')
+        request_software_refresh_hook = hooks.get('request_system_software_refresh')
+        launch_agent_update_hook = hooks.get('launch_manual_agent_update')
 
         def _log(message: str, *, error: bool = False) -> None:
             if callable(log_agent_hook):
@@ -478,12 +484,30 @@ class Role:
 
             task.add_done_callback(_cleanup)
 
+        async def _emit_progress(payload):
+            try:
+                await sio.emit('quick_job_progress', payload)
+            except Exception as exc:
+                _log(f"quick_job_progress emit failed: {exc}", error=True)
+
+        self._lane_coordinator = LaneCoordinator(emit_progress=_emit_progress, log=lambda message: _log(message))
+
         async def _handle_system_quick_job(payload):
             try:
                 job_id = payload.get('job_id')
                 script_type = (payload.get('script_type') or '').lower()
                 job_label = job_id if job_id is not None else 'unknown'
                 context = payload.get('context') if isinstance(payload, dict) else None
+                activity_kind = (
+                    str(context.get('activity_kind') or '').strip()
+                    if isinstance(context, dict)
+                    else ''
+                )
+                activity_metadata = (
+                    dict(context.get('activity_metadata'))
+                    if isinstance(context, dict) and isinstance(context.get('activity_metadata'), dict)
+                    else {}
+                )
 
                 def _result_payload(job_value, status_value, stdout_value="", stderr_value=""):
                     result = {
@@ -526,43 +550,23 @@ class Role:
                 _log(f"quick_job_run(system) signature verified job_id={job_label}")
 
                 content = script_bytes.decode('utf-8', errors='replace')
-                raw_env = payload.get('environment')
-                env_map = _sanitize_env_map(raw_env)
-                variables = payload.get('variables') if isinstance(payload.get('variables'), list) else []
-                for var in variables:
-                    if not isinstance(var, dict):
-                        continue
-                    name = str(var.get('name') or '').strip()
-                    if not name:
-                        continue
-                    key = _canonical_env_key(name)
-                    if key in env_map:
-                        continue
-                    default_val = var.get('default')
-                    if isinstance(default_val, bool):
-                        env_map[key] = "True" if default_val else "False"
-                    elif default_val is None:
-                        env_map[key] = ""
-                    else:
-                        env_map[key] = str(default_val)
-                env_map = _apply_variable_aliases(env_map, variables)
+                env_map = build_env_map_helper(
+                    payload.get('environment'),
+                    payload.get('variables'),
+                )
                 try:
                     timeout_seconds = max(0, int(payload.get('timeout_seconds') or 0))
                 except Exception:
                     timeout_seconds = 0
 
                 queue_key = self._resolve_system_queue_key(payload)
-                queue_lock = self._system_queue_locks.get(queue_key) if queue_key else None
-                queue_wait = bool(queue_lock and queue_lock.locked())
-                if queue_wait:
-                    _log(
-                        f"quick_job_run(system) queued behind active {queue_key} job job_id={job_label}"
-                    )
+                if queue_key == 'software_management' and not activity_kind:
+                    activity_kind = 'software_uninstall'
 
                 async def _execute_system_job():
                     _log(
                         f"quick_job_run(system) executing payload job_id={job_label} "
-                        f"queued={queue_wait} queue_key={queue_key or 'none'}"
+                        f"queue_key={queue_key or 'none'}"
                     )
 
                     def _run_system_job():
@@ -578,20 +582,39 @@ class Role:
                             if callable(busy_activity)
                             else contextlib.nullcontext()
                         )
+
+                        def _forward_progress(chunk: str) -> None:
+                            if not chunk:
+                                return
+                            coordinator = self._lane_coordinator
+                            if coordinator is None:
+                                return
+                            try:
+                                asyncio.run_coroutine_threadsafe(
+                                    coordinator.emit_progress(
+                                        job_id=job_id,
+                                        status='Running',
+                                        queue_lane=queue_key,
+                                        activity_kind=activity_kind,
+                                        metadata=activity_metadata,
+                                        context=context if isinstance(context, dict) else None,
+                                        stdout=chunk,
+                                        append_output=True,
+                                    ),
+                                    self.ctx.loop,
+                                )
+                            except Exception:
+                                pass
+
                         with busy_ctx:
-                            if script_type == 'powershell':
-                                if os.name == 'nt':
-                                    rc, out, err = _run_powershell_via_system_task(content, env_map, timeout_seconds)
-                                    if rc == -999:
-                                        rc, out, err = _run_powershell_script_content(content, env_map, timeout_seconds)
-                                else:
-                                    rc, out, err = _run_powershell_script_content(content, env_map, timeout_seconds)
-                            elif script_type == 'batch':
-                                rc, out, err = _run_batch_script_content(content, env_map, timeout_seconds)
-                            elif script_type == 'bash':
-                                rc, out, err = _run_bash_script_content(content, env_map, timeout_seconds)
-                            else:
-                                return None, '', f"Unsupported type: {script_type}"
+                            rc, out, err = run_system_script_helper(
+                                script_type=script_type,
+                                content=content,
+                                env_map=env_map,
+                                timeout_seconds=timeout_seconds,
+                                progress_callback=_forward_progress if queue_key == 'software_management' else None,
+                                log_callback=lambda message: _log(f"quick_job_run(system) {message}"),
+                            )
                             return rc, out, err
 
                         return -1, '', 'System quick job execution did not run.'
@@ -602,12 +625,47 @@ class Role:
                         return
                     status = 'Success' if rc == 0 else 'Failed'
                     await sio.emit('quick_job_result', _result_payload(job_id, status, out, err))
+                    if queue_key == 'software_management' and callable(request_software_refresh_hook):
+                        try:
+                            request_software_refresh_hook(reason=f"quick_job:{job_label}:{status.lower()}")
+                        except Exception as exc:
+                            _log(f"quick_job_run(system) software refresh request failed: {exc}", error=True)
 
-                if queue_lock is not None:
-                    async with queue_lock:
-                        await _execute_system_job()
-                else:
+                coordinator = self._lane_coordinator
+                if coordinator is None:
                     await _execute_system_job()
+                    return
+
+                async def _on_queued(waiting: bool) -> None:
+                    if not waiting:
+                        return
+                    _log(f"quick_job_run(system) queued behind active {queue_key} job job_id={job_label}")
+                    await coordinator.emit_progress(
+                        job_id=job_id,
+                        status='Queued',
+                        queue_lane=queue_key,
+                        activity_kind=activity_kind,
+                        metadata=activity_metadata,
+                        context=context if isinstance(context, dict) else None,
+                    )
+
+                async def _on_start() -> None:
+                    await coordinator.emit_progress(
+                        job_id=job_id,
+                        status='Running',
+                        queue_lane=queue_key,
+                        activity_kind=activity_kind,
+                        metadata=activity_metadata,
+                        context=context if isinstance(context, dict) else None,
+                    )
+
+                await coordinator.run(
+                    lane=queue_key,
+                    job_id=job_label,
+                    work=_execute_system_job,
+                    on_start=_on_start,
+                    on_queued=_on_queued,
+                )
             except Exception as e:
                 context = payload.get('context') if isinstance(payload, dict) else None
 
@@ -685,3 +743,100 @@ class Role:
                     await sio.emit('quick_job_result', _error_payload(payload.get('job_id') if isinstance(payload, dict) else None, str(e)))
                 except Exception:
                     pass
+
+        @sio.on("service_control_action")
+        async def _on_service_control_action(payload):
+            if not isinstance(payload, dict):
+                return
+            target_agent = str(payload.get("agent_id") or "").strip()
+            if target_agent and target_agent != str(self.ctx.agent_id or "").strip():
+                return
+            service_name = str(payload.get("service_name") or "").strip()
+            action = str(payload.get("action") or "").strip().lower()
+            requested_by = str(payload.get("requested_by") or "").strip()
+            target_hostname = str(payload.get("hostname") or payload.get("target_hostname") or "").strip().lower()
+            if target_hostname:
+                import socket
+
+                if target_hostname != socket.gethostname().strip().lower():
+                    return
+            if not service_name or action not in {"start", "stop", "restart"}:
+                return
+            if not callable(request_service_action_hook):
+                _log("service_control_action ignored; service-management hook unavailable.", error=True)
+                return
+            coordinator = self._lane_coordinator
+            if coordinator is None:
+                await asyncio.to_thread(request_service_action_hook, service_name, action, requested_by)
+                return
+            await coordinator.run(
+                lane=resolve_system_lane(payload, event_name="service_control_action"),
+                job_id=f"service:{service_name}:{action}",
+                work=lambda: asyncio.to_thread(request_service_action_hook, service_name, action, requested_by),
+            )
+
+        @sio.on("agent_update_request")
+        async def _on_agent_update_request(payload):
+            if not isinstance(payload, dict):
+                return
+            if not callable(launch_agent_update_hook):
+                _log("agent_update_request ignored; update hook unavailable.", error=True)
+                return
+            target_agent = str(payload.get("agent_id") or "").strip()
+            if target_agent and target_agent != str(self.ctx.agent_id or "").strip():
+                return
+            target_hostname = str(payload.get("hostname") or payload.get("target_hostname") or "").strip().lower()
+            if target_hostname:
+                import socket
+
+                if target_hostname != socket.gethostname().strip().lower():
+                    return
+            requested_by = str(payload.get("requested_by") or "").strip()
+            requested_at = payload.get("requested_at")
+
+            async def _launch():
+                launched, status = await asyncio.to_thread(
+                    launch_agent_update_hook,
+                    requested_by=requested_by,
+                    requested_at=requested_at,
+                )
+                if not launched:
+                    _log(f"agent_update_request failed: {status}", error=True)
+
+            coordinator = self._lane_coordinator
+            if coordinator is None:
+                await _launch()
+                return
+            await coordinator.run(
+                lane=resolve_system_lane(payload, event_name="agent_update_request"),
+                job_id="agent_update",
+                work=_launch,
+            )
+
+        @sio.on("software_inventory_refresh_request")
+        async def _on_software_inventory_refresh_request(payload):
+            if not isinstance(payload, dict):
+                return
+            if not callable(request_software_refresh_hook):
+                _log("software_inventory_refresh_request ignored; software-management hook unavailable.", error=True)
+                return
+            target_agent = str(payload.get("agent_id") or "").strip()
+            if target_agent and target_agent != str(self.ctx.agent_id or "").strip():
+                return
+            target_hostname = str(payload.get("hostname") or payload.get("target_hostname") or "").strip().lower()
+            if target_hostname:
+                import socket
+
+                if target_hostname != socket.gethostname().strip().lower():
+                    return
+            requested_by = str(payload.get("requested_by") or "").strip()
+            reason = str(payload.get("reason") or "").strip()
+            request_reason = reason or f"operator:{requested_by or 'unknown'}"
+            try:
+                await asyncio.to_thread(request_software_refresh_hook, reason=request_reason)
+                _log(
+                    "software_inventory_refresh_request accepted "
+                    f"requested_by={requested_by or '-'} reason={request_reason or '-'}"
+                )
+            except Exception as exc:
+                _log(f"software_inventory_refresh_request failed: {exc}", error=True)

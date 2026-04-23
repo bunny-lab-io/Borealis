@@ -3,8 +3,8 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-import Data.Agent.Roles.role_WireGuardTunnel as wireguard_role
-from Data.Agent.Roles.role_WireGuardTunnel import (
+import Data.Agent.Roles.role_system_wireguard as wireguard_role
+from Data.Agent.Roles.role_system_wireguard import (
     LinuxWireGuardClient,
     Role,
     SessionConfig,

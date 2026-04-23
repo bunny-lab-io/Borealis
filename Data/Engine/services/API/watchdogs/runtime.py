@@ -87,6 +87,16 @@ VALID_SESSION_TRANSITIONS = {"started", "ended", "locked", "unlocked", "rdp_star
 VALID_INTERFACE_CHANGE_TYPES = {"added", "removed", "mac_changed"}
 VALID_DRIVE_STORAGE_SCOPES = {"all", "fixed", "removable"}
 VALID_DRIVE_WATCH_MODES = {"any", "specific"}
+ROLE_NAME_ALIASES = {
+    "script_exec_system": "context_system",
+    "script_exec_currentuser": "context_currentuser",
+    "device_audit": "device_auditor",
+    "service_control": "service_management",
+    "remoteshell": "remote_shell",
+    "wireguardtunnel": "wireguard",
+    "macro": "macros",
+    "screenshot": "node_screenshot",
+}
 
 DEFAULT_WATCHDOG_CRITERIA = {"rules": [], "match_mode": "all"}
 DEFAULT_WATCHDOG_ACTIONS = {"actions": []}
@@ -156,6 +166,13 @@ def _clean_text(value: Any) -> str:
         return str(value).strip()
     except Exception:
         return ""
+
+
+def _normalize_role_match_name(value: Any) -> str:
+    text = _clean_text(value).lower()
+    if not text:
+        return ""
+    return ROLE_NAME_ALIASES.get(text, text)
 
 
 def _clean_single_line(value: Any) -> str:
@@ -2107,13 +2124,13 @@ class WatchdogRuntimeService:
                     "summary": "Agent role health telemetry is stale",
                     "sample": {},
                 }
-            role_name = _clean_text(rule.get("role_name")).lower()
+            role_name = _normalize_role_match_name(rule.get("role_name"))
             trigger_statuses = {str(item).lower() for item in (rule.get("trigger_statuses") or ["unhealthy"])}
             roles = role_payload.get("roles") if isinstance(role_payload.get("roles"), list) else []
             matched_role = None
             fallback_role = None
             for entry in roles:
-                candidate_name = _clean_text(entry.get("role_name")).lower()
+                candidate_name = _normalize_role_match_name(entry.get("role_name"))
                 candidate_label = _clean_text(entry.get("role_label")).lower()
                 if role_name and role_name not in {candidate_name, candidate_label}:
                     continue

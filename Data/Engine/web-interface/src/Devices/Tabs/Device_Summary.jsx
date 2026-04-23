@@ -213,21 +213,29 @@ const AGENT_HEALTH_KIND = Object.freeze({
 
 const AGENT_HEALTH_PRESENTATION_BY_KEY = Object.freeze({
   deviceaudit: { label: "Device Auditor", kind: AGENT_HEALTH_KIND.role },
+  deviceauditor: { label: "Device Auditor", kind: AGENT_HEALTH_KIND.role },
+  contextsystem: { label: "System Context", kind: AGENT_HEALTH_KIND.role },
+  contextcurrentuser: { label: "Current User Context", kind: AGENT_HEALTH_KIND.role },
   remoteshell: { label: "Remote Shell", kind: AGENT_HEALTH_KIND.role },
   remoteshellservice: { label: "Remote Shell", kind: AGENT_HEALTH_KIND.role },
   servicecontrol: { label: "Service Control", kind: AGENT_HEALTH_KIND.role },
+  servicemanagement: { label: "Service Management", kind: AGENT_HEALTH_KIND.role },
+  softwaremanagement: { label: "Software Management", kind: AGENT_HEALTH_KIND.role },
   scriptexeccurrentuser: { label: "Script Execution - CURRENTUSER", kind: AGENT_HEALTH_KIND.role },
   scriptexecsystem: { label: "Script Execution - SYSTEM", kind: AGENT_HEALTH_KIND.role },
+  nodescreenshot: { label: "Node Screenshot", kind: AGENT_HEALTH_KIND.role },
+  macros: { label: "Macro Automation", kind: AGENT_HEALTH_KIND.role },
   vnc: { label: "UltraVNC", kind: AGENT_HEALTH_KIND.service },
   ultravnc: { label: "UltraVNC", kind: AGENT_HEALTH_KIND.service },
   ultravncservice: { label: "UltraVNC", kind: AGENT_HEALTH_KIND.service },
+  wireguard: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
   wireguardtunnel: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
   wireguardservice: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
   wireguardvpn: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
 });
 
 const LEGACY_AGENT_HEALTH_KEYS = Object.freeze(
-  new Set(["macro", "macroautomation", "screenshot", "screenshotcapture"])
+  new Set(["macro", "macroautomation", "macros", "screenshot", "screenshotcapture", "nodescreenshot"])
 );
 
 function compactAgentHealthKey(value) {
@@ -312,10 +320,12 @@ function buildAgentHealthDialogContent(entry, tunnelInfo) {
 
   switch (presentationKey) {
     case "deviceaudit":
+    case "deviceauditor":
       appendLine("Reporter Task", details.reporter_task, "Unknown");
       appendLine("Report Interval", details.report_interval, "Unknown");
       break;
     case "macro":
+    case "macros":
       appendLine("Configured Tasks", details.configured_tasks, "0");
       appendLine("Active Tasks", details.active_tasks, "0");
       break;
@@ -326,19 +336,33 @@ function buildAgentHealthDialogContent(entry, tunnelInfo) {
       appendLine("Shell Binary", details.shell_binary, "Unavailable");
       break;
     case "screenshot":
+    case "nodescreenshot":
       appendLine("Configured Regions", details.configured_regions, "0");
       appendLine("Active Tasks", details.active_tasks, "0");
       appendLine("Visible Overlays", details.visible_overlays, "0");
       break;
     case "scriptexeccurrentuser":
+    case "contextcurrentuser":
       appendLine("Execution Context", details.execution_context, "CURRENTUSER");
       appendLine("Listener State", details.listener_state, "Unknown");
       appendMultilineSection("Loaded Helper Sessions", details.loaded_helper_sessions);
       appendMultilineSection("Pending Helper Sessions", details.pending_helper_sessions);
       break;
     case "scriptexecsystem":
+    case "contextsystem":
       appendLine("Execution Context", details.execution_context, "SYSTEM");
       appendLine("Listener State", details.listener_state, "Unknown");
+      appendLine("Queued Lanes", details.queued_lanes, "Unavailable");
+      appendLine("Active Lanes", details.active_lanes, "Unavailable");
+      break;
+    case "servicemanagement":
+      appendLine("Service Count", details.service_count, "0");
+      appendLine("Last Refresh", details.last_refresh_at, "Unavailable");
+      break;
+    case "softwaremanagement":
+      appendLine("Software Count", details.software_count, "0");
+      appendLine("Icon Payloads", details.icon_payload_count, "0");
+      appendLine("Last Refresh", details.last_refresh_at, "Unavailable");
       break;
     case "vnc":
     case "ultravnc":
@@ -348,6 +372,7 @@ function buildAgentHealthDialogContent(entry, tunnelInfo) {
       appendLine("Service Name", details.service_name, "Unavailable");
       break;
     case "wireguardtunnel":
+    case "wireguard":
     case "wireguardservice":
     case "wireguardvpn":
       appendLine("WireGuard Peer IP", details.wireguard_peer_ip || fallbackWireGuardPeerIp, "Inactive");
@@ -1248,6 +1273,7 @@ export default function DeviceSummary() {
   const [updateAgentBusy, setUpdateAgentBusy] = useState(false);
   const [releaseChannelSaving, setReleaseChannelSaving] = useState(false);
   const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
+  const softwareRefreshTimersRef = useRef([]);
   // Snapshotted status for the lifetime of this page
   const [lockedStatus, setLockedStatus] = useState(() => {
     if (loaderSnapshot?.lockedStatus) {
@@ -1382,6 +1408,63 @@ export default function DeviceSummary() {
     []
   );
 
+  const reloadDeviceSummarySnapshot = useCallback(
+    async ({ silent = false, includeAgents = false } = {}) => {
+      const guid = device?.agent_guid || device?.guid || device?.agentGuid || device?.summary?.agent_guid;
+      const hostname = device?.hostname || device?.summary?.hostname;
+      if (!device || (!guid && !hostname)) {
+        return;
+      }
+      if (!silent) {
+        setSummaryDataReady(false);
+      }
+      try {
+        const snapshot = await fetchDeviceSummarySnapshot({
+          device,
+          deviceId,
+          includeAgents,
+        });
+        applyDeviceSummarySnapshot(snapshot, { silent });
+        if (!silent) {
+          setSummaryDataReady(true);
+        }
+      } catch (e) {
+        console.warn("Failed to reload device info", e);
+        if (!silent) {
+          setLoadError(String(e?.message || "Unable to load device details."));
+          setSummaryDataReady(true);
+        }
+      }
+    },
+    [applyDeviceSummarySnapshot, device, deviceId]
+  );
+
+  const requestSoftwareDataRefresh = useCallback(
+    ({ burst = false } = {}) => {
+      void reloadDeviceSummarySnapshot({ silent: true, includeAgents: false });
+      softwareRefreshTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
+      softwareRefreshTimersRef.current = [];
+      if (!burst) {
+        return;
+      }
+      [4000, 10000, 20000].forEach((delayMs) => {
+        const timerId = window.setTimeout(() => {
+          void reloadDeviceSummarySnapshot({ silent: true, includeAgents: false });
+        }, delayMs);
+        softwareRefreshTimersRef.current.push(timerId);
+      });
+    },
+    [reloadDeviceSummarySnapshot]
+  );
+
+  useEffect(
+    () => () => {
+      softwareRefreshTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
+      softwareRefreshTimersRef.current = [];
+    },
+    []
+  );
+
   useEffect(() => {
     if (!loaderSnapshot) {
       setLoadError(String(loaderData?.initialError || ""));
@@ -1493,13 +1576,8 @@ export default function DeviceSummary() {
       if (inFlight) return;
       inFlight = true;
       try {
-        const snapshot = await fetchDeviceSummarySnapshot({
-          device,
-          deviceId,
-          includeAgents,
-        });
+        await reloadDeviceSummarySnapshot({ silent, includeAgents });
         if (canceled) return;
-        applyDeviceSummarySnapshot(snapshot, { silent });
       } catch (e) {
         if (canceled) return;
         console.warn("Failed to load device info", e);
@@ -1529,6 +1607,34 @@ export default function DeviceSummary() {
   const activityHostname = useMemo(() => {
     return (meta?.hostname || summary.hostname || agent?.hostname || device?.hostname || "").trim();
   }, [meta?.hostname, summary.hostname, agent?.hostname, device?.hostname]);
+
+  useEffect(() => {
+    const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
+    const expectedHost = String(activityHostname || "").trim().toLowerCase();
+    if (!socket || !expectedHost) return undefined;
+    let reloadTimer = null;
+
+    const handleInventoryChanged = (payload = {}) => {
+      const payloadHost = String(payload?.hostname || "").trim().toLowerCase();
+      const payloadChange = String(payload?.change || "").trim().toLowerCase();
+      if (!payloadHost || payloadHost !== expectedHost) return;
+      if (payloadChange && payloadChange !== "software_updated" && payloadChange !== "updated") return;
+      if (reloadTimer) {
+        window.clearTimeout(reloadTimer);
+      }
+      reloadTimer = window.setTimeout(() => {
+        void reloadDeviceSummarySnapshot({ silent: true, includeAgents: false });
+      }, 250);
+    };
+
+    socket.on("device_inventory_changed", handleInventoryChanged);
+    return () => {
+      if (reloadTimer) {
+        window.clearTimeout(reloadTimer);
+      }
+      socket.off("device_inventory_changed", handleInventoryChanged);
+    };
+  }, [activityHostname, reloadDeviceSummarySnapshot]);
 
   const saveConnectionEndpoint = useCallback(async () => {
     if (connectionType !== "ssh") return;
@@ -2506,10 +2612,11 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   };
 
   const renderSoftware = () => (
-    <InstalledSoftwareTab
+      <InstalledSoftwareTab
       softwareRows={softwareRows}
       hostname={activityHostname}
       operatingSystem={summary.operating_system || meta.operatingSystem || ""}
+      onSoftwareDataRefresh={requestSoftwareDataRefresh}
     />
   );
 

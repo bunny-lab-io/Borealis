@@ -27,6 +27,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing aide
 
 from ...assemblies.service import AssemblyRuntimeService
 from ...auth import RequestAuthContext, UserSiteAccessManager
+from ...activity_history import (
+    get_activity_history_row,
+    insert_activity_history_row,
+    list_activity_history_rows,
+    update_activity_history_row,
+)
 from ..devices.session_dispatch import build_currentuser_dispatch_fields
 
 def _normalize_script_relpath(rel_path: Any) -> Optional[str]:
@@ -405,6 +411,9 @@ def dispatch_inline_quick_job(
     admin_pass: str = "",
     assembly_source: str = "runtime",
     assembly_guid: Optional[str] = None,
+    queue_lane: str = "",
+    activity_kind: str = "",
+    activity_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     normalized_hosts = [str(host or "").strip() for host in (hostnames or []) if str(host or "").strip()]
     if not normalized_hosts:
@@ -463,6 +472,24 @@ def dispatch_inline_quick_job(
     service_log = getattr(adapters, "service_log", None)
     now = int(time.time())
     results: List[Dict[str, Any]] = []
+    resolved_queue_lane = str(queue_lane or "").strip().lower().replace("-", "_")
+    if not resolved_queue_lane and str(assembly_source or "").strip().lower() == "device_software_uninstall":
+        resolved_queue_lane = "software_management"
+    resolved_activity_kind = str(activity_kind or "").strip().lower().replace("-", "_")
+    if not resolved_activity_kind and str(assembly_source or "").strip().lower() == "device_software_uninstall":
+        resolved_activity_kind = "software_uninstall"
+    base_activity_metadata: Dict[str, Any] = {
+        "assembly_source": str(assembly_source or "").strip(),
+        "requested_by": str(requested_by or "").strip(),
+    }
+    if assembly_guid:
+        base_activity_metadata["assembly_guid"] = str(assembly_guid).strip().lower()
+    if isinstance(activity_metadata, dict):
+        for raw_key, raw_value in activity_metadata.items():
+            key = str(raw_key or "").strip()
+            if key:
+                base_activity_metadata[key] = raw_value
+    initial_status = "Queued" if resolved_queue_lane else "Running"
 
     def _write_service_log(message: str, *, level: str = "INFO") -> None:
         if not callable(service_log):
@@ -476,10 +503,14 @@ def dispatch_inline_quick_job(
         conn = None
         try:
             conn = adapters.db_conn_factory()
-            cur = conn.cursor()
-            cur.execute(
-                "UPDATE activity_history SET status=?, stderr=? WHERE id=?",
-                ("Failed", failure_text, int(job_id)),
+            failure_ts = _now_ts()
+            update_activity_history_row(
+                conn,
+                int(job_id),
+                status="Failed",
+                stderr=failure_text,
+                updated_at=failure_ts,
+                finished_at=failure_ts,
             )
             conn.commit()
         except Exception:
@@ -494,25 +525,23 @@ def dispatch_inline_quick_job(
     conn = None
     try:
         conn = adapters.db_conn_factory()
-        cur = conn.cursor()
         for host in normalized_hosts:
-            cur.execute(
-                """
-                INSERT INTO activity_history(hostname, script_path, script_name, script_type, ran_at, status, stdout, stderr)
-                VALUES(?,?,?,?,?,?,?,?)
-                """,
-                (
-                    host,
-                    script_path_normalized,
-                    friendly_name,
-                    script_type,
-                    now,
-                    "Running",
-                    "",
-                    "",
-                ),
+            job_id = insert_activity_history_row(
+                conn,
+                hostname=host,
+                script_path=script_path_normalized,
+                script_name=friendly_name,
+                script_type=script_type,
+                ran_at=now,
+                status=initial_status,
+                stdout="",
+                stderr="",
+                queue_lane=resolved_queue_lane,
+                activity_kind=resolved_activity_kind,
+                metadata=base_activity_metadata,
+                updated_at=now,
             )
-            activity_rows.append((host, int(cur.lastrowid or 0)))
+            activity_rows.append((host, int(job_id or 0)))
         conn.commit()
     except Exception:
         if conn is not None:
@@ -555,6 +584,12 @@ def dispatch_inline_quick_job(
         context_block["assembly_source"] = assembly_source
         if assembly_guid:
             context_block["assembly_guid"] = assembly_guid
+        if resolved_queue_lane:
+            context_block["queue_lane"] = resolved_queue_lane
+        if resolved_activity_kind:
+            context_block["activity_kind"] = resolved_activity_kind
+        if base_activity_metadata:
+            context_block["activity_metadata"] = dict(base_activity_metadata)
 
         emitted = False
         delivery_mode = "broadcast"
@@ -621,7 +656,7 @@ def dispatch_inline_quick_job(
         except Exception:
             pass
 
-        results.append({"hostname": host, "job_id": job_id, "status": "Running"})
+        results.append({"hostname": host, "job_id": job_id, "status": initial_status})
         _write_service_log(
             (
                 f"quick job queued hostname={host} path={script_path_normalized} "
@@ -795,31 +830,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                 cur.execute("DELETE FROM activity_history WHERE hostname = ?", (hostname,))
                 conn.commit()
                 return jsonify({"status": "ok"})
-
-            cur.execute(
-                """
-                SELECT id, script_name, script_path, script_type, ran_at, status, LENGTH(stdout), LENGTH(stderr)
-                  FROM activity_history
-                 WHERE hostname = ?
-                 ORDER BY ran_at DESC, id DESC
-                """,
-                (hostname,),
-            )
-            rows = cur.fetchall()
-            history = []
-            for jid, name, path, stype, ran_at, status, so_len, se_len in rows:
-                history.append(
-                    {
-                        "id": jid,
-                        "script_name": name,
-                        "script_path": path,
-                        "script_type": stype,
-                        "ran_at": ran_at,
-                        "status": status,
-                        "has_stdout": bool(so_len or 0),
-                        "has_stderr": bool(se_len or 0),
-                    }
-                )
+            history = list_activity_history_rows(conn, hostname)
             return jsonify({"history": history})
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
@@ -835,34 +846,13 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
         conn = None
         try:
             conn = adapters.db_conn_factory()
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT id, hostname, script_name, script_path, script_type, ran_at, status, stdout, stderr
-                  FROM activity_history
-                 WHERE id = ?
-                """,
-                (job_id,),
-            )
-            row = cur.fetchone()
+            row = get_activity_history_row(conn, job_id)
             if not row:
                 return jsonify({"error": "Not found"}), 404
-            (jid, hostname, name, path, stype, ran_at, status, stdout, stderr) = row
+            hostname = str(row.get("hostname") or "")
             if not site_access.user_can_access_hostname(user, hostname):
                 return jsonify({"error": "Not found"}), 404
-            return jsonify(
-                {
-                    "id": jid,
-                    "hostname": hostname,
-                    "script_name": name,
-                    "script_path": path,
-                    "script_type": stype,
-                    "ran_at": ran_at,
-                    "status": status,
-                    "stdout": stdout or "",
-                    "stderr": stderr or "",
-                }
-            )
+            return jsonify(row)
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
         finally:

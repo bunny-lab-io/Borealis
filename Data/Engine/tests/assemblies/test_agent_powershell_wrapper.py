@@ -38,10 +38,10 @@ def _install_agent_role_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize(
     ("module_name", "timeout_seconds"),
     [
-        ("Data.Agent.Roles.role_ScriptExec_CURRENTUSER", 0),
-        ("Data.Agent.Roles.role_ScriptExec_CURRENTUSER", 30),
-        ("Data.Agent.Roles.role_ScriptExec_SYSTEM", 0),
-        ("Data.Agent.Roles.role_ScriptExec_SYSTEM", 30),
+        ("Data.Agent.Roles.role_currentuser_context", 0),
+        ("Data.Agent.Roles.role_currentuser_context", 30),
+        ("Data.Agent.Roles.role_system_context", 0),
+        ("Data.Agent.Roles.role_system_context", 30),
     ],
 )
 def test_powershell_wrapper_preserves_advanced_script_preamble(

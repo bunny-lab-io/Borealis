@@ -3302,7 +3302,7 @@ def _request_system_wireguard_ensure(reason: str) -> None:
     if manager is None:
         return
     try:
-        role = manager.roles.get("WireGuardTunnel")
+        role = manager.roles.get("wireguard")
     except Exception:
         return
     requester = getattr(role, "request_immediate_ensure", None)
@@ -3444,7 +3444,7 @@ async def on_agent_config(cfg):
     # Forward screenshot config to service helper (interval only)
     try:
         for role_cfg in roles:
-            if role_cfg.get('role') == 'screenshot':
+            if role_cfg.get('role') in {'screenshot', 'node_screenshot'}:
                 interval_ms = int(role_cfg.get('interval', 1000))
                 send_service_control({'type': 'screenshot_config', 'interval_ms': interval_ms})
                 break
@@ -3879,7 +3879,30 @@ if __name__=='__main__':
             'role_health_registry': ROLE_HEALTH_REGISTRY,
             'process_restart_request_now': _process_tray_restart_request_now,
             'sync_tray_status': _sync_tray_status,
+            'launch_manual_agent_update': _launch_manual_agent_update,
         }
+        def _request_system_service_action(service_name: str, action: str, requested_by: str) -> None:
+            manager = ROLE_MANAGER_SYS
+            if manager is None:
+                raise RuntimeError("system role manager unavailable")
+            role = manager.roles.get("service_management")
+            requester = getattr(role, "request_action", None)
+            if not callable(requester):
+                raise RuntimeError("service management role unavailable")
+            requester(service_name, action, requested_by)
+
+        def _request_system_software_refresh(*, reason: str = "") -> None:
+            manager = ROLE_MANAGER_SYS
+            if manager is None:
+                raise RuntimeError("system role manager unavailable")
+            role = manager.roles.get("software_management")
+            requester = getattr(role, "request_refresh", None)
+            if not callable(requester):
+                raise RuntimeError("software management role unavailable")
+            requester(reason=reason)
+
+        base_hooks['request_system_service_action'] = _request_system_service_action
+        base_hooks['request_system_software_refresh'] = _request_system_software_refresh
         if not SESSION_HELPER_MODE:
             base_hooks['http_client'] = http_client
         if SYSTEM_SERVICE_MODE:
@@ -3891,10 +3914,10 @@ if __name__=='__main__':
             )
             try:
                 ROLE_HEALTH_REGISTRY.register_role(
-                    'script_exec_currentuser',
+                    'context_currentuser',
                     context='currentuser',
                     reporter=SESSION_HELPER_BROKER.currentuser_role_health,
-                    role_label='Script Execution - CURRENTUSER',
+                    role_label='Current User Context',
                 )
             except Exception as exc:
                 _log_agent(f'Failed to register currentuser helper health reporter: {exc}', fname='agent.error.log')

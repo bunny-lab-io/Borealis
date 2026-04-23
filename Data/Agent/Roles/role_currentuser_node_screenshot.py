@@ -20,7 +20,7 @@ from PIL import ImageGrab
 import importlib.util
 
 
-ROLE_NAME = 'screenshot'
+ROLE_NAME = 'node_screenshot'
 ROLE_CONTEXTS = ['interactive']
 
 
@@ -361,7 +361,9 @@ class Role:
 
     def on_config(self, roles_cfg):
         # Filter only screenshot roles
-        screenshot_roles = [r for r in roles_cfg if (r.get('role') == 'screenshot')]
+        screenshot_roles = [
+            r for r in roles_cfg if (r.get('role') in {'screenshot', 'node_screenshot'})
+        ]
 
         sanitized_roles = []
         for rcfg in screenshot_roles:

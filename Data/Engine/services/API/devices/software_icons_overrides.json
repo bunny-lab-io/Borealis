@@ -1,0 +1,204 @@
+{
+  "windows_icon_overrides": [
+    {
+      "rule_id": "icon_override_adobe_acrobat_64_bit",
+      "name": "Adobe Acrobat (64-bit)",
+      "display_icon": "C:\\Program Files\\Adobe\\Acrobat DC\\Acrobat\\Acrobat.exe,0"
+    },
+    {
+      "rule_id": "icon_override_libreoffice_25_8_1_1",
+      "name": "LibreOffice 25.8.1.1",
+      "display_icon": "C:\\Program Files\\LibreOffice\\program\\soffice.exe,0"
+    },
+    {
+      "rule_id": "icon_override_nextcloud",
+      "name": "Nextcloud",
+      "display_icon": "C:\\Program Files\\Nextcloud\\nextcloud.exe,0"
+    },
+    {
+      "rule_id": "icon_override_mobaxterm",
+      "name": "MobaXterm",
+      "display_icon": "C:\\Program Files (x86)\\Mobatek\\MobaXterm\\MobaXterm.exe,0"
+    },
+    {
+      "rule_id": "icon_override_google_chrome",
+      "name": "Google Chrome",
+      "display_icon": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe,0"
+    },
+    {
+      "rule_id": "icon_override_fl_cloud_plugins_version_1_9_5",
+      "name": "FL Cloud Plugins version 1.9.5",
+      "display_icon": "C:\\Program Files\\FL Cloud Plugins\\FL Cloud Plugins.exe,0"
+    },
+    {
+      "rule_id": "icon_override_epic_games_launcher",
+      "name": "Epic Games Launcher",
+      "display_icon": "C:\\Program Files (x86)\\Epic Games\\Launcher\\Portal\\Binaries\\Win32\\EpicGamesLauncher.exe,0"
+    },
+    {
+      "rule_id": "icon_override_displaylink_graphics",
+      "name": "DisplayLink Graphics",
+      "display_icon": "C:\\Program Files\\Blackmagic Design\\DaVinci Resolve\\Resolve.exe,0"
+    },
+    {
+      "rule_id": "icon_override_davinci_resolve",
+      "name": "DaVinci Resolve",
+      "display_icon": "C:\\Program Files\\Blackmagic Design\\DaVinci Resolve\\Resolve.exe,0"
+    },
+    {
+      "rule_id": "icon_override_davinci_resolve_control_panels",
+      "name": "DaVinci Resolve Control Panels",
+      "display_icon": "C:\\Program Files\\Blackmagic Design\\DaVinci Resolve\\Resolve.exe,0"
+    },
+    {
+      "rule_id": "icon_override_davinci_resolve_renderer",
+      "name": "DaVinci Resolve Renderer",
+      "display_icon": "C:\\Program Files\\Blackmagic Design\\DaVinci Resolve\\Resolve.exe,0"
+    },
+    {
+      "rule_id": "icon_override_epic_online_services",
+      "name": "Epic Online Services",
+      "display_icon": "C:\\Program Files (x86)\\Epic Games\\Launcher\\Portal\\Binaries\\Win32\\EpicGamesLauncher.exe,0"
+    },
+    {
+      "rule_id": "icon_override_fl_studio_asio",
+      "name": "FL Studio ASIO",
+      "display_icon": "C:\\Program Files\\Image-Line\\FL Studio 2025\\Data\\System\\icon.ico"
+    },
+    {
+      "rule_id": "icon_override_orca",
+      "name": "Orca",
+      "display_icon": "C:\\Program Files (x86)\\Orca\\Orca.exe,0"
+    },
+    {
+      "rule_id": "icon_override_powershell_7_x64",
+      "name": "PowerShell 7-x64",
+      "display_icon": "C:\\Program Files\\PowerShell\\7\\pwsh.exe,0"
+    },
+    {
+      "rule_id": "icon_override_powertoys_preview",
+      "name": "PowerToys (Preview)",
+      "display_icon": "C:\\Users\\nicole.rappe\\AppData\\Local\\PowerToys\\PowerToys.exe,0"
+    },
+    {
+      "rule_id": "icon_override_putty_release_0_83_64_bit",
+      "name": "PuTTY release 0.83 (64-bit)",
+      "display_icon": "C:\\Program Files\\PuTTY\\putty.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_10_5_core_interpreter_64_bit",
+      "name": "Python 3.10.5 Core Interpreter (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_10_5_development_libraries_64_bit",
+      "name": "Python 3.10.5 Development Libraries (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_10_5_documentation_64_bit",
+      "name": "Python 3.10.5 Documentation (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_10_5_executables_64_bit",
+      "name": "Python 3.10.5 Executables (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_10_5_pip_bootstrap_64_bit",
+      "name": "Python 3.10.5 pip Bootstrap (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_10_5_test_suite_64_bit",
+      "name": "Python 3.10.5 Test Suite (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_10_5_standard_library_64_bit",
+      "name": "Python 3.10.5 Standard Library (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_13_7_add_to_path_64_bit",
+      "name": "Python 3.13.7 Add to Path (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_13_7_core_interpreter_64_bit",
+      "name": "Python 3.13.7 Core Interpreter (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_13_7_development_libraries_64_bit",
+      "name": "Python 3.13.7 Development Libraries (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_13_7_documentation_64_bit",
+      "name": "Python 3.13.7 Documentation (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_13_7_executables_64_bit",
+      "name": "Python 3.13.7 Executables (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_launcher",
+      "name": "Python Launcher",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_rosetta_stone_language_training",
+      "name": "Rosetta Stone Language Training",
+      "display_icon": "C:\\Program Files (x86)\\Rosetta Stone\\Rosetta Stone Language Training\\Rosetta Stone.exe,0"
+    },
+    {
+      "rule_id": "icon_override_rosetta_stone_ltd_services",
+      "name": "Rosetta Stone Ltd Services",
+      "display_icon": "C:\\Program Files (x86)\\Rosetta Stone\\Rosetta Stone Language Training\\Rosetta Stone.exe,0"
+    },
+    {
+      "rule_id": "icon_override_spacedesk_windows_driver",
+      "name": "spacedesk Windows DRIVER",
+      "display_icon": "C:\\Program Files\\datronicsoft\\spacedesk\\spacedeskConsole.exe,0"
+    },
+    {
+      "rule_id": "icon_override_wireguard",
+      "name": "WireGuard",
+      "display_icon": "C:\\Program Files\\WireGuard\\wireguard.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_10_5_tcl_tk_support_64_bit",
+      "name": "Python 3.10.5 Tcl/Tk Support (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_10_5_utility_scripts_64_bit",
+      "name": "Python 3.10.5 Utility Scripts (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_13_7_pip_bootstrap_64_bit",
+      "name": "Python 3.13.7 pip Bootstrap (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_13_7_standard_library_64_bit",
+      "name": "Python 3.13.7 Standard Library (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_13_7_tcl_tk_support_64_bit",
+      "name": "Python 3.13.7 Tcl/Tk Support (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    },
+    {
+      "rule_id": "icon_override_python_3_13_7_test_suite_64_bit",
+      "name": "Python 3.13.7 Test Suite (64-bit)",
+      "display_icon": "C:\\Program Files\\Python310\\python.exe,0"
+    }
+  ]
+}

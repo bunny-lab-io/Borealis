@@ -17,9 +17,12 @@ from typing import Any
 from types import SimpleNamespace
 
 import pytest
+from Data.Engine import database as engine_database
 from Data.Engine.auth import jwt_service as jwt_service_module
 from Data.Engine.services.API.devices import management as device_management
 from Data.Engine.services.API.devices import routes as device_routes
+from Data.Engine.services.API.devices import software_icons as software_icons_module
+from Data.Engine.services.API.devices import software_uninstall as software_uninstall_module
 from Data.Engine.services.API.devices.service_inventory import serialize_device_services
 from Data.Engine.services.API.devices import tunnel as tunnel_api
 from Data.Engine.services.VPN.vpn_tunnel_service import (
@@ -774,6 +777,51 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
     ]
 
 
+def test_agent_details_emits_device_inventory_changed_when_software_changes(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted_events: list[tuple[str, Any, str]] = []
+    monkeypatch.setattr(
+        engine_harness.context.socketio,
+        "emit",
+        lambda event, payload, namespace="/": emitted_events.append((event, payload, namespace)),
+    )
+
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/agent/details",
+        json={
+            "hostname": "test-device",
+            "details": {
+                "summary": {
+                    "hostname": "test-device",
+                },
+                "software": [
+                    {
+                        "name": "Adobe Acrobat (64-bit)",
+                        "version": "26.001.21431",
+                        "source": "local_installed",
+                        "metadata": {
+                            "publisher": "Adobe",
+                            "install_location": "C:\\Program Files\\Adobe\\Acrobat DC\\",
+                            "display_icon": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe,0",
+                        },
+                    }
+                ],
+            },
+        },
+        headers=_device_headers(),
+    )
+
+    assert response.status_code == 200
+    assert (
+        "device_inventory_changed",
+        {"hostname": "test-device", "change": "software_updated"},
+        "/",
+    ) in emitted_events
+
+
 def test_agent_details_merge_top_level_software_metadata_into_existing_metadata(
     engine_harness: EngineTestHarness,
 ) -> None:
@@ -1201,11 +1249,10 @@ def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHa
     payload = response.get_json()
     assert payload["status"] == "queued"
     assert payload["software"]["name"] == "Google Chrome"
-    assert payload["uninstall"] == {
-        "strategy": "direct_command",
-        "summary": "Chrome setup.exe uninstall can be forced silent.",
-        "rule_id": "chrome_setup_force_uninstall",
-    }
+    assert payload["uninstall"]["strategy"] == "direct_command"
+    assert payload["uninstall"]["summary"] == "Chrome setup.exe uninstall can be forced silent."
+    assert payload["uninstall"]["rule_id"] == "chrome_setup_force_uninstall"
+    assert "setup.exe" in payload["uninstall"]["command_preview"]
     assert len(targeted_events) == 1
     hostname, service_mode, event_name, dispatched = targeted_events[0]
     assert hostname == "test-device"
@@ -1225,7 +1272,14 @@ def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHa
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:
         cur = conn.cursor()
-        cur.execute("SELECT script_name, script_path, script_type, status FROM activity_history ORDER BY id DESC LIMIT 1")
+        cur.execute(
+            """
+            SELECT script_name, script_path, script_type, status, queue_lane, activity_kind
+              FROM activity_history
+             ORDER BY id DESC
+             LIMIT 1
+            """
+        )
         row = cur.fetchone()
     finally:
         conn.close()
@@ -1234,7 +1288,9 @@ def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHa
         "Uninstall - Google Chrome",
         "Scripts/Internal/Software_Uninstall.ps1",
         "powershell",
-        "Running",
+        "Queued",
+        "software_management",
+        "software_uninstall",
     )
 
 
@@ -1264,6 +1320,111 @@ def test_device_software_uninstall_requires_supported_metadata(engine_harness: E
     assert response.status_code == 400
     payload = response.get_json()
     assert payload["error"] == "software_uninstall_unsupported"
+
+
+def test_quick_job_progress_updates_activity_history_and_broadcasts(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    socket_client = engine_harness.context.socketio.test_client(
+        engine_harness.app,
+        flask_test_client=client,
+    )
+    assert socket_client.is_connected()
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        engine_database._ensure_activity_history(conn, logger=None)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO activity_history(
+                hostname,
+                script_path,
+                script_name,
+                script_type,
+                ran_at,
+                status,
+                stdout,
+                stderr,
+                queue_lane,
+                activity_kind,
+                metadata_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "test-device",
+                "Scripts/Internal/Software_Uninstall.ps1",
+                "Uninstall - Contoso Agent",
+                "powershell",
+                1_777_000_000,
+                "Queued",
+                "",
+                "",
+                "software_management",
+                "software_uninstall",
+                json.dumps({"software_name": "Contoso Agent"}),
+            ),
+        )
+        activity_id = int(cur.lastrowid)
+        conn.commit()
+    finally:
+        conn.close()
+
+    socket_client.emit(
+        "quick_job_progress",
+        {
+            "job_id": activity_id,
+            "status": "Running",
+            "queue_lane": "software_management",
+            "activity_kind": "software_uninstall",
+            "metadata": {
+                "software_name": "Contoso Agent",
+                "command_preview": "setup.exe --uninstall --force-uninstall",
+            },
+            "stdout": "Starting uninstall\n",
+            "append_output": True,
+        },
+    )
+
+    received = socket_client.get_received()
+    assert any(
+        item.get("name") == "device_activity_changed"
+        and item.get("args")
+        and item["args"][0].get("activity_id") == activity_id
+        and item["args"][0].get("queue_lane") == "software_management"
+        and item["args"][0].get("activity_kind") == "software_uninstall"
+        and item["args"][0].get("status") == "Running"
+        for item in received
+    )
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT status, stdout, queue_lane, activity_kind, metadata_json, started_at, updated_at, finished_at
+              FROM activity_history
+             WHERE id=?
+            """,
+            (activity_id,),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+        socket_client.disconnect()
+
+    assert row is not None
+    assert row[0] == "Running"
+    assert row[1] == "Starting uninstall\n"
+    assert row[2] == "software_management"
+    assert row[3] == "software_uninstall"
+    metadata = json.loads(row[4] or "{}")
+    assert metadata["software_name"] == "Contoso Agent"
+    assert metadata["command_preview"] == "setup.exe --uninstall --force-uninstall"
+    assert int(row[5] or 0) > 0
+    assert int(row[6] or 0) > 0
+    assert row[7] in (None, 0, "0")
 
 
 def test_device_software_uninstall_rejects_non_removable_windows_store_package(
@@ -1445,6 +1606,157 @@ def test_device_software_uninstall_supports_install_location_derived_windows_rul
     ]
 
 
+def test_device_software_uninstall_applies_file_override(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    override_path = tmp_path / "software_uninstall_overrides.json"
+    override_path.write_text(
+        json.dumps(
+            {
+                "windows_uninstall_overrides": [
+                    {
+                        "rule_id": "uninstall_override_fedora_media_writer",
+                        "source": "local_installed",
+                        "name": "Fedora Media Writer",
+                        "version": "5.2.8",
+                        "publisher_contains_any": ["Fedora Project"],
+                        "strategy": "direct_command",
+                        "quiet_uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe" remove --confirm-command',
+                        "summary": "Uses a verified Fedora Media Writer unattended uninstall command override.",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(software_uninstall_module, "_UNINSTALL_OVERRIDES_PATH", override_path)
+    monkeypatch.setattr(software_uninstall_module, "_UNINSTALL_OVERRIDES_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_uninstall_module,
+        "_UNINSTALL_OVERRIDES_CACHE",
+        {"windows_uninstall_overrides": []},
+    )
+
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Fedora Media Writer",
+                "version": "5.2.8",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Fedora Project",
+                    "install_location": "C:\\Program Files\\Fedora Media Writer",
+                    "quiet_uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe" /S',
+                    "uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe"',
+                },
+            }
+        ],
+    )
+
+    detail_response = client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software = detail_response.get_json()["software"]
+    assert software == [
+        {
+            "name": "Fedora Media Writer",
+            "version": "5.2.8",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Fedora Project",
+                "install_location": "C:\\Program Files\\Fedora Media Writer",
+                "quiet_uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe" /S',
+                "uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe"',
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Uses a verified Fedora Media Writer unattended uninstall command override.",
+                "strategy": "direct_command",
+                "rule_id": "uninstall_override_fedora_media_writer",
+                "quiet_uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe" remove --confirm-command',
+                "uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe"',
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+
+def test_device_software_uninstall_blocks_known_interactive_quiet_string(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Fedora Media Writer",
+                "version": "5.2.8",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Fedora Project",
+                    "install_location": "C:\\Program Files\\Fedora Media Writer",
+                    "quiet_uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe" /S',
+                    "uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe"',
+                },
+            }
+        ],
+    )
+
+    detail_response = client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software = detail_response.get_json()["software"]
+    assert software == [
+        {
+            "name": "Fedora Media Writer",
+            "version": "5.2.8",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Fedora Project",
+                "install_location": "C:\\Program Files\\Fedora Media Writer",
+                "quiet_uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe" /S',
+                "uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe"',
+            },
+            "uninstall": {
+                "supported": False,
+                "reason": (
+                    "Fedora Media Writer's registered QuietUninstallString still prompts for confirmation. "
+                    "Borealis blocks automated uninstall for this title until a verified unattended command is known."
+                ),
+                "summary": "",
+                "strategy": "",
+                "rule_id": "",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+    response = client.post(
+        "/api/device/software/test-device/uninstall",
+        json={
+            "name": "Fedora Media Writer",
+            "version": "5.2.8",
+            "source": "local_installed",
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["error"] == "software_uninstall_unsupported"
+    assert (
+        payload["message"]
+        == "Fedora Media Writer's registered QuietUninstallString still prompts for confirmation. "
+        "Borealis blocks automated uninstall for this title until a verified unattended command is known."
+    )
+
+
 def test_device_software_uninstall_marks_steam_protocol_titles_as_unsupported(
     engine_harness: EngineTestHarness,
 ) -> None:
@@ -1576,6 +1888,817 @@ def test_agent_heartbeat_returns_assigned_site(engine_harness: EngineTestHarness
     assert payload["status"] == "ok"
     assert payload["site_name"] == "Main Lab"
     assert payload["site_id"] == 1
+
+
+def test_agent_software_management_overrides_endpoint_returns_icon_overrides(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    override_path = tmp_path / "software_icons_overrides.json"
+    override_payload = {
+        "windows_icon_overrides": [
+            {
+                "rule_id": "icon_override_contoso_agent",
+                "name": "Contoso Agent",
+                "display_icon": r"C:\Program Files\Contoso Agent\branding\agent.ico",
+            }
+        ]
+    }
+    override_path.write_text(json.dumps(override_payload), encoding="utf-8")
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_PATH", override_path)
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_icons_module,
+        "_SOFTWARE_ICON_OVERRIDES_CACHE",
+        {"windows_icon_overrides": []},
+    )
+
+    client = engine_harness.app.test_client()
+    response = client.get(
+        "/api/agent/software-management/overrides",
+        headers=_device_headers(),
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload == override_payload
+
+
+def test_device_software_icon_override_persists_rule_and_requests_refresh(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    override_path = tmp_path / "software_icons_overrides.json"
+    override_path.write_text(json.dumps({"windows_icon_overrides": []}), encoding="utf-8")
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_PATH", override_path)
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_icons_module,
+        "_SOFTWARE_ICON_OVERRIDES_CACHE",
+        {"windows_icon_overrides": []},
+    )
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Adobe Acrobat (64-bit)",
+                "version": "26.001.21431",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Adobe",
+                    "install_location": "C:\\Program Files\\Adobe\\Acrobat DC\\",
+                    "product_code": "{AC76BA86-1033-FF00-7760-BC15014EA700}",
+                },
+            }
+        ],
+    )
+
+    targeted_events: list[tuple[str, str, str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        engine_harness.context,
+        "emit_host_service_event",
+        lambda hostname, service_mode, event, payload: (
+            targeted_events.append((hostname, service_mode, event, payload)) or True
+        ),
+    )
+
+    response = client.post(
+        "/api/device/software/test-device/icon-override",
+        json={
+            "name": "Adobe Acrobat (64-bit)",
+            "version": "26.001.21431",
+            "source": "local_installed",
+            "display_icon": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["refresh_requested"] is True
+    assert payload["rule"]["rule_id"] == "icon_override_adobe_acrobat_64_bit"
+    assert payload["rule"]["display_icon"] == r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe,0"
+    assert payload["rule"]["name"] == "Adobe Acrobat (64-bit)"
+    assert len(targeted_events) == 1
+    target_hostname, service_mode, event_name, dispatched = targeted_events[0]
+    assert target_hostname == "test-device"
+    assert service_mode == "system"
+    assert event_name == "software_inventory_refresh_request"
+    assert dispatched["reason"].startswith("operator_icon_override:")
+
+    agent_response = engine_harness.app.test_client().get(
+        "/api/agent/software-management/overrides",
+        headers=_device_headers(),
+    )
+    assert agent_response.status_code == 200
+    override_payload = agent_response.get_json()
+    assert override_payload["windows_icon_overrides"] == [
+        {
+            "rule_id": payload["rule"]["rule_id"],
+            "name": "Adobe Acrobat (64-bit)",
+            "display_icon": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe,0",
+        }
+    ]
+
+
+def test_device_software_icon_override_can_clear_icon_and_request_refresh(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    override_path = tmp_path / "software_icons_overrides.json"
+    override_path.write_text(json.dumps({"windows_icon_overrides": []}), encoding="utf-8")
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_PATH", override_path)
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_icons_module,
+        "_SOFTWARE_ICON_OVERRIDES_CACHE",
+        {"windows_icon_overrides": []},
+    )
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Adobe Acrobat (64-bit)",
+                "version": "26.001.21431",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Adobe",
+                    "install_location": "C:\\Program Files\\Adobe\\Acrobat DC\\",
+                    "product_code": "{AC76BA86-1033-FF00-7760-BC15014EA700}",
+                },
+            }
+        ],
+    )
+
+    targeted_events: list[tuple[str, str, str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        engine_harness.context,
+        "emit_host_service_event",
+        lambda hostname, service_mode, event, payload: (
+            targeted_events.append((hostname, service_mode, event, payload)) or True
+        ),
+    )
+
+    response = client.post(
+        "/api/device/software/test-device/icon-override",
+        json={
+            "name": "Adobe Acrobat (64-bit)",
+            "version": "26.001.21431",
+            "source": "local_installed",
+            "clear_icon": True,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["refresh_requested"] is True
+    assert payload["rule"]["clear_icon"] is True
+    assert "display_icon" not in payload["rule"]
+    assert len(targeted_events) == 1
+    target_hostname, service_mode, event_name, dispatched = targeted_events[0]
+    assert target_hostname == "test-device"
+    assert service_mode == "system"
+    assert event_name == "software_inventory_refresh_request"
+    assert dispatched["reason"].startswith("operator_icon_override:")
+
+    agent_response = engine_harness.app.test_client().get(
+        "/api/agent/software-management/overrides",
+        headers=_device_headers(),
+    )
+    assert agent_response.status_code == 200
+    override_payload = agent_response.get_json()
+    assert override_payload["windows_icon_overrides"] == [
+        {
+            "rule_id": payload["rule"]["rule_id"],
+            "name": "Adobe Acrobat (64-bit)",
+            "clear_icon": True,
+        }
+    ]
+
+
+def test_device_software_icon_override_replaces_legacy_same_name_rule(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    override_path = tmp_path / "software_icons_overrides.json"
+    override_path.write_text(
+        json.dumps(
+            {
+                "windows_icon_overrides": [
+                    {
+                        "rule_id": "icon_override_adobe_acrobat_64_bit_26_001_11111",
+                        "name": "Adobe Acrobat (64-bit)",
+                        "version": "26.001.11111",
+                        "publisher_contains_any": ["Adobe"],
+                        "display_icon": r"C:\Program Files\Adobe\Acrobat DC\Old\Acrobat.exe,0",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_PATH", override_path)
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_icons_module,
+        "_SOFTWARE_ICON_OVERRIDES_CACHE",
+        {"windows_icon_overrides": []},
+    )
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Adobe Acrobat (64-bit)",
+                "version": "26.001.21431",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Adobe",
+                    "install_location": "C:\\Program Files\\Adobe\\Acrobat DC\\",
+                },
+            }
+        ],
+    )
+
+    response = client.post(
+        "/api/device/software/test-device/icon-override",
+        json={
+            "name": "Adobe Acrobat (64-bit)",
+            "version": "26.001.21431",
+            "source": "local_installed",
+            "display_icon": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
+        },
+    )
+
+    assert response.status_code == 200
+
+    persisted = json.loads(override_path.read_text(encoding="utf-8"))
+    assert persisted == {
+        "windows_icon_overrides": [
+            {
+                "rule_id": "icon_override_adobe_acrobat_64_bit",
+                "name": "Adobe Acrobat (64-bit)",
+                "display_icon": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe,0",
+            }
+        ]
+    }
+
+
+def test_device_details_backfills_global_icon_override_hash_from_other_device_inventory(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    override_path = tmp_path / "software_icons_overrides.json"
+    override_path.write_text(
+        json.dumps(
+            {
+                "windows_icon_overrides": [
+                    {
+                        "rule_id": "icon_override_wireguard",
+                        "name": "WireGuard",
+                        "display_icon": r"C:\Program Files\WireGuard\wireguard.exe,0",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_PATH", override_path)
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_icons_module,
+        "_SOFTWARE_ICON_OVERRIDES_CACHE",
+        {"windows_icon_overrides": []},
+    )
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "WireGuard",
+                "version": "0.5.3",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "WireGuard LLC",
+                },
+            }
+        ],
+    )
+    known_hash = "ab" * 32
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO device_software_inventory(
+                device_guid,
+                name,
+                name_normalized,
+                version,
+                source,
+                captured_at,
+                metadata_json
+            ) VALUES (?,?,?,?,?,?,?)
+            """,
+            (
+                "GUID-OTHER-DEVICE-0001",
+                "WireGuard",
+                "wireguard",
+                "0.5.3",
+                "local_installed",
+                int(time.time()),
+                json.dumps(
+                    {
+                        "icon_hash": known_hash,
+                        "display_icon_override_rule_id": "icon_override_wireguard",
+                        "display_icon_override": r"C:\Program Files\WireGuard\wireguard.exe,0",
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    detail_response = client.get("/api/device/details/test-device")
+
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.get_json()
+    software_row = detail_payload["details"]["software"][0]
+    metadata = software_row["metadata"]
+    assert metadata["icon_hash"] == known_hash
+    assert metadata["display_icon"] == r"C:\Program Files\WireGuard\wireguard.exe,0"
+    assert metadata["display_icon_override"] == r"C:\Program Files\WireGuard\wireguard.exe,0"
+    assert metadata["display_icon_override_rule_id"] == "icon_override_wireguard"
+    assert metadata["display_icon_override_cleared"] is False
+
+
+def test_device_details_backfills_global_icon_override_hash_from_devices_payload(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    override_path = tmp_path / "software_icons_overrides.json"
+    override_path.write_text(
+        json.dumps(
+            {
+                "windows_icon_overrides": [
+                    {
+                        "rule_id": "icon_override_wireguard",
+                        "name": "WireGuard",
+                        "display_icon": r"C:\Program Files\WireGuard\wireguard.exe,0",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_PATH", override_path)
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_icons_module,
+        "_SOFTWARE_ICON_OVERRIDES_CACHE",
+        {"windows_icon_overrides": []},
+    )
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "WireGuard",
+                "version": "0.5.3",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "WireGuard LLC",
+                },
+            }
+        ],
+    )
+    known_hash = "ef" * 32
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO devices (
+                guid,
+                hostname,
+                software,
+                created_at,
+                last_seen
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "GUID-WIREGUARD-SOURCE-0001",
+                "wireguard-source-device",
+                json.dumps(
+                    [
+                        {
+                            "name": "WireGuard",
+                            "version": "0.5.3",
+                            "source": "local_installed",
+                            "metadata": {
+                                "icon_hash": known_hash,
+                                "display_icon_override_rule_id": "icon_override_wireguard",
+                                "display_icon_override": r"C:\Program Files\WireGuard\wireguard.exe,0",
+                            },
+                        }
+                    ]
+                ),
+                int(time.time()),
+                int(time.time()),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    detail_response = client.get("/api/device/details/test-device")
+
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.get_json()
+    software_row = detail_payload["details"]["software"][0]
+    metadata = software_row["metadata"]
+    assert metadata["icon_hash"] == known_hash
+    assert metadata["display_icon"] == r"C:\Program Files\WireGuard\wireguard.exe,0"
+    assert metadata["display_icon_override"] == r"C:\Program Files\WireGuard\wireguard.exe,0"
+    assert metadata["display_icon_override_rule_id"] == "icon_override_wireguard"
+    assert metadata["display_icon_override_cleared"] is False
+
+
+def test_device_by_guid_backfills_global_icon_override_hash_from_devices_payload(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    override_path = tmp_path / "software_icons_overrides.json"
+    override_path.write_text(
+        json.dumps(
+            {
+                "windows_icon_overrides": [
+                    {
+                        "rule_id": "icon_override_wireguard",
+                        "name": "WireGuard",
+                        "display_icon": r"C:\Program Files\WireGuard\wireguard.exe,0",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_PATH", override_path)
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_icons_module,
+        "_SOFTWARE_ICON_OVERRIDES_CACHE",
+        {"windows_icon_overrides": []},
+    )
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "WireGuard",
+                "version": "0.5.3",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "WireGuard LLC",
+                },
+            }
+        ],
+    )
+    known_hash = "12" * 32
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO devices (
+                guid,
+                hostname,
+                software,
+                created_at,
+                last_seen
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "GUID-WIREGUARD-SOURCE-0002",
+                "wireguard-guid-source-device",
+                json.dumps(
+                    [
+                        {
+                            "name": "WireGuard",
+                            "version": "0.5.3",
+                            "source": "local_installed",
+                            "metadata": {
+                                "icon_hash": known_hash,
+                                "display_icon_override_rule_id": "icon_override_wireguard",
+                                "display_icon_override": r"C:\Program Files\WireGuard\wireguard.exe,0",
+                            },
+                        }
+                    ]
+                ),
+                int(time.time()),
+                int(time.time()),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    detail_response = client.get("/api/devices/GUID-TEST-0001")
+
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.get_json()
+    software_row = detail_payload["details"]["software"][0]
+    metadata = software_row["metadata"]
+    assert metadata["icon_hash"] == known_hash
+    assert metadata["display_icon"] == r"C:\Program Files\WireGuard\wireguard.exe,0"
+    assert metadata["display_icon_override"] == r"C:\Program Files\WireGuard\wireguard.exe,0"
+    assert metadata["display_icon_override_rule_id"] == "icon_override_wireguard"
+    assert metadata["display_icon_override_cleared"] is False
+
+
+def test_device_details_applies_clear_icon_override_even_for_stale_rows(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    override_path = tmp_path / "software_icons_overrides.json"
+    override_path.write_text(
+        json.dumps(
+            {
+                "windows_icon_overrides": [
+                    {
+                        "rule_id": "icon_override_wireguard_blank",
+                        "name": "WireGuard",
+                        "clear_icon": True,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_PATH", override_path)
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_icons_module,
+        "_SOFTWARE_ICON_OVERRIDES_CACHE",
+        {"windows_icon_overrides": []},
+    )
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "WireGuard",
+                "version": "0.5.3",
+                "source": "local_installed",
+                "metadata": {
+                    "display_icon": r"C:\Program Files\WireGuard\wireguard.exe,0",
+                    "icon_hash": "cd" * 32,
+                },
+            }
+        ],
+    )
+
+    detail_response = client.get("/api/device/details/test-device")
+
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.get_json()
+    software_row = detail_payload["details"]["software"][0]
+    metadata = software_row["metadata"]
+    assert "icon_hash" not in metadata
+    assert metadata["display_icon"] == ""
+    assert metadata["display_icon_override"] == ""
+    assert metadata["display_icon_override_rule_id"] == "icon_override_wireguard_blank"
+    assert metadata["display_icon_override_cleared"] is True
+    assert metadata["original_display_icon"] == r"C:\Program Files\WireGuard\wireguard.exe,0"
+
+
+def test_device_software_uninstall_override_hotloads_into_detail_enrichment(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    override_path = tmp_path / "software_uninstall_overrides.json"
+    override_path.write_text(json.dumps({"windows_uninstall_overrides": []}), encoding="utf-8")
+    monkeypatch.setattr(software_uninstall_module, "_UNINSTALL_OVERRIDES_PATH", override_path)
+    monkeypatch.setattr(software_uninstall_module, "_UNINSTALL_OVERRIDES_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_uninstall_module,
+        "_UNINSTALL_OVERRIDES_CACHE",
+        {"windows_uninstall_overrides": []},
+    )
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Contoso Widget",
+                "version": "1.2.3",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Contoso Ltd",
+                    "install_location": "C:\\Program Files\\Contoso Widget",
+                    "uninstall_string": '"C:\\Program Files\\Contoso Widget\\remove.exe"',
+                },
+            }
+        ],
+    )
+
+    response = client.post(
+        "/api/device/software/test-device/uninstall-override",
+        json={
+            "name": "Contoso Widget",
+            "version": "1.2.3",
+            "source": "local_installed",
+            "application_path": r"C:\Program Files\Contoso Widget\remove.exe",
+            "arguments": "/S /norestart",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["rule"]["quiet_uninstall_string"] == r'"C:\Program Files\Contoso Widget\remove.exe" /S /norestart'
+
+    detail_response = client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software_rows = detail_response.get_json()["software"]
+    assert software_rows == [
+        {
+            "name": "Contoso Widget",
+            "version": "1.2.3",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Contoso Ltd",
+                "install_location": "C:\\Program Files\\Contoso Widget",
+                "uninstall_string": '"C:\\Program Files\\Contoso Widget\\remove.exe"',
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Operator-defined global uninstall override.",
+                "strategy": "direct_command",
+                "rule_id": payload["rule"]["rule_id"],
+                "quiet_uninstall_string": r'"C:\Program Files\Contoso Widget\remove.exe" /S /norestart',
+                "uninstall_string": '"C:\\Program Files\\Contoso Widget\\remove.exe"',
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+
+def test_device_software_uninstall_block_and_unblock_hotload(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    blocklist_path = tmp_path / "software_uninstall_blocklist.json"
+    blocklist_path.write_text(json.dumps({"windows_quiet_uninstall_blocklist": []}), encoding="utf-8")
+    monkeypatch.setattr(software_uninstall_module, "_UNINSTALL_BLOCKLIST_PATH", blocklist_path)
+    monkeypatch.setattr(software_uninstall_module, "_UNINSTALL_BLOCKLIST_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_uninstall_module,
+        "_UNINSTALL_BLOCKLIST_CACHE",
+        {"windows_quiet_uninstall_blocklist": []},
+    )
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Widget Tool",
+                "version": "9.0.0",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Widget Labs",
+                    "install_location": "C:\\Program Files\\Widget Tool",
+                    "quiet_uninstall_string": '"C:\\Program Files\\Widget Tool\\uninstall.exe" /S',
+                    "uninstall_string": '"C:\\Program Files\\Widget Tool\\uninstall.exe"',
+                },
+            }
+        ],
+    )
+
+    block_response = client.post(
+        "/api/device/software/test-device/uninstall-block",
+        json={
+            "name": "Widget Tool",
+            "version": "9.0.0",
+            "source": "local_installed",
+            "reason": "Vendor uninstall still prompts for confirmation.",
+        },
+    )
+    assert block_response.status_code == 200
+    block_payload = block_response.get_json()
+    assert block_payload["status"] == "ok"
+
+    blocked_detail = client.get("/api/device/details/test-device")
+    assert blocked_detail.status_code == 200
+    blocked_software = blocked_detail.get_json()["software"]
+    assert blocked_software == [
+        {
+            "name": "Widget Tool",
+            "version": "9.0.0",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Widget Labs",
+                "install_location": "C:\\Program Files\\Widget Tool",
+                "quiet_uninstall_string": '"C:\\Program Files\\Widget Tool\\uninstall.exe" /S',
+                "uninstall_string": '"C:\\Program Files\\Widget Tool\\uninstall.exe"',
+            },
+            "uninstall": {
+                "supported": False,
+                "reason": "Vendor uninstall still prompts for confirmation.",
+                "summary": "",
+                "strategy": "",
+                "rule_id": "",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+    unblock_response = client.post(
+        "/api/device/software/test-device/uninstall-unblock",
+        json={
+            "name": "Widget Tool",
+            "version": "9.0.0",
+            "source": "local_installed",
+        },
+    )
+    assert unblock_response.status_code == 200
+    unblock_payload = unblock_response.get_json()
+    assert unblock_payload["status"] == "ok"
+    assert unblock_payload["removed_rule_ids"] == [block_payload["rule"]["rule_id"]]
+
+    unblocked_detail = client.get("/api/device/details/test-device")
+    assert unblocked_detail.status_code == 200
+    unblocked_software = unblocked_detail.get_json()["software"]
+    assert unblocked_software == [
+        {
+            "name": "Widget Tool",
+            "version": "9.0.0",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Widget Labs",
+                "install_location": "C:\\Program Files\\Widget Tool",
+                "quiet_uninstall_string": '"C:\\Program Files\\Widget Tool\\uninstall.exe" /S',
+                "uninstall_string": '"C:\\Program Files\\Widget Tool\\uninstall.exe"',
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Uses the registry quiet uninstall string.",
+                "strategy": "direct_command",
+                "rule_id": "metadata_quiet_uninstall_string",
+                "quiet_uninstall_string": '"C:\\Program Files\\Widget Tool\\uninstall.exe" /S',
+                "uninstall_string": '"C:\\Program Files\\Widget Tool\\uninstall.exe"',
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+
+def test_device_software_refresh_route_requests_system_refresh(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    targeted_events: list[tuple[str, str, str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        engine_harness.context,
+        "emit_host_service_event",
+        lambda hostname, service_mode, event, payload: (
+            targeted_events.append((hostname, service_mode, event, payload)) or True
+        ),
+    )
+
+    response = client.post("/api/device/software/test-device/refresh")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "queued"
+    assert len(targeted_events) == 1
+    hostname, service_mode, event_name, dispatched = targeted_events[0]
+    assert hostname == "test-device"
+    assert service_mode == "system"
+    assert event_name == "software_inventory_refresh_request"
+    assert dispatched["reason"] == "operator_query_software_updates"
 
 
 def test_device_list_views_lifecycle(engine_harness: EngineTestHarness) -> None:

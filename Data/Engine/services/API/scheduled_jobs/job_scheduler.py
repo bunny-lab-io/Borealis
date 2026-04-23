@@ -38,6 +38,7 @@ from ....db import dbapi as sqlite3
 from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
 from ...filters.matcher import DeviceFilterMatcher
+from ...activity_history import insert_activity_history_row, update_activity_history_row
 from ..devices.session_dispatch import build_currentuser_dispatch_fields
 from .targets import normalize_targets_for_save
 
@@ -1780,31 +1781,28 @@ class JobScheduler:
             now = _now_ts()
             act_id = None
             conn = self._conn()
-            cur = conn.cursor()
             try:
-                cur.execute(
-                    """
-                    INSERT INTO activity_history(hostname, script_path, script_name, script_type, ran_at, status, stdout, stderr)
-                    VALUES(?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        str(hostname),
-                        path_norm,
-                        friendly_name,
-                        stype,
-                        now,
-                        "Running",
-                        "",
-                        "",
-                    ),
-                )
-                act_id = _resolve_activity_history_insert_id(
-                    cur,
+                act_id = insert_activity_history_row(
+                    conn,
                     hostname=str(hostname),
                     script_path=path_norm,
                     script_name=friendly_name,
                     script_type=stype,
                     ran_at=now,
+                    status="Queued",
+                    stdout="",
+                    stderr="",
+                    queue_lane="scheduled_job_system",
+                    activity_kind="scheduled_job",
+                    metadata={
+                        "assembly_source": assembly_source,
+                        "scheduled_job_id": int(job_id),
+                        "scheduled_job_run_id": int(run_row_id),
+                        "scheduled_ts": int(scheduled_ts or 0),
+                        "component_kind": "script",
+                        "component_name": friendly_name,
+                    },
+                    updated_at=now,
                 )
                 conn.commit()
             finally:
@@ -1842,6 +1840,16 @@ class JobScheduler:
                 "scheduled_job_id": int(job_id),
                 "scheduled_job_run_id": int(run_row_id),
                 "scheduled_ts": int(scheduled_ts or 0),
+                "queue_lane": "scheduled_job_system",
+                "activity_kind": "scheduled_job",
+                "activity_metadata": {
+                    "assembly_source": assembly_source,
+                    "scheduled_job_id": int(job_id),
+                    "scheduled_job_run_id": int(run_row_id),
+                    "scheduled_ts": int(scheduled_ts or 0),
+                    "component_kind": "script",
+                    "component_name": friendly_name,
+                },
             }
             assembly_guid = str(record.get("assembly_guid") or "").strip().lower() if isinstance(record, dict) else ""
             if assembly_guid:
@@ -1869,11 +1877,15 @@ class JobScheduler:
                     )
                     fail_conn = self._conn()
                     try:
-                        fail_cur = fail_conn.cursor()
-                        fail_cur.execute(
-                            "UPDATE activity_history SET status=?, stderr=? WHERE id=?",
-                            (RUN_STATUS_FAILED, failure_text, int(act_id)),
+                        update_activity_history_row(
+                            fail_conn,
+                            int(act_id),
+                            status=RUN_STATUS_FAILED,
+                            stderr=failure_text,
+                            updated_at=now,
+                            finished_at=now,
                         )
+                        fail_cur = fail_conn.cursor()
                         fail_cur.execute(
                             """
                             UPDATE scheduled_job_runs

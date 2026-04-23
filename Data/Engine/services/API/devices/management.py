@@ -61,7 +61,11 @@ from .software_uninstall import (
     enrich_software_inventory_with_uninstall,
     normalize_software_inventory as _shared_normalize_software_inventory,
 )
-from .software_icons import normalize_software_icon_payloads, upsert_software_icon_assets
+from .software_icons import (
+    apply_engine_global_icon_overrides,
+    normalize_software_icon_payloads,
+    upsert_software_icon_assets,
+)
 from .process_inventory import normalize_device_processes, serialize_device_processes
 from .session_inventory import normalize_device_sessions, serialize_device_sessions
 from .service_inventory import (
@@ -586,6 +590,23 @@ class DeviceManagementService:
             )
         except Exception:
             self.logger.debug("Failed to emit device_services_changed for hostname=%s", normalized_hostname, exc_info=True)
+
+    def _emit_device_inventory_changed(self, hostname: str, *, change: str) -> None:
+        socketio = getattr(self.adapters.context, "socketio", None)
+        normalized_hostname = _clean_device_str(hostname) or ""
+        normalized_change = _clean_device_str(change) or ""
+        if socketio is None or not normalized_hostname or not normalized_change:
+            return
+        try:
+            socketio.emit(
+                "device_inventory_changed",
+                {
+                    "hostname": normalized_hostname,
+                    "change": normalized_change,
+                },
+            )
+        except Exception:
+            self.logger.debug("Failed to emit device_inventory_changed for hostname=%s", normalized_hostname, exc_info=True)
 
     def _target_repo_config(self) -> Tuple[str, str]:
         repo_name = (os.environ.get("BOREALIS_UPDATE_REPO") or "bunny-lab-io/Borealis").strip()
@@ -1149,6 +1170,11 @@ class DeviceManagementService:
             if not self.site_access.user_can_access_site(current_user, site_tuple[0]):
                 return {"error": "not found"}, 404
             payload = self._build_device_payload(device_tuple, site_tuple)
+            details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+            software_rows = details.get("software") if isinstance(details.get("software"), list) else []
+            if software_rows:
+                details["software"] = apply_engine_global_icon_overrides(self._db_conn, software_rows)
+                payload["software"] = details["software"]
             payload = self._attach_agent_version_status(payload)
             return payload, 200
         except Exception as exc:
@@ -1394,6 +1420,13 @@ class DeviceManagementService:
             services_changed = serialize_device_services(existing_services_raw) != serialize_device_services(
                 merged_services_payload
             )
+            software_changed = json.dumps(
+                _shared_normalize_software_inventory(prev_details.get("software") if isinstance(prev_details, dict) else []),
+                sort_keys=True,
+            ) != json.dumps(
+                _shared_normalize_software_inventory(merged.get("software")),
+                sort_keys=True,
+            )
             if software_icon_payloads:
                 upsert_software_icon_assets(cur, software_icon_payloads)
 
@@ -1431,6 +1464,8 @@ class DeviceManagementService:
             conn.commit()
             if services_changed:
                 self._emit_device_services_changed(hostname, change="updated")
+            if software_changed:
+                self._emit_device_inventory_changed(hostname, change="software_updated")
             return {"status": "ok"}, 200
         except Exception as exc:
             try:
@@ -1470,6 +1505,11 @@ class DeviceManagementService:
             if not self.site_access.user_can_access_site(current_user, site_tuple[0]):
                 return {}, 200
             payload = self._build_device_payload(device_tuple, site_tuple)
+            details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+            software_rows = details.get("software") if isinstance(details.get("software"), list) else []
+            if software_rows:
+                details["software"] = apply_engine_global_icon_overrides(self._db_conn, software_rows)
+                payload["software"] = details["software"]
             payload = self._attach_agent_version_status(payload)
             return payload, 200
         except Exception as exc:

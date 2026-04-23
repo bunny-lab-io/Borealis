@@ -70,7 +70,7 @@ def _normalize_service_start_mode(value: Optional[str], default: str = "demand")
     return normalized
 
 
-ROLE_NAME = "VNC"
+ROLE_NAME = "vnc"
 ROLE_CONTEXTS = ["system"]
 
 VNC_FIREWALL_RULE_NAME = "Borealis - VNC - UltraVNC"

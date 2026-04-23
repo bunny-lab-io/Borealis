@@ -48,6 +48,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
 - `POST /api/agent/details` (Device Authenticated) - full hardware, inventory, and cached service payload.
 - `POST /api/agent/script/request` (Device Authenticated) - request work or idle signal.
+- `GET /api/agent/software-management/overrides` (Device Authenticated) - file-backed software icon override rules used by the agent `software_management` role during inventory refresh.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
 - `GET /api/agents` (Token Authenticated) - list online collectors, with upgraded hosts advertising helper-backed current-user capability on their SYSTEM record via `helper_contexts`.
 - `GET /api/devices` (Token Authenticated) - device summary list, scoped to the operator's assigned sites unless the operator is an admin.
@@ -57,6 +58,11 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details, site-scoped for operators, including normalized session inventory with helper readiness fields.
 - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory for an in-scope device.
 - `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service on an in-scope device.
+- `POST /api/device/software/<hostname>/refresh` (Token Authenticated) - request an immediate software inventory refresh over the device SYSTEM socket.
+- `POST /api/device/software/<hostname>/icon-override` (Token Authenticated) - persist a hotloaded global software icon override for the selected software row and request a software refresh.
+- `POST /api/device/software/<hostname>/uninstall-override` (Token Authenticated) - persist a hotloaded global software uninstall override for the selected software row.
+- `POST /api/device/software/<hostname>/uninstall-block` (Token Authenticated) - persist a hotloaded global uninstall blocklist rule for the selected software row.
+- `POST /api/device/software/<hostname>/uninstall-unblock` (Token Authenticated) - remove matching hotloaded global uninstall blocklist rules for the selected software row.
 - `POST /api/device/software/<hostname>/uninstall` (Token Authenticated) - queue a silent uninstall quick job for a supported installed-software row on an in-scope Windows device.
 - `POST /api/device/update-agent/<hostname>` (Token Authenticated) - ask an in-scope device to start its local AutoUpdater task immediately.
 - `POST /api/device/description/<hostname>` (Token Authenticated) - update description for an in-scope device.
@@ -185,6 +191,9 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 - [Assemblies and Quick Jobs](assemblies.md)
 - [Scheduled Jobs](scheduled-jobs.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
+- [Software Icon Overrides](Software%20Management/adding-software-to-icon-overrides.md)
+- [Software Uninstall Overrides](Software%20Management/adding-software-to-uninstall-overrides.md)
+- [Software Uninstall Blocklist](Software%20Management/adding-software-to-uninstall-blocklist.md)
 
 ## Codex Agent (Detailed)
 ### Where endpoints are defined

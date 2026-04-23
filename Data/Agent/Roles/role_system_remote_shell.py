@@ -49,7 +49,7 @@ try:
 except Exception:
     busy_activity = None
 
-ROLE_NAME = "RemoteShell"
+ROLE_NAME = "remote_shell"
 ROLE_CONTEXTS = ["system"]
 _WINDOWS_PIPE_BROKEN_ERRORS = {109, 232}
 _WINDOWS_PIPE_SUPPORT = ctypes is not None and wintypes is not None and msvcrt is not None
