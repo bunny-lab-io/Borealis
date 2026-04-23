@@ -132,6 +132,7 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 #### Scope and runtime paths
 - Staging / launch: `Borealis.sh` handles Engine staging and launch on Linux once it is invoked directly or via `bootstrap.sh`. (`Borealis.ps1` is agent-only.)
 - Edit in `Data/Engine`; the runtime copy used by `borealis-engine.service` still lives under `/Engine`, and direct `systemctl restart borealis-engine` restarts do not currently restage `Data/Engine` automatically. Use `Borealis.sh --EngineDev` or `Borealis.sh --EngineProduction` when source changes need to reach the running service.
+- During `Borealis.sh` Engine restaging, Borealis now merges the runtime copies of `software_icons_overrides.json`, `software_uninstall_overrides.json`, and `software_uninstall_blocklist.json` back onto the freshly staged source payloads so operator hotloaded rules survive redeploys. Merge deduplication is name-based, and runtime/operator entries win when the same software name exists in both places.
 - `bootstrap.sh` is the supported Linux first-run path for syncing the repo and installing missing OS packages. Direct `Borealis.sh` redeploys intentionally avoid repeated apt/yum/dnf package checks unless bootstrap has opted the run into system package installation.
 
 #### Architecture

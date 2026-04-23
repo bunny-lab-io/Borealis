@@ -2739,10 +2739,82 @@ ensure_engine_web_interface() {
   [[ -f "${dest}/package.json" ]] || { ui_error "Failed to stage Engine web interface into '$dest'."; return 1; }
 }
 
+engine_override_merge_helper_path() {
+  echo "${SCRIPT_DIR}/Data/Engine/services/API/devices/runtime_override_merge.py"
+}
+
+capture_engine_runtime_override_snapshot() {
+  local runtime_root="$1"
+  local snapshot_root="$2"
+  mkdir -p "${snapshot_root}"
+
+  local spec=""
+  while IFS='|' read -r relative_path _merge_kind; do
+    [[ -n "${relative_path}" ]] || continue
+    local runtime_file="${runtime_root}/${relative_path}"
+    local snapshot_file="${snapshot_root}/${relative_path}"
+    if [[ -f "${runtime_file}" ]]; then
+      mkdir -p "$(dirname "${snapshot_file}")"
+      cp -a "${runtime_file}" "${snapshot_file}"
+    fi
+  done <<'EOF'
+services/API/devices/software_icons_overrides.json|software_icons
+services/API/devices/software_uninstall_overrides.json|software_uninstall_overrides
+services/API/devices/software_uninstall_blocklist.json|software_uninstall_blocklist
+EOF
+}
+
+merge_engine_runtime_override_snapshot() {
+  local source_root="$1"
+  local destination_root="$2"
+  local snapshot_root="$3"
+  local py_bin
+  py_bin="$(resolve_python_bin)"
+  [[ -n "${py_bin}" ]] || {
+    ui_error "Python interpreter not found. Cannot merge Engine override files during restage."
+    return 1
+  }
+
+  local helper_path
+  helper_path="$(engine_override_merge_helper_path)"
+  [[ -f "${helper_path}" ]] || {
+    ui_error "Engine override merge helper missing at '${helper_path}'."
+    return 1
+  }
+
+  local spec=""
+  while IFS='|' read -r relative_path merge_kind; do
+    [[ -n "${relative_path}" ]] || continue
+    local source_file="${source_root}/${relative_path}"
+    local destination_file="${destination_root}/${relative_path}"
+    local runtime_snapshot_file="${snapshot_root}/${relative_path}"
+    if [[ ! -f "${runtime_snapshot_file}" ]]; then
+      continue
+    fi
+    if ! "${py_bin}" "${helper_path}" \
+      --kind "${merge_kind}" \
+      --source "${source_file}" \
+      --runtime "${runtime_snapshot_file}" \
+      --output "${destination_file}"; then
+      ui_warn "Failed to merge Engine override file '${relative_path}' during restage; preserving runtime snapshot."
+      mkdir -p "$(dirname "${destination_file}")"
+      cp -a "${runtime_snapshot_file}" "${destination_file}"
+    fi
+  done <<'EOF'
+services/API/devices/software_icons_overrides.json|software_icons
+services/API/devices/software_uninstall_overrides.json|software_uninstall_overrides
+services/API/devices/software_uninstall_blocklist.json|software_uninstall_blocklist
+EOF
+}
+
 sync_engine_runtime() {
   local source_root="${SCRIPT_DIR}/Data/Engine"
   local destination_root="${SCRIPT_DIR}/Engine/Data/Engine"
+  local override_snapshot_dir=""
   [[ -d "$source_root" ]] || return 1
+
+  override_snapshot_dir="$(mktemp -d)"
+  capture_engine_runtime_override_snapshot "${destination_root}" "${override_snapshot_dir}"
 
   rm -rf "$destination_root" 2>/dev/null || true
   mkdir -p "$destination_root"
@@ -2753,6 +2825,12 @@ sync_engine_runtime() {
     cp -a "$item" "${destination_root}/"
   done
   shopt -u dotglob nullglob
+
+  merge_engine_runtime_override_snapshot "${source_root}" "${destination_root}" "${override_snapshot_dir}" || {
+    rm -rf "${override_snapshot_dir}" 2>/dev/null || true
+    return 1
+  }
+  rm -rf "${override_snapshot_dir}" 2>/dev/null || true
 
   prepare_engine_ansible_layout || return 1
   verify_engine_runtime_staging
@@ -3025,12 +3103,16 @@ create_engine_venv_and_stage_data() {
   local venv_dir="${SCRIPT_DIR}/Engine"
   local engine_src="${SCRIPT_DIR}/Data/Engine"
   local data_dest="${venv_dir}/Data/Engine"
+  local override_snapshot_dir=""
   local py_bin
   py_bin="$(resolve_python_bin)"
   [[ -n "$py_bin" ]] || {
     ui_error "Python interpreter not found. Install Python 3 first."
     return 1
   }
+
+  override_snapshot_dir="$(mktemp -d)"
+  capture_engine_runtime_override_snapshot "${venv_dir}/Data/Engine" "${override_snapshot_dir}"
 
   purge_engine_runtime_for_deploy
   if [[ ! -x "${venv_dir}/bin/python" && ! -x "${venv_dir}/bin/python3" ]]; then
@@ -3047,6 +3129,12 @@ create_engine_venv_and_stage_data() {
     cp -R "$item" "$data_dest/"
   done
   shopt -u dotglob nullglob
+
+  merge_engine_runtime_override_snapshot "${engine_src}" "${data_dest}" "${override_snapshot_dir}" || {
+    rm -rf "${override_snapshot_dir}" 2>/dev/null || true
+    return 1
+  }
+  rm -rf "${override_snapshot_dir}" 2>/dev/null || true
 
   # Runtime directories preserved outside the staged source tree.
   mkdir -p "${SCRIPT_DIR}/Engine/Auth_Tokens"

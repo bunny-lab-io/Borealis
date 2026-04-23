@@ -20,7 +20,8 @@ Explain how to provide file-backed custom uninstall plans when Windows registry 
 5. Save the override.
 6. Borealis writes the rule into `software_uninstall_overrides.json` and hotloads it immediately.
 7. Test the uninstall from the same software row. If you also changed icon behavior, you can use `Query Software Changes` to force a fresh software snapshot.
-8. Commit `software_uninstall_overrides.json` to Git later when the override should become an official shipped rule.
+8. Engine restaging merges the staged file with the current runtime copy by software name, so operator-created uninstall overrides survive redeploys unless the operator removes them explicitly.
+9. Commit `software_uninstall_overrides.json` to Git later when the override should become an official shipped rule.
 
 ## JSON Shape
 ```json
@@ -81,6 +82,7 @@ Explain how to provide file-backed custom uninstall plans when Windows registry 
 2. Add or update a rule under `windows_uninstall_overrides`.
 3. Save the file.
 4. Re-open the device details or retry the uninstall path; Borealis hotloads the file on the next uninstall-capability resolution.
+5. Future `Borealis.sh` Engine restages merge the staged source file with the runtime copy by software name, with runtime/operator entries taking precedence when the same software name exists in both places.
 
 ## Example
 ```json

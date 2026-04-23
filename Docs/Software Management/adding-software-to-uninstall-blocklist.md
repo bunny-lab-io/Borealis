@@ -54,13 +54,15 @@ Explain how to block installed software whose registry-provided `QuietUninstallS
 5. Save the block.
 6. Borealis writes the rule into `software_uninstall_blocklist.json` and hotloads it immediately.
 7. When the software later has a verified unattended uninstall path, either create a global uninstall override or right-click the row and choose `Unblock Uninstallation`.
-8. Commit `software_uninstall_blocklist.json` to Git later when the block should become an official shipped rule.
+8. Engine restaging merges the staged file with the current runtime copy by software name, so operator-created uninstall blocks survive redeploys unless the operator removes them explicitly.
+9. Commit `software_uninstall_blocklist.json` to Git later when the block should become an official shipped rule.
 
 ## Manual File Workflow
 1. Open `software_uninstall_blocklist.json`.
 2. Add or update a rule under `windows_quiet_uninstall_blocklist`.
 3. Save the file.
 4. Re-open the device details or retry the uninstall path; Borealis hotloads the file on the next uninstall-capability resolution.
+5. Future `Borealis.sh` Engine restages merge the staged source file with the runtime copy by software name, with runtime/operator entries taking precedence when the same software name exists in both places.
 
 ## Example
 ```json
