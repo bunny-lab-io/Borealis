@@ -287,6 +287,57 @@ function buildSoftwareActionKey(row = {}) {
   ].join("::");
 }
 
+function deriveSoftwareNameFromActivity(activity = {}) {
+  const metadata = activity?.metadata && typeof activity.metadata === "object" ? activity.metadata : {};
+  const metadataName = String(metadata?.software_name || "").trim();
+  if (metadataName) return metadataName;
+  const scriptName = String(activity?.script_name || activity?.scriptName || "").trim();
+  if (scriptName.toLowerCase().startsWith("uninstall - ")) {
+    return scriptName.slice("uninstall - ".length).trim();
+  }
+  return "";
+}
+
+function getTrackedUninstallToastStorageKey(hostname = "") {
+  const normalizedHostname = String(hostname || "").trim().toLowerCase();
+  return normalizedHostname ? `borealis:tracked-uninstall-toasts:${normalizedHostname}` : "";
+}
+
+function readTrackedUninstallToastIds(hostname = "") {
+  if (typeof window === "undefined" || !window.sessionStorage) {
+    return new Set();
+  }
+  const storageKey = getTrackedUninstallToastStorageKey(hostname);
+  if (!storageKey) return new Set();
+  try {
+    const raw = window.sessionStorage.getItem(storageKey);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(
+      parsed
+        .map((value) => Number(value || 0))
+        .filter((value) => Number.isFinite(value) && value > 0)
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function writeTrackedUninstallToastIds(hostname = "", values = new Set()) {
+  if (typeof window === "undefined" || !window.sessionStorage) return;
+  const storageKey = getTrackedUninstallToastStorageKey(hostname);
+  if (!storageKey) return;
+  try {
+    const serialized = Array.from(values)
+      .map((value) => Number(value || 0))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    window.sessionStorage.setItem(storageKey, JSON.stringify(serialized));
+  } catch {
+    // Ignore sessionStorage failures.
+  }
+}
+
 function getSoftwareIconHash(row = {}) {
   const metadata = getSoftwareMetadata(row);
   return String(metadata?.icon_hash || "").trim().toLowerCase();
@@ -596,7 +647,17 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
   const notifyOperator = useAppNotifications();
   const uninstallStatusRequestsRef = useRef(new Set());
   const uninstallCompletionToastsRef = useRef(new Set());
+  const trackedUninstallStatusesRef = useRef(new Map());
+  const trackedUninstallHydratedRef = useRef(false);
+  const [trackedUninstallsLoaded, setTrackedUninstallsLoaded] = useState(false);
   const normalizedHostname = useMemo(() => String(hostname || "").trim(), [hostname]);
+
+  useEffect(() => {
+    uninstallCompletionToastsRef.current = readTrackedUninstallToastIds(normalizedHostname);
+    trackedUninstallStatusesRef.current = new Map();
+    trackedUninstallHydratedRef.current = false;
+    setTrackedUninstallsLoaded(false);
+  }, [normalizedHostname]);
 
   useEffect(() => {
     if (!busyActionKey) return;
@@ -683,7 +744,8 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         const metadata = payload?.metadata && typeof payload.metadata === "object" ? payload.metadata : {};
         upsertTrackedUninstall(normalizedJobId, {
           hostname: String(payload?.hostname || normalizedHostname || ""),
-          softwareName: String(metadata?.software_name || "").trim(),
+          scriptName: String(payload?.script_name || "").trim(),
+          softwareName: deriveSoftwareNameFromActivity(payload),
           softwareVersion: String(metadata?.software_version || "").trim(),
           softwareSource: String(metadata?.software_source || "").trim(),
           commandPreview: String(metadata?.command_preview || "").trim(),
@@ -709,6 +771,7 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
   const loadTrackedUninstallsFromHistory = useCallback(async () => {
     if (!normalizedHostname) {
       setTrackedUninstalls([]);
+      setTrackedUninstallsLoaded(true);
       return;
     }
     try {
@@ -738,7 +801,8 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
           return mergeTrackedUninstall(existing, {
             jobId: Number(row?.id || 0),
             hostname: String(row?.hostname || normalizedHostname || ""),
-            softwareName: String(metadata?.software_name || "").trim(),
+            scriptName: String(row?.script_name || "").trim(),
+            softwareName: deriveSoftwareNameFromActivity(row),
             softwareVersion: String(metadata?.software_version || "").trim(),
             softwareSource: String(metadata?.software_source || "").trim(),
             commandPreview: String(metadata?.command_preview || "").trim(),
@@ -763,6 +827,8 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         });
     } catch (error) {
       console.warn("Failed to load tracked uninstall history", error);
+    } finally {
+      setTrackedUninstallsLoaded(true);
     }
   }, [loadTrackedUninstallStatus, normalizedHostname]);
 
@@ -878,15 +944,43 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
   }, [loadTrackedUninstallStatus, loadTrackedUninstallsFromHistory, normalizedHostname]);
 
   useEffect(() => {
+    if (!trackedUninstallsLoaded) return;
+    const previousStatuses = trackedUninstallStatusesRef.current;
+    const nextStatuses = new Map();
+    let persistedChanged = false;
+
+    if (!trackedUninstallHydratedRef.current) {
+      trackedUninstalls.forEach((job) => {
+        const jobId = Number(job?.jobId || 0);
+        if (!Number.isFinite(jobId) || jobId <= 0) return;
+        nextStatuses.set(jobId, String(job?.status || "").trim().toLowerCase());
+        if (isTrackedUninstallTerminal(job?.status) && !uninstallCompletionToastsRef.current.has(jobId)) {
+          uninstallCompletionToastsRef.current.add(jobId);
+          persistedChanged = true;
+        }
+      });
+      trackedUninstallStatusesRef.current = nextStatuses;
+      trackedUninstallHydratedRef.current = true;
+      if (persistedChanged) {
+        writeTrackedUninstallToastIds(normalizedHostname, uninstallCompletionToastsRef.current);
+      }
+      return;
+    }
+
     trackedUninstalls.forEach((job) => {
       const jobId = Number(job?.jobId || 0);
       if (!Number.isFinite(jobId) || jobId <= 0) return;
-      if (!isTrackedUninstallTerminal(job?.status)) return;
+      const normalizedStatus = String(job?.status || "").trim().toLowerCase();
+      nextStatuses.set(jobId, normalizedStatus);
+      if (!isTrackedUninstallTerminal(normalizedStatus)) return;
+      if (isTrackedUninstallTerminal(previousStatuses.get(jobId))) return;
       if (uninstallCompletionToastsRef.current.has(jobId)) return;
       uninstallCompletionToastsRef.current.add(jobId);
+      persistedChanged = true;
       const detail = summarizeUninstallOutput(job);
-      const succeeded = String(job?.status || "").trim().toLowerCase() === "success";
-      const softwareLabel = String(job?.softwareName || "Software").trim() || "Software";
+      const succeeded = normalizedStatus === "success";
+      const softwareLabel =
+        String(job?.softwareName || deriveSoftwareNameFromActivity(job) || "Software").trim() || "Software";
       const hostLabel = String(job?.hostname || normalizedHostname || hostname || "this device").trim() || "this device";
       void notifyOperator({
         title: succeeded ? "Software Uninstall Complete" : "Software Uninstall Failed",
@@ -897,7 +991,11 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         variant: succeeded ? "success" : "error",
       });
     });
-  }, [hostname, normalizedHostname, notifyOperator, trackedUninstalls]);
+    trackedUninstallStatusesRef.current = nextStatuses;
+    if (persistedChanged) {
+      writeTrackedUninstallToastIds(normalizedHostname, uninstallCompletionToastsRef.current);
+    }
+  }, [hostname, normalizedHostname, notifyOperator, trackedUninstalls, trackedUninstallsLoaded]);
 
   const softwareColumnDefs = useMemo(
     () => [

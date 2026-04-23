@@ -212,7 +212,11 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
       return {
         jobId: Number(payload?.id || 0) || 0,
         hostname: String(payload?.hostname || normalizedHostname || "").trim(),
-        softwareName: String(metadata?.software_name || "").trim(),
+        softwareName:
+          String(metadata?.software_name || "").trim() ||
+          (String(payload?.script_name || "").trim().toLowerCase().startsWith("uninstall - ")
+            ? String(payload?.script_name || "").trim().slice("Uninstall - ".length).trim()
+            : ""),
         softwareVersion: String(metadata?.software_version || "").trim(),
         softwareSource: String(metadata?.software_source || "").trim(),
         commandPreview: String(metadata?.command_preview || "").trim(),
@@ -353,22 +357,6 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
     };
   }, [loadHistory, normalizedHostname]);
 
-  useEffect(() => {
-    const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
-    if (!socket || !normalizedHostname || !selectedUninstallJobId) return undefined;
-    const expectedHost = normalizedHostname.toLowerCase();
-    const handleActivityChanged = (payload = {}) => {
-      const payloadHost = String(payload?.hostname || "").trim().toLowerCase();
-      const activityId = Number(payload?.activity_id || 0);
-      if (!payloadHost || payloadHost !== expectedHost || activityId !== Number(selectedUninstallJobId || 0)) return;
-      void handleOpenUninstall({ id: activityId });
-    };
-    socket.on("device_activity_changed", handleActivityChanged);
-    return () => {
-      socket.off("device_activity_changed", handleActivityChanged);
-    };
-  }, [handleOpenUninstall, normalizedHostname, selectedUninstallJobId]);
-
   const historyColumnDefs = useMemo(
     () => [
       {
@@ -487,6 +475,22 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
     },
     [buildUninstallDialogJob]
   );
+
+  useEffect(() => {
+    const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
+    if (!socket || !normalizedHostname || !selectedUninstallJobId) return undefined;
+    const expectedHost = normalizedHostname.toLowerCase();
+    const handleActivityChanged = (payload = {}) => {
+      const payloadHost = String(payload?.hostname || "").trim().toLowerCase();
+      const activityId = Number(payload?.activity_id || 0);
+      if (!payloadHost || payloadHost !== expectedHost || activityId !== Number(selectedUninstallJobId || 0)) return;
+      void handleOpenUninstall({ id: activityId });
+    };
+    socket.on("device_activity_changed", handleActivityChanged);
+    return () => {
+      socket.off("device_activity_changed", handleActivityChanged);
+    };
+  }, [handleOpenUninstall, normalizedHostname, selectedUninstallJobId]);
 
   const historyDisplayRows = useMemo(
     () =>
