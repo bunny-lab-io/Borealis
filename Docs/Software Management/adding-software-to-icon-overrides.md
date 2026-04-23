@@ -47,6 +47,9 @@ Explain how to add file-backed icon-location overrides for installed software wh
 ## Behavior Notes
 - The first matching rule wins.
 - Borealis replaces the row's `metadata.display_icon` before icon extraction runs.
+- On Windows, the agent can extract icons from `.ico` files directly and from embedded resources in `.exe`, `.dll`, `.icl`, `.cpl`, `.ocx`, and `.scr` files.
+- Resource-string overrides such as `C:\Program Files\Vendor\App\app.exe,0` are supported, and Borealis honors the icon index during extraction.
+- Borealis uses built-in Windows APIs for EXE and DLL icon extraction; no third-party icon-extraction library is required on the agent.
 - When an override is applied, the agent also preserves:
   - `metadata.original_display_icon`
   - `metadata.display_icon_override`

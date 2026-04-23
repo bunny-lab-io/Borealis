@@ -175,6 +175,34 @@ def test_extract_windows_icon_payloads_by_hint_batches_large_requests(monkeypatc
     }
 
 
+def test_extract_windows_icon_payload_batch_uses_native_resource_extraction(monkeypatch) -> None:
+    observed = {}
+
+    def fake_ps_json_file(script, timeout=120):
+        observed["script"] = script
+        observed["timeout"] = timeout
+        return []
+
+    monkeypatch.setattr(device_audit, "_ps_json_file", fake_ps_json_file)
+
+    payloads = device_audit._extract_windows_icon_payload_batch(
+        [
+            {
+                "hint": r"C:\Program Files\Contoso\contoso.exe,7",
+                "path": r"C:\Program Files\Contoso\contoso.exe",
+                "index": 7,
+            }
+        ]
+    )
+
+    assert payloads == {}
+    script = observed["script"]
+    assert "ExtractIconEx" in script
+    assert "DestroyIcon" in script
+    assert "nIconIndex" in script
+    assert "-IconIndex ([int]$spec.index)" in script
+
+
 def test_extract_windows_icon_payload_batch_uses_file_backed_powershell_runner(monkeypatch) -> None:
     observed = {}
 

@@ -752,6 +752,24 @@ $specs = @'
 """ + specs_json + r"""
 '@ | ConvertFrom-Json
 Add-Type -AssemblyName System.Drawing
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class BorealisIconInterop {
+  [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+  public static extern uint ExtractIconEx(
+    string szFileName,
+    int nIconIndex,
+    IntPtr[] phiconLarge,
+    IntPtr[] phiconSmall,
+    uint nIcons
+  );
+
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool DestroyIcon(IntPtr hIcon);
+}
+"@
 function Get-BorealisIconPayload {
   param(
     [string]$FileName,
@@ -780,19 +798,48 @@ function Get-BorealisIconPayload {
     }
 
     $icon = $null
+    $ownedIcon = $null
+    $largeIcons = $null
+    $smallIcons = $null
+    $iconHandle = [IntPtr]::Zero
     try {
-      $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($expanded)
+      $largeIcons = New-Object IntPtr[] 1
+      $smallIcons = New-Object IntPtr[] 1
+      $extractedCount = [BorealisIconInterop]::ExtractIconEx($expanded, [int]$IconIndex, $largeIcons, $smallIcons, 1)
+      if ($extractedCount -gt 0) {
+        if ($largeIcons[0] -ne [IntPtr]::Zero) {
+          $iconHandle = $largeIcons[0]
+        } elseif ($smallIcons[0] -ne [IntPtr]::Zero) {
+          $iconHandle = $smallIcons[0]
+        }
+      }
+      if ($iconHandle -ne [IntPtr]::Zero) {
+        $icon = [System.Drawing.Icon]::FromHandle($iconHandle)
+        if ($icon -ne $null) {
+          $ownedIcon = $icon.Clone()
+          $icon.Dispose()
+          $icon = $null
+        }
+      }
     } catch {
       $icon = $null
+      $ownedIcon = $null
     }
-    if ($null -eq $icon) {
-      return $null
+    if ($null -eq $ownedIcon) {
+      try {
+        $ownedIcon = [System.Drawing.Icon]::ExtractAssociatedIcon($expanded)
+      } catch {
+        $ownedIcon = $null
+      }
+      if ($null -eq $ownedIcon) {
+        return $null
+      }
     }
 
     $bitmap = $null
     $stream = $null
     try {
-      $bitmap = $icon.ToBitmap()
+      $bitmap = $ownedIcon.ToBitmap()
       if ($null -eq $bitmap) {
         return $null
       }
@@ -809,7 +856,13 @@ function Get-BorealisIconPayload {
     } finally {
       if ($stream) { $stream.Dispose() }
       if ($bitmap) { $bitmap.Dispose() }
-      if ($icon) { $icon.Dispose() }
+      if ($ownedIcon) { $ownedIcon.Dispose() }
+      if ($largeIcons -and $largeIcons.Length -gt 0 -and $largeIcons[0] -ne [IntPtr]::Zero) {
+        [BorealisIconInterop]::DestroyIcon($largeIcons[0]) | Out-Null
+      }
+      if ($smallIcons -and $smallIcons.Length -gt 0 -and $smallIcons[0] -ne [IntPtr]::Zero) {
+        [BorealisIconInterop]::DestroyIcon($smallIcons[0]) | Out-Null
+      }
     }
   } catch {
     return $null
