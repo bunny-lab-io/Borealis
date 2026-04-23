@@ -58,11 +58,12 @@ Explain how to add file-backed icon-location overrides for installed software wh
 
 ## Fast Workflow
 1. In the Installed Software tab, right-click the software name.
-2. Click `Copy software debug information`.
-3. Paste the JSON payload into your notes or into a Codex request.
-4. Copy the suggested `icon_override` entry from that payload into `software_icons_overrides.json`.
-5. Replace `display_icon` with a verified local icon path/resource if needed.
-6. Wait for the next software refresh or trigger a software-management refresh path.
+2. Click `Display software debug information`.
+3. Use the copy icon in the top-right of the dialog, or manually select and copy the JSON payload.
+4. Paste the JSON payload into your notes or into a Codex request.
+5. Copy the suggested `icon_override` entry from that payload into `software_icons_overrides.json`.
+6. Replace `display_icon` with a verified local icon path/resource if needed.
+7. Wait for the next software refresh or trigger a software-management refresh path.
 
 ## Example
 ```json

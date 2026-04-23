@@ -48,10 +48,11 @@ Explain how to block installed software whose registry-provided `QuietUninstallS
 
 ## Fast Workflow
 1. In the Installed Software tab, right-click the software name.
-2. Click `Copy software debug information`.
-3. Inspect `software.metadata.quiet_uninstall_string` and `suggested_entries.uninstall_blocklist`.
-4. Paste the suggested blocklist entry into `software_uninstall_blocklist.json`.
-5. Replace the placeholder `reason` text with the real observed failure mode.
+2. Click `Display software debug information`.
+3. Use the copy icon in the top-right of the dialog, or manually select and copy the JSON payload.
+4. Inspect `software.metadata.quiet_uninstall_string` and `suggested_entries.uninstall_blocklist`.
+5. Paste the suggested blocklist entry into `software_uninstall_blocklist.json`.
+6. Replace the placeholder `reason` text with the real observed failure mode.
 
 ## Example
 ```json

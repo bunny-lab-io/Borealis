@@ -2,13 +2,31 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Box,
   Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  IconButton,
   Menu,
   MenuItem,
   Tooltip,
   Typography,
 } from "@mui/material";
+import { ContentCopy as CopyIcon } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
+import Prism from "prismjs";
+import "prismjs/components/prism-json";
+import "prismjs/themes/prism-okaidia.css";
+import Editor from "react-simple-code-editor";
 import { ConfirmDeleteDialog } from "../../Dialogs.jsx";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../../DialogStyles.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 import { CountSliderGroup } from "../../Automation/Watchdogs/shared.jsx";
 import {
@@ -788,6 +806,11 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
     left: 0,
     row: null,
   });
+  const [softwareDebugDialog, setSoftwareDebugDialog] = useState({
+    open: false,
+    title: "",
+    content: "",
+  });
   const notifyOperator = useAppNotifications();
   const uninstallStatusRequestsRef = useRef(new Set());
   const uninstallCompletionToastsRef = useRef(new Set());
@@ -796,15 +819,15 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
   const [trackedUninstallsLoaded, setTrackedUninstallsLoaded] = useState(false);
   const normalizedHostname = useMemo(() => String(hostname || "").trim(), [hostname]);
 
-  const copyTextToClipboard = useCallback(async (value, promptTitle = "Copy text") => {
+  const copyTextToClipboard = useCallback(async (value) => {
     const normalizedValue = String(value || "").trim();
     if (!normalizedValue) {
-      return { copied: false, fallbackUsed: false };
+      return false;
     }
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(normalizedValue);
-        return { copied: true, fallbackUsed: false };
+        return true;
       }
     } catch {
       // Fall through to browser-compatible fallbacks below.
@@ -827,20 +850,13 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
           typeof document.execCommand === "function" ? document.execCommand("copy") === true : false;
         document.body.removeChild(textarea);
         if (copied) {
-          return { copied: true, fallbackUsed: true };
+          return true;
         }
       }
     } catch {
-      // Fall through to prompt below.
+      // Ignore fallback failures and let the caller show guidance.
     }
-    try {
-      if (typeof window !== "undefined" && typeof window.prompt === "function") {
-        window.prompt(promptTitle, normalizedValue);
-      }
-    } catch {
-      // Ignore prompt failures.
-    }
-    return { copied: false, fallbackUsed: true };
+    return false;
   }, []);
 
   const handleOpenSoftwareDebugMenu = useCallback((event, row) => {
@@ -861,24 +877,47 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
     });
   }, []);
 
-  const handleCopySoftwareDebugInformation = useCallback(async (rowOverride = null) => {
+  const handleCloseSoftwareDebugDialog = useCallback(() => {
+    setSoftwareDebugDialog({
+      open: false,
+      title: "",
+      content: "",
+    });
+  }, []);
+
+  const highlightDebugJson = useCallback((code) => {
+    try {
+      return Prism.highlight(code ?? "", Prism.languages.json || Prism.languages.javascript, "json");
+    } catch {
+      return String(code || "");
+    }
+  }, []);
+
+  const handleOpenSoftwareDebugInformation = useCallback(async (rowOverride = null) => {
     const row = rowOverride || softwareDebugMenu?.row || null;
     handleCloseSoftwareDebugMenu();
     if (!row) {
       await notifyOperator({
-        title: "Software Debug Copy Failed",
-        message: "Borealis could not determine which software row to copy.",
+        title: "Software Debug Info Unavailable",
+        message: "Borealis could not determine which software row to inspect.",
         icon: "warning",
         variant: "warning",
       });
       return;
     }
     const payload = buildSoftwareDebugPayload(row, normalizedHostname);
-    const result = await copyTextToClipboard(
-      JSON.stringify(payload, null, 2),
-      "Copy software debug information"
-    );
-    if (result?.copied) {
+    const softwareName = String(row?.name || "").trim() || "Software";
+    setSoftwareDebugDialog({
+      open: true,
+      title: `Software Debug Information - ${softwareName}`,
+      content: JSON.stringify(payload, null, 2),
+    });
+  }, [handleCloseSoftwareDebugMenu, normalizedHostname, notifyOperator, softwareDebugMenu]);
+
+  const handleCopyDisplayedSoftwareDebugInformation = useCallback(async () => {
+    const content = String(softwareDebugDialog?.content || "");
+    const copied = await copyTextToClipboard(content);
+    if (copied) {
       await notifyOperator({
         title: "Software Debug Info Copied",
         message: "Software debug information saved to clipboard.",
@@ -888,13 +927,13 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
       return;
     }
     await notifyOperator({
-      title: "Manual Copy Required",
+      title: "Clipboard Access Blocked",
       message:
-        "Clipboard access was blocked, so Borealis opened a manual copy prompt for the software debug information.",
+        "Clipboard access was blocked. Select the JSON in the dialog and copy it manually.",
       icon: "warning",
       variant: "warning",
     });
-  }, [copyTextToClipboard, handleCloseSoftwareDebugMenu, normalizedHostname, notifyOperator, softwareDebugMenu]);
+  }, [copyTextToClipboard, notifyOperator, softwareDebugDialog]);
 
   useEffect(() => {
     uninstallCompletionToastsRef.current = readTrackedUninstallToastIds(normalizedHostname);
@@ -1387,16 +1426,102 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
         <MenuItem
           onClick={() => {
             const selectedRow = softwareDebugMenu?.row || null;
-            void handleCopySoftwareDebugInformation(selectedRow);
+            void handleOpenSoftwareDebugInformation(selectedRow);
           }}
           sx={{
             fontSize: 13,
             color: MAGIC_UI.textBright,
           }}
         >
-          Copy software debug information
+          Display software debug information
         </MenuItem>
       </Menu>
+      <Dialog
+        open={Boolean(softwareDebugDialog?.open)}
+        onClose={handleCloseSoftwareDebugDialog}
+        fullWidth
+        maxWidth="md"
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
+      >
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title={softwareDebugDialog?.title || "Software Debug Information"}
+            subtitle="Review the JSON payload used to create icon overrides, uninstall overrides, and uninstall blocklist entries."
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
+          <Box
+            sx={{
+              position: "relative",
+              border: `1px solid ${MAGIC_UI.panelBorder}`,
+              borderRadius: 2,
+              bgcolor: "rgba(4,7,17,0.65)",
+              maxHeight: "56vh",
+              overflowY: "auto",
+              overflowX: "auto",
+              overscrollBehavior: "contain",
+              scrollbarGutter: "stable both-edges",
+              "&::-webkit-scrollbar": {
+                width: 10,
+                height: 10,
+              },
+              "&::-webkit-scrollbar-track": {
+                background: "rgba(15,23,42,0.45)",
+                borderRadius: 999,
+              },
+              "&::-webkit-scrollbar-thumb": {
+                background: "rgba(125,183,255,0.35)",
+                borderRadius: 999,
+                border: "2px solid rgba(15,23,42,0.45)",
+              },
+            }}
+          >
+            <Tooltip title="Copy JSON to clipboard">
+              <IconButton
+                onClick={() => {
+                  void handleCopyDisplayedSoftwareDebugInformation();
+                }}
+                sx={{
+                  position: "absolute",
+                  top: 10,
+                  right: 10,
+                  zIndex: 2,
+                  color: "#cfe8ff",
+                  bgcolor: "rgba(4,7,17,0.82)",
+                  border: `1px solid ${MAGIC_UI.panelBorder}`,
+                  "&:hover": {
+                    bgcolor: "rgba(13,24,46,0.96)",
+                  },
+                }}
+              >
+                <CopyIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Editor
+              value={softwareDebugDialog?.content || ""}
+              onValueChange={() => {}}
+              highlight={highlightDebugJson}
+              padding={12}
+              style={{
+                fontFamily:
+                  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                fontSize: 12,
+                color: "#e6edf3",
+                minHeight: 200,
+                whiteSpace: "pre",
+                overflowWrap: "normal",
+                wordBreak: "normal",
+              }}
+              textareaProps={{ readOnly: true, wrap: "off", spellCheck: false }}
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={handleCloseSoftwareDebugDialog} sx={DIALOG_BUTTON_SX}>
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
       <ConfirmDeleteDialog
         open={Boolean(confirmRow)}
         onCancel={() => {

@@ -68,10 +68,11 @@ Explain how to provide file-backed custom uninstall plans when Windows registry 
 
 ## Fast Workflow
 1. In the Installed Software tab, right-click the software name.
-2. Click `Copy software debug information`.
-3. Review `software.uninstall_capability`, `software.uninstall_command_preview`, and `suggested_entries.uninstall_override`.
-4. Paste the suggested entry into `software_uninstall_overrides.json`.
-5. Replace the command with the verified unattended uninstall command you tested manually.
+2. Click `Display software debug information`.
+3. Use the copy icon in the top-right of the dialog, or manually select and copy the JSON payload.
+4. Review `software.uninstall_capability`, `software.uninstall_command_preview`, and `suggested_entries.uninstall_override`.
+5. Paste the suggested entry into `software_uninstall_overrides.json`.
+6. Replace the command with the verified unattended uninstall command you tested manually.
 
 ## Example
 ```json
