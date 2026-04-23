@@ -798,21 +798,49 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
 
   const copyTextToClipboard = useCallback(async (value, promptTitle = "Copy text") => {
     const normalizedValue = String(value || "").trim();
-    if (!normalizedValue) return false;
+    if (!normalizedValue) {
+      return { copied: false, fallbackUsed: false };
+    }
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(normalizedValue);
-        return true;
+        return { copied: true, fallbackUsed: false };
       }
     } catch {
-      // Fall back to prompt below.
+      // Fall through to browser-compatible fallbacks below.
     }
     try {
-      window.prompt(promptTitle, normalizedValue);
+      if (typeof document !== "undefined" && typeof document.createElement === "function") {
+        const textarea = document.createElement("textarea");
+        textarea.value = normalizedValue;
+        textarea.setAttribute("readonly", "readonly");
+        textarea.setAttribute("aria-hidden", "true");
+        textarea.style.position = "fixed";
+        textarea.style.top = "-1000px";
+        textarea.style.left = "-1000px";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        const copied =
+          typeof document.execCommand === "function" ? document.execCommand("copy") === true : false;
+        document.body.removeChild(textarea);
+        if (copied) {
+          return { copied: true, fallbackUsed: true };
+        }
+      }
+    } catch {
+      // Fall through to prompt below.
+    }
+    try {
+      if (typeof window !== "undefined" && typeof window.prompt === "function") {
+        window.prompt(promptTitle, normalizedValue);
+      }
     } catch {
       // Ignore prompt failures.
     }
-    return false;
+    return { copied: false, fallbackUsed: true };
   }, []);
 
   const handleOpenSoftwareDebugMenu = useCallback((event, row) => {
@@ -833,16 +861,24 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
     });
   }, []);
 
-  const handleCopySoftwareDebugInformation = useCallback(async () => {
-    const row = softwareDebugMenu?.row || null;
+  const handleCopySoftwareDebugInformation = useCallback(async (rowOverride = null) => {
+    const row = rowOverride || softwareDebugMenu?.row || null;
     handleCloseSoftwareDebugMenu();
-    if (!row) return;
+    if (!row) {
+      await notifyOperator({
+        title: "Software Debug Copy Failed",
+        message: "Borealis could not determine which software row to copy.",
+        icon: "warning",
+        variant: "warning",
+      });
+      return;
+    }
     const payload = buildSoftwareDebugPayload(row, normalizedHostname);
-    const copied = await copyTextToClipboard(
+    const result = await copyTextToClipboard(
       JSON.stringify(payload, null, 2),
       "Copy software debug information"
     );
-    if (copied) {
+    if (result?.copied) {
       await notifyOperator({
         title: "Software Debug Info Copied",
         message: "Software debug information saved to clipboard.",
@@ -1350,7 +1386,8 @@ export default function InstalledSoftwareTab({ softwareRows = [], hostname = "" 
       >
         <MenuItem
           onClick={() => {
-            void handleCopySoftwareDebugInformation();
+            const selectedRow = softwareDebugMenu?.row || null;
+            void handleCopySoftwareDebugInformation(selectedRow);
           }}
           sx={{
             fontSize: 13,
