@@ -1170,6 +1170,11 @@ class DeviceManagementService:
             if not self.site_access.user_can_access_site(current_user, site_tuple[0]):
                 return {"error": "not found"}, 404
             payload = self._build_device_payload(device_tuple, site_tuple)
+            details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+            software_rows = details.get("software") if isinstance(details.get("software"), list) else []
+            if software_rows:
+                details["software"] = apply_engine_global_icon_overrides(self._db_conn, software_rows)
+                payload["software"] = details["software"]
             payload = self._attach_agent_version_status(payload)
             return payload, 200
         except Exception as exc:

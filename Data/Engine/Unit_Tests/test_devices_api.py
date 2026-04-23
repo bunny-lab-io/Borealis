@@ -2334,6 +2334,99 @@ def test_device_details_backfills_global_icon_override_hash_from_devices_payload
     assert metadata["display_icon_override_cleared"] is False
 
 
+def test_device_by_guid_backfills_global_icon_override_hash_from_devices_payload(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    override_path = tmp_path / "software_icons_overrides.json"
+    override_path.write_text(
+        json.dumps(
+            {
+                "windows_icon_overrides": [
+                    {
+                        "rule_id": "icon_override_wireguard",
+                        "name": "WireGuard",
+                        "display_icon": r"C:\Program Files\WireGuard\wireguard.exe,0",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_PATH", override_path)
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_icons_module,
+        "_SOFTWARE_ICON_OVERRIDES_CACHE",
+        {"windows_icon_overrides": []},
+    )
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "WireGuard",
+                "version": "0.5.3",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "WireGuard LLC",
+                },
+            }
+        ],
+    )
+    known_hash = "12" * 32
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO devices (
+                guid,
+                hostname,
+                software,
+                created_at,
+                last_seen
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "GUID-WIREGUARD-SOURCE-0002",
+                "wireguard-guid-source-device",
+                json.dumps(
+                    [
+                        {
+                            "name": "WireGuard",
+                            "version": "0.5.3",
+                            "source": "local_installed",
+                            "metadata": {
+                                "icon_hash": known_hash,
+                                "display_icon_override_rule_id": "icon_override_wireguard",
+                                "display_icon_override": r"C:\Program Files\WireGuard\wireguard.exe,0",
+                            },
+                        }
+                    ]
+                ),
+                int(time.time()),
+                int(time.time()),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    detail_response = client.get("/api/devices/GUID-TEST-0001")
+
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.get_json()
+    software_row = detail_payload["details"]["software"][0]
+    metadata = software_row["metadata"]
+    assert metadata["icon_hash"] == known_hash
+    assert metadata["display_icon"] == r"C:\Program Files\WireGuard\wireguard.exe,0"
+    assert metadata["display_icon_override"] == r"C:\Program Files\WireGuard\wireguard.exe,0"
+    assert metadata["display_icon_override_rule_id"] == "icon_override_wireguard"
+    assert metadata["display_icon_override_cleared"] is False
+
+
 def test_device_details_applies_clear_icon_override_even_for_stale_rows(
     engine_harness: EngineTestHarness,
     monkeypatch: pytest.MonkeyPatch,
