@@ -97,7 +97,7 @@ _WINDOWS_UNINSTALL_RULES: List[Dict[str, Any]] = [
 
 logger = logging.getLogger(__name__)
 
-_UNINSTALL_BLOCKLIST_PATH = Path(__file__).resolve().with_name("uninstall_blocklist.json")
+_UNINSTALL_BLOCKLIST_PATH = Path(__file__).resolve().with_name("software_uninstall_blocklist.json")
 _UNINSTALL_BLOCKLIST_CACHE_MTIME_NS: Optional[int] = None
 _UNINSTALL_BLOCKLIST_CACHE: Dict[str, List[Dict[str, Any]]] = {
     "windows_quiet_uninstall_blocklist": [],
