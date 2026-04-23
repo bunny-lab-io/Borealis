@@ -812,3 +812,31 @@ class Role:
                 job_id="agent_update",
                 work=_launch,
             )
+
+        @sio.on("software_inventory_refresh_request")
+        async def _on_software_inventory_refresh_request(payload):
+            if not isinstance(payload, dict):
+                return
+            if not callable(request_software_refresh_hook):
+                _log("software_inventory_refresh_request ignored; software-management hook unavailable.", error=True)
+                return
+            target_agent = str(payload.get("agent_id") or "").strip()
+            if target_agent and target_agent != str(self.ctx.agent_id or "").strip():
+                return
+            target_hostname = str(payload.get("hostname") or payload.get("target_hostname") or "").strip().lower()
+            if target_hostname:
+                import socket
+
+                if target_hostname != socket.gethostname().strip().lower():
+                    return
+            requested_by = str(payload.get("requested_by") or "").strip()
+            reason = str(payload.get("reason") or "").strip()
+            request_reason = reason or f"operator:{requested_by or 'unknown'}"
+            try:
+                await asyncio.to_thread(request_software_refresh_hook, reason=request_reason)
+                _log(
+                    "software_inventory_refresh_request accepted "
+                    f"requested_by={requested_by or '-'} reason={request_reason or '-'}"
+                )
+            except Exception as exc:
+                _log(f"software_inventory_refresh_request failed: {exc}", error=True)

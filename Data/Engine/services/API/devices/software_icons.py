@@ -8,6 +8,7 @@ import json
 import logging
 import re
 from pathlib import Path
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -24,6 +25,7 @@ _SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS: Optional[int] = None
 _SOFTWARE_ICON_OVERRIDES_CACHE: Dict[str, List[Dict[str, Any]]] = {
     "windows_icon_overrides": [],
 }
+_SOFTWARE_ICON_OVERRIDES_WRITE_LOCK = threading.RLock()
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,90 @@ def _normalize_icon_override_rows(value: Any) -> List[Dict[str, Any]]:
             continue
         normalized.append({str(key): item for key, item in row.items() if normalize_text(key)})
     return normalized
+
+
+def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temp_path.replace(path)
+
+
+def canonicalize_software_icon_override_resource(value: Any) -> str:
+    text = normalize_text(value)
+    if not text:
+        return ""
+    lowered = text.lower()
+    if lowered.endswith(".ico") or re.match(r'^\s*"?.+?\.ico"?\s*$', text, re.IGNORECASE):
+        return text.strip().strip('"')
+    resource_match = re.match(
+        r'^\s*"?(?P<path>.+?\.(?:exe|dll|icl|cpl|ocx|scr))"?\s*(?:,\s*(?P<index>-?\d+))?\s*$',
+        text,
+        re.IGNORECASE,
+    )
+    if not resource_match:
+        return ""
+    resource_path = normalize_text(resource_match.group("path")).strip('"')
+    if not resource_path:
+        return ""
+    try:
+        icon_index = int(normalize_text(resource_match.group("index")) or "0")
+    except Exception:
+        icon_index = 0
+    return f"{resource_path},{icon_index}"
+
+
+def upsert_software_icon_override(rule: Dict[str, Any]) -> Dict[str, Any]:
+    rule_id = normalize_text((rule or {}).get("rule_id"))
+    if not rule_id:
+        raise ValueError("rule_id is required")
+    display_icon = canonicalize_software_icon_override_resource(
+        (rule or {}).get("display_icon") or (rule or {}).get("icon_location")
+    )
+    if not display_icon:
+        raise ValueError("display_icon must be a valid EXE, DLL, ICO, or icon resource path")
+
+    normalized_rule: Dict[str, Any] = {
+        "rule_id": rule_id,
+        "display_icon": display_icon,
+    }
+    for key in ("source", "name", "version", "product_code"):
+        value = normalize_text((rule or {}).get(key))
+        if value:
+            normalized_rule[key] = value
+    for key in ("publisher_contains_any", "name_contains_any", "install_location_contains_any"):
+        raw_values = (rule or {}).get(key)
+        if isinstance(raw_values, list):
+            values = [normalize_text(item) for item in raw_values if normalize_text(item)]
+            if values:
+                normalized_rule[key] = values
+
+    with _SOFTWARE_ICON_OVERRIDES_WRITE_LOCK:
+        payload = {
+            "windows_icon_overrides": load_software_icon_overrides(),
+        }
+        rows = [dict(item) for item in payload["windows_icon_overrides"] if isinstance(item, dict)]
+        replaced = False
+        next_rows: List[Dict[str, Any]] = []
+        for existing in rows:
+            if normalize_text(existing.get("rule_id")) == rule_id:
+                next_rows.append(dict(normalized_rule))
+                replaced = True
+            else:
+                next_rows.append(existing)
+        if not replaced:
+            next_rows.append(dict(normalized_rule))
+        payload["windows_icon_overrides"] = next_rows
+        _write_json_atomic(_SOFTWARE_ICON_OVERRIDES_PATH, payload)
+        global _SOFTWARE_ICON_OVERRIDES_CACHE, _SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS
+        _SOFTWARE_ICON_OVERRIDES_CACHE = {
+            "windows_icon_overrides": _normalize_icon_override_rows(next_rows),
+        }
+        try:
+            _SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS = _SOFTWARE_ICON_OVERRIDES_PATH.stat().st_mtime_ns
+        except OSError:
+            _SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS = None
+        return dict(normalized_rule)
 
 
 def load_software_icon_overrides() -> List[Dict[str, Any]]:

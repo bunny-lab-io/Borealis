@@ -12,6 +12,16 @@ Explain how to provide file-backed custom uninstall plans when Windows registry 
 - Borealis checks uninstall overrides before it trusts registry `QuietUninstallString` metadata and before it applies the interactive-quiet-string blocklist.
 - Use overrides when you already have a verified unattended command or other uninstall plan.
 
+## Operator Hotload Workflow
+1. Open the device `Installed Software` tab.
+2. Right-click the software name.
+3. Click `Create Global Uninstall Override`.
+4. Enter the application path and any arguments Borealis should run for unattended uninstall.
+5. Save the override.
+6. Borealis writes the rule into `software_uninstall_overrides.json` and hotloads it immediately.
+7. Test the uninstall from the same software row. If you also changed icon behavior, you can use `Query Software Updates` to force a fresh software snapshot.
+8. Commit `software_uninstall_overrides.json` to Git later when the override should become an official shipped rule.
+
 ## JSON Shape
 ```json
 {
@@ -66,13 +76,11 @@ Explain how to provide file-backed custom uninstall plans when Windows registry 
 - `uninstall_string`
   Optional original uninstall string to preserve alongside the override.
 
-## Fast Workflow
-1. In the Installed Software tab, right-click the software name.
-2. Click `Display software debug information`.
-3. Use the copy icon in the top-right of the dialog, or manually select and copy the JSON payload.
-4. Review `software.uninstall_capability`, `software.uninstall_command_preview`, and `suggested_entries.uninstall_override`.
-5. Paste the suggested entry into `software_uninstall_overrides.json`.
-6. Replace the command with the verified unattended uninstall command you tested manually.
+## Manual File Workflow
+1. Open `software_uninstall_overrides.json`.
+2. Add or update a rule under `windows_uninstall_overrides`.
+3. Save the file.
+4. Re-open the device details or retry the uninstall path; Borealis hotloads the file on the next uninstall-capability resolution.
 
 ## Example
 ```json
@@ -99,15 +107,15 @@ Explain how to provide file-backed custom uninstall plans when Windows registry 
 - [Adding Software to Icon Overrides](adding-software-to-icon-overrides.md)
 
 ## Codex Agent (Detailed)
-### How to read copied software debug payloads
-- Prefer the `suggested_entries.uninstall_override` object as the starting point.
-- Cross-check these fields before saving:
-  - `software.metadata.quiet_uninstall_string`
-  - `software.metadata.uninstall_string`
-  - `software.metadata.product_code`
-  - `software.metadata.package_family_name`
-  - `software.uninstall_command_preview`
-  - `codex_notes.parsed_commands`
+### Codex workflow
+- Prefer the operator-created hotloaded rule in `software_uninstall_overrides.json` as the source of truth when asked to make an uninstall override official.
+- If the operator has not created the rule yet, gather the current software row data from `GET /api/device/details/<hostname>` and any manually verified unattended uninstall command the operator tested.
+- Cross-check these values before finalizing a permanent rule:
+  - `metadata.quiet_uninstall_string`
+  - `metadata.uninstall_string`
+  - `metadata.product_code`
+  - `metadata.package_family_name`
+  - the operator-provided verified executable path and arguments
 - Keep the override narrow enough to avoid accidentally matching unrelated versions or similarly named products.
 
 ### Strategy guidance

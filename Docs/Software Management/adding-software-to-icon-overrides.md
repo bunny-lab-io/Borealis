@@ -8,7 +8,17 @@ Explain how to add file-backed icon-location overrides for installed software wh
 - Path: `Data/Engine/services/API/devices/software_icons_overrides.json`
 - Runtime consumer:
   - Engine serves the override payload from `GET /api/agent/software-management/overrides`
-  - Agent applies matching icon overrides during `software_management` inventory refresh before it extracts icon payloads
+- Agent applies matching icon overrides during `software_management` inventory refresh before it extracts icon payloads
+
+## Operator Hotload Workflow
+1. Open the device `Installed Software` tab.
+2. Right-click the software name.
+3. Click `Create Global Icon Override`.
+4. Choose a suggested icon candidate or enter a verified `.ico`, `.exe`, `.dll`, or resource path manually.
+5. Save the override.
+6. Borealis writes the rule into `software_icons_overrides.json`, hotloads it immediately, and requests a software inventory refresh for that device.
+7. Use `Query Software Updates` when you want to force a fresh software snapshot instead of waiting for the normal poll cadence.
+8. After the override behaves correctly, commit `software_icons_overrides.json` to Git if you want to make the rule official for all Borealis users.
 
 ## JSON Shape
 ```json
@@ -56,14 +66,11 @@ Explain how to add file-backed icon-location overrides for installed software wh
   - `metadata.display_icon_override_rule_id`
 - The new icon appears after the next `software_management` inventory refresh from the agent.
 
-## Fast Workflow
-1. In the Installed Software tab, right-click the software name.
-2. Click `Display software debug information`.
-3. Use the copy icon in the top-right of the dialog, or manually select and copy the JSON payload.
-4. Paste the JSON payload into your notes or into a Codex request.
-5. Copy the suggested `icon_override` entry from that payload into `software_icons_overrides.json`.
-6. Replace `display_icon` with a verified local icon path/resource if needed.
-7. Wait for the next software refresh or trigger a software-management refresh path.
+## Manual File Workflow
+1. Open `software_icons_overrides.json`.
+2. Add or update a rule under `windows_icon_overrides`.
+3. Save the file.
+4. Wait for the next agent software-management override fetch or trigger `Query Software Updates` from the Installed Software tab.
 
 ## Example
 ```json
@@ -88,22 +95,20 @@ Explain how to add file-backed icon-location overrides for installed software wh
 - [Adding Software to Uninstall Blocklist](adding-software-to-uninstall-blocklist.md)
 
 ## Codex Agent (Detailed)
-### How to read copied software debug payloads
-- The Installed Software context-menu copy action places a JSON blob with `schema = borealis_software_debug_v1` on the clipboard.
-- Prefer these fields when creating an icon override:
-  - `software.name`
-  - `software.version`
-  - `software.source`
-  - `software.metadata.publisher`
-  - `software.metadata.install_location`
-  - `software.metadata.display_icon`
-  - `software.metadata.original_display_icon`
-  - `suggested_entries.icon_override`
-- If `suggested_entries.icon_override.display_icon` is blank, Borealis did not find a confirmed icon resource string. In that case, review `suggested_entries.icon_override.candidate_display_icon_paths` and verify one of those paths manually before using it.
-- If the copied payload already contains `display_icon_override`, treat that as the current active override value.
+### Codex workflow
+- Prefer the operator-created hotloaded rule in `software_icons_overrides.json` as the source of truth when asked to make an icon override official.
+- If the operator has not saved a rule yet, gather the needed values from the current software row in `GET /api/device/details/<hostname>` or from the Installed Software UI:
+  - `name`
+  - `version`
+  - `source`
+  - `publisher`
+  - `install_location`
+  - any verified icon resource path the operator tested manually
+- Candidate icon paths shown in the UI are heuristics, not proof. Verify the file/resource path before keeping it in the official JSON file.
+- If the rule already works in production, prefer tightening the existing match fields instead of inventing a brand-new duplicate rule.
 
 ### Recommended authoring rules
-- Start with the exact `name` from the copied payload.
+- Start with the exact `name` from the software row.
 - Keep `version` only when the icon path is version-specific.
 - Keep `publisher_contains_any` when the title name is generic or when there are likely multiple rows with similar names.
 - Use `install_location_contains_any` when the path is the most stable discriminator.
@@ -113,4 +118,4 @@ Explain how to add file-backed icon-location overrides for installed software wh
 - Engine override loader: `Data/Engine/services/API/devices/software_icons.py`
 - Agent application path: `Data/Agent/Roles/system_software_management.py`
 - Agent publishing role: `Data/Agent/Roles/role_system_software_management.py`
-- Installed Software UI copy action: `Data/Engine/web-interface/src/Devices/Tabs/Installed_Software.jsx`
+- Installed Software UI operator action: `Data/Engine/web-interface/src/Devices/Tabs/Installed_Software.jsx`

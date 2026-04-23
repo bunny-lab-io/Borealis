@@ -6,6 +6,11 @@
 # - GET /api/device/software/icon/<icon_hash> (Token Authenticated) - Serves a cached installed-software icon asset by hash.
 # - GET /api/device/services/<hostname> (Token Authenticated) - Returns cached service inventory for an in-scope device.
 # - POST /api/device/services/<hostname>/action (Token Authenticated) - Start, stop, or restart a named service on an in-scope device.
+# - POST /api/device/software/<hostname>/refresh (Token Authenticated) - Requests an immediate software inventory refresh over the device SYSTEM socket.
+# - POST /api/device/software/<hostname>/icon-override (Token Authenticated) - Persist a hotloaded global software icon override and request a software refresh.
+# - POST /api/device/software/<hostname>/uninstall-override (Token Authenticated) - Persist a hotloaded global software uninstall override.
+# - POST /api/device/software/<hostname>/uninstall-block (Token Authenticated) - Persist a hotloaded global uninstall blocklist rule.
+# - POST /api/device/software/<hostname>/uninstall-unblock (Token Authenticated) - Remove matching global uninstall blocklist rules for a software row.
 # - POST /api/device/software/<hostname>/uninstall (Token Authenticated) - Queues a silent uninstall quick job for a supported software row on an in-scope Windows device.
 # - POST /api/device/update-agent/<hostname> (Token Authenticated) - Ask an in-scope device to start its local AutoUpdater task immediately.
 # ======================================================
@@ -14,6 +19,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import re
 import textwrap
 import time
 from typing import Any, Dict, Optional, Tuple
@@ -22,13 +28,25 @@ from flask import Blueprint, jsonify, request, send_file
 
 from ...auth import UserSiteAccessManager
 from ..assemblies.execution import dispatch_inline_quick_job
-from .software_icons import load_software_icon_asset, normalize_software_icon_hash
+from .software_icons import (
+    canonicalize_software_icon_override_resource,
+    load_software_icon_asset,
+    normalize_software_icon_hash,
+    upsert_software_icon_override,
+)
 from .software_uninstall import (
+    build_windows_command,
+    extract_quiet_argument_tokens,
     find_software_entry,
+    find_matching_uninstall_blocklist_rules,
     normalize_text,
     normalize_software_source,
     resolve_software_uninstall_capability,
     software_metadata,
+    split_windows_command_line,
+    upsert_uninstall_blocklist_rule,
+    upsert_uninstall_override,
+    remove_uninstall_blocklist_rule,
 )
 from .service_inventory import (
     action_label,
@@ -316,6 +334,46 @@ def _software_uninstall_command_preview(uninstall_plan: Dict[str, Any]) -> str:
     return ""
 
 
+def _trim_windows_path(value: Any) -> str:
+    return normalize_text(value).rstrip("\\/")
+
+
+def _slugify_software_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", normalize_text(value).lower()).strip("_")
+
+
+def _build_software_rule_id(prefix: str, software_entry: Dict[str, Any]) -> str:
+    tokens = [
+        _slugify_software_token(prefix),
+        _slugify_software_token(software_entry.get("name") or "software"),
+    ]
+    version_token = _slugify_software_token(software_entry.get("version"))
+    if version_token:
+        tokens.append(version_token)
+    return "_".join(token for token in tokens if token)
+
+
+def _build_software_rule_match_base(software_entry: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = software_metadata(software_entry)
+    payload: Dict[str, Any] = {
+        "source": normalize_software_source(software_entry.get("source")),
+        "name": normalize_text(software_entry.get("name")),
+    }
+    version = normalize_text(software_entry.get("version"))
+    if version:
+        payload["version"] = version
+    publisher = normalize_text(metadata.get("publisher"))
+    if publisher:
+        payload["publisher_contains_any"] = [publisher]
+    product_code = normalize_text(metadata.get("product_code"))
+    if product_code:
+        payload["product_code"] = product_code
+    install_location = _trim_windows_path(metadata.get("install_location"))
+    if install_location:
+        payload["install_location_contains_any"] = [install_location]
+    return payload
+
+
 def register_services(app, adapters: "EngineServiceAdapters") -> None:
     blueprint = Blueprint("device_services", __name__)
     logger = adapters.context.logger.getChild("device_services.api")
@@ -393,6 +451,103 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
                     conn.close()
                 except Exception:
                     pass
+
+    def _resolve_software_request_context(hostname: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, Optional[Tuple[Dict[str, Any], int]]]:
+        user = _current_user(app) or {}
+        operator_id = normalize_text(user.get("username")) or "unknown"
+        if not site_access.user_can_access_hostname(user, hostname):
+            return None, None, operator_id, ({"error": "not found"}, 404)
+
+        record = _load_device_record(hostname)
+        if record is None:
+            return None, None, operator_id, ({"error": "not found"}, 404)
+
+        body = request.get_json(silent=True) or {}
+        software_name = normalize_text(body.get("name"))
+        software_version = normalize_text(body.get("version"))
+        requested_source = normalize_text(body.get("source"))
+        software_source = normalize_software_source(requested_source)
+        if not software_name:
+            return None, None, operator_id, ({"error": "software_name_required"}, 400)
+        if not requested_source:
+            return None, None, operator_id, ({"error": "software_source_required"}, 400)
+
+        software_entry = find_software_entry(
+            record.get("software"),
+            name=software_name,
+            version=software_version,
+            source=software_source,
+        )
+        if software_entry is None:
+            return None, None, operator_id, ({"error": "software_not_found"}, 404)
+
+        return record, software_entry, operator_id, None
+
+    def _request_software_inventory_refresh(
+        *,
+        hostname: str,
+        record: Dict[str, Any],
+        operator_id: str,
+        reason: str,
+    ) -> Tuple[bool, Dict[str, Any]]:
+        requested_at = int(time.time())
+        agent_id = _resolve_requested_agent_id(adapters, record.get("agent_id"))
+        emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
+        emit_agent_event = getattr(adapters.context, "emit_agent_event", None)
+        event_payload = {
+            "hostname": record.get("hostname") or hostname,
+            "agent_id": agent_id,
+            "requested_at": requested_at,
+            "requested_by": operator_id,
+            "reason": normalize_text(reason),
+        }
+
+        emitted = False
+        if callable(emit_host_service_event):
+            try:
+                emitted = bool(
+                    emit_host_service_event(
+                        record.get("hostname") or hostname,
+                        "system",
+                        "software_inventory_refresh_request",
+                        event_payload,
+                    )
+                )
+            except Exception:
+                emitted = False
+        if not emitted and callable(emit_agent_event) and agent_id:
+            try:
+                emitted = bool(emit_agent_event(agent_id, "software_inventory_refresh_request", event_payload))
+            except Exception:
+                emitted = False
+
+        log_payload = {
+            "hostname": record.get("hostname") or hostname,
+            "agent_id": agent_id,
+            "requested_at": requested_at,
+        }
+        if emitted:
+            _agent_update_log_event(
+                "device_software_refresh_request hostname={hostname} agent_id={agent_id} operator={operator} remote={remote} reason={reason}".format(
+                    hostname=record.get("hostname") or hostname,
+                    agent_id=agent_id or "-",
+                    operator=operator_id or "-",
+                    remote=_request_remote() or "-",
+                    reason=normalize_text(reason) or "-",
+                )
+            )
+        else:
+            _agent_update_log_event(
+                "device_software_refresh_unavailable hostname={hostname} agent_id={agent_id} operator={operator} remote={remote} reason={reason}".format(
+                    hostname=record.get("hostname") or hostname,
+                    agent_id=agent_id or "-",
+                    operator=operator_id or "-",
+                    remote=_request_remote() or "-",
+                    reason=normalize_text(reason) or "-",
+                ),
+                level="WARNING",
+            )
+        return emitted, log_payload
 
     def _agent_socket_available(hostname: str, agent_id: str) -> bool:
         has_host_socket = getattr(adapters.context, "has_host_service_socket", None)
@@ -591,6 +746,216 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
                 "reported_at": response.get("reported_at") or 0,
                 "count": len(response.get("services") or []),
                 "services": response.get("services") or [],
+            }
+        ), 200
+
+    @blueprint.route("/api/device/software/<hostname>/refresh", methods=["POST"])
+    def refresh_device_software(hostname: str):
+        requirement = _require_login(app)
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+
+        user = _current_user(app) or {}
+        operator_id = normalize_text(user.get("username")) or "unknown"
+        if not site_access.user_can_access_hostname(user, hostname):
+            return jsonify({"error": "not found"}), 404
+
+        record = _load_device_record(hostname)
+        if record is None:
+            return jsonify({"error": "not found"}), 404
+
+        emitted, refresh_payload = _request_software_inventory_refresh(
+            hostname=hostname,
+            record=record,
+            operator_id=operator_id,
+            reason="operator_query_software_updates",
+        )
+        if not emitted:
+            return (
+                jsonify(
+                    {
+                        "error": "agent_unavailable",
+                        "message": "The agent SYSTEM socket is not available to query software updates right now.",
+                        **refresh_payload,
+                    }
+                ),
+                409,
+            )
+
+        return jsonify({"status": "queued", **refresh_payload}), 200
+
+    @blueprint.route("/api/device/software/<hostname>/icon-override", methods=["POST"])
+    def create_device_software_icon_override(hostname: str):
+        requirement = _require_login(app)
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+
+        record, software_entry, operator_id, error_response = _resolve_software_request_context(hostname)
+        if error_response is not None:
+            payload, status = error_response
+            return jsonify(payload), status
+
+        body = request.get_json(silent=True) or {}
+        display_icon = canonicalize_software_icon_override_resource(
+            body.get("display_icon") or body.get("icon_location")
+        )
+        if not display_icon:
+            return (
+                jsonify(
+                    {
+                        "error": "display_icon_required",
+                        "message": "Choose or enter a valid EXE, DLL, ICO, or icon resource path.",
+                    }
+                ),
+                400,
+            )
+
+        rule = {
+            "rule_id": _build_software_rule_id("icon_override", software_entry or {}),
+            **_build_software_rule_match_base(software_entry or {}),
+            "display_icon": display_icon,
+        }
+        try:
+            persisted_rule = upsert_software_icon_override(rule)
+        except ValueError as exc:
+            return jsonify({"error": "invalid_icon_override", "message": str(exc)}), 400
+        except Exception as exc:
+            logger.debug("Failed to persist software icon override", exc_info=True)
+            return jsonify({"error": "icon_override_persist_failed", "message": str(exc)}), 500
+
+        emitted, refresh_payload = _request_software_inventory_refresh(
+            hostname=hostname,
+            record=record or {},
+            operator_id=operator_id,
+            reason=f"operator_icon_override:{persisted_rule.get('rule_id')}",
+        )
+        return jsonify(
+            {
+                "status": "ok",
+                "hostname": (record or {}).get("hostname") or hostname,
+                "rule": persisted_rule,
+                "refresh_requested": emitted,
+                **refresh_payload,
+            }
+        ), 200
+
+    @blueprint.route("/api/device/software/<hostname>/uninstall-override", methods=["POST"])
+    def create_device_software_uninstall_override(hostname: str):
+        requirement = _require_login(app)
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+
+        _record, software_entry, _operator_id, error_response = _resolve_software_request_context(hostname)
+        if error_response is not None:
+            payload, status = error_response
+            return jsonify(payload), status
+
+        body = request.get_json(silent=True) or {}
+        application_path = normalize_text(body.get("application_path") or body.get("file_path"))
+        arguments = normalize_text(body.get("arguments"))
+        if not application_path:
+            return jsonify({"error": "application_path_required"}), 400
+
+        metadata = software_metadata(software_entry or {})
+        rule = {
+            "rule_id": _build_software_rule_id("uninstall_override", software_entry or {}),
+            **_build_software_rule_match_base(software_entry or {}),
+            "strategy": "direct_command",
+            "quiet_uninstall_string": build_windows_command(application_path, arguments),
+            "uninstall_string": normalize_text(metadata.get("uninstall_string")),
+            "summary": "Operator-defined global uninstall override.",
+        }
+        try:
+            persisted_rule = upsert_uninstall_override(rule)
+        except ValueError as exc:
+            return jsonify({"error": "invalid_uninstall_override", "message": str(exc)}), 400
+        except Exception as exc:
+            logger.debug("Failed to persist uninstall override", exc_info=True)
+            return jsonify({"error": "uninstall_override_persist_failed", "message": str(exc)}), 500
+
+        return jsonify({"status": "ok", "hostname": hostname, "rule": persisted_rule}), 200
+
+    @blueprint.route("/api/device/software/<hostname>/uninstall-block", methods=["POST"])
+    def create_device_software_uninstall_block(hostname: str):
+        requirement = _require_login(app)
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+
+        _record, software_entry, _operator_id, error_response = _resolve_software_request_context(hostname)
+        if error_response is not None:
+            payload, status = error_response
+            return jsonify(payload), status
+
+        body = request.get_json(silent=True) or {}
+        reason = normalize_text(body.get("reason"))
+        if not reason:
+            return jsonify({"error": "reason_required"}), 400
+
+        metadata = software_metadata(software_entry or {})
+        parsed_quiet = split_windows_command_line(metadata.get("quiet_uninstall_string") or metadata.get("uninstall_string"))
+        executable_name = normalize_text((parsed_quiet or {}).get("executable_name")).lower()
+        quiet_args = extract_quiet_argument_tokens((parsed_quiet or {}).get("arguments"))
+        rule = {
+            "rule_id": _build_software_rule_id("uninstall_block", software_entry or {}),
+            **_build_software_rule_match_base(software_entry or {}),
+            "reason": reason,
+        }
+        if executable_name:
+            rule["exe_names"] = [executable_name]
+        if quiet_args:
+            rule["quiet_args_any"] = quiet_args
+
+        try:
+            persisted_rule = upsert_uninstall_blocklist_rule(rule)
+        except ValueError as exc:
+            return jsonify({"error": "invalid_uninstall_block", "message": str(exc)}), 400
+        except Exception as exc:
+            logger.debug("Failed to persist uninstall block", exc_info=True)
+            return jsonify({"error": "uninstall_block_persist_failed", "message": str(exc)}), 500
+
+        return jsonify({"status": "ok", "hostname": hostname, "rule": persisted_rule}), 200
+
+    @blueprint.route("/api/device/software/<hostname>/uninstall-unblock", methods=["POST"])
+    def remove_device_software_uninstall_block(hostname: str):
+        requirement = _require_login(app)
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+
+        _record, software_entry, _operator_id, error_response = _resolve_software_request_context(hostname)
+        if error_response is not None:
+            payload, status = error_response
+            return jsonify(payload), status
+
+        matching_rules = find_matching_uninstall_blocklist_rules(software_entry or {})
+        removed_rule_ids: list[str] = []
+        for rule in matching_rules:
+            rule_id = normalize_text(rule.get("rule_id"))
+            if not rule_id:
+                continue
+            if remove_uninstall_blocklist_rule(rule_id):
+                removed_rule_ids.append(rule_id)
+
+        if not removed_rule_ids:
+            return (
+                jsonify(
+                    {
+                        "error": "uninstall_block_not_found",
+                        "message": "No matching uninstall block rule was found for this software row.",
+                    }
+                ),
+                404,
+            )
+
+        return jsonify(
+            {
+                "status": "ok",
+                "hostname": hostname,
+                "removed_rule_ids": removed_rule_ids,
             }
         ), 200
 

@@ -23,6 +23,8 @@ def resolve_system_lane(payload: Any, *, event_name: str = "quick_job_run") -> s
         return "service_management"
     if event_name == "agent_update_request":
         return "agent_update"
+    if event_name == "software_inventory_refresh_request":
+        return "software_management"
 
     if not isinstance(payload, dict):
         return ""

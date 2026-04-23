@@ -67,6 +67,11 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details.
 - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory.
 - `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service.
+- `POST /api/device/software/<hostname>/refresh` (Token Authenticated) - request an immediate software inventory refresh on the device.
+- `POST /api/device/software/<hostname>/icon-override` (Token Authenticated) - create or replace a hotloaded global icon override for a software row.
+- `POST /api/device/software/<hostname>/uninstall-override` (Token Authenticated) - create or replace a hotloaded global uninstall override for a software row.
+- `POST /api/device/software/<hostname>/uninstall-block` (Token Authenticated) - create or replace a hotloaded global uninstall block rule for a software row.
+- `POST /api/device/software/<hostname>/uninstall-unblock` (Token Authenticated) - remove matching hotloaded uninstall block rules for a software row.
 - `POST /api/device/software/<hostname>/uninstall` (Token Authenticated) - queue a silent uninstall quick job for a supported installed-software row on an in-scope Windows device.
 - `POST /api/device/update-agent/<hostname>` (Token Authenticated) - ask a device to start its local AutoUpdater task immediately.
 - `POST /api/device/description/<hostname>` (Token Authenticated) - update description.
@@ -130,7 +135,8 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - JSON blobs are serialized into PostgreSQL text columns and rehydrated for UI.
 - Installed software is also normalized into `device_software_inventory` so filters can match name, source, and version reliably.
 - The Installed Software tab now also exposes a row-level `Uninstall` action for supported Windows software entries. Borealis queues that work through the signed quick-job path in SYSTEM context, so uninstall output lands in `activity_history` and the row disappears after the next successful device software inventory refresh.
-- Operators can right-click a software name in the Installed Software tab to copy a `borealis_software_debug_v1` payload to the clipboard. That payload is the intended source material for icon overrides, uninstall overrides, and uninstall blocklist additions.
+- Operators can right-click a software name in the Installed Software tab to create global icon overrides, global uninstall overrides, uninstall blocks, or uninstall unblocks directly from the WebUI. Borealis writes those operator-approved changes into the file-backed JSON override/blocklist stores under `Data/Engine/services/API/devices/`, hotloads them without an Engine restart, and lets the developer commit those files to Git later when the pilot rules should become official.
+- The Installed Software tab also exposes a `Query Software Updates` button that emits `software_inventory_refresh_request` over the device SYSTEM socket so operators can observe override and inventory changes faster than the normal software-management poll cadence.
 - Session inventory enrichment from the agent broker flows through `Data/Agent/Roles/role_system_device_auditor.py` and `Data/Engine/services/API/devices/session_inventory.py`, so Device Details can distinguish a merely logged-in session from a helper-ready interactive session.
 - Service inventory is cached in the `devices.services` JSON blob and merged with pending operator actions until a fresh agent snapshot confirms the desired state.
 - Manual agent update requests from the Device Summary action menu call `POST /api/device/update-agent/<hostname>` and are delivered over the device's SYSTEM Socket.IO channel as `agent_update_request`.

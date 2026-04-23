@@ -1273,6 +1273,7 @@ export default function DeviceSummary() {
   const [updateAgentBusy, setUpdateAgentBusy] = useState(false);
   const [releaseChannelSaving, setReleaseChannelSaving] = useState(false);
   const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
+  const softwareRefreshTimersRef = useRef([]);
   // Snapshotted status for the lifetime of this page
   const [lockedStatus, setLockedStatus] = useState(() => {
     if (loaderSnapshot?.lockedStatus) {
@@ -1407,6 +1408,63 @@ export default function DeviceSummary() {
     []
   );
 
+  const reloadDeviceSummarySnapshot = useCallback(
+    async ({ silent = false, includeAgents = false } = {}) => {
+      const guid = device?.agent_guid || device?.guid || device?.agentGuid || device?.summary?.agent_guid;
+      const hostname = device?.hostname || device?.summary?.hostname;
+      if (!device || (!guid && !hostname)) {
+        return;
+      }
+      if (!silent) {
+        setSummaryDataReady(false);
+      }
+      try {
+        const snapshot = await fetchDeviceSummarySnapshot({
+          device,
+          deviceId,
+          includeAgents,
+        });
+        applyDeviceSummarySnapshot(snapshot, { silent });
+        if (!silent) {
+          setSummaryDataReady(true);
+        }
+      } catch (e) {
+        console.warn("Failed to reload device info", e);
+        if (!silent) {
+          setLoadError(String(e?.message || "Unable to load device details."));
+          setSummaryDataReady(true);
+        }
+      }
+    },
+    [applyDeviceSummarySnapshot, device, deviceId]
+  );
+
+  const requestSoftwareDataRefresh = useCallback(
+    ({ burst = false } = {}) => {
+      void reloadDeviceSummarySnapshot({ silent: true, includeAgents: false });
+      softwareRefreshTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
+      softwareRefreshTimersRef.current = [];
+      if (!burst) {
+        return;
+      }
+      [4000, 10000, 20000].forEach((delayMs) => {
+        const timerId = window.setTimeout(() => {
+          void reloadDeviceSummarySnapshot({ silent: true, includeAgents: false });
+        }, delayMs);
+        softwareRefreshTimersRef.current.push(timerId);
+      });
+    },
+    [reloadDeviceSummarySnapshot]
+  );
+
+  useEffect(
+    () => () => {
+      softwareRefreshTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
+      softwareRefreshTimersRef.current = [];
+    },
+    []
+  );
+
   useEffect(() => {
     if (!loaderSnapshot) {
       setLoadError(String(loaderData?.initialError || ""));
@@ -1518,13 +1576,8 @@ export default function DeviceSummary() {
       if (inFlight) return;
       inFlight = true;
       try {
-        const snapshot = await fetchDeviceSummarySnapshot({
-          device,
-          deviceId,
-          includeAgents,
-        });
+        await reloadDeviceSummarySnapshot({ silent, includeAgents });
         if (canceled) return;
-        applyDeviceSummarySnapshot(snapshot, { silent });
       } catch (e) {
         if (canceled) return;
         console.warn("Failed to load device info", e);
@@ -2531,10 +2584,11 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   };
 
   const renderSoftware = () => (
-    <InstalledSoftwareTab
+      <InstalledSoftwareTab
       softwareRows={softwareRows}
       hostname={activityHostname}
       operatingSystem={summary.operating_system || meta.operatingSystem || ""}
+      onSoftwareDataRefresh={requestSoftwareDataRefresh}
     />
   );
 

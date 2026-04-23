@@ -11,6 +11,7 @@ import json
 import logging
 import re
 from pathlib import Path
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -107,6 +108,7 @@ _UNINSTALL_OVERRIDES_CACHE_MTIME_NS: Optional[int] = None
 _UNINSTALL_OVERRIDES_CACHE: Dict[str, List[Dict[str, Any]]] = {
     "windows_uninstall_overrides": [],
 }
+_UNINSTALL_CONFIG_WRITE_LOCK = threading.RLock()
 
 
 def normalize_text(value: Any) -> str:
@@ -136,6 +138,13 @@ def _normalize_uninstall_override_rows(value: Any) -> List[Dict[str, Any]]:
             continue
         normalized.append({str(key): item for key, item in row.items() if normalize_text(key)})
     return normalized
+
+
+def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temp_path.replace(path)
 
 
 def _load_uninstall_blocklist() -> Dict[str, List[Dict[str, Any]]]:
@@ -358,6 +367,175 @@ def option_present(arguments_text: Any, option: str) -> bool:
     return re.search(r"(?i)(^|\s)%s(\s|$)" % re.escape(option_text), normalize_text(arguments_text)) is not None
 
 
+def extract_quiet_argument_tokens(arguments_text: Any) -> List[str]:
+    tokens: List[str] = []
+    for raw_token in normalize_text(arguments_text).split():
+        token = normalize_text(raw_token)
+        if not token:
+            continue
+        if re.match(
+            r"(?i)^(/quiet|/qn|/qb!?|/passive|/s|/silent|/verysilent|--silent|--quiet|/suppressmsgboxes)$",
+            token,
+        ):
+            tokens.append(token.lower())
+    return tokens
+
+
+def upsert_uninstall_override(rule: Dict[str, Any]) -> Dict[str, Any]:
+    rule_id = normalize_text((rule or {}).get("rule_id"))
+    if not rule_id:
+        raise ValueError("rule_id is required")
+    strategy = normalize_text((rule or {}).get("strategy")).lower() or "direct_command"
+    normalized_rule: Dict[str, Any] = {
+        "rule_id": rule_id,
+        "strategy": strategy,
+    }
+    if strategy == "direct_command":
+        quiet_uninstall_string = canonicalize_windows_command((rule or {}).get("quiet_uninstall_string"))
+        if not quiet_uninstall_string:
+            raise ValueError("quiet_uninstall_string is required for direct_command uninstall overrides")
+        normalized_rule["quiet_uninstall_string"] = quiet_uninstall_string
+    elif strategy == "msi_product_code":
+        product_code = normalize_text((rule or {}).get("product_code")).upper()
+        if not _WINDOWS_PRODUCT_CODE_RE.match(product_code):
+            raise ValueError("product_code must be a valid Windows MSI product code")
+        normalized_rule["product_code"] = product_code
+    elif strategy == "windows_store":
+        package_family_name = normalize_text((rule or {}).get("package_family_name"))
+        if not package_family_name:
+            raise ValueError("package_family_name is required for windows_store uninstall overrides")
+        normalized_rule["package_family_name"] = package_family_name
+    else:
+        raise ValueError(f"Unsupported uninstall override strategy '{strategy}'")
+
+    for key in ("source", "name", "version", "product_code", "package_family_name", "summary"):
+        value = normalize_text((rule or {}).get(key))
+        if value and key not in normalized_rule:
+            normalized_rule[key] = value
+
+    uninstall_string = normalize_text((rule or {}).get("uninstall_string"))
+    if uninstall_string:
+        normalized_rule["uninstall_string"] = uninstall_string
+
+    for key in ("publisher_contains_any", "name_contains_any", "install_location_contains_any", "exe_names", "uninstall_contains_any"):
+        raw_values = (rule or {}).get(key)
+        if isinstance(raw_values, list):
+            values = [normalize_text(item) for item in raw_values if normalize_text(item)]
+            if values:
+                normalized_rule[key] = values
+
+    with _UNINSTALL_CONFIG_WRITE_LOCK:
+        payload = _load_uninstall_overrides()
+        rows = [dict(item) for item in payload.get("windows_uninstall_overrides") or [] if isinstance(item, dict)]
+        replaced = False
+        next_rows: List[Dict[str, Any]] = []
+        for existing in rows:
+            if normalize_text(existing.get("rule_id")) == rule_id:
+                next_rows.append(dict(normalized_rule))
+                replaced = True
+            else:
+                next_rows.append(existing)
+        if not replaced:
+            next_rows.append(dict(normalized_rule))
+        next_payload = {"windows_uninstall_overrides": next_rows}
+        _write_json_atomic(_UNINSTALL_OVERRIDES_PATH, next_payload)
+        global _UNINSTALL_OVERRIDES_CACHE, _UNINSTALL_OVERRIDES_CACHE_MTIME_NS
+        _UNINSTALL_OVERRIDES_CACHE = {
+            "windows_uninstall_overrides": _normalize_uninstall_override_rows(next_rows),
+        }
+        try:
+            _UNINSTALL_OVERRIDES_CACHE_MTIME_NS = _UNINSTALL_OVERRIDES_PATH.stat().st_mtime_ns
+        except OSError:
+            _UNINSTALL_OVERRIDES_CACHE_MTIME_NS = None
+        return dict(normalized_rule)
+
+
+def upsert_uninstall_blocklist_rule(rule: Dict[str, Any]) -> Dict[str, Any]:
+    rule_id = normalize_text((rule or {}).get("rule_id"))
+    if not rule_id:
+        raise ValueError("rule_id is required")
+    reason = normalize_text((rule or {}).get("reason"))
+    if not reason:
+        raise ValueError("reason is required")
+    normalized_rule: Dict[str, Any] = {
+        "rule_id": rule_id,
+        "reason": reason,
+    }
+    for key in ("source", "name", "version", "product_code"):
+        value = normalize_text((rule or {}).get(key))
+        if value:
+            normalized_rule[key] = value
+    for key in (
+        "publisher_contains_any",
+        "name_contains_any",
+        "install_location_contains_any",
+        "exe_names",
+        "quiet_args_any",
+        "uninstall_contains_any",
+    ):
+        raw_values = (rule or {}).get(key)
+        if isinstance(raw_values, list):
+            values = [normalize_text(item) for item in raw_values if normalize_text(item)]
+            if values:
+                normalized_rule[key] = values
+
+    with _UNINSTALL_CONFIG_WRITE_LOCK:
+        payload = _load_uninstall_blocklist()
+        rows = [
+            dict(item)
+            for item in payload.get("windows_quiet_uninstall_blocklist") or []
+            if isinstance(item, dict)
+        ]
+        replaced = False
+        next_rows: List[Dict[str, Any]] = []
+        for existing in rows:
+            if normalize_text(existing.get("rule_id")) == rule_id:
+                next_rows.append(dict(normalized_rule))
+                replaced = True
+            else:
+                next_rows.append(existing)
+        if not replaced:
+            next_rows.append(dict(normalized_rule))
+        next_payload = {"windows_quiet_uninstall_blocklist": next_rows}
+        _write_json_atomic(_UNINSTALL_BLOCKLIST_PATH, next_payload)
+        global _UNINSTALL_BLOCKLIST_CACHE, _UNINSTALL_BLOCKLIST_CACHE_MTIME_NS
+        _UNINSTALL_BLOCKLIST_CACHE = {
+            "windows_quiet_uninstall_blocklist": _normalize_blocklist_rows(next_rows),
+        }
+        try:
+            _UNINSTALL_BLOCKLIST_CACHE_MTIME_NS = _UNINSTALL_BLOCKLIST_PATH.stat().st_mtime_ns
+        except OSError:
+            _UNINSTALL_BLOCKLIST_CACHE_MTIME_NS = None
+        return dict(normalized_rule)
+
+
+def remove_uninstall_blocklist_rule(rule_id: Any) -> bool:
+    normalized_rule_id = normalize_text(rule_id)
+    if not normalized_rule_id:
+        return False
+    with _UNINSTALL_CONFIG_WRITE_LOCK:
+        payload = _load_uninstall_blocklist()
+        rows = [
+            dict(item)
+            for item in payload.get("windows_quiet_uninstall_blocklist") or []
+            if isinstance(item, dict)
+        ]
+        next_rows = [item for item in rows if normalize_text(item.get("rule_id")) != normalized_rule_id]
+        if len(next_rows) == len(rows):
+            return False
+        next_payload = {"windows_quiet_uninstall_blocklist": next_rows}
+        _write_json_atomic(_UNINSTALL_BLOCKLIST_PATH, next_payload)
+        global _UNINSTALL_BLOCKLIST_CACHE, _UNINSTALL_BLOCKLIST_CACHE_MTIME_NS
+        _UNINSTALL_BLOCKLIST_CACHE = {
+            "windows_quiet_uninstall_blocklist": _normalize_blocklist_rows(next_rows),
+        }
+        try:
+            _UNINSTALL_BLOCKLIST_CACHE_MTIME_NS = _UNINSTALL_BLOCKLIST_PATH.stat().st_mtime_ns
+        except OSError:
+            _UNINSTALL_BLOCKLIST_CACHE_MTIME_NS = None
+        return True
+
+
 def _quote_windows_token(value: str) -> str:
     text = normalize_text(value)
     if not text:
@@ -535,22 +713,31 @@ def _match_windows_rule(entry: Dict[str, Any], uninstall_string: str, executable
     return None
 
 
-def _match_blocked_quiet_uninstall(entry: Dict[str, Any], quiet_uninstall_string: str) -> Optional[Dict[str, Any]]:
-    parsed = split_windows_command_line(quiet_uninstall_string)
+def find_matching_uninstall_blocklist_rules(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
+    metadata = software_metadata(entry)
+    quiet_uninstall_string = normalize_text(metadata.get("quiet_uninstall_string"))
+    uninstall_string = normalize_text(metadata.get("uninstall_string"))
+    parsed = split_windows_command_line(quiet_uninstall_string or uninstall_string)
     executable_name = normalize_text((parsed or {}).get("executable_name")).lower()
     arguments = normalize_text((parsed or {}).get("arguments"))
+    uninstall_text = quiet_uninstall_string or uninstall_string
     blocklist = _load_uninstall_blocklist()
-
+    matches: List[Dict[str, Any]] = []
     for rule in blocklist.get("windows_quiet_uninstall_blocklist") or []:
         if _software_matches_rule(
             entry,
             rule,
             executable_name=executable_name,
-            uninstall_text=quiet_uninstall_string,
+            uninstall_text=uninstall_text,
             quiet_arguments=arguments,
         ):
-            return rule
-    return None
+            matches.append(dict(rule))
+    return matches
+
+
+def _match_blocked_quiet_uninstall(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    matches = find_matching_uninstall_blocklist_rules(entry)
+    return matches[0] if matches else None
 
 
 def _match_windows_uninstall_override(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -692,6 +879,9 @@ def resolve_windows_uninstall_plan(entry: Dict[str, Any]) -> Dict[str, Any]:
     quiet_uninstall_string = normalize_text(metadata.get("quiet_uninstall_string"))
     uninstall_string = normalize_text(metadata.get("uninstall_string"))
     product_code = normalize_text(metadata.get("product_code"))
+    blocked_rule = _match_blocked_quiet_uninstall(entry)
+    if blocked_rule is not None:
+        return _unsupported(normalize_text(blocked_rule.get("reason")))
     uninstall_override = _match_windows_uninstall_override(entry)
 
     if uninstall_override is not None:
@@ -729,9 +919,6 @@ def resolve_windows_uninstall_plan(entry: Dict[str, Any]) -> Dict[str, Any]:
             )
 
     if quiet_uninstall_string:
-        blocked_quiet_rule = _match_blocked_quiet_uninstall(entry, quiet_uninstall_string)
-        if blocked_quiet_rule is not None:
-            return _unsupported(normalize_text(blocked_quiet_rule.get("reason")))
         return _supported(
             strategy="direct_command",
             summary="Uses the registry quiet uninstall string.",

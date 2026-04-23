@@ -58,6 +58,11 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details, site-scoped for operators, including normalized session inventory with helper readiness fields.
 - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory for an in-scope device.
 - `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service on an in-scope device.
+- `POST /api/device/software/<hostname>/refresh` (Token Authenticated) - request an immediate software inventory refresh over the device SYSTEM socket.
+- `POST /api/device/software/<hostname>/icon-override` (Token Authenticated) - persist a hotloaded global software icon override for the selected software row and request a software refresh.
+- `POST /api/device/software/<hostname>/uninstall-override` (Token Authenticated) - persist a hotloaded global software uninstall override for the selected software row.
+- `POST /api/device/software/<hostname>/uninstall-block` (Token Authenticated) - persist a hotloaded global uninstall blocklist rule for the selected software row.
+- `POST /api/device/software/<hostname>/uninstall-unblock` (Token Authenticated) - remove matching hotloaded global uninstall blocklist rules for the selected software row.
 - `POST /api/device/software/<hostname>/uninstall` (Token Authenticated) - queue a silent uninstall quick job for a supported installed-software row on an in-scope Windows device.
 - `POST /api/device/update-agent/<hostname>` (Token Authenticated) - ask an in-scope device to start its local AutoUpdater task immediately.
 - `POST /api/device/description/<hostname>` (Token Authenticated) - update description for an in-scope device.

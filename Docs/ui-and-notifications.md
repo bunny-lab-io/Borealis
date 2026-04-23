@@ -54,7 +54,7 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - Transport: Socket.IO event `borealis_notification`.
 - Frontend: `Data/Engine/web-interface/src/Notifications.jsx`.
 - Scope: include `username` in the payload to target a specific signed-in operator; the frontend filters user-scoped notifications to that operator while unscoped notifications still broadcast to all connected operators.
-- Installed Software now uses that same toast path for its right-click debug-copy flow. When an operator copies software debug data from a software-name context menu, Borealis posts either `Software debug information saved to clipboard.` or a manual-copy warning when browser clipboard access is blocked.
+- Installed Software now uses that same toast path for operator-managed software actions. Right-click actions such as `Create Global Icon Override`, `Create Global Uninstall Override`, `Block Uninstallation`, `Unblock Uninstallation`, and the page-level `Query Software Updates` button all post success or failure notifications through the shared notification system.
 
 ## Watchdogs and Alerts UX
 - Sidebar placement:

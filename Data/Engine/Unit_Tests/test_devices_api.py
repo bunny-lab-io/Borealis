@@ -1883,6 +1883,306 @@ def test_agent_software_management_overrides_endpoint_returns_icon_overrides(
     assert payload == override_payload
 
 
+def test_device_software_icon_override_persists_rule_and_requests_refresh(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    override_path = tmp_path / "software_icons_overrides.json"
+    override_path.write_text(json.dumps({"windows_icon_overrides": []}), encoding="utf-8")
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_PATH", override_path)
+    monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_icons_module,
+        "_SOFTWARE_ICON_OVERRIDES_CACHE",
+        {"windows_icon_overrides": []},
+    )
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Adobe Acrobat (64-bit)",
+                "version": "26.001.21431",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Adobe",
+                    "install_location": "C:\\Program Files\\Adobe\\Acrobat DC\\",
+                    "product_code": "{AC76BA86-1033-FF00-7760-BC15014EA700}",
+                },
+            }
+        ],
+    )
+
+    targeted_events: list[tuple[str, str, str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        engine_harness.context,
+        "emit_host_service_event",
+        lambda hostname, service_mode, event, payload: (
+            targeted_events.append((hostname, service_mode, event, payload)) or True
+        ),
+    )
+
+    response = client.post(
+        "/api/device/software/test-device/icon-override",
+        json={
+            "name": "Adobe Acrobat (64-bit)",
+            "version": "26.001.21431",
+            "source": "local_installed",
+            "display_icon": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["refresh_requested"] is True
+    assert payload["rule"]["display_icon"] == r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe,0"
+    assert payload["rule"]["name"] == "Adobe Acrobat (64-bit)"
+    assert len(targeted_events) == 1
+    target_hostname, service_mode, event_name, dispatched = targeted_events[0]
+    assert target_hostname == "test-device"
+    assert service_mode == "system"
+    assert event_name == "software_inventory_refresh_request"
+    assert dispatched["reason"].startswith("operator_icon_override:")
+
+    agent_response = engine_harness.app.test_client().get(
+        "/api/agent/software-management/overrides",
+        headers=_device_headers(),
+    )
+    assert agent_response.status_code == 200
+    override_payload = agent_response.get_json()
+    assert override_payload["windows_icon_overrides"] == [
+        {
+            "rule_id": payload["rule"]["rule_id"],
+            "source": "local_installed",
+            "name": "Adobe Acrobat (64-bit)",
+            "version": "26.001.21431",
+            "publisher_contains_any": ["Adobe"],
+            "product_code": "{AC76BA86-1033-FF00-7760-BC15014EA700}",
+            "install_location_contains_any": ["C:\\Program Files\\Adobe\\Acrobat DC"],
+            "display_icon": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe,0",
+        }
+    ]
+
+
+def test_device_software_uninstall_override_hotloads_into_detail_enrichment(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    override_path = tmp_path / "software_uninstall_overrides.json"
+    override_path.write_text(json.dumps({"windows_uninstall_overrides": []}), encoding="utf-8")
+    monkeypatch.setattr(software_uninstall_module, "_UNINSTALL_OVERRIDES_PATH", override_path)
+    monkeypatch.setattr(software_uninstall_module, "_UNINSTALL_OVERRIDES_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_uninstall_module,
+        "_UNINSTALL_OVERRIDES_CACHE",
+        {"windows_uninstall_overrides": []},
+    )
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Contoso Widget",
+                "version": "1.2.3",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Contoso Ltd",
+                    "install_location": "C:\\Program Files\\Contoso Widget",
+                    "uninstall_string": '"C:\\Program Files\\Contoso Widget\\remove.exe"',
+                },
+            }
+        ],
+    )
+
+    response = client.post(
+        "/api/device/software/test-device/uninstall-override",
+        json={
+            "name": "Contoso Widget",
+            "version": "1.2.3",
+            "source": "local_installed",
+            "application_path": r"C:\Program Files\Contoso Widget\remove.exe",
+            "arguments": "/S /norestart",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["rule"]["quiet_uninstall_string"] == r'"C:\Program Files\Contoso Widget\remove.exe" /S /norestart'
+
+    detail_response = client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software_rows = detail_response.get_json()["software"]
+    assert software_rows == [
+        {
+            "name": "Contoso Widget",
+            "version": "1.2.3",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Contoso Ltd",
+                "install_location": "C:\\Program Files\\Contoso Widget",
+                "uninstall_string": '"C:\\Program Files\\Contoso Widget\\remove.exe"',
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Operator-defined global uninstall override.",
+                "strategy": "direct_command",
+                "rule_id": payload["rule"]["rule_id"],
+                "quiet_uninstall_string": r'"C:\Program Files\Contoso Widget\remove.exe" /S /norestart',
+                "uninstall_string": '"C:\\Program Files\\Contoso Widget\\remove.exe"',
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+
+def test_device_software_uninstall_block_and_unblock_hotload(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    blocklist_path = tmp_path / "software_uninstall_blocklist.json"
+    blocklist_path.write_text(json.dumps({"windows_quiet_uninstall_blocklist": []}), encoding="utf-8")
+    monkeypatch.setattr(software_uninstall_module, "_UNINSTALL_BLOCKLIST_PATH", blocklist_path)
+    monkeypatch.setattr(software_uninstall_module, "_UNINSTALL_BLOCKLIST_CACHE_MTIME_NS", None)
+    monkeypatch.setattr(
+        software_uninstall_module,
+        "_UNINSTALL_BLOCKLIST_CACHE",
+        {"windows_quiet_uninstall_blocklist": []},
+    )
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Widget Tool",
+                "version": "9.0.0",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Widget Labs",
+                    "install_location": "C:\\Program Files\\Widget Tool",
+                    "quiet_uninstall_string": '"C:\\Program Files\\Widget Tool\\uninstall.exe" /S',
+                    "uninstall_string": '"C:\\Program Files\\Widget Tool\\uninstall.exe"',
+                },
+            }
+        ],
+    )
+
+    block_response = client.post(
+        "/api/device/software/test-device/uninstall-block",
+        json={
+            "name": "Widget Tool",
+            "version": "9.0.0",
+            "source": "local_installed",
+            "reason": "Vendor uninstall still prompts for confirmation.",
+        },
+    )
+    assert block_response.status_code == 200
+    block_payload = block_response.get_json()
+    assert block_payload["status"] == "ok"
+
+    blocked_detail = client.get("/api/device/details/test-device")
+    assert blocked_detail.status_code == 200
+    blocked_software = blocked_detail.get_json()["software"]
+    assert blocked_software == [
+        {
+            "name": "Widget Tool",
+            "version": "9.0.0",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Widget Labs",
+                "install_location": "C:\\Program Files\\Widget Tool",
+                "quiet_uninstall_string": '"C:\\Program Files\\Widget Tool\\uninstall.exe" /S',
+                "uninstall_string": '"C:\\Program Files\\Widget Tool\\uninstall.exe"',
+            },
+            "uninstall": {
+                "supported": False,
+                "reason": "Vendor uninstall still prompts for confirmation.",
+                "summary": "",
+                "strategy": "",
+                "rule_id": "",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+    unblock_response = client.post(
+        "/api/device/software/test-device/uninstall-unblock",
+        json={
+            "name": "Widget Tool",
+            "version": "9.0.0",
+            "source": "local_installed",
+        },
+    )
+    assert unblock_response.status_code == 200
+    unblock_payload = unblock_response.get_json()
+    assert unblock_payload["status"] == "ok"
+    assert unblock_payload["removed_rule_ids"] == [block_payload["rule"]["rule_id"]]
+
+    unblocked_detail = client.get("/api/device/details/test-device")
+    assert unblocked_detail.status_code == 200
+    unblocked_software = unblocked_detail.get_json()["software"]
+    assert unblocked_software == [
+        {
+            "name": "Widget Tool",
+            "version": "9.0.0",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Widget Labs",
+                "install_location": "C:\\Program Files\\Widget Tool",
+                "quiet_uninstall_string": '"C:\\Program Files\\Widget Tool\\uninstall.exe" /S',
+                "uninstall_string": '"C:\\Program Files\\Widget Tool\\uninstall.exe"',
+            },
+            "uninstall": {
+                "supported": True,
+                "reason": "",
+                "summary": "Uses the registry quiet uninstall string.",
+                "strategy": "direct_command",
+                "rule_id": "metadata_quiet_uninstall_string",
+                "quiet_uninstall_string": '"C:\\Program Files\\Widget Tool\\uninstall.exe" /S',
+                "uninstall_string": '"C:\\Program Files\\Widget Tool\\uninstall.exe"',
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+
+def test_device_software_refresh_route_requests_system_refresh(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    targeted_events: list[tuple[str, str, str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        engine_harness.context,
+        "emit_host_service_event",
+        lambda hostname, service_mode, event, payload: (
+            targeted_events.append((hostname, service_mode, event, payload)) or True
+        ),
+    )
+
+    response = client.post("/api/device/software/test-device/refresh")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "queued"
+    assert len(targeted_events) == 1
+    hostname, service_mode, event_name, dispatched = targeted_events[0]
+    assert hostname == "test-device"
+    assert service_mode == "system"
+    assert event_name == "software_inventory_refresh_request"
+    assert dispatched["reason"] == "operator_query_software_updates"
+
+
 def test_device_list_views_lifecycle(engine_harness: EngineTestHarness) -> None:
     client = _client_with_admin_session(engine_harness)
     create_resp = client.post(
