@@ -131,6 +131,16 @@ const WINDOWS_QUIET_SWITCH_RE =
 const STEAM_UNINSTALL_PROTOCOL_RE = /\bsteam:\/\/uninstall\/(?<appId>\d+)\b/i;
 const STEAM_LIBRARY_PATH_RE = /(^|[\\/])steamapps[\\/]+common([\\/]|$)/i;
 const SIZE_UNITS = ["KB", "MB", "GB", "TB"];
+const WINDOWS_SYSTEM_EXECUTABLES = new Set([
+  "msiexec.exe",
+  "rundll32.exe",
+  "cmd.exe",
+  "powershell.exe",
+  "pwsh.exe",
+  "wscript.exe",
+  "cscript.exe",
+  "regsvr32.exe",
+]);
 function getSoftwareMetadata(row = {}) {
   const metadata =
     row?.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
@@ -247,8 +257,7 @@ function buildSoftwareNamePathTokens(name = "") {
   if (!baseName) return [];
   const variants = [];
   const withoutParens = baseName.replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s+/g, " ").trim();
-  const sanitized = withoutParens.replace(/[<>:"/\\|?*]/g, "").trim();
-  pushUniqueText(variants, baseName);
+  const sanitized = withoutParens.replace(/[<>:"/\\|?*()]/g, "").trim();
   pushUniqueText(variants, withoutParens);
   pushUniqueText(variants, sanitized);
   for (const candidate of [...variants]) {
@@ -271,8 +280,10 @@ function buildSuggestedIconCandidates(row = {}, parsedQuiet = null, parsedUninst
       pushUniqueText(candidates, toWindowsResourceCandidate(rawPath, 0));
       return;
     }
+    const rawBaseName = rawPath.split(/[/\\]+/).filter(Boolean).pop()?.toLowerCase() || "";
     if (!installLocation) return;
     if (!/\.(?:exe|dll|ico|icl|cpl|ocx|scr)$/i.test(rawPath)) return;
+    if (WINDOWS_SYSTEM_EXECUTABLES.has(rawBaseName)) return;
     pushUniqueText(candidates, toWindowsResourceCandidate(`${installLocation}\\${rawPath}`, 0));
   };
 
