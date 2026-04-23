@@ -6,14 +6,36 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+try:
+    from runtime_paths import agent_runtime_root
+except Exception:  # pragma: no cover - fallback for runtime path issues
+    def agent_runtime_root(start: Optional[Path] = None) -> Path:
+        return Path(_project_root())
+
 
 def _project_root() -> str:
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
+def _temp_root() -> str:
+    root = Path(agent_runtime_root(__file__)) / "Temp"
+    root.mkdir(parents=True, exist_ok=True)
+    return str(root)
+
+
+def _log(log_callback: Optional[Callable[[str], None]], message: str) -> None:
+    if not callable(log_callback):
+        return
+    try:
+        log_callback(str(message or "").strip())
+    except Exception:
+        pass
 
 
 def canonical_env_key(name: str) -> str:
@@ -89,7 +111,13 @@ def _ps_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def _build_wrapped_script(content: str, env_map: Dict[str, str], timeout_seconds: int) -> str:
+def _build_wrapped_script(
+    content: str,
+    env_map: Dict[str, str],
+    timeout_seconds: int,
+    *,
+    use_background_job: bool = True,
+) -> str:
     prelude_lines: List[str] = []
     for key, value in (env_map or {}).items():
         if not key:
@@ -111,7 +139,7 @@ def _build_wrapped_script(content: str, env_map: Dict[str, str], timeout_seconds
         pieces.append("\n".join(prelude_lines))
     pieces.append("$__BorealisScript = {\n" + (content or "") + "\n}\n")
     script_block = "\n".join(pieces)
-    if timeout_seconds and timeout_seconds > 0:
+    if timeout_seconds and timeout_seconds > 0 and use_background_job:
         return (
             script_block
             + "$job = Start-Job -ScriptBlock $__BorealisScript\n"
@@ -189,7 +217,7 @@ def _resolve_bash_binary() -> str:
 def _run_batch_script_content(content: str, env_map: Dict[str, str], timeout_seconds: int) -> Tuple[int, str, str]:
     if os.name != "nt":
         return -1, "", "Batch scripts are only supported on Windows agents."
-    temp_dir = os.path.join(_project_root(), "Temp")
+    temp_dir = _temp_root()
     os.makedirs(temp_dir, exist_ok=True)
     fd, path = tempfile.mkstemp(prefix="sj_", suffix=".bat", dir=temp_dir, text=True)
     try:
@@ -211,7 +239,7 @@ def _run_bash_script_content(content: str, env_map: Dict[str, str], timeout_seco
     bash_bin = _resolve_bash_binary()
     if not bash_bin:
         return -1, "", "Bash is not available on this agent."
-    temp_dir = os.path.join(_project_root(), "Temp")
+    temp_dir = _temp_root()
     os.makedirs(temp_dir, exist_ok=True)
     fd, path = tempfile.mkstemp(prefix="sj_", suffix=".sh", dir=temp_dir, text=True)
     try:
@@ -231,23 +259,107 @@ def _run_bash_script_content(content: str, env_map: Dict[str, str], timeout_seco
             pass
 
 
-def _run_powershell_script_content(content: str, env_map: Dict[str, str], timeout_seconds: int) -> Tuple[int, str, str]:
-    temp_dir = os.path.join(_project_root(), "Temp")
+def _resolve_powershell_binary() -> str:
+    if os.name == "nt":
+        ps = os.path.expandvars(r"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+        if os.path.isfile(ps):
+            return ps
+        return "powershell.exe"
+    return shutil.which("pwsh") or "pwsh"
+
+
+def _run_powershell_script_content(
+    content: str,
+    env_map: Dict[str, str],
+    timeout_seconds: int,
+    *,
+    progress_callback: Optional[Callable[[str], None]] = None,
+    log_callback: Optional[Callable[[str], None]] = None,
+    use_background_job: bool = True,
+) -> Tuple[int, str, str]:
+    temp_dir = _temp_root()
     os.makedirs(temp_dir, exist_ok=True)
     fd, path = tempfile.mkstemp(prefix="sj_", suffix=".ps1", dir=temp_dir, text=True)
-    final_content = _build_wrapped_script(content or "", env_map, timeout_seconds)
+    final_content = _build_wrapped_script(
+        content or "",
+        env_map,
+        timeout_seconds,
+        use_background_job=use_background_job,
+    )
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(final_content)
 
-    if os.name == "nt":
-        ps = os.path.expandvars(r"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
-        if not os.path.isfile(ps):
-            ps = "powershell.exe"
-    else:
-        ps = shutil.which("pwsh") or "pwsh"
+    ps = _resolve_powershell_binary()
     try:
         proc_timeout = timeout_seconds + 30 if timeout_seconds else 60 * 60
         flags = 0x08000000 if os.name == "nt" else 0
+        _log(
+            log_callback,
+            "system powershell direct launch script_path={0} timeout_seconds={1} background_job={2} temp_root={3}".format(
+                path,
+                timeout_seconds,
+                "yes" if use_background_job else "no",
+                temp_dir,
+            ),
+        )
+        if callable(progress_callback):
+            proc = subprocess.Popen(
+                [ps, "-ExecutionPolicy", "Bypass", "-NoProfile", "-File", path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                creationflags=flags,
+            )
+            _log(log_callback, f"system powershell direct launch pid={proc.pid} script_path={path}")
+            output_chunks: List[str] = []
+
+            def _reader() -> None:
+                stream = getattr(proc, "stdout", None)
+                if stream is None:
+                    return
+                try:
+                    while True:
+                        line = stream.readline()
+                        if line == "":
+                            break
+                        output_chunks.append(line)
+                        try:
+                            progress_callback(line)
+                        except Exception:
+                            pass
+                finally:
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+
+            reader_thread = threading.Thread(target=_reader, daemon=True)
+            reader_thread.start()
+            try:
+                proc.wait(timeout=proc_timeout)
+            except subprocess.TimeoutExpired:
+                _log(log_callback, f"system powershell direct launch timed out pid={proc.pid} script_path={path}")
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                reader_thread.join(timeout=2)
+                merged_output = "".join(output_chunks)
+                return -1, merged_output, f"Script timed out after {timeout_seconds} seconds"
+            reader_thread.join(timeout=2)
+            merged_output = "".join(output_chunks)
+            _log(
+                log_callback,
+                "system powershell direct launch finished pid={0} rc={1} output_bytes={2} script_path={3}".format(
+                    proc.pid,
+                    proc.returncode,
+                    len(merged_output.encode("utf-8", errors="replace")),
+                    path,
+                ),
+            )
+            return proc.returncode or 0, merged_output, ""
+
         proc = subprocess.run(
             [ps, "-ExecutionPolicy", "Bypass", "-NoProfile", "-File", path],
             capture_output=True,
@@ -255,8 +367,27 @@ def _run_powershell_script_content(content: str, env_map: Dict[str, str], timeou
             timeout=proc_timeout,
             creationflags=flags,
         )
-        return proc.returncode, proc.stdout or "", proc.stderr or ""
+        stdout_text = proc.stdout or ""
+        stderr_text = proc.stderr or ""
+        _log(
+            log_callback,
+            "system powershell direct launch finished rc={0} stdout_bytes={1} stderr_bytes={2} script_path={3}".format(
+                proc.returncode,
+                len(stdout_text.encode("utf-8", errors="replace")),
+                len(stderr_text.encode("utf-8", errors="replace")),
+                path,
+            ),
+        )
+        return proc.returncode, stdout_text, stderr_text
+    except subprocess.TimeoutExpired as exc:
+        stdout_text = exc.stdout or ""
+        stderr_text = exc.stderr or ""
+        timeout_text = f"Script timed out after {timeout_seconds} seconds"
+        stderr_text = f"{stderr_text.rstrip()}\n{timeout_text}".strip() if stderr_text else timeout_text
+        _log(log_callback, f"system powershell direct launch timed out script_path={path}")
+        return -1, stdout_text, stderr_text
     except Exception as exc:
+        _log(log_callback, f"system powershell direct launch failed script_path={path} error={exc}")
         return -1, "", str(exc)
     finally:
         try:
@@ -313,24 +444,42 @@ def _run_powershell_via_system_task(
     timeout_seconds: int,
     *,
     progress_callback: Optional[Callable[[str], None]] = None,
+    log_callback: Optional[Callable[[str], None]] = None,
+    use_background_job: bool = True,
 ) -> Tuple[int, str, str]:
-    ps_exe = os.path.expandvars(r"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe")
-    if not os.path.isfile(ps_exe):
-        ps_exe = "powershell.exe"
+    ps_exe = _resolve_powershell_binary()
     script_path = ""
     out_path = ""
     task_name = f"Borealis Agent - Task - {uuid.uuid4().hex} @ SYSTEM"
     try:
-        os.makedirs(os.path.join(_project_root(), "Temp"), exist_ok=True)
+        temp_dir = _temp_root()
+        os.makedirs(temp_dir, exist_ok=True)
         script_fd, script_path = tempfile.mkstemp(
             prefix="sys_task_",
             suffix=".ps1",
-            dir=os.path.join(_project_root(), "Temp"),
+            dir=temp_dir,
             text=True,
         )
         with os.fdopen(script_fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(_build_wrapped_script(content or "", env_map, timeout_seconds))
-        out_path = os.path.join(_project_root(), "Temp", f"out_{uuid.uuid4().hex}.txt")
+            handle.write(
+                _build_wrapped_script(
+                    content or "",
+                    env_map,
+                    timeout_seconds,
+                    use_background_job=use_background_job,
+                )
+            )
+        out_path = os.path.join(temp_dir, f"out_{uuid.uuid4().hex}.txt")
+        _log(
+            log_callback,
+            "system powershell scheduled-task launch requested task_name={0} script_path={1} output_path={2} timeout_seconds={3} background_job={4}".format(
+                task_name,
+                script_path,
+                out_path,
+                timeout_seconds,
+                "yes" if use_background_job else "no",
+            ),
+        )
         task_ps = f"""
 $ErrorActionPreference='Continue'
 $task = "{task_name}"
@@ -353,6 +502,10 @@ Start-ScheduledTask -TaskName $task | Out-Null
         )
         if created.returncode != 0:
             detail = created.stderr or created.stdout or "scheduled task creation failed"
+            _log(
+                log_callback,
+                "system powershell scheduled-task launch failed task_name={0} detail={1}".format(task_name, detail.strip()),
+            )
             return -999, "", detail
 
         deadline = time.time() + max(timeout_seconds + 30, 90) if timeout_seconds else time.time() + 90
@@ -360,6 +513,7 @@ Start-ScheduledTask -TaskName $task | Out-Null
         full_output = ""
         started_seen = False
         rc = 0
+        last_state_name = ""
         while time.time() < deadline:
             last_size, chunk = _read_output_delta(out_path, last_size)
             if chunk:
@@ -377,6 +531,16 @@ Start-ScheduledTask -TaskName $task | Out-Null
                 rc = int(state.get("LastTaskResult") or 0)
             except Exception:
                 rc = 0
+            if state_name != last_state_name:
+                _log(
+                    log_callback,
+                    "system powershell scheduled-task state task_name={0} state={1} last_task_result={2}".format(
+                        task_name,
+                        state_name or "unknown",
+                        rc,
+                    ),
+                )
+                last_state_name = state_name
 
             if state_name in {"running", "queued"}:
                 started_seen = True
@@ -386,6 +550,30 @@ Start-ScheduledTask -TaskName $task | Out-Null
                 break
             time.sleep(1)
         else:
+            _log(
+                log_callback,
+                "system powershell scheduled-task timed out task_name={0} output_path={1}".format(
+                    task_name,
+                    out_path,
+                ),
+            )
+            try:
+                subprocess.run(
+                    [
+                        ps_exe,
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-Command",
+                        f"try {{ Stop-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue }} catch {{}}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    creationflags=(0x08000000 if os.name == "nt" else 0),
+                    timeout=15,
+                )
+            except Exception:
+                pass
             return -1, full_output, f"Script timed out after {timeout_seconds} seconds"
 
         last_size, chunk = _read_output_delta(out_path, last_size)
@@ -396,8 +584,18 @@ Start-ScheduledTask -TaskName $task | Out-Null
                     progress_callback(chunk)
                 except Exception:
                     pass
+        _log(
+            log_callback,
+            "system powershell scheduled-task finished task_name={0} rc={1} output_bytes={2} output_path={3}".format(
+                task_name,
+                rc,
+                len(full_output.encode("utf-8", errors="replace")),
+                out_path,
+            ),
+        )
         return rc, full_output, ""
     except Exception as exc:
+        _log(log_callback, f"system powershell scheduled-task failed task_name={task_name} error={exc}")
         return -999, "", str(exc)
     finally:
         cleanup_ps = f"try {{ Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false }} catch {{}}"
@@ -426,20 +624,42 @@ def run_system_script(
     env_map: Dict[str, str],
     timeout_seconds: int,
     progress_callback: Optional[Callable[[str], None]] = None,
+    log_callback: Optional[Callable[[str], None]] = None,
 ) -> Tuple[int, str, str]:
     normalized_type = str(script_type or "").strip().lower()
     if normalized_type == "powershell":
+        use_background_job = not callable(progress_callback)
         if os.name == "nt":
             rc, out, err = _run_powershell_via_system_task(
                 content,
                 env_map,
                 timeout_seconds,
                 progress_callback=progress_callback,
+                log_callback=log_callback,
+                use_background_job=use_background_job,
             )
             if rc == -999:
-                return _run_powershell_script_content(content, env_map, timeout_seconds)
+                _log(
+                    log_callback,
+                    "system powershell scheduled-task fallback triggered detail={0}".format(str(err or "").strip() or "unknown"),
+                )
+                return _run_powershell_script_content(
+                    content,
+                    env_map,
+                    timeout_seconds,
+                    progress_callback=progress_callback,
+                    log_callback=log_callback,
+                    use_background_job=use_background_job,
+                )
             return rc, out, err
-        return _run_powershell_script_content(content, env_map, timeout_seconds)
+        return _run_powershell_script_content(
+            content,
+            env_map,
+            timeout_seconds,
+            progress_callback=progress_callback,
+            log_callback=log_callback,
+            use_background_job=use_background_job,
+        )
     if normalized_type == "batch":
         return _run_batch_script_content(content, env_map, timeout_seconds)
     if normalized_type == "bash":

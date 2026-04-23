@@ -612,6 +612,7 @@ class Role:
                                 env_map=env_map,
                                 timeout_seconds=timeout_seconds,
                                 progress_callback=_forward_progress if queue_key == 'software_management' else None,
+                                log_callback=lambda message: _log(f"quick_job_run(system) {message}"),
                             )
                             return rc, out, err
 
