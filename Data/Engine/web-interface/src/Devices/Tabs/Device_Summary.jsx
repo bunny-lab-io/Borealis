@@ -31,6 +31,7 @@ import DesktopWindowsRoundedIcon from "@mui/icons-material/DesktopWindowsRounded
 import PolicyIcon from "@mui/icons-material/Policy";
 import SpeedRoundedIcon from "@mui/icons-material/SpeedRounded";
 import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
+import FolderRoundedIcon from "@mui/icons-material/FolderRounded";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import { ClearDeviceActivityDialog } from "../../Dialogs.jsx";
 import {
@@ -46,6 +47,7 @@ import ActivityHistoryTab from "./Activity_History.jsx";
 import InstalledSoftwareTab from "./Installed_Software.jsx";
 import DeviceWatchdogsTab from "./Device_Watchdogs.jsx";
 import RemoteShellTab from "./RemoteShell.jsx";
+import RemoteFileManagementTab from "./Remote_File_Management.jsx";
 import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
 import ServiceList from "../Services/Service_List.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
@@ -112,6 +114,7 @@ const TUNNEL_INFO_IDLE = Object.freeze({
 
 const TOP_TABS = [
   { key: "summary", label: "Device Summary", icon: InfoOutlinedIcon },
+  { key: "file_management", label: "File Management", icon: FolderRoundedIcon },
   { key: "software", label: "Installed Software", icon: AppsRoundedIcon },
   { key: "services", label: "Services", icon: SettingsRoundedIcon },
   { key: "watchdogs", label: "Watchdogs", icon: PolicyIcon },
@@ -120,6 +123,7 @@ const TOP_TABS = [
 ];
 const DEVICE_DETAILS_TAB_URL_BY_KEY = Object.freeze({
   summary: "device_summary",
+  file_management: "file_management",
   software: "installed_software",
   services: "services",
   watchdogs: "watchdogs",
@@ -129,6 +133,7 @@ const DEVICE_DETAILS_TAB_URL_BY_KEY = Object.freeze({
 const DEVICE_DETAILS_TAB_KEY_BY_URL = Object.freeze({
   device_summary: "summary",
   summary: "summary",
+  file_management: "file_management",
   installed_software: "software",
   software: "software",
   services: "services",
@@ -3394,6 +3399,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   const status = lockedStatus || statusFromHeartbeat(agent.last_seen || device?.lastSeen);
 
+  const renderFileManagementTab = () => <RemoteFileManagementTab device={tunnelDevice} />;
+
   const rawDisplayHostname = meta.hostname || summary.hostname || agent.hostname || device?.hostname || "";
   const displayHostname = formatHostnameForDisplay(rawDisplayHostname) || "Device Summary";
   const pageSubtitle = status ? `Status: ${status}` : "";
@@ -3434,6 +3441,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   const topTabRenderers = [
     renderDeviceSummaryTab,
+    renderFileManagementTab,
     renderSoftware,
     renderServicesTab,
     renderWatchdogsTab,

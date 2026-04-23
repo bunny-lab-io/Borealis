@@ -10,6 +10,7 @@ KNOWN_LANES = (
     "scheduled_job_system",
     "service_management",
     "agent_update",
+    "file_management",
 )
 
 

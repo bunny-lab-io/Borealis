@@ -68,6 +68,7 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - Alerts starts in an unfiltered all-alerts view; clicking a status pill applies that queue filter, and clicking the same pill again clears it back to all alerts.
 - Alerts relies on AG Grid's built-in column filters rather than a page-level custom filter bar.
 - Device Summary includes a `Watchdogs` tab so operators can acknowledge incidents, suppress a watchdog for one device, or launch a prefilled device-scoped watchdog draft.
+- Device Summary also includes a `File Management` tab that uses a single AG Grid with a custom tree-style `Name` column, breadcrumbs, top-right `Upload` / `Download` actions, and a page-local `Actions` menu for create-folder, rename, move, delete, and collapse-all behaviors.
 - Real-time refresh uses `watchdog_incidents_changed` and `device_watchdogs_changed` on the shared `window.BorealisSocket`.
 
 ## API Endpoints
@@ -87,6 +88,10 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - `POST /api/watchdogs/incidents/<int:incident_id>/state` (Token Authenticated) - move an incident between the Alerts `Open` and `Suppressed` queues.
 - `GET /api/devices/<device_id>/watchdogs` (Token Authenticated) - hydrate the device-level Watchdogs tab.
 - `POST /api/devices/<device_id>/watchdogs/overrides` (Token Authenticated) - apply or clear a device-specific watchdog suppression.
+- `GET /api/device/files/<hostname>/roots` (Token Authenticated) - hydrate the Device Summary `File Management` roots view.
+- `GET /api/device/files/<hostname>/children?path=<absolute-path>` (Token Authenticated) - lazy-load one File Management directory.
+- `POST /api/device/files/<hostname>/upload` (Token Authenticated) - start a File Management upload transfer.
+- `POST /api/device/files/<hostname>/download` (Token Authenticated) - start a File Management download transfer.
 
 ## Related Documentation
 - [Engine Runtime](engine-runtime.md)
@@ -166,6 +171,7 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - Buttons and chips: page-header primary CTAs use a consistent cyan-to-violet gradient (`#7dd3fc -> #c084fc`); neutral actions use rounded outlines with `rgba(148,163,184,0.4)` borders and mixed-case labels.
 - Do not use rainbow-border CTAs in the shared page header rail.
 - AG Grid treatment: Quartz theme with matte navy headers, subtle alternating row opacity, cyan/magenta interaction glows, rounded wrappers, soft borders, inset selection glows.
+- The Device Summary `File Management` tab should keep using community AG Grid plus a React-managed flattened tree. Do not switch that surface to AG Grid Tree Data or grouping APIs for this workflow.
 - Default grid cell padding: keep roughly 18px on the left edge and 12px on the right for standard cells (12px/9px for `auto-col-tight`) so text never hugs a column edge. Target the center + pinned containers so both regions stay aligned.
 - Overlays/menus: `rgba(8,12,24,0.96)` canvas, blurred backdrops, thin steel borders; bright typography; deep blue glass inputs; cyan confirm, mauve destructive accents.
 
@@ -228,6 +234,7 @@ useRoutePageChrome({
 - Badges/metadata: do not standardize badges as part of the shared header rail. Page-specific metadata belongs in the page body, usually directly under the subtitle or near the first relevant control group.
 - Secondary action overflow: on narrow widths, if the full rail no longer fits on a single row, the shared rail automatically collapses all secondary actions into a single `Actions` secondary button while keeping primary/warning/danger actions visible. Overflow menu ordering should place the secondary action closest to the primary buttons at the top of the menu.
 - Device Summary uses a page-local `Actions` menu inside `Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx`; it now exposes `Quick Job`, `New Watchdog`, `Update Agent`, and `Clear Device Activity`.
+- The `File Management` tab follows the same local toolbar pattern: breadcrumbs and `Up` / `Refresh` on the left, primary `Upload` / `Download` actions on the right, and a secondary `Actions` menu for non-primary filesystem mutations.
 - `Update Agent` is an operator-triggered AutoUpdater start. It tells the device to run its existing local updater task immediately rather than using a separate direct-launch updater path.
 - Workflow and targeting UIs that consume `/api/agents` should treat helper-backed current-user capability as metadata on the host's SYSTEM record (`helper_contexts`), not as a second live Borealis socket.
 - Responsive behavior: tabs remain in normal flow beneath the header band. On narrow widths, the title block and action rail stack vertically. The rail should prefer collapsing secondary actions before wrapping and must never cover the tabs or the first content section.

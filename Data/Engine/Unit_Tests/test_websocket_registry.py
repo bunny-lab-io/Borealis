@@ -11,9 +11,14 @@ from Data.Engine.services.WebSocket.__init__ import AgentSocketRegistry, Operato
 class _FakeSocketIO:
     def __init__(self) -> None:
         self.events = []
+        self.calls = []
 
     def emit(self, event, payload, to=None):
         self.events.append((event, payload, to))
+
+    def call(self, event, payload, to=None, timeout=None):
+        self.calls.append((event, payload, to, timeout))
+        return {"ok": True, "event": event, "to": to}
 
 
 class _FakeLogger:
@@ -73,6 +78,30 @@ def test_agent_socket_registry_falls_back_to_system_socket_for_helper_backed_cur
     assert registry.get_agent_id_for_host_mode("LAB-AIO-02", "currentuser").endswith("_SYSTEM")
     assert registry.emit_to_host("LAB-AIO-02", "currentuser", "quick_job_run", {"job_id": 9}) is True
     assert socketio.events == [("quick_job_run", {"job_id": 9}, "sid-system")]
+
+
+def test_agent_socket_registry_call_routes_by_host_and_service_mode() -> None:
+    socketio = _FakeSocketIO()
+    registry = AgentSocketRegistry(socketio, _FakeLogger())
+
+    registry.register(
+        "LAB-FM-01_ABCDEF01-0000-0000-0000-000000000001_SYSTEM",
+        "sid-system",
+        service_mode="system",
+    )
+
+    response = registry.call_to_host(
+        "LAB-FM-01",
+        "system",
+        "file_management_request",
+        {"action": "roots"},
+        timeout=12.5,
+    )
+
+    assert response == {"ok": True, "event": "file_management_request", "to": "sid-system"}
+    assert socketio.calls == [
+        ("file_management_request", {"action": "roots"}, "sid-system", 12.5),
+    ]
 
 
 def test_operator_presence_registry_tracks_distinct_sessions() -> None:
