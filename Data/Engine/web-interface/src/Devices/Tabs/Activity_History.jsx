@@ -130,8 +130,12 @@ const HistoryTaskCell = React.memo(function HistoryTaskCell(props) {
         minWidth: 0,
         justifyContent: "flex-start",
         textTransform: "none",
-        color: MAGIC_UI.accentA,
+        color: "#dbeafe",
         fontWeight: 600,
+        "&:hover": {
+          backgroundColor: "transparent",
+          color: "#dbeafe",
+        },
       }}
     >
       {label}
