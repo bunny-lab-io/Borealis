@@ -179,6 +179,159 @@ def load_software_icon_overrides() -> List[Dict[str, Any]]:
     return list(_SOFTWARE_ICON_OVERRIDES_CACHE["windows_icon_overrides"])
 
 
+def _normalize_icon_override_rule_map(overrides: Any) -> Dict[str, Dict[str, Any]]:
+    rows = overrides if isinstance(overrides, list) else []
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = normalize_text(row.get("name")).lower()
+        if not name or name in normalized:
+            continue
+        clear_icon = _coerce_bool(row.get("clear_icon") or row.get("remove_icon"))
+        display_icon = ""
+        if not clear_icon:
+            display_icon = canonicalize_software_icon_override_resource(
+                row.get("display_icon") or row.get("icon_location")
+            )
+            if not display_icon:
+                continue
+        normalized[name] = {
+            "name": normalize_text(row.get("name")),
+            "rule_id": normalize_text(row.get("rule_id")),
+            "display_icon": display_icon,
+            "clear_icon": bool(clear_icon),
+        }
+    return normalized
+
+
+def _fetch_known_override_icon_hashes(
+    db_conn_factory,
+    override_rules: Dict[str, Dict[str, Any]],
+) -> Dict[str, str]:
+    names_to_lookup = sorted(name for name, rule in override_rules.items() if not _coerce_bool(rule.get("clear_icon")))
+    if not names_to_lookup:
+        return {}
+
+    raw_rows: List[Any] = []
+    conn = None
+    try:
+        conn = db_conn_factory()
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in names_to_lookup)
+        cur.execute(
+            f"""
+            SELECT name_normalized, captured_at, metadata_json
+              FROM device_software_inventory
+             WHERE name_normalized IN ({placeholders})
+             ORDER BY captured_at DESC, id DESC
+            """,
+            tuple(names_to_lookup),
+        )
+        raw_rows = list(cur.fetchall() or [])
+    except Exception:
+        logger.debug("Failed to look up known override icon hashes.", exc_info=True)
+        return {}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    known_hashes: Dict[str, str] = {}
+    for row in raw_rows:
+        if not isinstance(row, (list, tuple)) or len(row) < 3:
+            continue
+        name_key = normalize_text(row[0]).lower()
+        if not name_key or name_key in known_hashes:
+            continue
+        rule = override_rules.get(name_key)
+        if not isinstance(rule, dict) or _coerce_bool(rule.get("clear_icon")):
+            continue
+        metadata_raw = row[2]
+        if isinstance(metadata_raw, str):
+            try:
+                metadata = json.loads(metadata_raw)
+            except Exception:
+                metadata = {}
+        elif isinstance(metadata_raw, dict):
+            metadata = dict(metadata_raw)
+        else:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            continue
+        if _coerce_bool(metadata.get("display_icon_override_cleared")):
+            continue
+        icon_hash = normalize_software_icon_hash(metadata.get("icon_hash"))
+        if not icon_hash:
+            continue
+        metadata_rule_id = normalize_text(metadata.get("display_icon_override_rule_id"))
+        metadata_override = canonicalize_software_icon_override_resource(metadata.get("display_icon_override"))
+        expected_rule_id = normalize_text(rule.get("rule_id"))
+        expected_override = normalize_text(rule.get("display_icon"))
+        if expected_rule_id and metadata_rule_id and metadata_rule_id == expected_rule_id:
+            known_hashes[name_key] = icon_hash
+            continue
+        if expected_override and metadata_override and metadata_override.lower() == expected_override.lower():
+            known_hashes[name_key] = icon_hash
+            continue
+    return known_hashes
+
+
+def apply_engine_global_icon_overrides(
+    db_conn_factory,
+    rows: Any,
+    *,
+    overrides: Any = None,
+) -> List[Dict[str, Any]]:
+    normalized_rows = rows if isinstance(rows, list) else []
+    override_rules = _normalize_icon_override_rule_map(
+        load_software_icon_overrides() if overrides is None else overrides
+    )
+    if not override_rules:
+        return normalized_rows
+
+    relevant_rules = {
+        normalize_text(row.get("name")).lower(): override_rules[normalize_text(row.get("name")).lower()]
+        for row in normalized_rows
+        if isinstance(row, dict) and normalize_text(row.get("name")).lower() in override_rules
+    }
+    if not relevant_rules:
+        return normalized_rows
+
+    known_hashes = _fetch_known_override_icon_hashes(db_conn_factory, relevant_rules)
+    for row in normalized_rows:
+        if not isinstance(row, dict):
+            continue
+        name_key = normalize_text(row.get("name")).lower()
+        rule = relevant_rules.get(name_key)
+        if not isinstance(rule, dict):
+            continue
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        row["metadata"] = metadata
+        clear_icon = _coerce_bool(rule.get("clear_icon"))
+        display_icon = normalize_text(rule.get("display_icon"))
+        original_display_icon = normalize_text(metadata.get("display_icon"))
+        if (
+            original_display_icon
+            and (clear_icon or original_display_icon.lower() != display_icon.lower())
+            and not normalize_text(metadata.get("original_display_icon"))
+        ):
+            metadata["original_display_icon"] = original_display_icon
+        metadata["display_icon"] = "" if clear_icon else display_icon
+        metadata["display_icon_override"] = "" if clear_icon else display_icon
+        metadata["display_icon_override_rule_id"] = normalize_text(rule.get("rule_id"))
+        metadata["display_icon_override_cleared"] = bool(clear_icon)
+        if clear_icon:
+            metadata.pop("icon_hash", None)
+            continue
+        known_hash = known_hashes.get(name_key)
+        if known_hash:
+            metadata["icon_hash"] = known_hash
+    return normalized_rows
+
+
 def normalize_software_icon_hash(value: Any) -> str:
     text = normalize_text(value).lower()
     return text if _SOFTWARE_ICON_HASH_RE.match(text) else ""

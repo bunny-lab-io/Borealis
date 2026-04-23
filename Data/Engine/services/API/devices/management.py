@@ -61,7 +61,11 @@ from .software_uninstall import (
     enrich_software_inventory_with_uninstall,
     normalize_software_inventory as _shared_normalize_software_inventory,
 )
-from .software_icons import normalize_software_icon_payloads, upsert_software_icon_assets
+from .software_icons import (
+    apply_engine_global_icon_overrides,
+    normalize_software_icon_payloads,
+    upsert_software_icon_assets,
+)
 from .process_inventory import normalize_device_processes, serialize_device_processes
 from .session_inventory import normalize_device_sessions, serialize_device_sessions
 from .service_inventory import (
@@ -1496,6 +1500,11 @@ class DeviceManagementService:
             if not self.site_access.user_can_access_site(current_user, site_tuple[0]):
                 return {}, 200
             payload = self._build_device_payload(device_tuple, site_tuple)
+            details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+            software_rows = details.get("software") if isinstance(details.get("software"), list) else []
+            if software_rows:
+                details["software"] = apply_engine_global_icon_overrides(self._db_conn, software_rows)
+                payload["software"] = details["software"]
             payload = self._attach_agent_version_status(payload)
             return payload, 200
         except Exception as exc:
