@@ -1608,6 +1608,34 @@ export default function DeviceSummary() {
     return (meta?.hostname || summary.hostname || agent?.hostname || device?.hostname || "").trim();
   }, [meta?.hostname, summary.hostname, agent?.hostname, device?.hostname]);
 
+  useEffect(() => {
+    const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
+    const expectedHost = String(activityHostname || "").trim().toLowerCase();
+    if (!socket || !expectedHost) return undefined;
+    let reloadTimer = null;
+
+    const handleInventoryChanged = (payload = {}) => {
+      const payloadHost = String(payload?.hostname || "").trim().toLowerCase();
+      const payloadChange = String(payload?.change || "").trim().toLowerCase();
+      if (!payloadHost || payloadHost !== expectedHost) return;
+      if (payloadChange && payloadChange !== "software_updated" && payloadChange !== "updated") return;
+      if (reloadTimer) {
+        window.clearTimeout(reloadTimer);
+      }
+      reloadTimer = window.setTimeout(() => {
+        void reloadDeviceSummarySnapshot({ silent: true, includeAgents: false });
+      }, 250);
+    };
+
+    socket.on("device_inventory_changed", handleInventoryChanged);
+    return () => {
+      if (reloadTimer) {
+        window.clearTimeout(reloadTimer);
+      }
+      socket.off("device_inventory_changed", handleInventoryChanged);
+    };
+  }, [activityHostname, reloadDeviceSummarySnapshot]);
+
   const saveConnectionEndpoint = useCallback(async () => {
     if (connectionType !== "ssh") return;
     const host = activityHostname;

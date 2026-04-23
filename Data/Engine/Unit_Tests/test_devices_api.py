@@ -777,6 +777,51 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
     ]
 
 
+def test_agent_details_emits_device_inventory_changed_when_software_changes(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted_events: list[tuple[str, Any, str]] = []
+    monkeypatch.setattr(
+        engine_harness.context.socketio,
+        "emit",
+        lambda event, payload, namespace="/": emitted_events.append((event, payload, namespace)),
+    )
+
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/agent/details",
+        json={
+            "hostname": "test-device",
+            "details": {
+                "summary": {
+                    "hostname": "test-device",
+                },
+                "software": [
+                    {
+                        "name": "Adobe Acrobat (64-bit)",
+                        "version": "26.001.21431",
+                        "source": "local_installed",
+                        "metadata": {
+                            "publisher": "Adobe",
+                            "install_location": "C:\\Program Files\\Adobe\\Acrobat DC\\",
+                            "display_icon": r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe,0",
+                        },
+                    }
+                ],
+            },
+        },
+        headers=_device_headers(),
+    )
+
+    assert response.status_code == 200
+    assert (
+        "device_inventory_changed",
+        {"hostname": "test-device", "change": "software_updated"},
+        "/",
+    ) in emitted_events
+
+
 def test_agent_details_merge_top_level_software_metadata_into_existing_metadata(
     engine_harness: EngineTestHarness,
 ) -> None:

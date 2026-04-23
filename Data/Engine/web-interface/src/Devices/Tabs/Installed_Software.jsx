@@ -860,6 +860,7 @@ export default function InstalledSoftwareTab({
   hostname = "",
   onSoftwareDataRefresh = null,
 }) {
+  const softwareGridRef = useRef(null);
   const [busyActionKey, setBusyActionKey] = useState("");
   const [confirmRow, setConfirmRow] = useState(null);
   const [softwareFilterMode, setSoftwareFilterMode] = useState("locally_installed");
@@ -1188,6 +1189,33 @@ export default function InstalledSoftwareTab({
         : softwareRows,
     [softwareFilterMode, softwareRows]
   );
+
+  const softwareGridRefreshSignature = useMemo(
+    () =>
+      filteredSoftwareRows
+        .map((row) => {
+          const metadata = getSoftwareMetadata(row);
+          return [
+            buildSoftwareActionKey(row),
+            getSoftwareIconHash(row),
+            String(metadata?.display_icon_override || "").trim(),
+            String(metadata?.display_icon || "").trim(),
+            String(metadata?.original_display_icon || "").trim(),
+          ].join("|");
+        })
+        .join("||"),
+    [filteredSoftwareRows]
+  );
+
+  useEffect(() => {
+    const api = softwareGridRef.current?.api;
+    if (!api || typeof window === "undefined") return undefined;
+    const frameId = window.requestAnimationFrame(() => {
+      api.refreshCells({ force: true, columns: ["name"] });
+      api.redrawRows();
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [softwareGridRefreshSignature]);
 
   const activeTrackedUninstall = useMemo(
     () =>
@@ -1662,6 +1690,7 @@ export default function InstalledSoftwareTab({
         }}
       >
         <AgGridReact
+          ref={softwareGridRef}
           rowData={filteredSoftwareRows}
           columnDefs={softwareColumnDefs}
           defaultColDef={DEFAULT_GRID_COL_DEF}

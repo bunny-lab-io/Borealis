@@ -587,6 +587,23 @@ class DeviceManagementService:
         except Exception:
             self.logger.debug("Failed to emit device_services_changed for hostname=%s", normalized_hostname, exc_info=True)
 
+    def _emit_device_inventory_changed(self, hostname: str, *, change: str) -> None:
+        socketio = getattr(self.adapters.context, "socketio", None)
+        normalized_hostname = _clean_device_str(hostname) or ""
+        normalized_change = _clean_device_str(change) or ""
+        if socketio is None or not normalized_hostname or not normalized_change:
+            return
+        try:
+            socketio.emit(
+                "device_inventory_changed",
+                {
+                    "hostname": normalized_hostname,
+                    "change": normalized_change,
+                },
+            )
+        except Exception:
+            self.logger.debug("Failed to emit device_inventory_changed for hostname=%s", normalized_hostname, exc_info=True)
+
     def _target_repo_config(self) -> Tuple[str, str]:
         repo_name = (os.environ.get("BOREALIS_UPDATE_REPO") or "bunny-lab-io/Borealis").strip()
         branch_name = (os.environ.get("BOREALIS_UPDATE_BRANCH") or "main").strip()
@@ -1394,6 +1411,13 @@ class DeviceManagementService:
             services_changed = serialize_device_services(existing_services_raw) != serialize_device_services(
                 merged_services_payload
             )
+            software_changed = json.dumps(
+                _shared_normalize_software_inventory(prev_details.get("software") if isinstance(prev_details, dict) else []),
+                sort_keys=True,
+            ) != json.dumps(
+                _shared_normalize_software_inventory(merged.get("software")),
+                sort_keys=True,
+            )
             if software_icon_payloads:
                 upsert_software_icon_assets(cur, software_icon_payloads)
 
@@ -1431,6 +1455,8 @@ class DeviceManagementService:
             conn.commit()
             if services_changed:
                 self._emit_device_services_changed(hostname, change="updated")
+            if software_changed:
+                self._emit_device_inventory_changed(hostname, change="software_updated")
             return {"status": "ok"}, 200
         except Exception as exc:
             try:
