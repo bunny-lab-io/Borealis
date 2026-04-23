@@ -205,6 +205,40 @@ def _normalize_icon_override_rule_map(overrides: Any) -> Dict[str, Dict[str, Any
     return normalized
 
 
+def _extract_known_override_hash_from_metadata(
+    metadata_raw: Any,
+    rule: Dict[str, Any],
+) -> str:
+    if isinstance(metadata_raw, str):
+        try:
+            metadata = json.loads(metadata_raw)
+        except Exception:
+            metadata = {}
+    elif isinstance(metadata_raw, dict):
+        metadata = dict(metadata_raw)
+    else:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        return ""
+    if _coerce_bool(metadata.get("display_icon_override_cleared")):
+        return ""
+    icon_hash = normalize_software_icon_hash(metadata.get("icon_hash"))
+    if not icon_hash:
+        return ""
+    metadata_rule_id = normalize_text(metadata.get("display_icon_override_rule_id"))
+    metadata_override = canonicalize_software_icon_override_resource(metadata.get("display_icon_override"))
+    metadata_display_icon = canonicalize_software_icon_override_resource(metadata.get("display_icon"))
+    expected_rule_id = normalize_text(rule.get("rule_id"))
+    expected_override = normalize_text(rule.get("display_icon"))
+    if expected_rule_id and metadata_rule_id and metadata_rule_id == expected_rule_id:
+        return icon_hash
+    if expected_override and metadata_override and metadata_override.lower() == expected_override.lower():
+        return icon_hash
+    if expected_override and metadata_display_icon and metadata_display_icon.lower() == expected_override.lower():
+        return icon_hash
+    return ""
+
+
 def _fetch_known_override_icon_hashes(
     db_conn_factory,
     override_rules: Dict[str, Dict[str, Any]],
@@ -213,7 +247,8 @@ def _fetch_known_override_icon_hashes(
     if not names_to_lookup:
         return {}
 
-    raw_rows: List[Any] = []
+    inventory_rows: List[Any] = []
+    device_rows: List[Any] = []
     conn = None
     try:
         conn = db_conn_factory()
@@ -222,13 +257,17 @@ def _fetch_known_override_icon_hashes(
         cur.execute(
             f"""
             SELECT name_normalized, captured_at, metadata_json
-              FROM device_software_inventory
+             FROM device_software_inventory
              WHERE name_normalized IN ({placeholders})
              ORDER BY captured_at DESC, id DESC
             """,
             tuple(names_to_lookup),
         )
-        raw_rows = list(cur.fetchall() or [])
+        inventory_rows = list(cur.fetchall() or [])
+        cur.execute(
+            "SELECT guid, software FROM devices WHERE software IS NOT NULL AND software <> ''"
+        )
+        device_rows = list(cur.fetchall() or [])
     except Exception:
         logger.debug("Failed to look up known override icon hashes.", exc_info=True)
         return {}
@@ -240,7 +279,7 @@ def _fetch_known_override_icon_hashes(
                 pass
 
     known_hashes: Dict[str, str] = {}
-    for row in raw_rows:
+    for row in inventory_rows:
         if not isinstance(row, (list, tuple)) or len(row) < 3:
             continue
         name_key = normalize_text(row[0]).lower()
@@ -249,33 +288,39 @@ def _fetch_known_override_icon_hashes(
         rule = override_rules.get(name_key)
         if not isinstance(rule, dict) or _coerce_bool(rule.get("clear_icon")):
             continue
-        metadata_raw = row[2]
-        if isinstance(metadata_raw, str):
+        icon_hash = _extract_known_override_hash_from_metadata(row[2], rule)
+        if icon_hash:
+            known_hashes[name_key] = icon_hash
+
+    if len(known_hashes) == len(names_to_lookup):
+        return known_hashes
+
+    for row in device_rows:
+        if not isinstance(row, (list, tuple)) or len(row) < 2:
+            continue
+        software_raw = row[1]
+        if isinstance(software_raw, str):
             try:
-                metadata = json.loads(metadata_raw)
+                software_entries = json.loads(software_raw)
             except Exception:
-                metadata = {}
-        elif isinstance(metadata_raw, dict):
-            metadata = dict(metadata_raw)
+                software_entries = []
+        elif isinstance(software_raw, list):
+            software_entries = list(software_raw)
         else:
-            metadata = {}
-        if not isinstance(metadata, dict):
-            continue
-        if _coerce_bool(metadata.get("display_icon_override_cleared")):
-            continue
-        icon_hash = normalize_software_icon_hash(metadata.get("icon_hash"))
-        if not icon_hash:
-            continue
-        metadata_rule_id = normalize_text(metadata.get("display_icon_override_rule_id"))
-        metadata_override = canonicalize_software_icon_override_resource(metadata.get("display_icon_override"))
-        expected_rule_id = normalize_text(rule.get("rule_id"))
-        expected_override = normalize_text(rule.get("display_icon"))
-        if expected_rule_id and metadata_rule_id and metadata_rule_id == expected_rule_id:
-            known_hashes[name_key] = icon_hash
-            continue
-        if expected_override and metadata_override and metadata_override.lower() == expected_override.lower():
-            known_hashes[name_key] = icon_hash
-            continue
+            software_entries = []
+        for entry in software_entries:
+            if not isinstance(entry, dict):
+                continue
+            name_key = normalize_text(entry.get("name")).lower()
+            if not name_key or name_key in known_hashes:
+                continue
+            rule = override_rules.get(name_key)
+            if not isinstance(rule, dict) or _coerce_bool(rule.get("clear_icon")):
+                continue
+            metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else entry
+            icon_hash = _extract_known_override_hash_from_metadata(metadata, rule)
+            if icon_hash:
+                known_hashes[name_key] = icon_hash
     return known_hashes
 
 
