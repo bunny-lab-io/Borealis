@@ -93,6 +93,21 @@ _WINDOWS_UNINSTALL_RULES: List[Dict[str, Any]] = [
     },
 ]
 
+_WINDOWS_QUIET_UNINSTALL_BLOCKLIST: List[Dict[str, Any]] = [
+    {
+        "rule_id": "fedora_media_writer_quiet_string_interactive",
+        "source": "local_installed",
+        "publisher_contains_any": ["fedora project"],
+        "name_contains_any": ["fedora media writer"],
+        "exe_names": ["uninstall.exe"],
+        "quiet_args_any": ["/s"],
+        "reason": (
+            "Fedora Media Writer's registered QuietUninstallString still prompts for confirmation. "
+            "Borealis blocks automated uninstall for this title until a verified unattended command is known."
+        ),
+    },
+]
+
 
 def normalize_text(value: Any) -> str:
     if value is None:
@@ -368,6 +383,34 @@ def _match_windows_rule(entry: Dict[str, Any], uninstall_string: str, executable
     return None
 
 
+def _match_blocked_quiet_uninstall(entry: Dict[str, Any], quiet_uninstall_string: str) -> Optional[Dict[str, Any]]:
+    metadata = software_metadata(entry)
+    source = normalize_software_source(entry.get("source"))
+    name = normalize_text(entry.get("name"))
+    publisher = normalize_text(metadata.get("publisher"))
+    parsed = split_windows_command_line(quiet_uninstall_string)
+    executable_name = normalize_text((parsed or {}).get("executable_name")).lower()
+    arguments = normalize_text((parsed or {}).get("arguments"))
+
+    for rule in _WINDOWS_QUIET_UNINSTALL_BLOCKLIST:
+        if normalize_software_source(rule.get("source")) != source:
+            continue
+        publishers = [normalize_text(item).lower() for item in rule.get("publisher_contains_any") or [] if normalize_text(item)]
+        if publishers and not any(item in publisher.lower() for item in publishers):
+            continue
+        names = [normalize_text(item).lower() for item in rule.get("name_contains_any") or [] if normalize_text(item)]
+        if names and not any(item in name.lower() for item in names):
+            continue
+        exe_names = [normalize_text(item).lower() for item in rule.get("exe_names") or [] if normalize_text(item)]
+        if exe_names and executable_name not in exe_names:
+            continue
+        quiet_args = [normalize_text(item) for item in rule.get("quiet_args_any") or [] if normalize_text(item)]
+        if quiet_args and not any(option_present(arguments, item) for item in quiet_args):
+            continue
+        return rule
+    return None
+
+
 def _resolve_windows_install_location_rule(entry: Dict[str, Any], metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     name = normalize_text(entry.get("name"))
     name_lower = name.lower()
@@ -488,6 +531,9 @@ def resolve_windows_uninstall_plan(entry: Dict[str, Any]) -> Dict[str, Any]:
     product_code = normalize_text(metadata.get("product_code"))
 
     if quiet_uninstall_string:
+        blocked_quiet_rule = _match_blocked_quiet_uninstall(entry, quiet_uninstall_string)
+        if blocked_quiet_rule is not None:
+            return _unsupported(normalize_text(blocked_quiet_rule.get("reason")))
         return _supported(
             strategy="direct_command",
             summary="Uses the registry quiet uninstall string.",

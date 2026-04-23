@@ -1559,6 +1559,77 @@ def test_device_software_uninstall_supports_install_location_derived_windows_rul
     ]
 
 
+def test_device_software_uninstall_blocks_known_interactive_quiet_string(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _set_test_device_software(
+        engine_harness,
+        [
+            {
+                "name": "Fedora Media Writer",
+                "version": "5.2.8",
+                "source": "local_installed",
+                "metadata": {
+                    "publisher": "Fedora Project",
+                    "install_location": "C:\\Program Files\\Fedora Media Writer",
+                    "quiet_uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe" /S',
+                    "uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe"',
+                },
+            }
+        ],
+    )
+
+    detail_response = client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software = detail_response.get_json()["software"]
+    assert software == [
+        {
+            "name": "Fedora Media Writer",
+            "version": "5.2.8",
+            "source": "local_installed",
+            "metadata": {
+                "publisher": "Fedora Project",
+                "install_location": "C:\\Program Files\\Fedora Media Writer",
+                "quiet_uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe" /S',
+                "uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe"',
+            },
+            "uninstall": {
+                "supported": False,
+                "reason": (
+                    "Fedora Media Writer's registered QuietUninstallString still prompts for confirmation. "
+                    "Borealis blocks automated uninstall for this title until a verified unattended command is known."
+                ),
+                "summary": "",
+                "strategy": "",
+                "rule_id": "",
+                "quiet_uninstall_string": "",
+                "uninstall_string": "",
+                "product_code": "",
+                "package_family_name": "",
+            },
+        }
+    ]
+
+    response = client.post(
+        "/api/device/software/test-device/uninstall",
+        json={
+            "name": "Fedora Media Writer",
+            "version": "5.2.8",
+            "source": "local_installed",
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["error"] == "software_uninstall_unsupported"
+    assert (
+        payload["message"]
+        == "Fedora Media Writer's registered QuietUninstallString still prompts for confirmation. "
+        "Borealis blocks automated uninstall for this title until a verified unattended command is known."
+    )
+
+
 def test_device_software_uninstall_marks_steam_protocol_titles_as_unsupported(
     engine_harness: EngineTestHarness,
 ) -> None:
