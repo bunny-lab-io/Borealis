@@ -5,6 +5,7 @@ import {
   Box,
   Typography,
   Button,
+  Divider,
   Menu,
   MenuItem,
   Dialog,
@@ -14,6 +15,7 @@ import {
   TextField,
   CircularProgress,
   Link as MuiLink,
+  Tooltip,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import CachedIcon from "@mui/icons-material/Cached";
@@ -21,6 +23,10 @@ import SyncIcon from "@mui/icons-material/Sync";
 import PolylineIcon from "@mui/icons-material/Polyline";
 import CodeIcon from "@mui/icons-material/Code";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
+import OpenInNewRoundedIcon from "@mui/icons-material/OpenInNewRounded";
+import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
+import DriveFileRenameOutlineRoundedIcon from "@mui/icons-material/DriveFileRenameOutlineRounded";
+import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { ConfirmDeleteDialog, NewWorkflowDialog } from "../Dialogs";
@@ -227,6 +233,122 @@ const MENU_PROPS = {
   },
 };
 
+const ACTION_MENU_PAPER_SX = {
+  bgcolor: "rgba(8,12,24,0.96)",
+  border: "1px solid rgba(148, 163, 184, 0.35)",
+  backdropFilter: "blur(14px)",
+  borderRadius: 2,
+  minWidth: 288,
+  px: 0.8,
+  py: 0.8,
+};
+
+const ACTION_MENU_ITEM_SX = {
+  minHeight: 42,
+  borderRadius: 1.6,
+  color: "#e2e8f0",
+  alignItems: "center",
+  px: 1,
+  py: 0.85,
+  position: "relative",
+  overflow: "hidden",
+  "&:hover": {
+    backgroundColor: "rgba(88,166,255,0.12)",
+  },
+  "&::before": {
+    content: '""',
+    position: "absolute",
+    left: 0,
+    top: 8,
+    bottom: 8,
+    width: 3,
+    borderRadius: 999,
+    background: "transparent",
+    transition: "background-color 0.16s ease",
+  },
+  "&:hover::before": {
+    background: BOREALIS_BLUE,
+  },
+};
+
+const ACTION_MENU_DANGER_ITEM_SX = {
+  ...ACTION_MENU_ITEM_SX,
+  "&:hover": {
+    backgroundColor: "rgba(248,113,113,0.1)",
+  },
+  "&:hover::before": {
+    background: BOREALIS_BLUE,
+  },
+};
+
+const ACTION_MENU_SECTION_LABEL_SX = {
+  px: 1.2,
+  pt: 0.65,
+  pb: 0.45,
+  color: "rgba(148,163,184,0.72)",
+  fontSize: "0.68rem",
+  fontWeight: 700,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
+const ACTION_MENU_DIVIDER_SX = {
+  my: 0.55,
+  borderColor: "rgba(148,163,184,0.16)",
+};
+
+const ACTION_MENU_HEADER_SX = {
+  display: "flex",
+  alignItems: "center",
+  gap: 1,
+  px: 1.1,
+  pt: 0.55,
+  pb: 0.85,
+};
+
+const ACTION_MENU_HEADER_ICON_SX = {
+  width: 32,
+  height: 32,
+  borderRadius: 1.35,
+  flexShrink: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  border: "1px solid rgba(148,163,184,0.14)",
+  background: "rgba(255,255,255,0.04)",
+  color: "#8fd3ff",
+};
+
+const ACTION_MENU_ROW_ICON_SX = {
+  mt: 0.18,
+  mr: 1,
+  fontSize: 18,
+  flexShrink: 0,
+};
+
+const ACTION_MENU_LABEL_SX = {
+  color: "#e2e8f0",
+  fontSize: "0.84rem",
+  fontWeight: 500,
+  lineHeight: 1.2,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+const ACTION_MENU_DESCRIPTION_SX = {
+  color: "rgba(148,163,184,0.78)",
+  fontSize: "0.73rem",
+  lineHeight: 1.25,
+  mt: 0.25,
+};
+
+const ACTION_MENU_TITLE_TRUNCATE_SX = {
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
 const TYPE_METADATA = {
   workflow: {
     label: "Workflow",
@@ -240,6 +362,24 @@ const TYPE_METADATA = {
     label: "Playbook",
     Icon: MenuBookIcon,
   },
+};
+
+const ACTION_MENU_GROUP_LABELS = {
+  primary: "Primary",
+  organize: "Organize",
+  danger: "Danger Zone",
+  view: "View",
+};
+
+const ACTION_MENU_GROUP_ORDER = ["primary", "organize", "danger", "view"];
+
+const buildAssemblyContextSubtitle = (row) => {
+  if (!row) return "";
+  const typeLabel = TYPE_METADATA[row.typeKey]?.label || "Assembly";
+  const locationLabel = row.pathDisplay || "";
+  return [typeLabel, row.domainLabel || resolveDomainMeta(row.domain).label, locationLabel]
+    .filter(Boolean)
+    .join(" • ");
 };
 
 // Clickable name that opens the corresponding editor, styled in Borealis blue
@@ -770,39 +910,39 @@ export default function AssemblyList() {
   }, [catalogStatus.hasChecked, isAdmin, rows]);
 
   const handleCellContextMenu = useCallback((params) => {
-    params.event?.preventDefault();
-    setActiveRow(params?.data || null);
-    setContextMenu(
-      params?.event
-        ? {
-            mouseX: params.event.clientX + 2,
-            mouseY: params.event.clientY - 6,
-          }
-        : null,
-    );
+    const mouseEvent = params?.event;
+    if (!mouseEvent) return;
+    mouseEvent.preventDefault?.();
+    mouseEvent.stopPropagation?.();
+    const node = params?.node;
+    if (node && !node.isSelected?.()) {
+      node.setSelected?.(true, true);
+    }
+    setActiveRow(params?.data || node?.data || null);
+    setContextMenu({
+      mouseX: mouseEvent.clientX + 2,
+      mouseY: mouseEvent.clientY - 6,
+    });
   }, []);
 
-  const closeContextMenu = () => setContextMenu(null);
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
-  const startRename = () => {
+  const startRename = useCallback(() => {
     if (!activeRow) return;
     setRenameValue(activeRow.name || activeRow.fileName || "");
     setRenameDialogOpen(true);
-    closeContextMenu();
-  };
+  }, [activeRow]);
 
-  const startClone = () => {
+  const startClone = useCallback(() => {
     if (!activeRow || !activeRow.assemblyGuid) return;
     const defaultTarget = activeRow.domain === "user" ? "community" : "user";
     setCloneDialog({ open: true, row: activeRow, targetDomain: defaultTarget });
-    closeContextMenu();
-  };
+  }, [activeRow]);
 
-  const startDelete = () => {
+  const startDelete = useCallback(() => {
     if (!activeRow) return;
     setDeleteDialogOpen(true);
-    closeContextMenu();
-  };
+  }, [activeRow]);
 
   const handleCloneClose = () => setCloneDialog({ open: false, row: null, targetDomain: "user" });
 
@@ -1044,6 +1184,209 @@ export default function AssemblyList() {
     }),
     [catalogStatus.hasChecked, isAdmin, openRow, requestOfficialUpdate],
   );
+
+  const contextMenuSubject = useMemo(() => {
+    if (!activeRow) {
+      return {
+        title: "Assembly",
+        subtitle: "",
+        Icon: AppsIcon,
+      };
+    }
+
+    return {
+      title: activeRow.name || activeRow.fileName || activeRow.assemblyGuid || "Assembly",
+      subtitle: buildAssemblyContextSubtitle(activeRow),
+      Icon: TYPE_METADATA[activeRow.typeKey]?.Icon || AppsIcon,
+    };
+  }, [activeRow]);
+
+  const contextMenuActions = useMemo(() => {
+    const row = activeRow;
+    const hasAssemblyGuid = Boolean(row?.assemblyGuid);
+    const cloneDisabledReason = !hasAssemblyGuid
+      ? "This assembly must be saved before it can be cloned."
+      : !isAdmin && row?.domain !== "user"
+      ? "Administrator access is required to clone community or official assemblies."
+      : "";
+    const shouldShowAuroraAction = Boolean(row?.officialManaged || row?.officialUpdateAvailable);
+    const auroraDisabledReason = !catalogStatus.hasChecked
+      ? "Check Aurora for updates first."
+      : !row?.officialUpdateAvailable
+      ? "This assembly is already on the latest Aurora version."
+      : !isAdmin
+      ? "Administrator access is required to apply Aurora updates."
+      : "";
+    const renameDisabledReason = !hasAssemblyGuid ? "This assembly must be saved before it can be renamed." : "";
+    const deleteDisabledReason = !hasAssemblyGuid ? "This assembly must be saved before it can be deleted." : "";
+
+    return [
+      {
+        id: "open",
+        group: "primary",
+        label: "Open",
+        icon: OpenInNewRoundedIcon,
+        hidden: !row,
+        disabled: !row,
+        onClick: () => openRow(row),
+      },
+      {
+        id: "update-from-aurora",
+        group: "primary",
+        label: "Update from Aurora",
+        icon: SyncIcon,
+        hidden: !row || !shouldShowAuroraAction,
+        disabled: Boolean(auroraDisabledReason),
+        disabledReason: auroraDisabledReason,
+        description: row?.officialUpdateAvailable ? "Install the latest published Aurora version." : "",
+        onClick: () => requestOfficialUpdate(row),
+      },
+      {
+        id: "clone",
+        group: "organize",
+        label: "Clone",
+        icon: ContentCopyRoundedIcon,
+        hidden: !row,
+        disabled: Boolean(cloneDisabledReason),
+        disabledReason: cloneDisabledReason,
+        description:
+          row?.domain === "user"
+            ? "Create a community copy of this assembly."
+            : "Create a user copy of this assembly.",
+        onClick: startClone,
+      },
+      {
+        id: "rename",
+        group: "organize",
+        label: "Rename",
+        icon: DriveFileRenameOutlineRoundedIcon,
+        hidden: !row,
+        disabled: Boolean(renameDisabledReason),
+        disabledReason: renameDisabledReason,
+        onClick: startRename,
+      },
+      {
+        id: "delete",
+        group: "danger",
+        label: "Delete",
+        icon: DeleteOutlineRoundedIcon,
+        intent: "danger",
+        hidden: !row,
+        disabled: Boolean(deleteDisabledReason),
+        disabledReason: deleteDisabledReason,
+        description: row ? "Permanently removes this assembly from Borealis." : "",
+        onClick: startDelete,
+      },
+    ];
+  }, [
+    activeRow,
+    catalogStatus.hasChecked,
+    isAdmin,
+    openRow,
+    requestOfficialUpdate,
+    startClone,
+    startDelete,
+    startRename,
+  ]);
+
+  const renderContextMenuItems = useCallback(
+    (closeMenu) => {
+      const visibleActions = contextMenuActions.filter((action) => !action.hidden);
+      const groups = ACTION_MENU_GROUP_ORDER
+        .map((groupId) => ({
+          id: groupId,
+          label: ACTION_MENU_GROUP_LABELS[groupId],
+          actions: visibleActions.filter((action) => action.group === groupId),
+        }))
+        .filter((group) => group.actions.length);
+
+      const SubjectIcon = contextMenuSubject.Icon || AppsIcon;
+      const nodes = [
+        <Box key="context-header" component="li" role="presentation" sx={ACTION_MENU_HEADER_SX}>
+          <Box sx={ACTION_MENU_HEADER_ICON_SX}>
+            <SubjectIcon sx={{ fontSize: 19, color: "currentColor" }} />
+          </Box>
+          <Box sx={{ minWidth: 0 }}>
+            <Tooltip title={contextMenuSubject.title || ""} placement="top-start">
+              <Typography
+                sx={{
+                  ...ACTION_MENU_TITLE_TRUNCATE_SX,
+                  color: "#e2e8f0",
+                  fontSize: "0.88rem",
+                  fontWeight: 600,
+                  lineHeight: 1.2,
+                  maxWidth: 240,
+                }}
+              >
+                {contextMenuSubject.title}
+              </Typography>
+            </Tooltip>
+            <Tooltip title={contextMenuSubject.subtitle || ""} placement="top-start">
+              <Typography
+                sx={{
+                  ...ACTION_MENU_TITLE_TRUNCATE_SX,
+                  color: "rgba(148,163,184,0.82)",
+                  fontSize: "0.73rem",
+                  lineHeight: 1.25,
+                  mt: 0.22,
+                  maxWidth: 240,
+                }}
+              >
+                {contextMenuSubject.subtitle}
+              </Typography>
+            </Tooltip>
+          </Box>
+        </Box>,
+      ];
+
+      groups.forEach((group) => {
+        nodes.push(<Divider key={`divider-before-${group.id}`} component="li" sx={ACTION_MENU_DIVIDER_SX} />);
+        nodes.push(
+          <Box key={`label-${group.id}`} component="li" role="presentation" sx={ACTION_MENU_SECTION_LABEL_SX}>
+            {group.label}
+          </Box>,
+        );
+        group.actions.forEach((action) => {
+          const IconComponent = action.icon;
+          const helperText = action.disabledReason || action.description || "";
+          nodes.push(
+            <MenuItem
+              key={action.id}
+              disabled={Boolean(action.disabled)}
+              onClick={() => {
+                closeMenu();
+                action.onClick?.();
+              }}
+              sx={action.intent === "danger" ? ACTION_MENU_DANGER_ITEM_SX : ACTION_MENU_ITEM_SX}
+            >
+              <IconComponent
+                sx={{
+                  ...ACTION_MENU_ROW_ICON_SX,
+                  color: action.intent === "danger" ? "rgba(248,113,113,0.92)" : "rgba(226,232,240,0.92)",
+                }}
+              />
+              <Box
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: helperText ? "flex-start" : "center",
+                }}
+              >
+                <Typography sx={ACTION_MENU_LABEL_SX}>{action.label}</Typography>
+                {helperText ? <Typography sx={ACTION_MENU_DESCRIPTION_SX}>{helperText}</Typography> : null}
+              </Box>
+            </MenuItem>,
+          );
+        });
+      });
+
+      return nodes;
+    },
+    [contextMenuActions, contextMenuSubject],
+  );
+
   const compareAssemblyNames = useCallback(
     (valueA, valueB, nodeA, nodeB) => {
       if (catalogStatus.hasChecked) {
@@ -1436,6 +1779,8 @@ export default function AssemblyList() {
                 enableClickSelection: true,
               }}
               suppressCellFocus
+              suppressContextMenu
+              preventDefaultOnContextMenu
               pagination
               paginationPageSize={PAGE_SIZE}
               paginationPageSizeSelector={[25, 50, 100]}
@@ -1476,33 +1821,9 @@ export default function AssemblyList() {
         onClose={closeContextMenu}
         anchorReference="anchorPosition"
         anchorPosition={contextMenu ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined}
-        PaperProps={MENU_PROPS.PaperProps}
+        PaperProps={{ sx: ACTION_MENU_PAPER_SX }}
       >
-        <MenuItem
-          onClick={() => {
-            closeContextMenu();
-            openRow(activeRow);
-          }}
-        >
-          Open
-        </MenuItem>
-        {activeRow?.assemblyGuid && (isAdmin || activeRow.domain === "user") ? (
-          <MenuItem onClick={startClone}>Clone</MenuItem>
-        ) : null}
-        {catalogStatus.hasChecked && activeRow?.officialUpdateAvailable && isAdmin ? (
-          <MenuItem
-            onClick={() => {
-              closeContextMenu();
-              requestOfficialUpdate(activeRow);
-            }}
-          >
-            Update from Aurora
-          </MenuItem>
-        ) : null}
-        <MenuItem onClick={startRename}>Rename</MenuItem>
-        <MenuItem sx={{ color: "#ff8a8a" }} onClick={startDelete}>
-          Delete
-        </MenuItem>
+        {renderContextMenuItems(closeContextMenu)}
       </Menu>
       <Dialog open={renameDialogOpen} onClose={() => setRenameDialogOpen(false)} maxWidth="xs" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
         <DialogTitle sx={DIALOG_TITLE_SX}>

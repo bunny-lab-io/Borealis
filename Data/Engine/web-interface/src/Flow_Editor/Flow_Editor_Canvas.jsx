@@ -18,7 +18,7 @@ import ReactFlow, {
   useReactFlow
 } from "reactflow";
 
-import { Menu, MenuItem, Box, ListItemText } from "@mui/material";
+import { Box, Divider, Menu, MenuItem, Tooltip, Typography } from "@mui/material";
 import {
   Polyline as PolylineIcon,
   DeleteForever as DeleteForeverIcon,
@@ -34,6 +34,275 @@ const DEFAULT_EDGE_OPTIONS = {
   animated: true,
   style: { strokeDasharray: "6 3", stroke: "#58a6ff" },
 };
+
+const ACTION_MENU_PAPER_SX = {
+  bgcolor: "rgba(8,12,24,0.96)",
+  border: "1px solid rgba(148, 163, 184, 0.35)",
+  backdropFilter: "blur(14px)",
+  borderRadius: 2,
+  minWidth: 288,
+  px: 0.8,
+  py: 0.8,
+};
+
+const ACTION_MENU_COMPACT_PAPER_SX = {
+  ...ACTION_MENU_PAPER_SX,
+  minWidth: 248,
+};
+
+const ACTION_MENU_ITEM_SX = {
+  minHeight: 42,
+  borderRadius: 1.6,
+  color: "#e2e8f0",
+  alignItems: "center",
+  px: 1,
+  py: 0.85,
+  position: "relative",
+  overflow: "hidden",
+  "&:hover": {
+    backgroundColor: "rgba(88,166,255,0.12)",
+  },
+  "&.Mui-selected": {
+    backgroundColor: "rgba(88,166,255,0.16)",
+  },
+  "&.Mui-selected:hover": {
+    backgroundColor: "rgba(88,166,255,0.22)",
+  },
+  "&::before": {
+    content: '""',
+    position: "absolute",
+    left: 0,
+    top: 8,
+    bottom: 8,
+    width: 3,
+    borderRadius: 999,
+    background: "transparent",
+    transition: "background-color 0.16s ease",
+  },
+  "&:hover::before, &.Mui-selected::before": {
+    background: "#58a6ff",
+  },
+};
+
+const ACTION_MENU_DANGER_ITEM_SX = {
+  ...ACTION_MENU_ITEM_SX,
+  "&:hover": {
+    backgroundColor: "rgba(248,113,113,0.1)",
+  },
+  "&.Mui-selected": {
+    backgroundColor: "rgba(248,113,113,0.14)",
+  },
+  "&.Mui-selected:hover": {
+    backgroundColor: "rgba(248,113,113,0.18)",
+  },
+  "&:hover::before, &.Mui-selected::before": {
+    background: "#58a6ff",
+  },
+};
+
+const ACTION_MENU_SECTION_LABEL_SX = {
+  px: 1.2,
+  pt: 0.65,
+  pb: 0.45,
+  color: "rgba(148,163,184,0.72)",
+  fontSize: "0.68rem",
+  fontWeight: 700,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
+const ACTION_MENU_DIVIDER_SX = {
+  my: 0.55,
+  borderColor: "rgba(148,163,184,0.16)",
+};
+
+const ACTION_MENU_HEADER_SX = {
+  display: "flex",
+  alignItems: "center",
+  gap: 1,
+  px: 1.1,
+  pt: 0.55,
+  pb: 0.85,
+};
+
+const ACTION_MENU_HEADER_ICON_SX = {
+  width: 32,
+  height: 32,
+  borderRadius: 1.35,
+  flexShrink: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  border: "1px solid rgba(148,163,184,0.14)",
+  background: "rgba(255,255,255,0.04)",
+  color: "#8fd3ff",
+};
+
+const ACTION_MENU_ROW_ICON_SX = {
+  mt: 0.18,
+  mr: 1,
+  fontSize: 18,
+  flexShrink: 0,
+};
+
+const ACTION_MENU_LABEL_SX = {
+  color: "#e2e8f0",
+  fontSize: "0.84rem",
+  fontWeight: 500,
+  lineHeight: 1.2,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+const ACTION_MENU_DESCRIPTION_SX = {
+  color: "rgba(148,163,184,0.78)",
+  fontSize: "0.73rem",
+  lineHeight: 1.25,
+  mt: 0.25,
+};
+
+const ACTION_MENU_TITLE_TRUNCATE_SX = {
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+const ACTION_MENU_GROUP_LABELS = {
+  primary: "Primary",
+  organize: "Organize",
+  danger: "Danger Zone",
+  view: "View",
+};
+
+const ACTION_MENU_GROUP_ORDER = ["primary", "organize", "danger", "view"];
+
+function routeDescriptor(route) {
+  const normalized = String(route || WORKFLOW_RUNTIME_EDGE_ROUTES[0]?.value || "").trim().toLowerCase();
+  return WORKFLOW_RUNTIME_EDGE_ROUTES.find((entry) => entry.value === normalized) || WORKFLOW_RUNTIME_EDGE_ROUTES[0];
+}
+
+function workflowNodeLabel(node) {
+  if (!node) return "Workflow Node";
+  return getWorkflowRuntimeDisplayLabel(node.type, node.data?.label || node.id);
+}
+
+function workflowEdgeNodeLabel(node) {
+  return node ? workflowNodeLabel(node) : "Unknown node";
+}
+
+function WorkflowContextMenuContent({ subject, actions, onClose }) {
+  const groups = ACTION_MENU_GROUP_ORDER
+    .map((groupId) => ({
+      id: groupId,
+      label: ACTION_MENU_GROUP_LABELS[groupId],
+      actions: actions.filter((action) => !action.hidden && action.group === groupId),
+    }))
+    .filter((group) => group.actions.length);
+  const SubjectIcon = subject?.Icon || PolylineIcon;
+
+  return (
+    <>
+      <Box key="context-header" component="li" role="presentation" sx={ACTION_MENU_HEADER_SX}>
+        <Box sx={ACTION_MENU_HEADER_ICON_SX}>
+          <SubjectIcon sx={{ fontSize: 19, color: "currentColor" }} />
+        </Box>
+        <Box sx={{ minWidth: 0 }}>
+          <Tooltip title={subject?.title || ""} placement="top-start">
+            <Typography
+              sx={{
+                ...ACTION_MENU_TITLE_TRUNCATE_SX,
+                color: "#e2e8f0",
+                fontSize: "0.88rem",
+                fontWeight: 600,
+                lineHeight: 1.2,
+                maxWidth: 240,
+              }}
+            >
+              {subject?.title || "Workflow"}
+            </Typography>
+          </Tooltip>
+          <Tooltip title={subject?.subtitle || ""} placement="top-start">
+            <Typography
+              sx={{
+                ...ACTION_MENU_TITLE_TRUNCATE_SX,
+                color: "rgba(148,163,184,0.82)",
+                fontSize: "0.73rem",
+                lineHeight: 1.25,
+                mt: 0.22,
+                maxWidth: 240,
+              }}
+            >
+              {subject?.subtitle || "Context actions"}
+            </Typography>
+          </Tooltip>
+        </Box>
+      </Box>
+      {groups.map((group) => (
+        <React.Fragment key={group.id}>
+          <Divider component="li" sx={ACTION_MENU_DIVIDER_SX} />
+          <Box component="li" role="presentation" sx={ACTION_MENU_SECTION_LABEL_SX}>
+            {group.label}
+          </Box>
+          {group.actions.map((action) => {
+            const IconComponent = action.icon;
+            const helperText = action.disabledReason || action.description || "";
+            return (
+              <MenuItem
+                key={action.id}
+                selected={Boolean(action.selected)}
+                disabled={Boolean(action.disabled)}
+                onClick={(event) => {
+                  if (action.keepOpen) {
+                    action.onClick?.(event);
+                    return;
+                  }
+                  onClose?.();
+                  action.onClick?.(event);
+                }}
+                sx={action.intent === "danger" ? ACTION_MENU_DANGER_ITEM_SX : ACTION_MENU_ITEM_SX}
+              >
+                {action.dotColor ? (
+                  <Box
+                    sx={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: "50%",
+                      bgcolor: action.dotColor,
+                      mr: 1.15,
+                      flexShrink: 0,
+                      boxShadow: `0 0 0 1px ${action.dotColor}55`,
+                    }}
+                  />
+                ) : (
+                  <IconComponent
+                    sx={{
+                      ...ACTION_MENU_ROW_ICON_SX,
+                      color: action.intent === "danger" ? "rgba(248,113,113,0.92)" : "rgba(226,232,240,0.92)",
+                    }}
+                  />
+                )}
+                <Box
+                  sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: helperText ? "flex-start" : "center",
+                  }}
+                >
+                  <Typography sx={ACTION_MENU_LABEL_SX}>{action.label}</Typography>
+                  {helperText ? <Typography sx={ACTION_MENU_DESCRIPTION_SX}>{helperText}</Typography> : null}
+                </Box>
+                {action.trailingIcon ? action.trailingIcon : null}
+              </MenuItem>
+            );
+          })}
+        </React.Fragment>
+      ))}
+    </>
+  );
+}
 
 export default function FlowEditorCanvas({
   flowId,
@@ -74,6 +343,12 @@ export default function FlowEditorCanvas({
   const selectedNodeTitle = selectedNode
     ? getWorkflowRuntimeDisplayLabel(selectedNode.type, selectedNode.data?.label || selectedNode.id)
     : "";
+  const contextMenuNode = nodeContextMenu?.nodeId
+    ? nodes.find((node) => node.id === nodeContextMenu.nodeId) || null
+    : null;
+  const contextMenuNodeDef = contextMenuNode
+    ? Object.values(workflowCategorizedNodes).flat().find((def) => def.type === contextMenuNode.type) || null
+    : null;
   const nodesById = React.useMemo(
     () =>
       (Array.isArray(nodes) ? nodes : []).reduce((acc, node) => {
@@ -88,15 +363,22 @@ export default function FlowEditorCanvas({
   const contextMenuEdgePorts = contextMenuEdge
     ? getWorkflowEdgePortMetadata(contextMenuEdge, nodesById)
     : {};
+  const contextMenuRoute = routeDescriptor(contextMenuEdge?.data?.route_on);
 
   // --------- Context Menu Handlers ----------
   const handleRightClick = (e, node) => {
     e.preventDefault();
+    e.stopPropagation();
+    setEdgeContextMenu(null);
+    setEdgeRouteMenu(null);
     setNodeContextMenu({ mouseX: e.clientX + 2, mouseY: e.clientY - 6, nodeId: node.id });
   };
 
   const handleEdgeRightClick = (e, edge) => {
     e.preventDefault();
+    e.stopPropagation();
+    setNodeContextMenu(null);
+    setEdgeRouteMenu(null);
     setEdgeContextMenu({ mouseX: e.clientX + 2, mouseY: e.clientY - 6, edgeId: edge.id });
   };
 
@@ -343,6 +625,158 @@ export default function FlowEditorCanvas({
     }
   }, [onSelectedNodeChange, selectedNodeId, selectedNodeRun]);
 
+  const nodeMenuSubject = React.useMemo(
+    () => ({
+      title: workflowNodeLabel(contextMenuNode),
+      subtitle: [
+        contextMenuNodeDef?.label || contextMenuNode?.type || "Workflow node",
+        readOnly ? "Read-only" : "Editable",
+      ].filter(Boolean).join(" / "),
+      Icon: EditIcon,
+    }),
+    [contextMenuNode, contextMenuNodeDef, readOnly]
+  );
+
+  const nodeMenuActions = React.useMemo(
+    () => {
+      const nodeId = contextMenuNode?.id || "";
+      const readOnlyReason = readOnly ? "Workflow run snapshots are read-only." : "";
+      return [
+        {
+          id: "node-edit",
+          group: "primary",
+          label: readOnly ? "View Details" : "Edit Properties",
+          icon: EditIcon,
+          disabled: !nodeId,
+          disabledReason: !nodeId ? "Select a workflow node first." : "",
+          onClick: () => handleEditNodeProps(nodeId),
+        },
+        {
+          id: "node-disconnect",
+          group: "organize",
+          label: "Disconnect All Edges",
+          icon: PolylineIcon,
+          disabled: !nodeId || readOnly,
+          disabledReason: !nodeId ? "Select a workflow node first." : readOnlyReason,
+          description: "Remove every connection to and from this node.",
+          onClick: () => handleDisconnectAllEdges(nodeId),
+        },
+        {
+          id: "node-remove",
+          group: "danger",
+          label: "Remove Node",
+          icon: DeleteForeverIcon,
+          intent: "danger",
+          disabled: !nodeId || readOnly,
+          disabledReason: !nodeId ? "Select a workflow node first." : readOnlyReason,
+          description: "Deletes this node and any attached edges.",
+          onClick: () => handleRemoveNode(nodeId),
+        },
+      ];
+    },
+    [contextMenuNode, handleDisconnectAllEdges, handleEditNodeProps, handleRemoveNode, readOnly]
+  );
+
+  const edgeMenuSubject = React.useMemo(
+    () => {
+      const sourceLabel = workflowEdgeNodeLabel(contextMenuEdgePorts?.sourceNode);
+      const targetLabel = workflowEdgeNodeLabel(contextMenuEdgePorts?.targetNode);
+      const portLabel = [
+        contextMenuEdgePorts?.sourcePort?.label || contextMenuEdge?.sourceHandle || "",
+        contextMenuEdgePorts?.targetPort?.label || contextMenuEdge?.targetHandle || "",
+      ].filter(Boolean).join(" -> ");
+      return {
+        title: contextMenuEdge ? `${sourceLabel} -> ${targetLabel}` : "Workflow Edge",
+        subtitle: [
+          portLabel || "Workflow connection",
+          contextMenuEdgePorts?.supportsRouteSelection ? contextMenuRoute?.label : "",
+          readOnly ? "Read-only" : "Editable",
+        ].filter(Boolean).join(" / "),
+        Icon: PolylineIcon,
+      };
+    },
+    [
+      contextMenuEdge,
+      contextMenuEdgePorts,
+      contextMenuRoute,
+      readOnly,
+    ]
+  );
+
+  const edgeMenuActions = React.useMemo(
+    () => {
+      const edgeId = contextMenuEdge?.id || "";
+      const readOnlyReason = readOnly ? "Workflow run snapshots are read-only." : "";
+      return [
+        {
+          id: "edge-edit",
+          group: "primary",
+          label: "Edit Properties",
+          icon: EditIcon,
+          disabled: !edgeId || readOnly,
+          disabledReason: !edgeId ? "Select a workflow edge first." : readOnlyReason,
+          onClick: () => handleEditEdgeProps(edgeId),
+        },
+        {
+          id: "edge-route",
+          group: "primary",
+          label: "Flow Control",
+          icon: PolylineIcon,
+          hidden: !contextMenuEdgePorts?.supportsRouteSelection,
+          disabled: !edgeId || readOnly,
+          disabledReason: !edgeId ? "Select a workflow edge first." : readOnlyReason,
+          description: contextMenuRoute?.label ? `Current route: ${contextMenuRoute.label}` : "",
+          keepOpen: true,
+          trailingIcon: <NavigateNextIcon sx={{ fontSize: 18, color: "#7dd3fc", ml: 1 }} />,
+          onClick: (event) => handleOpenEdgeRouteMenu(event, edgeId),
+        },
+        {
+          id: "edge-unlink",
+          group: "danger",
+          label: "Unlink Edge",
+          icon: DeleteForeverIcon,
+          intent: "danger",
+          disabled: !edgeId || readOnly,
+          disabledReason: !edgeId ? "Select a workflow edge first." : readOnlyReason,
+          description: "Removes this connection from the workflow.",
+          onClick: () => handleUnlinkEdge(edgeId),
+        },
+      ];
+    },
+    [
+      contextMenuEdge,
+      contextMenuEdgePorts,
+      contextMenuRoute,
+      handleEditEdgeProps,
+      handleOpenEdgeRouteMenu,
+      handleUnlinkEdge,
+      readOnly,
+    ]
+  );
+
+  const edgeRouteMenuSubject = React.useMemo(
+    () => ({
+      title: "Flow Control",
+      subtitle: contextMenuRoute?.label ? `Current route: ${contextMenuRoute.label}` : "Choose route condition",
+      Icon: PolylineIcon,
+    }),
+    [contextMenuRoute]
+  );
+
+  const edgeRouteMenuActions = React.useMemo(
+    () =>
+      WORKFLOW_RUNTIME_EDGE_ROUTES.map((route) => ({
+        id: `edge-route-${route.value}`,
+        group: "primary",
+        label: route.label,
+        icon: PolylineIcon,
+        dotColor: route.color,
+        selected: route.value === contextMenuRoute?.value,
+        onClick: () => handleQuickSetEdgeRoute(edgeRouteMenu?.edgeId, route.value),
+      })),
+    [contextMenuRoute, edgeRouteMenu, handleQuickSetEdgeRoute]
+  );
+
   // --------- MAIN RENDER ----------
   return (
     <div
@@ -438,24 +872,13 @@ export default function FlowEditorCanvas({
         onClose={() => setNodeContextMenu(null)}
         anchorReference="anchorPosition"
         anchorPosition={nodeContextMenu ? { top: nodeContextMenu.mouseY, left: nodeContextMenu.mouseX } : undefined}
-        PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" } }}
+        PaperProps={{ sx: ACTION_MENU_PAPER_SX }}
       >
-        <MenuItem onClick={() => handleEditNodeProps(nodeContextMenu.nodeId)}>
-          <EditIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} />
-          {readOnly ? "View Details" : "Edit Properties"}
-        </MenuItem>
-        {!readOnly ? (
-          <MenuItem onClick={() => handleDisconnectAllEdges(nodeContextMenu.nodeId)}>
-            <PolylineIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} />
-            Disconnect All Edges
-          </MenuItem>
-        ) : null}
-        {!readOnly ? (
-          <MenuItem onClick={() => handleRemoveNode(nodeContextMenu.nodeId)}>
-            <DeleteForeverIcon sx={{ fontSize: 18, color: "#ff4f4f", mr: 1 }} />
-            Remove Node
-          </MenuItem>
-        ) : null}
+        <WorkflowContextMenuContent
+          subject={nodeMenuSubject}
+          actions={nodeMenuActions}
+          onClose={() => setNodeContextMenu(null)}
+        />
       </Menu>
 
       {/* Edge Context Menu */}
@@ -467,54 +890,31 @@ export default function FlowEditorCanvas({
         }}
         anchorReference="anchorPosition"
         anchorPosition={edgeContextMenu ? { top: edgeContextMenu.mouseY, left: edgeContextMenu.mouseX } : undefined}
-        PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" } }}
+        PaperProps={{ sx: ACTION_MENU_PAPER_SX }}
       >
-        {!readOnly ? (
-          <MenuItem onClick={() => handleEditEdgeProps(edgeContextMenu.edgeId)}>
-            <EditIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} />
-            Edit Properties
-          </MenuItem>
-        ) : null}
-        {!readOnly && contextMenuEdgePorts?.supportsRouteSelection ? (
-          <MenuItem onClick={(event) => handleOpenEdgeRouteMenu(event, edgeContextMenu.edgeId)}>
-            <ListItemText primary="Flow Control" />
-            <NavigateNextIcon sx={{ fontSize: 18, color: "#7dd3fc", ml: 1 }} />
-          </MenuItem>
-        ) : null}
-        {!readOnly ? (
-          <MenuItem onClick={() => handleUnlinkEdge(edgeContextMenu.edgeId)}>
-            <DeleteForeverIcon sx={{ fontSize: 18, color: "#ff4f4f", mr: 1 }} />
-            Unlink Edge
-          </MenuItem>
-        ) : null}
+        <WorkflowContextMenuContent
+          subject={edgeMenuSubject}
+          actions={edgeMenuActions}
+          onClose={() => {
+            setEdgeContextMenu(null);
+            setEdgeRouteMenu(null);
+          }}
+        />
       </Menu>
 
       <Menu
         open={Boolean(edgeRouteMenu)}
         anchorEl={edgeRouteMenu?.anchorEl || null}
         onClose={handleCloseEdgeRouteMenu}
-        PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" } }}
+        PaperProps={{ sx: ACTION_MENU_COMPACT_PAPER_SX }}
         anchorOrigin={{ vertical: "top", horizontal: "right" }}
         transformOrigin={{ vertical: "top", horizontal: "left" }}
       >
-        {WORKFLOW_RUNTIME_EDGE_ROUTES.map((route) => (
-          <MenuItem
-            key={route.value}
-            onClick={() => handleQuickSetEdgeRoute(edgeRouteMenu?.edgeId, route.value)}
-          >
-            <Box
-              sx={{
-                width: 10,
-                height: 10,
-                borderRadius: "50%",
-                bgcolor: route.color,
-                mr: 1.15,
-                boxShadow: `0 0 0 1px ${route.color}55`,
-              }}
-            />
-            {route.label}
-          </MenuItem>
-        ))}
+        <WorkflowContextMenuContent
+          subject={edgeRouteMenuSubject}
+          actions={edgeRouteMenuActions}
+          onClose={handleCloseEdgeRouteMenu}
+        />
       </Menu>
     </div>
   );
