@@ -50,6 +50,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/agent/script/request` (Device Authenticated) - request work or idle signal.
 - `GET /api/agent/software-management/overrides` (Device Authenticated) - file-backed software icon override rules used by the agent `software_management` role during inventory refresh.
 - `GET /api/agent/files/transfers/<transfer_id>/upload-item/<item_id>` (Device Authenticated) - fetch one staged File Management upload item from the Engine.
+- `GET /api/agent/files/transfers/<transfer_id>/status` (Device Authenticated) - fetch one File Management transfer control snapshot so the agent can honor cancellation while streaming or archiving.
 - `POST /api/agent/files/transfers/<transfer_id>/progress` (Device Authenticated) - update Engine-side File Management transfer progress.
 - `POST /api/agent/files/transfers/<transfer_id>/content` (Device Authenticated) - upload a completed File Management download artifact back to the Engine.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
@@ -76,10 +77,12 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/device/files/<hostname>/mkdir` (Token Authenticated) - create a remote directory on an in-scope device.
 - `POST /api/device/files/<hostname>/rename` (Token Authenticated) - rename one remote file-system item on an in-scope device.
 - `POST /api/device/files/<hostname>/move` (Token Authenticated) - move remote file-system items on an in-scope device.
+- `POST /api/device/files/<hostname>/paste` (Token Authenticated) - paste copied or cut remote file-system items into a destination directory on an in-scope device.
 - `POST /api/device/files/<hostname>/delete` (Token Authenticated) - delete remote file-system items on an in-scope device.
-- `POST /api/device/files/<hostname>/upload` (Token Authenticated) - stage browser-uploaded files for transfer to an in-scope device.
+- `POST /api/device/files/<hostname>/upload` (Token Authenticated) - stage browser-uploaded files or folder manifests for transfer to an in-scope device.
 - `POST /api/device/files/<hostname>/download` (Token Authenticated) - start a remote file download transfer from an in-scope device.
 - `GET /api/device/files/<hostname>/transfer/<transfer_id>/status` (Token Authenticated) - poll a File Management transfer snapshot.
+- `POST /api/device/files/<hostname>/transfer/<transfer_id>/cancel` (Token Authenticated) - request cancellation for an in-progress File Management transfer.
 - `GET /api/device/files/<hostname>/transfer/<transfer_id>/content` (Token Authenticated) - download a completed File Management transfer artifact from Engine temp storage.
 - `POST /api/device/description/<hostname>` (Token Authenticated) - update description for an in-scope device.
 - `GET /api/device_list_views` (Token Authenticated) - list saved device views.

@@ -11,12 +11,15 @@
 # - POST /api/device/files/<hostname>/mkdir (Token Authenticated) - Creates a remote directory on an in-scope device.
 # - POST /api/device/files/<hostname>/rename (Token Authenticated) - Renames one remote file-system item on an in-scope device.
 # - POST /api/device/files/<hostname>/move (Token Authenticated) - Moves remote file-system items on an in-scope device.
+# - POST /api/device/files/<hostname>/paste (Token Authenticated) - Pastes copied or cut remote file-system items into a destination directory on an in-scope device.
 # - POST /api/device/files/<hostname>/delete (Token Authenticated) - Deletes remote file-system items on an in-scope device.
 # - POST /api/device/files/<hostname>/upload (Token Authenticated) - Stages browser-uploaded files for transfer to an in-scope device.
 # - POST /api/device/files/<hostname>/download (Token Authenticated) - Starts a remote file download transfer from an in-scope device.
 # - GET /api/device/files/<hostname>/transfer/<transfer_id>/status (Token Authenticated) - Returns a staged transfer status snapshot.
+# - POST /api/device/files/<hostname>/transfer/<transfer_id>/cancel (Token Authenticated) - Requests cancellation for a staged transfer.
 # - GET /api/device/files/<hostname>/transfer/<transfer_id>/content (Token Authenticated) - Downloads a completed transfer artifact from Engine temp storage.
 # - GET /api/agent/files/transfers/<transfer_id>/upload-item/<item_id> (Device Authenticated) - Streams one staged upload item to the device.
+# - GET /api/agent/files/transfers/<transfer_id>/status (Device Authenticated) - Returns one staged transfer control snapshot to the device.
 # - POST /api/agent/files/transfers/<transfer_id>/progress (Device Authenticated) - Updates the Engine-side transfer progress snapshot.
 # - POST /api/agent/files/transfers/<transfer_id>/content (Device Authenticated) - Uploads a completed device-side transfer artifact back to the Engine.
 # ======================================================
@@ -47,6 +50,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing helper
 
 
 FILE_TRANSFER_SESSION_TTL_SECONDS = int(os.environ.get("BOREALIS_FILE_TRANSFER_TTL_SECONDS", 60 * 60))
+
+
 def _normalize_text(value: Any) -> str:
     if value is None:
         return ""
@@ -69,6 +74,23 @@ def _sanitize_upload_name(value: Any) -> str:
         return ""
     name = Path(raw).name.strip().replace("\x00", "")
     return name
+
+
+def _sanitize_relative_upload_path(value: Any, *, fallback_name: Any = "") -> str:
+    raw = _normalize_text(value).replace("\\", "/")
+    if not raw:
+        raw = _sanitize_upload_name(fallback_name)
+    if raw.startswith("/") or raw.startswith("\\") or (len(raw) >= 2 and raw[1] == ":"):
+        return ""
+    segments: list[str] = []
+    for part in raw.split("/"):
+        normalized = _sanitize_upload_name(part)
+        if not normalized:
+            continue
+        if normalized in {".", ".."}:
+            return ""
+        segments.append(normalized)
+    return "/".join(segments)
 
 
 def _normalize_transfer_entries(value: Any) -> list[Dict[str, Any]]:
@@ -106,16 +128,22 @@ def _normalize_upload_manifest_items(value: Any) -> list[Dict[str, Any]]:
         name = _sanitize_upload_name(item.get("name") or item.get("filename"))
         if not name:
             continue
+        relative_path = _sanitize_relative_upload_path(item.get("relative_path"), fallback_name=name)
+        if not relative_path:
+            continue
+        client_key = _normalize_text(item.get("client_key")) or relative_path
         rows.append(
             {
+                "client_key": client_key,
                 "name": name,
+                "relative_path": relative_path,
                 "size_bytes": int(item.get("size_bytes") or 0),
                 "modified_at": int(item.get("modified_at") or 0),
             }
         )
     deduped: dict[str, Dict[str, Any]] = {}
     for row in rows:
-        deduped[row["name"]] = row
+        deduped[row["client_key"]] = row
     return list(deduped.values())
 
 
@@ -134,7 +162,7 @@ def _normalize_conflict_resolution_map(value: Any) -> dict[str, str]:
         return {}
     rows: dict[str, str] = {}
     for key, resolution in value.items():
-        name = _sanitize_upload_name(key)
+        name = _normalize_text(key)
         choice = _normalize_text(resolution).lower()
         if not name or choice not in {"replace", "skip"}:
             continue
@@ -158,6 +186,7 @@ def _transfer_status_snapshot(session: Dict[str, Any]) -> Dict[str, Any]:
         "transfer_id": session.get("transfer_id") or "",
         "direction": session.get("direction") or "",
         "status": session.get("status") or "pending",
+        "cancel_requested": bool(session.get("cancel_requested")),
         "bytes_complete": int(session.get("bytes_complete") or 0),
         "bytes_total": int(session.get("bytes_total") or 0),
         "item_count": int(session.get("item_count") or 0),
@@ -236,6 +265,8 @@ class FileTransferStore:
         operator_id: str,
         target_path: str,
         files: Iterable[Any],
+        manifest_items: Optional[Iterable[Dict[str, Any]]] = None,
+        overwrite_keys: Optional[Iterable[str]] = None,
         overwrite_names: Optional[Iterable[str]] = None,
     ) -> Dict[str, Any]:
         self.cleanup_expired()
@@ -245,10 +276,22 @@ class FileTransferStore:
         uploads_dir.mkdir(parents=True, exist_ok=True)
         item_rows: list[Dict[str, Any]] = []
         bytes_total = 0
-        overwrite_lookup = {_sanitize_upload_name(name): True for name in (overwrite_names or []) if _sanitize_upload_name(name)}
-        for storage in files:
-            filename = _sanitize_upload_name(getattr(storage, "filename", ""))
-            if not filename:
+        manifest_list = list(manifest_items or [])
+        upload_list = list(files or [])
+        if manifest_list and len(manifest_list) != len(upload_list):
+            shutil.rmtree(session_dir, ignore_errors=True)
+            raise ValueError("upload_manifest_mismatch")
+        overwrite_source = list(overwrite_keys or []) or list(overwrite_names or [])
+        overwrite_lookup = {_normalize_text(key): True for key in overwrite_source if _normalize_text(key)}
+        paired_rows = zip(upload_list, manifest_list) if manifest_list else (
+            (storage, {"name": getattr(storage, "filename", ""), "relative_path": getattr(storage, "filename", "")})
+            for storage in upload_list
+        )
+        for storage, manifest_row in paired_rows:
+            filename = _sanitize_upload_name((manifest_row or {}).get("name") or getattr(storage, "filename", ""))
+            relative_path = _sanitize_relative_upload_path((manifest_row or {}).get("relative_path"), fallback_name=filename)
+            client_key = _normalize_text((manifest_row or {}).get("client_key")) or relative_path
+            if not filename or not relative_path:
                 continue
             item_id = uuid.uuid4().hex
             stored_path = uploads_dir / f"{item_id}.bin"
@@ -260,10 +303,12 @@ class FileTransferStore:
             item_rows.append(
                 {
                     "item_id": item_id,
+                    "client_key": client_key,
                     "name": filename,
+                    "relative_path": relative_path,
                     "size_bytes": size_bytes,
                     "stored_path": str(stored_path),
-                    "overwrite_existing": bool(overwrite_lookup.get(filename)),
+                    "overwrite_existing": bool(overwrite_lookup.get(client_key)),
                 }
             )
             bytes_total += size_bytes
@@ -275,6 +320,7 @@ class FileTransferStore:
             "transfer_id": transfer_id,
             "direction": "upload",
             "status": "pending",
+            "cancel_requested": False,
             "bytes_complete": 0,
             "bytes_total": bytes_total,
             "item_count": len(item_rows),
@@ -318,6 +364,7 @@ class FileTransferStore:
             "transfer_id": transfer_id,
             "direction": "download",
             "status": "pending",
+            "cancel_requested": False,
             "bytes_complete": 0,
             "bytes_total": 0,
             "item_count": len(selections),
@@ -388,6 +435,37 @@ class FileTransferStore:
 
     def mark_failed(self, transfer_id: str, error: str) -> Optional[Dict[str, Any]]:
         return self.mark_progress(transfer_id, status="failed", error=_normalize_text(error) or "transfer_failed")
+
+    def request_cancel(self, transfer_id: str) -> Optional[Dict[str, Any]]:
+        normalized = _normalize_text(transfer_id)
+        if not normalized:
+            return None
+        with self._lock:
+            session = self._sessions.get(normalized)
+            if not session:
+                return None
+            session["cancel_requested"] = True
+            current_status = _normalize_text(session.get("status")).lower() or "pending"
+            if current_status not in {"completed", "failed", "canceled"}:
+                session["status"] = "canceling"
+            session["updated_at"] = int(time.time())
+            session["expires_at"] = int(time.time()) + self._ttl_seconds
+            return _transfer_status_snapshot(session)
+
+    def mark_canceled(self, transfer_id: str, error: str = "") -> Optional[Dict[str, Any]]:
+        normalized = _normalize_text(transfer_id)
+        if not normalized:
+            return None
+        with self._lock:
+            session = self._sessions.get(normalized)
+            if not session:
+                return None
+            session["cancel_requested"] = True
+            session["status"] = "canceled"
+            session["error"] = _normalize_text(error) or "Transfer canceled by operator."
+            session["updated_at"] = int(time.time())
+            session["expires_at"] = int(time.time()) + self._ttl_seconds
+            return _transfer_status_snapshot(session)
 
     def get_upload_item(self, transfer_id: str, item_id: str) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
         normalized_transfer = _normalize_text(transfer_id)
@@ -542,6 +620,7 @@ def _rpc_error_response(response: Any) -> Tuple[Dict[str, Any], int]:
         "permission_denied": 403,
         "conflict": 409,
         "path_conflict": 409,
+        "transfer_canceled": 409,
         "agent_unavailable": 503,
         "timeout": 504,
     }.get(error_code, 502)
@@ -570,6 +649,39 @@ def _call_file_management_rpc(
     if response.get("ok") is False:
         return None, _rpc_error_response(response)
     return response, None
+
+
+def _upload_manifest_from_form(form_value: Any, files: Iterable[Any]) -> list[Dict[str, Any]]:
+    raw_value = form_value
+    if isinstance(raw_value, str):
+        raw_value = raw_value.strip()
+        if raw_value:
+            try:
+                import json
+
+                raw_value = json.loads(raw_value)
+            except Exception:
+                raw_value = []
+        else:
+            raw_value = []
+    manifest_items = _normalize_upload_manifest_items(raw_value)
+    if manifest_items:
+        return manifest_items
+    fallback_rows = []
+    for storage in files:
+        filename = _sanitize_upload_name(getattr(storage, "filename", ""))
+        if not filename:
+            continue
+        fallback_rows.append(
+            {
+                "client_key": filename,
+                "name": filename,
+                "relative_path": filename,
+                "size_bytes": 0,
+                "modified_at": 0,
+            }
+        )
+    return _normalize_upload_manifest_items(fallback_rows)
 
 
 def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
@@ -1008,15 +1120,15 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
         target_path = _normalize_text(request.form.get("target_path"))
         files = request.files.getlist("files")
         conflict_resolutions = _normalize_conflict_resolution_map(request.form.get("conflict_resolutions"))
+        upload_manifest = _upload_manifest_from_form(request.form.get("manifest"), files)
         if not target_path:
             return jsonify({"error": "target_path_required"}), 400
         if not files:
             return jsonify({"error": "upload_files_required"}), 400
-        upload_manifest = _normalize_upload_manifest_items(
-            [{"name": getattr(storage, "filename", ""), "size_bytes": 0, "modified_at": 0} for storage in files]
-        )
         if not upload_manifest:
             return jsonify({"error": "upload_files_required"}), 400
+        if len(upload_manifest) != len(files):
+            return jsonify({"error": "upload_manifest_mismatch"}), 400
         assert record is not None
         if not _system_socket_available(adapters, record.get("hostname") or hostname, record.get("agent_id") or ""):
             return jsonify({"error": "agent_unavailable"}), 503
@@ -1032,9 +1144,7 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
         else:
             assert conflict_payload is not None
             conflicts = conflict_payload.get("conflicts") if isinstance(conflict_payload.get("conflicts"), list) else []
-        unresolved_conflicts = [
-            conflict for conflict in conflicts if conflict_resolutions.get(_sanitize_upload_name(conflict.get("name"))) not in {"replace", "skip"}
-        ]
+        unresolved_conflicts = [conflict for conflict in conflicts if conflict_resolutions.get(_normalize_text(conflict.get("client_key"))) not in {"replace", "skip"}]
         if unresolved_conflicts:
             return (
                 jsonify(
@@ -1058,19 +1168,22 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
                 409,
             )
         files_to_upload = []
-        overwrite_names: list[str] = []
+        manifest_to_upload: list[Dict[str, Any]] = []
+        overwrite_keys: list[str] = []
         skipped_names: list[str] = []
-        for storage in files:
-            filename = _sanitize_upload_name(getattr(storage, "filename", ""))
-            if not filename:
+        for storage, manifest_row in zip(files, upload_manifest):
+            filename = _sanitize_upload_name((manifest_row or {}).get("name") or getattr(storage, "filename", ""))
+            client_key = _normalize_text((manifest_row or {}).get("client_key")) or _sanitize_upload_name(filename)
+            if not filename or not client_key:
                 continue
-            resolution = conflict_resolutions.get(filename)
+            resolution = conflict_resolutions.get(client_key)
             if resolution == "skip":
                 skipped_names.append(filename)
                 continue
             if resolution == "replace":
-                overwrite_names.append(filename)
+                overwrite_keys.append(client_key)
             files_to_upload.append(storage)
+            manifest_to_upload.append(dict(manifest_row))
         if not files_to_upload:
             return jsonify(
                 {
@@ -1088,7 +1201,8 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
                 operator_id=operator_id or "unknown",
                 target_path=target_path,
                 files=files_to_upload,
-                overwrite_names=overwrite_names,
+                manifest_items=manifest_to_upload,
+                overwrite_keys=overwrite_keys,
             )
         except ValueError as exc:
             return jsonify({"error": _normalize_text(exc) or "upload_files_required"}), 400
@@ -1111,7 +1225,9 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
                             "items": [
                                 {
                                     "item_id": row.get("item_id"),
+                                    "client_key": row.get("client_key"),
                                     "name": row.get("name"),
+                                    "relative_path": row.get("relative_path"),
                                     "size_bytes": int(row.get("size_bytes") or 0),
                                     "overwrite_existing": bool(row.get("overwrite_existing")),
                                 }
@@ -1137,6 +1253,49 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
             )
         )
         return jsonify(session), 202
+
+    @blueprint.route("/api/device/files/<hostname>/paste", methods=["POST"])
+    def paste_items(hostname: str):
+        _user, record, operator_id, error = _operator_context(hostname)
+        if error:
+            payload, status = error
+            return jsonify(payload), status
+        body = request.get_json(silent=True) or {}
+        destination_path = _normalize_text(body.get("destination_path"))
+        selections = _normalize_transfer_entries(body.get("paths") or body.get("items") or body.get("path"))
+        operation = _normalize_text(body.get("operation")).lower()
+        if operation not in {"copy", "cut"}:
+            return jsonify({"error": "operation_required"}), 400
+        if not destination_path or not selections:
+            return jsonify({"error": "paths_and_destination_required"}), 400
+        response, rpc_error = _call_file_management_rpc(
+            adapters,
+            hostname=record.get("hostname") or hostname,
+            payload={
+                "action": "paste",
+                "hostname": record.get("hostname") or hostname,
+                "agent_id": record.get("agent_id") or "",
+                "requested_by": operator_id,
+                "operation": operation,
+                "paths": selections,
+                "destination_path": destination_path,
+            },
+            timeout=300.0,
+        )
+        if rpc_error:
+            payload, status = rpc_error
+            return jsonify(payload), status
+        _service_log_event(
+            "file_management_paste hostname={hostname} operator={operator} remote={remote} items={items} destination={destination} operation={operation}".format(
+                hostname=record.get("hostname") or hostname,
+                operator=operator_id,
+                remote=_request_remote() or "-",
+                items=len(selections),
+                destination=destination_path,
+                operation=operation,
+            )
+        )
+        return jsonify({"ok": True, "pasted": response.get("pasted") if isinstance(response, dict) else []})
 
     @blueprint.route("/api/device/files/<hostname>/download", methods=["POST"])
     def start_download(hostname: str):
@@ -1207,6 +1366,27 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
         assert session is not None
         return jsonify(_transfer_status_snapshot(session))
 
+    @blueprint.route("/api/device/files/<hostname>/transfer/<transfer_id>/cancel", methods=["POST"])
+    def cancel_transfer(hostname: str, transfer_id: str):
+        session, error = _validate_operator_transfer(hostname, transfer_id)
+        if error:
+            payload, status = error
+            return jsonify(payload), status
+        assert session is not None
+        snapshot = _store().request_cancel(transfer_id)
+        if snapshot is None:
+            return jsonify({"error": "transfer_not_found"}), 404
+        _service_log_event(
+            "file_management_transfer_cancel hostname={hostname} operator={operator} remote={remote} transfer_id={transfer_id}".format(
+                hostname=_normalize_text(session.get("hostname")) or hostname,
+                operator=_normalize_text((_current_user(app) or {}).get("username")) or "unknown",
+                remote=_request_remote() or "-",
+                transfer_id=transfer_id,
+            ),
+            level="WARNING",
+        )
+        return jsonify(snapshot)
+
     @blueprint.route("/api/device/files/<hostname>/transfer/<transfer_id>/content", methods=["GET"])
     def get_transfer_content(hostname: str, transfer_id: str):
         session, error = _validate_operator_transfer(hostname, transfer_id)
@@ -1238,6 +1418,9 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
         if error:
             payload, status = error
             return jsonify(payload), status
+        assert session is not None
+        if bool(session.get("cancel_requested")) or _normalize_text(session.get("status")).lower() in {"canceling", "canceled"}:
+            return jsonify({"error": "transfer_canceled"}), 409
         item = _store().get_upload_item(transfer_id, item_id)
         if item is None:
             return jsonify({"error": "upload_item_not_found"}), 404
@@ -1252,6 +1435,16 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
             mimetype="application/octet-stream",
             max_age=0,
         )
+
+    @blueprint.route("/api/agent/files/transfers/<transfer_id>/status", methods=["GET"])
+    @require_device_auth(auth_manager)
+    def get_agent_transfer_status(transfer_id: str):
+        session, error = _agent_transfer_session(transfer_id)
+        if error:
+            payload, status = error
+            return jsonify(payload), status
+        assert session is not None
+        return jsonify(_transfer_status_snapshot(session))
 
     @blueprint.route("/api/agent/files/transfers/<transfer_id>/progress", methods=["POST"])
     @require_device_auth(auth_manager)
@@ -1268,6 +1461,8 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
         error_text = _normalize_text(body.get("error"))
         if status_value == "failed":
             snapshot = _store().mark_failed(transfer_id, error_text or "transfer_failed")
+        elif status_value == "canceled":
+            snapshot = _store().mark_canceled(transfer_id, error_text or "Transfer canceled by operator.")
         else:
             snapshot = _store().mark_progress(
                 transfer_id,
@@ -1288,6 +1483,10 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
         if error:
             payload, status = error
             return jsonify(payload), status
+        assert session is not None
+        if bool(session.get("cancel_requested")) or _normalize_text(session.get("status")).lower() in {"canceling", "canceled"}:
+            _store().mark_canceled(transfer_id, "Transfer canceled by operator.")
+            return jsonify({"error": "transfer_canceled"}), 409
         file_storage = request.files.get("artifact")
         if file_storage is None:
             return jsonify({"error": "artifact_required"}), 400

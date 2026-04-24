@@ -33,6 +33,7 @@ IS_WINDOWS = os.name == "nt"
 IS_LINUX = platform.system().lower() == "linux"
 STATUS_PROGRESS_INTERVAL_SECONDS = 2.0
 TEXT_EDITOR_MAX_BYTES = int(os.environ.get("BOREALIS_FILE_EDITOR_MAX_BYTES", 1024 * 1024))
+TRANSFER_CONTROL_POLL_SECONDS = 1.0
 
 
 class FileManagementError(RuntimeError):
@@ -258,6 +259,77 @@ def _validate_child_name(value: Any) -> str:
     return name
 
 
+def _normalize_relative_upload_path(value: Any, *, fallback_name: Any = "") -> str:
+    raw = _clean_text(value).replace("\\", "/")
+    if not raw:
+        raw = _validate_child_name(fallback_name)
+    if raw.startswith("/") or raw.startswith("\\") or (len(raw) >= 2 and raw[1] == ":"):
+        raise FileManagementError("invalid_name", f"Expected a relative upload path, received '{value}'.")
+    segments = []
+    for segment in raw.split("/"):
+        cleaned = _clean_text(segment)
+        if not cleaned:
+            continue
+        if cleaned in {".", ".."}:
+            raise FileManagementError("invalid_name", "Relative path markers are not allowed in upload manifests.")
+        segments.append(_validate_child_name(cleaned))
+    if not segments:
+        raise FileManagementError("invalid_name", "A relative upload path is required.")
+    return "/".join(segments)
+
+
+def _path_equal(left: str, right: str) -> bool:
+    return os.path.normcase(_normalize_requested_path(left)) == os.path.normcase(_normalize_requested_path(right))
+
+
+def _destination_inside_source(source_path: str, destination_path: str) -> bool:
+    normalized_source = _normalize_requested_path(source_path)
+    normalized_destination = _normalize_requested_path(destination_path)
+    if not os.path.isdir(normalized_source) or os.path.islink(normalized_source):
+        return False
+    try:
+        common = os.path.commonpath([normalized_source, normalized_destination])
+    except Exception:
+        return False
+    return os.path.normcase(common) == os.path.normcase(normalized_source)
+
+
+def _split_copy_name(path_value: str) -> tuple[str, str]:
+    name = os.path.basename(path_value.rstrip("\\/"))
+    if os.path.isdir(path_value) and not os.path.islink(path_value):
+        return name, ""
+    stem, suffix = os.path.splitext(name)
+    return stem or name, suffix
+
+
+def _next_copy_destination(path_value: str) -> str:
+    normalized = _normalize_requested_path(path_value)
+    if not _path_exists(normalized):
+        return normalized
+    parent_dir = os.path.dirname(normalized.rstrip("\\/")) or _parent_path(normalized)
+    stem, suffix = _split_copy_name(normalized)
+    candidate = os.path.join(parent_dir, f"{stem} - Copy{suffix}")
+    counter = 2
+    while _path_exists(candidate):
+        candidate = os.path.join(parent_dir, f"{stem} - Copy ({counter}){suffix}")
+        counter += 1
+    return candidate
+
+
+def _copy_item(source_path: str, destination_path: str) -> None:
+    if os.path.islink(source_path):
+        try:
+            target = os.readlink(source_path)
+            os.symlink(target, destination_path, target_is_directory=os.path.isdir(source_path))
+            return
+        except (AttributeError, NotImplementedError, OSError):
+            pass
+    if os.path.isdir(source_path) and not os.path.islink(source_path):
+        shutil.copytree(source_path, destination_path, symlinks=True)
+        return
+    shutil.copy2(source_path, destination_path, follow_symlinks=False)
+
+
 def _ensure_no_conflict(path_value: str) -> None:
     if _path_exists(path_value):
         raise FileManagementError("conflict", f"'{path_value}' already exists.")
@@ -297,16 +369,20 @@ def _normalize_upload_candidate_rows(value: Any) -> list[Dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         name = _validate_child_name(item.get("name") or item.get("filename"))
+        relative_path = _normalize_relative_upload_path(item.get("relative_path"), fallback_name=name)
+        client_key = _clean_text(item.get("client_key")) or relative_path
         rows.append(
             {
+                "client_key": client_key,
                 "name": name,
+                "relative_path": relative_path,
                 "size_bytes": int(item.get("size_bytes") or 0),
                 "modified_at": int(item.get("modified_at") or 0),
             }
         )
     deduped: dict[str, Dict[str, Any]] = {}
     for row in rows:
-        deduped[row["name"]] = row
+        deduped[row["client_key"]] = row
     return list(deduped.values())
 
 
@@ -315,13 +391,17 @@ def _inspect_upload_conflicts(path_value: Any, items: Any) -> Dict[str, Any]:
     candidates = _normalize_upload_candidate_rows(items)
     conflicts: list[Dict[str, Any]] = []
     for row in candidates:
-        destination_path = os.path.join(target_path, row["name"])
+        destination_path = os.path.join(target_path, *row["relative_path"].split("/"))
         if not _path_exists(destination_path):
             continue
-        destination_entry = _entry_from_path(destination_path, parent_path=target_path)
+        destination_parent = _parent_path(destination_path)
+        destination_entry = _entry_from_path(destination_path, parent_path=destination_parent)
         conflicts.append(
             {
+                "client_key": row["client_key"],
                 "name": row["name"],
+                "relative_path": row["relative_path"],
+                "display_name": row["relative_path"] if row["relative_path"] != row["name"] else row["name"],
                 "destination": destination_entry,
                 "upload_size_bytes": int(row.get("size_bytes") or 0),
                 "upload_modified_at": int(row.get("modified_at") or 0),
@@ -552,7 +632,14 @@ class Role:
                 return False
         return bool(common_parent)
 
-    def _build_7zip_selection(self, selections: list[Dict[str, Any]], archive_path: str, seven_zip_exe: str) -> int:
+    def _build_7zip_selection(
+        self,
+        selections: list[Dict[str, Any]],
+        archive_path: str,
+        seven_zip_exe: str,
+        *,
+        transfer_id: str = "",
+    ) -> int:
         if not self._can_use_7zip_archive(selections):
             raise FileManagementError("archive_fallback_required", "7-Zip archiving requires selections from the same parent directory.")
         first_path = _normalize_requested_path(selections[0].get("path"))
@@ -560,13 +647,21 @@ class Role:
         input_names = [os.path.basename(_normalize_requested_path(selection.get("path")).rstrip("\\/")) for selection in selections]
         command = [seven_zip_exe, "a", "-t7z", "-mx=5", "-y", archive_path, *input_names]
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 command,
                 cwd=working_directory,
                 capture_output=True,
                 text=True,
-                check=False,
             )
+            last_control_check = 0.0
+            while process.poll() is None:
+                time.sleep(0.2)
+                now_ts = time.time()
+                if transfer_id and now_ts - last_control_check >= TRANSFER_CONTROL_POLL_SECONDS:
+                    self._ensure_transfer_not_canceled(transfer_id)
+                    last_control_check = now_ts
+            stdout, stderr = process.communicate()
+            completed = type("Completed", (), {"returncode": process.returncode, "stdout": stdout, "stderr": stderr})()
         except OSError as exc:
             raise FileManagementError("archive_failed", str(exc)) from exc
         if completed.returncode != 0:
@@ -606,6 +701,27 @@ class Role:
             return False
         return True
 
+    def _transfer_control_snapshot(self, transfer_id: str) -> Dict[str, Any]:
+        client = self._http_client()
+        client.ensure_authenticated()
+        client.refresh_base_url()
+        headers = client.auth_headers()
+        url = f"{client.base_url}/api/agent/files/transfers/{transfer_id}/status"
+        response = client.session.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        payload = response.json() if callable(getattr(response, "json", None)) else {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _ensure_transfer_not_canceled(self, transfer_id: str) -> None:
+        try:
+            snapshot = self._transfer_control_snapshot(transfer_id)
+        except FileManagementError as exc:
+            if _clean_text(getattr(exc, "code", "")).lower() == "client_unavailable":
+                return
+            raise
+        if bool(snapshot.get("cancel_requested")) or _clean_text(snapshot.get("status")).lower() in {"canceling", "canceled"}:
+            raise FileManagementError("transfer_canceled", "Transfer canceled by operator.")
+
     def _report_progress(
         self,
         transfer_id: str,
@@ -615,7 +731,7 @@ class Role:
         bytes_total: Optional[int] = None,
         error: str = "",
         archive_name: str = "",
-    ) -> None:
+    ) -> Dict[str, Any]:
         client = self._http_client()
         payload: Dict[str, Any] = {}
         if status:
@@ -628,7 +744,40 @@ class Role:
             payload["error"] = error
         if archive_name:
             payload["archive_name"] = archive_name
-        client.post_json(f"/api/agent/files/transfers/{transfer_id}/progress", payload, require_auth=True)
+        response = client.post_json(f"/api/agent/files/transfers/{transfer_id}/progress", payload, require_auth=True)
+        return response if isinstance(response, dict) else {}
+
+    def _paste_items(self, *, operation: str, selections: list[Dict[str, Any]], destination_path: str) -> list[Dict[str, Any]]:
+        normalized_operation = _clean_text(operation).lower()
+        if normalized_operation not in {"copy", "cut"}:
+            raise FileManagementError("invalid_request", f"Unsupported paste operation '{operation}'.")
+        if not selections:
+            raise FileManagementError("invalid_request", "At least one source path is required.")
+        destination_dir = _ensure_directory(destination_path)
+        plan: list[tuple[str, str]] = []
+        for row in selections:
+            source_path = _normalize_requested_path(row.get("path"))
+            if not _path_exists(source_path):
+                raise FileManagementError("path_not_found", f"'{source_path}' does not exist.")
+            final_path = os.path.join(destination_dir, os.path.basename(source_path.rstrip("\\/")))
+            if _destination_inside_source(source_path, destination_dir):
+                raise FileManagementError("invalid_path", "A folder cannot be pasted into itself.")
+            if normalized_operation == "cut":
+                if _path_equal(source_path, final_path):
+                    continue
+                _ensure_no_conflict(final_path)
+            else:
+                if _path_equal(source_path, final_path) or _path_exists(final_path):
+                    final_path = _next_copy_destination(final_path)
+            plan.append((source_path, final_path))
+        pasted: list[Dict[str, Any]] = []
+        for source_path, final_path in plan:
+            if normalized_operation == "cut":
+                shutil.move(source_path, final_path)
+            else:
+                _copy_item(source_path, final_path)
+            pasted.append(_entry_from_path(final_path, parent_path=destination_dir))
+        return pasted
 
     def _stream_upload_item(
         self,
@@ -648,12 +797,15 @@ class Role:
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
         temp_file = None
+        last_control_check = 0.0
         try:
             if _path_exists(destination_path) and not overwrite_existing:
                 raise FileManagementError("conflict", f"'{destination_path}' already exists.")
             if overwrite_existing and _path_exists(destination_path) and os.path.isdir(destination_path) and not os.path.islink(destination_path):
                 raise FileManagementError("conflict", f"'{destination_path}' already exists as a directory.")
             with client.session.get(item_url, headers=headers, timeout=300, stream=True) as response:
+                if response.status_code == 409:
+                    raise FileManagementError("transfer_canceled", "Transfer canceled by operator.")
                 response.raise_for_status()
                 fd, temp_file = tempfile.mkstemp(prefix=".borealis-upload-", suffix=".tmp", dir=parent_dir or None)
                 with os.fdopen(fd, "wb") as handle:
@@ -664,13 +816,18 @@ class Role:
                         progress_state["bytes_complete"] = int(progress_state.get("bytes_complete") or 0) + len(chunk)
                         now_ts = time.time()
                         if now_ts - float(progress_state.get("last_report_at") or 0.0) >= STATUS_PROGRESS_INTERVAL_SECONDS:
-                            self._report_progress(
+                            snapshot = self._report_progress(
                                 transfer_id,
                                 status="running",
                                 bytes_complete=progress_state["bytes_complete"],
                                 bytes_total=progress_state.get("bytes_total"),
-                            )
+                            ) or {}
                             progress_state["last_report_at"] = now_ts
+                            if bool(snapshot.get("cancel_requested")):
+                                raise FileManagementError("transfer_canceled", "Transfer canceled by operator.")
+                        elif now_ts - last_control_check >= TRANSFER_CONTROL_POLL_SECONDS:
+                            self._ensure_transfer_not_canceled(transfer_id)
+                            last_control_check = now_ts
                 os.replace(temp_file, destination_path)
                 temp_file = None
         except PermissionError as exc:
@@ -696,13 +853,16 @@ class Role:
             "bytes_total": bytes_total,
             "last_report_at": 0.0,
         }
-        self._report_progress(transfer_id, status="running", bytes_complete=0, bytes_total=bytes_total)
+        snapshot = self._report_progress(transfer_id, status="running", bytes_complete=0, bytes_total=bytes_total) or {}
+        if bool(snapshot.get("cancel_requested")):
+            raise FileManagementError("transfer_canceled", "Transfer canceled by operator.")
         for row in items:
             if not isinstance(row, dict):
                 continue
+            self._ensure_transfer_not_canceled(transfer_id)
             item_id = _clean_text(row.get("item_id"))
-            item_name = _validate_child_name(row.get("name"))
-            destination_path = os.path.join(target_path, item_name)
+            relative_path = _normalize_relative_upload_path(row.get("relative_path"), fallback_name=row.get("name"))
+            destination_path = os.path.join(target_path, *relative_path.split("/"))
             self._stream_upload_item(
                 transfer_id=transfer_id,
                 item_id=item_id,
@@ -718,15 +878,19 @@ class Role:
         )
         self._last_error = ""
 
-    def _zip_selection(self, selections: list[Dict[str, Any]], archive_path: str) -> int:
+    def _zip_selection(self, selections: list[Dict[str, Any]], archive_path: str, *, transfer_id: str = "") -> int:
         total_bytes = 0
         with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for selection in selections:
+                if transfer_id:
+                    self._ensure_transfer_not_canceled(transfer_id)
                 source_path = _normalize_requested_path(selection.get("path"))
                 label = _normalize_upload_name(selection.get("name")) or os.path.basename(source_path.rstrip("\\/")) or source_path
                 if os.path.isdir(source_path) and not os.path.islink(source_path):
                     emitted = False
                     for root, dirs, files in os.walk(source_path, topdown=True, followlinks=False):
+                        if transfer_id:
+                            self._ensure_transfer_not_canceled(transfer_id)
                         dirs[:] = [name for name in dirs if not os.path.islink(os.path.join(root, name))]
                         relative_root = os.path.relpath(root, source_path)
                         if relative_root == ".":
@@ -768,6 +932,8 @@ class Role:
                 data={"archive_name": artifact_name, "mime_type": mime_type or "application/octet-stream"},
                 timeout=900,
             )
+        if response.status_code == 409:
+            raise FileManagementError("transfer_canceled", "Transfer canceled by operator.")
         response.raise_for_status()
 
     def _download_transfer_worker(self, payload: Dict[str, Any]) -> None:
@@ -777,13 +943,17 @@ class Role:
             raise FileManagementError("invalid_request", "Download manifest is missing transfer metadata.")
         archive_required = bool(payload.get("archive_required"))
         requested_archive_name = _normalize_upload_name(payload.get("archive_name")) or "download.7z"
+        self._ensure_transfer_not_canceled(transfer_id)
 
         if not archive_required and len(selections) == 1 and os.path.isfile(selections[0]["path"]):
             source_path = selections[0]["path"]
             artifact_name = _normalize_upload_name(selections[0].get("name")) or os.path.basename(source_path)
             mime_type = mimetypes.guess_type(artifact_name)[0] or "application/octet-stream"
             total_bytes = int(os.path.getsize(source_path) or 0)
-            self._report_progress(transfer_id, status="running", bytes_complete=0, bytes_total=total_bytes)
+            snapshot = self._report_progress(transfer_id, status="running", bytes_complete=0, bytes_total=total_bytes) or {}
+            if bool(snapshot.get("cancel_requested")):
+                raise FileManagementError("transfer_canceled", "Transfer canceled by operator.")
+            self._ensure_transfer_not_canceled(transfer_id)
             self._post_download_artifact(
                 transfer_id=transfer_id,
                 artifact_path=source_path,
@@ -804,10 +974,12 @@ class Role:
         try:
             try:
                 if use_7zip:
-                    total_bytes = self._build_7zip_selection(selections, archive_path, seven_zip_exe)
+                    total_bytes = self._build_7zip_selection(selections, archive_path, seven_zip_exe, transfer_id=transfer_id)
                 else:
-                    total_bytes = self._zip_selection(selections, archive_path)
+                    total_bytes = self._zip_selection(selections, archive_path, transfer_id=transfer_id)
             except FileManagementError as exc:
+                if _clean_text(getattr(exc, "code", "")).lower() == "transfer_canceled":
+                    raise
                 if not use_7zip:
                     raise
                 self._log(f"7-Zip archive creation failed; falling back to ZIP for {transfer_id}: {exc}")
@@ -817,14 +989,17 @@ class Role:
                 mime_type = "application/zip"
                 fd, archive_path = tempfile.mkstemp(prefix="download-", suffix=".zip", dir=self._temp_root)
                 os.close(fd)
-                total_bytes = self._zip_selection(selections, archive_path)
-            self._report_progress(
+                total_bytes = self._zip_selection(selections, archive_path, transfer_id=transfer_id)
+            snapshot = self._report_progress(
                 transfer_id,
                 status="running",
                 bytes_complete=0,
                 bytes_total=total_bytes,
                 archive_name=archive_name,
-            )
+            ) or {}
+            if bool(snapshot.get("cancel_requested")):
+                raise FileManagementError("transfer_canceled", "Transfer canceled by operator.")
+            self._ensure_transfer_not_canceled(transfer_id)
             self._post_download_artifact(
                 transfer_id=transfer_id,
                 artifact_path=archive_path,
@@ -871,6 +1046,20 @@ class Role:
                 )
             else:
                 raise FileManagementError("invalid_request", f"Unsupported transfer action '{action}'.")
+        except FileManagementError as exc:
+            if _clean_text(getattr(exc, "code", "")).lower() == "transfer_canceled":
+                self._last_error = str(exc)
+                try:
+                    self._report_progress(transfer_id, status="canceled", error=str(exc))
+                except Exception:
+                    self._log(f"file_management failed to report transfer cancellation transfer_id={transfer_id}", error=True)
+            else:
+                self._last_error = str(exc)
+                self._log(f"file_management transfer failed transfer_id={transfer_id} error={exc}", error=True)
+                try:
+                    self._report_progress(transfer_id, status="failed", error=str(exc))
+                except Exception:
+                    self._log(f"file_management failed to report transfer failure transfer_id={transfer_id}", error=True)
         except Exception as exc:
             self._last_error = str(exc)
             self._log(f"file_management transfer failed transfer_id={transfer_id} error={exc}", error=True)
@@ -1048,6 +1237,22 @@ class Role:
                     )
                     self._last_error = ""
                     return {"ok": True, "moved": moved}
+                if action == "paste":
+                    selections = _normalize_selection_rows(payload.get("paths"))
+                    destination_path = _ensure_directory(payload.get("destination_path"))
+                    operation = _clean_text(payload.get("operation")).lower()
+                    pasted = await self._lane_coordinator.run(
+                        lane="file_management",
+                        job_id=f"paste:{destination_path}:{operation or 'copy'}",
+                        work=lambda: asyncio.to_thread(
+                            self._paste_items,
+                            operation=operation,
+                            selections=selections,
+                            destination_path=destination_path,
+                        ),
+                    )
+                    self._last_error = ""
+                    return {"ok": True, "pasted": pasted}
                 if action == "delete":
                     selections = _normalize_selection_rows(payload.get("paths"))
                     if not selections:

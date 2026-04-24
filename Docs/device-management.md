@@ -39,12 +39,14 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Per-device suppressions mute one watchdog/device relationship without cloning the shared watchdog policy.
 
 ## Device File Management
-- Device Summary now also exposes a `File Management` tab for remote browse, upload, download, lightweight text editing, create-folder, rename, move, and delete actions against the device file system.
+- Device Summary now also exposes a `File Management` tab for remote browse, upload, download, lightweight text editing, copy, cut, paste, create-folder, rename, move, and delete actions against the device file system.
 - Windows devices browse in the Borealis SYSTEM context and Linux devices browse in the root context.
 - The tab uses a single AG Grid with a custom tree-style `Name` column, React-managed flattened rows, lazy directory expansion, a page-level `Refresh` control, and a right-click context menu for file actions.
-- Uploads stage browser files on the Engine first and then let the agent pull them into place. Downloads let the agent stage the requested file or zip archive back to the Engine before the operator fetches it.
-- Before File Management uploads start, Borealis now preflights duplicate names in the destination directory and, when needed, shows a Windows-style replace-or-skip dialog so the operator can replace, skip, or compare each duplicate before the transfer begins.
+- Uploads stage browser files on the Engine first and then let the agent pull them into place. Folder uploads preserve the browser-provided relative path manifest so Borealis can recreate the nested destination structure on the remote agent while serializing the file transfers into their matching subfolders.
+- Downloads let the agent stage the requested file or archive back to the Engine before the operator fetches it, and the in-tab transfer banner now also exposes `Cancel` so operators can interrupt in-progress uploads or downloads.
+- Before File Management uploads start, Borealis now preflights duplicate names in the destination directory and, when needed, shows a Windows-style replace-or-skip dialog so the operator can replace, skip, or compare each duplicate before the transfer begins, including duplicate files discovered inside folder uploads.
 - Lightweight text editing reads one remote text file at a time through the file-management socket lane, applies syntax highlighting based on the filename extension, and saves back to the same path in-place so the file keeps its existing permissions.
+- Copy and cut actions stay operator-local until the operator pastes them into a destination folder or drive, at which point the Engine asks the agent to perform the remote filesystem copy or move in place.
 - Operator access stays site-scoped per hostname, and agent-side transfer routes stay bound to the authenticated device GUID.
 
 ## Device List Views
@@ -91,10 +93,12 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `POST /api/device/files/<hostname>/mkdir` (Token Authenticated) - create a remote directory on an in-scope device.
 - `POST /api/device/files/<hostname>/rename` (Token Authenticated) - rename one remote file-system item on an in-scope device.
 - `POST /api/device/files/<hostname>/move` (Token Authenticated) - move remote file-system items on an in-scope device.
+- `POST /api/device/files/<hostname>/paste` (Token Authenticated) - paste copied or cut remote file-system items into a destination directory on an in-scope device.
 - `POST /api/device/files/<hostname>/delete` (Token Authenticated) - delete remote file-system items on an in-scope device.
 - `POST /api/device/files/<hostname>/upload` (Token Authenticated) - stage browser-uploaded files for transfer to an in-scope device.
 - `POST /api/device/files/<hostname>/download` (Token Authenticated) - start a remote file download transfer from an in-scope device.
 - `GET /api/device/files/<hostname>/transfer/<transfer_id>/status` (Token Authenticated) - poll a File Management transfer snapshot.
+- `POST /api/device/files/<hostname>/transfer/<transfer_id>/cancel` (Token Authenticated) - request cancellation for an in-progress File Management transfer.
 - `GET /api/device/files/<hostname>/transfer/<transfer_id>/content` (Token Authenticated) - download a completed File Management transfer artifact from Engine temp storage.
 - `POST /api/device/description/<hostname>` (Token Authenticated) - update description.
 - `GET /api/device_list_views` (Token Authenticated) - list saved views.
@@ -165,6 +169,8 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - The agent does not launch `Update.ps1` / `Update.sh` directly for that request anymore; it starts the existing local AutoUpdater scheduler path instead so manual and scheduled updates use the same execution flow.
 - File Management browse and mutation requests use the device SYSTEM Socket.IO channel with Socket.IO ACK responses under the `file_management_request` event instead of piggybacking on quick-job stdout/stderr.
 - File transfers use Engine temp-file staging plus device-authenticated agent pull/push endpoints so large uploads and downloads do not have to fit inside one socket payload.
+- Folder uploads rely on an Engine-staged upload manifest that preserves each browser file's relative path so the agent can rebuild the destination tree incrementally without requiring the whole folder to ride in one payload.
+- Transfer progress updates now double as cancellation checkpoints: the operator requests cancellation through the Engine, the Engine marks the transfer `cancel_requested`, and the agent polls that control snapshot while streaming upload chunks or building archives.
 
 ### Status computation
 - Online/offline is computed from `last_seen` (online if within ~300 seconds).

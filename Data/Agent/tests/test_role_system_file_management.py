@@ -236,6 +236,101 @@ def test_file_management_upload_conflicts_reports_existing_destination_metadata(
     asyncio.run(_run_test())
 
 
+def test_file_management_upload_conflicts_supports_nested_relative_paths(tmp_path: Path) -> None:
+    fake_sio = _FakeSio()
+    role = _make_role(fake_sio)
+    role.register_events()
+    handler = fake_sio.handlers["file_management_request"]
+
+    nested_dir = tmp_path / "Folder" / "Sub"
+    nested_dir.mkdir(parents=True)
+    existing_file = nested_dir / "report.log"
+    existing_file.write_text("existing", encoding="utf-8")
+
+    async def _run_test():
+        response = await handler(
+            {
+                "action": "upload_conflicts",
+                "target_path": str(tmp_path),
+                "items": [
+                    {
+                        "client_key": "Folder/Sub/report.log",
+                        "name": "report.log",
+                        "relative_path": "Folder/Sub/report.log",
+                        "size_bytes": 321,
+                        "modified_at": 1700000000,
+                    }
+                ],
+            }
+        )
+        assert response["ok"] is True
+        assert len(response["conflicts"]) == 1
+        conflict = response["conflicts"][0]
+        assert conflict["client_key"] == "Folder/Sub/report.log"
+        assert conflict["relative_path"] == "Folder/Sub/report.log"
+        assert conflict["display_name"] == "Folder/Sub/report.log"
+        assert conflict["destination"]["path"] == str(existing_file)
+
+    asyncio.run(_run_test())
+
+
+def test_file_management_paste_copy_creates_copy_name_for_same_directory(tmp_path: Path) -> None:
+    fake_sio = _FakeSio()
+    role = _make_role(fake_sio)
+    role.register_events()
+    handler = fake_sio.handlers["file_management_request"]
+
+    source_file = tmp_path / "report.txt"
+    source_file.write_text("hello", encoding="utf-8")
+
+    async def _run_test():
+        response = await handler(
+            {
+                "action": "paste",
+                "operation": "copy",
+                "destination_path": str(tmp_path),
+                "paths": [{"path": str(source_file), "name": source_file.name, "kind": "file"}],
+            }
+        )
+        assert response["ok"] is True
+        copied = tmp_path / "report - Copy.txt"
+        assert copied.is_file()
+        assert copied.read_text(encoding="utf-8") == "hello"
+
+    asyncio.run(_run_test())
+
+
+def test_file_management_paste_cut_moves_file(tmp_path: Path) -> None:
+    fake_sio = _FakeSio()
+    role = _make_role(fake_sio)
+    role.register_events()
+    handler = fake_sio.handlers["file_management_request"]
+
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    destination_dir = tmp_path / "destination"
+    destination_dir.mkdir()
+    source_file = source_dir / "move-me.txt"
+    source_file.write_text("payload", encoding="utf-8")
+
+    async def _run_test():
+        response = await handler(
+            {
+                "action": "paste",
+                "operation": "cut",
+                "destination_path": str(destination_dir),
+                "paths": [{"path": str(source_file), "name": source_file.name, "kind": "file"}],
+            }
+        )
+        assert response["ok"] is True
+        assert not source_file.exists()
+        moved_file = destination_dir / "move-me.txt"
+        assert moved_file.is_file()
+        assert moved_file.read_text(encoding="utf-8") == "payload"
+
+    asyncio.run(_run_test())
+
+
 def test_file_management_download_prefers_7zip_archive_when_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -255,8 +350,9 @@ def test_file_management_download_prefers_7zip_archive_when_available(
     def _fake_report_progress(*args, **kwargs):
         reported.append({"args": args, "kwargs": kwargs})
 
-    def _fake_build_7zip_selection(selections, archive_path, seven_zip_exe):
+    def _fake_build_7zip_selection(selections, archive_path, seven_zip_exe, transfer_id=""):
         assert seven_zip_exe == "/usr/bin/7zz"
+        assert transfer_id == "transfer-7z"
         Path(archive_path).write_bytes(b"7zdata")
         return 6
 

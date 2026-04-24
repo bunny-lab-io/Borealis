@@ -27,6 +27,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
   FormControlLabel,
   Icon,
   IconButton,
@@ -61,6 +62,9 @@ import CheckCircleOutlineRoundedIcon from "@mui/icons-material/CheckCircleOutlin
 import SkipNextRoundedIcon from "@mui/icons-material/SkipNextRounded";
 import CompareArrowsRoundedIcon from "@mui/icons-material/CompareArrowsRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
+import ContentCutRoundedIcon from "@mui/icons-material/ContentCutRounded";
+import ContentPasteRoundedIcon from "@mui/icons-material/ContentPasteRounded";
+import DriveFolderUploadRoundedIcon from "@mui/icons-material/DriveFolderUploadRounded";
 import {
   DEFAULT_GRID_COL_DEF,
   DEVICE_DETAILS_GRID_THEME,
@@ -208,13 +212,143 @@ const ACTION_MENU_PAPER_SX = {
   border: `1px solid ${MAGIC_UI.panelBorder}`,
   backdropFilter: "blur(14px)",
   borderRadius: 2,
-  minWidth: 240,
+  minWidth: 288,
+  px: 0.8,
+  py: 0.8,
 };
 
 const ACTION_MENU_ITEM_SX = {
-  fontSize: 13,
+  minHeight: 42,
+  borderRadius: 1.6,
   color: MAGIC_UI.textBright,
-  minHeight: 38,
+  alignItems: "center",
+  px: 1,
+  py: 0.85,
+  position: "relative",
+  overflow: "hidden",
+  "&:hover": {
+    backgroundColor: "rgba(88,166,255,0.12)",
+  },
+  "&::before": {
+    content: '""',
+    position: "absolute",
+    left: 0,
+    top: 8,
+    bottom: 8,
+    width: 3,
+    borderRadius: 999,
+    background: "transparent",
+    transition: "background-color 0.16s ease",
+  },
+  "&:hover::before": {
+    background: "#58a6ff",
+  },
+};
+
+const ACTION_MENU_SECTION_LABEL_SX = {
+  px: 1.2,
+  pt: 0.65,
+  pb: 0.45,
+  color: "rgba(148,163,184,0.72)",
+  fontSize: "0.68rem",
+  fontWeight: 700,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
+const ACTION_MENU_DIVIDER_SX = {
+  my: 0.55,
+  borderColor: "rgba(148,163,184,0.16)",
+};
+
+const TRANSFER_CANCEL_BUTTON_SX = {
+  minWidth: 74,
+  height: 30,
+  px: 1.35,
+  borderRadius: 999,
+  border: "1px solid rgba(248,113,113,0.3)",
+  color: "#fecaca",
+  background: "rgba(127,29,29,0.14)",
+  fontSize: "0.74rem",
+  fontWeight: 600,
+  textTransform: "none",
+  "&:hover": {
+    borderColor: "rgba(248,113,113,0.46)",
+    background: "rgba(127,29,29,0.22)",
+  },
+  "&.Mui-disabled": {
+    color: "rgba(148,163,184,0.52)",
+    borderColor: "rgba(148,163,184,0.2)",
+    background: "rgba(15,23,42,0.26)",
+  },
+};
+
+const ACTION_MENU_HEADER_SX = {
+  display: "flex",
+  alignItems: "center",
+  gap: 1,
+  px: 1.1,
+  pt: 0.55,
+  pb: 0.85,
+};
+
+const ACTION_MENU_HEADER_ICON_SX = {
+  width: 32,
+  height: 32,
+  borderRadius: 1.35,
+  flexShrink: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  border: "1px solid rgba(148,163,184,0.14)",
+  background: "rgba(255,255,255,0.04)",
+  color: "#8fd3ff",
+};
+
+const ACTION_MENU_ROW_ICON_SX = {
+  mt: 0.18,
+  mr: 1,
+  fontSize: 18,
+  flexShrink: 0,
+};
+
+const ACTION_MENU_LABEL_SX = {
+  color: MAGIC_UI.textBright,
+  fontSize: "0.84rem",
+  fontWeight: 500,
+  lineHeight: 1.2,
+};
+
+const ACTION_MENU_DESCRIPTION_SX = {
+  color: "rgba(148,163,184,0.78)",
+  fontSize: "0.73rem",
+  lineHeight: 1.25,
+  mt: 0.25,
+};
+
+const ACTION_MENU_TITLE_TRUNCATE_SX = {
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+const ACTION_MENU_SHORTCUT_SX = {
+  ml: 1,
+  pl: 0.7,
+  color: "rgba(148,163,184,0.78)",
+  fontSize: "0.72rem",
+  lineHeight: 1.1,
+  whiteSpace: "nowrap",
+};
+
+const ACTION_MENU_DANGER_ITEM_SX = {
+  ...ACTION_MENU_ITEM_SX,
+  "&:hover": {
+    backgroundColor: "rgba(248,113,113,0.1)",
+  },
+  "&:hover::before": {
+    background: "#58a6ff",
+  },
 };
 
 const UPLOAD_CONFLICT_DIALOG_PAPER_SX = {
@@ -259,6 +393,36 @@ function normalizeText(value) {
   } catch {
     return "";
   }
+}
+
+function normalizeUploadRelativePath(value, fallbackName = "") {
+  const raw = normalizeText(value).replace(/\\/g, "/") || normalizeText(fallbackName);
+  if (!raw) return "";
+  return raw
+    .split("/")
+    .map((segment) => normalizeText(segment))
+    .filter(Boolean)
+    .join("/");
+}
+
+function buildUploadManifest(files = [], { preserveRelativePath = false } = {}) {
+  return (Array.isArray(files) ? files : [])
+    .map((file, index) => {
+      const relativePath = normalizeUploadRelativePath(
+        preserveRelativePath ? file?.webkitRelativePath : "",
+        normalizeText(file?.name)
+      );
+      const name = relativePath.split("/").filter(Boolean).pop() || normalizeText(file?.name) || `upload-${index + 1}`;
+      const clientKey = relativePath || `${name}-${index + 1}`;
+      return {
+        client_key: clientKey,
+        name,
+        relative_path: relativePath || name,
+        size_bytes: Number(file?.size || 0),
+        modified_at: Math.floor(Number(file?.lastModified || 0) / 1000),
+      };
+    })
+    .filter((row) => normalizeText(row.relative_path));
 }
 
 function isGuidLike(value) {
@@ -374,6 +538,21 @@ function isWindowsDriveRootEntry(entry, currentPath, platform) {
   return /^[A-Za-z]:\\?$/.test(normalizedPath);
 }
 
+function getPathLeafLabel(pathValue, platform) {
+  const normalized = normalizeText(pathValue);
+  if (!normalized) {
+    return platform === "windows" ? "Drive Roots" : "Root";
+  }
+  if (platform === "windows") {
+    const trimmed = normalized.replace(/[\\/]+$/, "");
+    const parts = trimmed.split("\\").filter(Boolean);
+    return parts[parts.length - 1] || normalized;
+  }
+  if (normalized === "/") return "Root";
+  const parts = normalized.split("/").filter(Boolean);
+  return parts[parts.length - 1] || normalized;
+}
+
 function isGridInteractiveClick(event) {
   const target = event?.target;
   if (!target?.closest) return false;
@@ -386,7 +565,7 @@ function isGridInteractiveClick(event) {
 
 function isTerminalTransferStatus(value) {
   const normalized = normalizeText(value).toLowerCase();
-  return normalized === "completed" || normalized === "failed";
+  return normalized === "completed" || normalized === "failed" || normalized === "canceled";
 }
 
 function normalizeNavigablePath(pathValue, platform) {
@@ -673,7 +852,7 @@ function collapseExpandedBranch(expandedSet, entriesByParent, branchPath) {
   return next;
 }
 
-function TransferBanner({ transfers = {} }) {
+function TransferBanner({ transfers = {}, onCancel = null, actionBusy = "" }) {
   const rows = Object.values(transfers || {}).filter((transfer) => !isTerminalTransferStatus(transfer?.status));
   if (!rows.length) return null;
   return (
@@ -684,6 +863,11 @@ function TransferBanner({ transfers = {} }) {
         const progress = bytesTotal > 0 ? Math.min(100, Math.round((bytesComplete / bytesTotal) * 100)) : 0;
         const directionLabel = normalizeText(transfer?.direction).toLowerCase() === "upload" ? "Upload" : "Download";
         const targetLabel = normalizeText(transfer?.target_path) || normalizeText(transfer?.result_name) || normalizeText(transfer?.archive_name);
+        const statusLabel = normalizeText(transfer?.status).toLowerCase() === "canceling" ? "Canceling..." : progress ? `${progress}%` : normalizeText(transfer?.status) || "Pending";
+        const disableCancel =
+          !normalizeText(transfer?.transfer_id) ||
+          normalizeText(transfer?.status).toLowerCase() === "canceling" ||
+          normalizeText(actionBusy) === `cancel:${normalizeText(transfer?.transfer_id)}`;
         return (
           <Box
             key={transfer.transfer_id || directionLabel}
@@ -696,12 +880,21 @@ function TransferBanner({ transfers = {} }) {
             }}
           >
             <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ mb: 0.75 }}>
-              <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.88rem", fontWeight: 600 }}>
-                {directionLabel} in progress
-              </Typography>
-              <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.78rem" }}>
-                {progress ? `${progress}%` : normalizeText(transfer?.status) || "Pending"}
-              </Typography>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+                <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.88rem", fontWeight: 600 }}>
+                  {directionLabel} in progress
+                </Typography>
+                <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.78rem" }}>{statusLabel}</Typography>
+              </Stack>
+              <Button
+                onClick={() => {
+                  onCancel?.(transfer);
+                }}
+                disabled={disableCancel}
+                sx={TRANSFER_CANCEL_BUTTON_SX}
+              >
+                Cancel
+              </Button>
             </Stack>
             {targetLabel ? (
               <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.79rem", mb: 0.75 }}>
@@ -733,6 +926,7 @@ export default function RemoteFileManagement({ device }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const gridRef = useRef(null);
   const fileInputRef = useRef(null);
+  const folderInputRef = useRef(null);
   const pathInputRef = useRef(null);
   const handledTransfersRef = useRef({});
   const loadSuccessTimersRef = useRef({});
@@ -773,6 +967,7 @@ export default function RemoteFileManagement({ device }) {
   const [editorLineEnding, setEditorLineEnding] = useState("lf");
   const [inlineEditingUnsupported, setInlineEditingUnsupported] = useState(false);
   const [pendingUploadFiles, setPendingUploadFiles] = useState([]);
+  const [pendingUploadManifest, setPendingUploadManifest] = useState([]);
   const [pendingUploadTarget, setPendingUploadTarget] = useState("");
   const [uploadConflicts, setUploadConflicts] = useState([]);
   const [uploadConflictIndex, setUploadConflictIndex] = useState(0);
@@ -782,6 +977,7 @@ export default function RemoteFileManagement({ device }) {
   const [activeTransfers, setActiveTransfers] = useState({});
   const [rowLoadStateByPath, setRowLoadStateByPath] = useState({});
   const [showHiddenItems, setShowHiddenItems] = useState(false);
+  const [clipboardState, setClipboardState] = useState(null);
 
   const requestedWorkingDirectory = useMemo(
     () => normalizeText(searchParams.get("working_directory")),
@@ -812,8 +1008,12 @@ export default function RemoteFileManagement({ device }) {
   const editorHasChanges = useMemo(() => editorContent !== editorOriginalContent, [editorContent, editorOriginalContent]);
   const currentUploadConflict = uploadConflicts[uploadConflictIndex] || null;
   const currentUploadConflictFile = useMemo(
-    () => pendingUploadFiles.find((file) => normalizeText(file?.name) === normalizeText(currentUploadConflict?.name)) || null,
-    [currentUploadConflict, pendingUploadFiles]
+    () =>
+      pendingUploadFiles.find((_file, index) => {
+        const manifestRow = pendingUploadManifest[index] || {};
+        return normalizeText(manifestRow?.client_key) === normalizeText(currentUploadConflict?.client_key);
+      }) || null,
+    [currentUploadConflict, pendingUploadFiles, pendingUploadManifest]
   );
 
   const resolvedUploadTarget = useMemo(() => {
@@ -826,6 +1026,11 @@ export default function RemoteFileManagement({ device }) {
     const firstDirectory = selectedRows.find((row) => isDirectory(row));
     return firstDirectory?.path || "";
   }, [addressPath, platform, selectedRows]);
+
+  const resolvedClipboardTarget = useMemo(
+    () => normalizeText(resolvedUploadTarget || currentPath || (platform === "windows" ? "" : "/")),
+    [currentPath, platform, resolvedUploadTarget]
+  );
 
   useEffect(() => {
     setPathInput(displayedPath);
@@ -1289,6 +1494,20 @@ export default function RemoteFileManagement({ device }) {
               return next;
             });
           }
+          if (normalizeText(data?.status).toLowerCase() === "canceled" && !handledTransfersRef.current[handledKey]) {
+            handledTransfersRef.current[handledKey] = true;
+            void notifyOperator({
+              title: "Transfer Canceled",
+              message: normalizeText(data?.error) || "The file transfer was canceled.",
+              icon: "notification",
+              variant: "info",
+            });
+            setActiveTransfers((previous) => {
+              const next = { ...previous };
+              delete next[transfer.transfer_id];
+              return next;
+            });
+          }
         } catch (pollError) {
           if (!canceled) {
             setError(String(pollError?.message || pollError));
@@ -1446,6 +1665,7 @@ export default function RemoteFileManagement({ device }) {
 
   const clearUploadConflictState = useCallback(() => {
     setPendingUploadFiles([]);
+    setPendingUploadManifest([]);
     setPendingUploadTarget("");
     setUploadConflicts([]);
     setUploadConflictIndex(0);
@@ -1454,13 +1674,16 @@ export default function RemoteFileManagement({ device }) {
     setUploadConflictApplyToAll(false);
   }, []);
 
-  const openUploadConflictDialog = useCallback((files, targetPath, conflicts, existingSelections = {}) => {
+  const openUploadConflictDialog = useCallback((files, manifest, targetPath, conflicts, existingSelections = {}) => {
     const normalizedConflicts = Array.isArray(conflicts) ? conflicts : [];
     const firstPendingIndex = Math.max(
       0,
-      normalizedConflicts.findIndex((conflict) => !["replace", "skip"].includes(normalizeText(existingSelections?.[conflict?.name]).toLowerCase()))
+      normalizedConflicts.findIndex(
+        (conflict) => !["replace", "skip"].includes(normalizeText(existingSelections?.[conflict?.client_key]).toLowerCase())
+      )
     );
     setPendingUploadFiles(Array.isArray(files) ? files : []);
+    setPendingUploadManifest(Array.isArray(manifest) ? manifest : []);
     setPendingUploadTarget(normalizeText(targetPath));
     setUploadConflicts(normalizedConflicts);
     setUploadConflictSelections(existingSelections || {});
@@ -1470,14 +1693,16 @@ export default function RemoteFileManagement({ device }) {
   }, []);
 
   const startUploadRequest = useCallback(
-    async (files, targetPath, conflictSelections = {}) => {
+    async (files, manifest, targetPath, conflictSelections = {}) => {
       const uploadFiles = Array.isArray(files) ? files : [];
+      const uploadManifest = Array.isArray(manifest) ? manifest : [];
       const normalizedTarget = normalizeText(targetPath);
-      if (!uploadFiles.length || !hostname || !normalizedTarget) return;
+      if (!uploadFiles.length || !hostname || !normalizedTarget || uploadManifest.length !== uploadFiles.length) return;
       setActionBusy("upload");
       try {
         const formData = new FormData();
         formData.append("target_path", normalizedTarget);
+        formData.append("manifest", JSON.stringify(uploadManifest));
         if (Object.keys(conflictSelections || {}).length) {
           formData.append("conflict_resolutions", JSON.stringify(conflictSelections));
         }
@@ -1491,7 +1716,7 @@ export default function RemoteFileManagement({ device }) {
         });
         const data = await response.json().catch(() => ({}));
         if (response.status === 409 && normalizeText(data?.error).toLowerCase() === "upload_conflicts") {
-          openUploadConflictDialog(uploadFiles, normalizedTarget, data?.conflicts || [], conflictSelections);
+          openUploadConflictDialog(uploadFiles, uploadManifest, normalizedTarget, data?.conflicts || [], conflictSelections);
           return;
         }
         if (response.status === 409 && normalizeText(data?.error).toLowerCase() === "agent_update_required") {
@@ -1541,17 +1766,17 @@ export default function RemoteFileManagement({ device }) {
       const nextSelections = { ...uploadConflictSelections };
       if (uploadConflictApplyToAll) {
         uploadConflicts.slice(uploadConflictIndex).forEach((conflict) => {
-          nextSelections[conflict.name] = normalizedChoice;
+          nextSelections[conflict.client_key] = normalizedChoice;
         });
         setUploadConflictSelections(nextSelections);
-        await startUploadRequest(pendingUploadFiles, pendingUploadTarget, nextSelections);
+        await startUploadRequest(pendingUploadFiles, pendingUploadManifest, pendingUploadTarget, nextSelections);
         return;
       }
-      nextSelections[currentConflict.name] = normalizedChoice;
+      nextSelections[currentConflict.client_key] = normalizedChoice;
       const nextIndex = uploadConflictIndex + 1;
       if (nextIndex >= uploadConflicts.length) {
         setUploadConflictSelections(nextSelections);
-        await startUploadRequest(pendingUploadFiles, pendingUploadTarget, nextSelections);
+        await startUploadRequest(pendingUploadFiles, pendingUploadManifest, pendingUploadTarget, nextSelections);
         return;
       }
       setUploadConflictSelections(nextSelections);
@@ -1560,6 +1785,7 @@ export default function RemoteFileManagement({ device }) {
     },
     [
       pendingUploadFiles,
+      pendingUploadManifest,
       pendingUploadTarget,
       startUploadRequest,
       uploadConflictApplyToAll,
@@ -1597,11 +1823,27 @@ export default function RemoteFileManagement({ device }) {
     fileInputRef.current?.click?.();
   }, []);
 
+  const handleOpenUploadFolderPicker = useCallback(() => {
+    folderInputRef.current?.click?.();
+  }, []);
+
   const handleUploadSelection = useCallback(
-    async (event) => {
+    async (event, options = {}) => {
       const files = Array.from(event?.target?.files || []);
       event.target.value = "";
       if (!files.length || !hostname || !resolvedUploadTarget) return;
+      const manifest = buildUploadManifest(files, {
+        preserveRelativePath: Boolean(options?.preserveRelativePath),
+      });
+      if (!manifest.length || manifest.length !== files.length) {
+        await notifyOperator({
+          title: "Upload Failed",
+          message: "The selected upload is missing a valid file manifest.",
+          icon: "error",
+          variant: "error",
+        });
+        return;
+      }
       setActionBusy("upload");
       try {
         const response = await fetch(`/api/device/files/${encodeURIComponent(hostname)}/upload/conflicts`, {
@@ -1610,11 +1852,7 @@ export default function RemoteFileManagement({ device }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             target_path: resolvedUploadTarget,
-            items: files.map((file) => ({
-              name: file.name,
-              size_bytes: Number(file.size || 0),
-              modified_at: Math.floor(Number(file.lastModified || 0) / 1000),
-            })),
+            items: manifest,
           }),
         });
         const data = await response.json().catch(() => ({}));
@@ -1631,10 +1869,10 @@ export default function RemoteFileManagement({ device }) {
         }
         const conflicts = Array.isArray(data?.conflicts) ? data.conflicts : [];
         if (conflicts.length) {
-          openUploadConflictDialog(files, resolvedUploadTarget, conflicts, {});
+          openUploadConflictDialog(files, manifest, resolvedUploadTarget, conflicts, {});
           return;
         }
-        await startUploadRequest(files, resolvedUploadTarget, {});
+        await startUploadRequest(files, manifest, resolvedUploadTarget, {});
       } catch (uploadError) {
         await notifyOperator({
           title: "Upload Failed",
@@ -1688,6 +1926,44 @@ export default function RemoteFileManagement({ device }) {
     }
   }, [hostname, notifyOperator, selectedRows]);
 
+  const handleCancelTransfer = useCallback(
+    async (transfer) => {
+      const transferId = normalizeText(transfer?.transfer_id);
+      if (!hostname || !transferId) return;
+      setActionBusy(`cancel:${transferId}`);
+      try {
+        const response = await fetch(
+          `/api/device/files/${encodeURIComponent(hostname)}/transfer/${encodeURIComponent(transferId)}/cancel`,
+          {
+            method: "POST",
+            credentials: "include",
+          }
+        );
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(normalizeText(data?.message) || normalizeText(data?.error) || `HTTP ${response.status}`);
+        }
+        setActiveTransfers((previous) => ({ ...previous, [transferId]: data }));
+        await notifyOperator({
+          title: "Cancel Requested",
+          message: `Borealis is stopping the ${normalizeText(transfer?.direction).toLowerCase() === "download" ? "download" : "upload"} transfer.`,
+          icon: "notification",
+          variant: "info",
+        });
+      } catch (cancelError) {
+        await notifyOperator({
+          title: "Cancel Failed",
+          message: String(cancelError?.message || cancelError),
+          icon: "error",
+          variant: "error",
+        });
+      } finally {
+        setActionBusy("");
+      }
+    },
+    [hostname, notifyOperator]
+  );
+
   const executeJsonAction = useCallback(
     async (pathSuffix, payload, successMessage, busyKey) => {
       if (!hostname) return false;
@@ -1725,6 +2001,80 @@ export default function RemoteFileManagement({ device }) {
     },
     [hostname, notifyOperator, refreshBaseView]
   );
+
+  const handleCopySelection = useCallback(async () => {
+    if (!selectedRows.length) return;
+    setClipboardState({
+      mode: "copy",
+      items: selectedRows.map((row) => ({ path: row.path, name: row.name, kind: row.kind })),
+    });
+    await notifyOperator({
+      title: "Copied",
+      message: `Copied ${selectedRows.length} item${selectedRows.length === 1 ? "" : "s"} to the File Management clipboard.`,
+      icon: "notification",
+      variant: "info",
+    });
+    setContextMenuState(null);
+  }, [notifyOperator, selectedRows]);
+
+  const handleCutSelection = useCallback(async () => {
+    if (!selectedRows.length) return;
+    setClipboardState({
+      mode: "cut",
+      items: selectedRows.map((row) => ({ path: row.path, name: row.name, kind: row.kind })),
+    });
+    await notifyOperator({
+      title: "Ready to Move",
+      message: `Cut ${selectedRows.length} item${selectedRows.length === 1 ? "" : "s"} to the File Management clipboard.`,
+      icon: "notification",
+      variant: "info",
+    });
+    setContextMenuState(null);
+  }, [notifyOperator, selectedRows]);
+
+  const handlePasteClipboard = useCallback(async () => {
+    const operation = normalizeText(clipboardState?.mode).toLowerCase();
+    const items = Array.isArray(clipboardState?.items) ? clipboardState.items : [];
+    const destinationPath = normalizeText(resolvedClipboardTarget);
+    if (!hostname || !destinationPath || !items.length || !["copy", "cut"].includes(operation)) return;
+    setActionBusy("paste");
+    try {
+      const response = await fetch(`/api/device/files/${encodeURIComponent(hostname)}/paste`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operation,
+          destination_path: destinationPath,
+          paths: items,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(normalizeText(data?.message) || normalizeText(data?.error) || `HTTP ${response.status}`);
+      }
+      if (operation === "cut") {
+        setClipboardState(null);
+      }
+      await notifyOperator({
+        title: operation === "cut" ? "Move Complete" : "Paste Complete",
+        message: `${operation === "cut" ? "Moved" : "Copied"} ${items.length} item${items.length === 1 ? "" : "s"} into ${destinationPath}.`,
+        icon: "notification",
+        variant: "success",
+      });
+      await refreshBaseView();
+      setContextMenuState(null);
+    } catch (pasteError) {
+      await notifyOperator({
+        title: "Paste Failed",
+        message: String(pasteError?.message || pasteError),
+        icon: "error",
+        variant: "error",
+      });
+    } finally {
+      setActionBusy("");
+    }
+  }, [clipboardState, hostname, notifyOperator, refreshBaseView, resolvedClipboardTarget]);
 
   const handleCreateFolder = useCallback(async () => {
     const destination = normalizeText(resolvedUploadTarget || currentPath || (platform === "windows" ? "" : "/"));
@@ -1848,6 +2198,8 @@ export default function RemoteFileManagement({ device }) {
   const handleGridShellContextMenu = useCallback(
     (event) => {
       if (event?.target?.closest?.(".ag-cell")) return;
+      gridRef.current?.api?.deselectAll?.();
+      setSelectedRows([]);
       handleOpenContextMenuAtPointer(event);
     },
     [handleOpenContextMenuAtPointer]
@@ -1881,107 +2233,342 @@ export default function RemoteFileManagement({ device }) {
     []
   );
 
-  const renderActionMenuItems = (closeMenu) => [
-    <MenuItem
-      key="upload"
-      disabled={!resolvedUploadTarget || !!actionBusy}
-      onClick={() => {
-        closeMenu();
-        handleOpenUploadPicker();
-      }}
-      sx={ACTION_MENU_ITEM_SX}
-    >
-      <FileUploadRoundedIcon sx={{ mr: 1, fontSize: 18 }} />
-      Upload
-    </MenuItem>,
-    <MenuItem
-      key="download"
-      disabled={!selectedRows.length || !!actionBusy}
-      onClick={() => {
-        closeMenu();
-        void handleStartDownload();
-      }}
-      sx={ACTION_MENU_ITEM_SX}
-    >
-      <FileDownloadRoundedIcon sx={{ mr: 1, fontSize: 18 }} />
-      Download
-    </MenuItem>,
-    <MenuItem
-      key="edit"
-      disabled={!isEditableFileEntry(selectedEntry) || !!actionBusy || editorLoading || editorSaving || inlineEditingUnsupported}
-      onClick={() => {
-        closeMenu();
-        void handleOpenEditor();
-      }}
-      sx={ACTION_MENU_ITEM_SX}
-    >
-      <EditRoundedIcon sx={{ mr: 1, fontSize: 18 }} />
-      Edit
-    </MenuItem>,
-    <MenuItem
-      key="rename"
-      disabled={!selectedEntry || !!actionBusy}
-      onClick={() => {
-        closeMenu();
-        setRenameValue(normalizeText(selectedEntry?.name));
-        setRenameOpen(true);
-      }}
-      sx={ACTION_MENU_ITEM_SX}
-    >
-      <DriveFileRenameOutlineRoundedIcon sx={{ mr: 1, fontSize: 18 }} />
-      Rename
-    </MenuItem>,
-    <MenuItem
-      key="delete"
-      disabled={!selectedRows.length || !!actionBusy}
-      onClick={() => {
-        closeMenu();
-        setDeleteOpen(true);
-      }}
-      sx={ACTION_MENU_ITEM_SX}
-    >
-      <DeleteOutlineRoundedIcon sx={{ mr: 1, fontSize: 18 }} />
-      Delete
-    </MenuItem>,
-    <MenuItem
-      key="move"
-      disabled={!selectedRows.length || !!actionBusy}
-      onClick={() => {
-        closeMenu();
-        setMoveDestination(normalizeText(currentPath || resolvedUploadTarget || (platform === "windows" ? "" : "/")));
-        setMoveOpen(true);
-      }}
-      sx={ACTION_MENU_ITEM_SX}
-    >
-      <DriveFileMoveRoundedIcon sx={{ mr: 1, fontSize: 18 }} />
-      Move
-    </MenuItem>,
-    <MenuItem
-      key="new-folder"
-      disabled={!resolvedUploadTarget || !!actionBusy}
-      onClick={() => {
-        closeMenu();
-        setNewFolderName("");
-        setNewFolderOpen(true);
-      }}
-      sx={ACTION_MENU_ITEM_SX}
-    >
-      <CreateNewFolderRoundedIcon sx={{ mr: 1, fontSize: 18 }} />
-      New Folder
-    </MenuItem>,
-    <MenuItem
-      key="collapse-all"
-      disabled={!expandedPaths.size || !!actionBusy}
-      onClick={() => {
-        closeMenu();
-        setExpandedPaths(new Set());
-      }}
-      sx={ACTION_MENU_ITEM_SX}
-    >
-      <UnfoldLessRoundedIcon sx={{ mr: 1, fontSize: 18 }} />
-      Collapse All
-    </MenuItem>,
-  ];
+  const contextMenuSubject = useMemo(() => {
+    if (selectedRows.length === 1 && selectedEntry) {
+      return {
+        title: selectedEntry.name || selectedEntry.path || "Selected item",
+        subtitle: selectedEntry.path || selectedEntry.type_label || "Selection",
+        iconKind: "entry",
+        entry: selectedEntry,
+      };
+    }
+    if (selectedRows.length > 1) {
+      return {
+        title: `${selectedRows.length} items selected`,
+        subtitle: normalizeText(displayedPath) || getPathLeafLabel(workingDirectoryPath, platform),
+        iconKind: "selection",
+        entry: null,
+      };
+    }
+    return {
+      title: getPathLeafLabel(workingDirectoryPath, platform),
+      subtitle: normalizeText(workingDirectoryPath) || (platform === "windows" ? "Drive roots" : "/"),
+      iconKind: "location",
+      entry: null,
+    };
+  }, [displayedPath, platform, selectedEntry, selectedRows, workingDirectoryPath]);
+
+  const renderContextMenuSubjectIcon = useCallback(
+    (subject) => {
+      if (subject?.iconKind === "selection") {
+        return <CheckCircleRoundedIcon sx={{ fontSize: 19, color: "currentColor" }} />;
+      }
+      if (subject?.iconKind === "location") {
+        return platform === "windows" && !normalizeText(workingDirectoryPath) ? (
+          <ComputerRoundedIcon sx={{ fontSize: 19, color: "currentColor" }} />
+        ) : (
+          <FolderRoundedIcon sx={{ fontSize: 19, color: "currentColor" }} />
+        );
+      }
+      const entry = subject?.entry;
+      if (isWindowsDriveRootEntry(entry, currentPath, platform)) {
+        return (
+          <Icon
+            baseClassName="material-symbols-outlined"
+            sx={{
+              fontSize: 19,
+              color: "currentColor",
+              lineHeight: 1,
+              fontVariationSettings: '"FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24',
+            }}
+          >
+            hard_drive
+          </Icon>
+        );
+      }
+      if (normalizeText(entry?.kind).toLowerCase() === "directory") {
+        return <FolderRoundedIcon sx={{ fontSize: 19, color: "currentColor" }} />;
+      }
+      if (normalizeText(entry?.kind).toLowerCase() === "symlink") {
+        return <LinkRoundedIcon sx={{ fontSize: 19, color: "currentColor" }} />;
+      }
+      return <InsertDriveFileRoundedIcon sx={{ fontSize: 19, color: "currentColor" }} />;
+    },
+    [currentPath, platform, workingDirectoryPath]
+  );
+
+  const contextMenuActions = useMemo(
+    () => [
+      {
+        id: "upload",
+        group: "primary",
+        label: "Upload",
+        icon: FileUploadRoundedIcon,
+        disabled: !resolvedUploadTarget || !!actionBusy,
+        disabledReason: !resolvedUploadTarget ? "Select a folder or drive first." : "",
+        onClick: () => handleOpenUploadPicker(),
+      },
+      {
+        id: "upload-folder",
+        group: "primary",
+        label: "Upload Folder",
+        icon: DriveFolderUploadRoundedIcon,
+        disabled: !resolvedUploadTarget || !!actionBusy,
+        disabledReason: !resolvedUploadTarget ? "Select a folder or drive first." : "",
+        onClick: () => handleOpenUploadFolderPicker(),
+      },
+      {
+        id: "download",
+        group: "primary",
+        label: "Download",
+        icon: FileDownloadRoundedIcon,
+        disabled: !selectedRows.length || !!actionBusy,
+        disabledReason: !selectedRows.length ? "Select one or more items to download." : "",
+        onClick: () => {
+          void handleStartDownload();
+        },
+      },
+      {
+        id: "edit",
+        group: "organize",
+        label: "Edit",
+        icon: EditRoundedIcon,
+        disabled: !isEditableFileEntry(selectedEntry) || !!actionBusy || editorLoading || editorSaving || inlineEditingUnsupported,
+        disabledReason: inlineEditingUnsupported
+          ? "Inline editing requires an updated agent."
+          : !isEditableFileEntry(selectedEntry)
+            ? "Select exactly one file."
+            : "",
+        onClick: () => {
+          void handleOpenEditor();
+        },
+      },
+      {
+        id: "copy",
+        group: "organize",
+        label: "Copy",
+        icon: ContentCopyRoundedIcon,
+        disabled: !selectedRows.length || !!actionBusy,
+        disabledReason: !selectedRows.length ? "Select one or more items to copy." : "",
+        onClick: () => {
+          void handleCopySelection();
+        },
+      },
+      {
+        id: "cut",
+        group: "organize",
+        label: "Cut",
+        icon: ContentCutRoundedIcon,
+        disabled: !selectedRows.length || !!actionBusy,
+        disabledReason: !selectedRows.length ? "Select one or more items to cut." : "",
+        onClick: () => {
+          void handleCutSelection();
+        },
+      },
+      {
+        id: "paste",
+        group: "organize",
+        label: "Paste",
+        icon: ContentPasteRoundedIcon,
+        disabled:
+          !Array.isArray(clipboardState?.items) ||
+          !clipboardState.items.length ||
+          !resolvedClipboardTarget ||
+          !!actionBusy,
+        disabledReason:
+          !Array.isArray(clipboardState?.items) || !clipboardState.items.length
+            ? "Copy or cut one or more items first."
+            : !resolvedClipboardTarget
+              ? "Select a destination folder or drive first."
+              : "",
+        onClick: () => {
+          void handlePasteClipboard();
+        },
+      },
+      {
+        id: "rename",
+        group: "organize",
+        label: "Rename",
+        icon: DriveFileRenameOutlineRoundedIcon,
+        disabled: !selectedEntry || !!actionBusy,
+        disabledReason: !selectedEntry ? "Select exactly one item." : "",
+        onClick: () => {
+          setRenameValue(normalizeText(selectedEntry?.name));
+          setRenameOpen(true);
+        },
+      },
+      {
+        id: "move",
+        group: "organize",
+        label: "Move",
+        icon: DriveFileMoveRoundedIcon,
+        disabled: !selectedRows.length || !!actionBusy,
+        disabledReason: !selectedRows.length ? "Select one or more items to move." : "",
+        onClick: () => {
+          setMoveDestination(normalizeText(currentPath || resolvedUploadTarget || (platform === "windows" ? "" : "/")));
+          setMoveOpen(true);
+        },
+      },
+      {
+        id: "new-folder",
+        group: "organize",
+        label: "New Folder",
+        icon: CreateNewFolderRoundedIcon,
+        disabled: !resolvedUploadTarget || !!actionBusy,
+        disabledReason: !resolvedUploadTarget ? "Select a folder or drive first." : "",
+        onClick: () => {
+          setNewFolderName("");
+          setNewFolderOpen(true);
+        },
+      },
+      {
+        id: "delete",
+        group: "danger",
+        intent: "danger",
+        label: "Delete",
+        icon: DeleteOutlineRoundedIcon,
+        disabled: !selectedRows.length || !!actionBusy,
+        disabledReason: !selectedRows.length ? "Select one or more items to delete." : "",
+        description: selectedRows.length ? "Permanently removes the selected item(s)." : "",
+        onClick: () => {
+          setDeleteOpen(true);
+        },
+      },
+      {
+        id: "collapse-all",
+        group: "view",
+        label: "Collapse All",
+        icon: UnfoldLessRoundedIcon,
+        disabled: !expandedPaths.size || !!actionBusy,
+        disabledReason: !expandedPaths.size ? "No expanded folders in the current view." : "",
+        onClick: () => {
+          setExpandedPaths(new Set());
+        },
+      },
+    ],
+    [
+      actionBusy,
+      currentPath,
+      editorLoading,
+      editorSaving,
+      expandedPaths.size,
+      clipboardState,
+      handleCopySelection,
+      handleCutSelection,
+      handleOpenEditor,
+      handleOpenUploadFolderPicker,
+      handleStartDownload,
+      handlePasteClipboard,
+      inlineEditingUnsupported,
+      platform,
+      resolvedClipboardTarget,
+      resolvedUploadTarget,
+      selectedEntry,
+      selectedRows,
+    ]
+  );
+
+  const renderActionMenuItems = useCallback(
+    (closeMenu) => {
+      const groupLabels = {
+        primary: "Primary",
+        organize: "Organize",
+        danger: "Danger Zone",
+        view: "View",
+      };
+      const groupOrder = ["primary", "organize", "danger", "view"];
+      const groups = groupOrder
+        .map((groupId) => ({
+          id: groupId,
+          label: groupLabels[groupId],
+          actions: contextMenuActions.filter((action) => action.group === groupId),
+        }))
+        .filter((group) => group.actions.length);
+
+      const nodes = [
+        <Box key="context-header" component="li" role="presentation" sx={ACTION_MENU_HEADER_SX}>
+          <Box sx={ACTION_MENU_HEADER_ICON_SX}>{renderContextMenuSubjectIcon(contextMenuSubject)}</Box>
+          <Box sx={{ minWidth: 0 }}>
+            <Tooltip title={contextMenuSubject.title || ""} placement="top-start">
+              <Typography
+                sx={{
+                  ...ACTION_MENU_TITLE_TRUNCATE_SX,
+                  color: MAGIC_UI.textBright,
+                  fontSize: "0.88rem",
+                  fontWeight: 600,
+                  lineHeight: 1.2,
+                  maxWidth: 240,
+                }}
+              >
+                {contextMenuSubject.title}
+              </Typography>
+            </Tooltip>
+            <Tooltip title={contextMenuSubject.subtitle || ""} placement="top-start">
+              <Typography
+                sx={{
+                  ...ACTION_MENU_TITLE_TRUNCATE_SX,
+                  color: "rgba(148,163,184,0.82)",
+                  fontSize: "0.73rem",
+                  lineHeight: 1.25,
+                  mt: 0.22,
+                  maxWidth: 240,
+                }}
+              >
+                {contextMenuSubject.subtitle}
+              </Typography>
+            </Tooltip>
+          </Box>
+        </Box>,
+      ];
+
+      groups.forEach((group) => {
+        nodes.push(<Divider key={`divider-before-${group.id}`} component="li" sx={ACTION_MENU_DIVIDER_SX} />);
+        nodes.push(
+          <Box key={`label-${group.id}`} component="li" role="presentation" sx={ACTION_MENU_SECTION_LABEL_SX}>
+            {group.label}
+          </Box>
+        );
+        group.actions.forEach((action) => {
+          const IconComponent = action.icon;
+          const helperText = action.disabledReason || action.description || "";
+          nodes.push(
+            <MenuItem
+              key={action.id}
+              disabled={Boolean(action.disabled)}
+              onClick={() => {
+                closeMenu();
+                action.onClick?.();
+              }}
+              sx={action.intent === "danger" ? ACTION_MENU_DANGER_ITEM_SX : ACTION_MENU_ITEM_SX}
+            >
+              <IconComponent
+                sx={{
+                  ...ACTION_MENU_ROW_ICON_SX,
+                  color: action.intent === "danger" ? "rgba(248,113,113,0.92)" : "rgba(226,232,240,0.92)",
+                }}
+              />
+              <Box
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: helperText ? "flex-start" : "center",
+                }}
+              >
+                <Typography sx={ACTION_MENU_LABEL_SX}>{action.label}</Typography>
+                {helperText ? <Typography sx={ACTION_MENU_DESCRIPTION_SX}>{helperText}</Typography> : null}
+              </Box>
+              {action.shortcut ? <Typography sx={ACTION_MENU_SHORTCUT_SX}>{action.shortcut}</Typography> : null}
+            </MenuItem>
+          );
+        });
+      });
+
+      return nodes;
+    },
+    [contextMenuActions, contextMenuSubject, renderContextMenuSubjectIcon]
+  );
 
   const columnDefs = useMemo(
     () => [
@@ -2145,7 +2732,18 @@ export default function RemoteFileManagement({ device }) {
         multiple
         hidden
         onChange={(event) => {
-          void handleUploadSelection(event);
+          void handleUploadSelection(event, { preserveRelativePath: false });
+        }}
+      />
+      <input
+        ref={folderInputRef}
+        type="file"
+        multiple
+        hidden
+        webkitdirectory=""
+        directory=""
+        onChange={(event) => {
+          void handleUploadSelection(event, { preserveRelativePath: true });
         }}
       />
 
@@ -2155,7 +2753,7 @@ export default function RemoteFileManagement({ device }) {
         </Alert>
       ) : null}
 
-      <TransferBanner transfers={activeTransfers} />
+      <TransferBanner transfers={activeTransfers} onCancel={handleCancelTransfer} actionBusy={actionBusy} />
 
       <Stack spacing={0.8} sx={{ minWidth: 0 }}>
         <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
@@ -2405,7 +3003,8 @@ export default function RemoteFileManagement({ device }) {
               </Typography>
               <Box>
                 <Typography sx={{ color: "#f8fafc", fontSize: "1.28rem", fontWeight: 500, lineHeight: 1.32 }}>
-                  The destination already has a file named "{currentUploadConflict.name}"
+                  The destination already has a file named "
+                  {normalizeText(currentUploadConflict.display_name) || currentUploadConflict.name}"
                 </Typography>
                 <Typography sx={{ color: "rgba(226,232,240,0.74)", fontSize: "0.84rem", mt: 0.7 }}>
                   Incoming file last modified{" "}
@@ -2491,7 +3090,12 @@ export default function RemoteFileManagement({ device }) {
                     }}
                   >
                     <Typography sx={{ color: "#7dd3fc", fontSize: "0.8rem", fontWeight: 600, mb: 0.9 }}>Incoming file</Typography>
-                    <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.82rem" }}>{currentUploadConflictFile?.name || currentUploadConflict.name}</Typography>
+                    <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.82rem" }}>
+                      {normalizeText(currentUploadConflict?.display_name) ||
+                        currentUploadConflictFile?.webkitRelativePath ||
+                        currentUploadConflictFile?.name ||
+                        currentUploadConflict.name}
+                    </Typography>
                     <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.78rem", mt: 0.55 }}>
                       Size: {formatBytes(currentUploadConflictFile?.size || currentUploadConflict?.upload_size_bytes)}
                     </Typography>
@@ -2514,7 +3118,9 @@ export default function RemoteFileManagement({ device }) {
                   >
                     <Typography sx={{ color: "#c084fc", fontSize: "0.8rem", fontWeight: 600, mb: 0.9 }}>Existing file</Typography>
                     <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.82rem" }}>
-                      {normalizeText(currentUploadConflict?.destination?.name) || currentUploadConflict.name}
+                      {normalizeText(currentUploadConflict?.destination?.path) ||
+                        normalizeText(currentUploadConflict?.destination?.name) ||
+                        currentUploadConflict.name}
                     </Typography>
                     <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.78rem", mt: 0.55 }}>
                       Size: {formatBytes(currentUploadConflict?.destination?.size_bytes)}

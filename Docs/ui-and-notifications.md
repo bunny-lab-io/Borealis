@@ -3,6 +3,7 @@
 
 ## Purpose
 Describe the Borealis WebUI architecture, styling conventions, and the toast notification system.
+Treat this document as the single source of truth for Borealis WebUI design rules. Product pages may be referenced as example implementations, but when a page and this document disagree, this document wins and the page should be updated.
 
 ## WebUI Architecture (High Level)
 - Entry point: `Data/Engine/web-interface/src/App.jsx` bootstraps the app shell and router in `Data/Engine/web-interface/src/app/`.
@@ -68,17 +69,18 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - Alerts starts in an unfiltered all-alerts view; clicking a status pill applies that queue filter, and clicking the same pill again clears it back to all alerts.
 - Alerts relies on AG Grid's built-in column filters rather than a page-level custom filter bar.
 - Device Summary includes a `Watchdogs` tab so operators can acknowledge incidents, suppress a watchdog for one device, or launch a prefilled device-scoped watchdog draft.
-- Device Summary also includes a `File Management` tab that uses a single AG Grid with a custom tree-style `Name` column, a full-width explorer-style `Working Directory` address bar above the grid, a lightweight page-level `Refresh` action, and a right-click action menu for upload, download, inline text editing, rename, move, delete, create-folder, and collapse-all behaviors.
-- The File Management tab should keep the current working directory URL-synced through `working_directory` so browser refresh, upload refreshes, and shared deep links reopen the same folder depth instead of collapsing back to the roots view.
-- Keep a `Show Hidden Items` checkbox directly under the File Management address bar. Default it to unchecked so hidden files and folders are not shown until the operator explicitly opts in.
-- The File Management address bar has two modes:
-  - default mode renders clickable chevron-delimited path segments for fast parent navigation
-  - clicking the empty address-bar space to the right of the segment trail switches into raw-path edit mode for direct copy/paste and manual path entry
-- Keep a clickable root affordance on the far-left of that address bar, styled as a monitor/computer icon with a trailing chevron, so operators can jump back to the filesystem root quickly.
-- Give both the root affordance and the chevron path segments an obvious soft Borealis-blue hover state so they read clearly as navigation controls rather than static labels.
-- Keep a copy icon button on the far-right edge of that address bar so operators can copy the current path without switching modes.
-- File Management text editing should open in a large glass dialog that mirrors the StdOut / StdErr viewer shell: path subtitle on the left, `Save` and `Close` actions on the top-right, and a monospace syntax-highlighted editor surface sized for quick inline edits rather than full IDE workflows.
-- File Management upload conflicts should use a Windows Explorer-style `Replace or Skip Files` dialog rather than a generic confirmation modal. Keep the duplicate filename prominent, offer `Replace the file in the destination`, `Skip this file`, and `Compare info for both files` actions as full-width stacked rows, and show a `Do this for all items` checkbox whenever more than one duplicate remains.
+- Filesystem browser surfaces should follow the explorer pattern now established in the Device Summary `File Management` tab:
+  - use a single AG Grid with a custom tree-style `Name` column when operators benefit from seeing the broader hierarchy while working
+  - keep the current working directory URL-synced through a stable query key such as `working_directory` so browser refreshes, post-action refreshes, and shared links reopen the same folder depth instead of collapsing back to the roots view
+  - default hidden files and folders to off behind an explicit `Show Hidden Items` checkbox instead of showing them by default
+  - use an address bar with two modes:
+    - default mode renders clickable chevron-delimited path segments for fast parent navigation
+    - clicking into the empty address-bar space to the right of the segment trail switches into raw-path edit mode for direct copy/paste and manual path entry
+  - keep a clickable root affordance on the far-left of that address bar so operators can jump back to the filesystem root quickly
+  - give both the root affordance and the chevron path segments an obvious soft Borealis-blue hover state so they read clearly as navigation controls rather than static labels
+  - keep a copy affordance on the far-right edge of that address bar so operators can copy the current path without switching modes
+  - lightweight inline text editing should open in a large glass dialog that mirrors the StdOut / StdErr viewer shell: path subtitle on the left, `Save` and `Close` actions on the top-right, and a monospace syntax-highlighted editor surface sized for quick inline edits rather than full IDE workflows
+  - duplicate upload conflicts should use an explorer-style `Replace or Skip Files` decision dialog rather than a generic confirmation modal
 - Real-time refresh uses `watchdog_incidents_changed` and `device_watchdogs_changed` on the shared `window.BorealisSocket`.
 
 ## API Endpoints
@@ -181,25 +183,88 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - Buttons and chips: page-header primary CTAs use a consistent cyan-to-violet gradient (`#7dd3fc -> #c084fc`); neutral actions use rounded outlines with `rgba(148,163,184,0.4)` borders and mixed-case labels.
 - Do not use rainbow-border CTAs in the shared page header rail.
 - AG Grid treatment: Quartz theme with matte navy headers, subtle alternating row opacity, cyan/magenta interaction glows, rounded wrappers, soft borders, inset selection glows.
-- The Device Summary `File Management` tab should keep using community AG Grid plus a React-managed flattened tree. Do not switch that surface to AG Grid Tree Data or grouping APIs for this workflow.
+- Explorer-style file browsers and similar nested navigation surfaces that need broad hierarchy visibility should use community AG Grid plus a React-managed flattened tree. Do not switch those surfaces to AG Grid Tree Data or grouping APIs for this workflow. Reference implementation: `Data/Engine/web-interface/src/Devices/Tabs/Remote_File_Management.jsx`.
 - Default grid cell padding: keep roughly 18px on the left edge and 12px on the right for standard cells (12px/9px for `auto-col-tight`) so text never hugs a column edge. Target the center + pinned containers so both regions stay aligned.
 - Overlays/menus: `rgba(8,12,24,0.96)` canvas, blurred backdrops, thin steel borders; bright typography; deep blue glass inputs; cyan confirm, mauve destructive accents.
 
 #### Right-Click Context Menus
 - Use a right-click context menu for row-targeted grid actions when operators benefit from working directly in-table rather than moving back to a page-level toolbar.
-- Match the Installed Software and File Management interaction model:
+- Match the shared Borealis context-menu model.
+- Reference implementations currently live in:
+  - `Data/Engine/web-interface/src/Devices/Tabs/Installed_Software.jsx`
+  - `Data/Engine/web-interface/src/Devices/Tabs/Remote_File_Management.jsx`
+- Core interaction model:
   - open the menu at the pointer using MUI `Menu` with `anchorReference="anchorPosition"`
-  - use a dark glass paper surface with `rgba(8,12,24,0.96)` background, shared panel border, backdrop blur, and about `8px` radius
-  - keep menu copy compact at about `13px`, with bright foreground text and icons aligned on the left edge of each item
+  - use a dark glass paper surface with `rgba(8,12,24,0.96)` background, shared panel border, backdrop blur, about `8px` radius, and a little inner padding so grouped sections have room to breathe
+  - keep menu copy compact, with bright foreground text, left-aligned icons, and enough height for a short helper line when a page needs one
 - Right-click behavior:
   - if the operator right-clicks an unselected row, select that row first and then open the menu
   - if the operator right-clicks an already selected row, preserve the existing selection
   - right-clicking empty grid space may still open a context menu when the page has useful non-row actions such as `New Folder` or `Collapse All`
+- Context-menu anatomy:
+  - a context header row belongs at the top of object-aware menus; use it to show the current object icon plus one short title and one concise subtitle
+  - header title and subtitle should both stay single-line; if either value can ellipsize, expose the full value on hover with a tooltip instead of leaving the operator with raw trailing `...`
+  - below the header, group actions into semantic sections instead of presenting one uninterrupted list
+  - use small uppercase section labels for those groups when the menu contains more than one action family
+  - separate groups with subtle dividers rather than large visual blocks
+- Standard group order:
+  - `Primary`
+  - `Organize`
+  - `Danger Zone`
+  - `View`
+- Action schema:
+  - define context-menu items from a structured action object instead of hand-authoring one-off `MenuItem` lists whenever practical
+  - the recommended fields are:
+    - `id`
+    - `label`
+    - `icon`
+    - `group`
+    - `intent`
+    - `shortcut`
+    - `description`
+    - `disabled`
+    - `disabledReason`
+    - `hidden`
+    - `onClick`
+- Hidden vs disabled:
+  - hide actions that are not relevant to the current object type
+  - disable actions that are relevant but temporarily unavailable
+  - when an action is disabled and the reason is not obvious, provide a short inline `disabledReason` instead of leaving the operator to guess
+  - keep section labels visible even when every action inside that section is disabled; do not auto-collapse whole sections away
 - Menu composition:
   - put the most common direct actions first
-  - keep destructive actions visually in the same family as the rest of the menu unless the product explicitly needs a destructive accent
+  - keep destructive actions visually in the same family as the rest of the menu unless the product explicitly needs a destructive accent, but give the destructive section its own placement and a subtle danger tint on icon/hover so it reads as intentional
   - preserve useful action icons on the left side of each item rather than hiding them in trailing affordances
-- File Management reference ordering:
+  - only show trailing shortcut hints when the shortcut actually exists in the product; do not imply unimplemented keyboard bindings
+  - keep primary action labels single-line; prefer shorter copy or ellipsis over wrapping normal action labels across multiple lines
+  - helper copy such as `description` and `disabledReason` may wrap when needed
+  - single-line action rows should vertically center the icon and label content; two-line rows that include helper copy should remain top-aligned so the label-to-helper spacing stays readable
+  - hovered actionable rows should show a subtle Borealis-blue left-edge accent bar in addition to the row hover fill so the active target feels anchored
+- Menu sizing and overflow:
+  - use one of the approved Borealis menu width variants instead of inventing page-specific widths:
+    - `compact`: short utility menus with a small number of terse actions and no object header
+    - `standard`: the default for row-level and object-level action menus across Borealis
+    - `extended`: rare metadata-heavy, compare-heavy, or decision-heavy menus that need extra width to stay readable
+  - default to `standard` unless there is a clear reason to use `compact` or `extended`
+  - `standard` menus should keep the same width across normal implementations so the product feels consistent; content should adapt inside that width rather than forcing each page to size menus unpredictably
+  - do not introduce one-off page-specific widths unless the design language in this document is updated to approve a new variant
+  - header title and subtitle should ellipsize within the chosen width rather than expanding the menu
+  - helper copy may wrap within the chosen width; normal action labels should not
+- Selection-aware behavior:
+  - one selected item may expose object-specific actions such as `Edit`, `Rename`, or `Properties`
+  - multi-selection should automatically collapse to bulk-safe actions
+  - empty-space context menus may expose location-scoped or view-scoped actions and should use the current location in the header row
+- Reference implementation:
+  - `Data/Engine/web-interface/src/Devices/Tabs/Remote_File_Management.jsx` demonstrates the preferred Borealis anatomy:
+    - context header
+    - ellipsis-safe header tooltips
+    - grouped sections
+    - `standard` width behavior
+    - destructive section placement
+    - inline disabled reasons
+    - mixed single-line/two-line row alignment
+    - Borealis-blue left-edge hover accent
+- Filesystem browser reference ordering:
   - `Upload`
   - `Download`
   - `Edit`
@@ -267,8 +332,7 @@ useRoutePageChrome({
 - Label treatment: the floating label text should blend directly into the page/header background. Do not add a chip, pill, or opaque backdrop behind the label text.
 - Badges/metadata: do not standardize badges as part of the shared header rail. Page-specific metadata belongs in the page body, usually directly under the subtitle or near the first relevant control group.
 - Secondary action overflow: on narrow widths, if the full rail no longer fits on a single row, the shared rail automatically collapses all secondary actions into a single `Actions` secondary button while keeping primary/warning/danger actions visible. Overflow menu ordering should place the secondary action closest to the primary buttons at the top of the menu.
-- Device Summary uses a page-local `Actions` menu inside `Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx`; it now exposes `Quick Job`, `New Watchdog`, `Update Agent`, and `Clear Device Activity`.
-- The `File Management` tab follows the same local toolbar pattern: breadcrumbs and `Up` / `Refresh` on the left, primary `Upload` / `Download` actions on the right, and a secondary `Actions` menu for non-primary filesystem mutations.
+- Some tabbed surfaces may still expose page-local action menus when the actions are truly tab-scoped rather than row-scoped. Use `Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx` as an example implementation, but keep the shared action-rail rules in this document as the authority.
 - `Update Agent` is an operator-triggered AutoUpdater start. It tells the device to run its existing local updater task immediately rather than using a separate direct-launch updater path.
 - Workflow and targeting UIs that consume `/api/agents` should treat helper-backed current-user capability as metadata on the host's SYSTEM record (`helper_contexts`), not as a second live Borealis socket.
 - Responsive behavior: tabs remain in normal flow beneath the header band. On narrow widths, the title block and action rail stack vertically. The rail should prefer collapsing secondary actions before wrapping and must never cover the tabs or the first content section.

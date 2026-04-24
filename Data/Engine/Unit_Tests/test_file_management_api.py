@@ -101,3 +101,50 @@ def test_create_upload_session_marks_overwrite_items(tmp_path: Path) -> None:
     items = {row["name"]: row for row in stored_session["upload_items"]}
     assert items["replace-me.txt"]["overwrite_existing"] is True
     assert items["leave-me.txt"]["overwrite_existing"] is False
+
+
+def test_create_upload_session_preserves_relative_paths(tmp_path: Path) -> None:
+    store = file_management_module.FileTransferStore(tmp_path / "engine_file_management", ttl_seconds=3600, logger=_Logger())
+
+    session = store.create_upload_session(
+        hostname="LAB-OPERATOR-01",
+        device_guid="00000000-0000-0000-0000-000000000001",
+        agent_id="agent-001",
+        operator_id="operator-001",
+        target_path=r"C:\Temp",
+        files=[
+            _FakeStorage("alpha.txt", b"alpha"),
+            _FakeStorage("beta.txt", b"beta"),
+        ],
+        manifest_items=[
+            {"client_key": "Folder/alpha.txt", "name": "alpha.txt", "relative_path": "Folder/alpha.txt"},
+            {"client_key": "Folder/Sub/beta.txt", "name": "beta.txt", "relative_path": "Folder/Sub/beta.txt"},
+        ],
+        overwrite_keys=["Folder/alpha.txt"],
+    )
+
+    stored_session = store.get_session(session["transfer_id"])
+    assert stored_session is not None
+    items = {row["client_key"]: row for row in stored_session["upload_items"]}
+    assert items["Folder/alpha.txt"]["relative_path"] == "Folder/alpha.txt"
+    assert items["Folder/Sub/beta.txt"]["relative_path"] == "Folder/Sub/beta.txt"
+    assert items["Folder/alpha.txt"]["overwrite_existing"] is True
+    assert items["Folder/Sub/beta.txt"]["overwrite_existing"] is False
+
+
+def test_request_cancel_marks_transfer_canceling(tmp_path: Path) -> None:
+    store = file_management_module.FileTransferStore(tmp_path / "engine_file_management", ttl_seconds=3600, logger=_Logger())
+    session = store.create_download_session(
+        hostname="LAB-OPERATOR-01",
+        device_guid="00000000-0000-0000-0000-000000000001",
+        agent_id="agent-001",
+        operator_id="operator-001",
+        selections=[{"path": r"C:\Temp", "name": "Temp", "kind": "directory"}],
+        archive_name="download.7z",
+    )
+
+    snapshot = store.request_cancel(session["transfer_id"])
+
+    assert snapshot is not None
+    assert snapshot["cancel_requested"] is True
+    assert snapshot["status"] == "canceling"
