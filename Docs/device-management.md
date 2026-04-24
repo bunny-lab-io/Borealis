@@ -38,6 +38,17 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Operators can create a new prefilled watchdog for the current device without leaving the device page.
 - Per-device suppressions mute one watchdog/device relationship without cloning the shared watchdog policy.
 
+## Device File Management
+- Device Summary now also exposes a `File Management` tab for remote browse, upload, download, lightweight text editing, copy, cut, paste, create-folder, rename, move, and delete actions against the device file system.
+- Windows devices browse in the Borealis SYSTEM context and Linux devices browse in the root context.
+- The tab uses a single AG Grid with a custom tree-style `Name` column, React-managed flattened rows, lazy directory expansion, a page-level `Refresh` control, and a right-click context menu for file actions.
+- Uploads stage browser files on the Engine first and then let the agent pull them into place. Folder uploads preserve the browser-provided relative path manifest so Borealis can recreate the nested destination structure on the remote agent while serializing the file transfers into their matching subfolders.
+- Downloads let the agent stage the requested file or archive back to the Engine before the operator fetches it, and the in-tab transfer banner now also exposes `Cancel` so operators can interrupt in-progress uploads or downloads.
+- Before File Management uploads start, Borealis now preflights duplicate names in the destination directory and, when needed, shows a Windows-style replace-or-skip dialog so the operator can replace, skip, or compare each duplicate before the transfer begins, including duplicate files discovered inside folder uploads.
+- Lightweight text editing reads one remote text file at a time through the file-management socket lane, applies syntax highlighting based on the filename extension, and saves back to the same path in-place so the file keeps its existing permissions.
+- Copy and cut actions stay operator-local until the operator pastes them into a destination folder or drive, at which point the Engine asks the agent to perform the remote filesystem copy or move in place.
+- Operator access stays site-scoped per hostname, and agent-side transfer routes stay bound to the authenticated device GUID.
+
 ## Device List Views
 - Operators can save custom table views for the device list UI.
 - Views are stored per operator and exposed via `/api/device_list_views`.
@@ -74,6 +85,21 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `POST /api/device/software/<hostname>/uninstall-unblock` (Token Authenticated) - remove matching hotloaded uninstall block rules for a software row.
 - `POST /api/device/software/<hostname>/uninstall` (Token Authenticated) - queue a silent uninstall quick job for a supported installed-software row on an in-scope Windows device.
 - `POST /api/device/update-agent/<hostname>` (Token Authenticated) - ask a device to start its local AutoUpdater task immediately.
+- `GET /api/device/files/<hostname>/roots` (Token Authenticated) - load the File Management tab roots view for an in-scope device.
+- `GET /api/device/files/<hostname>/children?path=<absolute-path>` (Token Authenticated) - list one remote directory for an in-scope device.
+- `POST /api/device/files/<hostname>/upload/conflicts` (Token Authenticated) - preflight upload name conflicts in one remote directory for an in-scope device.
+- `GET /api/device/files/<hostname>/text?path=<absolute-path>` (Token Authenticated) - read one lightweight-editable remote text file for the File Management editor.
+- `POST /api/device/files/<hostname>/text` (Token Authenticated) - save one lightweight-editable remote text file back in place on an in-scope device.
+- `POST /api/device/files/<hostname>/mkdir` (Token Authenticated) - create a remote directory on an in-scope device.
+- `POST /api/device/files/<hostname>/rename` (Token Authenticated) - rename one remote file-system item on an in-scope device.
+- `POST /api/device/files/<hostname>/move` (Token Authenticated) - move remote file-system items on an in-scope device.
+- `POST /api/device/files/<hostname>/paste` (Token Authenticated) - paste copied or cut remote file-system items into a destination directory on an in-scope device.
+- `POST /api/device/files/<hostname>/delete` (Token Authenticated) - delete remote file-system items on an in-scope device.
+- `POST /api/device/files/<hostname>/upload` (Token Authenticated) - stage browser-uploaded files for transfer to an in-scope device.
+- `POST /api/device/files/<hostname>/download` (Token Authenticated) - start a remote file download transfer from an in-scope device.
+- `GET /api/device/files/<hostname>/transfer/<transfer_id>/status` (Token Authenticated) - poll a File Management transfer snapshot.
+- `POST /api/device/files/<hostname>/transfer/<transfer_id>/cancel` (Token Authenticated) - request cancellation for an in-progress File Management transfer.
+- `GET /api/device/files/<hostname>/transfer/<transfer_id>/content` (Token Authenticated) - download a completed File Management transfer artifact from Engine temp storage.
 - `POST /api/device/description/<hostname>` (Token Authenticated) - update description.
 - `GET /api/device_list_views` (Token Authenticated) - list saved views.
 - `GET /api/device_list_views/<int:view_id>` (Token Authenticated) - get saved view.
@@ -141,6 +167,10 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Service inventory is cached in the `devices.services` JSON blob and merged with pending operator actions until a fresh agent snapshot confirms the desired state.
 - Manual agent update requests from the Device Summary action menu call `POST /api/device/update-agent/<hostname>` and are delivered over the device's SYSTEM Socket.IO channel as `agent_update_request`.
 - The agent does not launch `Update.ps1` / `Update.sh` directly for that request anymore; it starts the existing local AutoUpdater scheduler path instead so manual and scheduled updates use the same execution flow.
+- File Management browse and mutation requests use the device SYSTEM Socket.IO channel with Socket.IO ACK responses under the `file_management_request` event instead of piggybacking on quick-job stdout/stderr.
+- File transfers use Engine temp-file staging plus device-authenticated agent pull/push endpoints so large uploads and downloads do not have to fit inside one socket payload.
+- Folder uploads rely on an Engine-staged upload manifest that preserves each browser file's relative path so the agent can rebuild the destination tree incrementally without requiring the whole folder to ride in one payload.
+- Transfer progress updates now double as cancellation checkpoints: the operator requests cancellation through the Engine, the Engine marks the transfer `cancel_requested`, and the agent polls that control snapshot while streaming upload chunks or building archives.
 
 ### Status computation
 - Online/offline is computed from `last_seen` (online if within ~300 seconds).
@@ -174,6 +204,8 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 ### WebUI deep links
 - Device Details route: `/devices/<agent_guid_or_hostname>`.
 - Tab query keys: `device_summary`, `installed_software`, `services`, `activity_history`, `remote_shell`, `remote_desktop`.
+- Device Details also exposes the `file_management` tab query key for the File Management view.
+- File Management also exposes a `working_directory` query param for shareable folder deep links, for example `?tab=file_management&working_directory=C%3A%5CUsers%5Cnicole.rappe%5CDesktop`.
 - Route registration and URL preservation are implemented in `Data/Engine/web-interface/src/app/routes/router.jsx` plus `Data/Engine/web-interface/src/app/routes/paths.js`; component-level tab URL sync is implemented in `Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx`.
 - Shared header hostname search is implemented in `Data/Engine/web-interface/src/GlobalDeviceSearch.jsx` and queries `GET /api/devices/search`.
 

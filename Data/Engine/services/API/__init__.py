@@ -39,6 +39,7 @@ from .devices.tunnel import register_tunnel
 from .devices.vnc import register_vnc
 from .devices.shell import register_shell
 from .devices.services import register_services
+from .devices.file_management import register_file_management
 
 from ...server import EngineContext
 from .access_management.login import register_auth
@@ -350,6 +351,7 @@ def _register_devices(app: Flask, adapters: EngineServiceAdapters) -> None:
     register_vnc(app, adapters)
     register_shell(app, adapters)
     register_services(app, adapters)
+    register_file_management(app, adapters)
 
 def _register_filters(app: Flask, adapters: EngineServiceAdapters) -> None:
     filters_management.register_filters(app, adapters)

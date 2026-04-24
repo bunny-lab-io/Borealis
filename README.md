@@ -1,6 +1,6 @@
 ![Borealis Logo](Data/Engine/web-interface/public/Borealis_Logo_Full.png)
 
-Borealis is a remote management and automation platform built around a Linux-hosted Engine (*server*), Windows and Linux agent (*client*) runtimes, and a visual workflow layer. Operators can execute scripts, schedule jobs, orchestrate infrastructure tasks, and manage distributed systems through a unified interface.
+Borealis is a remote management and automation platform built around a Linux-hosted Engine (*server*), Windows and Linux agent (*client*) runtimes, and a visual workflow layer. Operators can execute scripts, schedule jobs, orchestrate infrastructure tasks, manage software and files on remote devices, and operate distributed systems through a unified interface.
 
 The project was originally created to consolidate the functionality of multiple standalone tools used in and outside my homelab and real-world environments (Various RMM platforms, Ansible/AWX, SemaphoreUI, etc.) into a single, cohesive platform.
 
@@ -115,6 +115,24 @@ Borealis integrates with the **[Aurora Repository](https://github.com/bunny-lab-
 - Saved filters and device list views
 - Global hostname search scoped by operator access
 - Device-level watchdog and alerts surfaces
+- Per-device Activity History and service control surfaces
+
+## Software Management
+- Installed Software tab with normalized software inventory
+- Row-level uninstall for supported software
+- Global icon overrides for software rows
+- Global uninstall overrides for custom uninstall strings
+- Global uninstall block and unblock governance
+- Immediate `Query Software Changes` refreshes from the device UI
+
+## File Management
+- Remote file browser with AG Grid tree navigation
+- File upload and recursive folder upload
+- File and folder download with staged transfer tracking
+- Duplicate upload conflict handling with replace/skip/compare decisions
+- Copy, cut, paste, rename, move, delete, and create-folder actions
+- Lightweight inline text editing with extension-aware syntax highlighting
+- Cancelable upload and download transfers
 
 ## Remote Execution
 - PowerShell (Windows)

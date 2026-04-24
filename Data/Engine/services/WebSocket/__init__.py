@@ -253,6 +253,16 @@ class AgentSocketRegistry:
             self.logger.debug("Failed to emit %s to agent_id=%s", event, agent_id, exc_info=True)
             return False
 
+    def call(self, agent_id: str, event: str, payload: Any, *, timeout: float = 30.0) -> Any:
+        sid = self._sid_by_agent.get(agent_id)
+        if not sid or not hasattr(self.socketio, "call"):
+            return None
+        try:
+            return self.socketio.call(event, payload, to=sid, timeout=timeout)
+        except Exception:
+            self.logger.debug("Failed to call %s for agent_id=%s", event, agent_id, exc_info=True)
+            return None
+
     def emit_to_host(self, hostname: str, service_mode: str, event: str, payload: Any) -> bool:
         sid = self._resolve_sid_for_host_mode(hostname, service_mode)
         if not sid:
@@ -269,6 +279,22 @@ class AgentSocketRegistry:
                 exc_info=True,
             )
             return False
+
+    def call_to_host(self, hostname: str, service_mode: str, event: str, payload: Any, *, timeout: float = 30.0) -> Any:
+        sid = self._resolve_sid_for_host_mode(hostname, service_mode)
+        if not sid or not hasattr(self.socketio, "call"):
+            return None
+        try:
+            return self.socketio.call(event, payload, to=sid, timeout=timeout)
+        except Exception:
+            self.logger.debug(
+                "Failed to call %s for hostname=%s service_mode=%s",
+                event,
+                hostname,
+                service_mode,
+                exc_info=True,
+            )
+            return None
 
 
 class OperatorPresenceRegistry:
@@ -368,8 +394,13 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
     def _emit_agent_event(agent_id: str, event: str, payload: Any) -> bool:
         return agent_registry.emit(agent_id, event, payload)
 
+    def _call_agent_event(agent_id: str, event: str, payload: Any, *, timeout: float = 30.0) -> Any:
+        return agent_registry.call(agent_id, event, payload, timeout=timeout)
+
     setattr(context, "emit_agent_event", _emit_agent_event)
+    setattr(context, "call_agent_event", _call_agent_event)
     setattr(context, "emit_host_service_event", agent_registry.emit_to_host)
+    setattr(context, "call_host_service_event", agent_registry.call_to_host)
     setattr(context, "has_host_service_socket", agent_registry.is_host_mode_registered)
 
     def _prewarm_vnc_credential(agent_id: str) -> None:
