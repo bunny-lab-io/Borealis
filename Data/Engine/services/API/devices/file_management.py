@@ -5,6 +5,9 @@
 # API Endpoints (if applicable):
 # - GET /api/device/files/<hostname>/roots (Token Authenticated) - Returns the remote file-management roots view for an in-scope device.
 # - GET /api/device/files/<hostname>/children (Token Authenticated) - Returns direct children for a remote directory on an in-scope device.
+# - POST /api/device/files/<hostname>/upload/conflicts (Token Authenticated) - Preflights upload name conflicts against a remote directory on an in-scope device.
+# - GET /api/device/files/<hostname>/text (Token Authenticated) - Reads one lightweight-editable remote text file from an in-scope device.
+# - POST /api/device/files/<hostname>/text (Token Authenticated) - Saves one lightweight-editable remote text file on an in-scope device.
 # - POST /api/device/files/<hostname>/mkdir (Token Authenticated) - Creates a remote directory on an in-scope device.
 # - POST /api/device/files/<hostname>/rename (Token Authenticated) - Renames one remote file-system item on an in-scope device.
 # - POST /api/device/files/<hostname>/move (Token Authenticated) - Moves remote file-system items on an in-scope device.
@@ -94,11 +97,56 @@ def _normalize_transfer_entries(value: Any) -> list[Dict[str, Any]]:
     return list(deduped.values())
 
 
+def _normalize_upload_manifest_items(value: Any) -> list[Dict[str, Any]]:
+    rows: list[Dict[str, Any]] = []
+    candidates = value if isinstance(value, list) else [value]
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        name = _sanitize_upload_name(item.get("name") or item.get("filename"))
+        if not name:
+            continue
+        rows.append(
+            {
+                "name": name,
+                "size_bytes": int(item.get("size_bytes") or 0),
+                "modified_at": int(item.get("modified_at") or 0),
+            }
+        )
+    deduped: dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        deduped[row["name"]] = row
+    return list(deduped.values())
+
+
+def _normalize_conflict_resolution_map(value: Any) -> dict[str, str]:
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return {}
+        try:
+            import json
+
+            value = json.loads(raw)
+        except Exception:
+            return {}
+    if not isinstance(value, dict):
+        return {}
+    rows: dict[str, str] = {}
+    for key, resolution in value.items():
+        name = _sanitize_upload_name(key)
+        choice = _normalize_text(resolution).lower()
+        if not name or choice not in {"replace", "skip"}:
+            continue
+        rows[name] = choice
+    return rows
+
+
 def _guess_download_name(hostname: str, selections: list[Dict[str, Any]], *, archive_required: bool) -> str:
     now_label = time.strftime("%Y%m%d-%H%M%S")
     if archive_required:
         normalized_host = _normalize_text(hostname) or "device"
-        return f"{normalized_host}-files-{now_label}.zip"
+        return f"{normalized_host}-files-{now_label}.7z"
     if not selections:
         return f"download-{now_label}.bin"
     only = selections[0]
@@ -167,6 +215,15 @@ class FileTransferStore:
         except Exception:
             self._logger.debug("Failed to remove file-management session temp files.", exc_info=True)
 
+    def delete_session(self, transfer_id: str) -> None:
+        normalized = _normalize_text(transfer_id)
+        if not normalized:
+            return
+        with self._lock:
+            session = self._sessions.pop(normalized, None)
+        if session:
+            self._remove_session_files(session)
+
     def _session_dir_for(self, transfer_id: str) -> Path:
         return self._root_dir / transfer_id
 
@@ -179,6 +236,7 @@ class FileTransferStore:
         operator_id: str,
         target_path: str,
         files: Iterable[Any],
+        overwrite_names: Optional[Iterable[str]] = None,
     ) -> Dict[str, Any]:
         self.cleanup_expired()
         transfer_id = uuid.uuid4().hex
@@ -187,6 +245,7 @@ class FileTransferStore:
         uploads_dir.mkdir(parents=True, exist_ok=True)
         item_rows: list[Dict[str, Any]] = []
         bytes_total = 0
+        overwrite_lookup = {_sanitize_upload_name(name): True for name in (overwrite_names or []) if _sanitize_upload_name(name)}
         for storage in files:
             filename = _sanitize_upload_name(getattr(storage, "filename", ""))
             if not filename:
@@ -204,6 +263,7 @@ class FileTransferStore:
                     "name": filename,
                     "size_bytes": size_bytes,
                     "stored_path": str(stored_path),
+                    "overwrite_existing": bool(overwrite_lookup.get(filename)),
                 }
             )
             bytes_total += size_bytes
@@ -461,15 +521,24 @@ def _rpc_error_response(response: Any) -> Tuple[Dict[str, Any], int]:
         return {"error": "agent_unavailable", "message": "The device file-management channel did not respond."}, 503
     error_code = _normalize_text(response.get("error")).lower() or "agent_error"
     message = _normalize_text(response.get("message")) or error_code
+    if error_code == "invalid_request" and "Unsupported file-management action" in message:
+        return {
+            "error": "agent_update_required",
+            "message": "The device agent needs to be updated before this File Management capability is available.",
+        }, 409
     status_code = {
         "not_found": 404,
         "path_not_found": 404,
         "file_not_found": 404,
         "directory_not_found": 404,
         "not_a_directory": 400,
+        "not_a_file": 400,
         "invalid_path": 400,
         "invalid_name": 400,
         "invalid_request": 400,
+        "file_too_large": 413,
+        "binary_not_supported": 415,
+        "text_encoding_not_supported": 415,
         "permission_denied": 403,
         "conflict": 409,
         "path_conflict": 409,
@@ -636,6 +705,152 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
             }
         )
 
+    def _upload_conflicts_payload(record: Dict[str, Any], hostname: str, operator_id: str, target_path: str, items: list[Dict[str, Any]]):
+        response, rpc_error = _call_file_management_rpc(
+            adapters,
+            hostname=record.get("hostname") or hostname,
+            payload={
+                "action": "upload_conflicts",
+                "hostname": record.get("hostname") or hostname,
+                "agent_id": record.get("agent_id") or "",
+                "requested_by": operator_id,
+                "target_path": target_path,
+                "items": items,
+            },
+        )
+        if rpc_error:
+            return None, rpc_error
+        assert response is not None
+        return {
+            "ok": True,
+            "hostname": record.get("hostname") or hostname,
+            "target_path": response.get("target_path") or target_path,
+            "conflicts": response.get("conflicts") if isinstance(response.get("conflicts"), list) else [],
+        }, None
+
+    @blueprint.route("/api/device/files/<hostname>/upload/conflicts", methods=["POST"])
+    def get_upload_conflicts(hostname: str):
+        _user, record, operator_id, error = _operator_context(hostname)
+        if error:
+            payload, status = error
+            return jsonify(payload), status
+        body = request.get_json(silent=True) or {}
+        target_path = _normalize_text(body.get("target_path"))
+        items = _normalize_upload_manifest_items(body.get("items"))
+        if not target_path or not items:
+            return jsonify({"error": "target_path_and_items_required"}), 400
+        assert record is not None
+        if not _system_socket_available(adapters, record.get("hostname") or hostname, record.get("agent_id") or ""):
+            return jsonify({"error": "agent_unavailable"}), 503
+        payload, rpc_error = _upload_conflicts_payload(record, hostname, operator_id, target_path, items)
+        if rpc_error:
+            error_payload, status = rpc_error
+            if error_payload.get("error") == "agent_update_required":
+                return jsonify(
+                    {
+                        "ok": True,
+                        "hostname": record.get("hostname") or hostname,
+                        "target_path": target_path,
+                        "conflicts": [],
+                        "capability_supported": False,
+                        "message": error_payload.get("message") or "",
+                    }
+                )
+            return jsonify(error_payload), status
+        return jsonify(payload)
+
+    @blueprint.route("/api/device/files/<hostname>/text", methods=["GET"])
+    def read_text_file(hostname: str):
+        _user, record, operator_id, error = _operator_context(hostname)
+        if error:
+            payload, status = error
+            return jsonify(payload), status
+        requested_path = _normalize_text(request.args.get("path"))
+        if not requested_path:
+            return jsonify({"error": "path_required"}), 400
+        assert record is not None
+        if not _system_socket_available(adapters, record.get("hostname") or hostname, record.get("agent_id") or ""):
+            return jsonify({"error": "agent_unavailable"}), 503
+        response, rpc_error = _call_file_management_rpc(
+            adapters,
+            hostname=record.get("hostname") or hostname,
+            payload={
+                "action": "read_text",
+                "hostname": record.get("hostname") or hostname,
+                "agent_id": record.get("agent_id") or "",
+                "requested_by": operator_id,
+                "path": requested_path,
+            },
+        )
+        if rpc_error:
+            payload, status = rpc_error
+            return jsonify(payload), status
+        assert response is not None
+        return jsonify(
+            {
+                "ok": True,
+                "hostname": record.get("hostname") or hostname,
+                "path": response.get("path") or requested_path,
+                "content": response.get("content") or "",
+                "encoding": response.get("encoding") or "utf-8",
+                "line_ending": response.get("line_ending") or "lf",
+                "size_bytes": int(response.get("size_bytes") or 0),
+                "modified_at": int(response.get("modified_at") or 0),
+                "entry": response.get("entry") if isinstance(response.get("entry"), dict) else None,
+            }
+        )
+
+    @blueprint.route("/api/device/files/<hostname>/text", methods=["POST"])
+    def write_text_file(hostname: str):
+        _user, record, operator_id, error = _operator_context(hostname)
+        if error:
+            payload, status = error
+            return jsonify(payload), status
+        body = request.get_json(silent=True) or {}
+        item_path = _normalize_text(body.get("path"))
+        if not item_path:
+            return jsonify({"error": "path_required"}), 400
+        assert record is not None
+        if not _system_socket_available(adapters, record.get("hostname") or hostname, record.get("agent_id") or ""):
+            return jsonify({"error": "agent_unavailable"}), 503
+        response, rpc_error = _call_file_management_rpc(
+            adapters,
+            hostname=record.get("hostname") or hostname,
+            payload={
+                "action": "write_text",
+                "hostname": record.get("hostname") or hostname,
+                "agent_id": record.get("agent_id") or "",
+                "requested_by": operator_id,
+                "path": item_path,
+                "content": body.get("content"),
+                "encoding": body.get("encoding"),
+                "line_ending": body.get("line_ending"),
+            },
+        )
+        if rpc_error:
+            payload, status = rpc_error
+            return jsonify(payload), status
+        _service_log_event(
+            "file_management_write_text hostname={hostname} operator={operator} remote={remote} path={path}".format(
+                hostname=record.get("hostname") or hostname,
+                operator=operator_id,
+                remote=_request_remote() or "-",
+                path=item_path,
+            )
+        )
+        assert response is not None
+        return jsonify(
+            {
+                "ok": True,
+                "path": response.get("path") or item_path,
+                "encoding": response.get("encoding") or "utf-8",
+                "line_ending": response.get("line_ending") or "lf",
+                "size_bytes": int(response.get("size_bytes") or 0),
+                "modified_at": int(response.get("modified_at") or 0),
+                "entry": response.get("entry") if isinstance(response.get("entry"), dict) else None,
+            }
+        )
+
     @blueprint.route("/api/device/files/<hostname>/mkdir", methods=["POST"])
     def create_directory(hostname: str):
         user, record, operator_id, error = _operator_context(hostname)
@@ -786,18 +1001,85 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
 
     @blueprint.route("/api/device/files/<hostname>/upload", methods=["POST"])
     def start_upload(hostname: str):
-        user, record, operator_id, error = _operator_context(hostname)
+        _user, record, operator_id, error = _operator_context(hostname)
         if error:
             payload, status = error
             return jsonify(payload), status
         target_path = _normalize_text(request.form.get("target_path"))
         files = request.files.getlist("files")
+        conflict_resolutions = _normalize_conflict_resolution_map(request.form.get("conflict_resolutions"))
         if not target_path:
             return jsonify({"error": "target_path_required"}), 400
         if not files:
             return jsonify({"error": "upload_files_required"}), 400
+        upload_manifest = _normalize_upload_manifest_items(
+            [{"name": getattr(storage, "filename", ""), "size_bytes": 0, "modified_at": 0} for storage in files]
+        )
+        if not upload_manifest:
+            return jsonify({"error": "upload_files_required"}), 400
+        assert record is not None
         if not _system_socket_available(adapters, record.get("hostname") or hostname, record.get("agent_id") or ""):
             return jsonify({"error": "agent_unavailable"}), 503
+        conflict_payload, rpc_error = _upload_conflicts_payload(record, hostname, operator_id, target_path, upload_manifest)
+        conflicts: list[Dict[str, Any]] = []
+        legacy_conflict_support = False
+        if rpc_error:
+            payload, status = rpc_error
+            if payload.get("error") == "agent_update_required":
+                legacy_conflict_support = True
+            else:
+                return jsonify(payload), status
+        else:
+            assert conflict_payload is not None
+            conflicts = conflict_payload.get("conflicts") if isinstance(conflict_payload.get("conflicts"), list) else []
+        unresolved_conflicts = [
+            conflict for conflict in conflicts if conflict_resolutions.get(_sanitize_upload_name(conflict.get("name"))) not in {"replace", "skip"}
+        ]
+        if unresolved_conflicts:
+            return (
+                jsonify(
+                    {
+                        "error": "upload_conflicts",
+                        "message": "The destination already contains one or more items with the same name.",
+                        "target_path": conflict_payload.get("target_path") or target_path,
+                        "conflicts": unresolved_conflicts,
+                    }
+                ),
+                409,
+            )
+        if legacy_conflict_support and conflict_resolutions:
+            return (
+                jsonify(
+                    {
+                        "error": "agent_update_required",
+                        "message": "The device agent needs to be updated before duplicate upload resolution is available.",
+                    }
+                ),
+                409,
+            )
+        files_to_upload = []
+        overwrite_names: list[str] = []
+        skipped_names: list[str] = []
+        for storage in files:
+            filename = _sanitize_upload_name(getattr(storage, "filename", ""))
+            if not filename:
+                continue
+            resolution = conflict_resolutions.get(filename)
+            if resolution == "skip":
+                skipped_names.append(filename)
+                continue
+            if resolution == "replace":
+                overwrite_names.append(filename)
+            files_to_upload.append(storage)
+        if not files_to_upload:
+            return jsonify(
+                {
+                    "ok": True,
+                    "status": "skipped",
+                    "target_path": target_path,
+                    "skipped_count": len(skipped_names),
+                }
+            )
         try:
             session = _store().create_upload_session(
                 hostname=record.get("hostname") or hostname,
@@ -805,7 +1087,8 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
                 agent_id=record.get("agent_id") or "",
                 operator_id=operator_id or "unknown",
                 target_path=target_path,
-                files=files,
+                files=files_to_upload,
+                overwrite_names=overwrite_names,
             )
         except ValueError as exc:
             return jsonify({"error": _normalize_text(exc) or "upload_files_required"}), 400
@@ -830,6 +1113,7 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
                                     "item_id": row.get("item_id"),
                                     "name": row.get("name"),
                                     "size_bytes": int(row.get("size_bytes") or 0),
+                                    "overwrite_existing": bool(row.get("overwrite_existing")),
                                 }
                                 for row in (_store().get_session(session["transfer_id"]) or {}).get("upload_items") or []
                             ],
@@ -937,13 +1221,15 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
         result_path = _normalize_text(session.get("result_path"))
         if not result_path or not Path(result_path).is_file():
             return jsonify({"error": "content_not_available"}), 404
-        return send_file(
+        response = send_file(
             result_path,
             as_attachment=True,
             download_name=_normalize_text(session.get("result_name")) or Path(result_path).name,
             mimetype=_normalize_text(session.get("result_mime")) or "application/octet-stream",
             max_age=0,
         )
+        response.call_on_close(lambda: _store().delete_session(transfer_id))
+        return response
 
     @blueprint.route("/api/agent/files/transfers/<transfer_id>/upload-item/<item_id>", methods=["GET"])
     @require_device_auth(auth_manager)

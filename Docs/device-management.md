@@ -39,10 +39,12 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Per-device suppressions mute one watchdog/device relationship without cloning the shared watchdog policy.
 
 ## Device File Management
-- Device Summary now also exposes a `File Management` tab for remote browse, upload, download, create-folder, rename, move, and delete actions against the device file system.
+- Device Summary now also exposes a `File Management` tab for remote browse, upload, download, lightweight text editing, create-folder, rename, move, and delete actions against the device file system.
 - Windows devices browse in the Borealis SYSTEM context and Linux devices browse in the root context.
-- The tab uses a single AG Grid with a custom tree-style `Name` column, React-managed flattened rows, lazy directory expansion, and top-right `Upload` / `Download` actions.
+- The tab uses a single AG Grid with a custom tree-style `Name` column, React-managed flattened rows, lazy directory expansion, a page-level `Refresh` control, and a right-click context menu for file actions.
 - Uploads stage browser files on the Engine first and then let the agent pull them into place. Downloads let the agent stage the requested file or zip archive back to the Engine before the operator fetches it.
+- Before File Management uploads start, Borealis now preflights duplicate names in the destination directory and, when needed, shows a Windows-style replace-or-skip dialog so the operator can replace, skip, or compare each duplicate before the transfer begins.
+- Lightweight text editing reads one remote text file at a time through the file-management socket lane, applies syntax highlighting based on the filename extension, and saves back to the same path in-place so the file keeps its existing permissions.
 - Operator access stays site-scoped per hostname, and agent-side transfer routes stay bound to the authenticated device GUID.
 
 ## Device List Views
@@ -83,6 +85,9 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `POST /api/device/update-agent/<hostname>` (Token Authenticated) - ask a device to start its local AutoUpdater task immediately.
 - `GET /api/device/files/<hostname>/roots` (Token Authenticated) - load the File Management tab roots view for an in-scope device.
 - `GET /api/device/files/<hostname>/children?path=<absolute-path>` (Token Authenticated) - list one remote directory for an in-scope device.
+- `POST /api/device/files/<hostname>/upload/conflicts` (Token Authenticated) - preflight upload name conflicts in one remote directory for an in-scope device.
+- `GET /api/device/files/<hostname>/text?path=<absolute-path>` (Token Authenticated) - read one lightweight-editable remote text file for the File Management editor.
+- `POST /api/device/files/<hostname>/text` (Token Authenticated) - save one lightweight-editable remote text file back in place on an in-scope device.
 - `POST /api/device/files/<hostname>/mkdir` (Token Authenticated) - create a remote directory on an in-scope device.
 - `POST /api/device/files/<hostname>/rename` (Token Authenticated) - rename one remote file-system item on an in-scope device.
 - `POST /api/device/files/<hostname>/move` (Token Authenticated) - move remote file-system items on an in-scope device.
@@ -194,6 +199,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Device Details route: `/devices/<agent_guid_or_hostname>`.
 - Tab query keys: `device_summary`, `installed_software`, `services`, `activity_history`, `remote_shell`, `remote_desktop`.
 - Device Details also exposes the `file_management` tab query key for the File Management view.
+- File Management also exposes a `working_directory` query param for shareable folder deep links, for example `?tab=file_management&working_directory=C%3A%5CUsers%5Cnicole.rappe%5CDesktop`.
 - Route registration and URL preservation are implemented in `Data/Engine/web-interface/src/app/routes/router.jsx` plus `Data/Engine/web-interface/src/app/routes/paths.js`; component-level tab URL sync is implemented in `Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx`.
 - Shared header hostname search is implemented in `Data/Engine/web-interface/src/GlobalDeviceSearch.jsx` and queries `GET /api/devices/search`.
 

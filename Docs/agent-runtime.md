@@ -17,7 +17,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `role_system_context.py` (ROLE_NAME: `context_system`) - canonical SYSTEM task router for `quick_job_run`, `service_control_action`, and `agent_update_request`, with per-device task lanes for `software_management`, `scheduled_job_system`, `service_management`, and `agent_update`.
 - `role_currentuser_context.py` (ROLE_NAME: `context_currentuser`) - interactive device-local script execution plus the current-user helper tray/status UI.
 - `role_system_device_auditor.py` (ROLE_NAME: `device_auditor`) - summary, memory, storage, network, session, and process inventory.
-- `role_system_file_management.py` (ROLE_NAME: `file_management`) - remote filesystem browse, create-folder, rename, move, delete, upload, and download orchestration over the SYSTEM socket plus device-authenticated transfer endpoints.
+- `role_system_file_management.py` (ROLE_NAME: `file_management`) - remote filesystem browse, lightweight text read/write, create-folder, rename, move, delete, upload, and download orchestration over the SYSTEM socket plus device-authenticated transfer endpoints.
 - `role_system_service_management.py` (ROLE_NAME: `service_management`) - system service inventory and start/stop/restart control.
 - `role_system_software_management.py` (ROLE_NAME: `software_management`) - installed software inventory, Windows icon payload publication, and software refresh boosts after software-management work.
 - `role_system_remote_shell.py` (ROLE_NAME: `remote_shell`) - remote shell server over WireGuard (PowerShell on Windows, Bash on Linux).
@@ -77,7 +77,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `AgentHttpClient.ensure_authenticated()` handles enrollment and refresh.
 - Socket.IO is used by the SYSTEM runtime for:
   - `quick_job_run` dispatch (system jobs plus helper-backed current-user jobs).
-  - `file_management_request` browse, mutate, and transfer orchestration for the Device Summary `File Management` tab.
+  - `file_management_request` browse, upload-conflict preflight, lightweight text-edit, mutate, and transfer orchestration for the Device Summary `File Management` tab.
   - `vpn_tunnel_start` (WireGuard lifecycle; tunnels are persistent and ignore stop events).
   - `connect_agent` registration (agent socket registry).
 - The SYSTEM socket advertises `helper_contexts=["currentuser"]` when the session broker is running so the Engine can route logical current-user work through the same socket.
@@ -156,7 +156,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Auto-discovers roles from `Data/Agent/Roles/`; no loader changes needed.
 - Naming: `role_<context>_<purpose>.py` with `ROLE_NAME`, `ROLE_CONTEXTS`, and optional hooks (`register_events`, `on_config`, `stop_all`).
 - Standard supported one-socket roles: `role_system_context.py`, `role_currentuser_context.py`, `role_system_device_auditor.py`, `role_system_service_management.py`, `role_system_software_management.py`, `role_system_remote_shell.py`, `role_system_vnc.py`, `role_system_wireguard.py`.
-- The remote filesystem surface now also includes `role_system_file_management.py`, which serializes transfer-heavy work through the `file_management` lane and keeps browse/mutate requests on the SYSTEM socket.
+- The remote filesystem surface now also includes `role_system_file_management.py`, which serializes transfer-heavy and inline text-edit work through the `file_management` lane and keeps browse/mutate requests on the SYSTEM socket.
 - `role_currentuser_macros.py` and `role_currentuser_node_screenshot.py` remain legacy interactive-only implementations and are not part of the supported helper-backed Windows runtime path.
 - SYSTEM tasks depend on scheduled-task creation rights; failures should surface through Engine logging.
 

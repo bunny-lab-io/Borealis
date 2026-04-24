@@ -68,7 +68,17 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - Alerts starts in an unfiltered all-alerts view; clicking a status pill applies that queue filter, and clicking the same pill again clears it back to all alerts.
 - Alerts relies on AG Grid's built-in column filters rather than a page-level custom filter bar.
 - Device Summary includes a `Watchdogs` tab so operators can acknowledge incidents, suppress a watchdog for one device, or launch a prefilled device-scoped watchdog draft.
-- Device Summary also includes a `File Management` tab that uses a single AG Grid with a custom tree-style `Name` column, breadcrumbs, top-right `Upload` / `Download` actions, and a page-local `Actions` menu for create-folder, rename, move, delete, and collapse-all behaviors.
+- Device Summary also includes a `File Management` tab that uses a single AG Grid with a custom tree-style `Name` column, a full-width explorer-style `Working Directory` address bar above the grid, a lightweight page-level `Refresh` action, and a right-click action menu for upload, download, inline text editing, rename, move, delete, create-folder, and collapse-all behaviors.
+- The File Management tab should keep the current working directory URL-synced through `working_directory` so browser refresh, upload refreshes, and shared deep links reopen the same folder depth instead of collapsing back to the roots view.
+- Keep a `Show Hidden Items` checkbox directly under the File Management address bar. Default it to unchecked so hidden files and folders are not shown until the operator explicitly opts in.
+- The File Management address bar has two modes:
+  - default mode renders clickable chevron-delimited path segments for fast parent navigation
+  - clicking the empty address-bar space to the right of the segment trail switches into raw-path edit mode for direct copy/paste and manual path entry
+- Keep a clickable root affordance on the far-left of that address bar, styled as a monitor/computer icon with a trailing chevron, so operators can jump back to the filesystem root quickly.
+- Give both the root affordance and the chevron path segments an obvious soft Borealis-blue hover state so they read clearly as navigation controls rather than static labels.
+- Keep a copy icon button on the far-right edge of that address bar so operators can copy the current path without switching modes.
+- File Management text editing should open in a large glass dialog that mirrors the StdOut / StdErr viewer shell: path subtitle on the left, `Save` and `Close` actions on the top-right, and a monospace syntax-highlighted editor surface sized for quick inline edits rather than full IDE workflows.
+- File Management upload conflicts should use a Windows Explorer-style `Replace or Skip Files` dialog rather than a generic confirmation modal. Keep the duplicate filename prominent, offer `Replace the file in the destination`, `Skip this file`, and `Compare info for both files` actions as full-width stacked rows, and show a `Do this for all items` checkbox whenever more than one duplicate remains.
 - Real-time refresh uses `watchdog_incidents_changed` and `device_watchdogs_changed` on the shared `window.BorealisSocket`.
 
 ## API Endpoints
@@ -174,6 +184,30 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - The Device Summary `File Management` tab should keep using community AG Grid plus a React-managed flattened tree. Do not switch that surface to AG Grid Tree Data or grouping APIs for this workflow.
 - Default grid cell padding: keep roughly 18px on the left edge and 12px on the right for standard cells (12px/9px for `auto-col-tight`) so text never hugs a column edge. Target the center + pinned containers so both regions stay aligned.
 - Overlays/menus: `rgba(8,12,24,0.96)` canvas, blurred backdrops, thin steel borders; bright typography; deep blue glass inputs; cyan confirm, mauve destructive accents.
+
+#### Right-Click Context Menus
+- Use a right-click context menu for row-targeted grid actions when operators benefit from working directly in-table rather than moving back to a page-level toolbar.
+- Match the Installed Software and File Management interaction model:
+  - open the menu at the pointer using MUI `Menu` with `anchorReference="anchorPosition"`
+  - use a dark glass paper surface with `rgba(8,12,24,0.96)` background, shared panel border, backdrop blur, and about `8px` radius
+  - keep menu copy compact at about `13px`, with bright foreground text and icons aligned on the left edge of each item
+- Right-click behavior:
+  - if the operator right-clicks an unselected row, select that row first and then open the menu
+  - if the operator right-clicks an already selected row, preserve the existing selection
+  - right-clicking empty grid space may still open a context menu when the page has useful non-row actions such as `New Folder` or `Collapse All`
+- Menu composition:
+  - put the most common direct actions first
+  - keep destructive actions visually in the same family as the rest of the menu unless the product explicitly needs a destructive accent
+  - preserve useful action icons on the left side of each item rather than hiding them in trailing affordances
+- File Management reference ordering:
+  - `Upload`
+  - `Download`
+  - `Edit`
+  - `Rename`
+  - `Delete`
+  - `Move`
+  - `New Folder`
+  - `Collapse All`
 
 #### Filter Slider
 - Official name: `Filter Slider`.

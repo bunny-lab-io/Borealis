@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import contextlib
+import locale
 import mimetypes
 import os
 import platform
@@ -9,6 +11,7 @@ import shutil
 import socket
 import stat as stat_module
 import string
+import subprocess
 import tempfile
 import time
 import zipfile
@@ -29,6 +32,7 @@ ROLE_CONTEXTS = ["system"]
 IS_WINDOWS = os.name == "nt"
 IS_LINUX = platform.system().lower() == "linux"
 STATUS_PROGRESS_INTERVAL_SECONDS = 2.0
+TEXT_EDITOR_MAX_BYTES = int(os.environ.get("BOREALIS_FILE_EDITOR_MAX_BYTES", 1024 * 1024))
 
 
 class FileManagementError(RuntimeError):
@@ -59,6 +63,19 @@ def _normalize_upload_name(value: Any) -> str:
     if not raw:
         return ""
     return Path(raw).name.strip().replace("\x00", "")
+
+
+def _normalize_archive_name(value: Any, suffix: str) -> str:
+    normalized = _normalize_upload_name(value)
+    desired_suffix = _clean_text(suffix) or ".zip"
+    if not desired_suffix.startswith("."):
+        desired_suffix = f".{desired_suffix}"
+    if not normalized:
+        return f"download{desired_suffix}"
+    source = Path(normalized)
+    stem = source.stem if source.suffix else normalized
+    stem = _clean_text(stem) or "download"
+    return f"{stem}{desired_suffix}"
 
 
 def _normalize_requested_path(value: Any) -> str:
@@ -273,6 +290,205 @@ def _normalize_selection_rows(value: Any) -> list[Dict[str, Any]]:
     return list(deduped.values())
 
 
+def _normalize_upload_candidate_rows(value: Any) -> list[Dict[str, Any]]:
+    rows: list[Dict[str, Any]] = []
+    candidates = value if isinstance(value, list) else [value]
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        name = _validate_child_name(item.get("name") or item.get("filename"))
+        rows.append(
+            {
+                "name": name,
+                "size_bytes": int(item.get("size_bytes") or 0),
+                "modified_at": int(item.get("modified_at") or 0),
+            }
+        )
+    deduped: dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        deduped[row["name"]] = row
+    return list(deduped.values())
+
+
+def _inspect_upload_conflicts(path_value: Any, items: Any) -> Dict[str, Any]:
+    target_path = _ensure_directory(path_value)
+    candidates = _normalize_upload_candidate_rows(items)
+    conflicts: list[Dict[str, Any]] = []
+    for row in candidates:
+        destination_path = os.path.join(target_path, row["name"])
+        if not _path_exists(destination_path):
+            continue
+        destination_entry = _entry_from_path(destination_path, parent_path=target_path)
+        conflicts.append(
+            {
+                "name": row["name"],
+                "destination": destination_entry,
+                "upload_size_bytes": int(row.get("size_bytes") or 0),
+                "upload_modified_at": int(row.get("modified_at") or 0),
+                "replace_supported": _clean_text(destination_entry.get("kind")).lower() != "directory",
+            }
+        )
+    return {"ok": True, "target_path": target_path, "conflicts": conflicts}
+
+
+def _normalize_text_editor_line_ending(value: Any) -> str:
+    normalized = _clean_text(value).lower()
+    if normalized in {"", "lf", "\\n"}:
+        return "lf"
+    if normalized in {"crlf", "\\r\\n"}:
+        return "crlf"
+    if normalized in {"cr", "\\r"}:
+        return "cr"
+    raise FileManagementError("invalid_request", f"Unsupported line ending '{value}'.")
+
+
+def _line_ending_sequence(value: Any) -> str:
+    normalized = _normalize_text_editor_line_ending(value)
+    if normalized == "crlf":
+        return "\r\n"
+    if normalized == "cr":
+        return "\r"
+    return "\n"
+
+
+def _detect_line_ending(text: str) -> str:
+    if "\r\n" in text:
+        return "crlf"
+    if "\r" in text:
+        return "cr"
+    return "lf"
+
+
+def _looks_like_binary_bytes(payload: bytes, *, allow_nulls: bool = False) -> bool:
+    if not payload:
+        return False
+    sample = payload[:4096]
+    if not allow_nulls and b"\x00" in sample:
+        return True
+    control_bytes = 0
+    for value in sample:
+        if value in {9, 10, 13}:
+            continue
+        if value < 32 or value == 127:
+            control_bytes += 1
+    return control_bytes > max(1, int(len(sample) * 0.2))
+
+
+def _looks_like_binary_text(text: str) -> bool:
+    if not text:
+        return False
+    sample = text[:4096]
+    control_chars = 0
+    for character in sample:
+        if character in {"\t", "\n", "\r"}:
+            continue
+        if ord(character) < 32 or ord(character) == 127:
+            control_chars += 1
+    return control_chars > max(1, int(len(sample) * 0.2))
+
+
+def _decode_text_payload(payload: bytes) -> tuple[str, str]:
+    if not payload:
+        return "", "utf-8"
+    preferred_encoding = _clean_text(locale.getpreferredencoding(False)).lower()
+    candidates: list[str] = []
+    if payload.startswith(codecs.BOM_UTF8):
+        candidates.append("utf-8-sig")
+    elif payload.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        candidates.append("utf-16")
+    candidates.append("utf-8")
+    if preferred_encoding and preferred_encoding not in {candidate.lower() for candidate in candidates}:
+        candidates.append(preferred_encoding)
+    seen: set[str] = set()
+    for encoding in candidates:
+        normalized = _clean_text(encoding).lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        try:
+            return payload.decode(encoding), encoding
+        except UnicodeDecodeError:
+            continue
+        except LookupError as exc:
+            raise FileManagementError("text_encoding_not_supported", str(exc)) from exc
+    raise FileManagementError("text_encoding_not_supported", "This text file uses an unsupported encoding.")
+
+
+def _read_text_file(path_value: Any) -> Dict[str, Any]:
+    source_path = _normalize_requested_path(path_value)
+    if not _path_exists(source_path):
+        raise FileManagementError("path_not_found", f"'{source_path}' does not exist.")
+    if os.path.isdir(source_path):
+        raise FileManagementError("not_a_file", f"'{source_path}' is not a file.")
+    try:
+        with open(source_path, "rb") as handle:
+            payload = handle.read(TEXT_EDITOR_MAX_BYTES + 1)
+    except PermissionError as exc:
+        raise FileManagementError("permission_denied", f"Permission denied for '{source_path}'.") from exc
+    except OSError as exc:
+        raise FileManagementError("invalid_path", str(exc)) from exc
+    if len(payload) > TEXT_EDITOR_MAX_BYTES:
+        raise FileManagementError(
+            "file_too_large",
+            f"'{source_path}' exceeds the lightweight editor limit of {TEXT_EDITOR_MAX_BYTES} bytes.",
+        )
+    allow_nulls = payload.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE))
+    if _looks_like_binary_bytes(payload, allow_nulls=allow_nulls):
+        raise FileManagementError("binary_not_supported", "Binary files cannot be opened in the lightweight text editor.")
+    content, encoding = _decode_text_payload(payload)
+    if _looks_like_binary_text(content):
+        raise FileManagementError("binary_not_supported", "Binary files cannot be opened in the lightweight text editor.")
+    entry = _entry_from_path(source_path, parent_path=_parent_path(source_path))
+    return {
+        "path": source_path,
+        "content": content,
+        "encoding": encoding,
+        "line_ending": _detect_line_ending(content),
+        "size_bytes": int(len(payload)),
+        "modified_at": int(entry.get("modified_at") or 0),
+        "entry": entry,
+    }
+
+
+def _write_text_file(path_value: Any, content: Any, *, encoding: Any, line_ending: Any) -> Dict[str, Any]:
+    destination_path = _normalize_requested_path(path_value)
+    if not _path_exists(destination_path):
+        raise FileManagementError("path_not_found", f"'{destination_path}' does not exist.")
+    if os.path.isdir(destination_path):
+        raise FileManagementError("not_a_file", f"'{destination_path}' is not a file.")
+    requested_encoding = _clean_text(encoding) or "utf-8"
+    try:
+        codecs.lookup(requested_encoding)
+    except LookupError as exc:
+        raise FileManagementError("text_encoding_not_supported", str(exc)) from exc
+    raw_content = "" if content is None else str(content)
+    normalized_content = raw_content.replace("\r\n", "\n").replace("\r", "\n")
+    encoded_content = normalized_content.replace("\n", _line_ending_sequence(line_ending)).encode(requested_encoding)
+    if len(encoded_content) > TEXT_EDITOR_MAX_BYTES:
+        raise FileManagementError(
+            "file_too_large",
+            f"'{destination_path}' exceeds the lightweight editor limit of {TEXT_EDITOR_MAX_BYTES} bytes.",
+        )
+    try:
+        with open(destination_path, "r+b") as handle:
+            handle.seek(0)
+            handle.write(encoded_content)
+            handle.truncate()
+    except PermissionError as exc:
+        raise FileManagementError("permission_denied", f"Permission denied for '{destination_path}'.") from exc
+    except OSError as exc:
+        raise FileManagementError("invalid_path", str(exc)) from exc
+    entry = _entry_from_path(destination_path, parent_path=_parent_path(destination_path))
+    return {
+        "path": destination_path,
+        "encoding": requested_encoding,
+        "line_ending": _normalize_text_editor_line_ending(line_ending),
+        "size_bytes": int(len(encoded_content)),
+        "modified_at": int(entry.get("modified_at") or 0),
+        "entry": entry,
+    }
+
+
 class Role:
     def __init__(self, ctx) -> None:
         self.ctx = ctx
@@ -288,6 +504,78 @@ class Role:
         self._active_transfers = 0
         self._temp_root = Path(tempfile.gettempdir()) / "Borealis" / "file_management"
         self._temp_root.mkdir(parents=True, exist_ok=True)
+
+    def _find_7zip_executable(self) -> str:
+        candidates: list[str] = []
+        env_candidate = _clean_text(os.environ.get("BOREALIS_7ZIP_EXE"))
+        if env_candidate:
+            candidates.append(env_candidate)
+        if IS_WINDOWS:
+            repo_root = Path(__file__).resolve().parents[3]
+            for base_dir in (repo_root, Path.cwd()):
+                candidates.append(str(base_dir / "Dependencies" / "7zip" / "7z.exe"))
+            for env_name in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+                install_root = _clean_text(os.environ.get(env_name))
+                if install_root:
+                    candidates.append(str(Path(install_root) / "7-Zip" / "7z.exe"))
+        for executable_name in ("7zz", "7z", "7za"):
+            resolved = shutil.which(executable_name)
+            if resolved:
+                candidates.append(resolved)
+        seen: set[str] = set()
+        for candidate in candidates:
+            normalized = _clean_text(candidate)
+            if not normalized or normalized.lower() in seen:
+                continue
+            seen.add(normalized.lower())
+            if Path(normalized).is_file():
+                return normalized
+        return ""
+
+    def _can_use_7zip_archive(self, selections: list[Dict[str, Any]]) -> bool:
+        if not selections:
+            return False
+        common_parent = ""
+        for selection in selections:
+            source_path = _normalize_requested_path(selection.get("path"))
+            label = _normalize_upload_name(selection.get("name")) or os.path.basename(source_path.rstrip("\\/")) or source_path
+            source_name = os.path.basename(source_path.rstrip("\\/"))
+            if not source_name or label != source_name:
+                return False
+            parent_path = _parent_path(source_path)
+            if not parent_path:
+                return False
+            if not common_parent:
+                common_parent = parent_path
+                continue
+            if os.path.normcase(common_parent) != os.path.normcase(parent_path):
+                return False
+        return bool(common_parent)
+
+    def _build_7zip_selection(self, selections: list[Dict[str, Any]], archive_path: str, seven_zip_exe: str) -> int:
+        if not self._can_use_7zip_archive(selections):
+            raise FileManagementError("archive_fallback_required", "7-Zip archiving requires selections from the same parent directory.")
+        first_path = _normalize_requested_path(selections[0].get("path"))
+        working_directory = _parent_path(first_path)
+        input_names = [os.path.basename(_normalize_requested_path(selection.get("path")).rstrip("\\/")) for selection in selections]
+        command = [seven_zip_exe, "a", "-t7z", "-mx=5", "-y", archive_path, *input_names]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=working_directory,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise FileManagementError("archive_failed", str(exc)) from exc
+        if completed.returncode != 0:
+            details = _clean_text(completed.stderr) or _clean_text(completed.stdout) or "7-Zip failed to create the archive."
+            raise FileManagementError("archive_failed", details)
+        try:
+            return int(os.path.getsize(archive_path))
+        except Exception:
+            return 0
 
     def _log(self, message: str, *, error: bool = False) -> None:
         if callable(self._log_hook):
@@ -349,6 +637,7 @@ class Role:
         item_id: str,
         destination_path: str,
         progress_state: Dict[str, Any],
+        overwrite_existing: bool = False,
     ) -> None:
         client = self._http_client()
         client.ensure_authenticated()
@@ -360,8 +649,10 @@ class Role:
             os.makedirs(parent_dir, exist_ok=True)
         temp_file = None
         try:
-            if _path_exists(destination_path):
+            if _path_exists(destination_path) and not overwrite_existing:
                 raise FileManagementError("conflict", f"'{destination_path}' already exists.")
+            if overwrite_existing and _path_exists(destination_path) and os.path.isdir(destination_path) and not os.path.islink(destination_path):
+                raise FileManagementError("conflict", f"'{destination_path}' already exists as a directory.")
             with client.session.get(item_url, headers=headers, timeout=300, stream=True) as response:
                 response.raise_for_status()
                 fd, temp_file = tempfile.mkstemp(prefix=".borealis-upload-", suffix=".tmp", dir=parent_dir or None)
@@ -417,6 +708,7 @@ class Role:
                 item_id=item_id,
                 destination_path=destination_path,
                 progress_state=progress_state,
+                overwrite_existing=bool(row.get("overwrite_existing")),
             )
         self._report_progress(
             transfer_id,
@@ -484,7 +776,7 @@ class Role:
         if not transfer_id or not selections:
             raise FileManagementError("invalid_request", "Download manifest is missing transfer metadata.")
         archive_required = bool(payload.get("archive_required"))
-        archive_name = _normalize_upload_name(payload.get("archive_name")) or "download.zip"
+        requested_archive_name = _normalize_upload_name(payload.get("archive_name")) or "download.7z"
 
         if not archive_required and len(selections) == 1 and os.path.isfile(selections[0]["path"]):
             source_path = selections[0]["path"]
@@ -502,10 +794,30 @@ class Role:
             return
 
         self._temp_root.mkdir(parents=True, exist_ok=True)
-        fd, archive_path = tempfile.mkstemp(prefix="download-", suffix=".zip", dir=self._temp_root)
+        seven_zip_exe = self._find_7zip_executable()
+        use_7zip = bool(seven_zip_exe and self._can_use_7zip_archive(selections))
+        archive_suffix = ".7z" if use_7zip else ".zip"
+        archive_name = _normalize_archive_name(requested_archive_name, archive_suffix)
+        mime_type = "application/x-7z-compressed" if use_7zip else "application/zip"
+        fd, archive_path = tempfile.mkstemp(prefix="download-", suffix=archive_suffix, dir=self._temp_root)
         os.close(fd)
         try:
-            total_bytes = self._zip_selection(selections, archive_path)
+            try:
+                if use_7zip:
+                    total_bytes = self._build_7zip_selection(selections, archive_path, seven_zip_exe)
+                else:
+                    total_bytes = self._zip_selection(selections, archive_path)
+            except FileManagementError as exc:
+                if not use_7zip:
+                    raise
+                self._log(f"7-Zip archive creation failed; falling back to ZIP for {transfer_id}: {exc}")
+                with contextlib.suppress(Exception):
+                    os.remove(archive_path)
+                archive_name = _normalize_archive_name(requested_archive_name, ".zip")
+                mime_type = "application/zip"
+                fd, archive_path = tempfile.mkstemp(prefix="download-", suffix=".zip", dir=self._temp_root)
+                os.close(fd)
+                total_bytes = self._zip_selection(selections, archive_path)
             self._report_progress(
                 transfer_id,
                 status="running",
@@ -517,7 +829,7 @@ class Role:
                 transfer_id=transfer_id,
                 artifact_path=archive_path,
                 artifact_name=archive_name,
-                mime_type="application/zip",
+                mime_type=mime_type,
             )
             self._last_error = ""
         finally:
@@ -623,6 +935,41 @@ class Role:
                     current_path = _normalize_requested_path(payload.get("path"))
                     self._last_error = ""
                     return {"ok": True, "current_path": current_path, "entries": _list_children(current_path)}
+                if action == "upload_conflicts":
+                    target_path = _ensure_directory(payload.get("target_path"))
+                    conflict_payload = await self._lane_coordinator.run(
+                        lane="file_management",
+                        job_id=f"upload_conflicts:{target_path}",
+                        work=lambda: asyncio.to_thread(_inspect_upload_conflicts, target_path, payload.get("items")),
+                    )
+                    self._last_error = ""
+                    return conflict_payload
+                if action == "read_text":
+                    source_path = _normalize_requested_path(payload.get("path"))
+
+                    text_payload = await self._lane_coordinator.run(
+                        lane="file_management",
+                        job_id=f"read_text:{source_path}",
+                        work=lambda: asyncio.to_thread(_read_text_file, source_path),
+                    )
+                    self._last_error = ""
+                    return {"ok": True, **text_payload}
+                if action == "write_text":
+                    source_path = _normalize_requested_path(payload.get("path"))
+
+                    text_payload = await self._lane_coordinator.run(
+                        lane="file_management",
+                        job_id=f"write_text:{source_path}",
+                        work=lambda: asyncio.to_thread(
+                            _write_text_file,
+                            source_path,
+                            payload.get("content"),
+                            encoding=payload.get("encoding"),
+                            line_ending=payload.get("line_ending"),
+                        ),
+                    )
+                    self._last_error = ""
+                    return {"ok": True, **text_payload}
                 if action == "mkdir":
                     parent_path = _ensure_directory(payload.get("path"))
                     name = _validate_child_name(payload.get("name"))
