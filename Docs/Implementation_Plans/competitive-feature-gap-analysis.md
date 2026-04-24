@@ -49,7 +49,7 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | Screenshot / quick visual capture | Partial but still a gap | `Docs/agent-runtime.md` | `role_currentuser_node_screenshot.py` still exists, but the docs explicitly mark screenshot and macro roles as legacy interactive-only roles outside the supported helper-backed runtime. |
 | Macro / UI automation | Partial but still a gap | `Docs/agent-runtime.md` | Same issue as screenshot: `role_currentuser_macros.py` exists, but it is not part of the supported helper-backed path. |
 | Event Viewer | Absent | `Docs/device-management.md`, `Docs/api-reference.md` | No event-log/Event Viewer APIs or documented UI surface were found. |
-| File Manager / file transfer | Absent | `Docs/device-management.md`, `Docs/api-reference.md` | Borealis documents remote shell, VNC, services, and activity history, but no remote file browser or transfer feature. |
+| File Manager / file transfer | Shipped | `Docs/device-management.md`, `Docs/api-reference.md`, `Docs/ui-and-notifications.md` | Borealis now ships a first-class File Management tab with lazy remote browse, file and folder upload, file and folder download, copy/cut/paste, duplicate handling, cancelable transfers, and lightweight inline text editing. |
 | Local user and group management | Absent | `Docs/device-management.md`, `Docs/api-reference.md` | No dedicated device account-management feature was found. |
 | Startup management | Absent | `Docs/device-management.md`, `Docs/api-reference.md` | No startup-item management APIs or UI were found. |
 | Technician/end-user chat | Absent | `Docs/ui-and-notifications.md`, `Docs/api-reference.md` | Borealis has operator toast notifications, not remote chat. |
@@ -82,6 +82,12 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 - Operators can uninstall supported software directly from the Installed Software tab, track uninstall work in Activity History, and request an immediate software refresh with `Query Software Changes`.
 - Operators can also self-govern global icon overrides, uninstall overrides, uninstall blocks, and uninstall unblocks directly from the WebUI, with hotloaded JSON-backed rule stores that survive Engine restaging.
 - These additions reduce the old “uninstall apps” gap materially, but they do not yet close the larger patching/deployment/compliance gaps that mainstream RMM platforms bundle under software management.
+
+### File Management Delta Since The Initial Matrix Pass
+- Borealis now has a real remote file-management surface instead of requiring operators to fall back to remote shell or third-party tooling.
+- Operators can browse drives/directories lazily, upload files or whole folders, download files/folders, cancel active transfers, handle duplicate upload conflicts, and perform create-folder, rename, move, delete, copy, cut, and paste actions from the File Management tab.
+- Lightweight inline text editing closes another frequent technician workflow gap by allowing extension-aware edits without a download-edit-reupload loop.
+- This closes the old `File Manager` gap materially, though it does not eliminate the remaining technician-tooling gaps around processes, event logs, startup management, and local account tooling.
 
 ### Platform Coverage
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
@@ -160,8 +166,8 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
   - The matrix shows strong competitor coverage for event logs, file management, processes, uninstall, and related device-admin surfaces.
 - Current Borealis position:
   - Borealis already has excellent remote shell, VNC, and service control.
-  - Borealis now also has a usable software-management surface with uninstall actions, override/block governance, and Activity History visibility.
-  - It does not yet productize the rest of the background-control tool belt.
+  - Borealis now also has usable software-management and file-management surfaces with uninstall actions, override/block governance, remote browse/transfer, inline text editing, and Activity History visibility.
+  - It still does not yet productize the rest of the background-control tool belt.
   - Legacy screenshot/macro roles do not close this gap because they are explicitly outside the supported runtime path.
 - Immediate product implication:
   - This is the gap most likely to create daily operator friction even if Borealis wins on automation depth.
@@ -206,6 +212,7 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 - Local/domain user-account automation is not productized.
 - Process inventory exists internally, but the operator process-manager surface is still missing.
 - Software deployment/install policy remains absent even though software uninstall and override governance now exist.
+- File management is now shipped, but process tooling, event-log tooling, startup tooling, and local account tooling are still absent.
 - Reporting/export exists in pieces, but not as a first-class reporting product.
 
 ## Current Differentiators
@@ -227,6 +234,10 @@ Borealis is not starting from zero. Several areas already compare well, and thes
   - `Docs/Software Management/adding-software-to-icon-overrides.md`
   - `Docs/Software Management/adding-software-to-uninstall-overrides.md`
   - `Docs/Software Management/adding-software-to-uninstall-blocklist.md`
+- Remote file browsing, transfer, and inline text editing:
+  - `Docs/device-management.md`
+  - `Docs/api-reference.md`
+  - `Docs/ui-and-notifications.md`
 - Aegis, MFA, passkeys, short-lived tokens, and code signing:
   - `Docs/security-and-trust.md`
   - `Docs/engine-runtime.md`
@@ -251,7 +262,6 @@ If Borealis chooses to close the top gaps, the public interface surface will lik
 
 ### Technician Tooling
 - Device-side read/action APIs for:
-  - file browsing and transfer
   - process inspection and termination
   - event logs
   - local user/group management
