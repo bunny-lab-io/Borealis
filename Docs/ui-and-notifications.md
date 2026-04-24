@@ -201,6 +201,11 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
   - if the operator right-clicks an unselected row, select that row first and then open the menu
   - if the operator right-clicks an already selected row, preserve the existing selection
   - right-clicking empty grid space may still open a context menu when the page has useful non-row actions such as `New Folder` or `Collapse All`
+- Native browser menu suppression:
+  - when Borealis intentionally exposes its own right-click context menu, suppress the browser's native context menu for that interaction target so the operator receives the Borealis menu consistently
+  - wire suppression at every menu entrypoint, including DOM `onContextMenu` handlers and component-library context-menu hooks
+  - on AG Grid and similar surfaces, pair the Borealis menu trigger with available grid-level context-menu suppression settings so the browser menu does not appear underneath or instead of the Borealis menu
+  - do not suppress the browser menu on unrelated surfaces that do not provide a Borealis context menu
 - Context-menu anatomy:
   - a context header row belongs at the top of object-aware menus; use it to show the current object icon plus one short title and one concise subtitle
   - header title and subtitle should both stay single-line; if either value can ellipsize, expose the full value on hover with a tooltip instead of leaving the operator with raw trailing `...`

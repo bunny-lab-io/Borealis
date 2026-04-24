@@ -7,6 +7,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
   FormControlLabel,
   Menu,
   MenuItem,
@@ -15,6 +16,11 @@ import {
   Typography,
 } from "@mui/material";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
+import AppsRoundedIcon from "@mui/icons-material/AppsRounded";
+import BlockRoundedIcon from "@mui/icons-material/BlockRounded";
+import ImageRoundedIcon from "@mui/icons-material/ImageRounded";
+import LockOpenRoundedIcon from "@mui/icons-material/LockOpenRounded";
+import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
 import { AgGridReact } from "ag-grid-react";
 import { ConfirmDeleteDialog } from "../../Dialogs.jsx";
 import {
@@ -80,6 +86,131 @@ const PRIMARY_REFRESH_BUTTON_SX = {
     boxShadow: "none",
   },
 };
+
+const ACTION_MENU_PAPER_SX = {
+  bgcolor: "rgba(8,12,24,0.96)",
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  backdropFilter: "blur(14px)",
+  borderRadius: 2,
+  minWidth: 288,
+  px: 0.8,
+  py: 0.8,
+};
+
+const ACTION_MENU_ITEM_SX = {
+  minHeight: 42,
+  borderRadius: 1.6,
+  color: MAGIC_UI.textBright,
+  alignItems: "center",
+  px: 1,
+  py: 0.85,
+  position: "relative",
+  overflow: "hidden",
+  "&:hover": {
+    backgroundColor: "rgba(88,166,255,0.12)",
+  },
+  "&::before": {
+    content: '""',
+    position: "absolute",
+    left: 0,
+    top: 8,
+    bottom: 8,
+    width: 3,
+    borderRadius: 999,
+    background: "transparent",
+    transition: "background-color 0.16s ease",
+  },
+  "&:hover::before": {
+    background: "#58a6ff",
+  },
+};
+
+const ACTION_MENU_DANGER_ITEM_SX = {
+  ...ACTION_MENU_ITEM_SX,
+  "&:hover": {
+    backgroundColor: "rgba(248,113,113,0.1)",
+  },
+  "&:hover::before": {
+    background: "#58a6ff",
+  },
+};
+
+const ACTION_MENU_SECTION_LABEL_SX = {
+  px: 1.2,
+  pt: 0.65,
+  pb: 0.45,
+  color: "rgba(148,163,184,0.72)",
+  fontSize: "0.68rem",
+  fontWeight: 700,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
+const ACTION_MENU_DIVIDER_SX = {
+  my: 0.55,
+  borderColor: "rgba(148,163,184,0.16)",
+};
+
+const ACTION_MENU_HEADER_SX = {
+  display: "flex",
+  alignItems: "center",
+  gap: 1,
+  px: 1.1,
+  pt: 0.55,
+  pb: 0.85,
+};
+
+const ACTION_MENU_HEADER_ICON_SX = {
+  width: 32,
+  height: 32,
+  borderRadius: 1.35,
+  flexShrink: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  border: "1px solid rgba(148,163,184,0.14)",
+  background: "rgba(255,255,255,0.04)",
+  color: "#8fd3ff",
+};
+
+const ACTION_MENU_ROW_ICON_SX = {
+  mt: 0.18,
+  mr: 1,
+  fontSize: 18,
+  flexShrink: 0,
+};
+
+const ACTION_MENU_LABEL_SX = {
+  color: MAGIC_UI.textBright,
+  fontSize: "0.84rem",
+  fontWeight: 500,
+  lineHeight: 1.2,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+const ACTION_MENU_DESCRIPTION_SX = {
+  color: "rgba(148,163,184,0.78)",
+  fontSize: "0.73rem",
+  lineHeight: 1.25,
+  mt: 0.25,
+};
+
+const ACTION_MENU_TITLE_TRUNCATE_SX = {
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+const ACTION_MENU_GROUP_LABELS = {
+  primary: "Primary",
+  organize: "Organize",
+  danger: "Danger Zone",
+  view: "View",
+};
+
+const ACTION_MENU_GROUP_ORDER = ["primary", "organize", "danger", "view"];
 
 const SOFTWARE_DIALOG_TEXT_FIELD_SX = {
   "& .MuiOutlinedInput-root": {
@@ -532,20 +663,49 @@ function SoftwareIconGlyph({ row = {} }) {
   );
 }
 
+function SoftwareContextMenuSubjectIcon({ row = {} }) {
+  const iconHash = getSoftwareIconHash(row);
+  const [iconFailed, setIconFailed] = useState(false);
+
+  useEffect(() => {
+    setIconFailed(false);
+  }, [iconHash]);
+
+  const iconUrl = useMemo(() => buildSoftwareIconUrl(iconHash), [iconHash]);
+  if (iconUrl && !iconFailed) {
+    return (
+      <Box
+        component="img"
+        src={iconUrl}
+        alt=""
+        loading="lazy"
+        onError={() => setIconFailed(true)}
+        sx={{ ...SOFTWARE_ICON_IMAGE_SX, width: 22, height: 22 }}
+      />
+    );
+  }
+
+  return <AppsRoundedIcon sx={{ fontSize: 19, color: "currentColor" }} />;
+}
+
 function SoftwareNameCell({ row = {}, onOpenContextMenu }) {
   return (
     <Box
-      onContextMenu={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        onOpenContextMenu?.(event, row);
-      }}
+      onContextMenu={
+        onOpenContextMenu
+          ? (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onOpenContextMenu(event, row);
+            }
+          : undefined
+      }
       sx={{
         display: "inline-flex",
         alignItems: "center",
         gap: 1,
         minWidth: 0,
-        cursor: "context-menu",
+        cursor: onOpenContextMenu ? "context-menu" : "inherit",
       }}
     >
       <SoftwareIconGlyph row={row} />
@@ -920,7 +1080,12 @@ export default function InstalledSoftwareTab({
     [onSoftwareDataRefresh]
   );
 
-  const handleOpenSoftwareActionMenu = useCallback((event, row) => {
+  const handleOpenSoftwareActionMenu = useCallback((event, row, rowNode = null) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (rowNode && !rowNode.isSelected?.()) {
+      rowNode.setSelected?.(true, true);
+    }
     setSoftwareActionMenu({
       open: true,
       top: Number(event?.clientY || 0),
@@ -928,6 +1093,16 @@ export default function InstalledSoftwareTab({
       row: row || null,
     });
   }, []);
+
+  const handleSoftwareCellContextMenu = useCallback(
+    (params) => {
+      const mouseEvent = params?.event;
+      const row = params?.data || null;
+      if (!mouseEvent || !row) return;
+      handleOpenSoftwareActionMenu(mouseEvent, row, params?.node || null);
+    },
+    [handleOpenSoftwareActionMenu]
+  );
 
   const handleCloseSoftwareActionMenu = useCallback(() => {
     setSoftwareActionMenu({
@@ -1023,6 +1198,176 @@ export default function InstalledSoftwareTab({
       });
     },
     [handleCloseSoftwareActionMenu, notifyOperator, softwareActionMenu]
+  );
+
+  const softwareActionMenuSubject = useMemo(() => {
+    const row = softwareActionMenu?.row || null;
+    const softwareName = String(row?.name || "").trim() || "Software";
+    const softwareVersion = String(row?.version || "").trim();
+    const sourceLabel = row ? getSoftwareSourceMeta(row?.source).label : "";
+    return {
+      title: softwareName,
+      subtitle:
+        [softwareVersion, sourceLabel, normalizedHostname].filter(Boolean).join(" • ") ||
+        "Installed software",
+      row,
+    };
+  }, [normalizedHostname, softwareActionMenu?.row]);
+
+  const softwareActionMenuActions = useMemo(() => {
+    const row = softwareActionMenuSubject.row;
+    const unavailableReason = !row
+      ? "Select a software row first."
+      : !normalizedHostname
+      ? "Device hostname is unavailable."
+      : "";
+    return [
+      {
+        id: "uninstall-override",
+        group: "primary",
+        label: "Create Global Uninstall Override",
+        icon: TerminalRoundedIcon,
+        disabled: Boolean(unavailableReason),
+        disabledReason: unavailableReason,
+        description: "Define the trusted uninstall command Borealis should use for this software.",
+        onClick: () => {
+          void handleOpenSoftwareActionDialog("uninstall_override", row);
+        },
+      },
+      {
+        id: "icon-override",
+        group: "primary",
+        label: "Create Global Icon Override",
+        icon: ImageRoundedIcon,
+        disabled: Boolean(unavailableReason),
+        disabledReason: unavailableReason,
+        description: "Set or clear the display icon Borealis uses for this software.",
+        onClick: () => {
+          void handleOpenSoftwareActionDialog("icon_override", row);
+        },
+      },
+      {
+        id: "uninstall-block",
+        group: "danger",
+        label: "Block Uninstallation",
+        icon: BlockRoundedIcon,
+        intent: "danger",
+        disabled: Boolean(unavailableReason),
+        disabledReason: unavailableReason,
+        description: "Prevent Borealis from queueing uninstall actions for this software.",
+        onClick: () => {
+          void handleOpenSoftwareActionDialog("uninstall_block", row);
+        },
+      },
+      {
+        id: "uninstall-unblock",
+        group: "danger",
+        label: "Unblock Uninstallation",
+        icon: LockOpenRoundedIcon,
+        disabled: Boolean(unavailableReason),
+        disabledReason: unavailableReason,
+        description: "Remove the matching global uninstall block rule.",
+        onClick: () => {
+          void handleOpenSoftwareActionDialog("uninstall_unblock", row);
+        },
+      },
+    ];
+  }, [handleOpenSoftwareActionDialog, normalizedHostname, softwareActionMenuSubject.row]);
+
+  const renderSoftwareActionMenuItems = useCallback(
+    (closeMenu) => {
+      const groups = ACTION_MENU_GROUP_ORDER
+        .map((groupId) => ({
+          id: groupId,
+          label: ACTION_MENU_GROUP_LABELS[groupId],
+          actions: softwareActionMenuActions.filter((action) => action.group === groupId),
+        }))
+        .filter((group) => group.actions.length);
+
+      const nodes = [
+        <Box key="context-header" component="li" role="presentation" sx={ACTION_MENU_HEADER_SX}>
+          <Box sx={ACTION_MENU_HEADER_ICON_SX}>
+            <SoftwareContextMenuSubjectIcon row={softwareActionMenuSubject.row || {}} />
+          </Box>
+          <Box sx={{ minWidth: 0 }}>
+            <Tooltip title={softwareActionMenuSubject.title || ""} placement="top-start">
+              <Typography
+                sx={{
+                  ...ACTION_MENU_TITLE_TRUNCATE_SX,
+                  color: MAGIC_UI.textBright,
+                  fontSize: "0.88rem",
+                  fontWeight: 600,
+                  lineHeight: 1.2,
+                  maxWidth: 240,
+                }}
+              >
+                {softwareActionMenuSubject.title}
+              </Typography>
+            </Tooltip>
+            <Tooltip title={softwareActionMenuSubject.subtitle || ""} placement="top-start">
+              <Typography
+                sx={{
+                  ...ACTION_MENU_TITLE_TRUNCATE_SX,
+                  color: "rgba(148,163,184,0.82)",
+                  fontSize: "0.73rem",
+                  lineHeight: 1.25,
+                  mt: 0.22,
+                  maxWidth: 240,
+                }}
+              >
+                {softwareActionMenuSubject.subtitle}
+              </Typography>
+            </Tooltip>
+          </Box>
+        </Box>,
+      ];
+
+      groups.forEach((group) => {
+        nodes.push(<Divider key={`divider-before-${group.id}`} component="li" sx={ACTION_MENU_DIVIDER_SX} />);
+        nodes.push(
+          <Box key={`label-${group.id}`} component="li" role="presentation" sx={ACTION_MENU_SECTION_LABEL_SX}>
+            {group.label}
+          </Box>
+        );
+        group.actions.forEach((action) => {
+          const IconComponent = action.icon;
+          const helperText = action.disabledReason || action.description || "";
+          nodes.push(
+            <MenuItem
+              key={action.id}
+              disabled={Boolean(action.disabled)}
+              onClick={() => {
+                closeMenu();
+                action.onClick?.();
+              }}
+              sx={action.intent === "danger" ? ACTION_MENU_DANGER_ITEM_SX : ACTION_MENU_ITEM_SX}
+            >
+              <IconComponent
+                sx={{
+                  ...ACTION_MENU_ROW_ICON_SX,
+                  color: action.intent === "danger" ? "rgba(248,113,113,0.92)" : "rgba(226,232,240,0.92)",
+                }}
+              />
+              <Box
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: helperText ? "flex-start" : "center",
+                }}
+              >
+                <Typography sx={ACTION_MENU_LABEL_SX}>{action.label}</Typography>
+                {helperText ? <Typography sx={ACTION_MENU_DESCRIPTION_SX}>{helperText}</Typography> : null}
+              </Box>
+            </MenuItem>
+          );
+        });
+      });
+
+      return nodes;
+    },
+    [softwareActionMenuActions, softwareActionMenuSubject]
   );
 
   const submitSoftwareAction = useCallback(async () => {
@@ -1554,9 +1899,7 @@ export default function InstalledSoftwareTab({
         flex: 1.2,
         minWidth: 240,
         filter: "agTextColumnFilter",
-        cellRenderer: (params) => (
-          <SoftwareNameCell row={params.data} onOpenContextMenu={handleOpenSoftwareActionMenu} />
-        ),
+        cellRenderer: (params) => <SoftwareNameCell row={params.data} />,
       },
       {
         field: "version",
@@ -1606,7 +1949,7 @@ export default function InstalledSoftwareTab({
         ),
       },
     ],
-    [busyActionKey, handleOpenSoftwareActionMenu, hostname, requestUninstall]
+    [busyActionKey, hostname, requestUninstall]
   );
 
   const getSoftwareRowId = useCallback(
@@ -1724,11 +2067,14 @@ export default function InstalledSoftwareTab({
             enableClickSelection: true,
           }}
           suppressCellFocus
+          suppressContextMenu
+          preventDefaultOnContextMenu
           pagination
           paginationPageSize={100}
           paginationPageSizeSelector={[20, 50, 100]}
           animateRows
           getRowId={getSoftwareRowId}
+          onCellContextMenu={handleSoftwareCellContextMenu}
           theme={DEVICE_DETAILS_GRID_THEME}
         />
       </GridShell>
@@ -1744,60 +2090,9 @@ export default function InstalledSoftwareTab({
               }
             : undefined
         }
-        PaperProps={{
-          sx: {
-            bgcolor: "rgba(8,12,24,0.96)",
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            backdropFilter: "blur(14px)",
-            borderRadius: 2,
-            minWidth: 260,
-          },
-        }}
+        PaperProps={{ sx: ACTION_MENU_PAPER_SX }}
       >
-        <MenuItem
-          onClick={() => {
-            void handleOpenSoftwareActionDialog("icon_override", softwareActionMenu?.row || null);
-          }}
-          sx={{
-            fontSize: 13,
-            color: MAGIC_UI.textBright,
-          }}
-        >
-          Create Global Icon Override
-        </MenuItem>
-        <MenuItem
-          onClick={() => {
-            void handleOpenSoftwareActionDialog("uninstall_override", softwareActionMenu?.row || null);
-          }}
-          sx={{
-            fontSize: 13,
-            color: MAGIC_UI.textBright,
-          }}
-        >
-          Create Global Uninstall Override
-        </MenuItem>
-        <MenuItem
-          onClick={() => {
-            void handleOpenSoftwareActionDialog("uninstall_block", softwareActionMenu?.row || null);
-          }}
-          sx={{
-            fontSize: 13,
-            color: MAGIC_UI.textBright,
-          }}
-        >
-          Block Uninstallation
-        </MenuItem>
-        <MenuItem
-          onClick={() => {
-            void handleOpenSoftwareActionDialog("uninstall_unblock", softwareActionMenu?.row || null);
-          }}
-          sx={{
-            fontSize: 13,
-            color: MAGIC_UI.textBright,
-          }}
-        >
-          Unblock Uninstallation
-        </MenuItem>
+        {renderSoftwareActionMenuItems(handleCloseSoftwareActionMenu)}
       </Menu>
       <Dialog
         open={Boolean(softwareActionDialog?.open)}
