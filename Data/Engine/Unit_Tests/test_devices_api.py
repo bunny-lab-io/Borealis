@@ -1294,6 +1294,132 @@ def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHa
     )
 
 
+def test_device_processes_snapshot_uses_system_socket(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    calls: list[tuple[str, str, str, dict[str, Any], float]] = []
+
+    monkeypatch.setattr(
+        engine_harness.context,
+        "has_host_service_socket",
+        lambda hostname, mode: hostname == "test-device" and mode == "system",
+        raising=False,
+    )
+
+    def _call_host_service_event(
+        hostname: str,
+        service_mode: str,
+        event: str,
+        payload: dict[str, Any],
+        *,
+        timeout: float,
+    ):
+        calls.append((hostname, service_mode, event, payload, timeout))
+        return {
+            "ok": True,
+            "reported_at": 1_700_000_900,
+            "refresh_interval_ms": 5000,
+            "processes": [
+                {
+                    "id": "4242:1700000000",
+                    "pid": 4242,
+                    "parent_pid": 1,
+                    "name": "chrome.exe",
+                    "cpu_percent": 32.5,
+                    "memory_percent": 4.2,
+                    "memory_bytes": 536870912,
+                    "command_line": "chrome.exe --type=renderer",
+                    "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(engine_harness.context, "call_host_service_event", _call_host_service_event, raising=False)
+
+    response = client.get("/api/device/processes/test-device")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["hostname"] == "test-device"
+    assert payload["agent_id"] == "test-device-agent"
+    assert payload["reported_at"] == 1_700_000_900
+    assert payload["refresh_interval_ms"] == 5000
+    assert payload["processes"][0]["pid"] == 4242
+    assert len(calls) == 1
+    hostname, service_mode, event, dispatched, timeout = calls[0]
+    assert hostname == "test-device"
+    assert service_mode == "system"
+    assert event == "process_management_request"
+    assert dispatched["action"] == "list"
+    assert timeout == 8.0
+
+
+def test_device_process_terminate_sends_system_socket_request_and_notifies(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    calls: list[tuple[str, str, str, dict[str, Any], float]] = []
+    socket_events: list[tuple[str, Any]] = []
+
+    monkeypatch.setattr(
+        engine_harness.context,
+        "has_host_service_socket",
+        lambda hostname, mode: hostname == "test-device" and mode == "system",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        engine_harness.context.socketio,
+        "emit",
+        lambda event, payload, **_kwargs: socket_events.append((event, payload)),
+        raising=False,
+    )
+
+    def _call_host_service_event(
+        hostname: str,
+        service_mode: str,
+        event: str,
+        payload: dict[str, Any],
+        *,
+        timeout: float,
+    ):
+        calls.append((hostname, service_mode, event, payload, timeout))
+        return {
+            "ok": True,
+            "reported_at": 1_700_001_100,
+            "refresh_interval_ms": 5000,
+            "terminated_pids": [4242],
+            "processes": [],
+        }
+
+    monkeypatch.setattr(engine_harness.context, "call_host_service_event", _call_host_service_event, raising=False)
+
+    response = client.post("/api/device/processes/test-device/terminate", json={"pid": 4242})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["terminated_pid"] == 4242
+    assert payload["processes"] == []
+    assert len(calls) == 1
+    hostname, service_mode, event, dispatched, timeout = calls[0]
+    assert hostname == "test-device"
+    assert service_mode == "system"
+    assert event == "process_management_request"
+    assert dispatched["action"] == "terminate"
+    assert dispatched["pid"] == 4242
+    assert dispatched["requested_by"] == "admin"
+    assert timeout == 15.0
+    assert socket_events
+    event_name, event_payload = socket_events[-1]
+    assert event_name == "device_processes_changed"
+    assert event_payload["hostname"] == "test-device"
+    assert event_payload["change"] == "terminated"
+
+
 def test_device_software_uninstall_requires_supported_metadata(engine_harness: EngineTestHarness) -> None:
     client = _client_with_admin_session(engine_harness)
     _set_test_device_software(

@@ -25,6 +25,7 @@ import MemoryRoundedIcon from "@mui/icons-material/MemoryRounded";
 import LanRoundedIcon from "@mui/icons-material/LanRounded";
 import AppsRoundedIcon from "@mui/icons-material/AppsRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
+import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
 import ListAltRoundedIcon from "@mui/icons-material/ListAltRounded";
 import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
 import DesktopWindowsRoundedIcon from "@mui/icons-material/DesktopWindowsRounded";
@@ -48,6 +49,7 @@ import InstalledSoftwareTab from "./Installed_Software.jsx";
 import DeviceWatchdogsTab from "./Device_Watchdogs.jsx";
 import RemoteShellTab from "./Remote_Shell.jsx";
 import RemoteFileManagementTab from "./Remote_File_Management.jsx";
+import ProcessManagementTab from "./Process_Management.jsx";
 import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
 import ServiceList from "./Service_List.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
@@ -117,6 +119,7 @@ const TOP_TABS = [
   { key: "file_management", label: "File Management", icon: FolderRoundedIcon },
   { key: "software", label: "Installed Software", icon: AppsRoundedIcon },
   { key: "services", label: "Services", icon: SettingsRoundedIcon },
+  { key: "process_management", label: "Processes", icon: AccountTreeRoundedIcon },
   { key: "watchdogs", label: "Watchdogs", icon: PolicyIcon },
   { key: "activity", label: "Activity History", icon: ListAltRoundedIcon },
   { key: "shell", label: "Remote Shell", icon: TerminalRoundedIcon },
@@ -126,6 +129,7 @@ const DEVICE_DETAILS_TAB_URL_BY_KEY = Object.freeze({
   file_management: "file_management",
   software: "installed_software",
   services: "services",
+  process_management: "process_management",
   watchdogs: "watchdogs",
   activity: "activity_history",
   shell: "remote_shell",
@@ -137,6 +141,8 @@ const DEVICE_DETAILS_TAB_KEY_BY_URL = Object.freeze({
   installed_software: "software",
   software: "software",
   services: "services",
+  process_management: "process_management",
+  processes: "process_management",
   watchdogs: "watchdogs",
   activity_history: "activity",
   activity: "activity",
@@ -2638,6 +2644,19 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     </Box>
   );
 
+  const renderProcessManagementTab = () => (
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        flexGrow: 1,
+        minHeight: 0,
+      }}
+    >
+      <ProcessManagementTab device={tunnelDevice} />
+    </Box>
+  );
+
   const renderRemoteShellTab = () => (
     <Box
       sx={{
@@ -3444,6 +3463,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     renderFileManagementTab,
     renderSoftware,
     renderServicesTab,
+    renderProcessManagementTab,
     renderWatchdogsTab,
     renderHistory,
     renderRemoteShellTab,

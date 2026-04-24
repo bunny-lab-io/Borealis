@@ -104,6 +104,8 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - `GET /api/device/files/<hostname>/children?path=<absolute-path>` (Token Authenticated) - lazy-load one File Management directory.
 - `POST /api/device/files/<hostname>/upload` (Token Authenticated) - start a File Management upload transfer.
 - `POST /api/device/files/<hostname>/download` (Token Authenticated) - start a File Management download transfer.
+- `GET /api/device/processes/<hostname>` (Token Authenticated) - hydrate the Device Summary `Processes` tab with a live process snapshot.
+- `POST /api/device/processes/<hostname>/terminate` (Token Authenticated) - end one process from the Device Summary `Processes` context menu.
 
 ## Related Documentation
 - [Engine Runtime](engine-runtime.md)
@@ -461,6 +463,7 @@ const NAV_TAB_COLORS = {
 - `device_summary`
 - `installed_software`
 - `services`
+- `process_management`
 - `activity_history`
 - `remote_shell`
 - `remote_desktop`
