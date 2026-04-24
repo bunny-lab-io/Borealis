@@ -19,7 +19,7 @@ class _FakeStorage:
         Path(destination).write_bytes(self._payload)
 
 
-def test_guess_download_name_prefers_7z_for_archives() -> None:
+def test_guess_download_name_prefers_zip_for_archives() -> None:
     archive_name = file_management_module._guess_download_name(
         "LAB-OPERATOR-01",
         [{"path": r"C:\Temp", "name": "Temp", "kind": "directory"}],
@@ -27,7 +27,7 @@ def test_guess_download_name_prefers_7z_for_archives() -> None:
     )
 
     assert archive_name.startswith("LAB-OPERATOR-01-files-")
-    assert archive_name.endswith(".7z")
+    assert archive_name.endswith(".zip")
 
 
 def test_delete_session_removes_download_artifact_directory(tmp_path: Path) -> None:
@@ -38,14 +38,14 @@ def test_delete_session_removes_download_artifact_directory(tmp_path: Path) -> N
         agent_id="agent-001",
         operator_id="operator-001",
         selections=[{"path": r"C:\Temp", "name": "Temp", "kind": "directory"}],
-        archive_name="LAB-OPERATOR-01-files-test.7z",
+        archive_name="LAB-OPERATOR-01-files-test.zip",
     )
 
     transfer_id = session["transfer_id"]
     session_dir = tmp_path / "engine_file_management" / transfer_id
     download_dir = session_dir / "download"
     download_dir.mkdir(parents=True, exist_ok=True)
-    artifact_path = download_dir / "LAB-OPERATOR-01-files-test.7z"
+    artifact_path = download_dir / "LAB-OPERATOR-01-files-test.zip"
     artifact_path.write_bytes(b"archive")
 
     with store._lock:
@@ -140,7 +140,7 @@ def test_request_cancel_marks_transfer_canceling(tmp_path: Path) -> None:
         agent_id="agent-001",
         operator_id="operator-001",
         selections=[{"path": r"C:\Temp", "name": "Temp", "kind": "directory"}],
-        archive_name="download.7z",
+        archive_name="download.zip",
     )
 
     snapshot = store.request_cancel(session["transfer_id"])

@@ -11,7 +11,6 @@ import shutil
 import socket
 import stat as stat_module
 import string
-import subprocess
 import tempfile
 import time
 import zipfile
@@ -585,94 +584,6 @@ class Role:
         self._temp_root = Path(tempfile.gettempdir()) / "Borealis" / "file_management"
         self._temp_root.mkdir(parents=True, exist_ok=True)
 
-    def _find_7zip_executable(self) -> str:
-        candidates: list[str] = []
-        env_candidate = _clean_text(os.environ.get("BOREALIS_7ZIP_EXE"))
-        if env_candidate:
-            candidates.append(env_candidate)
-        if IS_WINDOWS:
-            repo_root = Path(__file__).resolve().parents[3]
-            for base_dir in (repo_root, Path.cwd()):
-                candidates.append(str(base_dir / "Dependencies" / "7zip" / "7z.exe"))
-            for env_name in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
-                install_root = _clean_text(os.environ.get(env_name))
-                if install_root:
-                    candidates.append(str(Path(install_root) / "7-Zip" / "7z.exe"))
-        for executable_name in ("7zz", "7z", "7za"):
-            resolved = shutil.which(executable_name)
-            if resolved:
-                candidates.append(resolved)
-        seen: set[str] = set()
-        for candidate in candidates:
-            normalized = _clean_text(candidate)
-            if not normalized or normalized.lower() in seen:
-                continue
-            seen.add(normalized.lower())
-            if Path(normalized).is_file():
-                return normalized
-        return ""
-
-    def _can_use_7zip_archive(self, selections: list[Dict[str, Any]]) -> bool:
-        if not selections:
-            return False
-        common_parent = ""
-        for selection in selections:
-            source_path = _normalize_requested_path(selection.get("path"))
-            label = _normalize_upload_name(selection.get("name")) or os.path.basename(source_path.rstrip("\\/")) or source_path
-            source_name = os.path.basename(source_path.rstrip("\\/"))
-            if not source_name or label != source_name:
-                return False
-            parent_path = _parent_path(source_path)
-            if not parent_path:
-                return False
-            if not common_parent:
-                common_parent = parent_path
-                continue
-            if os.path.normcase(common_parent) != os.path.normcase(parent_path):
-                return False
-        return bool(common_parent)
-
-    def _build_7zip_selection(
-        self,
-        selections: list[Dict[str, Any]],
-        archive_path: str,
-        seven_zip_exe: str,
-        *,
-        transfer_id: str = "",
-    ) -> int:
-        if not self._can_use_7zip_archive(selections):
-            raise FileManagementError("archive_fallback_required", "7-Zip archiving requires selections from the same parent directory.")
-        first_path = _normalize_requested_path(selections[0].get("path"))
-        working_directory = _parent_path(first_path)
-        input_names = [os.path.basename(_normalize_requested_path(selection.get("path")).rstrip("\\/")) for selection in selections]
-        command = [seven_zip_exe, "a", "-t7z", "-mx=5", "-y", archive_path, *input_names]
-        try:
-            process = subprocess.Popen(
-                command,
-                cwd=working_directory,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            last_control_check = 0.0
-            while process.poll() is None:
-                time.sleep(0.2)
-                now_ts = time.time()
-                if transfer_id and now_ts - last_control_check >= TRANSFER_CONTROL_POLL_SECONDS:
-                    self._ensure_transfer_not_canceled(transfer_id)
-                    last_control_check = now_ts
-            stdout, stderr = process.communicate()
-            completed = type("Completed", (), {"returncode": process.returncode, "stdout": stdout, "stderr": stderr})()
-        except OSError as exc:
-            raise FileManagementError("archive_failed", str(exc)) from exc
-        if completed.returncode != 0:
-            details = _clean_text(completed.stderr) or _clean_text(completed.stdout) or "7-Zip failed to create the archive."
-            raise FileManagementError("archive_failed", details)
-        try:
-            return int(os.path.getsize(archive_path))
-        except Exception:
-            return 0
-
     def _log(self, message: str, *, error: bool = False) -> None:
         if callable(self._log_hook):
             try:
@@ -943,7 +854,7 @@ class Role:
         if not transfer_id or not selections:
             raise FileManagementError("invalid_request", "Download manifest is missing transfer metadata.")
         archive_required = bool(payload.get("archive_required"))
-        requested_archive_name = _normalize_upload_name(payload.get("archive_name")) or "download.7z"
+        requested_archive_name = _normalize_upload_name(payload.get("archive_name")) or "download.zip"
         self._ensure_transfer_not_canceled(transfer_id)
 
         if not archive_required and len(selections) == 1 and os.path.isfile(selections[0]["path"]):
@@ -965,32 +876,12 @@ class Role:
             return
 
         self._temp_root.mkdir(parents=True, exist_ok=True)
-        seven_zip_exe = self._find_7zip_executable()
-        use_7zip = bool(seven_zip_exe and self._can_use_7zip_archive(selections))
-        archive_suffix = ".7z" if use_7zip else ".zip"
-        archive_name = _normalize_archive_name(requested_archive_name, archive_suffix)
-        mime_type = "application/x-7z-compressed" if use_7zip else "application/zip"
-        fd, archive_path = tempfile.mkstemp(prefix="download-", suffix=archive_suffix, dir=self._temp_root)
+        archive_name = _normalize_archive_name(requested_archive_name, ".zip")
+        mime_type = "application/zip"
+        fd, archive_path = tempfile.mkstemp(prefix="download-", suffix=".zip", dir=self._temp_root)
         os.close(fd)
         try:
-            try:
-                if use_7zip:
-                    total_bytes = self._build_7zip_selection(selections, archive_path, seven_zip_exe, transfer_id=transfer_id)
-                else:
-                    total_bytes = self._zip_selection(selections, archive_path, transfer_id=transfer_id)
-            except FileManagementError as exc:
-                if _clean_text(getattr(exc, "code", "")).lower() == "transfer_canceled":
-                    raise
-                if not use_7zip:
-                    raise
-                self._log(f"7-Zip archive creation failed; falling back to ZIP for {transfer_id}: {exc}")
-                with contextlib.suppress(Exception):
-                    os.remove(archive_path)
-                archive_name = _normalize_archive_name(requested_archive_name, ".zip")
-                mime_type = "application/zip"
-                fd, archive_path = tempfile.mkstemp(prefix="download-", suffix=".zip", dir=self._temp_root)
-                os.close(fd)
-                total_bytes = self._zip_selection(selections, archive_path, transfer_id=transfer_id)
+            total_bytes = self._zip_selection(selections, archive_path, transfer_id=transfer_id)
             snapshot = self._report_progress(
                 transfer_id,
                 status="running",

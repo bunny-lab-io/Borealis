@@ -174,7 +174,7 @@ def _guess_download_name(hostname: str, selections: list[Dict[str, Any]], *, arc
     now_label = time.strftime("%Y%m%d-%H%M%S")
     if archive_required:
         normalized_host = _normalize_text(hostname) or "device"
-        return f"{normalized_host}-files-{now_label}.7z"
+        return f"{normalized_host}-files-{now_label}.zip"
     if not selections:
         return f"download-{now_label}.bin"
     only = selections[0]

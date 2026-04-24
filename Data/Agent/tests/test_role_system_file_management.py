@@ -331,7 +331,7 @@ def test_file_management_paste_cut_moves_file(tmp_path: Path) -> None:
     asyncio.run(_run_test())
 
 
-def test_file_management_download_prefers_7zip_archive_when_available(
+def test_file_management_download_archives_directory_as_zip(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     role = _make_role(_FakeSio())
@@ -345,16 +345,13 @@ def test_file_management_download_prefers_7zip_archive_when_available(
     reported = []
     uploaded = {}
 
-    monkeypatch.setattr(role, "_find_7zip_executable", lambda: "/usr/bin/7zz")
-
     def _fake_report_progress(*args, **kwargs):
         reported.append({"args": args, "kwargs": kwargs})
 
-    def _fake_build_7zip_selection(selections, archive_path, seven_zip_exe, transfer_id=""):
-        assert seven_zip_exe == "/usr/bin/7zz"
-        assert transfer_id == "transfer-7z"
-        Path(archive_path).write_bytes(b"7zdata")
-        return 6
+    def _fake_zip_selection(selections, archive_path, transfer_id=""):
+        assert transfer_id == "transfer-zip"
+        Path(archive_path).write_bytes(b"zipdata")
+        return 7
 
     def _fake_post_download_artifact(*, transfer_id, artifact_path, artifact_name, mime_type):
         uploaded["transfer_id"] = transfer_id
@@ -364,62 +361,20 @@ def test_file_management_download_prefers_7zip_archive_when_available(
         assert Path(artifact_path).is_file()
 
     monkeypatch.setattr(role, "_report_progress", _fake_report_progress)
-    monkeypatch.setattr(role, "_build_7zip_selection", _fake_build_7zip_selection)
+    monkeypatch.setattr(role, "_zip_selection", _fake_zip_selection)
     monkeypatch.setattr(role, "_post_download_artifact", _fake_post_download_artifact)
 
     role._download_transfer_worker(
         {
-            "transfer_id": "transfer-7z",
+            "transfer_id": "transfer-zip",
             "archive_required": True,
             "archive_name": "host-files.zip",
             "items": [{"path": str(source_dir), "name": source_dir.name, "kind": "directory"}],
         }
     )
 
-    assert uploaded["transfer_id"] == "transfer-7z"
-    assert uploaded["artifact_name"].endswith(".7z")
-    assert uploaded["mime_type"] == "application/x-7z-compressed"
-    assert reported[0]["kwargs"]["archive_name"].endswith(".7z")
+    assert uploaded["transfer_id"] == "transfer-zip"
+    assert uploaded["artifact_name"].endswith(".zip")
+    assert uploaded["mime_type"] == "application/zip"
+    assert reported[0]["kwargs"]["archive_name"].endswith(".zip")
     assert not Path(uploaded["artifact_path"]).exists()
-
-
-def test_file_management_build_7zip_selection_uses_popen_pipes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    role = _make_role(_FakeSio())
-    source_dir = tmp_path / "source"
-    source_dir.mkdir()
-    payload = source_dir / "payload.txt"
-    payload.write_text("hello world", encoding="utf-8")
-    archive_path = tmp_path / "download.7z"
-
-    popen_calls = []
-
-    class _FakePopen:
-        def __init__(self, command, **kwargs) -> None:
-            popen_calls.append({"command": command, "kwargs": kwargs})
-            assert "capture_output" not in kwargs
-            assert kwargs["stdout"] is role_module.subprocess.PIPE
-            assert kwargs["stderr"] is role_module.subprocess.PIPE
-            assert kwargs["text"] is True
-            assert kwargs["cwd"] == str(source_dir.parent)
-            self.returncode = 0
-            archive_path.write_bytes(b"7zdata")
-
-        def poll(self):
-            return 0
-
-        def communicate(self):
-            return ("", "")
-
-    monkeypatch.setattr(role_module.subprocess, "Popen", _FakePopen)
-
-    total_bytes = role._build_7zip_selection(
-        [{"path": str(source_dir), "name": source_dir.name, "kind": "directory"}],
-        str(archive_path),
-        "/usr/bin/7zz",
-        transfer_id="transfer-7z",
-    )
-
-    assert total_bytes == 6
-    assert len(popen_calls) == 1
