@@ -46,7 +46,7 @@ import { AgGridReact } from "ag-grid-react";
 import ActivityHistoryTab from "./Activity_History.jsx";
 import InstalledSoftwareTab from "./Installed_Software.jsx";
 import DeviceWatchdogsTab from "./Device_Watchdogs.jsx";
-import RemoteShellTab from "./RemoteShell.jsx";
+import RemoteShellTab from "./Remote_Shell.jsx";
 import RemoteFileManagementTab from "./Remote_File_Management.jsx";
 import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
 import ServiceList from "./Service_List.jsx";
