@@ -49,7 +49,7 @@ import DeviceWatchdogsTab from "./Device_Watchdogs.jsx";
 import RemoteShellTab from "./RemoteShell.jsx";
 import RemoteFileManagementTab from "./Remote_File_Management.jsx";
 import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
-import ServiceList from "../Services/Service_List.jsx";
+import ServiceList from "./Service_List.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
 import { useAuth } from "../../app/providers/AuthContext.jsx";
