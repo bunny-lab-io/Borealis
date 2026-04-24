@@ -381,3 +381,45 @@ def test_file_management_download_prefers_7zip_archive_when_available(
     assert uploaded["mime_type"] == "application/x-7z-compressed"
     assert reported[0]["kwargs"]["archive_name"].endswith(".7z")
     assert not Path(uploaded["artifact_path"]).exists()
+
+
+def test_file_management_build_7zip_selection_uses_popen_pipes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    role = _make_role(_FakeSio())
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    payload = source_dir / "payload.txt"
+    payload.write_text("hello world", encoding="utf-8")
+    archive_path = tmp_path / "download.7z"
+
+    popen_calls = []
+
+    class _FakePopen:
+        def __init__(self, command, **kwargs) -> None:
+            popen_calls.append({"command": command, "kwargs": kwargs})
+            assert "capture_output" not in kwargs
+            assert kwargs["stdout"] is role_module.subprocess.PIPE
+            assert kwargs["stderr"] is role_module.subprocess.PIPE
+            assert kwargs["text"] is True
+            assert kwargs["cwd"] == str(source_dir.parent)
+            self.returncode = 0
+            archive_path.write_bytes(b"7zdata")
+
+        def poll(self):
+            return 0
+
+        def communicate(self):
+            return ("", "")
+
+    monkeypatch.setattr(role_module.subprocess, "Popen", _FakePopen)
+
+    total_bytes = role._build_7zip_selection(
+        [{"path": str(source_dir), "name": source_dir.name, "kind": "directory"}],
+        str(archive_path),
+        "/usr/bin/7zz",
+        transfer_id="transfer-7z",
+    )
+
+    assert total_bytes == 6
+    assert len(popen_calls) == 1

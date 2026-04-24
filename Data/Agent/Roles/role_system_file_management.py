@@ -650,7 +650,8 @@ class Role:
             process = subprocess.Popen(
                 command,
                 cwd=working_directory,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
             )
             last_control_check = 0.0
