@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import json
 import os
 import platform
@@ -126,6 +127,7 @@ class Role:
         self._active_until = 0.0
         self._cpu_count = self._resolve_cpu_count()
         self._previous_io_counters: Dict[str, Tuple[float, int, int]] = {}
+        self._previous_tcp_counters: Dict[str, Tuple[float, int]] = {}
         self._supported, self._unsupported_reason = self._detect_support()
         self._thread: Optional[threading.Thread] = None
         if self._supported:
@@ -222,6 +224,133 @@ class Role:
             rates[pid] = max(read_rate + write_rate, data_rate)
         return rates
 
+    def _collect_windows_tcp_network_rates(self, captured_monotonic: float) -> Optional[Dict[int, float]]:
+        if not IS_WINDOWS or psutil is None:
+            return None
+
+        class MIB_TCPROW(ctypes.Structure):
+            _fields_ = [
+                ("dwState", ctypes.c_ulong),
+                ("dwLocalAddr", ctypes.c_ulong),
+                ("dwLocalPort", ctypes.c_ulong),
+                ("dwRemoteAddr", ctypes.c_ulong),
+                ("dwRemotePort", ctypes.c_ulong),
+            ]
+
+        class TCP_ESTATS_DATA_RW_v0(ctypes.Structure):
+            _fields_ = [("EnableCollection", ctypes.c_ubyte)]
+
+        class TCP_ESTATS_DATA_ROD_v0(ctypes.Structure):
+            _fields_ = [
+                ("DataBytesOut", ctypes.c_ulonglong),
+                ("DataSegsOut", ctypes.c_ulonglong),
+                ("DataBytesIn", ctypes.c_ulonglong),
+                ("DataSegsIn", ctypes.c_ulonglong),
+                ("SegsOut", ctypes.c_ulonglong),
+                ("SegsIn", ctypes.c_ulonglong),
+                ("SoftErrors", ctypes.c_ulong),
+                ("SoftErrorReason", ctypes.c_ulong),
+                ("SndUna", ctypes.c_ulong),
+                ("SndNxt", ctypes.c_ulong),
+                ("SndMax", ctypes.c_ulong),
+                ("ThruBytesAcked", ctypes.c_ulonglong),
+                ("RcvNxt", ctypes.c_ulong),
+                ("ThruBytesReceived", ctypes.c_ulonglong),
+            ]
+
+        def _addr_to_dword(value: str) -> Optional[int]:
+            try:
+                return int.from_bytes(socket.inet_aton(value), "little")
+            except Exception:
+                return None
+
+        try:
+            iphlpapi = ctypes.WinDLL("iphlpapi")
+        except Exception:
+            return None
+        try:
+            connections = psutil.net_connections(kind="tcp")
+        except Exception:
+            return None
+
+        TCP_CONNECTION_ESTATS_DATA = 1
+        TCP_STATE_ESTABLISHED = 5
+        rates: Dict[int, float] = {}
+        next_tcp_counters: Dict[str, Tuple[float, int]] = {}
+
+        for conn in connections:
+            pid = _coerce_int(getattr(conn, "pid", 0), 0)
+            if pid <= 0:
+                continue
+            if _clean_text(getattr(conn, "status", "")).upper() != "ESTABLISHED":
+                continue
+            local = getattr(conn, "laddr", None)
+            remote = getattr(conn, "raddr", None)
+            if not local or not remote:
+                continue
+            local_ip = _clean_text(local.ip if hasattr(local, "ip") else local[0] if len(local) > 0 else "")
+            remote_ip = _clean_text(remote.ip if hasattr(remote, "ip") else remote[0] if len(remote) > 0 else "")
+            local_port = _coerce_int(local.port if hasattr(local, "port") else local[1] if len(local) > 1 else 0, 0)
+            remote_port = _coerce_int(remote.port if hasattr(remote, "port") else remote[1] if len(remote) > 1 else 0, 0)
+            local_addr = _addr_to_dword(local_ip)
+            remote_addr = _addr_to_dword(remote_ip)
+            if local_addr is None or remote_addr is None or local_port <= 0 or remote_port <= 0:
+                continue
+
+            row = MIB_TCPROW(
+                TCP_STATE_ESTABLISHED,
+                local_addr,
+                socket.htons(local_port),
+                remote_addr,
+                socket.htons(remote_port),
+            )
+            rw = TCP_ESTATS_DATA_RW_v0(1)
+            try:
+                iphlpapi.SetPerTcpConnectionEStats(
+                    ctypes.byref(row),
+                    TCP_CONNECTION_ESTATS_DATA,
+                    ctypes.byref(rw),
+                    0,
+                    ctypes.sizeof(rw),
+                    0,
+                )
+            except Exception:
+                pass
+
+            rw_probe = TCP_ESTATS_DATA_RW_v0()
+            rod = TCP_ESTATS_DATA_ROD_v0()
+            try:
+                status = iphlpapi.GetPerTcpConnectionEStats(
+                    ctypes.byref(row),
+                    TCP_CONNECTION_ESTATS_DATA,
+                    ctypes.byref(rw_probe),
+                    0,
+                    ctypes.sizeof(rw_probe),
+                    None,
+                    0,
+                    0,
+                    ctypes.byref(rod),
+                    0,
+                    ctypes.sizeof(rod),
+                )
+            except Exception:
+                continue
+            if status != 0 or not bool(rw_probe.EnableCollection):
+                continue
+
+            total_bytes = int(rod.DataBytesIn or 0) + int(rod.DataBytesOut or 0)
+            key = f"{local_ip}:{local_port}>{remote_ip}:{remote_port}:{pid}"
+            previous = self._previous_tcp_counters.get(key)
+            if previous:
+                previous_time, previous_total = previous
+                elapsed = max(0.0, captured_monotonic - float(previous_time or 0.0))
+                if elapsed > 0:
+                    rates[pid] = rates.get(pid, 0.0) + max(0.0, float(total_bytes - int(previous_total or 0)) / elapsed)
+            next_tcp_counters[key] = (captured_monotonic, total_bytes)
+
+        self._previous_tcp_counters = next_tcp_counters
+        return rates
+
     def _collect_psutil_processes(self) -> List[Dict[str, Any]]:
         if psutil is None:
             return []
@@ -309,6 +438,7 @@ class Role:
         self._previous_io_counters = next_io_counters
         if IS_WINDOWS:
             perf_rates = self._collect_windows_perf_process_io_rates()
+            network_rates = self._collect_windows_tcp_network_rates(captured_monotonic)
             if perf_rates:
                 for item in processes:
                     pid = _coerce_int(item.get("pid"), 0)
@@ -317,6 +447,10 @@ class Role:
                             max(_coerce_float(item.get("disk_bytes_per_second"), 0.0), perf_rates[pid]),
                             2,
                         )
+            if network_rates is not None:
+                for item in processes:
+                    pid = _coerce_int(item.get("pid"), 0)
+                    item["network_bytes_per_second"] = round(max(0.0, network_rates.get(pid, 0.0)), 2)
         return processes
 
     def _collect_windows_fallback_processes(self) -> List[Dict[str, Any]]:

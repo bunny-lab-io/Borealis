@@ -690,7 +690,7 @@ function CommandLineCell({ row }) {
       <Typography
         component="span"
         sx={{
-          color: commandText ? "rgba(226,232,240,0.88)" : "rgba(148,163,184,0.56)",
+          color: "rgba(148,163,184,0.72)",
           fontFamily: '"IBM Plex Mono", "Consolas", monospace',
           fontSize: "0.78rem",
           whiteSpace: "nowrap",
@@ -1284,7 +1284,7 @@ export default function ProcessManagement({ device }) {
         ),
       },
       {
-        headerName: "Command / Location",
+        headerName: "Command Line",
         field: "command_line",
         colId: "command_line",
         valueGetter: (params) => getProcessCommandText(params.data),

@@ -51,7 +51,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ## Device Process Management
 - Device Summary exposes a `Processes` tab for live task-manager style process inspection and control.
-- The tab uses a single AG Grid with `Name`, `Owner`, `CPU Usage`, `Memory Usage`, `Disk`, `Network`, and `Command / Location` columns, defaults to the hottest individual or app-family CPU usage first, trims Windows service scaffolding, `explorer.exe`, and terminal shell hosts out of the visible parent chain, and keeps parent/child expansion opt-in so the default view reads like Task Manager rather than a fully expanded Process Explorer tree.
+- The tab uses a single AG Grid with `Name`, `Owner`, `CPU Usage`, `Memory Usage`, `Disk`, `Network`, and `Command Line` columns, defaults to the hottest individual or app-family CPU usage first, trims Windows service scaffolding, `explorer.exe`, and terminal shell hosts out of the visible parent chain, and keeps parent/child expansion opt-in so the default view reads like Task Manager rather than a fully expanded Process Explorer tree.
 - Parent process rows display aggregate CPU and memory totals for their visible descendant processes so collapsed app families line up with Windows Task Manager group rows.
 - `Show System Processes` is disabled by default. When disabled, Borealis removes low-CPU, low-memory OS scaffolding such as service hosts, session brokers, shell helpers, and kernel worker rows while keeping those same processes visible when they become meaningful resource consumers. It always hides `MemCompression` and `wslservice.exe` while system processes are suppressed.
 - The refresh Filter Slider supports `Live` (1s), `Normal` (5s), and `Quiet` (15s) polling. Faster polling passes a lower process snapshot max age to the agent so the device refreshes more often while the tab is active.
@@ -59,7 +59,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Process names use the same Borealis-blue treatment as the File Management `Name` column.
 - CPU, memory, disk, and network cells include resource heat-map fills so high-consumption processes stand out before an operator sorts or filters.
 - Windows disk usage uses psutil process I/O deltas with a `Win32_PerfFormattedData_PerfProc_Process` fallback so short cached samples still receive an OS-formatted per-process I/O rate.
-- Per-process network usage is reported as `N/A` when the agent cannot collect a true per-process network rate; Windows exposes that Task Manager value through lower-level tracing rather than the process counters Borealis currently uses.
+- Windows network usage uses TCP extended statistics when available, aggregated by owning process ID. Rows report `N/A` only when the agent cannot access those per-connection counters.
 - The WebUI polls the live process endpoint according to the selected refresh rate while the tab is open. The agent-side `process_management` role keeps a short active polling window and cached snapshots so multiple UI refreshes reuse recent process data instead of forcing duplicate process walks.
 - Right-click row actions use the Borealis context-menu model and currently include `Copy Location to Clipboard`, `Copy Command to Clipboard`, and `End Task`.
 
