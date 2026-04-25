@@ -33,7 +33,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
   `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Branch bootstrap + server URL + enrollment example:
   `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/optimization/agent-context-socket-consolidation/bootstrap.ps1"))) --agent --repo-branch optimization/agent-context-socket-consolidation --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
-- Linux agent binaries are not available; `Borealis.sh --Agent` only stages settings.
+- Linux agents run from the same script-staged Python runtime model as the rest of Borealis, not shipped binaries. The Linux Agent path can be installed with `./Borealis.sh --Agent`; current parity notes live in `agent-runtime.md`.
 
 ## First Run Checklist
 - Open the Engine URL and confirm the login page loads.

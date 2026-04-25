@@ -1,206 +1,67 @@
 ![Borealis Logo](Data/Engine/web-interface/public/Borealis_Logo_Full.png)
 
-Borealis is a remote management and automation platform built around a Linux-hosted Engine (*server*), Windows and Linux agent (*client*) runtimes, and a visual workflow layer. Operators can execute scripts, schedule jobs, orchestrate infrastructure tasks, manage software and files on remote devices, and operate distributed systems through a unified interface.
+# Why Borealis Exists
+Borealis was created to replace a pile of separate homelab and real-world operations tools with one cohesive platform.  Borealis is a remote management, monitoring, and automation platform built around a Linux-hosted management Engine and a cross-platform Agent runtime
 
-The project was originally created to consolidate the functionality of multiple standalone tools used in and outside my homelab and real-world environments (Various RMM platforms, Ansible/AWX, SemaphoreUI, etc.) into a single, cohesive platform.
+It combines the useful parts of various RMM platforms, Ansible/AWX-style automation, scheduled jobs, watchdog remediation, remote desktop and interactive shell access, file/software/process/service management, and credential-backed infrastructure execution into one single operator interface.
 
-## A Note on Development Pace
-I'm the sole maintainer of this project and still learning as I go while working a full-time IT job. Progress is iterative, and parts of the system are occasionally reworked as better architectural approaches emerge.
+## Development Pace
+Borealis is maintained by one person while working a full-time IT job. Progress is iterative, and some internals get reworked as better architecture emerges. Current focus is turning the strong automation and remote-operations core into a broader MSP-ready platform.
 
-## Documentation
-- Human-friendly docs live in `Docs/` with a top-level index at `Docs/index.md`
-- The same files also include **Codex Agent** sections with deeper implementation details
-- Start with:
-  - `Docs/index.md`
-  - `Docs/getting-started.md`
-  - `Docs/architecture-overview.md`
+## Feature Support Matrix
+Status means productized support in the current Borealis codebase and docs, not long-term intent. `Full` means supported on that endpoint path today. `Partial` means useful implementation exists but gaps or validation remain. `-` means no productized endpoint support or OS scope does not apply. Engine features use `-` for OS columns because they are Engine-side capabilities.
 
-# System Requirements
-Borealis currently runs as a single-node Linux Engine deployment that bundles the Python API/runtime, PostgreSQL, Traefik, WebSockets, scheduling, and automation services onto one host. Because of that, the Engine will use the resources you give it in a few predictable ways:
+| Scope | Feature | What it Does | Windows | Linux | macOS |
+| --- | --- | --- | --- | --- | --- |
+| Agent | Agent Runtime | Script-staged Python Agent with role loading, enrollment, telemetry, and remote-operation roles. | Full | Partial | - |
+| Agent | Inventory Collection | Collect hardware, OS, software, services, sessions, status, and health payloads from the endpoint. | Full | Partial | - |
+| Agent | WireGuard Tunnel | Maintain outbound WireGuard transport for remote operations and Engine-side automation reachability. | Full | Full | - |
+| Agent | Remote Shell Host | Expose an interactive shell over the managed WireGuard tunnel. | Full | Full | - |
+| Agent | Remote Desktop Host | Run the endpoint-side remote desktop service used by browser-based noVNC sessions. | Full | - | - |
+| Agent | File Operations | Browse, upload, folder-upload, download, cancel transfers, copy, cut, paste, rename, move, delete, create folders, and edit text files remotely. | Full | Full | - |
+| Agent | Process Operations | Report live process data and accept process-control actions such as End Task. | Full | Partial | - |
+| Agent | Service Operations | Report service inventory and accept start, stop, and restart actions. | Full | Partial | - |
+| Agent | Software Operations | Report installed software, refresh inventory, and support software-management actions. | Full | Partial | - |
+| Agent | Signed Script Execution | Validate signed payloads and run scripts in supported contexts. | Full | Full | - |
+| Agent | Watchdog Inputs and Remediation | Provide endpoint telemetry used by watchdogs and execute remediation assemblies when dispatched. | Full | Partial | - |
+| Agent | Device Identity and Tunnel Trust | Use Ed25519 device identity, short-lived tunnel tokens, and public CA/hostname validation. | Full | Full | - |
+| Engine | Device Inventory Store | Store device inventory, status, health, software, services, sessions, and activity history in PostgreSQL. | - | - | - |
+| Engine | Sites, Agent Approvals, and RBAC | Scope devices by site, approve agent enrollments, and restrict operators by site. | - | - | - |
+| Engine | Device Filters | Build typed filters, preview matches, scope automations by site, and save per-operator device-list views. | - | - | - |
+| Engine | Remote Operations API and UI | Provide operator-facing APIs and UI for shell, desktop, files, processes, services, and software actions. | - | - | - |
+| Engine | Scheduled and Quick Jobs | Dispatch signed scripts, workflows, and Engine-side Ansible playbook runs with target history. | - | - | - |
+| Engine | Workflow Editor | Build and run graph-based automation from the web UI. | - | - | - |
+| Engine | Watchdogs and Auto-Remediation | Preview watchdog matches, track incidents, suppress noise, and dispatch remediation automations. | - | - | - |
+| Engine | Aurora Content Repository | Ingest official assemblies, scripts, and playbooks while keeping local user assemblies on the Engine. | - | - | - |
+| Engine | Engine-side Ansible | Run SSH or WinRM automation from the Linux Engine over Borealis-managed WireGuard sessions. | - | - | - |
+| Engine | Aegis Cipher | Protect reusable machine credentials, operator password hashes, TOTP secrets, passkey data, and GitHub token storage with `scrypt` plus `AES-256-GCM`. | - | - | - |
+| Engine | MFA, Passkeys, and Sessions | Require Aegis unlock, enforce MFA by default, support WebAuthn passkeys, and invalidate sessions strictly. | - | - | - |
+| Engine | Code Signing | Sign script delivery and enforce trusted execution payloads. | - | - | - |
+| Engine | REST/API Surface | Expose authenticated APIs for devices, jobs, files, processes, services, software, filters, sites, logs, and runtime operations. | - | - | - |
+| Engine | Reporting | Track device activity history, scheduled job run history, alerts, and ansible recap data. | - | - | - |
 
-- **CPU**:
-  - operator-driven activity such as Web UI requests, AG Grid-backed searches, filtering, and live socket updates
-  - scheduler, watchdog evaluation, workflow execution, and assembly dispatch
-  - PostgreSQL query execution, indexing, and autovacuum work
-- **RAM**:
-  - PostgreSQL shared buffers and filesystem cache for device inventory, job history, and alerting data
-  - Engine process memory for operator sessions, active WebSocket clients, background workers, and runtime caches
-  - temporary headroom during large queries, scheduled job bursts, or watchdog preview/evaluation work
-- **Storage**:
-  - PostgreSQL tables, indexes, and WAL files
-  - Engine logs, job history, and other retained operational artifacts
-  - staged runtime assets such as the built Web UI, certificates, and Aurora-managed assembly content
-
-Storage requirements are driven more by retention policy than by the Borealis binaries themselves. Shorter log and job-history retention keeps storage needs much lower, while longer retention and heavier automation output will grow the requirement over time.
-During Engine deployment and re-deployment, `Borealis.sh` profiles the host CPU and RAM, prints the detected Engine profile in the CLI, and auto-configures the PostgreSQL and Engine DB tuning for that host. Storage is displayed as guidance only and does not change the selected profile.
+## Architecture
+- **Engine**: Linux-hosted single-node control plane with Python services, PostgreSQL, Traefik, WebSockets, scheduling, automation, and the web UI.
+- **Agent**: Script-staged cross-platform runtime with Windows as the reference path, Linux as a partial-but-working path, role-based capabilities, signed work execution, inventory, WireGuard, remote shell, file management, and remote operation roles.
+- **Transport**: Agents connect outbound. Remote operations use WireGuard sessions with strict `/32` isolation and Engine-controlled port allowlists.
+- **Data Layer**: PostgreSQL stores devices, inventory, jobs, activity history, alerts, assemblies, credentials metadata, and operational state.
+- **Automation Model**: Assemblies can run through quick jobs, scheduled jobs, workflows, watchdog remediation, and Engine-side Ansible playbooks.
+- **Security Model**: Aegis Cipher system protects secrets, MFA is required by default, passkeys are supported, scripts are signed, and WireGuard tunnel access uses short-lived tokens.
 
 ## Engine Deployment Profiles
+`Borealis.sh` profiles CPU and RAM during Engine deployment, prints the detected profile, and auto-configures PostgreSQL plus Engine DB tuning. Storage guidance is advisory and mostly depends on retention policy, job output, logs, and inventory volume.
 
-| Profile | Typical Use | Endpoints | Active Operators | vCPU | RAM | NVMe Storage |
+| Profile | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Homelab | Personal labs, testing, feature development, and very small sites | Up to 250 | 1-3 | < 8 | < 16 GiB | 80-150 GiB |
-| Small Business | Smaller production environments with light-to-moderate operator activity | Up to 1,000 | 2-4 | 8-15 | 16-31 GiB | 150-250 GiB |
-| MSP / Production | The main Borealis target for real-world SMB and managed-service usage | Up to 2,000 | 4-8 | 16-23 | 32-63 GiB | 500 GiB |
-| Enterprise | Larger single-node environments on the current Borealis architecture | Up to 10,000 | 10-20 | 24+ | 64 GiB+ | 500 GiB-1 TiB |
-| Enterprise Clustered (Not Implemented Yet) | Much larger multi-node clustered environments | 10,000+ | 20+ per node | 24+ per node | 64 GiB+ per node | 500 GiB-1 TiB per node |
+| Homelab | Personal labs, testing, feature development, very small sites | Up to 250 | 1-3 | < 8 | < 16 GiB | 80-150 GiB |
+| Small Business | Smaller production environments | Up to 1,000 | 2-4 | 8-15 | 16-31 GiB | 150-250 GiB |
+| MSP / Production | Main Borealis target for SMB and managed-service usage | Up to 2,000 | 4-8 | 16-23 | 32-63 GiB | 500 GiB |
+| Enterprise | Larger single-node environments on current architecture | Up to 10,000 | 10-20 | 24+ | 64 GiB+ | 500 GiB-1 TiB |
+| Enterprise Clustered | Roadmap-only multi-node planning placeholder | 10,000+ | 20+ per node | 24+ per node | 64 GiB+ per node | 500 GiB-1 TiB per node |
 
-## Practical Guidance
+## Getting Started
+Deploy the Borealis Engine to a Linux host:
 
-- The `Homelab` profile is intended for personal labs, development work, and very small environments where operator concurrency and retained history stay light.
-- The `Small Business` profile is intended for smaller real-world deployments and provides a practical production floor before Borealis starts benefiting heavily from larger PostgreSQL cache and job-history headroom.
-- The `MSP / Production` profile is the primary Borealis target today and should feel very strong at `2,000` endpoints or less with `4-8` active operators.
-- The `Enterprise` profile represents the upper single-node range of the current architecture. It should remain comfortable around `5,000` endpoints with disciplined retention policies and can function decently up to `10,000` endpoints on a well-tuned host.
-- All production-oriented profiles benefit most from additional RAM and fast NVMe storage because PostgreSQL cache, WAL activity, alerting history, job history, and device inventory all scale with real usage.
-- The clustered enterprise profile is intentionally marked as roadmap-only guidance. It describes the kind of per-node sizing that would likely make sense once Borealis gains orchestrated horizontal scaling, but that deployment model is not implemented today.
-
-## Current Architecture and Future Scale
-
-- The sizing guidance above assumes Borealis is running in its current single-node architecture.
-- Borealis is intentionally being sized today so it can soar for homelab users and smaller businesses, remain strong for typical MSP-style environments, and still operate reasonably well at higher endpoint counts.
-- Horizontal scaling through orchestrated clustering is a future roadmap item, but it is not required for the common `2,000`-endpoint-or-less usage profile that Borealis is primarily targeting today.
-- Until clustering exists, the `Enterprise Clustered (Not Implemented Yet)` row should be read as a forward-looking planning placeholder rather than a currently supported deployment topology.
-
----
-
-# Core Architecture
-
-## Secure Connectivity (WireGuard)
-Borealis uses **WireGuard-based tunnels** as its primary transport layer between the Engine (*Server*) and Agents (*Clients*), and serves as the foundation for all remote operations.
-
-- Outbound-only agent connections (no inbound exposure)
-- Persistent, low-overhead tunnels with keepalive
-- Shared tunnel sessions per agent
-- Strict isolation (`/32` addressing, no lateral movement)
-- Port-level allowlists enforced by the Engine
-- Ed25519-signed, short-lived tunnel tokens
-- Public CA + hostname validation on the HTTPS control plane
-
----
-
-## Data Layer (PostgreSQL)
-Borealis now runs on **PostgreSQL**, replacing SQLite that was used in older versions of Borealis:
-
-- Improved scalability and concurrency
-- Stronger data integrity guarantees
-- Foundation for larger environments and higher workloads
-
----
-
-## Assembly & Automation Model
-- Assemblies are stored in PostgreSQL `assemblies.*` tables
-- Jobs resolve assemblies by GUID
-- Supports:
-  - Quick Jobs
-  - Scheduled Jobs
-  - Watchdog-triggered remediation
-  - Workflow authoring and execution
-
----
-
-## Aurora Repository Integration
-Borealis integrates with the **[Aurora Repository](https://github.com/bunny-lab-io/Aurora)**:
-
-- Aurora serves as the external source of truth for official assemblies, scripts, and playbooks
-- Decouples automation content from engine releases
-- Supports update ingestion into PostgreSQL
-- User-created assemblies remain local to the Engine
-
----
-
-# Features
-
-## Device Management
-- Device inventory (OS, hardware, software, services, and status)
-- Site-based organization, approvals, and RBAC-aware targeting
-- Saved filters and device list views
-- Global hostname search scoped by operator access
-- Device-level watchdog and alerts surfaces
-- Per-device Activity History and service control surfaces
-
-## Software Management
-- Installed Software tab with normalized software inventory
-- Row-level uninstall for supported software
-- Global icon overrides for software rows
-- Global uninstall overrides for custom uninstall strings
-- Global uninstall block and unblock governance
-- Immediate `Query Software Changes` refreshes from the device UI
-
-## File Management
-- Remote file browser with AG Grid tree navigation
-- File upload and recursive folder upload
-- File and folder download with staged transfer tracking
-- Duplicate upload conflict handling with replace/skip/compare decisions
-- Copy, cut, paste, rename, move, delete, and create-folder actions
-- Lightweight inline text editing with extension-aware syntax highlighting
-- Cancelable upload and download transfers
-
-## Remote Execution
-- PowerShell (Windows)
-- Batch (Windows)
-- Bash (when the target agent runtime provides it)
-- SYSTEM-level execution support
-- CURRENTUSER-level execution support
-
-## Remote Access
-- WireGuard-backed secure connectivity
-- Remote Shell over WireGuard
-- Same-origin VNC remote desktop for Windows (UltraVNC + noVNC)
-- Engine-side automation can reach SSH and WinRM targets over managed WireGuard sessions
-
-## Automation & Workflows
-- Quick Jobs for immediate agent-side script execution
-- Scheduled Jobs for scripts, workflows, and Engine-side Ansible runs
-- Visual workflow editor and runtime
-- Watchdogs with preview, incident tracking, and assembly-based remediation
-- Assembly-driven execution model
-
-## Ansible Integration
-- Engine-side Ansible playbook execution on the Linux Engine
-- Scheduled-job execution contexts:
-  - `ssh`
-  - `ssh_individual`
-  - `winrm`
-  - `winrm_individual`
-- Routed over Borealis-managed WireGuard sessions
-- Integrated credential selection and runner-budget controls
-- Per-run output and recap data are persisted, with richer recap/reporting UX still expanding
-
-## Credential Management (Aegis Cipher)
-- Engine-global Aegis bootstrap and unlock gate
-- `scrypt` + `AES-256-GCM` protection for reusable credentials, operator password hashes, TOTP secrets, passkey material, and the GitHub API token
-- Rotation and destructive force-reset flows
-- Secrets decrypted only in memory after Aegis unlock
-
-## Role-Based Access Control (RBAC)
-- Site-scoped access restrictions
-- Operators only see assigned devices/sites
-- Enforcement across:
-  - Filters
-  - Jobs
-  - Remote access APIs
-
-## Authentication & Security
-- Aegis bootstrap is required before the normal login UI is available
-- MFA required by default
-- WebAuthn passkeys for direct browser sign-in
-- Persistent Engine session secret
-- Strict session validation and invalidation
-- Code-signed script delivery to agents
-
-## Agent Capabilities
-- Windows and Linux agent support
-- Automatic self-updating:
-  - Windows Scheduled Task
-  - Linux systemd service/timer
-- Inventory collection, service telemetry, and health reporting
-- WireGuard tunnel management and remote shell access
-- Agent Health telemetry:
-  - Roles/services status
-  - Recovery state visibility
-  - 60-second refresh intervals
-
-# Getting Started
-## Deploy the Borealis Engine
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s --
 ```

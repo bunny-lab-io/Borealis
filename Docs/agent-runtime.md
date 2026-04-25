@@ -164,7 +164,11 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - SYSTEM tasks depend on scheduled-task creation rights; failures should surface through Engine logging.
 
 #### Platform parity
-- Windows is the reference. Linux (`Borealis.sh`) lags in venv setup, supervision, and role loading; align Linux before macOS work continues.
+- Windows is the reference path and has the broadest tested feature surface.
+- Linux agents run from the script-staged Python runtime through `Borealis.sh --Agent`, not shipped binaries.
+- Linux agents load the standard Agent roles and currently support WireGuard VPN, remote Bash/script execution, file/folder interaction, and Engine-side Ansible reachability to remote Linux devices.
+- Linux does not have a system tray/helper UI yet, and remote desktop remains Windows-only through the UltraVNC/noVNC path.
+- Linux service control, process management, and software management code paths exist but need validation before they should be described as parity features.
 
 #### Ansible support
 - The agent no longer hosts an Ansible playbook execution role.

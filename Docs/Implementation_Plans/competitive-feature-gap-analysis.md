@@ -14,7 +14,7 @@ Turn the provided RMM competitor CSV into a Borealis roadmap analysis that is gr
 - Lens: roadmap priorities for the current Borealis single-node MSP/production target, not a pure procurement scorecard.
 
 ## Quick Conclusion
-Borealis already has real strengths in automation, remote access, product security, and Windows software management. The biggest roadmap gaps are the features MSPs use every day to replace incumbent RMM stacks:
+Borealis already has real strengths in automation, remote access, technician tooling, product security, and Windows software management. The biggest roadmap gaps are the features MSPs use every day to replace incumbent RMM stacks:
 
 1. Patch management
 2. Integrations and ecosystem depth
@@ -45,7 +45,7 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | PowerShell / script execution | Shipped | `Docs/assemblies.md`, `Docs/agent-runtime.md`, `README.md` | Borealis supports quick jobs, scheduled jobs, and signed PowerShell/Batch/Bash execution. |
 | Service inventory and service control | Shipped | `Docs/device-management.md`, `Docs/api-reference.md` | Device APIs expose cached services plus start/stop/restart actions. |
 | Installed software inventory, uninstall, and software override governance | Shipped | `Docs/device-management.md`, `Docs/api-reference.md`, `Docs/Software Management/adding-software-to-icon-overrides.md`, `Docs/Software Management/adding-software-to-uninstall-overrides.md`, `Docs/Software Management/adding-software-to-uninstall-blocklist.md` | Borealis now has a first-class Installed Software surface with row-level uninstall, global icon overrides, global uninstall overrides, uninstall block/unblock, on-demand `Query Software Changes`, and uninstall progress/history in Activity History. |
-| Processes | Partial but still a gap | `Docs/watchdogs.md`, `Data/Engine/services/API/devices/process_inventory.py` | Borealis collects process snapshots for watchdog evaluation, but there is no documented operator-facing process manager UI or action surface. |
+| Processes | Shipped | `Docs/device-management.md`, `Docs/agent-runtime.md`, `Docs/api-reference.md`, `Data/Engine/services/API/devices/processes.py`, `Data/Agent/Roles/role_system_process_management.py`, `Data/Engine/web-interface/src/Devices/Tabs/Process_Management.jsx` | Borealis now has a Device Summary `Processes` tab with live process snapshots, CPU/memory/disk/network metadata, owner and command-line columns, parent/child grouping, system-process filtering, terminated-process visibility, copy actions, and operator-triggered `End Task`. |
 | Screenshot / quick visual capture | Partial but still a gap | `Docs/agent-runtime.md` | `role_currentuser_node_screenshot.py` still exists, but the docs explicitly mark screenshot and macro roles as legacy interactive-only roles outside the supported helper-backed runtime. |
 | Macro / UI automation | Partial but still a gap | `Docs/agent-runtime.md` | Same issue as screenshot: `role_currentuser_macros.py` exists, but it is not part of the supported helper-backed path. |
 | Event Viewer | Absent | `Docs/device-management.md`, `Docs/api-reference.md` | No event-log/Event Viewer APIs or documented UI surface were found. |
@@ -87,13 +87,19 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 - Borealis now has a real remote file-management surface instead of requiring operators to fall back to remote shell or third-party tooling.
 - Operators can browse drives/directories lazily, upload files or whole folders, download files/folders, cancel active transfers, handle duplicate upload conflicts, and perform create-folder, rename, move, delete, copy, cut, and paste actions from the File Management tab.
 - Lightweight inline text editing closes another frequent technician workflow gap by allowing extension-aware edits without a download-edit-reupload loop.
-- This closes the old `File Manager` gap materially, though it does not eliminate the remaining technician-tooling gaps around processes, event logs, startup management, and local account tooling.
+- This closes the old `File Manager` gap materially, though it does not eliminate the remaining technician-tooling gaps around event logs, startup management, and local account tooling.
+
+### Process Management Delta Since The Initial Matrix Pass
+- Borealis now has a real process-management surface instead of only cached process snapshots for watchdog evaluation.
+- Operators can inspect live process rows from the Device Summary `Processes` tab, including owner, CPU, memory, disk, network, command line, and parent/child relationships.
+- Operators can toggle low-signal system processes, keep recently terminated processes visible, copy executable paths or command lines, and send `End Task` through the live `process_management` agent role.
+- This closes the old `Processes` gap materially, though event-log tooling, startup tooling, local account tooling, screenshot capture, chat, and broader technician background tools remain gaps.
 
 ### Platform Coverage
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
 | --- | --- | --- | --- |
 | Windows endpoint agent | Shipped | `Docs/getting-started.md`, `Docs/agent-runtime.md`, `README.md` | Windows is the reference platform. |
-| Linux endpoint agent | Partial but still a gap | `Docs/getting-started.md`, `Docs/engine-runtime.md`, `Docs/agent-runtime.md`, `README.md` | Multiple docs explicitly say Linux agent binaries are unavailable or Linux parity is incomplete. |
+| Linux endpoint agent | Partial but still a gap | `Docs/getting-started.md`, `Docs/engine-runtime.md`, `Docs/agent-runtime.md`, `README.md` | Linux agents are script-staged, load roles, and support WireGuard VPN, remote Bash/script execution, file/folder interaction, and Engine-side Ansible reachability. Linux still lacks tray/helper UI and remote desktop, while service control, process management, and software management need validation. |
 | macOS endpoint support | Absent | `README.md`, `Docs/getting-started.md`, `Docs/agent-runtime.md` | macOS appears in UI filters and OS naming logic, but there is no documented macOS agent/runtime path. |
 | iOS / Android / MDM | Absent | `Docs/index.md`, `Docs/api-reference.md`, `README.md` | No mobile-device-management feature set was found. |
 | Technician mobile app | Absent | `Docs/ui-and-notifications.md`, `README.md` | Borealis documents a web SPA only; no iOS/Android admin app is documented. |
@@ -165,8 +171,8 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
   - These are high-frequency operator tools used during every support shift.
   - The matrix shows strong competitor coverage for event logs, file management, processes, uninstall, and related device-admin surfaces.
 - Current Borealis position:
-  - Borealis already has excellent remote shell, VNC, and service control.
-  - Borealis now also has usable software-management and file-management surfaces with uninstall actions, override/block governance, remote browse/transfer, inline text editing, and Activity History visibility.
+  - Borealis already has excellent remote shell, VNC, service control, and process management.
+  - Borealis now also has usable software-management, file-management, and process-management surfaces with uninstall actions, override/block governance, remote browse/transfer, inline text editing, live process inspection, `End Task`, and Activity History visibility.
   - It still does not yet productize the rest of the background-control tool belt.
   - Legacy screenshot/macro roles do not close this gap because they are explicitly outside the supported runtime path.
 - Immediate product implication:
@@ -174,11 +180,11 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 
 ### 4. Platform Breadth
 - Why it ranks fourth:
-  - Borealis is intentionally Windows-first today, but competitors typically market broader endpoint coverage.
+  - Windows remains the broadest tested endpoint path today, while competitors typically market broader endpoint coverage.
   - Mobile admin apps and some form of network-device/SNMP support are common enough to matter.
 - Current Borealis position:
   - Windows is healthy.
-  - Linux parity is explicitly incomplete.
+  - Linux has a functioning script-staged Agent path with WireGuard, script execution, file/folder interaction, and Engine-side Ansible reachability, but still lacks tray/helper UI and remote desktop, and several management roles need Linux validation.
   - macOS is not productized.
   - iOS/Android/MDM and SNMP/network-device coverage are absent.
 - Immediate product implication:
@@ -190,7 +196,7 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
   - Competitors overwhelmingly advertise monitoring reports, executive summaries, branded reports, and white-label packaging.
 - Current Borealis position:
   - Borealis has good operational history and alerting.
-  - `README.md` explicitly says richer recap/reporting UX is still expanding.
+  - `README.md` now classifies reporting and client packaging as partial because activity history, run history, alerts, and recaps exist, but scheduled reports and branded client-facing outputs do not.
   - No scheduled reports, executive summaries, report branding, or white-label helpdesk surfaces are documented.
 - Immediate product implication:
   - Borealis currently feels more like a strong operator platform than a polished MSP reporting/customer-portal platform.
@@ -210,9 +216,8 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 - Customer-facing branding/custom-domain controls are absent.
 - Network-device/SNMP coverage is absent.
 - Local/domain user-account automation is not productized.
-- Process inventory exists internally, but the operator process-manager surface is still missing.
 - Software deployment/install policy remains absent even though software uninstall and override governance now exist.
-- File management is now shipped, but process tooling, event-log tooling, startup tooling, and local account tooling are still absent.
+- File management and process management are now shipped, but event-log tooling, startup tooling, and local account tooling are still absent.
 - Reporting/export exists in pieces, but not as a first-class reporting product.
 
 ## Current Differentiators
@@ -238,6 +243,12 @@ Borealis is not starting from zero. Several areas already compare well, and thes
   - `Docs/device-management.md`
   - `Docs/api-reference.md`
   - `Docs/ui-and-notifications.md`
+- Live process inspection and termination:
+  - `Docs/device-management.md`
+  - `Docs/agent-runtime.md`
+  - `Data/Engine/services/API/devices/processes.py`
+  - `Data/Agent/Roles/role_system_process_management.py`
+  - `Data/Engine/web-interface/src/Devices/Tabs/Process_Management.jsx`
 - Aegis, MFA, passkeys, short-lived tokens, and code signing:
   - `Docs/security-and-trust.md`
   - `Docs/engine-runtime.md`
@@ -262,7 +273,6 @@ If Borealis chooses to close the top gaps, the public interface surface will lik
 
 ### Technician Tooling
 - Device-side read/action APIs for:
-  - process inspection and termination
   - event logs
   - local user/group management
   - startup/session tooling
@@ -280,7 +290,7 @@ If Borealis chooses to close the top gaps, the public interface surface will lik
 - Possible tenant/client-facing data models if white-label/helpdesk features enter scope.
 
 ## Final Read
-Borealis already looks differentiated in automation, remote access, and security. The competitive gap is not that it lacks depth everywhere. The gap is that it still lacks several high-frequency MSP operating-system features that incumbents bundle into the same pane of glass.
+Borealis already looks differentiated in automation, remote access, technician tooling, and security. The competitive gap is not that it lacks depth everywhere. The gap is that it still lacks several high-frequency MSP operating-system features that incumbents bundle into the same pane of glass.
 
 If Borealis wants the fastest path toward feature-market fit, the roadmap should prioritize:
 - patch management first
