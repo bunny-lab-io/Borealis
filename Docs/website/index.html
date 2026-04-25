@@ -366,7 +366,7 @@
 
     .feature-matrix {
       display: grid;
-      gap: 18px;
+      gap: 16px;
     }
 
     .support-legend {
@@ -413,84 +413,16 @@
       background: #64748b;
     }
 
-    .feature-track {
-      display: grid;
-      gap: 12px;
-      padding: 14px 0 4px;
-      border-top: 1px solid rgba(125, 183, 255, 0.18);
-    }
-
-    .feature-track-head {
-      display: grid;
-      grid-template-columns: auto 1fr;
-      gap: 12px;
-      align-items: center;
-    }
-
-    .scope-mark {
-      width: 42px;
-      height: 42px;
-      border-radius: 10px;
-      display: grid;
-      place-items: center;
-      color: #e6f2ff;
-      border: 1px solid rgba(125, 183, 255, 0.32);
-      background: rgba(8, 12, 24, 0.74);
-      box-shadow: 0 12px 24px rgba(2, 6, 23, 0.36);
-    }
-
-    .agent-track .scope-mark {
-      color: #bbf7d0;
-      border-color: rgba(52, 211, 153, 0.34);
-      background: linear-gradient(135deg, rgba(16, 185, 129, 0.18), rgba(8, 12, 24, 0.74));
-    }
-
-    .engine-track .scope-mark {
-      color: #d8b4fe;
-      border-color: rgba(192, 132, 252, 0.36);
-      background: linear-gradient(135deg, rgba(147, 51, 234, 0.2), rgba(8, 12, 24, 0.74));
-    }
-
-    .scope-mark i {
-      font-size: 1.05rem;
-    }
-
-    .feature-track-head h3 {
-      margin: 0;
-      font-size: 1.02rem;
-      color: #e6f2ff;
-    }
-
-    .feature-track-head p {
-      margin: 3px 0 0;
-      color: var(--text-muted);
-      font-size: 0.84rem;
-      line-height: 1.5;
-    }
-
-    .feature-card-grid {
-      display: grid;
-      gap: 10px;
-      grid-template-columns: repeat(auto-fit, minmax(min(285px, 100%), 1fr));
-    }
-
-    .feature-card {
+    .matrix-panel {
       position: relative;
       overflow: hidden;
-      display: grid;
-      grid-template-rows: auto 1fr auto;
-      gap: 10px;
-      min-height: 178px;
       border: 1px solid rgba(125, 183, 255, 0.18);
       border-radius: var(--radius-md);
-      background:
-        linear-gradient(135deg, rgba(11, 18, 34, 0.88), rgba(5, 9, 21, 0.78)),
-        rgba(8, 12, 24, 0.74);
-      padding: 12px;
-      box-shadow: 0 14px 28px rgba(2, 6, 23, 0.32);
+      background: linear-gradient(135deg, rgba(8, 13, 28, 0.92), rgba(5, 9, 21, 0.84));
+      box-shadow: 0 16px 32px rgba(2, 6, 23, 0.34);
     }
 
-    .feature-card::before {
+    .matrix-panel::before {
       content: "";
       position: absolute;
       inset: 0 0 auto 0;
@@ -499,22 +431,152 @@
       opacity: 0.78;
     }
 
-    .engine-feature::before {
+    .engine-panel::before {
       background: linear-gradient(90deg, rgba(192, 132, 252, 0.85), rgba(125, 211, 252, 0.62));
     }
 
-    .feature-card-title {
+    .matrix-panel-head {
       display: flex;
       align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 15px 16px 13px;
+      border-bottom: 1px solid rgba(125, 183, 255, 0.16);
+      background: rgba(15, 23, 42, 0.42);
+    }
+
+    .matrix-panel-title {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 11px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .scope-mark {
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      color: #e6f2ff;
+      border: 1px solid rgba(125, 183, 255, 0.28);
+      background: rgba(15, 23, 42, 0.82);
+    }
+
+    .agent-panel .scope-mark {
+      color: #bbf7d0;
+      border-color: rgba(52, 211, 153, 0.34);
+      background: rgba(6, 78, 59, 0.28);
+    }
+
+    .engine-panel .scope-mark {
+      color: #e9d5ff;
+      border-color: rgba(192, 132, 252, 0.36);
+      background: rgba(88, 28, 135, 0.26);
+    }
+
+    .matrix-panel-head h3 {
+      margin: 0;
+      color: #e6f2ff;
+      font-size: 1rem;
+    }
+
+    .matrix-panel-head p {
+      margin: 3px 0 0;
+      color: var(--text-muted);
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }
+
+    .scope-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      background: rgba(8, 12, 24, 0.64);
+      color: #dbeafe;
+      padding: 6px 10px;
+      font-size: 0.72rem;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .feature-table-wrap {
+      overflow-x: auto;
+      scrollbar-color: rgba(125, 183, 255, 0.32) rgba(8, 12, 24, 0.54);
+    }
+
+    .feature-table {
+      width: 100%;
+      min-width: 760px;
+      border-collapse: separate;
+      border-spacing: 0;
+      table-layout: fixed;
+    }
+
+    .feature-table th,
+    .feature-table td {
+      border-bottom: 1px solid rgba(125, 183, 255, 0.12);
+      padding: 11px 13px;
+      vertical-align: middle;
+    }
+
+    .feature-table thead th {
+      background: rgba(3, 7, 18, 0.48);
+      color: #93c5fd;
+      font-size: 0.72rem;
+      font-weight: 800;
+      text-align: left;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .feature-table tbody th {
+      background: transparent;
+      text-align: left;
+    }
+
+    .feature-table thead th:nth-child(1) {
+      width: 250px;
+    }
+
+    .feature-table thead th:nth-child(3),
+    .feature-table thead th:nth-child(4),
+    .feature-table thead th:nth-child(5),
+    .feature-table td.support-cell {
+      width: 112px;
+      text-align: center;
+    }
+
+    .feature-table tbody tr {
+      transition: background 160ms ease, box-shadow 160ms ease;
+    }
+
+    .feature-table tbody tr:hover {
+      background: rgba(125, 183, 255, 0.055);
+      box-shadow: inset 3px 0 0 rgba(125, 211, 252, 0.55);
+    }
+
+    .feature-table tbody tr:last-child th,
+    .feature-table tbody tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .feature-name {
+      display: grid;
+      grid-template-columns: 32px 1fr;
       gap: 10px;
+      align-items: center;
       min-width: 0;
     }
 
     .feature-icon {
-      width: 34px;
-      height: 34px;
+      width: 32px;
+      height: 32px;
       border-radius: 8px;
-      flex: 0 0 auto;
       display: grid;
       place-items: center;
       color: #cde8ff;
@@ -522,116 +584,77 @@
       background: rgba(15, 23, 42, 0.82);
     }
 
-    .feature-icon i {
-      font-size: 0.98rem;
+    .engine-panel .feature-icon {
+      color: #e9d5ff;
+      border-color: rgba(192, 132, 252, 0.28);
     }
 
-    .feature-card-title h4 {
-      margin: 0;
+    .feature-name strong {
+      display: block;
       color: var(--text-nav-active);
-      font-size: 0.94rem;
+      font-size: 0.88rem;
       line-height: 1.25;
     }
 
-    .feature-card p {
-      margin: 0;
+    .feature-desc {
       color: var(--text-muted);
-      font-size: 0.84rem;
-      line-height: 1.48;
+      font-size: 0.82rem;
+      line-height: 1.45;
     }
 
-    .os-support {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 6px;
-    }
-
-    .os-pill {
-      min-width: 0;
-      display: grid;
-      grid-template-columns: auto 1fr;
-      column-gap: 6px;
-      row-gap: 2px;
+    .os-head {
+      display: inline-flex;
       align-items: center;
-      border-radius: 8px;
-      border: 1px solid rgba(148, 163, 184, 0.24);
-      padding: 7px;
-      background: rgba(15, 23, 42, 0.72);
-    }
-
-    .os-pill i {
-      grid-row: 1 / span 2;
-      font-size: 0.98rem;
-    }
-
-    .os-pill span {
-      overflow: hidden;
-      color: #e2e8f0;
-      font-size: 0.7rem;
-      font-weight: 700;
-      line-height: 1;
-      text-overflow: ellipsis;
+      justify-content: center;
+      gap: 6px;
       white-space: nowrap;
     }
 
-    .os-pill strong {
-      color: var(--text-muted);
-      font-size: 0.64rem;
-      font-weight: 600;
-      letter-spacing: 0.04em;
+    .support-pill {
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 88px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      padding: 6px 8px;
+      background: rgba(15, 23, 42, 0.72);
+      color: #e2e8f0;
+      font-size: 0.71rem;
+      font-weight: 800;
       line-height: 1;
-      text-transform: uppercase;
+    }
+
+    .support-pill i {
+      font-size: 0.82rem;
     }
 
     .state-full {
       border-color: rgba(52, 211, 153, 0.38);
       background: rgba(6, 78, 59, 0.32);
-    }
-
-    .state-full i,
-    .state-full strong {
       color: #86efac;
     }
 
     .state-partial {
       border-color: rgba(251, 191, 36, 0.38);
       background: rgba(120, 53, 15, 0.28);
-    }
-
-    .state-partial i,
-    .state-partial strong {
       color: #fde68a;
     }
 
     .state-none {
       border-color: rgba(100, 116, 139, 0.28);
       background: rgba(15, 23, 42, 0.48);
+      color: #94a3b8;
       opacity: 0.72;
     }
 
-    .state-none i,
-    .state-none strong {
-      color: #94a3b8;
-    }
-
-    .engine-scope-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      align-items: center;
-    }
-
-    .engine-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      border-radius: 999px;
-      border: 1px solid rgba(192, 132, 252, 0.32);
-      background: rgba(88, 28, 135, 0.24);
-      color: #e9d5ff;
-      padding: 6px 9px;
-      font-size: 0.72rem;
-      font-weight: 700;
+    .state-na {
+      width: 58px;
+      border-color: rgba(148, 163, 184, 0.18);
+      background: rgba(15, 23, 42, 0.46);
+      color: #64748b;
     }
 
     .roadmap {
@@ -1187,8 +1210,17 @@
         padding: 14px;
       }
 
-      .os-support {
-        grid-template-columns: 1fr;
+      .support-legend,
+      .matrix-panel-head {
+        align-items: flex-start;
+      }
+
+      .matrix-panel-head {
+        flex-direction: column;
+      }
+
+      .feature-table {
+        min-width: 720px;
       }
     }
   </style>
@@ -1275,327 +1307,264 @@
             <span class="legend-chip"><span class="legend-dot none" aria-hidden="true"></span>Not supported</span>
           </div>
 
-          <section class="feature-track agent-track" aria-labelledby="agent-feature-heading">
-            <div class="feature-track-head">
-              <span class="scope-mark" aria-hidden="true"><i class="fa-solid fa-satellite-dish"></i></span>
-              <div>
-                <h3 id="agent-feature-heading">Agent Features</h3>
-                <p>Endpoint-side capabilities that run from script-staged Windows and Linux agents.</p>
+          <section class="matrix-panel agent-panel" aria-labelledby="agent-feature-heading">
+            <div class="matrix-panel-head">
+              <div class="matrix-panel-title">
+                <span class="scope-mark" aria-hidden="true"><i class="fa-solid fa-satellite-dish"></i></span>
+                <div>
+                  <h3 id="agent-feature-heading">Agent Features</h3>
+                  <p>Endpoint-side capabilities from script-staged Windows and Linux agents.</p>
+                </div>
               </div>
+              <span class="scope-pill"><i class="fa-solid fa-laptop-code" aria-hidden="true"></i>Scope: Agent</span>
             </div>
 
-            <div class="feature-card-grid">
-              <article class="feature-card">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-microchip"></i></span>
-                  <h4>Agent Runtime</h4>
-                </div>
-                <p>Role loading, enrollment, telemetry, signed work execution, and remote-operation services.</p>
-                <div class="os-support" aria-label="Agent Runtime OS support">
-                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
-                  <span class="os-pill state-partial"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Partial</strong></span>
-                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
-                </div>
-              </article>
-
-              <article class="feature-card">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-clipboard-list"></i></span>
-                  <h4>Inventory Collection</h4>
-                </div>
-                <p>Hardware, OS, software, services, sessions, status, and health snapshots from managed endpoints.</p>
-                <div class="os-support" aria-label="Inventory Collection OS support">
-                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
-                  <span class="os-pill state-partial"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Partial</strong></span>
-                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
-                </div>
-              </article>
-
-              <article class="feature-card">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-shield-halved"></i></span>
-                  <h4>WireGuard Tunnel</h4>
-                </div>
-                <p>Outbound tunnel transport for remote operations and Engine-side automation reachability.</p>
-                <div class="os-support" aria-label="WireGuard Tunnel OS support">
-                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
-                  <span class="os-pill state-full"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Full</strong></span>
-                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
-                </div>
-              </article>
-
-              <article class="feature-card">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-terminal"></i></span>
-                  <h4>Remote Shell Host</h4>
-                </div>
-                <p>Interactive shell sessions over managed WireGuard, using PowerShell on Windows and Bash on Linux.</p>
-                <div class="os-support" aria-label="Remote Shell Host OS support">
-                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
-                  <span class="os-pill state-full"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Full</strong></span>
-                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
-                </div>
-              </article>
-
-              <article class="feature-card">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-display"></i></span>
-                  <h4>Remote Desktop Host</h4>
-                </div>
-                <p>Endpoint-side desktop service used by browser-based noVNC sessions through the Borealis tunnel.</p>
-                <div class="os-support" aria-label="Remote Desktop Host OS support">
-                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
-                  <span class="os-pill state-none"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>None</strong></span>
-                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
-                </div>
-              </article>
-
-              <article class="feature-card">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-folder-tree"></i></span>
-                  <h4>File Operations</h4>
-                </div>
-                <p>Browse, upload, download, copy, move, delete, create folders, and edit text files remotely.</p>
-                <div class="os-support" aria-label="File Operations OS support">
-                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
-                  <span class="os-pill state-full"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Full</strong></span>
-                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
-                </div>
-              </article>
-
-              <article class="feature-card">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-list-check"></i></span>
-                  <h4>Process Operations</h4>
-                </div>
-                <p>Live process reporting with CPU, memory, disk, network, owner, command line, and End Task actions.</p>
-                <div class="os-support" aria-label="Process Operations OS support">
-                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
-                  <span class="os-pill state-partial"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Partial</strong></span>
-                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
-                </div>
-              </article>
-
-              <article class="feature-card">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-gears"></i></span>
-                  <h4>Service Operations</h4>
-                </div>
-                <p>Service inventory plus start, stop, and restart requests from Device Summary.</p>
-                <div class="os-support" aria-label="Service Operations OS support">
-                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
-                  <span class="os-pill state-partial"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Partial</strong></span>
-                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
-                </div>
-              </article>
-
-              <article class="feature-card">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-box-open"></i></span>
-                  <h4>Software Operations</h4>
-                </div>
-                <p>Installed software inventory, refresh, uninstall support, and software-management metadata.</p>
-                <div class="os-support" aria-label="Software Operations OS support">
-                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
-                  <span class="os-pill state-partial"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Partial</strong></span>
-                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
-                </div>
-              </article>
-
-              <article class="feature-card">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-file-signature"></i></span>
-                  <h4>Signed Script Execution</h4>
-                </div>
-                <p>Signed payload validation and script execution in supported endpoint contexts.</p>
-                <div class="os-support" aria-label="Signed Script Execution OS support">
-                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
-                  <span class="os-pill state-full"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Full</strong></span>
-                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
-                </div>
-              </article>
-
-              <article class="feature-card">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-heart-pulse"></i></span>
-                  <h4>Watchdog Inputs</h4>
-                </div>
-                <p>Endpoint telemetry used by watchdogs plus remediation assembly execution when dispatched.</p>
-                <div class="os-support" aria-label="Watchdog Inputs OS support">
-                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
-                  <span class="os-pill state-partial"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Partial</strong></span>
-                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
-                </div>
-              </article>
-
-              <article class="feature-card">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-fingerprint"></i></span>
-                  <h4>Device Identity</h4>
-                </div>
-                <p>Ed25519 device identity, short-lived tunnel tokens, and public CA/hostname validation.</p>
-                <div class="os-support" aria-label="Device Identity OS support">
-                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
-                  <span class="os-pill state-full"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Full</strong></span>
-                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
-                </div>
-              </article>
+            <div class="feature-table-wrap">
+              <table class="feature-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Feature</th>
+                    <th scope="col">What it does</th>
+                    <th scope="col"><span class="os-head"><i class="fa-brands fa-windows" aria-hidden="true"></i>Windows</span></th>
+                    <th scope="col"><span class="os-head"><i class="fa-brands fa-linux" aria-hidden="true"></i>Linux</span></th>
+                    <th scope="col"><span class="os-head"><i class="fa-brands fa-apple" aria-hidden="true"></i>macOS</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-microchip"></i></span><strong>Agent Runtime</strong></span></th>
+                    <td class="feature-desc">Role loading, enrollment, telemetry, signed work execution, and remote-operation services.</td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Windows full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-partial" aria-label="Linux partial support"><i class="fa-solid fa-circle-half-stroke" aria-hidden="true"></i>Partial</span></td>
+                    <td class="support-cell"><span class="support-pill state-none" aria-label="macOS not supported"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i>None</span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-clipboard-list"></i></span><strong>Inventory Collection</strong></span></th>
+                    <td class="feature-desc">Hardware, OS, software, services, sessions, status, and health snapshots from managed endpoints.</td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Windows full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-partial" aria-label="Linux partial support"><i class="fa-solid fa-circle-half-stroke" aria-hidden="true"></i>Partial</span></td>
+                    <td class="support-cell"><span class="support-pill state-none" aria-label="macOS not supported"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i>None</span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-shield-halved"></i></span><strong>WireGuard Tunnel</strong></span></th>
+                    <td class="feature-desc">Outbound tunnel transport for remote operations and Engine-side automation reachability.</td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Windows full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Linux full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-none" aria-label="macOS not supported"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i>None</span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-terminal"></i></span><strong>Remote Shell Host</strong></span></th>
+                    <td class="feature-desc">Interactive shell sessions over managed WireGuard, using PowerShell on Windows and Bash on Linux.</td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Windows full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Linux full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-none" aria-label="macOS not supported"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i>None</span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-display"></i></span><strong>Remote Desktop Host</strong></span></th>
+                    <td class="feature-desc">Endpoint-side desktop service used by browser-based noVNC sessions through the Borealis tunnel.</td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Windows full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-none" aria-label="Linux not supported"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i>None</span></td>
+                    <td class="support-cell"><span class="support-pill state-none" aria-label="macOS not supported"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i>None</span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-folder-tree"></i></span><strong>File Operations</strong></span></th>
+                    <td class="feature-desc">Browse, upload, download, copy, move, delete, create folders, and edit text files remotely.</td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Windows full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Linux full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-none" aria-label="macOS not supported"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i>None</span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-list-check"></i></span><strong>Process Operations</strong></span></th>
+                    <td class="feature-desc">Live process reporting with CPU, memory, disk, network, owner, command line, and End Task actions.</td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Windows full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-partial" aria-label="Linux partial support"><i class="fa-solid fa-circle-half-stroke" aria-hidden="true"></i>Partial</span></td>
+                    <td class="support-cell"><span class="support-pill state-none" aria-label="macOS not supported"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i>None</span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-gears"></i></span><strong>Service Operations</strong></span></th>
+                    <td class="feature-desc">Service inventory plus start, stop, and restart requests from Device Summary.</td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Windows full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-partial" aria-label="Linux partial support"><i class="fa-solid fa-circle-half-stroke" aria-hidden="true"></i>Partial</span></td>
+                    <td class="support-cell"><span class="support-pill state-none" aria-label="macOS not supported"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i>None</span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-box-open"></i></span><strong>Software Operations</strong></span></th>
+                    <td class="feature-desc">Installed software inventory, refresh, uninstall support, and software-management metadata.</td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Windows full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-partial" aria-label="Linux partial support"><i class="fa-solid fa-circle-half-stroke" aria-hidden="true"></i>Partial</span></td>
+                    <td class="support-cell"><span class="support-pill state-none" aria-label="macOS not supported"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i>None</span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-file-signature"></i></span><strong>Signed Script Execution</strong></span></th>
+                    <td class="feature-desc">Signed payload validation and script execution in supported endpoint contexts.</td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Windows full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Linux full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-none" aria-label="macOS not supported"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i>None</span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-window-maximize"></i></span><strong>System Tray UI</strong></span></th>
+                    <td class="feature-desc">Local helper UI for endpoint status and agent-side interaction where platform shell support exists.</td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Windows full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-none" aria-label="Linux not supported"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i>None</span></td>
+                    <td class="support-cell"><span class="support-pill state-none" aria-label="macOS not supported"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i>None</span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-heart-pulse"></i></span><strong>Watchdog Inputs</strong></span></th>
+                    <td class="feature-desc">Endpoint telemetry used by watchdogs plus remediation assembly execution when dispatched.</td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Windows full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-partial" aria-label="Linux partial support"><i class="fa-solid fa-circle-half-stroke" aria-hidden="true"></i>Partial</span></td>
+                    <td class="support-cell"><span class="support-pill state-none" aria-label="macOS not supported"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i>None</span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-fingerprint"></i></span><strong>Device Identity</strong></span></th>
+                    <td class="feature-desc">Ed25519 device identity, short-lived tunnel tokens, and public CA/hostname validation.</td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Windows full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-full" aria-label="Linux full support"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>Full</span></td>
+                    <td class="support-cell"><span class="support-pill state-none" aria-label="macOS not supported"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i>None</span></td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </section>
 
-          <section class="feature-track engine-track" aria-labelledby="engine-feature-heading">
-            <div class="feature-track-head">
-              <span class="scope-mark" aria-hidden="true"><i class="fa-solid fa-server"></i></span>
-              <div>
-                <h3 id="engine-feature-heading">Engine Features</h3>
-                <p>Control-plane features that live on the Linux-hosted Borealis Engine and do not map to endpoint OS support.</p>
+          <section class="matrix-panel engine-panel" aria-labelledby="engine-feature-heading">
+            <div class="matrix-panel-head">
+              <div class="matrix-panel-title">
+                <span class="scope-mark" aria-hidden="true"><i class="fa-solid fa-server"></i></span>
+                <div>
+                  <h3 id="engine-feature-heading">Engine Features</h3>
+                  <p>Control-plane capabilities that live on the Linux-hosted Borealis Engine.</p>
+                </div>
               </div>
+              <span class="scope-pill"><i class="fa-solid fa-server" aria-hidden="true"></i>Scope: Engine</span>
             </div>
 
-            <div class="feature-card-grid">
-              <article class="feature-card engine-feature">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-database"></i></span>
-                  <h4>Device Inventory Store</h4>
-                </div>
-                <p>PostgreSQL-backed device inventory, status, health, software, services, sessions, and activity history.</p>
-                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
-              </article>
-
-              <article class="feature-card engine-feature">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-users-gear"></i></span>
-                  <h4>Sites, Approvals, and RBAC</h4>
-                </div>
-                <p>Site-scoped devices, agent enrollment approvals, and operator access restrictions.</p>
-                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
-              </article>
-
-              <article class="feature-card engine-feature">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-filter"></i></span>
-                  <h4>Device Filters</h4>
-                </div>
-                <p>Typed filters, match previews, site scoping, and per-operator device-list views.</p>
-                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
-              </article>
-
-              <article class="feature-card engine-feature">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-window-restore"></i></span>
-                  <h4>Remote Operations UI</h4>
-                </div>
-                <p>Operator-facing APIs and UI for shell, desktop, files, processes, services, and software actions.</p>
-                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
-              </article>
-
-              <article class="feature-card engine-feature">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-calendar-check"></i></span>
-                  <h4>Scheduled and Quick Jobs</h4>
-                </div>
-                <p>Signed scripts, workflows, and Engine-side Ansible playbook runs with target history.</p>
-                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
-              </article>
-
-              <article class="feature-card engine-feature">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-diagram-project"></i></span>
-                  <h4>Workflow Editor</h4>
-                </div>
-                <p>Graph-based automation authoring and execution directly from the Borealis web UI.</p>
-                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
-              </article>
-
-              <article class="feature-card engine-feature">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-bell"></i></span>
-                  <h4>Watchdogs and Remediation</h4>
-                </div>
-                <p>Watchdog previews, incident tracking, suppressions, and remediation automation dispatch.</p>
-                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
-              </article>
-
-              <article class="feature-card engine-feature">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-box-archive"></i></span>
-                  <h4>Aurora Content Repository</h4>
-                </div>
-                <p>Official assemblies, scripts, and playbooks ingested separately from local user assemblies.</p>
-                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
-              </article>
-
-              <article class="feature-card engine-feature">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-network-wired"></i></span>
-                  <h4>Engine-side Ansible</h4>
-                </div>
-                <p>SSH and WinRM automation from the Linux Engine over Borealis-managed WireGuard sessions.</p>
-                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
-              </article>
-
-              <article class="feature-card engine-feature">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-lock"></i></span>
-                  <h4>Aegis Cipher</h4>
-                </div>
-                <p>Protected machine credentials, password hashes, TOTP secrets, passkey data, and GitHub token storage.</p>
-                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
-              </article>
-
-              <article class="feature-card engine-feature">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-key"></i></span>
-                  <h4>MFA, Passkeys, and Sessions</h4>
-                </div>
-                <p>Aegis unlock, MFA by default, WebAuthn passkeys, and strict session invalidation.</p>
-                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
-              </article>
-
-              <article class="feature-card engine-feature">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-code-branch"></i></span>
-                  <h4>Code Signing</h4>
-                </div>
-                <p>Trusted script delivery and signed execution payload enforcement.</p>
-                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
-              </article>
-
-              <article class="feature-card engine-feature">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-code"></i></span>
-                  <h4>REST/API Surface</h4>
-                </div>
-                <p>Authenticated APIs for devices, jobs, files, processes, services, software, filters, sites, logs, and runtime operations.</p>
-                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
-              </article>
-
-              <article class="feature-card engine-feature">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-plug"></i></span>
-                  <h4>MSP Ecosystem Integrations</h4>
-                </div>
-                <p>GitHub integration exists today, with broader PSA, backup, AV/EDR, and documentation integrations planned.</p>
-                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
-              </article>
-
-              <article class="feature-card engine-feature">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-chart-line"></i></span>
-                  <h4>Reporting and Client Packaging</h4>
-                </div>
-                <p>Activity history, run history, alerts, and recap data with richer reporting still expanding.</p>
-                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
-              </article>
-
-              <article class="feature-card engine-feature">
-                <div class="feature-card-title">
-                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-certificate"></i></span>
-                  <h4>Enterprise Assurance Extras</h4>
-                </div>
-                <p>Security posture is strong, while SAML/SSO, SIEM export, lockbox, and formal compliance artifacts remain future work.</p>
-                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
-              </article>
+            <div class="feature-table-wrap">
+              <table class="feature-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Feature</th>
+                    <th scope="col">What it does</th>
+                    <th scope="col"><span class="os-head"><i class="fa-brands fa-windows" aria-hidden="true"></i>Windows</span></th>
+                    <th scope="col"><span class="os-head"><i class="fa-brands fa-linux" aria-hidden="true"></i>Linux</span></th>
+                    <th scope="col"><span class="os-head"><i class="fa-brands fa-apple" aria-hidden="true"></i>macOS</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-database"></i></span><strong>Device Inventory Store</strong></span></th>
+                    <td class="feature-desc">PostgreSQL-backed device inventory, status, health, software, services, sessions, and activity history.</td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Windows not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Linux not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="macOS not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-users-gear"></i></span><strong>Sites, Approvals, and RBAC</strong></span></th>
+                    <td class="feature-desc">Site-scoped devices, agent enrollment approvals, and operator access restrictions.</td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Windows not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Linux not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="macOS not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-filter"></i></span><strong>Device Filters</strong></span></th>
+                    <td class="feature-desc">Typed filters, match previews, site scoping, and per-operator device-list views.</td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Windows not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Linux not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="macOS not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-window-restore"></i></span><strong>Remote Operations UI</strong></span></th>
+                    <td class="feature-desc">Operator-facing APIs and UI for shell, desktop, files, processes, services, and software actions.</td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Windows not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Linux not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="macOS not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-calendar-check"></i></span><strong>Scheduled and Quick Jobs</strong></span></th>
+                    <td class="feature-desc">Signed scripts, workflows, and Engine-side Ansible playbook runs with target history.</td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Windows not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Linux not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="macOS not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-diagram-project"></i></span><strong>Workflow Editor</strong></span></th>
+                    <td class="feature-desc">Graph-based automation authoring and execution directly from Borealis web UI.</td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Windows not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Linux not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="macOS not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-bell"></i></span><strong>Watchdogs and Remediation</strong></span></th>
+                    <td class="feature-desc">Watchdog previews, incident tracking, suppressions, and remediation automation dispatch.</td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Windows not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Linux not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="macOS not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-box-archive"></i></span><strong>Aurora Content Repository</strong></span></th>
+                    <td class="feature-desc">Official assemblies, scripts, and playbooks ingested separately from local user assemblies.</td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Windows not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Linux not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="macOS not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-network-wired"></i></span><strong>Engine-side Ansible</strong></span></th>
+                    <td class="feature-desc">SSH and WinRM automation from Linux Engine over Borealis-managed WireGuard sessions.</td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Windows not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Linux not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="macOS not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-lock"></i></span><strong>Aegis Cipher</strong></span></th>
+                    <td class="feature-desc">Protected machine credentials, password hashes, TOTP secrets, passkey data, and GitHub token storage.</td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Windows not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Linux not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="macOS not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-key"></i></span><strong>MFA, Passkeys, and Sessions</strong></span></th>
+                    <td class="feature-desc">Aegis unlock, MFA by default, WebAuthn passkeys, and strict session invalidation.</td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Windows not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Linux not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="macOS not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-code-branch"></i></span><strong>Code Signing</strong></span></th>
+                    <td class="feature-desc">Trusted script delivery and signed execution payload enforcement.</td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Windows not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Linux not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="macOS not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-code"></i></span><strong>REST/API Surface</strong></span></th>
+                    <td class="feature-desc">Authenticated APIs for devices, jobs, files, processes, services, software, filters, sites, logs, and runtime operations.</td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Windows not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Linux not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="macOS not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-plug"></i></span><strong>MSP Ecosystem Integrations</strong></span></th>
+                    <td class="feature-desc">GitHub integration exists today, with broader PSA, backup, AV/EDR, and documentation integrations planned.</td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Windows not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Linux not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="macOS not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-chart-line"></i></span><strong>Reporting and Client Packaging</strong></span></th>
+                    <td class="feature-desc">Activity history, run history, alerts, and recap data with richer reporting still expanding.</td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Windows not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Linux not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="macOS not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                  </tr>
+                  <tr>
+                    <th scope="row"><span class="feature-name"><span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-certificate"></i></span><strong>Enterprise Assurance Extras</strong></span></th>
+                    <td class="feature-desc">Security posture is strong, while SAML/SSO, SIEM export, lockbox, and formal compliance artifacts remain future work.</td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Windows not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="Linux not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                    <td class="support-cell"><span class="support-pill state-na" aria-label="macOS not applicable"><i class="fa-solid fa-minus" aria-hidden="true"></i></span></td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </section>
         </div>
