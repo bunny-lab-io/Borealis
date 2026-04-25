@@ -369,6 +369,23 @@ function normalizeProcessRow(row = {}, index = 0) {
   };
 }
 
+function createTerminatedProcessRow(row = {}, terminatedAt = Math.floor(Date.now() / 1000), reason = "terminated") {
+  const reportedAt = Math.max(0, Math.trunc(coerceNumber(terminatedAt, 0))) || Math.floor(Date.now() / 1000);
+  return normalizeProcessRow({
+    ...row,
+    cpu_percent: 0,
+    disk_bytes_per_second: 0,
+    network_bytes_per_second: coerceNullableNumber(row?.network_bytes_per_second) == null ? null : 0,
+    parent_pid: 0,
+    status: "terminated",
+    terminated: true,
+    terminated_reason: reason,
+    terminated_at: reportedAt,
+    has_children: false,
+    child_count: 0,
+  });
+}
+
 function getProcessCommandText(row = {}) {
   const name = normalizeText(row?.name).toLowerCase();
   const commandLine = normalizeText(row?.command_line);
@@ -658,6 +675,26 @@ function ProcessNameCell({ row = {}, onToggle }) {
           PID {row.pid}
         </Typography>
       ) : null}
+      {row?.terminated ? (
+        <Typography
+          component="span"
+          sx={{
+            color: "rgba(254,202,202,0.95)",
+            fontSize: "0.66rem",
+            fontWeight: 700,
+            lineHeight: 1,
+            whiteSpace: "nowrap",
+            flexShrink: 0,
+            border: "1px solid rgba(248,113,113,0.26)",
+            borderRadius: 999,
+            px: 0.65,
+            py: 0.28,
+            background: "rgba(127,29,29,0.22)",
+          }}
+        >
+          Terminated
+        </Typography>
+      ) : null}
     </Box>
   );
 }
@@ -710,6 +747,7 @@ export default function ProcessManagement({ device }) {
   const notifyOperator = useAppNotifications();
   const gridApiRef = useRef(null);
   const inFlightRef = useRef(false);
+  const previousLiveProcessRowsRef = useRef(new Map());
 
   const hostname = useMemo(() => getHostname(device), [device]);
   const [processRows, setProcessRows] = useState([]);
@@ -738,7 +776,7 @@ export default function ProcessManagement({ device }) {
   const filteredProcessRows = useMemo(() => {
     const rows = Array.isArray(allProcessRows) ? allProcessRows : [];
     if (showSystemProcesses) return rows;
-    return rows.filter((row) => !isLowSignalSystemProcess(row));
+    return rows.filter((row) => row?.terminated || !isLowSignalSystemProcess(row));
   }, [allProcessRows, showSystemProcesses]);
 
   const hiddenProcessCount = useMemo(
@@ -792,6 +830,7 @@ export default function ProcessManagement({ device }) {
       subtitle: [
         `PID ${row.pid || "-"}`,
         row.username,
+        row.terminated ? "Terminated" : "",
         formatPercent(getDisplayCpuPercent(row)),
         formatBytes(getDisplayMemoryBytes(row)),
       ]
@@ -820,13 +859,31 @@ export default function ProcessManagement({ device }) {
 
   const applyProcessPayload = useCallback((payload = {}) => {
     const rows = Array.isArray(payload?.processes) ? payload.processes.map((row, index) => normalizeProcessRow(row, index)) : [];
+    const liveRowsById = new Map(rows.map((row) => [row.id, row]).filter(([id]) => Boolean(id)));
+    const liveIds = new Set(liveRowsById.keys());
+    const previousLiveRows = previousLiveProcessRowsRef.current;
+    const reportedAtSeconds = Number(payload?.reported_at || 0) || Math.floor(Date.now() / 1000);
     setProcessRows(rows);
     setTerminatedProcessRows((current) => {
-      if (!current.size) return current;
-      const liveIds = new Set(rows.map((row) => row.id).filter(Boolean));
-      const next = new Map([...current].filter(([id]) => !liveIds.has(id)));
-      return next.size === current.size ? current : next;
+      let changed = false;
+      const next = new Map();
+      current.forEach((row, id) => {
+        if (liveIds.has(id)) {
+          changed = true;
+          return;
+        }
+        next.set(id, row);
+      });
+      if (previousLiveRows.size) {
+        previousLiveRows.forEach((previousRow, id) => {
+          if (!id || liveIds.has(id) || next.has(id) || previousRow?.terminated) return;
+          next.set(id, createTerminatedProcessRow(previousRow, reportedAtSeconds, "missing_from_snapshot"));
+          changed = true;
+        });
+      }
+      return changed ? next : current;
     });
+    previousLiveProcessRowsRef.current = liveRowsById;
     setReportedAt(Number(payload?.reported_at || 0) || 0);
     setError("");
     setExpandedPids((current) => {
@@ -835,7 +892,7 @@ export default function ProcessManagement({ device }) {
     });
     setSelectedProcessId((current) => {
       if (!current) return "";
-      return rows.some((row) => row.id === current) ? current : "";
+      return liveIds.has(current) || previousLiveRows.has(current) ? current : "";
     });
   }, []);
 
@@ -1001,17 +1058,7 @@ export default function ProcessManagement({ device }) {
       if (!response.ok) {
         throw new Error(normalizeText(payload?.message) || normalizeText(payload?.error) || `HTTP ${response.status}`);
       }
-      const terminatedRow = normalizeProcessRow({
-        ...row,
-        cpu_percent: 0,
-        disk_bytes_per_second: 0,
-        network_bytes_per_second: null,
-        parent_pid: 0,
-        terminated: true,
-        terminated_at: Math.floor(Date.now() / 1000),
-        has_children: false,
-        child_count: 0,
-      });
+      const terminatedRow = createTerminatedProcessRow(row, Math.floor(Date.now() / 1000), "operator_end_task");
       setTerminatedProcessRows((current) => {
         const next = new Map(current);
         next.set(terminatedRow.id, terminatedRow);
@@ -1322,6 +1369,7 @@ export default function ProcessManagement({ device }) {
   useEffect(() => {
     setProcessRows([]);
     setTerminatedProcessRows(new Map());
+    previousLiveProcessRowsRef.current = new Map();
     setReportedAt(0);
     setExpandedPids(new Set());
     setSelectedProcessId("");
@@ -1411,7 +1459,7 @@ export default function ProcessManagement({ device }) {
               pl: 1,
             }}
           >
-            Process Polling Rate
+            Refresh Rate
           </Typography>
           <CountSliderGroup
             options={PROCESS_REFRESH_OPTIONS}
@@ -1555,8 +1603,9 @@ export default function ProcessManagement({ device }) {
             boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
           },
           "& .ag-row.process-row-terminated": {
-            backgroundColor: "rgba(127,29,29,0.24) !important",
-            boxShadow: "inset 3px 0 0 rgba(248,113,113,0.68)",
+            background:
+              "linear-gradient(90deg, rgba(127,29,29,0.32), rgba(127,29,29,0.16) 46%, rgba(15,23,42,0.2)) !important",
+            boxShadow: "inset 3px 0 0 rgba(248,113,113,0.72), inset 0 0 0 1px rgba(248,113,113,0.18)",
           },
           "& .ag-row.process-row-terminated .ag-cell": {
             color: "rgba(254,226,226,0.88)",

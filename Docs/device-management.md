@@ -55,7 +55,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Parent process rows display aggregate CPU and memory totals for their visible descendant processes so collapsed app families line up with Windows Task Manager group rows.
 - `Show System Processes` is disabled by default. When disabled, Borealis removes low-CPU, low-memory OS scaffolding such as service hosts, session brokers, shell helpers, and kernel worker rows while keeping those same processes visible when they become meaningful resource consumers. It always hides `MemCompression` and `wslservice.exe` while system processes are suppressed.
 - The refresh Filter Slider supports `Live` (1s), `Normal` (5s), and `Quiet` (15s) polling. Faster polling passes a lower process snapshot max age to the agent so the device refreshes more often while the tab is active.
-- Terminated processes remain visible by default with a gentle red row highlight through `Show Terminated Processes` so operators can see task death after an End Task action.
+- Terminated processes remain visible by default with a gentle red row highlight through `Show Terminated Processes` so operators can see task death after an End Task action or when a process disappears from later live snapshots.
 - Process names use the same Borealis-blue treatment as the File Management `Name` column.
 - CPU, memory, disk, and network cells include resource heat-map fills so high-consumption processes stand out before an operator sorts or filters.
 - Windows disk usage uses psutil process I/O deltas with a `Win32_PerfFormattedData_PerfProc_Process` fallback so short cached samples still receive an OS-formatted per-process I/O rate.
