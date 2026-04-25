@@ -5,7 +5,6 @@ import {
   Checkbox,
   Divider,
   FormControlLabel,
-  IconButton,
   LinearProgress,
   Menu,
   MenuItem,
@@ -15,36 +14,101 @@ import {
 } from "@mui/material";
 import { AgGridReact } from "ag-grid-react";
 import { themeQuartz } from "ag-grid-community";
-import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
 import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
 import KeyboardArrowRightRoundedIcon from "@mui/icons-material/KeyboardArrowRightRounded";
 import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import StopCircleRoundedIcon from "@mui/icons-material/StopCircleRounded";
 import { DEFAULT_GRID_COL_DEF, GridShell, MAGIC_UI } from "./Shared.jsx";
+import { CountSliderGroup } from "../../Automation/Watchdogs/shared.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 
 const PROCESS_POLL_INTERVAL_MS = 5000;
-const AUTO_SIZE_COLUMNS = ["name", "cpu_percent", "memory_percent"];
+const PROCESS_REFRESH_OPTIONS = [
+  { key: "live", label: "Live" },
+  { key: "normal", label: "Normal" },
+  { key: "quiet", label: "Quiet" },
+];
+const PROCESS_REFRESH_INTERVALS_MS = {
+  live: 1000,
+  normal: 5000,
+  quiet: 15000,
+};
+const PROCESS_REFRESH_COUNTS = {
+  live: "1s",
+  normal: "5s",
+  quiet: "15s",
+};
+const AUTO_SIZE_COLUMNS = ["name", "username", "cpu_percent", "memory_percent", "disk_bytes_per_second", "network_bytes_per_second"];
 const NAME_LINK_COLOR = "#58a6ff";
+const LOW_SIGNAL_CPU_PERCENT = 0.5;
+const LOW_SIGNAL_MEMORY_PERCENT = 1;
 const TREE_BOUNDARY_PROCESS_NAMES = new Set([
   "csrss.exe",
+  "cmd.exe",
+  "conhost.exe",
+  "explorer.exe",
   "lsaiso.exe",
   "lsass.exe",
   "memcompression",
   "memory compression",
+  "openconsole.exe",
+  "powershell.exe",
+  "pwsh.exe",
   "registry",
   "services.exe",
   "smss.exe",
   "svchost.exe",
   "system",
   "system idle process",
+  "windowsterminal.exe",
   "wininit.exe",
   "winlogon.exe",
+  "wt.exe",
 ]);
 const FRIENDLY_PROCESS_NAMES = {
   memcompression: "Memory Compression",
 };
+const ALWAYS_HIDE_SYSTEM_PROCESS_NAMES = new Set(["memcompression", "memory compression", "wslservice.exe"]);
+const LOW_SIGNAL_SYSTEM_PROCESS_NAMES = new Set([
+  "aggregatorhost.exe",
+  "audiodg.exe",
+  "backgroundtaskhost.exe",
+  "comppkgsrv.exe",
+  "conhost.exe",
+  "csrss.exe",
+  "ctfmon.exe",
+  "dashost.exe",
+  "dllhost.exe",
+  "dwm.exe",
+  "fontdrvhost.exe",
+  "lsaiso.exe",
+  "lsass.exe",
+  "memory compression",
+  "memcompression",
+  "registry",
+  "runtimebroker.exe",
+  "searchfilterhost.exe",
+  "searchhost.exe",
+  "searchindexer.exe",
+  "securityhealthservice.exe",
+  "services.exe",
+  "sihost.exe",
+  "smartscreen.exe",
+  "smss.exe",
+  "spoolsv.exe",
+  "startmenuexperiencehost.exe",
+  "svchost.exe",
+  "system",
+  "system idle process",
+  "taskhostw.exe",
+  "textinputhost.exe",
+  "wininit.exe",
+  "winlogon.exe",
+  "wmiprvse.exe",
+  "wudfhost.exe",
+]);
+const LOW_SIGNAL_SYSTEM_PROCESS_PREFIXES = ["kworker/", "ksoftirqd/", "migration/", "idle_inject/", "rcu_"];
 
 const PROCESS_GRID_THEME = themeQuartz.withParams({
   accentColor: "#7dd3fc",
@@ -56,29 +120,6 @@ const PROCESS_GRID_THEME = themeQuartz.withParams({
   foregroundColor: "#f4f7ff",
   headerFontSize: 14,
 });
-
-const REFRESH_ICON_BUTTON_SX = {
-  width: 42,
-  height: 42,
-  borderRadius: "50%",
-  flexShrink: 0,
-  border: "1px solid rgba(148,163,184,0.36)",
-  background: "rgba(5,10,24,0.82)",
-  color: MAGIC_UI.textBright,
-  transition: "background-color 0.18s ease, border-color 0.18s ease, transform 0.18s ease",
-  "&:hover": {
-    background: "rgba(9,16,34,0.94)",
-    borderColor: "rgba(125,211,252,0.46)",
-  },
-  "&:active": {
-    transform: "scale(0.98)",
-  },
-  "&.Mui-disabled": {
-    color: "rgba(148,163,184,0.76)",
-    borderColor: "rgba(148,163,184,0.22)",
-    background: "rgba(15,23,42,0.42)",
-  },
-};
 
 const ACTION_MENU_PAPER_SX = {
   bgcolor: "rgba(8,12,24,0.96)",
@@ -228,6 +269,17 @@ function coerceNumber(value, fallback = 0) {
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
+function coerceNullableNumber(value) {
+  if (value == null || value === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function normalizeRateMetric(value) {
+  const numeric = coerceNullableNumber(value);
+  return numeric == null ? null : Math.max(0, numeric);
+}
+
 function formatUpdatedAt(epochSeconds) {
   const value = Number(epochSeconds || 0);
   if (!value) return "Last Updated Awaiting process telemetry";
@@ -251,6 +303,11 @@ function formatBytes(sizeBytes) {
   return `${size.toFixed(size >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
+function formatBytesPerSecond(sizeBytes) {
+  if (sizeBytes == null) return "N/A";
+  return `${formatBytes(sizeBytes)}/s`;
+}
+
 function formatPercent(value) {
   const numeric = Math.max(0, coerceNumber(value, 0));
   if (numeric >= 10) return `${numeric.toFixed(0)}%`;
@@ -268,6 +325,25 @@ function isTreeBoundaryProcess(row = {}) {
   return TREE_BOUNDARY_PROCESS_NAMES.has(normalizeText(row?.name).toLowerCase());
 }
 
+function normalizeProcessOwner(row = {}) {
+  const owner = normalizeText(row?.username || row?.user || row?.owner);
+  if (!owner) return "";
+  return owner.replace(/^nt authority\\/i, "");
+}
+
+function isLowSignalSystemProcess(row = {}) {
+  const name = normalizeText(row?.name).toLowerCase();
+  if (!name) return false;
+  if (ALWAYS_HIDE_SYSTEM_PROCESS_NAMES.has(name)) return true;
+  const isKnownNoise =
+    LOW_SIGNAL_SYSTEM_PROCESS_NAMES.has(name) || LOW_SIGNAL_SYSTEM_PROCESS_PREFIXES.some((prefix) => name.startsWith(prefix));
+  if (!isKnownNoise) return false;
+  return (
+    coerceNumber(row?.cpu_percent, 0) < LOW_SIGNAL_CPU_PERCENT &&
+    coerceNumber(row?.memory_percent, 0) < LOW_SIGNAL_MEMORY_PERCENT
+  );
+}
+
 function normalizeProcessRow(row = {}, index = 0) {
   const pid = Math.max(0, Math.trunc(coerceNumber(row?.pid, 0)));
   const parentPid = Math.max(0, Math.trunc(coerceNumber(row?.parent_pid ?? row?.ppid, 0)));
@@ -282,11 +358,24 @@ function normalizeProcessRow(row = {}, index = 0) {
     cpu_percent: Math.max(0, coerceNumber(row?.cpu_percent, 0)),
     memory_percent: Math.max(0, coerceNumber(row?.memory_percent, 0)),
     memory_bytes: Math.max(0, coerceNumber(row?.memory_bytes, 0)),
+    disk_bytes_per_second: normalizeRateMetric(row?.disk_bytes_per_second),
+    network_bytes_per_second: normalizeRateMetric(row?.network_bytes_per_second),
     command_line: normalizeText(row?.command_line),
     executable_path: normalizeText(row?.executable_path),
+    username: normalizeProcessOwner(row),
+    status: normalizeText(row?.status),
     child_count: Math.max(0, Math.trunc(coerceNumber(row?.child_count, 0))),
     has_children: Boolean(row?.has_children || coerceNumber(row?.child_count, 0) > 0),
   };
+}
+
+function getProcessCommandText(row = {}) {
+  const name = normalizeText(row?.name).toLowerCase();
+  const commandLine = normalizeText(row?.command_line);
+  if (commandLine && commandLine.toLowerCase() !== name) return commandLine;
+  const executablePath = normalizeText(row?.executable_path);
+  if (executablePath && executablePath.toLowerCase() !== name) return executablePath;
+  return "";
 }
 
 function getProcessLocation(row = {}) {
@@ -299,10 +388,35 @@ function getProcessLocation(row = {}) {
   return normalizeText(commandLine.split(/\s+/, 1)[0]);
 }
 
+function getDisplayCpuPercent(row = {}) {
+  return coerceNumber(row?.has_children ? row?.group_cpu_total : row?.cpu_percent, row?.cpu_percent || 0);
+}
+
+function getDisplayMemoryBytes(row = {}) {
+  return coerceNumber(row?.has_children ? row?.group_memory_bytes_total : row?.memory_bytes, row?.memory_bytes || 0);
+}
+
+function getDisplayMemoryPercent(row = {}) {
+  return coerceNumber(row?.has_children ? row?.group_memory_percent_total : row?.memory_percent, row?.memory_percent || 0);
+}
+
+function getDisplayDiskBytesPerSecond(row = {}) {
+  const value = row?.has_children ? row?.group_disk_bytes_per_second_total : row?.disk_bytes_per_second;
+  return coerceNullableNumber(value);
+}
+
+function getDisplayNetworkBytesPerSecond(row = {}) {
+  const value = row?.has_children ? row?.group_network_bytes_per_second_total : row?.network_bytes_per_second;
+  return coerceNullableNumber(value);
+}
+
 function getSortValue(row, columnId) {
-  if (columnId === "cpu_percent") return coerceNumber(row?.group_cpu_peak ?? row?.cpu_percent, 0);
-  if (columnId === "memory_percent") return coerceNumber(row?.group_memory_peak ?? row?.memory_percent, 0);
-  if (columnId === "command_line") return normalizeText(row?.command_line).toLowerCase();
+  if (columnId === "cpu_percent") return getDisplayCpuPercent(row);
+  if (columnId === "memory_percent") return getDisplayMemoryBytes(row);
+  if (columnId === "disk_bytes_per_second") return coerceNumber(getDisplayDiskBytesPerSecond(row), -1);
+  if (columnId === "network_bytes_per_second") return coerceNumber(getDisplayNetworkBytesPerSecond(row), -1);
+  if (columnId === "username") return normalizeText(row?.username).toLowerCase();
+  if (columnId === "command_line") return getProcessCommandText(row).toLowerCase();
   return normalizeText(row?.name).toLowerCase();
 }
 
@@ -350,15 +464,38 @@ function buildVisibleProcessRows(processes = [], expandedPids = new Set(), sortM
     if (!row || seen.has(row.pid)) return row;
     seen.add(row.pid);
     const children = childrenByDisplayParent.get(row.pid) || [];
-    let cpuPeak = row.cpu_percent;
-    let memoryPeak = row.memory_percent;
+    let cpuTotal = coerceNumber(row.cpu_percent, 0);
+    let memoryBytesTotal = coerceNumber(row.memory_bytes, 0);
+    let memoryPercentTotal = coerceNumber(row.memory_percent, 0);
+    const ownDiskBytesPerSecond = coerceNullableNumber(row.disk_bytes_per_second);
+    const ownNetworkBytesPerSecond = coerceNullableNumber(row.network_bytes_per_second);
+    let hasDiskBytesPerSecond = ownDiskBytesPerSecond != null;
+    let hasNetworkBytesPerSecond = ownNetworkBytesPerSecond != null;
+    let diskBytesPerSecondTotal = ownDiskBytesPerSecond || 0;
+    let networkBytesPerSecondTotal = ownNetworkBytesPerSecond || 0;
     children.forEach((child) => {
       annotateGroupMetrics(child, seen);
-      cpuPeak = Math.max(cpuPeak, coerceNumber(child.group_cpu_peak ?? child.cpu_percent, 0));
-      memoryPeak = Math.max(memoryPeak, coerceNumber(child.group_memory_peak ?? child.memory_percent, 0));
+      cpuTotal += coerceNumber(child.group_cpu_total ?? child.cpu_percent, 0);
+      memoryBytesTotal += coerceNumber(child.group_memory_bytes_total ?? child.memory_bytes, 0);
+      memoryPercentTotal += coerceNumber(child.group_memory_percent_total ?? child.memory_percent, 0);
+      const childDiskBytesPerSecond = coerceNullableNumber(child.group_disk_bytes_per_second_total ?? child.disk_bytes_per_second);
+      const childNetworkBytesPerSecond = coerceNullableNumber(
+        child.group_network_bytes_per_second_total ?? child.network_bytes_per_second
+      );
+      if (childDiskBytesPerSecond != null) {
+        hasDiskBytesPerSecond = true;
+        diskBytesPerSecondTotal += childDiskBytesPerSecond;
+      }
+      if (childNetworkBytesPerSecond != null) {
+        hasNetworkBytesPerSecond = true;
+        networkBytesPerSecondTotal += childNetworkBytesPerSecond;
+      }
     });
-    row.group_cpu_peak = cpuPeak;
-    row.group_memory_peak = memoryPeak;
+    row.group_cpu_total = cpuTotal;
+    row.group_memory_bytes_total = memoryBytesTotal;
+    row.group_memory_percent_total = memoryPercentTotal;
+    row.group_disk_bytes_per_second_total = hasDiskBytesPerSecond ? diskBytesPerSecondTotal : null;
+    row.group_network_bytes_per_second_total = hasNetworkBytesPerSecond ? networkBytesPerSecondTotal : null;
     row.has_children = children.length > 0;
     row.child_count = children.length;
     return row;
@@ -382,7 +519,17 @@ function buildVisibleProcessRows(processes = [], expandedPids = new Set(), sortM
 function MetricHeatCell({ value, label, subLabel = "", intensity = 0, tone = "cpu" }) {
   const normalizedIntensity = Math.max(0, Math.min(1, Number(intensity || 0)));
   const gradient =
-    tone === "memory"
+    tone === "network"
+      ? `linear-gradient(90deg, rgba(52,211,153,${0.08 + normalizedIntensity * 0.34}) ${Math.max(
+          6,
+          normalizedIntensity * 100
+        )}%, transparent ${Math.max(6, normalizedIntensity * 100)}%)`
+      : tone === "disk"
+      ? `linear-gradient(90deg, rgba(251,191,36,${0.08 + normalizedIntensity * 0.34}) ${Math.max(
+          6,
+          normalizedIntensity * 100
+        )}%, transparent ${Math.max(6, normalizedIntensity * 100)}%)`
+      : tone === "memory"
       ? `linear-gradient(90deg, rgba(192,132,252,${0.08 + normalizedIntensity * 0.34}) ${Math.max(
           6,
           normalizedIntensity * 100
@@ -514,14 +661,36 @@ function ProcessNameCell({ row = {}, onToggle }) {
   );
 }
 
-function CommandLineCell({ value }) {
+function ProcessOwnerCell({ value }) {
   const text = normalizeText(value) || "-";
   return (
     <Tooltip title={text} placement="top-start">
       <Typography
         component="span"
         sx={{
-          color: "rgba(226,232,240,0.88)",
+          color: "rgba(226,232,240,0.84)",
+          fontSize: "0.8rem",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          minWidth: 0,
+        }}
+      >
+        {text}
+      </Typography>
+    </Tooltip>
+  );
+}
+
+function CommandLineCell({ row }) {
+  const commandText = getProcessCommandText(row);
+  const text = commandText || "-";
+  return (
+    <Tooltip title={commandText || "No command line reported"} placement="top-start">
+      <Typography
+        component="span"
+        sx={{
+          color: commandText ? "rgba(226,232,240,0.88)" : "rgba(148,163,184,0.56)",
           fontFamily: '"IBM Plex Mono", "Consolas", monospace',
           fontSize: "0.78rem",
           whiteSpace: "nowrap",
@@ -543,8 +712,9 @@ export default function ProcessManagement({ device }) {
 
   const hostname = useMemo(() => getHostname(device), [device]);
   const [processRows, setProcessRows] = useState([]);
+  const [terminatedProcessRows, setTerminatedProcessRows] = useState(() => new Map());
   const [reportedAt, setReportedAt] = useState(0);
-  const [refreshIntervalMs, setRefreshIntervalMs] = useState(PROCESS_POLL_INTERVAL_MS);
+  const [refreshRateKey, setRefreshRateKey] = useState("normal");
   const [expandedPids, setExpandedPids] = useState(() => new Set());
   const [selectedProcessId, setSelectedProcessId] = useState("");
   const [sortModel, setSortModel] = useState([{ colId: "cpu_percent", sort: "desc" }]);
@@ -553,34 +723,54 @@ export default function ProcessManagement({ device }) {
   const [error, setError] = useState("");
   const [actionBusy, setActionBusy] = useState("");
   const [contextMenuState, setContextMenuState] = useState(null);
-  const [hideSvchostProcesses, setHideSvchostProcesses] = useState(true);
+  const [showSystemProcesses, setShowSystemProcesses] = useState(false);
+  const [showTerminatedProcesses, setShowTerminatedProcesses] = useState(true);
+
+  const effectiveRefreshIntervalMs = PROCESS_REFRESH_INTERVALS_MS[refreshRateKey] || PROCESS_POLL_INTERVAL_MS;
+
+  const allProcessRows = useMemo(() => {
+    const liveRows = Array.isArray(processRows) ? processRows : [];
+    if (!showTerminatedProcesses || !terminatedProcessRows.size) return liveRows;
+    return [...liveRows, ...terminatedProcessRows.values()];
+  }, [processRows, showTerminatedProcesses, terminatedProcessRows]);
 
   const filteredProcessRows = useMemo(() => {
-    const rows = Array.isArray(processRows) ? processRows : [];
-    if (!hideSvchostProcesses) return rows;
-    return rows.filter((row) => normalizeText(row?.name).toLowerCase() !== "svchost.exe");
-  }, [hideSvchostProcesses, processRows]);
+    const rows = Array.isArray(allProcessRows) ? allProcessRows : [];
+    if (showSystemProcesses) return rows;
+    return rows.filter((row) => !isLowSignalSystemProcess(row));
+  }, [allProcessRows, showSystemProcesses]);
 
-  const metricMaxima = useMemo(() => {
-    return filteredProcessRows.reduce(
-      (accumulator, row) => ({
-        cpu: Math.max(accumulator.cpu, coerceNumber(row?.cpu_percent, 0)),
-        memory: Math.max(accumulator.memory, coerceNumber(row?.memory_percent, 0)),
-      }),
-      { cpu: 0, memory: 0 }
-    );
-  }, [filteredProcessRows]);
+  const hiddenProcessCount = useMemo(
+    () => Math.max(0, allProcessRows.length - filteredProcessRows.length),
+    [allProcessRows.length, filteredProcessRows.length]
+  );
 
   const visibleRows = useMemo(() => {
     const rows = buildVisibleProcessRows(filteredProcessRows, expandedPids, sortModel);
+    const metricMaxima = rows.reduce(
+      (accumulator, row) => ({
+        cpu: Math.max(accumulator.cpu, getDisplayCpuPercent(row)),
+        memory: Math.max(accumulator.memory, getDisplayMemoryPercent(row)),
+        disk: Math.max(accumulator.disk, coerceNumber(getDisplayDiskBytesPerSecond(row), 0)),
+        network: Math.max(accumulator.network, coerceNumber(getDisplayNetworkBytesPerSecond(row), 0)),
+      }),
+      { cpu: 0, memory: 0, disk: 0, network: 0 }
+    );
     return rows.map((row) => ({
       ...row,
       is_expanded: expandedPids.has(row.pid),
-      cpu_heat: metricMaxima.cpu > 0 ? coerceNumber(row.group_cpu_peak ?? row.cpu_percent, 0) / metricMaxima.cpu : 0,
-      memory_heat:
-        metricMaxima.memory > 0 ? coerceNumber(row.group_memory_peak ?? row.memory_percent, 0) / metricMaxima.memory : 0,
+      display_cpu_percent: getDisplayCpuPercent(row),
+      display_memory_bytes: getDisplayMemoryBytes(row),
+      display_memory_percent: getDisplayMemoryPercent(row),
+      display_disk_bytes_per_second: getDisplayDiskBytesPerSecond(row),
+      display_network_bytes_per_second: getDisplayNetworkBytesPerSecond(row),
+      cpu_heat: metricMaxima.cpu > 0 ? getDisplayCpuPercent(row) / metricMaxima.cpu : 0,
+      memory_heat: metricMaxima.memory > 0 ? getDisplayMemoryPercent(row) / metricMaxima.memory : 0,
+      disk_heat: metricMaxima.disk > 0 ? coerceNumber(getDisplayDiskBytesPerSecond(row), 0) / metricMaxima.disk : 0,
+      network_heat:
+        metricMaxima.network > 0 ? coerceNumber(getDisplayNetworkBytesPerSecond(row), 0) / metricMaxima.network : 0,
     }));
-  }, [expandedPids, filteredProcessRows, metricMaxima.cpu, metricMaxima.memory, sortModel]);
+  }, [expandedPids, filteredProcessRows, sortModel]);
 
   const selectedProcess = useMemo(
     () => visibleRows.find((row) => row.id === selectedProcessId) || null,
@@ -598,7 +788,14 @@ export default function ProcessManagement({ device }) {
     }
     return {
       title: row.name || "Process",
-      subtitle: [`PID ${row.pid || "-"}`, formatPercent(row.cpu_percent), formatBytes(row.memory_bytes)].join(" • "),
+      subtitle: [
+        `PID ${row.pid || "-"}`,
+        row.username,
+        formatPercent(getDisplayCpuPercent(row)),
+        formatBytes(getDisplayMemoryBytes(row)),
+      ]
+        .filter(Boolean)
+        .join(" • "),
       row,
     };
   }, [contextMenuState?.row, selectedProcess]);
@@ -623,8 +820,13 @@ export default function ProcessManagement({ device }) {
   const applyProcessPayload = useCallback((payload = {}) => {
     const rows = Array.isArray(payload?.processes) ? payload.processes.map((row, index) => normalizeProcessRow(row, index)) : [];
     setProcessRows(rows);
+    setTerminatedProcessRows((current) => {
+      if (!current.size) return current;
+      const liveIds = new Set(rows.map((row) => row.id).filter(Boolean));
+      const next = new Map([...current].filter(([id]) => !liveIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
     setReportedAt(Number(payload?.reported_at || 0) || 0);
-    setRefreshIntervalMs(Math.max(PROCESS_POLL_INTERVAL_MS, Number(payload?.refresh_interval_ms || PROCESS_POLL_INTERVAL_MS) || PROCESS_POLL_INTERVAL_MS));
     setError("");
     setExpandedPids((current) => {
       const available = new Set(rows.filter((row) => row.pid > 0).map((row) => row.pid));
@@ -646,9 +848,13 @@ export default function ProcessManagement({ device }) {
         setRefreshing(true);
       }
       try {
-        const response = await fetch(`/api/device/processes/${encodeURIComponent(hostname)}`, {
-          credentials: "include",
-        });
+        const maxAgeSeconds = Math.max(0.25, effectiveRefreshIntervalMs / 1000);
+        const response = await fetch(
+          `/api/device/processes/${encodeURIComponent(hostname)}?max_age_seconds=${encodeURIComponent(maxAgeSeconds)}`,
+          {
+            credentials: "include",
+          }
+        );
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
           throw new Error(normalizeText(payload?.message) || normalizeText(payload?.error) || `HTTP ${response.status}`);
@@ -665,7 +871,7 @@ export default function ProcessManagement({ device }) {
         }
       }
     },
-    [applyProcessPayload, hostname]
+    [applyProcessPayload, effectiveRefreshIntervalMs, hostname]
   );
 
   const toggleProcessExpansion = useCallback((row) => {
@@ -745,6 +951,37 @@ export default function ProcessManagement({ device }) {
     }
   }, [contextMenuSubject.row, handleCloseContextMenu, notifyOperator]);
 
+  const copyCommandToClipboard = useCallback(async () => {
+    const row = contextMenuSubject.row;
+    const commandLine = getProcessCommandText(row);
+    handleCloseContextMenu();
+    if (!commandLine) {
+      await notifyOperator({
+        title: "Process Management",
+        message: "Borealis could not determine a process command line to copy.",
+        icon: "content_copy",
+        variant: "warning",
+      });
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(commandLine);
+      await notifyOperator({
+        title: "Process Management",
+        message: "Copied process command line to the clipboard.",
+        icon: "content_copy",
+        variant: "info",
+      });
+    } catch (err) {
+      await notifyOperator({
+        title: "Process Management",
+        message: `Borealis could not copy the command line: ${String(err?.message || err)}`,
+        icon: "error",
+        variant: "error",
+      });
+    }
+  }, [contextMenuSubject.row, handleCloseContextMenu, notifyOperator]);
+
   const endSelectedTask = useCallback(async () => {
     const row = contextMenuSubject.row;
     const pid = Number(row?.pid || 0);
@@ -763,6 +1000,22 @@ export default function ProcessManagement({ device }) {
       if (!response.ok) {
         throw new Error(normalizeText(payload?.message) || normalizeText(payload?.error) || `HTTP ${response.status}`);
       }
+      const terminatedRow = normalizeProcessRow({
+        ...row,
+        cpu_percent: 0,
+        disk_bytes_per_second: 0,
+        network_bytes_per_second: null,
+        parent_pid: 0,
+        terminated: true,
+        terminated_at: Math.floor(Date.now() / 1000),
+        has_children: false,
+        child_count: 0,
+      });
+      setTerminatedProcessRows((current) => {
+        const next = new Map(current);
+        next.set(terminatedRow.id, terminatedRow);
+        return next;
+      });
       applyProcessPayload(payload);
       await notifyOperator({
         title: "Process Management",
@@ -788,7 +1041,9 @@ export default function ProcessManagement({ device }) {
   const contextMenuActions = useMemo(() => {
     const row = contextMenuSubject.row;
     const processLocation = getProcessLocation(row);
+    const commandLine = getProcessCommandText(row);
     const unavailableReason = !row ? "Select a process first." : "";
+    const terminatedReason = row?.terminated ? "This process has already terminated." : "";
     return [
       {
         id: "copy-location",
@@ -801,18 +1056,28 @@ export default function ProcessManagement({ device }) {
         onClick: copyLocationToClipboard,
       },
       {
+        id: "copy-command",
+        group: "primary",
+        label: "Copy Command to Clipboard",
+        icon: ContentCopyRoundedIcon,
+        disabled: Boolean(unavailableReason || !commandLine),
+        disabledReason: unavailableReason || (!commandLine ? "This process did not report a command line." : ""),
+        description: "Copy the commandline used to inoke the executable.",
+        onClick: copyCommandToClipboard,
+      },
+      {
         id: "end-task",
         group: "danger",
         label: "End Task",
         icon: StopCircleRoundedIcon,
         intent: "danger",
-        disabled: Boolean(unavailableReason || actionBusy),
-        disabledReason: unavailableReason || (actionBusy ? "A process action is already running." : ""),
+        disabled: Boolean(unavailableReason || terminatedReason || actionBusy),
+        disabledReason: unavailableReason || terminatedReason || (actionBusy ? "A process action is already running." : ""),
         description: "Terminate the selected process on the remote device.",
         onClick: endSelectedTask,
       },
     ];
-  }, [actionBusy, contextMenuSubject.row, copyLocationToClipboard, endSelectedTask]);
+  }, [actionBusy, contextMenuSubject.row, copyCommandToClipboard, copyLocationToClipboard, endSelectedTask]);
 
   const renderContextMenuItems = useCallback(
     (closeMenu) => {
@@ -917,7 +1182,7 @@ export default function ProcessManagement({ device }) {
         headerName: "Name",
         field: "name",
         colId: "name",
-        minWidth: 280,
+        minWidth: 310,
         width: 310,
         sortable: true,
         comparator: () => 0,
@@ -925,11 +1190,24 @@ export default function ProcessManagement({ device }) {
         cellRenderer: (params) => <ProcessNameCell row={params.data} onToggle={params.context?.toggleProcessExpansion} />,
       },
       {
+        headerName: "Owner",
+        field: "username",
+        colId: "username",
+        minWidth: 180,
+        width: 180,
+        sortable: true,
+        comparator: () => 0,
+        filter: "agTextColumnFilter",
+        cellClass: "auto-col-tight",
+        cellRenderer: (params) => <ProcessOwnerCell value={params.value} />,
+      },
+      {
         headerName: "CPU Usage",
         field: "cpu_percent",
         colId: "cpu_percent",
-        minWidth: 138,
-        width: 150,
+        valueGetter: (params) => getDisplayCpuPercent(params.data),
+        minWidth: 180,
+        width: 180,
         sortable: true,
         sort: "desc",
         comparator: () => 0,
@@ -937,8 +1215,8 @@ export default function ProcessManagement({ device }) {
         cellClass: "auto-col-tight",
         cellRenderer: (params) => (
           <MetricHeatCell
-            value={params.data?.cpu_percent}
-            label={formatPercent(params.data?.cpu_percent)}
+            value={params.data?.display_cpu_percent}
+            label={formatPercent(params.data?.display_cpu_percent)}
             intensity={params.data?.cpu_heat}
             tone="cpu"
           />
@@ -948,7 +1226,8 @@ export default function ProcessManagement({ device }) {
         headerName: "Memory Usage",
         field: "memory_percent",
         colId: "memory_percent",
-        minWidth: 170,
+        valueGetter: (params) => getDisplayMemoryBytes(params.data),
+        minWidth: 180,
         width: 180,
         sortable: true,
         comparator: () => 0,
@@ -956,25 +1235,66 @@ export default function ProcessManagement({ device }) {
         cellClass: "auto-col-tight",
         cellRenderer: (params) => (
           <MetricHeatCell
-            value={params.data?.memory_percent}
-            label={formatBytes(params.data?.memory_bytes)}
-            subLabel={formatPercent(params.data?.memory_percent)}
+            value={params.data?.display_memory_percent}
+            label={formatBytes(params.data?.display_memory_bytes)}
+            subLabel={formatPercent(params.data?.display_memory_percent)}
             intensity={params.data?.memory_heat}
             tone="memory"
           />
         ),
       },
       {
-        headerName: "Command Line",
+        headerName: "Disk",
+        field: "disk_bytes_per_second",
+        colId: "disk_bytes_per_second",
+        valueGetter: (params) => getDisplayDiskBytesPerSecond(params.data),
+        minWidth: 150,
+        width: 155,
+        sortable: true,
+        comparator: () => 0,
+        filter: "agNumberColumnFilter",
+        cellClass: "auto-col-tight",
+        cellRenderer: (params) => (
+          <MetricHeatCell
+            value={params.data?.display_disk_bytes_per_second}
+            label={formatBytesPerSecond(params.data?.display_disk_bytes_per_second)}
+            intensity={params.data?.disk_heat}
+            tone="disk"
+          />
+        ),
+      },
+      {
+        headerName: "Network",
+        field: "network_bytes_per_second",
+        colId: "network_bytes_per_second",
+        valueGetter: (params) => getDisplayNetworkBytesPerSecond(params.data),
+        minWidth: 150,
+        width: 155,
+        sortable: true,
+        comparator: () => 0,
+        filter: "agNumberColumnFilter",
+        cellClass: "auto-col-tight",
+        cellRenderer: (params) => (
+          <MetricHeatCell
+            value={params.data?.display_network_bytes_per_second}
+            label={formatBytesPerSecond(params.data?.display_network_bytes_per_second)}
+            intensity={params.data?.network_heat}
+            tone="network"
+          />
+        ),
+      },
+      {
+        headerName: "Command / Location",
         field: "command_line",
         colId: "command_line",
+        valueGetter: (params) => getProcessCommandText(params.data),
         minWidth: 360,
         flex: 1,
         sortable: true,
         comparator: () => 0,
         filter: "agTextColumnFilter",
         cellClass: "auto-col-tight",
-        cellRenderer: (params) => <CommandLineCell value={params.value} />,
+        cellRenderer: (params) => <CommandLineCell row={params.data} />,
       },
     ],
     []
@@ -1000,6 +1320,7 @@ export default function ProcessManagement({ device }) {
 
   useEffect(() => {
     setProcessRows([]);
+    setTerminatedProcessRows(new Map());
     setReportedAt(0);
     setExpandedPids(new Set());
     setSelectedProcessId("");
@@ -1016,12 +1337,12 @@ export default function ProcessManagement({ device }) {
       timerId = window.setTimeout(async () => {
         await loadProcesses({ silent: true });
         if (cancelled) return;
-        scheduleNext(Math.max(PROCESS_POLL_INTERVAL_MS, refreshIntervalMs || PROCESS_POLL_INTERVAL_MS));
+        scheduleNext(effectiveRefreshIntervalMs);
       }, delay);
     };
 
     void loadProcesses({ silent: false });
-    scheduleNext(Math.max(PROCESS_POLL_INTERVAL_MS, refreshIntervalMs || PROCESS_POLL_INTERVAL_MS));
+    scheduleNext(effectiveRefreshIntervalMs);
 
     return () => {
       cancelled = true;
@@ -1029,7 +1350,7 @@ export default function ProcessManagement({ device }) {
         window.clearTimeout(timerId);
       }
     };
-  }, [hostname, loadProcesses, refreshIntervalMs]);
+  }, [effectiveRefreshIntervalMs, hostname, loadProcesses]);
 
   useEffect(() => {
     const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
@@ -1076,73 +1397,127 @@ export default function ProcessManagement({ device }) {
         direction={{ xs: "column", md: "row" }}
         spacing={1.5}
         justifyContent="space-between"
-        alignItems={{ xs: "flex-start", md: "center" }}
+        alignItems={{ xs: "flex-start", md: "flex-start" }}
       >
-        <Stack direction="row" spacing={1.15} alignItems="center" sx={{ minWidth: 0 }}>
-          <Typography variant="caption" sx={{ display: "block", color: "rgba(203,213,225,0.78)" }}>
-            {formatUpdatedAt(reportedAt)}
+        <Stack spacing={0.7} alignItems="flex-start" sx={{ minWidth: 0 }}>
+          <Typography
+            component="span"
+            sx={{
+              color: NAME_LINK_COLOR,
+              fontSize: 11,
+              fontWeight: 600,
+              lineHeight: 1.1,
+              pl: 1,
+            }}
+          >
+            Process Polling Rate
           </Typography>
-          {refreshing ? (
+          <CountSliderGroup
+            options={PROCESS_REFRESH_OPTIONS}
+            activeKey={refreshRateKey}
+            counts={PROCESS_REFRESH_COUNTS}
+            onChange={(key) => {
+              setRefreshRateKey(key || "normal");
+            }}
+          />
+        </Stack>
+        <Stack spacing={0.7} alignItems={{ xs: "flex-start", md: "flex-end" }} sx={{ ml: "auto", maxWidth: "100%" }}>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: "wrap", rowGap: 0.8, justifyContent: "flex-end" }}>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={showSystemProcesses}
+                  onChange={(event) => setShowSystemProcesses(Boolean(event.target.checked))}
+                  size="small"
+                  sx={{
+                    color: "rgba(148,163,184,0.86)",
+                    "&.Mui-checked": {
+                      color: "#7dd3fc",
+                    },
+                    "& .MuiSvgIcon-root": {
+                      fontSize: 18,
+                    },
+                  }}
+                />
+              }
+              label="Show System Processes"
+              sx={{
+                m: 0,
+                userSelect: "none",
+                "& .MuiFormControlLabel-label": {
+                  color: MAGIC_UI.textMuted,
+                  fontSize: "0.84rem",
+                  fontWeight: 500,
+                },
+              }}
+            />
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={showTerminatedProcesses}
+                  onChange={(event) => setShowTerminatedProcesses(Boolean(event.target.checked))}
+                  size="small"
+                  sx={{
+                    color: "rgba(148,163,184,0.86)",
+                    "&.Mui-checked": {
+                      color: "#7dd3fc",
+                    },
+                    "& .MuiSvgIcon-root": {
+                      fontSize: 18,
+                    },
+                  }}
+                />
+              }
+              label="Show Terminated Processes"
+              sx={{
+                m: 0,
+                userSelect: "none",
+                "& .MuiFormControlLabel-label": {
+                  color: MAGIC_UI.textMuted,
+                  fontSize: "0.84rem",
+                  fontWeight: 500,
+                },
+              }}
+            />
             <Typography
               variant="caption"
               sx={{
                 display: "inline-flex",
                 alignItems: "center",
-                color: "#c7f9cc",
-                border: "1px solid rgba(74,222,128,0.22)",
+                color: "rgba(191,219,254,0.86)",
+                border: "1px solid rgba(125,211,252,0.18)",
                 borderRadius: 999,
                 px: 0.7,
                 py: 0.18,
-                background: "rgba(15,23,42,0.72)",
+                background: "rgba(15,23,42,0.62)",
+                whiteSpace: "nowrap",
               }}
             >
-              Updating
+              {filteredProcessRows.length} shown{hiddenProcessCount ? ` • ${hiddenProcessCount} hidden` : ""}
             </Typography>
-          ) : null}
-        </Stack>
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: "wrap", rowGap: 0.8 }}>
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={hideSvchostProcesses}
-                onChange={(event) => setHideSvchostProcesses(Boolean(event.target.checked))}
-                size="small"
+          </Stack>
+          <Stack direction="row" spacing={1} alignItems="center" justifyContent="flex-end" sx={{ flexWrap: "wrap" }}>
+            <Typography variant="caption" sx={{ display: "block", color: "rgba(203,213,225,0.78)", textAlign: "right" }}>
+              {formatUpdatedAt(reportedAt)}
+            </Typography>
+            {refreshing ? (
+              <Typography
+                variant="caption"
                 sx={{
-                  color: "rgba(148,163,184,0.86)",
-                  "&.Mui-checked": {
-                    color: "#7dd3fc",
-                  },
-                  "& .MuiSvgIcon-root": {
-                    fontSize: 18,
-                  },
+                  display: "inline-flex",
+                  alignItems: "center",
+                  color: "#c7f9cc",
+                  border: "1px solid rgba(74,222,128,0.22)",
+                  borderRadius: 999,
+                  px: 0.7,
+                  py: 0.18,
+                  background: "rgba(15,23,42,0.72)",
                 }}
-              />
-            }
-            label="Hide svchost.exe"
-            sx={{
-              m: 0,
-              userSelect: "none",
-              "& .MuiFormControlLabel-label": {
-                color: MAGIC_UI.textMuted,
-                fontSize: "0.84rem",
-                fontWeight: 500,
-              },
-            }}
-          />
-          <Tooltip title="Refresh processes" arrow>
-            <span>
-              <IconButton
-                aria-label="Refresh processes"
-                onClick={() => {
-                  void loadProcesses({ silent: false });
-                }}
-                disabled={!hostname || loading || Boolean(actionBusy)}
-                sx={REFRESH_ICON_BUTTON_SX}
               >
-                <RefreshRoundedIcon />
-              </IconButton>
-            </span>
-          </Tooltip>
+                Updating
+              </Typography>
+            ) : null}
+          </Stack>
         </Stack>
       </Stack>
 
@@ -1178,6 +1553,13 @@ export default function ProcessManagement({ device }) {
             backgroundColor: "rgba(125,211,252,0.2) !important",
             boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
           },
+          "& .ag-row.process-row-terminated": {
+            backgroundColor: "rgba(127,29,29,0.24) !important",
+            boxShadow: "inset 3px 0 0 rgba(248,113,113,0.68)",
+          },
+          "& .ag-row.process-row-terminated .ag-cell": {
+            color: "rgba(254,226,226,0.88)",
+          },
           "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
             display: "flex",
             alignItems: "center",
@@ -1205,6 +1587,7 @@ export default function ProcessManagement({ device }) {
           context={gridContext}
           theme={PROCESS_GRID_THEME}
           getRowId={(params) => params.data?.tree_id || params.data?.id || `${params.data?.pid || "process"}-${params.rowIndex}`}
+          getRowClass={(params) => (params.data?.terminated ? "process-row-terminated" : "")}
           rowSelection={{
             mode: "singleRow",
             checkboxes: false,

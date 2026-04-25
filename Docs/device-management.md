@@ -51,11 +51,17 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ## Device Process Management
 - Device Summary exposes a `Processes` tab for live task-manager style process inspection and control.
-- The tab uses a single AG Grid with `Name`, `CPU Usage`, `Memory Usage`, and `Command Line` columns, defaults to the hottest individual or app-family CPU usage first, trims Windows service scaffolding out of the visible parent chain, and keeps parent/child expansion opt-in so the default view reads like Task Manager rather than a fully expanded Process Explorer tree.
+- The tab uses a single AG Grid with `Name`, `Owner`, `CPU Usage`, `Memory Usage`, `Disk`, `Network`, and `Command / Location` columns, defaults to the hottest individual or app-family CPU usage first, trims Windows service scaffolding, `explorer.exe`, and terminal shell hosts out of the visible parent chain, and keeps parent/child expansion opt-in so the default view reads like Task Manager rather than a fully expanded Process Explorer tree.
+- Parent process rows display aggregate CPU and memory totals for their visible descendant processes so collapsed app families line up with Windows Task Manager group rows.
+- `Show System Processes` is disabled by default. When disabled, Borealis removes low-CPU, low-memory OS scaffolding such as service hosts, session brokers, shell helpers, and kernel worker rows while keeping those same processes visible when they become meaningful resource consumers. It always hides `MemCompression` and `wslservice.exe` while system processes are suppressed.
+- The refresh Filter Slider supports `Live` (1s), `Normal` (5s), and `Quiet` (15s) polling. Faster polling passes a lower process snapshot max age to the agent so the device refreshes more often while the tab is active.
+- Terminated processes remain visible by default with a gentle red row highlight through `Show Terminated Processes` so operators can see task death after an End Task action.
 - Process names use the same Borealis-blue treatment as the File Management `Name` column.
-- CPU and memory cells include resource heat-map fills so high-consumption processes stand out before an operator sorts or filters.
-- The WebUI polls the live process endpoint about every five seconds while the tab is open. The agent-side `process_management` role keeps a short active polling window and cached five-second snapshots so multiple UI refreshes reuse recent process data instead of forcing duplicate process walks.
-- Right-click row actions use the Borealis context-menu model and currently include `Copy Location to Clipboard` and `End Task`.
+- CPU, memory, disk, and network cells include resource heat-map fills so high-consumption processes stand out before an operator sorts or filters.
+- Windows disk usage uses psutil process I/O deltas with a `Win32_PerfFormattedData_PerfProc_Process` fallback so short cached samples still receive an OS-formatted per-process I/O rate.
+- Per-process network usage is reported as `N/A` when the agent cannot collect a true per-process network rate; Windows exposes that Task Manager value through lower-level tracing rather than the process counters Borealis currently uses.
+- The WebUI polls the live process endpoint according to the selected refresh rate while the tab is open. The agent-side `process_management` role keeps a short active polling window and cached snapshots so multiple UI refreshes reuse recent process data instead of forcing duplicate process walks.
+- Right-click row actions use the Borealis context-menu model and currently include `Copy Location to Clipboard`, `Copy Command to Clipboard`, and `End Task`.
 
 ## Device List Views
 - Operators can save custom table views for the device list UI.
@@ -86,7 +92,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details.
 - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory.
 - `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service.
-- `GET /api/device/processes/<hostname>` (Token Authenticated) - return a live process snapshot for an in-scope device.
+- `GET /api/device/processes/<hostname>?max_age_seconds=<seconds>` (Token Authenticated) - return a live process snapshot for an in-scope device, optionally forcing a fresher agent snapshot for live polling.
 - `POST /api/device/processes/<hostname>/terminate` (Token Authenticated) - request process termination on an in-scope device.
 - `POST /api/device/software/<hostname>/refresh` (Token Authenticated) - request an immediate software inventory refresh on the device.
 - `POST /api/device/software/<hostname>/icon-override` (Token Authenticated) - create or replace a hotloaded global icon override for a software row.

@@ -125,6 +125,7 @@ class Role:
         self._last_process_count = 0
         self._active_until = 0.0
         self._cpu_count = self._resolve_cpu_count()
+        self._previous_io_counters: Dict[str, Tuple[float, int, int]] = {}
         self._supported, self._unsupported_reason = self._detect_support()
         self._thread: Optional[threading.Thread] = None
         if self._supported:
@@ -186,15 +187,53 @@ class Role:
         except Exception:
             pass
 
+    def _collect_windows_perf_process_io_rates(self) -> Dict[int, float]:
+        if not IS_WINDOWS:
+            return {}
+        powershell = shutil.which("powershell.exe") or shutil.which("powershell") or "powershell.exe"
+        command = (
+            "$items = Get-CimInstance Win32_PerfFormattedData_PerfProc_Process | "
+            "Where-Object { $_.IDProcess -gt 0 -and $_.Name -ne '_Total' -and $_.Name -ne 'Idle' } | "
+            "Select-Object IDProcess,IOReadBytesPerSec,IOWriteBytesPerSec,IODataBytesPerSec; "
+            "$items | ConvertTo-Json -Depth 3 -Compress"
+        )
+        try:
+            result = self._run_subprocess([powershell, "-NoProfile", "-Command", command], timeout=10)
+        except Exception:
+            return {}
+        if result.returncode != 0:
+            return {}
+        try:
+            payload = json.loads(result.stdout or "[]")
+        except Exception:
+            return {}
+        if isinstance(payload, dict):
+            payload = [payload]
+        rates: Dict[int, float] = {}
+        for item in payload or []:
+            if not isinstance(item, dict):
+                continue
+            pid = _coerce_int(item.get("IDProcess"), 0)
+            if pid <= 0:
+                continue
+            read_rate = max(0.0, _coerce_float(item.get("IOReadBytesPerSec"), 0.0))
+            write_rate = max(0.0, _coerce_float(item.get("IOWriteBytesPerSec"), 0.0))
+            data_rate = max(0.0, _coerce_float(item.get("IODataBytesPerSec"), 0.0))
+            rates[pid] = max(read_rate + write_rate, data_rate)
+        return rates
+
     def _collect_psutil_processes(self) -> List[Dict[str, Any]]:
         if psutil is None:
             return []
-        captured_at = int(time.time())
+        captured_at = time.time()
+        captured_at_epoch = int(captured_at)
+        captured_monotonic = time.monotonic()
         try:
             total_memory = int(psutil.virtual_memory().total or 0)
         except Exception:
             total_memory = 0
         processes: List[Dict[str, Any]] = []
+        next_io_counters: Dict[str, Tuple[float, int, int]] = {}
         attrs = ["pid", "ppid", "name", "cmdline", "exe", "memory_info", "create_time", "username", "status"]
         for proc in psutil.process_iter(attrs=attrs):
             try:
@@ -230,6 +269,23 @@ class Role:
             if not command_line:
                 command_line = executable_path or name
             create_time = _coerce_float(info.get("create_time"), 0.0)
+            disk_bytes_per_second = 0.0
+            try:
+                io_counters = proc.io_counters()
+                read_total = int(getattr(io_counters, "read_bytes", 0) or 0)
+                write_total = int(getattr(io_counters, "write_bytes", 0) or 0)
+                io_key = f"{pid}:{int(create_time or 0)}"
+                previous = self._previous_io_counters.get(io_key)
+                if previous:
+                    previous_time, previous_read_total, previous_write_total = previous
+                    elapsed = max(0.0, captured_monotonic - float(previous_time or 0.0))
+                    if elapsed > 0:
+                        read_delta = max(0, read_total - int(previous_read_total or 0))
+                        write_delta = max(0, write_total - int(previous_write_total or 0))
+                        disk_bytes_per_second = max(0.0, float(read_delta + write_delta) / elapsed)
+                next_io_counters[io_key] = (captured_monotonic, read_total, write_total)
+            except Exception:
+                pass
             processes.append(
                 {
                     "id": f"{pid}:{int(create_time or 0)}",
@@ -240,14 +296,27 @@ class Role:
                     "raw_cpu_percent": round(max(0.0, _coerce_float(raw_cpu, 0.0)), 2),
                     "memory_percent": memory_percent,
                     "memory_bytes": memory_bytes,
+                    "disk_bytes_per_second": round(disk_bytes_per_second, 2),
+                    "network_bytes_per_second": None,
                     "command_line": command_line,
                     "executable_path": executable_path,
                     "username": _clean_text(info.get("username")),
                     "status": _clean_text(info.get("status")),
                     "created_at": create_time,
-                    "captured_at": captured_at,
+                    "captured_at": captured_at_epoch,
                 }
             )
+        self._previous_io_counters = next_io_counters
+        if IS_WINDOWS:
+            perf_rates = self._collect_windows_perf_process_io_rates()
+            if perf_rates:
+                for item in processes:
+                    pid = _coerce_int(item.get("pid"), 0)
+                    if pid in perf_rates:
+                        item["disk_bytes_per_second"] = round(
+                            max(_coerce_float(item.get("disk_bytes_per_second"), 0.0), perf_rates[pid]),
+                            2,
+                        )
         return processes
 
     def _collect_windows_fallback_processes(self) -> List[Dict[str, Any]]:
@@ -290,6 +359,8 @@ class Role:
                     "raw_cpu_percent": 0.0,
                     "memory_percent": _normalize_memory_percent(memory_bytes, total_memory),
                     "memory_bytes": memory_bytes,
+                    "disk_bytes_per_second": 0.0,
+                    "network_bytes_per_second": None,
                     "command_line": command_line,
                     "executable_path": executable_path,
                     "username": "",
@@ -298,6 +369,12 @@ class Role:
                     "captured_at": captured_at,
                 }
             )
+        perf_rates = self._collect_windows_perf_process_io_rates()
+        if perf_rates:
+            for item in rows:
+                pid = _coerce_int(item.get("pid"), 0)
+                if pid in perf_rates:
+                    item["disk_bytes_per_second"] = round(perf_rates[pid], 2)
         return rows
 
     def _collect_posix_fallback_processes(self) -> List[Dict[str, Any]]:
@@ -334,6 +411,8 @@ class Role:
                     "raw_cpu_percent": round(max(0.0, _coerce_float(parts[2], 0.0)), 2),
                     "memory_percent": _normalize_memory_percent(memory_bytes, int(total_memory or 0)),
                     "memory_bytes": memory_bytes,
+                    "disk_bytes_per_second": 0.0,
+                    "network_bytes_per_second": None,
                     "command_line": command_line,
                     "executable_path": "",
                     "username": "",
@@ -524,7 +603,8 @@ class Role:
         action = _clean_text(payload.get("action")).lower()
         if action in {"", "list", "snapshot"}:
             try:
-                snapshot = self._ensure_fresh_snapshot()
+                max_age_seconds = max(0.25, _coerce_float(payload.get("max_age_seconds"), REFRESH_INTERVAL_SECONDS))
+                snapshot = self._ensure_fresh_snapshot(max_age_seconds=max_age_seconds)
                 return {"ok": True, **snapshot}
             except Exception as exc:
                 self._record_error(f"Process inventory request failed: {exc}")

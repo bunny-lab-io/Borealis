@@ -40,6 +40,15 @@ def _coerce_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _coerce_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value in (None, ""):
+            raise ValueError
+        return float(value)
+    except Exception:
+        return default
+
+
 def _error_status(error_code: str) -> int:
     normalized = _clean_text(error_code).lower()
     if normalized in {"invalid_action", "invalid_request", "pid_required"}:
@@ -218,6 +227,7 @@ def register_processes(app, adapters: "EngineServiceAdapters") -> None:
             record,
             {
                 "action": "list",
+                "max_age_seconds": max(0.25, min(15.0, _coerce_float(request.args.get("max_age_seconds"), 5.0))),
                 "requested_at": int(time.time()),
             },
             timeout=8.0,

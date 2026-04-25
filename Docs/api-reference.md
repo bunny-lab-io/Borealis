@@ -62,7 +62,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details, site-scoped for operators, including normalized session inventory with helper readiness fields.
 - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory for an in-scope device.
 - `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service on an in-scope device.
-- `GET /api/device/processes/<hostname>` (Token Authenticated) - return a live process snapshot for an in-scope device.
+- `GET /api/device/processes/<hostname>?max_age_seconds=<seconds>` (Token Authenticated) - return a live process snapshot for an in-scope device, optionally forcing a fresher agent snapshot for live polling.
 - `POST /api/device/processes/<hostname>/terminate` (Token Authenticated) - request process termination on an in-scope device.
 - `POST /api/device/software/<hostname>/refresh` (Token Authenticated) - request an immediate software inventory refresh over the device SYSTEM socket.
 - `POST /api/device/software/<hostname>/icon-override` (Token Authenticated) - persist a hotloaded global software icon override for the selected software row and request a software refresh.
