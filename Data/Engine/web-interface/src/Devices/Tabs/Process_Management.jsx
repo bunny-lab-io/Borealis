@@ -39,7 +39,7 @@ const PROCESS_REFRESH_COUNTS = {
   normal: "5s",
   quiet: "15s",
 };
-const AUTO_SIZE_COLUMNS = ["name", "username", "cpu_percent", "memory_percent", "disk_bytes_per_second", "network_bytes_per_second"];
+const AUTO_SIZE_COLUMNS = ["username", "cpu_percent", "memory_percent", "disk_bytes_per_second", "network_bytes_per_second"];
 const NAME_LINK_COLOR = "#58a6ff";
 const LOW_SIGNAL_CPU_PERCENT = 0.5;
 const LOW_SIGNAL_MEMORY_PERCENT = 1;
@@ -647,13 +647,14 @@ function ProcessNameCell({ row = {}, onToggle }) {
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
+            minWidth: 0,
           }}
         >
           {row?.name || "Process"}
         </Typography>
       </Tooltip>
       {row?.pid ? (
-        <Typography sx={{ color: "rgba(148,163,184,0.72)", fontSize: "0.72rem", whiteSpace: "nowrap" }}>
+        <Typography sx={{ color: "rgba(148,163,184,0.72)", fontSize: "0.72rem", whiteSpace: "nowrap", flexShrink: 0 }}>
           PID {row.pid}
         </Typography>
       ) : null}
@@ -1182,7 +1183,7 @@ export default function ProcessManagement({ device }) {
         headerName: "Name",
         field: "name",
         colId: "name",
-        minWidth: 310,
+        minWidth: 260,
         width: 310,
         sortable: true,
         comparator: () => 0,
