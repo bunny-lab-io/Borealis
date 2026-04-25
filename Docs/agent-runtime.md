@@ -19,6 +19,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `role_system_device_auditor.py` (ROLE_NAME: `device_auditor`) - summary, memory, storage, network, session, and process inventory.
 - `role_system_file_management.py` (ROLE_NAME: `file_management`) - remote filesystem browse, lightweight text read/write, copy, cut, paste, create-folder, rename, move, delete, upload, folder-upload manifest replay, and download orchestration over the SYSTEM socket plus device-authenticated transfer endpoints.
 - `role_system_service_management.py` (ROLE_NAME: `service_management`) - system service inventory and start/stop/restart control.
+- `role_system_process_management.py` (ROLE_NAME: `process_management`) - live process snapshots, per-process CPU/memory/command-line metadata, parent-child process relationships, and operator-triggered process termination.
 - `role_system_software_management.py` (ROLE_NAME: `software_management`) - installed software inventory, Windows icon payload publication, and software refresh boosts after software-management work.
 - `role_system_remote_shell.py` (ROLE_NAME: `remote_shell`) - remote shell server over WireGuard (PowerShell on Windows, Bash on Linux).
 - `role_system_vnc.py` (ROLE_NAME: `vnc`) - always-on UltraVNC server lifecycle.
@@ -78,7 +79,8 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `AgentHttpClient.ensure_authenticated()` handles enrollment and refresh.
 - Socket.IO is used by the SYSTEM runtime for:
   - `quick_job_run` dispatch (system jobs plus helper-backed current-user jobs).
-- `file_management_request` browse, upload-conflict preflight, lightweight text-edit, copy/cut/paste mutate, and transfer orchestration for the Device Summary `File Management` tab.
+  - `file_management_request` browse, upload-conflict preflight, lightweight text-edit, copy/cut/paste mutate, and transfer orchestration for the Device Summary `File Management` tab.
+  - `process_management_request` live process snapshots and process termination for the Device Summary `Processes` tab.
   - `vpn_tunnel_start` (WireGuard lifecycle; tunnels are persistent and ignore stop events).
   - `connect_agent` registration (agent socket registry).
 - The SYSTEM socket advertises `helper_contexts=["currentuser"]` when the session broker is running so the Engine can route logical current-user work through the same socket.
@@ -156,7 +158,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 #### Execution contexts and roles
 - Auto-discovers roles from `Data/Agent/Roles/`; no loader changes needed.
 - Naming: `role_<context>_<purpose>.py` with `ROLE_NAME`, `ROLE_CONTEXTS`, and optional hooks (`register_events`, `on_config`, `stop_all`).
-- Standard supported one-socket roles: `role_system_context.py`, `role_currentuser_context.py`, `role_system_device_auditor.py`, `role_system_service_management.py`, `role_system_software_management.py`, `role_system_remote_shell.py`, `role_system_vnc.py`, `role_system_wireguard.py`.
+- Standard supported one-socket roles: `role_system_context.py`, `role_currentuser_context.py`, `role_system_device_auditor.py`, `role_system_service_management.py`, `role_system_process_management.py`, `role_system_software_management.py`, `role_system_remote_shell.py`, `role_system_vnc.py`, `role_system_wireguard.py`.
 - The remote filesystem surface now also includes `role_system_file_management.py`, which serializes transfer-heavy and inline text-edit work through the `file_management` lane, replays folder-upload manifests one file at a time into the requested destination tree, honors operator cancel requests during upload/download/archive work, and keeps browse/mutate requests on the SYSTEM socket.
 - `role_currentuser_macros.py` and `role_currentuser_node_screenshot.py` remain legacy interactive-only implementations and are not part of the supported helper-backed Windows runtime path.
 - SYSTEM tasks depend on scheduled-task creation rights; failures should surface through Engine logging.
