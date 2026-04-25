@@ -364,6 +364,276 @@
       font-size: 0.86rem;
     }
 
+    .feature-matrix {
+      display: grid;
+      gap: 18px;
+    }
+
+    .support-legend {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 2px;
+      color: var(--text-muted);
+      font-size: 0.78rem;
+    }
+
+    .legend-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      background: rgba(8, 12, 24, 0.68);
+      padding: 5px 9px;
+      color: #dbeafe;
+      font-size: 0.74rem;
+      font-weight: 600;
+    }
+
+    .legend-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+
+    .legend-dot.full {
+      background: var(--accent-c);
+      box-shadow: 0 0 14px rgba(52, 211, 153, 0.6);
+    }
+
+    .legend-dot.partial {
+      background: #fbbf24;
+      box-shadow: 0 0 14px rgba(251, 191, 36, 0.5);
+    }
+
+    .legend-dot.none {
+      background: #64748b;
+    }
+
+    .feature-track {
+      display: grid;
+      gap: 12px;
+      padding: 14px 0 4px;
+      border-top: 1px solid rgba(125, 183, 255, 0.18);
+    }
+
+    .feature-track-head {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .scope-mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      color: #e6f2ff;
+      border: 1px solid rgba(125, 183, 255, 0.32);
+      background: rgba(8, 12, 24, 0.74);
+      box-shadow: 0 12px 24px rgba(2, 6, 23, 0.36);
+    }
+
+    .agent-track .scope-mark {
+      color: #bbf7d0;
+      border-color: rgba(52, 211, 153, 0.34);
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.18), rgba(8, 12, 24, 0.74));
+    }
+
+    .engine-track .scope-mark {
+      color: #d8b4fe;
+      border-color: rgba(192, 132, 252, 0.36);
+      background: linear-gradient(135deg, rgba(147, 51, 234, 0.2), rgba(8, 12, 24, 0.74));
+    }
+
+    .scope-mark i {
+      font-size: 1.05rem;
+    }
+
+    .feature-track-head h3 {
+      margin: 0;
+      font-size: 1.02rem;
+      color: #e6f2ff;
+    }
+
+    .feature-track-head p {
+      margin: 3px 0 0;
+      color: var(--text-muted);
+      font-size: 0.84rem;
+      line-height: 1.5;
+    }
+
+    .feature-card-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(min(285px, 100%), 1fr));
+    }
+
+    .feature-card {
+      position: relative;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 10px;
+      min-height: 178px;
+      border: 1px solid rgba(125, 183, 255, 0.18);
+      border-radius: var(--radius-md);
+      background:
+        linear-gradient(135deg, rgba(11, 18, 34, 0.88), rgba(5, 9, 21, 0.78)),
+        rgba(8, 12, 24, 0.74);
+      padding: 12px;
+      box-shadow: 0 14px 28px rgba(2, 6, 23, 0.32);
+    }
+
+    .feature-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 2px;
+      background: linear-gradient(90deg, rgba(125, 211, 252, 0.84), rgba(192, 132, 252, 0.68), rgba(52, 211, 153, 0.58));
+      opacity: 0.78;
+    }
+
+    .engine-feature::before {
+      background: linear-gradient(90deg, rgba(192, 132, 252, 0.85), rgba(125, 211, 252, 0.62));
+    }
+
+    .feature-card-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .feature-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      color: #cde8ff;
+      border: 1px solid rgba(125, 183, 255, 0.28);
+      background: rgba(15, 23, 42, 0.82);
+    }
+
+    .feature-icon i {
+      font-size: 0.98rem;
+    }
+
+    .feature-card-title h4 {
+      margin: 0;
+      color: var(--text-nav-active);
+      font-size: 0.94rem;
+      line-height: 1.25;
+    }
+
+    .feature-card p {
+      margin: 0;
+      color: var(--text-muted);
+      font-size: 0.84rem;
+      line-height: 1.48;
+    }
+
+    .os-support {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+    }
+
+    .os-pill {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      column-gap: 6px;
+      row-gap: 2px;
+      align-items: center;
+      border-radius: 8px;
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      padding: 7px;
+      background: rgba(15, 23, 42, 0.72);
+    }
+
+    .os-pill i {
+      grid-row: 1 / span 2;
+      font-size: 0.98rem;
+    }
+
+    .os-pill span {
+      overflow: hidden;
+      color: #e2e8f0;
+      font-size: 0.7rem;
+      font-weight: 700;
+      line-height: 1;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .os-pill strong {
+      color: var(--text-muted);
+      font-size: 0.64rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+
+    .state-full {
+      border-color: rgba(52, 211, 153, 0.38);
+      background: rgba(6, 78, 59, 0.32);
+    }
+
+    .state-full i,
+    .state-full strong {
+      color: #86efac;
+    }
+
+    .state-partial {
+      border-color: rgba(251, 191, 36, 0.38);
+      background: rgba(120, 53, 15, 0.28);
+    }
+
+    .state-partial i,
+    .state-partial strong {
+      color: #fde68a;
+    }
+
+    .state-none {
+      border-color: rgba(100, 116, 139, 0.28);
+      background: rgba(15, 23, 42, 0.48);
+      opacity: 0.72;
+    }
+
+    .state-none i,
+    .state-none strong {
+      color: #94a3b8;
+    }
+
+    .engine-scope-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .engine-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(192, 132, 252, 0.32);
+      background: rgba(88, 28, 135, 0.24);
+      color: #e9d5ff;
+      padding: 6px 9px;
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+
     .roadmap {
       display: grid;
       gap: 10px;
@@ -916,6 +1186,10 @@
       .section {
         padding: 14px;
       }
+
+      .os-support {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -954,8 +1228,8 @@
         <div class="hero-copy">
           <h2>Overview</h2>
           <p>
-            Borealis is a remote management and automation platform built around a Linux-hosted Engine, a Windows-first agent model, and a
-            visual workflow layer, with broader Linux agent parity still in progress. I originally started it to consolidate the mix of RMM,
+            Borealis is a remote management and automation platform built around a Linux-hosted Engine, script-staged Windows and Linux agents, and a
+            visual workflow layer, with broader Linux agent validation still in progress. I originally started it to consolidate the mix of RMM,
             automation, and orchestration tools I was using across my homelab and real-world environments into one cohesive platform.
           </p>
           <br>
@@ -993,39 +1267,337 @@
       </div>
 
       <div id="features" class="content-panel active" role="tabpanel" aria-labelledby="content-tab-features" data-content-panel="features">
-        <div class="feature-grid">
-          <article class="feature">
-            <h3>Aegis-Protected Access</h3>
-            <p>Aegis bootstrap and unlock, MFA, passkeys, short-lived tokens, and approval-gated enrollment keep Borealis locked down by default.</p>
-          </article>
-          <article class="feature">
-            <h3>Public HTTPS by Default</h3>
-            <p>The Linux Engine ships with an embedded Traefik edge and Let&apos;s Encrypt integration so the public Borealis surface is served over managed HTTPS.</p>
-          </article>
-          <article class="feature">
-            <h3>WireGuard-First Remote Access</h3>
-            <p>Borealis uses managed WireGuard tunnels as the transport backbone for remote shell, VNC, Ansible, and future remote workflows.</p>
-          </article>
-          <article class="feature">
-            <h3>Remote Desktop That Just Works</h3>
-            <p>Same-origin VNC remote desktop for Windows is integrated directly into the platform, with Borealis handling session setup and proxying.</p>
-          </article>
-          <article class="feature">
-            <h3>Live Remote Shell</h3>
-            <p>Open PowerShell on Windows or Bash on Linux through Borealis-managed remote shell sessions carried over WireGuard.</p>
-          </article>
-          <article class="feature">
-            <h3>Signed Script Delivery</h3>
-            <p>Quick jobs and scheduled execution can run PowerShell, Batch, and Bash where available in <code>CURRENTUSER</code> or <code>NT AUTHORITY\SYSTEM</code> contexts.</p>
-          </article>
-          <article class="feature">
-            <h3>Fully Functional Ansible Playbooks</h3>
-            <p>The Linux Engine runs scheduled Ansible playbooks over Borealis-managed WireGuard, SSH, and WinRM paths as part of the current automation stack.</p>
-          </article>
-          <article class="feature">
-            <h3>Automation That Sticks</h3>
-            <p>Workflows, quick jobs, scheduling, watchdogs, alerts, and role health give Borealis a real day-two operations story instead of a one-off remote tool feel.</p>
-          </article>
+        <div class="feature-matrix">
+          <div class="support-legend" aria-label="Support legend">
+            <span>Endpoint compatibility</span>
+            <span class="legend-chip"><span class="legend-dot full" aria-hidden="true"></span>Full</span>
+            <span class="legend-chip"><span class="legend-dot partial" aria-hidden="true"></span>Partial</span>
+            <span class="legend-chip"><span class="legend-dot none" aria-hidden="true"></span>Not supported</span>
+          </div>
+
+          <section class="feature-track agent-track" aria-labelledby="agent-feature-heading">
+            <div class="feature-track-head">
+              <span class="scope-mark" aria-hidden="true"><i class="fa-solid fa-satellite-dish"></i></span>
+              <div>
+                <h3 id="agent-feature-heading">Agent Features</h3>
+                <p>Endpoint-side capabilities that run from script-staged Windows and Linux agents.</p>
+              </div>
+            </div>
+
+            <div class="feature-card-grid">
+              <article class="feature-card">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-microchip"></i></span>
+                  <h4>Agent Runtime</h4>
+                </div>
+                <p>Role loading, enrollment, telemetry, signed work execution, and remote-operation services.</p>
+                <div class="os-support" aria-label="Agent Runtime OS support">
+                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
+                  <span class="os-pill state-partial"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Partial</strong></span>
+                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
+                </div>
+              </article>
+
+              <article class="feature-card">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-clipboard-list"></i></span>
+                  <h4>Inventory Collection</h4>
+                </div>
+                <p>Hardware, OS, software, services, sessions, status, and health snapshots from managed endpoints.</p>
+                <div class="os-support" aria-label="Inventory Collection OS support">
+                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
+                  <span class="os-pill state-partial"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Partial</strong></span>
+                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
+                </div>
+              </article>
+
+              <article class="feature-card">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-shield-halved"></i></span>
+                  <h4>WireGuard Tunnel</h4>
+                </div>
+                <p>Outbound tunnel transport for remote operations and Engine-side automation reachability.</p>
+                <div class="os-support" aria-label="WireGuard Tunnel OS support">
+                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
+                  <span class="os-pill state-full"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Full</strong></span>
+                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
+                </div>
+              </article>
+
+              <article class="feature-card">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-terminal"></i></span>
+                  <h4>Remote Shell Host</h4>
+                </div>
+                <p>Interactive shell sessions over managed WireGuard, using PowerShell on Windows and Bash on Linux.</p>
+                <div class="os-support" aria-label="Remote Shell Host OS support">
+                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
+                  <span class="os-pill state-full"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Full</strong></span>
+                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
+                </div>
+              </article>
+
+              <article class="feature-card">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-display"></i></span>
+                  <h4>Remote Desktop Host</h4>
+                </div>
+                <p>Endpoint-side desktop service used by browser-based noVNC sessions through the Borealis tunnel.</p>
+                <div class="os-support" aria-label="Remote Desktop Host OS support">
+                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
+                  <span class="os-pill state-none"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>None</strong></span>
+                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
+                </div>
+              </article>
+
+              <article class="feature-card">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-folder-tree"></i></span>
+                  <h4>File Operations</h4>
+                </div>
+                <p>Browse, upload, download, copy, move, delete, create folders, and edit text files remotely.</p>
+                <div class="os-support" aria-label="File Operations OS support">
+                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
+                  <span class="os-pill state-full"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Full</strong></span>
+                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
+                </div>
+              </article>
+
+              <article class="feature-card">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-list-check"></i></span>
+                  <h4>Process Operations</h4>
+                </div>
+                <p>Live process reporting with CPU, memory, disk, network, owner, command line, and End Task actions.</p>
+                <div class="os-support" aria-label="Process Operations OS support">
+                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
+                  <span class="os-pill state-partial"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Partial</strong></span>
+                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
+                </div>
+              </article>
+
+              <article class="feature-card">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-gears"></i></span>
+                  <h4>Service Operations</h4>
+                </div>
+                <p>Service inventory plus start, stop, and restart requests from Device Summary.</p>
+                <div class="os-support" aria-label="Service Operations OS support">
+                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
+                  <span class="os-pill state-partial"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Partial</strong></span>
+                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
+                </div>
+              </article>
+
+              <article class="feature-card">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-box-open"></i></span>
+                  <h4>Software Operations</h4>
+                </div>
+                <p>Installed software inventory, refresh, uninstall support, and software-management metadata.</p>
+                <div class="os-support" aria-label="Software Operations OS support">
+                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
+                  <span class="os-pill state-partial"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Partial</strong></span>
+                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
+                </div>
+              </article>
+
+              <article class="feature-card">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-file-signature"></i></span>
+                  <h4>Signed Script Execution</h4>
+                </div>
+                <p>Signed payload validation and script execution in supported endpoint contexts.</p>
+                <div class="os-support" aria-label="Signed Script Execution OS support">
+                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
+                  <span class="os-pill state-full"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Full</strong></span>
+                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
+                </div>
+              </article>
+
+              <article class="feature-card">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-heart-pulse"></i></span>
+                  <h4>Watchdog Inputs</h4>
+                </div>
+                <p>Endpoint telemetry used by watchdogs plus remediation assembly execution when dispatched.</p>
+                <div class="os-support" aria-label="Watchdog Inputs OS support">
+                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
+                  <span class="os-pill state-partial"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Partial</strong></span>
+                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
+                </div>
+              </article>
+
+              <article class="feature-card">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-fingerprint"></i></span>
+                  <h4>Device Identity</h4>
+                </div>
+                <p>Ed25519 device identity, short-lived tunnel tokens, and public CA/hostname validation.</p>
+                <div class="os-support" aria-label="Device Identity OS support">
+                  <span class="os-pill state-full"><i class="fa-brands fa-windows" aria-hidden="true"></i><span>Windows</span><strong>Full</strong></span>
+                  <span class="os-pill state-full"><i class="fa-brands fa-linux" aria-hidden="true"></i><span>Linux</span><strong>Full</strong></span>
+                  <span class="os-pill state-none"><i class="fa-brands fa-apple" aria-hidden="true"></i><span>macOS</span><strong>None</strong></span>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="feature-track engine-track" aria-labelledby="engine-feature-heading">
+            <div class="feature-track-head">
+              <span class="scope-mark" aria-hidden="true"><i class="fa-solid fa-server"></i></span>
+              <div>
+                <h3 id="engine-feature-heading">Engine Features</h3>
+                <p>Control-plane features that live on the Linux-hosted Borealis Engine and do not map to endpoint OS support.</p>
+              </div>
+            </div>
+
+            <div class="feature-card-grid">
+              <article class="feature-card engine-feature">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-database"></i></span>
+                  <h4>Device Inventory Store</h4>
+                </div>
+                <p>PostgreSQL-backed device inventory, status, health, software, services, sessions, and activity history.</p>
+                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
+              </article>
+
+              <article class="feature-card engine-feature">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-users-gear"></i></span>
+                  <h4>Sites, Approvals, and RBAC</h4>
+                </div>
+                <p>Site-scoped devices, agent enrollment approvals, and operator access restrictions.</p>
+                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
+              </article>
+
+              <article class="feature-card engine-feature">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-filter"></i></span>
+                  <h4>Device Filters</h4>
+                </div>
+                <p>Typed filters, match previews, site scoping, and per-operator device-list views.</p>
+                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
+              </article>
+
+              <article class="feature-card engine-feature">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-window-restore"></i></span>
+                  <h4>Remote Operations UI</h4>
+                </div>
+                <p>Operator-facing APIs and UI for shell, desktop, files, processes, services, and software actions.</p>
+                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
+              </article>
+
+              <article class="feature-card engine-feature">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-calendar-check"></i></span>
+                  <h4>Scheduled and Quick Jobs</h4>
+                </div>
+                <p>Signed scripts, workflows, and Engine-side Ansible playbook runs with target history.</p>
+                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
+              </article>
+
+              <article class="feature-card engine-feature">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-diagram-project"></i></span>
+                  <h4>Workflow Editor</h4>
+                </div>
+                <p>Graph-based automation authoring and execution directly from the Borealis web UI.</p>
+                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
+              </article>
+
+              <article class="feature-card engine-feature">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-bell"></i></span>
+                  <h4>Watchdogs and Remediation</h4>
+                </div>
+                <p>Watchdog previews, incident tracking, suppressions, and remediation automation dispatch.</p>
+                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
+              </article>
+
+              <article class="feature-card engine-feature">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-box-archive"></i></span>
+                  <h4>Aurora Content Repository</h4>
+                </div>
+                <p>Official assemblies, scripts, and playbooks ingested separately from local user assemblies.</p>
+                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
+              </article>
+
+              <article class="feature-card engine-feature">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-network-wired"></i></span>
+                  <h4>Engine-side Ansible</h4>
+                </div>
+                <p>SSH and WinRM automation from the Linux Engine over Borealis-managed WireGuard sessions.</p>
+                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
+              </article>
+
+              <article class="feature-card engine-feature">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-lock"></i></span>
+                  <h4>Aegis Cipher</h4>
+                </div>
+                <p>Protected machine credentials, password hashes, TOTP secrets, passkey data, and GitHub token storage.</p>
+                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
+              </article>
+
+              <article class="feature-card engine-feature">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-key"></i></span>
+                  <h4>MFA, Passkeys, and Sessions</h4>
+                </div>
+                <p>Aegis unlock, MFA by default, WebAuthn passkeys, and strict session invalidation.</p>
+                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
+              </article>
+
+              <article class="feature-card engine-feature">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-code-branch"></i></span>
+                  <h4>Code Signing</h4>
+                </div>
+                <p>Trusted script delivery and signed execution payload enforcement.</p>
+                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
+              </article>
+
+              <article class="feature-card engine-feature">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-code"></i></span>
+                  <h4>REST/API Surface</h4>
+                </div>
+                <p>Authenticated APIs for devices, jobs, files, processes, services, software, filters, sites, logs, and runtime operations.</p>
+                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
+              </article>
+
+              <article class="feature-card engine-feature">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-plug"></i></span>
+                  <h4>MSP Ecosystem Integrations</h4>
+                </div>
+                <p>GitHub integration exists today, with broader PSA, backup, AV/EDR, and documentation integrations planned.</p>
+                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
+              </article>
+
+              <article class="feature-card engine-feature">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-chart-line"></i></span>
+                  <h4>Reporting and Client Packaging</h4>
+                </div>
+                <p>Activity history, run history, alerts, and recap data with richer reporting still expanding.</p>
+                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
+              </article>
+
+              <article class="feature-card engine-feature">
+                <div class="feature-card-title">
+                  <span class="feature-icon" aria-hidden="true"><i class="fa-solid fa-certificate"></i></span>
+                  <h4>Enterprise Assurance Extras</h4>
+                </div>
+                <p>Security posture is strong, while SAML/SSO, SIEM export, lockbox, and formal compliance artifacts remain future work.</p>
+                <div class="engine-scope-row"><span class="engine-badge"><i class="fa-solid fa-server" aria-hidden="true"></i>Engine-side</span></div>
+              </article>
+            </div>
+          </section>
         </div>
       </div>
 
