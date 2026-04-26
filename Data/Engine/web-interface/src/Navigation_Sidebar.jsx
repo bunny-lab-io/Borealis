@@ -25,6 +25,7 @@ import {
   Dns as ServerInfoIcon,
   VpnKey as CredentialIcon,
   PersonOutline as UserIcon,
+  AccountTree as DirectoryIcon,
   AdminPanelSettings as AdminPanelSettingsIcon,
   ReceiptLong as LogsIcon,
 } from "@mui/icons-material";
@@ -128,16 +129,33 @@ const NAV_SECTIONS = Object.freeze([
     adminOnly: true,
     items: [
       {
+        kind: "subheader",
+        label: "Directory Services",
+      },
+      {
+        icon: DirectoryIcon,
+        label: "Directory Services",
+        navKey: "directory-services",
+        to: APP_PATHS.directoryServices,
+        indent: 1,
+      },
+      {
+        kind: "subheader",
+        label: "Local Access",
+      },
+      {
         icon: CredentialIcon,
         label: "Credentials",
         navKey: "credentials",
         to: APP_PATHS.credentials,
+        indent: 1,
       },
       {
         icon: UserIcon,
         label: "Users",
         navKey: "users",
         to: APP_PATHS.users,
+        indent: 1,
       },
     ],
   },
@@ -305,6 +323,25 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
         {visibleSections.map((section) => (
           <Section key={section.id} title={section.title} k={section.id}>
             {section.items.map((item) => {
+              if (item.kind === "subheader") {
+                return collapsed ? null : (
+                  <Typography
+                    key={`${section.id}-${item.label}`}
+                    sx={{
+                      px: 2,
+                      pt: 1.1,
+                      pb: 0.35,
+                      color: "rgba(203, 213, 225, 0.68)",
+                      fontSize: "0.68rem",
+                      fontWeight: 700,
+                      letterSpacing: 0.8,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {item.label}
+                  </Typography>
+                );
+              }
               const IconComponent = item.icon;
               return (
                 <NavItem
@@ -313,6 +350,7 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
                   label={item.label}
                   navKey={item.navKey}
                   to={item.to}
+                  indent={item.indent || 0}
                 />
               );
             })}

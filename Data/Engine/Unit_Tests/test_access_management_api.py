@@ -18,6 +18,7 @@ from Data.Engine.server import create_app
 
 from Data.Engine.crypto.aegis import ENVELOPE_PREFIX
 from Data.Engine.integrations import github as github_integration
+from Data.Engine.services.API.access_management import directory_services
 from Data.Engine.services.API.access_management import login as access_login
 
 from .conftest import EngineTestHarness
@@ -2224,3 +2225,269 @@ def test_user_password_reset_requires_login(engine_harness: EngineTestHarness) -
         },
     )
     assert response.status_code == 401
+
+
+def test_directory_provider_crud_requires_test_before_enable(engine_harness: EngineTestHarness) -> None:
+    client = _admin_client(engine_harness)
+    create_response = client.post(
+        "/api/directory/providers",
+        json={
+            "name": "Corp LDAP",
+            "provider_type": "ldap",
+            "server_urls": ["ldaps://ldap.example.com"],
+            "base_dn": "DC=example,DC=com",
+            "bind_dn": "CN=svc,DC=example,DC=com",
+            "bind_password": "svc-password",
+            "group_mappings": [
+                {"role": "Admin", "group_dn": "CN=Borealis Admins,DC=example,DC=com"},
+                {"role": "User", "group_dn": "CN=Borealis Users,DC=example,DC=com"},
+            ],
+        },
+    )
+    assert create_response.status_code == 200
+    provider = create_response.get_json()["provider"]
+    assert provider["name"] == "Corp LDAP"
+    assert provider["bind_password_present"] is True
+    assert provider["enabled"] is False
+
+    enable_response = client.patch(
+        f"/api/directory/providers/{provider['id']}",
+        json={"enabled": True},
+    )
+    assert enable_response.status_code == 409
+    assert enable_response.get_json()["error"] == "test_required"
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE directory_providers SET last_test_status='ok', last_test_message='ok' WHERE id=?",
+            (provider["id"],),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    enable_response = client.patch(
+        f"/api/directory/providers/{provider['id']}",
+        json={"enabled": True},
+    )
+    assert enable_response.status_code == 200
+    assert enable_response.get_json()["provider"]["enabled"] is True
+
+
+def test_directory_users_surface_source_and_block_local_actions(engine_harness: EngineTestHarness) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO directory_providers (
+                id,
+                name,
+                provider_type,
+                enabled,
+                priority,
+                domain_suffix,
+                server_urls_json,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (7, "Corp AD", "active_directory", 1, 10, "example.com", '["ldaps://ad.example.com"]', 0, 0),
+        )
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                auth_source,
+                directory_provider_id,
+                directory_domain,
+                directory_disabled
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                22,
+                "operator@example.com",
+                "Directory Operator",
+                "__directory_auth__",
+                "User",
+                0,
+                0,
+                0,
+                1,
+                0,
+                "directory",
+                7,
+                "example.com",
+                0,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _admin_client(engine_harness)
+    users_response = client.get("/api/users")
+    assert users_response.status_code == 200
+    directory_user = next(
+        item for item in users_response.get_json()["users"] if item["username"] == "operator@example.com"
+    )
+    assert directory_user["auth_source"] == "directory"
+    assert directory_user["directory_provider_name"] == "Corp AD"
+
+    assert client.post(
+        "/api/users/operator@example.com/reset_password",
+        json={"password_sha512": "a" * 128},
+    ).status_code == 403
+    assert client.post("/api/users/operator@example.com/role", json={"role": "Admin"}).status_code == 403
+    assert client.post("/api/users/operator@example.com/mfa", json={"enabled": False}).status_code == 403
+
+    disable_response = client.post(
+        "/api/users/operator@example.com/directory-cache",
+        json={"disabled": True},
+    )
+    assert disable_response.status_code == 200
+    assert disable_response.get_json()["directory_disabled"] is True
+
+
+def test_disabled_directory_cache_invalidates_session(engine_harness: EngineTestHarness) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                auth_source,
+                directory_provider_id,
+                directory_disabled
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (23, "directory-user", "Directory User", "__directory_auth__", "User", 0, 0, 0, 1, 0, "directory", 7, 0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = engine_harness.app.test_client()
+    with client.session_transaction() as sess:
+        sess["username"] = "directory-user"
+        sess["role"] = "User"
+
+    assert client.get("/api/auth/me").status_code == 200
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET directory_disabled=1 WHERE username=?", ("directory-user",))
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert client.get("/api/auth/me").status_code == 401
+
+
+def test_directory_login_creates_mfa_challenge(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    password_hash = _sha512_hex("directory-password")
+
+    class FakeDirectoryManager:
+        def __init__(self, *, db_conn_factory, **_kwargs):
+            self.db_conn_factory = db_conn_factory
+
+        def authenticate_login(self, username: str, password: str):
+            assert username == "operator@example.com"
+            assert password == "directory-password"
+            conn = self.db_conn_factory()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    INSERT INTO users (
+                        username,
+                        display_name,
+                        password_sha512,
+                        role,
+                        last_login,
+                        created_at,
+                        updated_at,
+                        mfa_enabled,
+                        mfa_disabled,
+                        auth_source,
+                        directory_provider_id,
+                        directory_domain,
+                        directory_disabled
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "operator@example.com",
+                        "Directory Operator",
+                        "__directory_auth__",
+                        "User",
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        "directory",
+                        77,
+                        "example.com",
+                        0,
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return directory_services.DirectoryLoginResult(
+                username="operator@example.com",
+                display_name="Directory Operator",
+                role="User",
+                provider_id=77,
+                provider_name="Corp AD",
+                domain="example.com",
+                dn="CN=Directory Operator,DC=example,DC=com",
+                subject="operator@example.com",
+                groups=["CN=Borealis Users,DC=example,DC=com"],
+            )
+
+    monkeypatch.setattr(access_login, "DirectoryAuthenticationManager", FakeDirectoryManager)
+    monkeypatch.setattr(access_login, "_generate_totp_secret", lambda: "JBSWY3DPEHPK3PXP")
+    monkeypatch.setattr(
+        access_login,
+        "_totp_provisioning_uri",
+        lambda secret, username: f"otpauth://totp/Borealis:{username}?secret={secret}",
+    )
+    monkeypatch.setattr(access_login, "_totp_qr_data_uri", lambda payload: "data:image/png;base64,test")
+
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/auth/login",
+        json={
+            "username": "operator@example.com",
+            "password": "directory-password",
+            "password_sha512": password_hash,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "mfa_required"
+    assert payload["stage"] == "setup"
+    assert payload["username"] == "operator@example.com"

@@ -1425,6 +1425,38 @@ install_tesseract() {
   esac
 }
 
+install_kerberos_dependencies() {
+  if command_exists kinit; then
+    return 0
+  fi
+
+  if ! allow_system_package_install; then
+    ui_warn "Kerberos tools are not installed. Active Directory password authentication will remain unavailable until krb5 packages are installed."
+    return 0
+  fi
+
+  detect_distro
+  case "$DISTRO_ID" in
+    ubuntu|debian|linuxmint|pop)
+      run_privileged_quiet apt update -qq
+      DEBIAN_FRONTEND=noninteractive run_privileged_quiet apt install -y krb5-user libkrb5-dev gcc
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      if command_exists dnf; then
+        run_privileged_quiet dnf install -y krb5-workstation krb5-devel gcc
+      else
+        run_privileged_quiet yum install -y krb5-workstation krb5-devel gcc
+      fi
+      ;;
+    arch)
+      run_privileged_quiet pacman -Sy --noconfirm krb5 gcc
+      ;;
+    *)
+      ui_warn "Unsupported distro '${DISTRO_ID}' for automated Kerberos package install."
+      ;;
+  esac
+}
+
 NODE_VERSION="v23.11.0"
 NODE_DIR="${SCRIPT_DIR}/Dependencies/NodeJS"
 NODE_BIN="${NODE_DIR}/bin/node"
@@ -1457,6 +1489,7 @@ ensure_node_bins() {
 install_server_dependencies() {
   install_shared_dependencies
   install_postgresql_best_effort
+  install_kerberos_dependencies
   install_tesseract
   install_wireguard_tools_best_effort engine
   install_traefik_best_effort

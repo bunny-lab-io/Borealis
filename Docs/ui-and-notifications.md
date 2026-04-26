@@ -39,7 +39,8 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - `Setup Aegis Cipher` and `Enter Aegis Cipher` moved out of the authenticated Credentials page and into the public bootstrap gate.
 - The Aegis row now advertises that it protects operator auth, reusable credentials, and the GitHub API token.
 - User Management:
-- `Access_Management/Users.jsx` now surfaces an `Recovery` state column driven by `auth_reset_required`.
+- `Access_Management/Users.jsx` now surfaces `Source` and `Recovery` state columns. Directory users show provider/domain origin and expose cache-disable actions instead of local password/role/passkey management.
+- `Access_Management/Directory_Services.jsx` owns LDAP, LDAPS, and Active Directory provider configuration under Access Management > Directory Services.
 - Operators flagged by Aegis force reset show `Recovery Required`, and the row action relabels the password-reset flow to `Recover Account`.
 - Recovering or resetting a flagged account also clears stale MFA/passkey auth material so the operator re-enrolls cleanly.
 

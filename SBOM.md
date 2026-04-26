@@ -52,6 +52,9 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - SQLAlchemy - MIT - https://spdx.org/licenses/MIT.html
 - alembic - MIT - https://spdx.org/licenses/MIT.html
 - psycopg (`psycopg[binary]`) - LGPL-3.0-only - https://spdx.org/licenses/LGPL-3.0-only.html
+- ldap3 - LGPL-3.0-or-later - https://github.com/cannatag/ldap3/blob/dev/COPYING
+- python-gssapi (`gssapi`) - ISC - https://github.com/pythongssapi/python-gssapi/blob/main/LICENSE.txt
+- MIT Kerberos (`krb5-user`/`krb5-workstation` runtime packages) - MIT - https://web.mit.edu/kerberos/krb5-devel/doc/mitK5license.html
 - ansible-core - GPL-3.0-or-later - https://spdx.org/licenses/GPL-3.0-or-later.html
 - ansible-runner - Apache-2.0 - https://spdx.org/licenses/Apache-2.0.html
 - jmespath - MIT - https://spdx.org/licenses/MIT.html

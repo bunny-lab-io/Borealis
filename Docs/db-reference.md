@@ -638,7 +638,7 @@ finally:
 #### `users`
 - Status: Active.
 - Purpose: Operator identity, login state, and recovery state.
-- Columns: `id`, `username`, `display_name`, `password_sha512`, `role`, `last_login`, `created_at`, `updated_at`, `mfa_enabled`, `mfa_disabled`, `mfa_secret`, `auth_reset_required`, `auth_reset_at`.
+- Columns: `id`, `username`, `display_name`, `password_sha512`, `role`, `last_login`, `created_at`, `updated_at`, `mfa_enabled`, `mfa_disabled`, `mfa_secret`, `auth_reset_required`, `auth_reset_at`, `auth_source`, `directory_provider_id`, `directory_subject`, `directory_domain`, `directory_dn`, `directory_groups_json`, `directory_last_sync_at`, `directory_disabled`, `directory_disabled_at`.
 - Constraints and indexes:
 - `id` autoincrement primary key.
 - `username` unique.
@@ -654,6 +654,37 @@ finally:
 - Initial deployment no longer seeds a default admin automatically; bootstrap creates the first administrator after Aegis is configured.
 - `mfa_disabled=0` means MFA is required by default, even before the operator has completed first-time setup.
 - `mfa_secret` remaining empty with `mfa_disabled=0` causes the next successful password login to enter MFA setup immediately.
+- `auth_source='local'` uses Borealis password/passkey auth. `auth_source='directory'` uses an LDAP/AD provider, keeps Borealis TOTP MFA, and blocks local password/passkey management.
+- `directory_disabled=1` disables the JIT cache row and invalidates active sessions through request-time user revalidation.
+
+#### `directory_providers`
+- Status: Active.
+- Purpose: LDAP, LDAPS, and Active Directory provider configuration.
+- Columns: `id`, `name`, `provider_type`, `enabled`, `priority`, `domain_suffix`, `server_urls_json`, `use_ldaps`, `tls_required`, `tls_ca_pem`, `base_dn`, `bind_dn`, `bind_password_encrypted`, `user_search_filter`, `username_attribute`, `display_name_attribute`, `email_attribute`, `member_of_attribute`, `group_search_base_dn`, `nested_groups`, `kerberos_realm`, `kerberos_kdc`, `kerberos_keytab_encrypted`, `sync_interval_seconds`, `last_sync_at`, `last_sync_status`, `last_sync_message`, `last_test_at`, `last_test_status`, `last_test_message`, `created_at`, `updated_at`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- `name` unique.
+- Index on `enabled, priority`.
+- Used by:
+- Directory Services admin APIs.
+- `/api/auth/login` directory credential-provider routing.
+- Notes:
+- Aegis protects `bind_password_encrypted` and `kerberos_keytab_encrypted`.
+- Providers must pass `/api/directory/providers/<id>/test` before enablement.
+- LDAPS is strict by default; optional PEM trust anchors supplement system trust.
+
+#### `directory_provider_group_mappings`
+- Status: Active.
+- Purpose: Allowed/admin group role mapping for directory-authenticated operators.
+- Columns: `id`, `provider_id`, `group_dn`, `role`, `created_at`, `updated_at`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- Unique index on `provider_id, group_dn, role`.
+- Index on `provider_id`.
+- Used by:
+- Directory authentication role assignment and admission checks.
+- Notes:
+- `role='Admin'` grants Borealis Admin. `role='User'` grants Borealis User and acts as allowed-group membership.
 
 #### `user_passkeys`
 - Status: Active.

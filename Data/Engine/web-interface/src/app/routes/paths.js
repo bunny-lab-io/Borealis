@@ -41,6 +41,7 @@ export const APP_PATHS = {
   assemblyWorkflowRun: (runId) =>
     `/assemblies/workflows/runs/${encodeURIComponent(normalizedString(runId))}`,
   credentials: "/credentials",
+  directoryServices: "/directory-services",
   users: "/users",
   siteAssignment: "/users/site-assignment",
   server: "/server",

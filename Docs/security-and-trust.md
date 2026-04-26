@@ -12,7 +12,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Operator session signing secret: generated once and persisted at `Engine/engine_secret.txt`.
 - Front-door operator bootstrap: Borealis now requires the Aegis Cipher before it will render any login UI after first setup or restart.
 - Operator sign-in methods: Borealis supports password plus TOTP MFA, and WebAuthn passkeys for direct browser sign-in once the Engine reaches the `login_required` bootstrap phase.
-- Operator auth secrets at rest: Aegis now protects stored password hashes, TOTP secrets, passkey cryptographic material, reusable credentials, and the GitHub API token.
+- Operator auth secrets at rest: Aegis now protects stored password hashes, TOTP secrets, passkey cryptographic material, directory bind passwords/keytabs, reusable credentials, and the GitHub API token.
 - Code signing: scripts are signed by the Engine; agents reject payloads with invalid signatures.
 - On supported Windows deployments, only the SYSTEM Borealis runtime authenticates to the Engine; per-session helpers are local-only and inherit no Borealis token or socket identity.
 
@@ -26,6 +26,8 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Replay and credential theft defenses layer in DPoP proof validation (thumbprint binding) on the server side and short-lived access tokens (about 15 minutes) with 90-day refresh tokens hashed via SHA-256.
 - Centralized logging under `Engine/Logs` and `Agent/Logs` captures enrollment approvals, rate-limit hits, signature failures, and auth anomalies for post-incident review.
 - Operator-facing API endpoints (device inventory, assemblies, job history, credentials, user management, etc.) require the Engine to be Aegis-unlocked and in the `login_required` bootstrap phase before an authenticated operator session or bearer token is honored.
+- Directory authentication supports LDAP/LDAPS user-bind providers and Active Directory Kerberos password verification. Directory users are cached just-in-time in `users`, keep Borealis TOTP MFA, and cannot register Borealis passkeys.
+- Active sessions are revalidated against the operator row on authenticated requests. Deleted users, disabled directory cache entries, and deprovisioned directory users stop passing authorization checks without waiting for token expiry.
 - Borealis operator accounts still support username/password plus TOTP and direct passkey sign-in, but those flows are now unreachable until Aegis setup or unlock is complete.
 
 ### Operator Bootstrap and At-Rest Auth Protection
@@ -202,7 +204,14 @@ sequenceDiagram
 - `GET /api/auth/passkeys` (Token Authenticated) - list the current operator's passkeys.
 - `PATCH /api/auth/passkeys/<int:passkey_id>` (Token Authenticated) - rename one of the current operator's passkeys.
 - `DELETE /api/auth/passkeys/<int:passkey_id>` (Token Authenticated) - remove one of the current operator's passkeys.
-- `GET /api/auth/me` (Token Authenticated) - current operator profile, including MFA-enabled state and passkey count.
+- `GET /api/auth/me` (Token Authenticated) - current operator profile, including MFA-enabled state, auth source, and passkey count.
+- `GET /api/directory/providers` (Admin) - list directory providers.
+- `POST /api/directory/providers` (Admin) - create a directory provider.
+- `PATCH /api/directory/providers/<int:provider_id>` (Admin) - update or enable/disable a directory provider.
+- `DELETE /api/directory/providers/<int:provider_id>` (Admin) - delete an unused directory provider.
+- `POST /api/directory/providers/<int:provider_id>/test` (Admin) - test provider connectivity.
+- `POST /api/directory/providers/<int:provider_id>/sync` (Admin) - sync cached directory users.
+- `POST /api/users/<username>/directory-cache` (Admin) - disable or re-enable a cached directory user.
 - MFA policy note: Borealis requires MFA by default. Only an administrator can explicitly disable MFA for an operator account.
 - `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
 - `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).

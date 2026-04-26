@@ -55,7 +55,7 @@ export default function Login({ onLogin }) {
     try {
       const hash = await sha512(password);
       const body = hash
-        ? { username, password_sha512: hash }
+        ? { username, password, password_sha512: hash }
         : { username, password };
       const resp = await fetch("/api/auth/login", {
         method: "POST",
@@ -70,6 +70,14 @@ export default function Login({ onLogin }) {
             "This account needs administrator recovery before it can sign in again.",
           bootstrap_required:
             "Borealis must finish Aegis bootstrap before sign-in is available.",
+          directory_password_required:
+            "Directory accounts require password sign-in from this page.",
+          ambiguous_directory_username:
+            "Use your domain-qualified username for this directory account.",
+          directory_group_not_allowed:
+            "This directory account is not authorized for Borealis.",
+          directory_user_disabled:
+            "This directory account is disabled in Borealis.",
         };
         throw new Error(messageMap[data?.error] || data?.error || "Invalid username or password");
       }
