@@ -1425,13 +1425,39 @@ install_tesseract() {
   esac
 }
 
+kerberos_python_build_dependencies_available() {
+  command_exists krb5-config && command_exists gcc
+}
+
+kerberos_system_dependencies_available() {
+  command_exists kinit && kerberos_python_build_dependencies_available
+}
+
+kerberos_dependency_hint() {
+  detect_distro
+  case "$DISTRO_ID" in
+    ubuntu|debian|linuxmint|pop)
+      printf '%s' 'apt install -y krb5-user libkrb5-dev gcc'
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      printf '%s' 'dnf install -y krb5-workstation krb5-devel gcc'
+      ;;
+    arch)
+      printf '%s' 'pacman -Sy --noconfirm krb5 gcc'
+      ;;
+    *)
+      printf '%s' 'install krb5 tools, krb5 development headers, and gcc'
+      ;;
+  esac
+}
+
 install_kerberos_dependencies() {
-  if command_exists kinit; then
+  if kerberos_system_dependencies_available; then
     return 0
   fi
 
   if ! allow_system_package_install; then
-    ui_warn "Kerberos tools are not installed. Active Directory password authentication will remain unavailable until krb5 packages are installed."
+    ui_warn "Kerberos packages are incomplete. Active Directory password authentication will remain unavailable until installed: $(kerberos_dependency_hint)"
     return 0
   fi
 
@@ -1439,7 +1465,7 @@ install_kerberos_dependencies() {
   case "$DISTRO_ID" in
     ubuntu|debian|linuxmint|pop)
       run_privileged_quiet apt update -qq
-      DEBIAN_FRONTEND=noninteractive run_privileged_quiet apt install -y krb5-user libkrb5-dev gcc
+      run_privileged_quiet env DEBIAN_FRONTEND=noninteractive apt install -y krb5-user libkrb5-dev gcc
       ;;
     rhel|centos|fedora|rocky|almalinux)
       if command_exists dnf; then
@@ -1455,6 +1481,10 @@ install_kerberos_dependencies() {
       ui_warn "Unsupported distro '${DISTRO_ID}' for automated Kerberos package install."
       ;;
   esac
+
+  if ! kerberos_system_dependencies_available; then
+    ui_warn "Kerberos packages are still incomplete. Active Directory password authentication will remain unavailable until installed: $(kerberos_dependency_hint)"
+  fi
 }
 
 NODE_VERSION="v23.11.0"
@@ -3190,6 +3220,7 @@ install_engine_python_deps() {
   verify_engine_venv_writable || return 1
   local engine_src="${SCRIPT_DIR}/Data/Engine"
   local reqs=( "${engine_src}/engine-requirements.txt" "${engine_src}/requirements.txt" )
+  local kerberos_reqs="${engine_src}/engine-kerberos-requirements.txt"
   local site_packages_dir
   site_packages_dir="$(engine_site_packages_dir)"
   local pth_paths=(
@@ -3199,9 +3230,17 @@ install_engine_python_deps() {
   )
   for r in "${reqs[@]}"; do
     if [[ -f "$r" && -n "$venv_py" ]]; then
-      run_logged_command "$venv_py" -m pip install --disable-pip-version-check -q -r "$r"
+      run_logged_command "$venv_py" -m pip install --disable-pip-version-check -q -r "$r" || return 1
       if [[ -n "${site_packages_dir}" ]]; then
         printf '%s\n' "${pth_paths[@]}" > "${site_packages_dir}/borealis-project-root.pth"
+      fi
+      if [[ -f "$kerberos_reqs" ]]; then
+        if kerberos_python_build_dependencies_available; then
+          run_logged_command "$venv_py" -m pip install --disable-pip-version-check -q -r "$kerberos_reqs" || \
+            ui_warn "python-gssapi installation failed. Active Directory password authentication remains unavailable until Kerberos Python dependencies install successfully."
+        else
+          ui_warn "Skipping python-gssapi install because Kerberos packages are incomplete. Active Directory password authentication remains unavailable until installed: $(kerberos_dependency_hint)"
+        fi
       fi
       return 0
     fi
