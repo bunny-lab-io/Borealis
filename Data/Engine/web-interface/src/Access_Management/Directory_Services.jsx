@@ -66,6 +66,7 @@ const emptyForm = {
   priority: 100,
   domain_suffix: "",
   server_urls: "",
+  host_overrides_text: "",
   use_ldaps: true,
   tls_required: true,
   tls_ca_pem: "",
@@ -126,12 +127,42 @@ function splitServerUrls(value) {
     .filter(Boolean);
 }
 
+function hostOverridesToText(overrides = {}) {
+  return Object.entries(overrides || {})
+    .map(([host, connectHost]) => `${host}=${connectHost}`)
+    .join("\n");
+}
+
+function textToHostOverrides(value) {
+  return String(value || "")
+    .split(/\r?\n|,/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .reduce((result, line) => {
+      let host = "";
+      let connectHost = "";
+      if (line.includes("=")) {
+        [host, connectHost] = line.split("=", 2);
+      } else if (line.includes("|")) {
+        [host, connectHost] = line.split("|", 2);
+      } else {
+        const parts = line.split(/\s+/);
+        if (parts.length === 2) [host, connectHost] = parts;
+      }
+      host = String(host || "").trim().toLowerCase();
+      connectHost = String(connectHost || "").trim();
+      if (host && connectHost) result[host] = connectHost;
+      return result;
+    }, {});
+}
+
 function formFromProvider(provider) {
   if (!provider) return { ...emptyForm };
   return {
     ...emptyForm,
     ...provider,
     server_urls: Array.isArray(provider.server_urls) ? provider.server_urls.join("\n") : "",
+    host_overrides_text: hostOverridesToText(provider.host_overrides || {}),
     bind_password: "",
     kerberos_keytab_base64: "",
     tls_ca_pem: provider.tls_ca_pem || "",
@@ -242,6 +273,7 @@ export default function DirectoryServices() {
       priority: Number(form.priority || 100),
       domain_suffix: form.domain_suffix,
       server_urls: splitServerUrls(form.server_urls),
+      host_overrides: textToHostOverrides(form.host_overrides_text),
       use_ldaps: Boolean(form.use_ldaps),
       tls_required: Boolean(form.tls_required),
       base_dn: form.base_dn,
@@ -275,7 +307,11 @@ export default function DirectoryServices() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ server_urls: serverUrls, use_ldaps: Boolean(form.use_ldaps) }),
+        body: JSON.stringify({
+          server_urls: serverUrls,
+          host_overrides: textToHostOverrides(form.host_overrides_text),
+          use_ldaps: Boolean(form.use_ldaps),
+        }),
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
@@ -286,7 +322,7 @@ export default function DirectoryServices() {
     } finally {
       setCertificateBusy(false);
     }
-  }, [form.server_urls, form.use_ldaps, sendNotification]);
+  }, [form.host_overrides_text, form.server_urls, form.use_ldaps, sendNotification]);
 
   const trustCertificate = useCallback(() => {
     if (!certificateReview?.pem) return;
@@ -590,6 +626,7 @@ export default function DirectoryServices() {
             <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 3" } }} label="Priority" type="number" value={form.priority} onChange={(e) => updateForm("priority", e.target.value)} />
             <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 4" } }} label="Domain Suffix" value={form.domain_suffix} onChange={(e) => updateForm("domain_suffix", e.target.value)} />
             <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 8" } }} label="Server URLs" multiline minRows={2} value={form.server_urls} onChange={(e) => updateForm("server_urls", e.target.value)} />
+            <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 12" } }} label="Host Overrides" multiline minRows={2} value={form.host_overrides_text} onChange={(e) => updateForm("host_overrides_text", e.target.value)} />
             <FormControlLabel sx={{ gridColumn: { md: "span 3" } }} control={<Checkbox checked={Boolean(form.use_ldaps)} onChange={(e) => updateForm("use_ldaps", e.target.checked)} />} label="Use LDAPS" />
             <FormControlLabel sx={{ gridColumn: { md: "span 3" } }} control={<Checkbox checked={Boolean(form.tls_required)} onChange={(e) => updateForm("tls_required", e.target.checked)} />} label="Strict TLS" />
             <FormControlLabel sx={{ gridColumn: { md: "span 3" } }} control={<Checkbox checked={Boolean(form.nested_groups)} onChange={(e) => updateForm("nested_groups", e.target.checked)} />} label="Nested Groups" />
@@ -656,6 +693,7 @@ export default function DirectoryServices() {
               ["Subject", certificateReview?.subject],
               ["Issuer", certificateReview?.issuer],
               ["Common Name", certificateReview?.common_name],
+              ["Connected To", certificateReview?.connect_host],
               ["DNS Names", (certificateReview?.dns_names || []).join(", ")],
               ["IP Addresses", (certificateReview?.ip_addresses || []).join(", ")],
               ["Serial", certificateReview?.serial_number],

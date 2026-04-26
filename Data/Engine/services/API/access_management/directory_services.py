@@ -114,6 +114,29 @@ def _json_dumps_list(values: Iterable[Any]) -> str:
     return json.dumps([_clean_text(value) for value in values if _clean_text(value)])
 
 
+def _json_object(value: Any) -> Dict[str, str]:
+    if isinstance(value, dict):
+        raw = value
+    else:
+        try:
+            parsed = json.loads(str(value or "{}"))
+            raw = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            raw = {}
+    return {_clean_text(key).lower(): _clean_text(item) for key, item in raw.items() if _clean_text(key) and _clean_text(item)}
+
+
+def _json_dumps_object(values: Mapping[str, Any]) -> str:
+    return json.dumps(
+        {
+            _clean_text(key).lower(): _clean_text(value)
+            for key, value in values.items()
+            if _clean_text(key) and _clean_text(value)
+        },
+        sort_keys=True,
+    )
+
+
 def _rows_to_dicts(cursor: Any, rows: Sequence[Sequence[Any]]) -> List[Dict[str, Any]]:
     keys = [str(item[0]) for item in (cursor.description or [])]
     return [dict(zip(keys, list(row))) for row in rows]
@@ -198,6 +221,10 @@ def _server_urls(provider: Mapping[str, Any]) -> List[str]:
     return urls
 
 
+def _host_overrides(provider: Mapping[str, Any]) -> Dict[str, str]:
+    return _json_object(provider.get("host_overrides_json"))
+
+
 def _split_server_urls(value: Any, *, use_ldaps: bool = True) -> List[str]:
     if isinstance(value, str):
         items = [part.strip() for part in value.replace(",", "\n").splitlines()]
@@ -212,24 +239,72 @@ def _split_server_urls(value: Any, *, use_ldaps: bool = True) -> List[str]:
     return _server_urls(provider)
 
 
-def _parse_ldaps_url(server_url: str) -> Tuple[str, int, str]:
+def _split_host_overrides(value: Any) -> Dict[str, str]:
+    if isinstance(value, dict):
+        return _json_object(value)
+    overrides: Dict[str, str] = {}
+    for raw_line in str(value or "").replace(",", "\n").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if "=" in line:
+            host, connect_host = line.split("=", 1)
+        elif "|" in line:
+            host, connect_host = line.split("|", 1)
+        else:
+            parts = line.split()
+            if len(parts) != 2:
+                continue
+            host, connect_host = parts
+        host = _clean_text(host).lower()
+        connect_host = _clean_text(connect_host)
+        if host and connect_host:
+            overrides[host] = connect_host
+    return overrides
+
+
+def _parse_ldap_url(server_url: str, *, default_scheme: str = "ldap") -> Tuple[str, str, int, str]:
     text = _clean_text(server_url)
     if not text:
         raise DirectoryAuthError("missing_server", "LDAP server URL is required.", 400)
-    parsed = urlparse(text if "://" in text else f"ldaps://{text}")
-    if parsed.scheme.lower() != "ldaps":
-        raise DirectoryAuthError("ldaps_required", "Certificate download requires an LDAPS server URL.", 400)
+    scheme = _clean_text(default_scheme).lower() or "ldap"
+    parsed = urlparse(text if "://" in text else f"{scheme}://{text}")
+    scheme = parsed.scheme.lower()
+    if scheme not in {"ldap", "ldaps"}:
+        raise DirectoryAuthError("invalid_server_url", "LDAP server URL must use ldap:// or ldaps://.", 400)
     host = _clean_text(parsed.hostname)
     if not host:
-        raise DirectoryAuthError("invalid_server_url", "LDAPS server URL is missing a host.", 400)
+        raise DirectoryAuthError("invalid_server_url", "LDAP server URL is missing a host.", 400)
     try:
-        port = int(parsed.port or 636)
+        port = int(parsed.port or (636 if scheme == "ldaps" else 389))
     except ValueError as exc:
-        raise DirectoryAuthError("invalid_server_url", "LDAPS server URL has an invalid port.", 400) from exc
+        raise DirectoryAuthError("invalid_server_url", "LDAP server URL has an invalid port.", 400) from exc
     if port <= 0 or port > 65535:
-        raise DirectoryAuthError("invalid_server_url", "LDAPS server URL has an invalid port.", 400)
-    normalized = f"ldaps://{host}:{port}"
+        raise DirectoryAuthError("invalid_server_url", "LDAP server URL has an invalid port.", 400)
+    normalized = f"{scheme}://{host}:{port}"
+    return scheme, host, port, normalized
+
+
+def _parse_ldaps_url(server_url: str) -> Tuple[str, int, str]:
+    scheme, host, port, normalized = _parse_ldap_url(server_url, default_scheme="ldaps")
+    if scheme != "ldaps":
+        raise DirectoryAuthError("ldaps_required", "Certificate download requires an LDAPS server URL.", 400)
     return host, port, normalized
+
+
+def _connection_target(provider: Mapping[str, Any], server_url: str) -> Dict[str, Any]:
+    scheme, host, port, normalized = _parse_ldap_url(
+        server_url,
+        default_scheme="ldaps" if _as_bool(provider.get("use_ldaps")) else "ldap",
+    )
+    overrides = _host_overrides(provider)
+    return {
+        "scheme": scheme,
+        "host": host,
+        "connect_host": overrides.get(host.lower(), host),
+        "port": port,
+        "server_url": normalized,
+    }
 
 
 def _fingerprint_sha256(cert: x509.Certificate) -> str:
@@ -280,13 +355,14 @@ def _certificate_metadata(der_bytes: bytes, *, server_url: str, host: str, port:
     }
 
 
-def _fetch_ldaps_certificate(server_url: str, *, timeout: int = 10) -> Dict[str, Any]:
+def _fetch_ldaps_certificate(server_url: str, *, host_overrides: Optional[Mapping[str, str]] = None, timeout: int = 10) -> Dict[str, Any]:
     host, port, normalized_url = _parse_ldaps_url(server_url)
+    connect_host = _json_object(host_overrides or {}).get(host.lower(), host)
     context = ssl._create_unverified_context()
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
     try:
-        with socket.create_connection((host, port), timeout=timeout) as raw_socket:
+        with socket.create_connection((connect_host, port), timeout=timeout) as raw_socket:
             with context.wrap_socket(raw_socket, server_hostname=host) as tls_socket:
                 der_bytes = tls_socket.getpeercert(binary_form=True)
     except DirectoryAuthError:
@@ -295,7 +371,9 @@ def _fetch_ldaps_certificate(server_url: str, *, timeout: int = 10) -> Dict[str,
         raise DirectoryAuthError("certificate_download_failed", str(exc), 502) from exc
     if not der_bytes:
         raise DirectoryAuthError("certificate_download_failed", "LDAPS server did not present a certificate.", 502)
-    return _certificate_metadata(der_bytes, server_url=normalized_url, host=host, port=port)
+    metadata = _certificate_metadata(der_bytes, server_url=normalized_url, host=host, port=port)
+    metadata["connect_host"] = connect_host
+    return metadata
 
 
 def _pem_certificates(pem_text: str) -> List[x509.Certificate]:
@@ -342,11 +420,11 @@ def _pinned_certificate_fingerprints(pem_text: str) -> List[str]:
     return [_fingerprint_sha256(cert) for cert in _pem_certificates(pem_text) if not _certificate_is_ca(cert)]
 
 
-def _verify_pinned_ldaps_certificate(server_url: str, pem_text: str) -> None:
+def _verify_pinned_ldaps_certificate(server_url: str, pem_text: str, *, host_overrides: Optional[Mapping[str, str]] = None) -> None:
     expected = set(_pinned_certificate_fingerprints(pem_text))
     if not expected:
         return
-    certificate = _fetch_ldaps_certificate(server_url)
+    certificate = _fetch_ldaps_certificate(server_url, host_overrides=host_overrides)
     observed = _clean_text(certificate.get("sha256_fingerprint"))
     if observed not in expected:
         raise DirectoryAuthError(
@@ -531,6 +609,7 @@ class DirectoryAuthenticationManager:
             "priority": _as_int(provider.get("priority"), 100),
             "domain_suffix": _clean_text(provider.get("domain_suffix")),
             "server_urls": _json_list(provider.get("server_urls_json")),
+            "host_overrides": _host_overrides(provider),
             "use_ldaps": _as_bool(provider.get("use_ldaps")),
             "tls_required": _as_bool(provider.get("tls_required")),
             "tls_ca_pem_present": bool(_clean_text(provider.get("tls_ca_pem"))),
@@ -566,16 +645,29 @@ class DirectoryAuthenticationManager:
     def default_username_attribute(self, provider: Mapping[str, Any]) -> str:
         return "sAMAccountName" if _normalize_provider_type(provider.get("provider_type")) == "active_directory" else "uid"
 
-    def _tls_for_url(self, provider: Mapping[str, Any], url: str):
-        if Tls is None or not url.lower().startswith("ldaps://"):
+    def _tls_for_target(self, provider: Mapping[str, Any], target: Mapping[str, Any], *, ca_path: str = ""):
+        if Tls is None or target.get("scheme") != "ldaps":
             return None
         ca_pem = _clean_text(provider.get("tls_ca_pem"))
+        host = _clean_text(target.get("host"))
         if ca_pem and _pem_contains_pinned_leaf(ca_pem):
-            _verify_pinned_ldaps_certificate(url, ca_pem)
-            return Tls(validate=ssl.CERT_NONE)
+            _verify_pinned_ldaps_certificate(_clean_text(target.get("server_url")), ca_pem, host_overrides=_host_overrides(provider))
+            return Tls(validate=ssl.CERT_NONE, sni=host)
+        if ca_path:
+            return Tls(validate=ssl.CERT_REQUIRED, ca_certs_file=ca_path, valid_names=[host], sni=host)
         if _as_bool(provider.get("tls_required")):
-            return Tls(validate=ssl.CERT_REQUIRED)
-        return Tls(validate=ssl.CERT_NONE)
+            return Tls(validate=ssl.CERT_REQUIRED, valid_names=[host], sni=host)
+        return Tls(validate=ssl.CERT_NONE, sni=host)
+
+    def _server_for_target(self, target: Mapping[str, Any], tls: Any):
+        return Server(
+            _clean_text(target.get("connect_host")),
+            port=_as_int(target.get("port"), 636 if target.get("scheme") == "ldaps" else 389),
+            use_ssl=target.get("scheme") == "ldaps",
+            get_info=ALL,
+            connect_timeout=10,
+            tls=tls,
+        )
 
     def _service_connection(self, provider: Mapping[str, Any]):
         if Connection is None or Server is None:
@@ -588,16 +680,17 @@ class DirectoryAuthenticationManager:
         ca_pem = _clean_text(provider.get("tls_ca_pem"))
         last_error: Optional[Exception] = None
         for url in urls:
-            if _as_bool(provider.get("tls_required")) and not url.lower().startswith("ldaps://"):
+            target = _connection_target(provider, url)
+            if _as_bool(provider.get("tls_required")) and target.get("scheme") != "ldaps":
                 last_error = RuntimeError("Strict TLS requires ldaps:// server URLs.")
                 continue
             try:
                 if ca_pem and Tls is not None and not _pem_contains_pinned_leaf(ca_pem):
                     with _temporary_text_file(ca_pem) as ca_path:
-                        tls = Tls(validate=ssl.CERT_REQUIRED, ca_certs_file=ca_path)
-                        server = Server(url, get_info=ALL, connect_timeout=10, tls=tls)
+                        tls = self._tls_for_target(provider, target, ca_path=ca_path)
+                        server = self._server_for_target(target, tls)
                         return Connection(server, user=bind_dn or None, password=bind_password or None, authentication=SIMPLE, auto_bind=True)
-                server = Server(url, get_info=ALL, connect_timeout=10, tls=self._tls_for_url(provider, url))
+                server = self._server_for_target(target, self._tls_for_target(provider, target))
                 return Connection(server, user=bind_dn or None, password=bind_password or None, authentication=SIMPLE, auto_bind=True)
             except Exception as exc:
                 last_error = exc
@@ -722,16 +815,17 @@ class DirectoryAuthenticationManager:
         ca_pem = _clean_text(provider.get("tls_ca_pem"))
         last_error: Optional[Exception] = None
         for url in urls:
-            if _as_bool(provider.get("tls_required")) and not url.lower().startswith("ldaps://"):
+            target = _connection_target(provider, url)
+            if _as_bool(provider.get("tls_required")) and target.get("scheme") != "ldaps":
                 last_error = RuntimeError("Strict TLS requires ldaps:// server URLs.")
                 continue
             try:
                 if ca_pem and Tls is not None and not _pem_contains_pinned_leaf(ca_pem):
                     with _temporary_text_file(ca_pem) as ca_path:
-                        server = Server(url, get_info=ALL, connect_timeout=10, tls=Tls(validate=ssl.CERT_REQUIRED, ca_certs_file=ca_path))
+                        server = self._server_for_target(target, self._tls_for_target(provider, target, ca_path=ca_path))
                         conn = Connection(server, user=user_dn, password=password, authentication=SIMPLE, auto_bind=True)
                 else:
-                    server = Server(url, get_info=ALL, connect_timeout=10, tls=self._tls_for_url(provider, url))
+                    server = self._server_for_target(target, self._tls_for_target(provider, target))
                     conn = Connection(server, user=user_dn, password=password, authentication=SIMPLE, auto_bind=True)
                 try:
                     conn.unbind()
@@ -1253,12 +1347,13 @@ class DirectoryManagementService:
         payload = request.get_json(silent=True) or {}
         raw_urls = payload.get("server_urls") if "server_urls" in payload else payload.get("server_url")
         urls = _split_server_urls(raw_urls, use_ldaps=_as_bool(payload.get("use_ldaps", True)))
+        host_overrides = _split_host_overrides(payload.get("host_overrides", {}))
         if not urls:
             return jsonify({"error": "missing_server", "message": "LDAP server URL is required."}), 400
         last_error: Optional[DirectoryAuthError] = None
         for url in urls:
             try:
-                certificate = _fetch_ldaps_certificate(url)
+                certificate = _fetch_ldaps_certificate(url, host_overrides=host_overrides)
                 if callable(self.adapters.service_log):
                     self.adapters.service_log("directory_services", f"certificate_download server={certificate.get('server_url')}", None)
                 return jsonify({"status": "ok", "certificate": certificate})
@@ -1305,6 +1400,9 @@ class DirectoryManagementService:
         else:
             server_urls = [_clean_text(item) for item in (server_urls_raw or []) if _clean_text(item)]
 
+        host_overrides_raw = payload.get("host_overrides") if "host_overrides" in payload else _host_overrides(existing or {})
+        host_overrides = _split_host_overrides(host_overrides_raw)
+
         bind_password_encrypted = _clean_text((existing or {}).get("bind_password_encrypted"))
         if "bind_password" in payload:
             bind_password = _clean_text(payload.get("bind_password"))
@@ -1324,6 +1422,7 @@ class DirectoryManagementService:
             "priority": _as_int(field("priority", 100), 100),
             "domain_suffix": _clean_text(field("domain_suffix", "")),
             "server_urls_json": _json_dumps_list(server_urls),
+            "host_overrides_json": _json_dumps_object(host_overrides),
             "use_ldaps": 1 if _as_bool(field("use_ldaps", False)) else 0,
             "tls_required": 1 if _as_bool(field("tls_required", True)) else 0,
             "tls_ca_pem": _clean_text(field("tls_ca_pem", "")),
@@ -1361,6 +1460,7 @@ class DirectoryManagementService:
                            priority=?,
                            domain_suffix=?,
                            server_urls_json=?,
+                           host_overrides_json=?,
                            use_ldaps=?,
                            tls_required=?,
                            tls_ca_pem=?,
@@ -1388,6 +1488,7 @@ class DirectoryManagementService:
                         row_values["priority"],
                         row_values["domain_suffix"],
                         row_values["server_urls_json"],
+                        row_values["host_overrides_json"],
                         row_values["use_ldaps"],
                         row_values["tls_required"],
                         row_values["tls_ca_pem"],
@@ -1420,6 +1521,7 @@ class DirectoryManagementService:
                         priority,
                         domain_suffix,
                         server_urls_json,
+                        host_overrides_json,
                         use_ldaps,
                         tls_required,
                         tls_ca_pem,
@@ -1439,7 +1541,7 @@ class DirectoryManagementService:
                         sync_interval_seconds,
                         created_at,
                         updated_at
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         row_values["name"],
@@ -1448,6 +1550,7 @@ class DirectoryManagementService:
                         row_values["priority"],
                         row_values["domain_suffix"],
                         row_values["server_urls_json"],
+                        row_values["host_overrides_json"],
                         row_values["use_ldaps"],
                         row_values["tls_required"],
                         row_values["tls_ca_pem"],

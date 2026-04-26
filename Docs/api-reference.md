@@ -24,7 +24,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `DELETE /api/auth/passkeys/<int:passkey_id>` (Token Authenticated) - remove one of the current operator's passkeys.
 - `GET /api/auth/me` (Token Authenticated) - current operator profile, including MFA-enabled state, auth source, and passkey count for account menu actions.
 - `GET /api/directory/providers` (Admin) - list LDAP, LDAPS, and Active Directory providers without secret material.
-- `POST /api/directory/providers` (Admin) - create a directory provider. Providers are disabled until connectivity test succeeds.
+- `POST /api/directory/providers` (Admin) - create a directory provider. Providers are disabled until connectivity test succeeds. Supports optional provider-scoped `host_overrides` for FQDN-to-IP LDAP connection routing.
 - `PATCH /api/directory/providers/<int:provider_id>` (Admin) - update a directory provider or toggle enablement after a passing test.
 - `DELETE /api/directory/providers/<int:provider_id>` (Admin) - delete a provider with no cached directory users.
 - `POST /api/directory/providers/certificate` (Admin) - download LDAPS peer-certificate metadata and PEM for operator review before pinning trust.

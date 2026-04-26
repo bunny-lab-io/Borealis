@@ -2235,6 +2235,7 @@ def test_directory_provider_crud_requires_test_before_enable(engine_harness: Eng
             "name": "Corp LDAP",
             "provider_type": "ldap",
             "server_urls": ["ldaps://ldap.example.com"],
+            "host_overrides": {"ldap.example.com": "192.0.2.10"},
             "base_dn": "DC=example,DC=com",
             "bind_dn": "CN=svc,DC=example,DC=com",
             "bind_password": "svc-password",
@@ -2247,6 +2248,7 @@ def test_directory_provider_crud_requires_test_before_enable(engine_harness: Eng
     assert create_response.status_code == 200
     provider = create_response.get_json()["provider"]
     assert provider["name"] == "Corp LDAP"
+    assert provider["host_overrides"] == {"ldap.example.com": "192.0.2.10"}
     assert provider["bind_password_present"] is True
     assert provider["enabled"] is False
 
@@ -2284,12 +2286,14 @@ def test_directory_certificate_download_returns_review_payload(
 ) -> None:
     captured: Dict[str, Any] = {}
 
-    def fake_fetch(server_url: str, *, timeout: int = 10) -> Dict[str, Any]:
+    def fake_fetch(server_url: str, *, host_overrides: Any = None, timeout: int = 10) -> Dict[str, Any]:
         captured["server_url"] = server_url
+        captured["host_overrides"] = host_overrides
         captured["timeout"] = timeout
         return {
             "server_url": "ldaps://192.168.3.25:636",
             "host": "192.168.3.25",
+            "connect_host": "192.168.3.25",
             "port": 636,
             "subject": "CN=dc01.bunny-lab.io",
             "issuer": "CN=Bunny Lab Root CA",
@@ -2308,15 +2312,35 @@ def test_directory_certificate_download_returns_review_payload(
     client = _admin_client(engine_harness)
     response = client.post(
         "/api/directory/providers/certificate",
-        json={"server_urls": ["192.168.3.25"], "use_ldaps": True},
+        json={
+            "server_urls": ["lab-dc-01.bunny-lab.io"],
+            "host_overrides": {"lab-dc-01.bunny-lab.io": "192.168.3.25"},
+            "use_ldaps": True,
+        },
     )
 
     assert response.status_code == 200
-    assert captured["server_url"] == "ldaps://192.168.3.25"
+    assert captured["server_url"] == "ldaps://lab-dc-01.bunny-lab.io"
+    assert captured["host_overrides"] == {"lab-dc-01.bunny-lab.io": "192.168.3.25"}
     payload = response.get_json()
     assert payload["status"] == "ok"
     assert payload["certificate"]["sha256_fingerprint"] == "AA:BB"
     assert payload["certificate"]["pem"].startswith("-----BEGIN CERTIFICATE-----")
+
+
+def test_directory_connection_target_uses_provider_host_override() -> None:
+    target = directory_services._connection_target(
+        {
+            "use_ldaps": 1,
+            "host_overrides_json": '{"lab-dc-01.bunny-lab.io": "192.168.3.25"}',
+        },
+        "ldaps://lab-dc-01.bunny-lab.io:636",
+    )
+
+    assert target["host"] == "lab-dc-01.bunny-lab.io"
+    assert target["connect_host"] == "192.168.3.25"
+    assert target["port"] == 636
+    assert target["scheme"] == "ldaps"
 
 
 def test_directory_users_surface_source_and_block_local_actions(engine_harness: EngineTestHarness) -> None:

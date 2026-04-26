@@ -359,6 +359,7 @@ def _ensure_directory_services(conn: sqlite3.Connection, *, logger: Optional[log
                 priority INTEGER NOT NULL DEFAULT 100,
                 domain_suffix TEXT,
                 server_urls_json TEXT NOT NULL DEFAULT '[]',
+                host_overrides_json TEXT NOT NULL DEFAULT '{}',
                 use_ldaps INTEGER NOT NULL DEFAULT 0,
                 tls_required INTEGER NOT NULL DEFAULT 1,
                 tls_ca_pem TEXT,
@@ -387,6 +388,10 @@ def _ensure_directory_services(conn: sqlite3.Connection, *, logger: Optional[log
             )
             """
         )
+        cur.execute("PRAGMA table_info(directory_providers)")
+        columns = {str(row[1]) for row in cur.fetchall()}
+        if "host_overrides_json" not in columns:
+            cur.execute("ALTER TABLE directory_providers ADD COLUMN host_overrides_json TEXT NOT NULL DEFAULT '{}'")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS directory_provider_group_mappings (
