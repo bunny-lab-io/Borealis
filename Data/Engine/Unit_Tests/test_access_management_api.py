@@ -2273,7 +2273,50 @@ def test_directory_provider_crud_requires_test_before_enable(engine_harness: Eng
         json={"enabled": True},
     )
     assert enable_response.status_code == 200
-    assert enable_response.get_json()["provider"]["enabled"] is True
+    enabled_provider = enable_response.get_json()["provider"]
+    assert enabled_provider["enabled"] is True
+    assert enabled_provider["bind_password_present"] is True
+
+
+def test_directory_certificate_download_returns_review_payload(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: Dict[str, Any] = {}
+
+    def fake_fetch(server_url: str, *, timeout: int = 10) -> Dict[str, Any]:
+        captured["server_url"] = server_url
+        captured["timeout"] = timeout
+        return {
+            "server_url": "ldaps://192.168.3.25:636",
+            "host": "192.168.3.25",
+            "port": 636,
+            "subject": "CN=dc01.bunny-lab.io",
+            "issuer": "CN=Bunny Lab Root CA",
+            "common_name": "dc01.bunny-lab.io",
+            "serial_number": "01",
+            "sha256_fingerprint": "AA:BB",
+            "not_before": "2026-01-01T00:00:00Z",
+            "not_after": "2027-01-01T00:00:00Z",
+            "dns_names": ["dc01.bunny-lab.io"],
+            "ip_addresses": ["192.168.3.25"],
+            "pem": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+        }
+
+    monkeypatch.setattr(directory_services, "_fetch_ldaps_certificate", fake_fetch)
+
+    client = _admin_client(engine_harness)
+    response = client.post(
+        "/api/directory/providers/certificate",
+        json={"server_urls": ["192.168.3.25"], "use_ldaps": True},
+    )
+
+    assert response.status_code == 200
+    assert captured["server_url"] == "ldaps://192.168.3.25"
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["certificate"]["sha256_fingerprint"] == "AA:BB"
+    assert payload["certificate"]["pem"].startswith("-----BEGIN CERTIFICATE-----")
 
 
 def test_directory_users_surface_source_and_block_local_actions(engine_harness: EngineTestHarness) -> None:

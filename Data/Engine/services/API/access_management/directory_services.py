@@ -9,6 +9,7 @@
 # - DELETE /api/directory/providers/<provider_id> (Token Authenticated (Admin)) - Deletes a directory provider.
 # - POST /api/directory/providers/<provider_id>/test (Token Authenticated (Admin)) - Tests provider connectivity.
 # - POST /api/directory/providers/<provider_id>/sync (Token Authenticated (Admin)) - Syncs cached directory users.
+# - POST /api/directory/providers/certificate (Token Authenticated (Admin)) - Downloads LDAPS certificate metadata for operator trust.
 # - POST /api/users/<username>/directory-cache (Token Authenticated (Admin)) - Enables or disables a cached directory user.
 # ======================================================
 
@@ -18,14 +19,19 @@ from __future__ import annotations
 import base64
 import json
 import os
+import socket
 import ssl
 import tempfile
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from urllib.parse import urlparse
 
 from Data.Engine.db import dbapi as sqlite3
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
+from cryptography.x509.oid import ExtensionOID, NameOID
 from flask import Blueprint, Flask, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
@@ -190,6 +196,164 @@ def _server_urls(provider: Mapping[str, Any]) -> List[str]:
             continue
         urls.append(text if "://" in text else f"{scheme}://{text}")
     return urls
+
+
+def _split_server_urls(value: Any, *, use_ldaps: bool = True) -> List[str]:
+    if isinstance(value, str):
+        items = [part.strip() for part in value.replace(",", "\n").splitlines()]
+    elif isinstance(value, list):
+        items = [_clean_text(item) for item in value]
+    else:
+        items = []
+    provider = {
+        "server_urls_json": _json_dumps_list(items),
+        "use_ldaps": 1 if use_ldaps else 0,
+    }
+    return _server_urls(provider)
+
+
+def _parse_ldaps_url(server_url: str) -> Tuple[str, int, str]:
+    text = _clean_text(server_url)
+    if not text:
+        raise DirectoryAuthError("missing_server", "LDAP server URL is required.", 400)
+    parsed = urlparse(text if "://" in text else f"ldaps://{text}")
+    if parsed.scheme.lower() != "ldaps":
+        raise DirectoryAuthError("ldaps_required", "Certificate download requires an LDAPS server URL.", 400)
+    host = _clean_text(parsed.hostname)
+    if not host:
+        raise DirectoryAuthError("invalid_server_url", "LDAPS server URL is missing a host.", 400)
+    try:
+        port = int(parsed.port or 636)
+    except ValueError as exc:
+        raise DirectoryAuthError("invalid_server_url", "LDAPS server URL has an invalid port.", 400) from exc
+    if port <= 0 or port > 65535:
+        raise DirectoryAuthError("invalid_server_url", "LDAPS server URL has an invalid port.", 400)
+    normalized = f"ldaps://{host}:{port}"
+    return host, port, normalized
+
+
+def _fingerprint_sha256(cert: x509.Certificate) -> str:
+    digest = cert.fingerprint(hashes.SHA256()).hex().upper()
+    return ":".join(digest[index:index + 2] for index in range(0, len(digest), 2))
+
+
+def _certificate_time(cert: x509.Certificate, attr: str) -> str:
+    value = getattr(cert, f"{attr}_utc", None)
+    if value is None:
+        value = getattr(cert, attr)
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _certificate_common_name(name: x509.Name) -> str:
+    values = name.get_attributes_for_oid(NameOID.COMMON_NAME)
+    return values[0].value if values else ""
+
+
+def _certificate_san_entries(cert: x509.Certificate) -> Tuple[List[str], List[str]]:
+    try:
+        san = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME).value
+    except Exception:
+        return [], []
+    dns_names = [str(item) for item in san.get_values_for_type(x509.DNSName)]
+    ip_addresses = [str(item) for item in san.get_values_for_type(x509.IPAddress)]
+    return dns_names, ip_addresses
+
+
+def _certificate_metadata(der_bytes: bytes, *, server_url: str, host: str, port: int) -> Dict[str, Any]:
+    cert = x509.load_der_x509_certificate(der_bytes)
+    dns_names, ip_addresses = _certificate_san_entries(cert)
+    pem = ssl.DER_cert_to_PEM_cert(der_bytes)
+    return {
+        "server_url": server_url,
+        "host": host,
+        "port": port,
+        "subject": cert.subject.rfc4514_string(),
+        "issuer": cert.issuer.rfc4514_string(),
+        "common_name": _certificate_common_name(cert.subject),
+        "serial_number": format(cert.serial_number, "X"),
+        "sha256_fingerprint": _fingerprint_sha256(cert),
+        "not_before": _certificate_time(cert, "not_valid_before"),
+        "not_after": _certificate_time(cert, "not_valid_after"),
+        "dns_names": dns_names,
+        "ip_addresses": ip_addresses,
+        "pem": pem,
+    }
+
+
+def _fetch_ldaps_certificate(server_url: str, *, timeout: int = 10) -> Dict[str, Any]:
+    host, port, normalized_url = _parse_ldaps_url(server_url)
+    context = ssl._create_unverified_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as raw_socket:
+            with context.wrap_socket(raw_socket, server_hostname=host) as tls_socket:
+                der_bytes = tls_socket.getpeercert(binary_form=True)
+    except DirectoryAuthError:
+        raise
+    except Exception as exc:
+        raise DirectoryAuthError("certificate_download_failed", str(exc), 502) from exc
+    if not der_bytes:
+        raise DirectoryAuthError("certificate_download_failed", "LDAPS server did not present a certificate.", 502)
+    return _certificate_metadata(der_bytes, server_url=normalized_url, host=host, port=port)
+
+
+def _pem_certificates(pem_text: str) -> List[x509.Certificate]:
+    text = _clean_text(pem_text)
+    if not text:
+        return []
+    certificates: List[x509.Certificate] = []
+    block: List[str] = []
+    inside = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "-----BEGIN CERTIFICATE-----":
+            block = [stripped]
+            inside = True
+            continue
+        if not inside:
+            continue
+        block.append(stripped)
+        if stripped == "-----END CERTIFICATE-----":
+            cert_pem = ("\n".join(block) + "\n").encode("ascii")
+            certificates.append(x509.load_pem_x509_certificate(cert_pem))
+            block = []
+            inside = False
+    return certificates
+
+
+def _certificate_is_ca(cert: x509.Certificate) -> bool:
+    try:
+        constraints = cert.extensions.get_extension_for_class(x509.BasicConstraints).value
+        return bool(constraints.ca)
+    except Exception:
+        return False
+
+
+def _pem_contains_pinned_leaf(pem_text: str) -> bool:
+    try:
+        certs = _pem_certificates(pem_text)
+    except Exception:
+        return False
+    return any(not _certificate_is_ca(cert) for cert in certs)
+
+
+def _pinned_certificate_fingerprints(pem_text: str) -> List[str]:
+    return [_fingerprint_sha256(cert) for cert in _pem_certificates(pem_text) if not _certificate_is_ca(cert)]
+
+
+def _verify_pinned_ldaps_certificate(server_url: str, pem_text: str) -> None:
+    expected = set(_pinned_certificate_fingerprints(pem_text))
+    if not expected:
+        return
+    certificate = _fetch_ldaps_certificate(server_url)
+    observed = _clean_text(certificate.get("sha256_fingerprint"))
+    if observed not in expected:
+        raise DirectoryAuthError(
+            "pinned_certificate_mismatch",
+            "LDAPS certificate does not match the trusted certificate pinned for this provider.",
+            502,
+        )
 
 
 @contextmanager
@@ -402,6 +566,17 @@ class DirectoryAuthenticationManager:
     def default_username_attribute(self, provider: Mapping[str, Any]) -> str:
         return "sAMAccountName" if _normalize_provider_type(provider.get("provider_type")) == "active_directory" else "uid"
 
+    def _tls_for_url(self, provider: Mapping[str, Any], url: str):
+        if Tls is None or not url.lower().startswith("ldaps://"):
+            return None
+        ca_pem = _clean_text(provider.get("tls_ca_pem"))
+        if ca_pem and _pem_contains_pinned_leaf(ca_pem):
+            _verify_pinned_ldaps_certificate(url, ca_pem)
+            return Tls(validate=ssl.CERT_NONE)
+        if _as_bool(provider.get("tls_required")):
+            return Tls(validate=ssl.CERT_REQUIRED)
+        return Tls(validate=ssl.CERT_NONE)
+
     def _service_connection(self, provider: Mapping[str, Any]):
         if Connection is None or Server is None:
             raise DirectoryAuthError("ldap_unavailable", "ldap3 is not installed.", 503)
@@ -417,12 +592,12 @@ class DirectoryAuthenticationManager:
                 last_error = RuntimeError("Strict TLS requires ldaps:// server URLs.")
                 continue
             try:
-                if ca_pem and Tls is not None:
+                if ca_pem and Tls is not None and not _pem_contains_pinned_leaf(ca_pem):
                     with _temporary_text_file(ca_pem) as ca_path:
                         tls = Tls(validate=ssl.CERT_REQUIRED, ca_certs_file=ca_path)
                         server = Server(url, get_info=ALL, connect_timeout=10, tls=tls)
                         return Connection(server, user=bind_dn or None, password=bind_password or None, authentication=SIMPLE, auto_bind=True)
-                server = Server(url, get_info=ALL, connect_timeout=10)
+                server = Server(url, get_info=ALL, connect_timeout=10, tls=self._tls_for_url(provider, url))
                 return Connection(server, user=bind_dn or None, password=bind_password or None, authentication=SIMPLE, auto_bind=True)
             except Exception as exc:
                 last_error = exc
@@ -551,12 +726,12 @@ class DirectoryAuthenticationManager:
                 last_error = RuntimeError("Strict TLS requires ldaps:// server URLs.")
                 continue
             try:
-                if ca_pem and Tls is not None:
+                if ca_pem and Tls is not None and not _pem_contains_pinned_leaf(ca_pem):
                     with _temporary_text_file(ca_pem) as ca_path:
                         server = Server(url, get_info=ALL, connect_timeout=10, tls=Tls(validate=ssl.CERT_REQUIRED, ca_certs_file=ca_path))
                         conn = Connection(server, user=user_dn, password=password, authentication=SIMPLE, auto_bind=True)
                 else:
-                    server = Server(url, get_info=ALL, connect_timeout=10)
+                    server = Server(url, get_info=ALL, connect_timeout=10, tls=self._tls_for_url(provider, url))
                     conn = Connection(server, user=user_dn, password=password, authentication=SIMPLE, auto_bind=True)
                 try:
                     conn.unbind()
@@ -1070,6 +1245,30 @@ class DirectoryManagementService:
             self.manager._update_provider_sync(provider_id, "failed", message)
             return jsonify({"error": "sync_failed", "message": message}), 502
 
+    def fetch_certificate(self):
+        requirement = self._require_admin()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+        payload = request.get_json(silent=True) or {}
+        raw_urls = payload.get("server_urls") if "server_urls" in payload else payload.get("server_url")
+        urls = _split_server_urls(raw_urls, use_ldaps=_as_bool(payload.get("use_ldaps", True)))
+        if not urls:
+            return jsonify({"error": "missing_server", "message": "LDAP server URL is required."}), 400
+        last_error: Optional[DirectoryAuthError] = None
+        for url in urls:
+            try:
+                certificate = _fetch_ldaps_certificate(url)
+                if callable(self.adapters.service_log):
+                    self.adapters.service_log("directory_services", f"certificate_download server={certificate.get('server_url')}", None)
+                return jsonify({"status": "ok", "certificate": certificate})
+            except DirectoryAuthError as exc:
+                last_error = exc
+                if exc.status_code == 400:
+                    break
+        error = last_error or DirectoryAuthError("certificate_download_failed", "Certificate download failed.", 502)
+        return jsonify({"error": error.code, "message": str(error)}), error.status_code
+
     def set_user_cache(self, username: str):
         requirement = self._require_admin()
         if requirement:
@@ -1313,6 +1512,10 @@ def register_directory_services(app: Flask, adapters: "EngineServiceAdapters") -
     @blueprint.route("/api/directory/providers", methods=["POST"])
     def _create_provider():
         return service.save_provider()
+
+    @blueprint.route("/api/directory/providers/certificate", methods=["POST"])
+    def _fetch_certificate():
+        return service.fetch_certificate()
 
     @blueprint.route("/api/directory/providers/<int:provider_id>", methods=["PATCH"])
     def _update_provider(provider_id: int):

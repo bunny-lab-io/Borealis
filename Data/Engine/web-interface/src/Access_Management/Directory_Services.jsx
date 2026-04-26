@@ -20,6 +20,7 @@ import AddIcon from "@mui/icons-material/Add";
 import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import ErrorOutlineRoundedIcon from "@mui/icons-material/ErrorOutlineRounded";
+import FileDownloadRoundedIcon from "@mui/icons-material/FileDownloadRounded";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import SyncIcon from "@mui/icons-material/Sync";
@@ -118,6 +119,13 @@ function textToMappings(value) {
     .filter((item) => item.group_dn);
 }
 
+function splitServerUrls(value) {
+  return String(value || "")
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function formFromProvider(provider) {
   if (!provider) return { ...emptyForm };
   return {
@@ -129,6 +137,13 @@ function formFromProvider(provider) {
     tls_ca_pem: provider.tls_ca_pem || "",
     group_mappings_text: mappingsToText(provider.group_mappings || []),
   };
+}
+
+function formatCertificateDate(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
 }
 
 function statusChip(status, message) {
@@ -165,6 +180,8 @@ export default function DirectoryServices() {
   const [editingProvider, setEditingProvider] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [certificateReview, setCertificateReview] = useState(null);
+  const [certificateBusy, setCertificateBusy] = useState(false);
   const [busyId, setBusyId] = useState(null);
   const gridRef = useRef(null);
   const sendNotification = useAppNotifications({
@@ -217,34 +234,71 @@ export default function DirectoryServices() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }, []);
 
-  const providerPayload = useCallback(() => ({
-    name: form.name,
-    provider_type: form.provider_type,
-    enabled: Boolean(form.enabled),
-    priority: Number(form.priority || 100),
-    domain_suffix: form.domain_suffix,
-    server_urls: String(form.server_urls || "")
-      .split(/\r?\n|,/)
-      .map((item) => item.trim())
-      .filter(Boolean),
-    use_ldaps: Boolean(form.use_ldaps),
-    tls_required: Boolean(form.tls_required),
-    tls_ca_pem: form.tls_ca_pem,
-    base_dn: form.base_dn,
-    bind_dn: form.bind_dn,
-    bind_password: form.bind_password,
-    user_search_filter: form.user_search_filter,
-    username_attribute: form.username_attribute,
-    display_name_attribute: form.display_name_attribute,
-    email_attribute: form.email_attribute,
-    member_of_attribute: form.member_of_attribute,
-    group_search_base_dn: form.group_search_base_dn,
-    nested_groups: Boolean(form.nested_groups),
-    kerberos_realm: form.kerberos_realm,
-    kerberos_kdc: form.kerberos_kdc,
-    kerberos_keytab_base64: form.kerberos_keytab_base64,
-    group_mappings: textToMappings(form.group_mappings_text),
-  }), [form]);
+  const providerPayload = useCallback(() => {
+    const payload = {
+      name: form.name,
+      provider_type: form.provider_type,
+      enabled: Boolean(form.enabled),
+      priority: Number(form.priority || 100),
+      domain_suffix: form.domain_suffix,
+      server_urls: splitServerUrls(form.server_urls),
+      use_ldaps: Boolean(form.use_ldaps),
+      tls_required: Boolean(form.tls_required),
+      base_dn: form.base_dn,
+      bind_dn: form.bind_dn,
+      user_search_filter: form.user_search_filter,
+      username_attribute: form.username_attribute,
+      display_name_attribute: form.display_name_attribute,
+      email_attribute: form.email_attribute,
+      member_of_attribute: form.member_of_attribute,
+      group_search_base_dn: form.group_search_base_dn,
+      nested_groups: Boolean(form.nested_groups),
+      kerberos_realm: form.kerberos_realm,
+      kerberos_kdc: form.kerberos_kdc,
+      group_mappings: textToMappings(form.group_mappings_text),
+    };
+    if (!editingProvider?.tls_ca_pem_present || form.tls_ca_pem) payload.tls_ca_pem = form.tls_ca_pem;
+    if (!editingProvider?.bind_password_present || form.bind_password) payload.bind_password = form.bind_password;
+    if (!editingProvider?.kerberos_keytab_present || form.kerberos_keytab_base64) payload.kerberos_keytab_base64 = form.kerberos_keytab_base64;
+    return payload;
+  }, [editingProvider, form]);
+
+  const downloadCertificate = useCallback(async () => {
+    const serverUrls = splitServerUrls(form.server_urls);
+    if (!serverUrls.length) {
+      sendNotification("LDAP server URL required");
+      return;
+    }
+    setCertificateBusy(true);
+    try {
+      const resp = await fetch("/api/directory/providers/certificate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ server_urls: serverUrls, use_ldaps: Boolean(form.use_ldaps) }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        sendNotification(data?.message || data?.error || "Certificate download failed");
+        return;
+      }
+      setCertificateReview(data?.certificate || null);
+    } finally {
+      setCertificateBusy(false);
+    }
+  }, [form.server_urls, form.use_ldaps, sendNotification]);
+
+  const trustCertificate = useCallback(() => {
+    if (!certificateReview?.pem) return;
+    setForm((prev) => ({
+      ...prev,
+      use_ldaps: true,
+      tls_required: true,
+      tls_ca_pem: certificateReview.pem,
+    }));
+    setCertificateReview(null);
+    sendNotification("LDAP certificate trusted");
+  }, [certificateReview, sendNotification]);
 
   const saveProvider = useCallback(async () => {
     const payload = providerPayload();
@@ -555,7 +609,22 @@ export default function DirectoryServices() {
                 <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 12" } }} label={editingProvider?.kerberos_keytab_present ? "Keytab Base64 (leave blank to keep)" : "Keytab Base64"} multiline minRows={2} value={form.kerberos_keytab_base64} onChange={(e) => updateForm("kerberos_keytab_base64", e.target.value)} />
               </>
             ) : null}
-            <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 12" } }} label="CA PEM" multiline minRows={3} value={form.tls_ca_pem} onChange={(e) => updateForm("tls_ca_pem", e.target.value)} />
+            <Button
+              sx={{ ...DIALOG_BUTTON_SX, gridColumn: { md: "span 12" }, justifySelf: "flex-start" }}
+              startIcon={<FileDownloadRoundedIcon />}
+              disabled={certificateBusy || !form.use_ldaps || splitServerUrls(form.server_urls).length === 0}
+              onClick={downloadCertificate}
+            >
+              Download Certificate from LDAP Server
+            </Button>
+            <TextField
+              sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 12" } }}
+              label={editingProvider?.tls_ca_pem_present ? "CA / Pinned Certificate PEM (leave blank to keep)" : "CA / Pinned Certificate PEM"}
+              multiline
+              minRows={3}
+              value={form.tls_ca_pem}
+              onChange={(e) => updateForm("tls_ca_pem", e.target.value)}
+            />
             <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 12" } }} label="Group Mappings" multiline minRows={4} value={form.group_mappings_text} onChange={(e) => updateForm("group_mappings_text", e.target.value)} />
             <Typography sx={{ gridColumn: "1 / -1", color: "#9aa3ad", fontSize: 13 }}>
               Group mappings use one entry per line: Admin|CN=Borealis Admins,DC=example,DC=com or User|CN=Borealis Users,DC=example,DC=com.
@@ -565,6 +634,45 @@ export default function DirectoryServices() {
         <DialogActions sx={DIALOG_ACTIONS_SX}>
           <Button sx={DIALOG_BUTTON_SX} onClick={() => setEditorOpen(false)}>Cancel</Button>
           <Button sx={DIALOG_PRIMARY_BUTTON_SX} onClick={saveProvider}>Save</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(certificateReview)}
+        onClose={() => setCertificateReview(null)}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
+      >
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="Trust LDAP Certificate"
+            subtitle={certificateReview?.server_url || ""}
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
+          <Box sx={{ display: "grid", gridTemplateColumns: "minmax(120px, 0.35fr) minmax(0, 1fr)", gap: 1.25, color: "#dbeafe" }}>
+            {[
+              ["Subject", certificateReview?.subject],
+              ["Issuer", certificateReview?.issuer],
+              ["Common Name", certificateReview?.common_name],
+              ["DNS Names", (certificateReview?.dns_names || []).join(", ")],
+              ["IP Addresses", (certificateReview?.ip_addresses || []).join(", ")],
+              ["Serial", certificateReview?.serial_number],
+              ["Valid From", formatCertificateDate(certificateReview?.not_before)],
+              ["Valid Until", formatCertificateDate(certificateReview?.not_after)],
+              ["SHA-256", certificateReview?.sha256_fingerprint],
+            ].map(([label, value]) => (
+              <React.Fragment key={label}>
+                <Typography sx={{ color: "#94a3b8", fontSize: 13 }}>{label}</Typography>
+                <Typography sx={{ color: "#f8fafc", fontSize: 13, overflowWrap: "anywhere" }}>{value || "-"}</Typography>
+              </React.Fragment>
+            ))}
+          </Box>
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button sx={DIALOG_BUTTON_SX} onClick={() => setCertificateReview(null)}>Deny</Button>
+          <Button sx={DIALOG_PRIMARY_BUTTON_SX} onClick={trustCertificate}>Trust Certificate</Button>
         </DialogActions>
       </Dialog>
 
