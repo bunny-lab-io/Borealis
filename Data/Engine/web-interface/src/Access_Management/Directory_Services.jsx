@@ -645,6 +645,23 @@ export default function DirectoryServices() {
         </DialogTitle>
         <DialogContent sx={DIALOG_CONTENT_SX}>
           <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "repeat(12, 1fr)" }, gap: 2 }}>
+            {form.provider_type === "active_directory" ? (
+              <Box
+                sx={{
+                  gridColumn: "1 / -1",
+                  border: "1px solid rgba(251, 191, 36, 0.45)",
+                  background: "rgba(251, 191, 36, 0.12)",
+                  color: "#fde68a",
+                  borderRadius: 1,
+                  px: 1.5,
+                  py: 1.25,
+                  fontSize: 13,
+                  fontWeight: 700,
+                }}
+              >
+                Active Directory has not been validated as functional or bug tested. You are on your own.
+              </Box>
+            ) : null}
             <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 6" } }} label="Name" value={form.name} onChange={(e) => updateForm("name", e.target.value)} />
             <TextField select sx={{ ...DIALOG_SELECT_SX, gridColumn: { md: "span 3" } }} label="Type" value={form.provider_type} onChange={(e) => updateForm("provider_type", e.target.value)}>
               <MenuItem value="ldap">LDAP / LDAPS</MenuItem>
