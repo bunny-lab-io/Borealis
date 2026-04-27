@@ -225,6 +225,25 @@ def _host_overrides(provider: Mapping[str, Any]) -> Dict[str, str]:
     return _json_object(provider.get("host_overrides_json"))
 
 
+def _resolve_host_override(host: str, overrides: Mapping[str, Any]) -> Tuple[str, str]:
+    host_name = _clean_text(host).lower()
+    normalized = _json_object(overrides)
+    if not host_name:
+        return "", ""
+    if host_name in normalized:
+        return normalized[host_name], host_name
+
+    short_name = host_name.split(".", 1)[0]
+    if "." not in host_name:
+        for override_host, connect_host in normalized.items():
+            if override_host.split(".", 1)[0] == short_name:
+                return connect_host, override_host
+    elif short_name in normalized:
+        return normalized[short_name], host_name
+
+    return host_name, host_name
+
+
 def _split_server_urls(value: Any, *, use_ldaps: bool = True) -> List[str]:
     if isinstance(value, str):
         items = [part.strip() for part in value.replace(",", "\n").splitlines()]
@@ -297,13 +316,14 @@ def _connection_target(provider: Mapping[str, Any], server_url: str) -> Dict[str
         server_url,
         default_scheme="ldaps" if _as_bool(provider.get("use_ldaps")) else "ldap",
     )
-    overrides = _host_overrides(provider)
+    connect_host, tls_host = _resolve_host_override(host, _host_overrides(provider))
     return {
         "scheme": scheme,
-        "host": host,
-        "connect_host": overrides.get(host.lower(), host),
+        "host": tls_host,
+        "requested_host": host,
+        "connect_host": connect_host,
         "port": port,
-        "server_url": normalized,
+        "server_url": f"{scheme}://{tls_host}:{port}" if tls_host else normalized,
     }
 
 
@@ -357,13 +377,14 @@ def _certificate_metadata(der_bytes: bytes, *, server_url: str, host: str, port:
 
 def _fetch_ldaps_certificate(server_url: str, *, host_overrides: Optional[Mapping[str, str]] = None, timeout: int = 10) -> Dict[str, Any]:
     host, port, normalized_url = _parse_ldaps_url(server_url)
-    connect_host = _json_object(host_overrides or {}).get(host.lower(), host)
+    connect_host, tls_host = _resolve_host_override(host, host_overrides or {})
+    display_url = f"ldaps://{tls_host}:{port}" if tls_host else normalized_url
     context = ssl._create_unverified_context()
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
     try:
         with socket.create_connection((connect_host, port), timeout=timeout) as raw_socket:
-            with context.wrap_socket(raw_socket, server_hostname=host) as tls_socket:
+            with context.wrap_socket(raw_socket, server_hostname=tls_host or host) as tls_socket:
                 der_bytes = tls_socket.getpeercert(binary_form=True)
     except DirectoryAuthError:
         raise
@@ -371,8 +392,9 @@ def _fetch_ldaps_certificate(server_url: str, *, host_overrides: Optional[Mappin
         raise DirectoryAuthError("certificate_download_failed", str(exc), 502) from exc
     if not der_bytes:
         raise DirectoryAuthError("certificate_download_failed", "LDAPS server did not present a certificate.", 502)
-    metadata = _certificate_metadata(der_bytes, server_url=normalized_url, host=host, port=port)
+    metadata = _certificate_metadata(der_bytes, server_url=display_url, host=tls_host or host, port=port)
     metadata["connect_host"] = connect_host
+    metadata["requested_host"] = host
     return metadata
 
 
