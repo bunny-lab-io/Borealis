@@ -828,6 +828,67 @@ class DirectoryAuthenticationManager:
             self.logger.debug("Nested directory group lookup failed.", exc_info=True)
             return []
 
+    def preview_group_access(self, provider: Mapping[str, Any], group_dns: Sequence[str]) -> List[Dict[str, Any]]:
+        base_dn = _clean_text(provider.get("base_dn"))
+        normalized_dns = [_clean_text(group_dn) for group_dn in group_dns if _clean_text(group_dn)]
+        if not base_dn or not normalized_dns:
+            return []
+        conn = self._service_connection(provider)
+        try:
+            username_attr = _clean_text(provider.get("username_attribute")) or self.default_username_attribute(provider)
+            display_attr = _clean_text(provider.get("display_name_attribute")) or "displayName"
+            email_attr = _clean_text(provider.get("email_attribute")) or "mail"
+            member_attr = _clean_text(provider.get("member_of_attribute")) or "memberOf"
+            attributes = list(
+                dict.fromkeys(
+                    [
+                        username_attr,
+                        "sAMAccountName",
+                        "userPrincipalName",
+                        display_attr,
+                        email_attr,
+                        member_attr,
+                        "distinguishedName",
+                        "objectGUID",
+                    ]
+                )
+            )
+            by_dn: Dict[str, Dict[str, Any]] = {}
+            nested = _as_bool(provider.get("nested_groups"))
+            for group_dn in normalized_dns:
+                escaped_group = escape_filter_chars(group_dn)
+                member_filter = (
+                    f"({member_attr}:1.2.840.113556.1.4.1941:={escaped_group})"
+                    if nested
+                    else f"({member_attr}={escaped_group})"
+                )
+                search_filter = f"(&(|(objectClass=user)(objectClass=person))(objectClass=*){member_filter})"
+                if not conn.search(base_dn, search_filter, search_scope=SUBTREE, attributes=attributes):
+                    continue
+                for entry in list(getattr(conn, "entries", []) or []):
+                    attrs = getattr(entry, "entry_attributes_as_dict", {}) or {}
+                    dn = _clean_text(getattr(entry, "entry_dn", "")) or _first_attr(attrs, "distinguishedName")
+                    if not dn:
+                        continue
+                    key = dn.lower()
+                    existing = by_dn.setdefault(
+                        key,
+                        {
+                            "dn": dn,
+                            "account": _first_attr(attrs, "userPrincipalName", username_attr, "sAMAccountName", email_attr) or dn,
+                            "display_name": _first_attr(attrs, display_attr, "cn", username_attr, "sAMAccountName") or dn,
+                            "matched_groups": [],
+                        },
+                    )
+                    if group_dn not in existing["matched_groups"]:
+                        existing["matched_groups"].append(group_dn)
+            return sorted(by_dn.values(), key=lambda item: (_clean_text(item.get("display_name")).lower(), _clean_text(item.get("account")).lower()))
+        finally:
+            try:
+                conn.unbind()
+            except Exception:
+                pass
+
     def _verify_ldap_password(self, provider: Mapping[str, Any], user_dn: str, password: str) -> None:
         if Connection is None or Server is None:
             raise DirectoryAuthError("ldap_unavailable", "ldap3 is not installed.", 503)
@@ -1421,6 +1482,37 @@ class DirectoryManagementService:
                 result["password_message"] = str(exc)
         return jsonify(result)
 
+    def preview_group_access(self, provider_id: int):
+        requirement = self._require_admin()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+        provider = self.manager.load_provider(provider_id)
+        if not provider:
+            return jsonify({"error": "provider_not_found"}), 404
+        payload = request.get_json(silent=True) or {}
+        role = _canonical_role(payload.get("role"))
+        group_dns = [_clean_text(item) for item in payload.get("group_dns") or [] if _clean_text(item)]
+        if not group_dns:
+            return jsonify({"error": "group_dns_required", "message": "At least one group DN is required."}), 400
+        try:
+            users = self.manager.preview_group_access(provider, group_dns)
+        except DirectoryAuthError as exc:
+            return jsonify({"error": exc.code, "message": str(exc)}), exc.status_code
+        except Exception as exc:
+            self.logger.debug("Directory effective access preview failed for provider %s.", provider_id, exc_info=True)
+            return jsonify({"error": "effective_access_failed", "message": str(exc)}), 502
+        return jsonify(
+            {
+                "status": "ok",
+                "provider_id": int(provider_id),
+                "role": role,
+                "group_dns": group_dns,
+                "users": users,
+                "user_count": len(users),
+            }
+        )
+
     def fetch_certificate(self):
         requirement = self._require_admin()
         if requirement:
@@ -1721,6 +1813,10 @@ def register_directory_services(app: Flask, adapters: "EngineServiceAdapters") -
     @blueprint.route("/api/directory/providers/<int:provider_id>/lookup-user", methods=["POST"])
     def _lookup_user(provider_id: int):
         return service.lookup_user(provider_id)
+
+    @blueprint.route("/api/directory/providers/<int:provider_id>/effective-access", methods=["POST"])
+    def _preview_group_access(provider_id: int):
+        return service.preview_group_access(provider_id)
 
     @blueprint.route("/api/users/<username>/directory-cache", methods=["POST"])
     def _set_user_cache(username: str):

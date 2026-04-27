@@ -23,6 +23,9 @@ Use this file as the entrypoint for Codex instructions. The full knowledgebase n
 
 Precedence: follow domain docs first; where overlap exists, the domain page wins. The Codex Agent sections inside each page are the authoritative agent guidance.
 
+## Interacting with the Codebase
+- When making changes to the codebase, do not attempt to build code via npm or vite from the staging folder located under either `Data/Agent` or `Data/Engine`, changes of that nature need to take place in the runtime folders, and it is best to defer to the operator / developer to re-deploy the agent or engine to detect errors with page formatting, etc.
+
 ## Database Work
 - For any code change, migration, troubleshooting step, or implementation that reads from, writes to, or otherwise interacts with PostgreSQL, read `Docs/db-reference.md` first.
 - Follow the connection-lifecycle guidance in `Docs/db-reference.md`: do the minimum SQL work needed, release the connection immediately, and perform payload shaping, crypto, target expansion, and integration lookups only after the DB connection has been returned to the pool.

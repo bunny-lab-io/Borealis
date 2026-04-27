@@ -129,33 +129,22 @@ const NAV_SECTIONS = Object.freeze([
     adminOnly: true,
     items: [
       {
-        kind: "subheader",
-        label: "Directory Services",
+        icon: CredentialIcon,
+        label: "Credentials",
+        navKey: "credentials",
+        to: APP_PATHS.credentials,
       },
       {
         icon: DirectoryIcon,
         label: "Directory Services",
         navKey: "directory-services",
         to: APP_PATHS.directoryServices,
-        indent: 1,
-      },
-      {
-        kind: "subheader",
-        label: "Local Access",
-      },
-      {
-        icon: CredentialIcon,
-        label: "Credentials",
-        navKey: "credentials",
-        to: APP_PATHS.credentials,
-        indent: 1,
       },
       {
         icon: UserIcon,
         label: "Users",
         navKey: "users",
         to: APP_PATHS.users,
-        indent: 1,
       },
     ],
   },
