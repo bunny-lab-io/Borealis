@@ -284,7 +284,7 @@ def test_open_session_forces_recovery_when_probe_grace_pending(monkeypatch) -> N
     assert tunnel_service.recover_calls == [("agent-1", "vpn_shell_connect", "shell_connect_retry")]
 
 
-def test_open_session_forces_recovery_after_initial_connect_failure(monkeypatch) -> None:
+def test_open_session_does_not_force_recovery_after_single_healthy_connect_failure(monkeypatch) -> None:
     tcp = _PongSocket()
     socketio = _DummySocketIO()
     tunnel_service = _DummyTunnelService()
@@ -321,9 +321,8 @@ def test_open_session_forces_recovery_after_initial_connect_failure(monkeypatch)
     session = bridge.open_session("sid-1", "agent-1")
 
     assert session is not None
-    assert tunnel_service.start_calls[0] == ("agent-1", False, "shell_connect_retry")
-    assert ("agent-1", True, "shell_connect_retry") in tunnel_service.start_calls
-    assert tunnel_service.recover_calls == [("agent-1", "vpn_shell_connect", "shell_connect_retry")]
+    assert tunnel_service.start_calls == [("agent-1", False, "shell_connect_retry")]
+    assert tunnel_service.recover_calls == []
 
 
 def test_open_session_replaces_existing_agent_session(monkeypatch) -> None:

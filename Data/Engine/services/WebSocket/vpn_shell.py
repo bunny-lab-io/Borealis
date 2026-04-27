@@ -605,10 +605,8 @@ class VpnShellBridge:
         connect_started_at = time.monotonic()
         connect_deadline = connect_started_at + _CONNECT_WAIT_WINDOW_SECONDS
         reemit_index = 0
-        early_force_recovery_emitted = False
 
         def _emit_shell_agent_start(trigger_after: float, *, force_restart: bool) -> None:
-            nonlocal early_force_recovery_emitted
             try:
                 service.request_agent_start(
                     agent_id,
@@ -649,8 +647,6 @@ class VpnShellBridge:
                         ),
                         level="WARNING",
                     )
-                    if trigger_after < _FORCE_RESTART_AFTER_SECONDS:
-                        early_force_recovery_emitted = True
                 except Exception:
                     self.logger.debug(
                         "Failed to force WireGuard transport recovery for agent=%s",
@@ -699,12 +695,6 @@ class VpnShellBridge:
                 _configure_tcp_socket(tcp)
             except Exception as exc:
                 last_error = exc
-                if reemit_index > 0 and not early_force_recovery_emitted:
-                    elapsed_after_attempt = max(0.0, time.monotonic() - connect_started_at)
-                    force_restart_on_first_emit = False
-                    if elapsed_after_attempt < _FORCE_RESTART_AFTER_SECONDS:
-                        _emit_shell_agent_start(elapsed_after_attempt, force_restart=True)
-                        reemit_index = max(reemit_index, 1)
                 remaining = connect_deadline - time.monotonic()
                 if remaining > 0:
                     _cooperative_sleep(min(_RETRY_DELAY_SECONDS, remaining))
