@@ -443,6 +443,19 @@ export function buildAppRoutes() {
                   ),
                 },
                 {
+                  path: "directory-services",
+                  handle: {
+                    title: "Directory Services",
+                    breadcrumb: "Directory Services",
+                    navKey: "directory-services",
+                    pageKey: "directory-services",
+                  },
+                  lazy: lazyNamed(
+                    () => import("../route-modules/accessRoutes.jsx"),
+                    "DirectoryServicesRoute"
+                  ),
+                },
+                {
                   path: "users",
                   element: <RootShell />,
                   handle: {

@@ -22,13 +22,22 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/auth/passkeys` (Token Authenticated) - list the current operator's enrolled passkeys.
 - `PATCH /api/auth/passkeys/<int:passkey_id>` (Token Authenticated) - rename one of the current operator's passkeys.
 - `DELETE /api/auth/passkeys/<int:passkey_id>` (Token Authenticated) - remove one of the current operator's passkeys.
-- `GET /api/auth/me` (Token Authenticated) - current operator profile, including MFA-enabled state and passkey count for account menu actions.
+- `GET /api/auth/me` (Token Authenticated) - current operator profile, including MFA-enabled state, auth source, and passkey count for account menu actions.
+- `GET /api/directory/providers` (Admin) - list LDAP, LDAPS, and Active Directory providers without secret material.
+- `POST /api/directory/providers` (Admin) - create a directory provider. Providers are disabled until connectivity test succeeds. Supports optional provider-scoped `host_overrides` for FQDN-to-IP LDAP connection routing.
+- `PATCH /api/directory/providers/<int:provider_id>` (Admin) - update a directory provider or toggle enablement after a passing test.
+- `DELETE /api/directory/providers/<int:provider_id>` (Admin) - delete a provider with no cached directory users.
+- `POST /api/directory/providers/certificate` (Admin) - download LDAPS peer-certificate metadata and PEM for operator review before pinning trust.
+- `POST /api/directory/providers/<int:provider_id>/test` (Admin) - verify provider connectivity and mark provider test state.
+- `POST /api/directory/providers/<int:provider_id>/lookup-user` (Admin) - run provider-scoped user lookup diagnostics, including group-role mapping and optional password verification.
+- `POST /api/directory/providers/<int:provider_id>/sync` (Admin) - re-check cached users and disable cache entries no longer found in the provider.
+- `POST /api/users/<username>/directory-cache` (Admin) - enable or disable a cached directory user.
 - `GET /api/credentials` (Token Authenticated) - list stored remote-execution credentials.
 - `GET /api/credentials/<int:credential_id>` (Token Authenticated) - get one stored credential without secret material.
 - `POST /api/credentials` (Admin) - create a stored credential.
 - `PUT /api/credentials/<int:credential_id>` (Admin) - update a stored credential.
 - `DELETE /api/credentials/<int:credential_id>` (Admin) - delete a stored credential.
-- `GET /api/users` (Admin) - list operator accounts.
+- `GET /api/users` (Admin) - list operator accounts, including local/directory source metadata.
 - `POST /api/users` (Admin) - create operator account.
 - `DELETE /api/users/<username>` (Admin) - delete operator account.
 - `POST /api/users/<username>/reset_password` (Admin) - reset operator password.

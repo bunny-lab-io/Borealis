@@ -24,6 +24,54 @@ from .secrets import require_app_secret
 PermissionResult = Tuple[Dict[str, Any], int]
 
 
+def revalidate_operator_identity(
+    db_conn_factory: Optional[Callable[[], Any]],
+    *,
+    username: str,
+    role: str = "User",
+    logger: Optional[logging.Logger] = None,
+) -> Optional[Dict[str, Any]]:
+    """Return current DB-backed operator identity or None when account is inactive."""
+
+    username_norm = str(username or "").strip()
+    if not username_norm or not callable(db_conn_factory):
+        return None
+    try:
+        conn = db_conn_factory()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT
+                    username,
+                    COALESCE(role, ?),
+                    COALESCE(auth_source, 'local'),
+                    COALESCE(directory_disabled, 0)
+                FROM users
+                WHERE LOWER(username)=LOWER(?)
+                LIMIT 1
+                """,
+                (role or "User", username_norm),
+            )
+            row = cur.fetchone()
+        finally:
+            conn.close()
+    except Exception:
+        if logger:
+            logger.debug("Failed to revalidate operator identity for %s.", username_norm, exc_info=True)
+        return None
+    if not row:
+        return None
+    auth_source = str(row[2] or "local").strip().lower()
+    if auth_source == "directory" and bool(row[3] or 0):
+        return None
+    return {
+        "username": str(row[0] or username_norm),
+        "role": str(row[1] or role or "User"),
+        "auth_source": auth_source,
+    }
+
+
 def _coerce_positive_int(value: Any, default: int) -> int:
     try:
         candidate = int(value)
@@ -93,7 +141,12 @@ class RequestAuthContext:
         username = session.get("username")
         role = session.get("role") or "User"
         if username:
-            return {"username": username, "role": role}
+            return revalidate_operator_identity(
+                self._db_conn_factory,
+                username=str(username),
+                role=str(role),
+                logger=self._logger,
+            )
 
         token = self._bearer_token(request)
         if not token:
@@ -111,7 +164,12 @@ class RequestAuthContext:
         role = (data.get("r") or "User").strip() or "User"
         if not username:
             return None
-        return {"username": username, "role": role}
+        return revalidate_operator_identity(
+            self._db_conn_factory,
+            username=username,
+            role=role,
+            logger=self._logger,
+        )
 
     def dev_mode_enabled(self, *, user: Optional[Dict[str, Any]] = None) -> bool:
         """Return whether Dev Mode is currently active for the operator."""
@@ -212,4 +270,4 @@ class RequestAuthContext:
         return None
 
 
-__all__ = ["RequestAuthContext", "PermissionResult"]
+__all__ = ["RequestAuthContext", "PermissionResult", "revalidate_operator_identity"]

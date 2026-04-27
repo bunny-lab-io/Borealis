@@ -91,9 +91,16 @@ from ...auth.bootstrap_state import (
     determine_bootstrap_state,
     operator_auth_allowed,
 )
+from ...auth.context import revalidate_operator_identity
 from ...auth.secrets import require_app_secret
 from .aegis import register_aegis_cipher_management
 from .credentials import register_credential_management
+from .directory_services import (
+    DIRECTORY_AUTH_SOURCE,
+    DirectoryAuthenticationManager,
+    DirectoryAuthError,
+    register_directory_services,
+)
 from .github import register_github_token_management
 from .multi_factor_authentication import register_mfa_management
 from .passkeys import (
@@ -409,7 +416,9 @@ class _AuthService:
                     id,
                     username,
                     COALESCE(display_name, username),
-                    COALESCE(role, 'User')
+                    COALESCE(role, 'User'),
+                    COALESCE(auth_source, 'local'),
+                    COALESCE(directory_disabled, 0)
                 FROM users
                 WHERE LOWER(username)=LOWER(?)
                 LIMIT 1
@@ -426,6 +435,8 @@ class _AuthService:
             "username": str(row[1] or username_norm),
             "display_name": str(row[2] or row[1] or username_norm),
             "role": str(row[3] or "User"),
+            "auth_source": str(row[4] or "local"),
+            "directory_disabled": int(row[5] or 0),
         }
 
     def _load_user_identity_by_id(self, user_id: Any) -> Optional[Mapping[str, Any]]:
@@ -444,7 +455,9 @@ class _AuthService:
                     id,
                     username,
                     COALESCE(display_name, username),
-                    COALESCE(role, 'User')
+                    COALESCE(role, 'User'),
+                    COALESCE(auth_source, 'local'),
+                    COALESCE(directory_disabled, 0)
                 FROM users
                 WHERE id=?
                 LIMIT 1
@@ -461,6 +474,8 @@ class _AuthService:
             "username": str(row[1] or ""),
             "display_name": str(row[2] or row[1] or ""),
             "role": str(row[3] or "User"),
+            "auth_source": str(row[4] or "local"),
+            "directory_disabled": int(row[5] or 0),
         }
 
     def _load_login_row(self, username: str):
@@ -481,7 +496,9 @@ class _AuthService:
                     COALESCE(mfa_enabled, 0) AS mfa_enabled,
                     COALESCE(mfa_secret, '') AS mfa_secret,
                     COALESCE(mfa_disabled, 0) AS mfa_disabled,
-                    COALESCE(auth_reset_required, 0) AS auth_reset_required
+                    COALESCE(auth_reset_required, 0) AS auth_reset_required,
+                    COALESCE(auth_source, 'local') AS auth_source,
+                    COALESCE(directory_disabled, 0) AS directory_disabled
                 FROM users WHERE LOWER(username)=LOWER(?)
                 """,
                 (username,),
@@ -497,7 +514,12 @@ class _AuthService:
         username = session.get("username")
         role = session.get("role") or "User"
         if username:
-            return {"username": username, "role": role}
+            return revalidate_operator_identity(
+                self.db_conn_factory,
+                username=str(username),
+                role=str(role),
+                logger=self.logger,
+            )
 
         token = None
         auth_header = request.headers.get("Authorization") or ""
@@ -506,7 +528,15 @@ class _AuthService:
         if not token:
             token = request.cookies.get("borealis_auth")
         if token:
-            return self._verify_token(token)
+            verified = self._verify_token(token)
+            if not verified:
+                return None
+            return revalidate_operator_identity(
+                self.db_conn_factory,
+                username=str(verified.get("username") or ""),
+                role=str(verified.get("role") or "User"),
+                logger=self.logger,
+            )
         return None
 
     def _update_last_login(self, username: str) -> None:
@@ -551,6 +581,94 @@ class _AuthService:
             path="/",
         )
         return response
+
+    def _begin_mfa_or_finalize(self, *, username: str, role: str, existing_secret: str, mfa_disabled: bool):
+        available_methods = ["totp"] if existing_secret else []
+        setup_methods = ["totp"]
+
+        session.pop("username", None)
+        session.pop("role", None)
+        session.pop("passkey_pending", None)
+
+        if mfa_disabled:
+            session.pop("mfa_pending", None)
+            return self._finalize_login(username, role)
+
+        stage = "verify" if available_methods else "setup"
+        pending_token = uuid.uuid4().hex
+        pending = {
+            "username": username,
+            "role": role,
+            "token": pending_token,
+            "stage": stage,
+            "expires": _now_ts() + 300,
+        }
+
+        secret = None
+        otpauth_url = None
+        qr_image = None
+
+        if stage == "setup":
+            try:
+                secret = _generate_totp_secret()
+            except Exception as exc:
+                return jsonify({"error": f"MFA setup unavailable: {exc}"}), 500
+            pending["secret"] = secret
+            otpauth_url = _totp_provisioning_uri(secret, username)
+            if otpauth_url:
+                qr_image = _totp_qr_data_uri(otpauth_url)
+        else:
+            pending["secret"] = None
+
+        session["mfa_pending"] = pending
+        session.modified = True
+
+        response_payload: Dict[str, Any] = {
+            "status": "mfa_required",
+            "stage": stage,
+            "pending_token": pending_token,
+            "username": username,
+            "role": role,
+            "available_methods": available_methods if stage == "verify" else setup_methods,
+            "preferred_method": "totp",
+        }
+        if stage == "setup":
+            response_payload.update(
+                {
+                    "secret": secret,
+                    "otpauth_url": otpauth_url,
+                    "qr_image": qr_image,
+                }
+            )
+        return jsonify(response_payload)
+
+    def _directory_login(self, username: str, password: str):
+        try:
+            result = DirectoryAuthenticationManager(
+                db_conn_factory=self.db_conn_factory,
+                aegis_cipher_service=self.aegis_cipher_service,
+                logger=self.logger,
+                service_log=self.service_log,
+            ).authenticate_login(username, password)
+        except DirectoryAuthError as exc:
+            return jsonify({"error": exc.code, "message": str(exc)}), exc.status_code
+        except Exception as exc:
+            self.logger.debug("Directory authentication failed for %s.", username, exc_info=True)
+            return jsonify({"error": "directory_auth_failed", "message": str(exc)}), 502
+
+        row = self._load_login_row(result.username)
+        if not row:
+            return jsonify({"error": "directory_cache_failed"}), 500
+        try:
+            existing_secret = self._decrypt_auth_secret(row[9]).strip()
+        except Exception:
+            existing_secret = ""
+        return self._begin_mfa_or_finalize(
+            username=row[1],
+            role=row[4] or result.role or "User",
+            existing_secret=existing_secret,
+            mfa_disabled=False,
+        )
 
     def bootstrap_state(self):
         return jsonify(self._public_bootstrap_state())
@@ -777,7 +895,17 @@ class _AuthService:
         row = self._load_login_row(username)
 
         if not row:
-            return jsonify({"error": "invalid username or password"}), 401
+            if not password:
+                return jsonify({"error": "directory_password_required"}), 400
+            return self._directory_login(username, str(password))
+
+        auth_source = str(row[12] or "local").strip().lower() if len(row) > 12 else "local"
+        if auth_source == DIRECTORY_AUTH_SOURCE:
+            if bool(row[13] or 0):
+                return jsonify({"error": "directory_user_disabled"}), 403
+            if not password:
+                return jsonify({"error": "directory_password_required"}), 400
+            return self._directory_login(username, str(password))
 
         if bool(row[11] or 0):
             return jsonify({"error": "auth_reset_required"}), 423
@@ -800,64 +928,12 @@ class _AuthService:
 
         role = row[4] or "User"
         mfa_disabled = bool(row[10] or 0)
-        available_methods = ["totp"] if existing_secret else []
-        setup_methods = ["totp"]
-
-        session.pop("username", None)
-        session.pop("role", None)
-        session.pop("passkey_pending", None)
-
-        if mfa_disabled:
-            session.pop("mfa_pending", None)
-            return self._finalize_login(row[1], role)
-
-        stage = "verify" if available_methods else "setup"
-        pending_token = uuid.uuid4().hex
-        pending = {
-            "username": row[1],
-            "role": role,
-            "token": pending_token,
-            "stage": stage,
-            "expires": _now_ts() + 300,
-        }
-
-        secret = None
-        otpauth_url = None
-        qr_image = None
-
-        if stage == "setup":
-            try:
-                secret = _generate_totp_secret()
-            except Exception as exc:
-                return jsonify({"error": f"MFA setup unavailable: {exc}"}), 500
-            pending["secret"] = secret
-            otpauth_url = _totp_provisioning_uri(secret, row[1])
-            if otpauth_url:
-                qr_image = _totp_qr_data_uri(otpauth_url)
-        else:
-            pending["secret"] = None
-
-        session["mfa_pending"] = pending
-        session.modified = True
-
-        response_payload: Dict[str, Any] = {
-            "status": "mfa_required",
-            "stage": stage,
-            "pending_token": pending_token,
-            "username": row[1],
-            "role": role,
-            "available_methods": available_methods if stage == "verify" else setup_methods,
-            "preferred_method": "totp",
-        }
-        if stage == "setup":
-            response_payload.update(
-                {
-                    "secret": secret,
-                    "otpauth_url": otpauth_url,
-                    "qr_image": qr_image,
-                }
-            )
-        return jsonify(response_payload)
+        return self._begin_mfa_or_finalize(
+            username=row[1],
+            role=role,
+            existing_secret=existing_secret,
+            mfa_disabled=mfa_disabled,
+        )
 
     def logout(self):
         return self._clear_all_auth_sessions()
@@ -926,6 +1002,16 @@ class _AuthService:
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 
+        identity = revalidate_operator_identity(
+            self.db_conn_factory,
+            username=str(username),
+            role=str(role),
+            logger=self.logger,
+        )
+        if not identity:
+            session.pop("mfa_pending", None)
+            return jsonify({"error": "user_disabled"}), 403
+
         return self._finalize_login(username, role)
 
     def passkey_register_options(self):
@@ -947,6 +1033,10 @@ class _AuthService:
         identity = self._load_user_identity(username)
         if not identity:
             return jsonify({"error": "user_not_found"}), 404
+        if str(identity.get("auth_source") or "local").lower() == DIRECTORY_AUTH_SOURCE:
+            return jsonify({"error": "passkeys_local_users_only"}), 403
+        if bool(identity.get("directory_disabled")):
+            return jsonify({"error": "user_disabled"}), 403
 
         conn = self._db_conn()
         try:
@@ -1212,6 +1302,10 @@ class _AuthService:
             identity = self._load_user_identity_by_id(stored_passkey.user_id)
             if not identity:
                 return jsonify({"error": "user_not_found"}), 404
+            if str(identity.get("auth_source") or "local").lower() == DIRECTORY_AUTH_SOURCE:
+                return jsonify({"error": "passkeys_local_users_only"}), 403
+            if bool(identity.get("directory_disabled")):
+                return jsonify({"error": "user_disabled"}), 403
 
             bundle = deserialize_passkey_secret_bundle(
                 self._decrypt_auth_secret(stored_passkey.secret_encrypted)
@@ -1387,7 +1481,10 @@ class _AuthService:
                         last_login,
                         created_at,
                         updated_at,
-                        CASE WHEN COALESCE(mfa_disabled, 0) = 1 THEN 0 ELSE 1 END AS mfa_enabled
+                        CASE WHEN COALESCE(mfa_disabled, 0) = 1 THEN 0 ELSE 1 END AS mfa_enabled,
+                        COALESCE(auth_source, 'local') AS auth_source,
+                        COALESCE(directory_provider_id, 0) AS directory_provider_id,
+                        COALESCE(directory_disabled, 0) AS directory_disabled
                     FROM users
                     WHERE LOWER(username)=LOWER(?)
                     """,
@@ -1405,7 +1502,10 @@ class _AuthService:
                         "display_name": info["display_name"],
                         "role": info["role"],
                         "mfa_enabled": bool(info["mfa_enabled"]),
-                        "passkey_count": passkey_count,
+                        "passkey_count": 0 if str(row[8] or "local").lower() == DIRECTORY_AUTH_SOURCE else passkey_count,
+                        "auth_source": str(row[8] or "local"),
+                        "directory_provider_id": int(row[9] or 0),
+                        "directory_disabled": bool(row[10] or 0),
                     }
                 )
         except Exception:
@@ -1503,3 +1603,4 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
     register_aegis_cipher_management(app, adapters)
     register_github_token_management(app, adapters)
     register_credential_management(app, adapters)
+    register_directory_services(app, adapters)

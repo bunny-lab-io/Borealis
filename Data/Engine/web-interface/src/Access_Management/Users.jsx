@@ -18,6 +18,7 @@ import {
   Stack,
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
+import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
 import GroupIcon from "@mui/icons-material/Group";
 import LocationCityIcon from "@mui/icons-material/LocationCity";
 import PersonAddAlt1Icon from "@mui/icons-material/PersonAddAlt1";
@@ -60,7 +61,7 @@ const gridTheme = themeQuartz.withParams({
 const themeClassName = gridTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
-const AUTO_SIZE_COLUMNS = ["display_name", "username", "last_login", "role", "mfa_enabled", "auth_reset_required"];
+const AUTO_SIZE_COLUMNS = ["display_name", "username", "auth_source", "last_login", "role", "mfa_enabled", "auth_reset_required"];
 
 function formatTs(tsSec) {
   if (!tsSec) return "-";
@@ -68,6 +69,18 @@ function formatTs(tsSec) {
   const date = d.toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
   const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   return `${date} @ ${time}`;
+}
+
+function isDirectoryUser(user) {
+  return String(user?.auth_source || "local").toLowerCase() === "directory";
+}
+
+function userSourceLabel(user) {
+  if (!isDirectoryUser(user)) return "Local";
+  const provider = String(user?.directory_provider_name || "").trim();
+  const domain = String(user?.directory_domain || "").trim();
+  if (provider && domain) return `${provider} (${domain})`;
+  return provider || domain || "Directory";
 }
 
 async function sha512(text) {
@@ -103,6 +116,8 @@ export default function UserManagement() {
   const [confirmMfaStateNextEnabled, setConfirmMfaStateNextEnabled] = useState(null);
   const [resetMfaOpen, setResetMfaOpen] = useState(false);
   const [resetMfaTarget, setResetMfaTarget] = useState(null);
+  const [disableDirectoryOpen, setDisableDirectoryOpen] = useState(false);
+  const [disableDirectoryTarget, setDisableDirectoryTarget] = useState(null);
   const [selectedUsernames, setSelectedUsernames] = useState(() => new Set());
   const gridRef = useRef(null);
   const gridApiRef = useRef(null);
@@ -203,6 +218,27 @@ export default function UserManagement() {
     []
   );
 
+  const sourceTheme = useMemo(
+    () => ({
+      local: {
+        text: "#7dd3fc",
+        background: "rgba(125, 211, 252, 0.14)",
+        border: "1px solid rgba(125, 211, 252, 0.42)",
+      },
+      directory: {
+        text: "#c084fc",
+        background: "rgba(192, 132, 252, 0.16)",
+        border: "1px solid rgba(192, 132, 252, 0.45)",
+      },
+      disabled: {
+        text: "#ffb347",
+        background: "rgba(255, 179, 71, 0.16)",
+        border: "1px solid rgba(255, 179, 71, 0.45)",
+      },
+    }),
+    []
+  );
+
   const openMenu = (event, user) => {
     setMenuAnchor(event.currentTarget);
     setMenuUser(user);
@@ -214,6 +250,11 @@ export default function UserManagement() {
 
   const confirmDelete = (user) => {
     if (!user) return;
+    if (isDirectoryUser(user)) {
+      setWarnMessage("Directory users are managed by their source provider. Disable the cached directory user instead.");
+      setWarnOpen(true);
+      return;
+    }
     if (me && user.username && String(me.username).toLowerCase() === String(user.username).toLowerCase()) {
       setWarnMessage("You cannot delete the user you are currently logged in as.");
       setWarnOpen(true);
@@ -253,6 +294,11 @@ export default function UserManagement() {
 
   const openChangeRole = (user) => {
     if (!user) return;
+    if (isDirectoryUser(user)) {
+      setWarnMessage("Directory user roles are managed by Directory Services group mappings.");
+      setWarnOpen(true);
+      return;
+    }
     if (me && user.username && String(me.username).toLowerCase() === String(user.username).toLowerCase()) {
       setWarnMessage("You cannot change your own role.");
       setWarnOpen(true);
@@ -296,12 +342,22 @@ export default function UserManagement() {
 
   const openResetMfa = (user) => {
     if (!user) return;
+    if (isDirectoryUser(user)) {
+      setWarnMessage("Directory user MFA is reset by the operator from their own account recovery controls.");
+      setWarnOpen(true);
+      return;
+    }
     setResetMfaTarget(user);
     setResetMfaOpen(true);
   };
 
   const openChangeMfaState = (user) => {
     if (!user) return;
+    if (isDirectoryUser(user)) {
+      setWarnMessage("Directory users must keep Borealis MFA enabled.");
+      setWarnOpen(true);
+      return;
+    }
     setConfirmMfaStateTarget(user);
     setConfirmMfaStateNextEnabled(!Boolean(user.mfa_enabled));
     setConfirmMfaStateOpen(true);
@@ -374,6 +430,33 @@ export default function UserManagement() {
       setWarnOpen(true);
     } finally {
       setMfaBusyUser(null);
+    }
+  };
+
+  const doDisableDirectoryCache = async () => {
+    const user = disableDirectoryTarget;
+    setDisableDirectoryOpen(false);
+    setDisableDirectoryTarget(null);
+    if (!user?.username) return;
+    try {
+      const resp = await fetch(`/api/users/${encodeURIComponent(user.username)}/directory-cache`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ disabled: true }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setWarnMessage(data?.message || data?.error || "Failed to disable directory user cache.");
+        setWarnOpen(true);
+        return;
+      }
+      await fetchUsers();
+      sendNotification(`Directory cache disabled for "${user.username}"`);
+    } catch (err) {
+      console.error(err);
+      setWarnMessage("Failed to disable directory user cache.");
+      setWarnOpen(true);
     }
   };
 
@@ -461,6 +544,11 @@ export default function UserManagement() {
 
   const openReset = (user) => {
     if (!user) return;
+    if (isDirectoryUser(user)) {
+      setWarnMessage("Directory user passwords are managed by their source provider.");
+      setWarnOpen(true);
+      return;
+    }
     setResetTarget(user);
     setResetOpen(true);
     setNewPassword("");
@@ -588,6 +676,52 @@ export default function UserManagement() {
         cellClass: "auto-col-tight",
       },
       {
+        headerName: "Source",
+        field: "auth_source",
+        minWidth: 180,
+        cellClass: "status-pill-cell",
+        valueGetter: (params) => userSourceLabel(params.data),
+        comparator: (a, b) => String(a || "").localeCompare(String(b || "")),
+        cellRenderer: (params) => {
+          const user = params.data || {};
+          const directory = isDirectoryUser(user);
+          const disabled = directory && Boolean(user.directory_disabled);
+          const theme = disabled ? sourceTheme.disabled : directory ? sourceTheme.directory : sourceTheme.local;
+          return (
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%" }}>
+              <Box
+                component="span"
+                title={disabled ? "Directory cache disabled." : userSourceLabel(user)}
+                sx={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  minWidth: directory ? 128 : 76,
+                  maxWidth: "100%",
+                  px: 1.25,
+                  py: 0.4,
+                  borderRadius: 999,
+                  gap: 0.6,
+                  border: theme.border,
+                  backgroundColor: theme.background,
+                  color: theme.text,
+                  fontWeight: 700,
+                  fontSize: "13px",
+                  lineHeight: 1,
+                  fontFamily: gridFontFamily,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {directory ? <AccountTreeRoundedIcon sx={{ fontSize: 15 }} /> : null}
+                {disabled ? "Directory Disabled" : userSourceLabel(user)}
+              </Box>
+            </Box>
+          );
+        },
+      },
+      {
         headerName: "Last Login",
         field: "last_login",
         minWidth: 190,
@@ -615,7 +749,8 @@ export default function UserManagement() {
           const busy = Boolean(
             mfaBusyUser && String(mfaBusyUser).toLowerCase() === String(user.username || "").toLowerCase()
           );
-          const explicitlyDisabled = !Boolean(user.mfa_enabled);
+          const directory = isDirectoryUser(user);
+          const explicitlyDisabled = directory || !Boolean(user.mfa_enabled);
           return (
             <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%" }}>
               <Checkbox
@@ -724,7 +859,7 @@ export default function UserManagement() {
         },
       },
     ],
-    [mfaBusyUser, recoveryTokenTheme]
+    [mfaBusyUser, recoveryTokenTheme, sourceTheme]
   );
 
   const defaultColDef = useMemo(
@@ -882,7 +1017,10 @@ export default function UserManagement() {
           PaperProps={{ sx: { bgcolor: "#111827", color: "#e5eefc", fontSize: "0.9rem" } }}
         >
           <MenuItem
-            disabled={me && menuUser && String(me.username).toLowerCase() === String(menuUser.username).toLowerCase()}
+            disabled={
+              isDirectoryUser(menuUser) ||
+              (me && menuUser && String(me.username).toLowerCase() === String(menuUser.username).toLowerCase())
+            }
             onClick={() => {
               const user = menuUser;
               closeMenu();
@@ -892,6 +1030,7 @@ export default function UserManagement() {
             Delete User
           </MenuItem>
           <MenuItem
+            disabled={isDirectoryUser(menuUser)}
             onClick={() => {
               const user = menuUser;
               closeMenu();
@@ -901,7 +1040,10 @@ export default function UserManagement() {
             {Boolean(menuUser?.auth_reset_required) ? "Recover Account" : "Reset Password"}
           </MenuItem>
           <MenuItem
-            disabled={me && menuUser && String(me.username).toLowerCase() === String(menuUser.username).toLowerCase()}
+            disabled={
+              isDirectoryUser(menuUser) ||
+              (me && menuUser && String(me.username).toLowerCase() === String(menuUser.username).toLowerCase())
+            }
             onClick={() => {
               const user = menuUser;
               closeMenu();
@@ -912,6 +1054,7 @@ export default function UserManagement() {
           </MenuItem>
           <MenuItem
             disabled={
+              isDirectoryUser(menuUser) ||
               Boolean(menuUser?.auth_reset_required) ||
               Boolean(
                 mfaBusyUser && menuUser && String(mfaBusyUser).toLowerCase() === String(menuUser.username || "").toLowerCase()
@@ -931,10 +1074,23 @@ export default function UserManagement() {
               closeMenu();
               openResetMfa(user);
             }}
-            disabled={!Boolean(menuUser?.mfa_enabled) || Boolean(menuUser?.auth_reset_required)}
+            disabled={isDirectoryUser(menuUser) || !Boolean(menuUser?.mfa_enabled) || Boolean(menuUser?.auth_reset_required)}
           >
             Reset MFA
           </MenuItem>
+          {isDirectoryUser(menuUser) ? (
+            <MenuItem
+              disabled={Boolean(menuUser?.directory_disabled)}
+              onClick={() => {
+                const user = menuUser;
+                closeMenu();
+                setDisableDirectoryTarget(user);
+                setDisableDirectoryOpen(true);
+              }}
+            >
+              Disable Directory Cache
+            </MenuItem>
+          ) : null}
         </Menu>
 
         <Dialog open={resetOpen} onClose={() => setResetOpen(false)} maxWidth="xs" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
@@ -1070,6 +1226,15 @@ export default function UserManagement() {
         onConfirm={doResetMfa}
         confirmLabel="Reset MFA"
         confirmTone="primary"
+      />
+      <ConfirmDeleteDialog
+        open={disableDirectoryOpen}
+        title="Disable Directory Cache"
+        message={disableDirectoryTarget ? `Disable cached directory user '${disableDirectoryTarget.username}'? Active sessions for this user will stop passing authorization checks.` : ""}
+        onCancel={() => { setDisableDirectoryOpen(false); setDisableDirectoryTarget(null); }}
+        onConfirm={doDisableDirectoryCache}
+        confirmLabel="Disable Cache"
+        confirmTone="danger"
       />
       <ConfirmDeleteDialog
         open={warnOpen}

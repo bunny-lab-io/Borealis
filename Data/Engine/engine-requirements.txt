@@ -18,6 +18,7 @@ regex
 SQLAlchemy
 alembic
 psycopg[binary]
+ldap3
 ansible-core
 ansible-runner
 jmespath

@@ -29,32 +29,9 @@ from ...db import get_database_manager
 from ...database import initialise_engine_database
 from ...security import signing
 from ...enrollment import NonceCache
-from ...integrations import GitHubIntegration
-from ..aegis_cipher import AegisCipherService
 from ..agent_release_channels import AgentReleaseChannelManager
 from ..auth import DevModeManager
-from .enrollment import routes as enrollment_routes
-from .tokens import routes as token_routes
-from .devices.tunnel import register_tunnel
-from .devices.vnc import register_vnc
-from .devices.shell import register_shell
-from .devices.services import register_services
-from .devices.file_management import register_file_management
-from .devices.processes import register_processes
-
 from ...server import EngineContext
-from .access_management.login import register_auth
-from .assemblies.management import register_assemblies
-from .assemblies.execution import register_execution
-from .devices import routes as device_routes
-from .devices.approval import register_admin_endpoints
-from .devices.management import register_management
-from .filters import management as filters_management
-from .notifications import management as notifications_management
-from .scheduled_jobs import management as scheduled_jobs_management
-from .watchdogs import management as watchdogs_management
-from .workflows import management as workflows_management
-from .server import info as server_info, log_management
 
 DEFAULT_API_GROUPS: Sequence[str] = (
     "core",
@@ -208,10 +185,10 @@ class EngineServiceAdapters:
     script_signer: Any = field(init=False)
     service_log: Callable[[str, str, Optional[str]], None] = field(init=False)
     device_auth_manager: DeviceAuthManager = field(init=False)
-    github_integration: GitHubIntegration = field(init=False)
+    github_integration: Any = field(init=False)
     agent_release_manager: AgentReleaseChannelManager = field(init=False)
     dev_mode_manager: DevModeManager = field(init=False)
-    aegis_cipher_service: AegisCipherService = field(init=False)
+    aegis_cipher_service: Any = field(init=False)
 
     def __post_init__(self) -> None:
         self.db_manager = get_database_manager(
@@ -250,6 +227,8 @@ class EngineServiceAdapters:
         else:
             base = Path.cwd() / "Engine" / "Logs"
         self.service_log = _make_service_logger(base, self.context.logger)
+        from ..aegis_cipher import AegisCipherService
+
         self.aegis_cipher_service = AegisCipherService(
             db_conn_factory=self.db_conn_factory,
             logger=self.context.logger,
@@ -283,6 +262,8 @@ class EngineServiceAdapters:
         except (TypeError, ValueError):
             default_ttl_seconds = None
 
+        from ...integrations import GitHubIntegration
+
         self.github_integration = GitHubIntegration(
             cache_file=cache_file,
             db_conn_factory=self.db_conn_factory,
@@ -293,6 +274,7 @@ class EngineServiceAdapters:
             default_ttl_seconds=default_ttl_seconds,
             aegis_cipher_service=self.aegis_cipher_service,
         )
+        self.context.github_integration = self.github_integration
         self.agent_release_manager = AgentReleaseChannelManager(
             context=self.context,
             db_conn_factory=self.db_conn_factory,
@@ -323,6 +305,8 @@ class EngineServiceAdapters:
 
 
 def _register_tokens(app: Flask, adapters: EngineServiceAdapters) -> None:
+    from .tokens import routes as token_routes
+
     token_routes.register(
         app,
         db_conn_factory=adapters.db_conn_factory,
@@ -332,6 +316,8 @@ def _register_tokens(app: Flask, adapters: EngineServiceAdapters) -> None:
 
 
 def _register_enrollment(app: Flask, adapters: EngineServiceAdapters) -> None:
+    from .enrollment import routes as enrollment_routes
+
     enrollment_routes.register(
         app,
         db_conn_factory=adapters.db_conn_factory,
@@ -345,6 +331,16 @@ def _register_enrollment(app: Flask, adapters: EngineServiceAdapters) -> None:
 
 
 def _register_devices(app: Flask, adapters: EngineServiceAdapters) -> None:
+    from .devices import routes as device_routes
+    from .devices.approval import register_admin_endpoints
+    from .devices.file_management import register_file_management
+    from .devices.management import register_management
+    from .devices.processes import register_processes
+    from .devices.services import register_services
+    from .devices.shell import register_shell
+    from .devices.tunnel import register_tunnel
+    from .devices.vnc import register_vnc
+
     register_management(app, adapters)
     register_admin_endpoints(app, adapters)
     device_routes.register_agents(app, adapters)
@@ -357,37 +353,58 @@ def _register_devices(app: Flask, adapters: EngineServiceAdapters) -> None:
 
 
 def _register_filters(app: Flask, adapters: EngineServiceAdapters) -> None:
+    from .filters import management as filters_management
+
     filters_management.register_filters(app, adapters)
 
 
 def _register_scheduled_jobs(app: Flask, adapters: EngineServiceAdapters) -> None:
+    from .scheduled_jobs import management as scheduled_jobs_management
+
     scheduled_jobs_management.register_management(app, adapters)
 
 
 def _register_workflows(app: Flask, adapters: EngineServiceAdapters) -> None:
+    from .workflows import management as workflows_management
+
     workflows_management.register_management(app, adapters)
 
 
 def _register_notifications(app: Flask, adapters: EngineServiceAdapters) -> None:
+    from .notifications import management as notifications_management
+
     notifications_management.register_notifications(app, adapters)
 
 
 def _register_watchdogs(app: Flask, adapters: EngineServiceAdapters) -> None:
+    from .watchdogs import management as watchdogs_management
+
     watchdogs_management.register_management(app, adapters)
 
 
 def _register_assemblies(app: Flask, adapters: EngineServiceAdapters) -> None:
+    from .assemblies.execution import register_execution
+    from .assemblies.management import register_assemblies
+
     register_assemblies(app, adapters)
     register_execution(app, adapters)
 
 
 def _register_server(app: Flask, adapters: EngineServiceAdapters) -> None:
+    from .server import info as server_info, log_management
+
     server_info.register_info(app, adapters)
     log_management.register_log_management(app, adapters)
 
 
+def _register_auth(app: Flask, adapters: EngineServiceAdapters) -> None:
+    from .access_management.login import register_auth
+
+    register_auth(app, adapters)
+
+
 _GROUP_REGISTRARS: Mapping[str, Callable[[Flask, EngineServiceAdapters], None]] = {
-    "auth": register_auth,
+    "auth": _register_auth,
     "tokens": _register_tokens,
     "enrollment": _register_enrollment,
     "devices": _register_devices,

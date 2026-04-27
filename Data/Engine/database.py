@@ -43,6 +43,7 @@ def initialise_engine_database(database_url: str, *, logger: Optional[logging.Lo
         _ensure_sites(conn, logger=logger)
         _ensure_site_enrollment_codes(conn, logger=logger)
         _ensure_users_table(conn, logger=logger)
+        _ensure_directory_services(conn, logger=logger)
         _ensure_user_passkeys(conn, logger=logger)
         _ensure_user_site_assignments(conn, logger=logger)
         _ensure_ansible_recaps(conn, logger=logger)
@@ -306,10 +307,147 @@ def _ensure_users_table(conn: sqlite3.Connection, *, logger: Optional[logging.Lo
             cur.execute("ALTER TABLE users ADD COLUMN auth_reset_required INTEGER NOT NULL DEFAULT 0")
         if "auth_reset_at" not in columns:
             cur.execute("ALTER TABLE users ADD COLUMN auth_reset_at INTEGER")
+        if "auth_source" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN auth_source TEXT NOT NULL DEFAULT 'local'")
+        if "directory_provider_id" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN directory_provider_id INTEGER")
+        if "directory_subject" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN directory_subject TEXT")
+        if "directory_domain" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN directory_domain TEXT")
+        if "directory_dn" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN directory_dn TEXT")
+        if "directory_groups_json" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN directory_groups_json TEXT")
+        if "directory_last_sync_at" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN directory_last_sync_at INTEGER")
+        if "directory_disabled" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN directory_disabled INTEGER NOT NULL DEFAULT 0")
+        if "directory_disabled_at" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN directory_disabled_at INTEGER")
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_users_auth_source
+                ON users(auth_source)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_users_directory_provider
+                ON users(directory_provider_id)
+            """
+        )
     except Exception as exc:
         if logger:
             logger.error("Failed to ensure users table: %s", exc, exc_info=True)
         else:  # pragma: no cover - escalate without logger for tests
+            raise
+    finally:
+        cur.close()
+
+
+def _ensure_directory_services(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS directory_providers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                provider_type TEXT NOT NULL DEFAULT 'ldap',
+                enabled INTEGER NOT NULL DEFAULT 0,
+                priority INTEGER NOT NULL DEFAULT 100,
+                domain_suffix TEXT,
+                server_urls_json TEXT NOT NULL DEFAULT '[]',
+                host_overrides_json TEXT NOT NULL DEFAULT '{}',
+                use_ldaps INTEGER NOT NULL DEFAULT 0,
+                tls_required INTEGER NOT NULL DEFAULT 1,
+                tls_ca_pem TEXT,
+                base_dn TEXT,
+                bind_dn TEXT,
+                bind_password_encrypted TEXT,
+                user_search_filter TEXT,
+                username_attribute TEXT,
+                display_name_attribute TEXT,
+                email_attribute TEXT,
+                member_of_attribute TEXT,
+                group_search_base_dn TEXT,
+                nested_groups INTEGER NOT NULL DEFAULT 1,
+                kerberos_realm TEXT,
+                kerberos_kdc TEXT,
+                kerberos_keytab_encrypted TEXT,
+                sync_interval_seconds INTEGER NOT NULL DEFAULT 60,
+                last_sync_at INTEGER,
+                last_sync_status TEXT,
+                last_sync_message TEXT,
+                last_test_at INTEGER,
+                last_test_status TEXT,
+                last_test_message TEXT,
+                created_at INTEGER,
+                updated_at INTEGER
+            )
+            """
+        )
+        cur.execute("PRAGMA table_info(directory_providers)")
+        columns = {str(row[1]) for row in cur.fetchall()}
+        if "host_overrides_json" not in columns:
+            cur.execute("ALTER TABLE directory_providers ADD COLUMN host_overrides_json TEXT NOT NULL DEFAULT '{}'")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS directory_provider_group_mappings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider_id INTEGER NOT NULL,
+                group_dn TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'User',
+                created_at INTEGER,
+                updated_at INTEGER,
+                FOREIGN KEY(provider_id) REFERENCES directory_providers(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_directory_provider_group_role
+                ON directory_provider_group_mappings(provider_id, group_dn, role)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_directory_provider_enabled_priority
+                ON directory_providers(enabled, priority)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_directory_group_provider
+                ON directory_provider_group_mappings(provider_id)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS directory_provider_site_mappings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider_id INTEGER NOT NULL,
+                label TEXT,
+                group_dns_json TEXT NOT NULL DEFAULT '[]',
+                site_ids_json TEXT NOT NULL DEFAULT '[]',
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER,
+                updated_at INTEGER,
+                FOREIGN KEY(provider_id) REFERENCES directory_providers(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_directory_site_mapping_provider
+                ON directory_provider_site_mappings(provider_id, position)
+            """
+        )
+    except Exception as exc:
+        if logger:
+            logger.error("Failed to ensure directory service tables: %s", exc, exc_info=True)
+        else:
             raise
     finally:
         cur.close()

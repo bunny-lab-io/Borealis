@@ -28,7 +28,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing helper
 
 from ...aegis_cipher import AegisDataCorruptionError
 from ...auth.bootstrap_state import operator_auth_allowed
+from ...auth.context import revalidate_operator_identity
 from ...auth.secrets import require_app_secret
+from .directory_services import DIRECTORY_AUTH_SOURCE, LOCAL_AUTH_SOURCE
 from .passkeys import delete_user_passkeys
 
 def _now_ts() -> int:
@@ -52,6 +54,11 @@ def _row_to_user(row: Sequence[Any]) -> Mapping[str, Any]:
         "mfa_enabled": 1 if (row[7] or 0) else 0,
         "auth_reset_required": 1 if (row[8] or 0) else 0,
         "auth_reset_at": row[9] or 0,
+        "auth_source": row[10] or LOCAL_AUTH_SOURCE,
+        "directory_provider_id": row[11] or None,
+        "directory_provider_name": row[12] or "",
+        "directory_domain": row[13] or "",
+        "directory_disabled": 1 if (row[14] or 0) else 0,
     }
 
 
@@ -82,7 +89,12 @@ class UserManagementService:
         username = session.get("username")
         role = session.get("role") or "User"
         if username:
-            return {"username": username, "role": role}
+            return revalidate_operator_identity(
+                self.db_conn_factory,
+                username=str(username),
+                role=str(role),
+                logger=self.logger,
+            )
 
         token = None
         auth_header = request.headers.get("Authorization") or ""
@@ -100,7 +112,12 @@ class UserManagementService:
             username = data.get("u")
             role = data.get("r") or "User"
             if username:
-                return {"username": username, "role": role}
+                return revalidate_operator_identity(
+                    self.db_conn_factory,
+                    username=str(username),
+                    role=str(role),
+                    logger=self.logger,
+                )
         except (BadSignature, SignatureExpired, Exception):
             return None
         return None
@@ -153,6 +170,22 @@ class UserManagementService:
             return None
         return str(row[0] or ""), int(row[1] or 0)
 
+    def _load_user_source(self, username: str) -> Optional[str]:
+        username_norm = (username or "").strip()
+        if not username_norm:
+            return None
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT COALESCE(auth_source, 'local') FROM users WHERE LOWER(username)=LOWER(?)",
+                (username_norm,),
+            )
+            row = cur.fetchone()
+        finally:
+            conn.close()
+        return str(row[0] or LOCAL_AUTH_SOURCE).strip().lower() if row else None
+
     # ------------------------------------------------------------------ #
     # Endpoint implementations
     # ------------------------------------------------------------------ #
@@ -171,18 +204,25 @@ class UserManagementService:
             cur.execute(
                 """
                 SELECT
-                    id,
-                    username,
-                    display_name,
-                    role,
-                    last_login,
-                    created_at,
-                    updated_at,
+                    users.id,
+                    users.username,
+                    users.display_name,
+                    users.role,
+                    users.last_login,
+                    users.created_at,
+                    users.updated_at,
                     CASE WHEN COALESCE(mfa_disabled, 0) = 1 THEN 0 ELSE 1 END AS mfa_enabled,
-                    COALESCE(auth_reset_required, 0) AS auth_reset_required,
-                    COALESCE(auth_reset_at, 0) AS auth_reset_at
+                    COALESCE(users.auth_reset_required, 0) AS auth_reset_required,
+                    COALESCE(users.auth_reset_at, 0) AS auth_reset_at,
+                    COALESCE(users.auth_source, 'local') AS auth_source,
+                    users.directory_provider_id,
+                    COALESCE(directory_providers.name, '') AS directory_provider_name,
+                    COALESCE(users.directory_domain, '') AS directory_domain,
+                    COALESCE(users.directory_disabled, 0) AS directory_disabled
                 FROM users
-                ORDER BY LOWER(username) ASC
+                LEFT JOIN directory_providers
+                       ON directory_providers.id = users.directory_provider_id
+                ORDER BY LOWER(users.username) ASC
                 """
             )
             rows = cur.fetchall()
@@ -219,9 +259,9 @@ class UserManagementService:
             conn = self._db_conn()
             cur = conn.cursor()
             cur.execute(
-                "INSERT INTO users(username, display_name, password_sha512, role, created_at, updated_at, mfa_enabled, mfa_disabled, auth_reset_required, auth_reset_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (username, display_name or username, encrypted_password, role, now_ts, now_ts, 0, 0, 0, None),
+                "INSERT INTO users(username, display_name, password_sha512, role, created_at, updated_at, mfa_enabled, mfa_disabled, auth_reset_required, auth_reset_at, auth_source) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (username, display_name or username, encrypted_password, role, now_ts, now_ts, 0, 0, 0, None, LOCAL_AUTH_SOURCE),
             )
             conn.commit()
             return jsonify({"status": "ok"})
@@ -243,6 +283,8 @@ class UserManagementService:
         username_norm = (username or "").strip()
         if not username_norm:
             return jsonify({"error": "invalid username"}), 400
+        if self._load_user_source(username_norm) == DIRECTORY_AUTH_SOURCE:
+            return jsonify({"error": "directory_user_local_action_disabled"}), 403
 
         conn: Optional[sqlite3.Connection] = None
         try:
@@ -296,6 +338,8 @@ class UserManagementService:
         password_sha512 = (data.get("password_sha512") or "").strip().lower()
         if not password_sha512 or len(password_sha512) != 128:
             return jsonify({"error": "invalid password hash"}), 400
+        if self._load_user_source(username) == DIRECTORY_AUTH_SOURCE:
+            return jsonify({"error": "directory_user_local_action_disabled"}), 403
 
         encrypted_password = self._encrypt_password_hash(password_sha512)
         conn: Optional[sqlite3.Connection] = None
@@ -337,6 +381,8 @@ class UserManagementService:
         username = (user.get("username") or "").strip()
         if not username:
             return jsonify({"error": "unauthorized"}), 401
+        if self._load_user_source(username) == DIRECTORY_AUTH_SOURCE:
+            return jsonify({"error": "directory_user_local_action_disabled"}), 403
 
         data = request.get_json(silent=True) or {}
         current_password_sha512 = self._extract_password_hash(
@@ -411,6 +457,8 @@ class UserManagementService:
         role = (data.get("role") or "").strip().title()
         if role not in ("User", "Admin"):
             return jsonify({"error": "invalid role"}), 400
+        if self._load_user_source(username) == DIRECTORY_AUTH_SOURCE:
+            return jsonify({"error": "directory_user_local_action_disabled"}), 403
 
         conn: Optional[sqlite3.Connection] = None
         try:

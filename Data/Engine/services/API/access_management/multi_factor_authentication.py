@@ -22,7 +22,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing helper
     from .. import EngineServiceAdapters
 
 from ...auth.bootstrap_state import operator_auth_allowed
+from ...auth.context import revalidate_operator_identity
 from ...auth.secrets import require_app_secret
+from .directory_services import DIRECTORY_AUTH_SOURCE
 def _now_ts() -> int:
     return int(time.time())
 
@@ -54,7 +56,12 @@ class MultiFactorAdministrationService:
         username = session.get("username")
         role = session.get("role") or "User"
         if username:
-            return {"username": username, "role": role}
+            return revalidate_operator_identity(
+                self.db_conn_factory,
+                username=str(username),
+                role=str(role),
+                logger=self.logger,
+            )
 
         token = None
         auth_header = request.headers.get("Authorization") or ""
@@ -72,7 +79,12 @@ class MultiFactorAdministrationService:
             username = data.get("u")
             role = data.get("r") or "User"
             if username:
-                return {"username": username, "role": role}
+                return revalidate_operator_identity(
+                    self.db_conn_factory,
+                    username=str(username),
+                    role=str(role),
+                    logger=self.logger,
+                )
         except (BadSignature, SignatureExpired, Exception):
             return None
         return None
@@ -104,6 +116,15 @@ class MultiFactorAdministrationService:
             conn = self._db_conn()
             cur = conn.cursor()
             now_ts = _now_ts()
+            cur.execute(
+                "SELECT COALESCE(auth_source, 'local') FROM users WHERE LOWER(username)=LOWER(?)",
+                (username_norm,),
+            )
+            source_row = cur.fetchone()
+            if not source_row:
+                return jsonify({"error": "user not found"}), 404
+            if str(source_row[0] or "local").strip().lower() == DIRECTORY_AUTH_SOURCE and not enabled:
+                return jsonify({"error": "directory_mfa_required"}), 403
 
             if enabled:
                 if reset_secret:
