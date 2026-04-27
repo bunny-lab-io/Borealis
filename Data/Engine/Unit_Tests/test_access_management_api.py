@@ -2280,6 +2280,90 @@ def test_directory_provider_crud_requires_test_before_enable(engine_harness: Eng
     assert enabled_provider["bind_password_present"] is True
 
 
+def test_directory_provider_site_mappings_assign_directory_user_sites(engine_harness: EngineTestHarness) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.executemany(
+            "INSERT INTO sites(id, name, description, created_at, enrollment_code) VALUES(?,?,?,?,?)",
+            [
+                (101, "Low Priority", "", 0, "LOW"),
+                (102, "Remote Branch", "", 0, "REMOTE"),
+                (103, "High Priority", "", 0, "HIGH"),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    provider = {
+        "id": 77,
+        "name": "Corp LDAP",
+        "domain_suffix": "example.com",
+        "site_mappings": [
+            {
+                "label": "Tier 1",
+                "group_dns": ["CN=Borealis_Tier1,DC=example,DC=com"],
+                "site_ids": [101, 102],
+            },
+            {
+                "label": "Tier 2",
+                "group_dns": ["CN=Borealis_Tier2,DC=example,DC=com"],
+                "site_ids": [103],
+            },
+        ],
+    }
+    user_info = {
+        "account": "operator@example.com",
+        "display_name": "Directory Operator",
+        "dn": "CN=Directory Operator,DC=example,DC=com",
+        "subject": "operator@example.com",
+        "groups": ["CN=Borealis_Tier1,DC=example,DC=com"],
+    }
+    manager = directory_services.DirectoryAuthenticationManager(
+        db_conn_factory=lambda: sqlite3.connect(str(engine_harness.db_path)),
+        aegis_cipher_service=engine_harness.context.aegis_cipher_service,
+        logger=engine_harness.context.logger,
+    )
+
+    manager._upsert_directory_user(provider, user_info, "User")
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT usa.site_id
+              FROM user_site_assignments AS usa
+              JOIN users AS u ON u.id = usa.user_id
+             WHERE LOWER(u.username)=LOWER(?)
+          ORDER BY usa.site_id
+            """,
+            ("operator@example.com",),
+        )
+        assert [int(row[0]) for row in cur.fetchall()] == [101, 102]
+    finally:
+        conn.close()
+
+    manager._upsert_directory_user(provider, user_info, "Admin")
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT COUNT(*)
+              FROM user_site_assignments AS usa
+              JOIN users AS u ON u.id = usa.user_id
+             WHERE LOWER(u.username)=LOWER(?)
+            """,
+            ("operator@example.com",),
+        )
+        assert int((cur.fetchone() or [0])[0] or 0) == 0
+    finally:
+        conn.close()
+
+
 def test_directory_certificate_download_returns_review_payload(
     engine_harness: EngineTestHarness,
     monkeypatch: pytest.MonkeyPatch,

@@ -660,7 +660,7 @@ finally:
 #### `directory_providers`
 - Status: Active.
 - Purpose: LDAP, LDAPS, and Active Directory provider configuration.
-- Columns: `id`, `name`, `provider_type`, `enabled`, `priority`, `domain_suffix`, `server_urls_json`, `use_ldaps`, `tls_required`, `tls_ca_pem`, `base_dn`, `bind_dn`, `bind_password_encrypted`, `user_search_filter`, `username_attribute`, `display_name_attribute`, `email_attribute`, `member_of_attribute`, `group_search_base_dn`, `nested_groups`, `kerberos_realm`, `kerberos_kdc`, `kerberos_keytab_encrypted`, `sync_interval_seconds`, `last_sync_at`, `last_sync_status`, `last_sync_message`, `last_test_at`, `last_test_status`, `last_test_message`, `created_at`, `updated_at`.
+- Columns: `id`, `name`, `provider_type`, `enabled`, `priority`, `domain_suffix`, `server_urls_json`, `host_overrides_json`, `use_ldaps`, `tls_required`, `tls_ca_pem`, `base_dn`, `bind_dn`, `bind_password_encrypted`, `user_search_filter`, `username_attribute`, `display_name_attribute`, `email_attribute`, `member_of_attribute`, `group_search_base_dn`, `nested_groups`, `kerberos_realm`, `kerberos_kdc`, `kerberos_keytab_encrypted`, `sync_interval_seconds`, `last_sync_at`, `last_sync_status`, `last_sync_message`, `last_test_at`, `last_test_status`, `last_test_message`, `created_at`, `updated_at`.
 - Constraints and indexes:
 - `id` autoincrement primary key.
 - `name` unique.
@@ -685,6 +685,21 @@ finally:
 - Directory authentication role assignment and admission checks.
 - Notes:
 - `role='Admin'` grants Borealis Admin. `role='User'` grants Borealis User and acts as allowed-group membership.
+
+#### `directory_provider_site_mappings`
+- Status: Active.
+- Purpose: Directory user-group to Borealis site-scope mapping.
+- Columns: `id`, `provider_id`, `label`, `group_dns_json`, `site_ids_json`, `position`, `created_at`, `updated_at`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- Index on `provider_id, position`.
+- Used by:
+- Directory Services provider editor Site Assignment tab.
+- Directory authentication JIT cache updates that replace `user_site_assignments` for non-admin directory users.
+- Notes:
+- Admin directory users remain globally scoped through role semantics.
+- User directory groups are unioned across matching mapping rows; each matching mapping contributes all configured `site_ids_json` entries.
+- Saving provider site mappings immediately reapplies site scope for cached directory users using their stored `directory_groups_json`; directory login and sync also refresh the assignments.
 
 #### `user_passkeys`
 - Status: Active.

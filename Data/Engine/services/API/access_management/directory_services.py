@@ -115,6 +115,33 @@ def _json_dumps_list(values: Iterable[Any]) -> str:
     return json.dumps([_clean_text(value) for value in values if _clean_text(value)])
 
 
+def _json_int_list(value: Any) -> List[int]:
+    if isinstance(value, list):
+        items = value
+    else:
+        try:
+            parsed = json.loads(str(value or "[]"))
+            items = parsed if isinstance(parsed, list) else []
+        except Exception:
+            items = []
+    result: List[int] = []
+    seen: set[int] = set()
+    for item in items:
+        try:
+            parsed = int(item)
+        except (TypeError, ValueError):
+            continue
+        if parsed in seen:
+            continue
+        seen.add(parsed)
+        result.append(parsed)
+    return result
+
+
+def _json_dumps_int_list(values: Iterable[Any]) -> str:
+    return json.dumps(_json_int_list(list(values)))
+
+
 def _json_object(value: Any) -> Dict[str, str]:
     if isinstance(value, dict):
         raw = value
@@ -141,6 +168,33 @@ def _json_dumps_object(values: Mapping[str, Any]) -> str:
 def _rows_to_dicts(cursor: Any, rows: Sequence[Sequence[Any]]) -> List[Dict[str, Any]]:
     keys = [str(item[0]) for item in (cursor.description or [])]
     return [dict(zip(keys, list(row))) for row in rows]
+
+
+def _normalize_site_mappings(raw: Any) -> List[Dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    mappings: List[Dict[str, Any]] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, Mapping):
+            continue
+        group_dns_raw = item.get("group_dns")
+        if isinstance(group_dns_raw, str):
+            group_dns = [part.strip() for part in group_dns_raw.replace(",", "\n").splitlines() if part.strip()]
+        else:
+            group_dns = [_clean_text(group_dn) for group_dn in (group_dns_raw or []) if _clean_text(group_dn)]
+        site_ids = _json_int_list(item.get("site_ids") or item.get("sites") or [])
+        label = _clean_text(item.get("label")) or f"User Site Group {index + 1}"
+        if not group_dns and not site_ids:
+            continue
+        mappings.append(
+            {
+                "label": label,
+                "group_dns": group_dns,
+                "site_ids": site_ids,
+                "position": _as_int(item.get("position"), index),
+            }
+        )
+    return mappings
 
 
 def _entry_attr(attrs: Mapping[str, Any], name: str) -> Any:
@@ -596,6 +650,7 @@ class DirectoryAuthenticationManager:
             providers = _rows_to_dicts(cur, cur.fetchall())
             provider_ids = [int(item.get("id") or 0) for item in providers]
             mappings: Dict[int, List[Dict[str, Any]]] = {provider_id: [] for provider_id in provider_ids}
+            site_mappings: Dict[int, List[Dict[str, Any]]] = {provider_id: [] for provider_id in provider_ids}
             if provider_ids:
                 placeholders = ",".join("?" for _ in provider_ids)
                 cur.execute(
@@ -611,8 +666,29 @@ class DirectoryAuthenticationManager:
                     mappings.setdefault(int(row.get("provider_id") or 0), []).append(
                         {"group_dn": _clean_text(row.get("group_dn")), "role": _canonical_role(row.get("role"))}
                     )
+                cur.execute(
+                    f"""
+                    SELECT id, provider_id, label, group_dns_json, site_ids_json, position
+                      FROM directory_provider_site_mappings
+                     WHERE provider_id IN ({placeholders})
+                     ORDER BY provider_id ASC, position ASC, id ASC
+                    """,
+                    tuple(provider_ids),
+                )
+                for row in _rows_to_dicts(cur, cur.fetchall()):
+                    provider_id = int(row.get("provider_id") or 0)
+                    site_mappings.setdefault(provider_id, []).append(
+                        {
+                            "id": int(row.get("id") or 0),
+                            "label": _clean_text(row.get("label")),
+                            "group_dns": _json_list(row.get("group_dns_json")),
+                            "site_ids": _json_int_list(row.get("site_ids_json")),
+                            "position": _as_int(row.get("position"), 0),
+                        }
+                    )
             for provider in providers:
                 provider["group_mappings"] = mappings.get(int(provider.get("id") or 0), [])
+                provider["site_mappings"] = site_mappings.get(int(provider.get("id") or 0), [])
             return providers
         finally:
             conn.close()
@@ -662,6 +738,17 @@ class DirectoryAuthenticationManager:
                 {"group_dn": _clean_text(item.get("group_dn")), "role": _canonical_role(item.get("role"))}
                 for item in provider.get("group_mappings", [])
                 if _clean_text(item.get("group_dn"))
+            ],
+            "site_mappings": [
+                {
+                    "id": int(item.get("id") or 0),
+                    "label": _clean_text(item.get("label")),
+                    "group_dns": [_clean_text(group_dn) for group_dn in item.get("group_dns", []) if _clean_text(group_dn)],
+                    "site_ids": _json_int_list(item.get("site_ids") or []),
+                    "position": _as_int(item.get("position"), index),
+                }
+                for index, item in enumerate(provider.get("site_mappings", []) or [])
+                if item.get("group_dns") or item.get("site_ids")
             ],
         }
 
@@ -951,6 +1038,81 @@ class DirectoryAuthenticationManager:
                 matched_role = "User"
         return matched_role
 
+    def _site_ids_for_directory_groups(self, provider: Mapping[str, Any], groups: Sequence[str]) -> List[int]:
+        group_set = {_clean_text(group).lower() for group in groups if _clean_text(group)}
+        site_ids: List[int] = []
+        seen: set[int] = set()
+        for mapping in provider.get("site_mappings", []) or []:
+            mapping_groups = {_clean_text(group_dn).lower() for group_dn in mapping.get("group_dns", []) if _clean_text(group_dn)}
+            if not mapping_groups.intersection(group_set):
+                continue
+            for site_id in _json_int_list(mapping.get("site_ids") or []):
+                if site_id in seen:
+                    continue
+                seen.add(site_id)
+                site_ids.append(site_id)
+        return site_ids
+
+    def _replace_directory_site_assignments(
+        self,
+        cur: Any,
+        *,
+        user_id: int,
+        role: str,
+        provider: Mapping[str, Any],
+        groups: Sequence[str],
+        assigned_at: int,
+    ) -> None:
+        cur.execute("DELETE FROM user_site_assignments WHERE user_id=?", (int(user_id),))
+        if _canonical_role(role) == "Admin":
+            return
+        site_ids = self._site_ids_for_directory_groups(provider, groups)
+        if not site_ids:
+            return
+        cur.executemany(
+            """
+            INSERT OR IGNORE INTO user_site_assignments(user_id, site_id, assigned_at)
+            VALUES (?, ?, ?)
+            """,
+            [(int(user_id), int(site_id), int(assigned_at)) for site_id in site_ids],
+        )
+
+    def refresh_cached_site_assignments(self, provider: Mapping[str, Any]) -> int:
+        provider_id = int(provider.get("id") or 0)
+        if not provider_id:
+            return 0
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, role, directory_groups_json
+                  FROM users
+                 WHERE COALESCE(auth_source, 'local')=?
+                   AND COALESCE(directory_provider_id, 0)=?
+                   AND COALESCE(directory_disabled, 0)=0
+                """,
+                (DIRECTORY_AUTH_SOURCE, provider_id),
+            )
+            rows = _rows_to_dicts(cur, cur.fetchall())
+            now_ts = _now_ts()
+            for row in rows:
+                self._replace_directory_site_assignments(
+                    cur,
+                    user_id=int(row.get("id") or 0),
+                    role=_canonical_role(row.get("role")),
+                    provider=provider,
+                    groups=_json_list(row.get("directory_groups_json")),
+                    assigned_at=now_ts,
+                )
+            conn.commit()
+            return len(rows)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def authenticate_login(self, login_name: str, password: str) -> DirectoryLoginResult:
         login_name = _clean_text(login_name)
         if not login_name or not password:
@@ -1042,6 +1204,7 @@ class DirectoryAuthenticationManager:
         conn = self._db_conn()
         try:
             cur = conn.cursor()
+            user_id = 0
             cur.execute(
                 """
                 SELECT id, COALESCE(auth_source, 'local'), COALESCE(directory_provider_id, 0), COALESCE(directory_disabled, 0)
@@ -1065,6 +1228,7 @@ class DirectoryAuthenticationManager:
                     409,
                 )
             if row:
+                user_id = int(row[0] or 0)
                 cur.execute(
                     """
                     UPDATE users
@@ -1142,6 +1306,20 @@ class DirectoryAuthenticationManager:
                         0,
                     ),
                 )
+                user_id = int(cur.lastrowid or 0)
+                if not user_id:
+                    cur.execute("SELECT id FROM users WHERE LOWER(username)=LOWER(?) LIMIT 1", (username,))
+                    inserted = cur.fetchone()
+                    user_id = int((inserted or [0])[0] or 0)
+            if user_id:
+                self._replace_directory_site_assignments(
+                    cur,
+                    user_id=user_id,
+                    role=role,
+                    provider=provider,
+                    groups=groups,
+                    assigned_at=now_ts,
+                )
             conn.commit()
         except DirectoryAuthError:
             conn.rollback()
@@ -1190,7 +1368,14 @@ class DirectoryAuthenticationManager:
                 found = self.search_user(provider, username)
             except Exception:
                 found = None
-            if found:
+            if not found:
+                self.set_directory_cache_disabled(username, disabled=True, allow_self=True)
+                disabled += 1
+                continue
+            groups = [_clean_text(group) for group in found.get("groups", []) if _clean_text(group)]
+            role = self._mapped_role(provider, groups)
+            if role:
+                self._upsert_directory_user(provider, found, role)
                 continue
             self.set_directory_cache_disabled(username, disabled=True, allow_self=True)
             disabled += 1
@@ -1329,6 +1514,50 @@ class DirectoryManagementService:
             return jsonify(payload), status
         return jsonify({"providers": [self.manager.public_provider(item) for item in self.manager.load_providers()]})
 
+    def list_sites(self):
+        requirement = self._require_admin()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT s.id,
+                       s.name,
+                       s.description,
+                       s.created_at,
+                       COALESCE(ds.cnt, 0) AS device_count,
+                       s.enrollment_code
+                  FROM sites AS s
+             LEFT JOIN (
+                       SELECT site_id, COUNT(*) AS cnt
+                         FROM device_sites
+                     GROUP BY site_id
+                   ) AS ds ON ds.site_id = s.id
+              ORDER BY LOWER(s.name) ASC
+                """
+            )
+            rows = _rows_to_dicts(cur, cur.fetchall())
+        finally:
+            conn.close()
+        return jsonify(
+            {
+                "sites": [
+                    {
+                        "id": int(row.get("id") or 0),
+                        "name": _clean_text(row.get("name")),
+                        "description": _clean_text(row.get("description")),
+                        "created_at": _as_int(row.get("created_at"), 0),
+                        "device_count": _as_int(row.get("device_count"), 0),
+                        "enrollment_code": _clean_text(row.get("enrollment_code")),
+                    }
+                    for row in rows
+                ]
+            }
+        )
+
     def save_provider(self, provider_id: Optional[int] = None):
         requirement = self._require_admin()
         if requirement:
@@ -1341,6 +1570,9 @@ class DirectoryManagementService:
             return jsonify({"error": "provider_not_found"}), 404
         try:
             saved = self._persist_provider(payload, existing=existing)
+            if "site_mappings" in payload:
+                self.manager.refresh_cached_site_assignments(saved)
+                saved = self.manager.load_provider(int(saved.get("id") or 0)) or saved
             return jsonify({"status": "ok", "provider": self.manager.public_provider(saved)})
         except DirectoryAuthError as exc:
             return jsonify({"error": exc.code, "message": str(exc)}), exc.status_code
@@ -1364,6 +1596,7 @@ class DirectoryManagementService:
             )
             if int((cur.fetchone() or [0])[0] or 0) > 0:
                 return jsonify({"error": "provider_has_cached_users"}), 409
+            cur.execute("DELETE FROM directory_provider_site_mappings WHERE provider_id=?", (int(provider_id),))
             cur.execute("DELETE FROM directory_provider_group_mappings WHERE provider_id=?", (int(provider_id),))
             cur.execute("DELETE FROM directory_providers WHERE id=?", (int(provider_id),))
             deleted = int(cur.rowcount or 0)
@@ -1609,13 +1842,18 @@ class DirectoryManagementService:
             "email_attribute": _clean_text(field("email_attribute", "mail")),
             "member_of_attribute": _clean_text(field("member_of_attribute", "memberOf")),
             "group_search_base_dn": _clean_text(field("group_search_base_dn", "")),
-            "nested_groups": 1 if _as_bool(field("nested_groups", provider_type == "active_directory")) else 0,
+            "nested_groups": 1 if _as_bool(field("nested_groups", True)) else 0,
             "kerberos_realm": _clean_text(field("kerberos_realm", "")).upper(),
             "kerberos_kdc": _clean_text(field("kerberos_kdc", "")),
             "kerberos_keytab_encrypted": keytab_encrypted,
             "sync_interval_seconds": max(60, _as_int(field("sync_interval_seconds", DEFAULT_SYNC_INTERVAL_SECONDS), DEFAULT_SYNC_INTERVAL_SECONDS)),
             "updated_at": now_ts,
         }
+        site_mappings = (
+            _normalize_site_mappings(payload.get("site_mappings"))
+            if "site_mappings" in payload
+            else _normalize_site_mappings((existing or {}).get("site_mappings") or [])
+        )
 
         if provider_type == "active_directory" and not row_values["kerberos_realm"]:
             raise DirectoryAuthError("kerberos_realm_required", "Active Directory providers require a Kerberos realm.", 400)
@@ -1751,6 +1989,19 @@ class DirectoryManagementService:
                 cur.execute("SELECT id FROM directory_providers WHERE LOWER(name)=LOWER(?)", (name,))
                 row = cur.fetchone()
                 provider_id = int(row[0] or 0)
+            if "site_mappings" in payload:
+                site_ids = sorted({site_id for item in site_mappings for site_id in _json_int_list(item.get("site_ids") or [])})
+                if site_ids:
+                    placeholders = ",".join("?" for _ in site_ids)
+                    cur.execute(f"SELECT id FROM sites WHERE id IN ({placeholders})", tuple(site_ids))
+                    existing_site_ids = {int(row[0]) for row in cur.fetchall()}
+                    missing_site_ids = [site_id for site_id in site_ids if site_id not in existing_site_ids]
+                    if missing_site_ids:
+                        raise DirectoryAuthError(
+                            "site_not_found",
+                            f"One or more assigned sites no longer exists: {missing_site_ids}",
+                            404,
+                        )
             if "group_mappings" in payload:
                 cur.execute("DELETE FROM directory_provider_group_mappings WHERE provider_id=?", (provider_id,))
                 for item in payload.get("group_mappings") or []:
@@ -1763,6 +2014,31 @@ class DirectoryManagementService:
                         VALUES(?,?,?,?,?)
                         """,
                         (provider_id, group_dn, _canonical_role((item or {}).get("role")), now_ts, now_ts),
+                    )
+            if "site_mappings" in payload:
+                cur.execute("DELETE FROM directory_provider_site_mappings WHERE provider_id=?", (provider_id,))
+                for position, item in enumerate(site_mappings):
+                    cur.execute(
+                        """
+                        INSERT INTO directory_provider_site_mappings(
+                            provider_id,
+                            label,
+                            group_dns_json,
+                            site_ids_json,
+                            position,
+                            created_at,
+                            updated_at
+                        ) VALUES(?,?,?,?,?,?,?)
+                        """,
+                        (
+                            provider_id,
+                            _clean_text(item.get("label")) or f"User Site Group {position + 1}",
+                            _json_dumps_list(item.get("group_dns") or []),
+                            _json_dumps_int_list(item.get("site_ids") or []),
+                            position,
+                            now_ts,
+                            now_ts,
+                        ),
                     )
             conn.commit()
         except Exception:
@@ -1785,6 +2061,10 @@ def register_directory_services(app: Flask, adapters: "EngineServiceAdapters") -
     @blueprint.route("/api/directory/providers", methods=["GET"])
     def _list_providers():
         return service.list_providers()
+
+    @blueprint.route("/api/directory/sites", methods=["GET"])
+    def _list_sites():
+        return service.list_sites()
 
     @blueprint.route("/api/directory/providers", methods=["POST"])
     def _create_provider():

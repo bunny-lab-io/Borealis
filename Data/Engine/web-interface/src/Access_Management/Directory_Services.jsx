@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Box,
   Button,
+  Chip,
   Checkbox,
   Dialog,
   DialogActions,
@@ -25,6 +26,7 @@ import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
 import EditRoundedIcon from "@mui/icons-material/EditRounded";
 import ErrorOutlineRoundedIcon from "@mui/icons-material/ErrorOutlineRounded";
 import FileDownloadRoundedIcon from "@mui/icons-material/FileDownloadRounded";
+import LocationCityRoundedIcon from "@mui/icons-material/LocationCityRounded";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import SettingsEthernetRoundedIcon from "@mui/icons-material/SettingsEthernetRounded";
@@ -121,6 +123,7 @@ const DIALOG_TABS_SX = {
 const DIALOG_TAB_DEFS = [
   { key: "basic", label: "Basic", icon: SettingsEthernetRoundedIcon },
   { key: "mapping", label: "User / Group Mapping", icon: AccountTreeRoundedIcon },
+  { key: "sites", label: "Site Assignment", icon: LocationCityRoundedIcon },
   { key: "diagnostics", label: "Diagnostics", icon: SearchRoundedIcon },
 ];
 const DIALOG_CARD_SX = {
@@ -140,6 +143,25 @@ const CARD_HEADER_SX = {
   justifyContent: "space-between",
   gap: 1.5,
   flexWrap: "wrap",
+};
+const DIALOG_SCROLLBAR_SX = {
+  scrollbarWidth: "thin",
+  scrollbarColor: "rgba(125,211,252,0.45) rgba(15,23,42,0.5)",
+  "&::-webkit-scrollbar": {
+    width: 10,
+  },
+  "&::-webkit-scrollbar-track": {
+    background: "rgba(15,23,42,0.5)",
+    borderRadius: 999,
+  },
+  "&::-webkit-scrollbar-thumb": {
+    background: "rgba(125,211,252,0.45)",
+    borderRadius: 999,
+    border: "2px solid rgba(15,23,42,0.5)",
+  },
+  "&::-webkit-scrollbar-thumb:hover": {
+    background: "rgba(125,211,252,0.65)",
+  },
 };
 const ACTION_MENU_PAPER_SX = {
   bgcolor: "rgba(8,12,24,0.96)",
@@ -256,6 +278,33 @@ const ACTION_MENU_GROUP_LABELS = {
 };
 const ACTION_MENU_GROUP_ORDER = ["primary", "organize", "danger"];
 
+function normalizeSiteIds(value) {
+  const source = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  return source
+    .map((item) => Number(item))
+    .filter((item) => Number.isFinite(item))
+    .filter((item) => {
+      if (seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    });
+}
+
+function makeLocalId(prefix = "directory-site-map") {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createSiteMapping(index = 0, values = {}) {
+  return {
+    local_id: values.local_id || (values.id ? `saved-${values.id}` : makeLocalId()),
+    id: values.id || 0,
+    label: values.label || `User Site Group ${index + 1}`,
+    group_dns_text: values.group_dns_text || "",
+    site_ids: normalizeSiteIds(values.site_ids || []),
+  };
+}
+
 const emptyForm = {
   name: "",
   provider_type: "ldap",
@@ -282,7 +331,15 @@ const emptyForm = {
   kerberos_keytab_base64: "",
   admin_group_dns_text: "",
   user_group_dns_text: "",
+  site_mappings: [],
 };
+
+function makeEmptyForm() {
+  return {
+    ...emptyForm,
+    site_mappings: [createSiteMapping(0)],
+  };
+}
 
 function formatTs(ts) {
   if (!ts) return "-";
@@ -316,6 +373,47 @@ function roleDnsToMappings(adminDnsText, userDnsText) {
     ...linesToDnsList(adminDnsText).map((group_dn) => ({ role: "Admin", group_dn })),
     ...linesToDnsList(userDnsText).map((group_dn) => ({ role: "User", group_dn })),
   ];
+}
+
+function siteMappingsToPayload(mappings = []) {
+  return (mappings || [])
+    .map((mapping, index) => ({
+      label: String(mapping?.label || `User Site Group ${index + 1}`).trim() || `User Site Group ${index + 1}`,
+      group_dns: linesToDnsList(mapping?.group_dns_text),
+      site_ids: normalizeSiteIds(mapping?.site_ids),
+      position: index,
+    }))
+    .filter((mapping) => mapping.group_dns.length || mapping.site_ids.length);
+}
+
+function siteMappingsToUserDnsText(mappings = []) {
+  const seen = new Set();
+  const groupDns = [];
+  siteMappingsToPayload(mappings).forEach((mapping) => {
+    mapping.group_dns.forEach((dn) => {
+      const key = dn.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      groupDns.push(dn);
+    });
+  });
+  return groupDns.join("\n");
+}
+
+function siteMappingsFromProvider(provider) {
+  const savedMappings = Array.isArray(provider?.site_mappings) ? provider.site_mappings : [];
+  if (savedMappings.length) {
+    return savedMappings.map((mapping, index) =>
+      createSiteMapping(index, {
+        id: mapping?.id || 0,
+        label: mapping?.label || `User Site Group ${index + 1}`,
+        group_dns_text: Array.isArray(mapping?.group_dns) ? mapping.group_dns.join("\n") : "",
+        site_ids: normalizeSiteIds(mapping?.site_ids || []),
+      })
+    );
+  }
+  const legacyUserDns = mappingsToRoleText(provider?.group_mappings || [], "User");
+  return [createSiteMapping(0, { group_dns_text: legacyUserDns })];
 }
 
 function splitServerUrls(value) {
@@ -355,9 +453,9 @@ function textToHostOverrides(value) {
 }
 
 function formFromProvider(provider) {
-  if (!provider) return { ...emptyForm };
+  if (!provider) return makeEmptyForm();
   return {
-    ...emptyForm,
+    ...makeEmptyForm(),
     ...provider,
     server_urls: Array.isArray(provider.server_urls) ? provider.server_urls.join("\n") : "",
     host_overrides_text: hostOverridesToText(provider.host_overrides || {}),
@@ -369,6 +467,7 @@ function formFromProvider(provider) {
     member_of_attribute: provider.member_of_attribute || emptyForm.member_of_attribute,
     admin_group_dns_text: mappingsToRoleText(provider.group_mappings || [], "Admin"),
     user_group_dns_text: mappingsToRoleText(provider.group_mappings || [], "User"),
+    site_mappings: siteMappingsFromProvider(provider),
   };
 }
 
@@ -435,12 +534,16 @@ export default function DirectoryServices() {
   const [menuRow, setMenuRow] = useState(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState(null);
-  const [form, setForm] = useState(emptyForm);
+  const [form, setForm] = useState(() => makeEmptyForm());
   const [dialogTab, setDialogTab] = useState("basic");
   const [certificateExpanded, setCertificateExpanded] = useState(false);
   const [dnsOverridesExpanded, setDnsOverridesExpanded] = useState(false);
   const [basicAdvancedExpanded, setBasicAdvancedExpanded] = useState(false);
   const [ldapAdvancedExpanded, setLdapAdvancedExpanded] = useState(false);
+  const [availableSites, setAvailableSites] = useState([]);
+  const [sitesLoading, setSitesLoading] = useState(false);
+  const [siteAssignmentTargetId, setSiteAssignmentTargetId] = useState("");
+  const [siteAssignmentSelection, setSiteAssignmentSelection] = useState(() => new Set());
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [certificateReview, setCertificateReview] = useState(null);
   const [certificateBusy, setCertificateBusy] = useState(false);
@@ -471,9 +574,26 @@ export default function DirectoryServices() {
     }
   }, []);
 
+  const fetchDirectorySites = useCallback(async () => {
+    setSitesLoading(true);
+    try {
+      const resp = await fetch("/api/directory/sites", { credentials: "include" });
+      const data = await resp.json().catch(() => ({}));
+      setAvailableSites(Array.isArray(data?.sites) ? data.sites : []);
+    } catch {
+      setAvailableSites([]);
+    } finally {
+      setSitesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (isAdmin) fetchProviders();
   }, [fetchProviders, isAdmin]);
+
+  useEffect(() => {
+    if (isAdmin && editorOpen) fetchDirectorySites();
+  }, [editorOpen, fetchDirectorySites, isAdmin]);
 
   const openContextMenu = useCallback((event, row, node = null) => {
     const mouseEvent = event?.event || event;
@@ -497,7 +617,7 @@ export default function DirectoryServices() {
 
   const openCreate = useCallback(() => {
     setEditingProvider(null);
-    setForm({ ...emptyForm });
+    setForm(makeEmptyForm());
     setDialogTab("basic");
     setCertificateExpanded(false);
     setDnsOverridesExpanded(false);
@@ -507,6 +627,8 @@ export default function DirectoryServices() {
     setLookupPassword("");
     setLookupResult(null);
     setAccessPreview(null);
+    setSiteAssignmentTargetId("");
+    setSiteAssignmentSelection(new Set());
     setEditorOpen(true);
   }, []);
 
@@ -522,12 +644,43 @@ export default function DirectoryServices() {
     setLookupPassword("");
     setLookupResult(null);
     setAccessPreview(null);
+    setSiteAssignmentTargetId("");
+    setSiteAssignmentSelection(new Set());
     setEditorOpen(true);
     closeMenu();
   }, [closeMenu]);
 
   const updateForm = useCallback((key, value) => {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }, []);
+
+  const updateSiteMapping = useCallback((localId, patch) => {
+    setForm((prev) => ({
+      ...prev,
+      site_mappings: (prev.site_mappings || []).map((mapping) =>
+        mapping.local_id === localId ? { ...mapping, ...patch } : mapping
+      ),
+    }));
+  }, []);
+
+  const addSiteMapping = useCallback(() => {
+    setForm((prev) => {
+      const current = Array.isArray(prev.site_mappings) ? prev.site_mappings : [];
+      return {
+        ...prev,
+        site_mappings: [...current, createSiteMapping(current.length)],
+      };
+    });
+  }, []);
+
+  const removeSiteMapping = useCallback((localId) => {
+    setForm((prev) => {
+      const next = (prev.site_mappings || []).filter((mapping) => mapping.local_id !== localId);
+      return {
+        ...prev,
+        site_mappings: next.length ? next : [createSiteMapping(0)],
+      };
+    });
   }, []);
 
   const updateConnectionSecurity = useCallback((value) => {
@@ -539,7 +692,23 @@ export default function DirectoryServices() {
     }));
   }, []);
 
+  const openSiteAssignment = useCallback((mapping) => {
+    if (!mapping?.local_id) return;
+    setSiteAssignmentTargetId(mapping.local_id);
+    setSiteAssignmentSelection(new Set(normalizeSiteIds(mapping.site_ids || [])));
+  }, []);
+
+  const applySiteAssignment = useCallback(() => {
+    if (!siteAssignmentTargetId) return;
+    updateSiteMapping(siteAssignmentTargetId, { site_ids: Array.from(siteAssignmentSelection) });
+    setSiteAssignmentTargetId("");
+    setSiteAssignmentSelection(new Set());
+  }, [siteAssignmentSelection, siteAssignmentTargetId, updateSiteMapping]);
+
   const providerPayload = useCallback(() => {
+    const siteMappingState = Array.isArray(form.site_mappings) ? form.site_mappings : [];
+    const siteMappings = siteMappingsToPayload(siteMappingState);
+    const userGroupDnsText = siteMappingState.length ? siteMappingsToUserDnsText(siteMappingState) : form.user_group_dns_text;
     const payload = {
       name: form.name,
       provider_type: form.provider_type,
@@ -561,7 +730,8 @@ export default function DirectoryServices() {
       nested_groups: Boolean(form.nested_groups),
       kerberos_realm: form.kerberos_realm,
       kerberos_kdc: form.kerberos_kdc,
-      group_mappings: roleDnsToMappings(form.admin_group_dns_text, form.user_group_dns_text),
+      group_mappings: roleDnsToMappings(form.admin_group_dns_text, userGroupDnsText),
+      site_mappings: siteMappings,
     };
     if (!editingProvider?.tls_ca_pem_present || form.tls_ca_pem) payload.tls_ca_pem = form.tls_ca_pem;
     if (!editingProvider?.bind_password_present || form.bind_password) payload.bind_password = form.bind_password;
@@ -628,18 +798,24 @@ export default function DirectoryServices() {
     }
   }, [editingProvider, lookupPassword, lookupUsername, sendNotification]);
 
-  const previewEffectiveAccess = useCallback(async (role) => {
+  const previewEffectiveAccess = useCallback(async (role, groupDnsTextOverride = "", busyKey = "") => {
     if (!editingProvider?.id) {
       sendNotification("Save provider before previewing effective access");
       return;
     }
     const normalizedRole = role === "Admin" ? "Admin" : "User";
-    const groupDns = linesToDnsList(normalizedRole === "Admin" ? form.admin_group_dns_text : form.user_group_dns_text);
+    const groupDnsText = groupDnsTextOverride || (
+      normalizedRole === "Admin"
+        ? form.admin_group_dns_text
+        : (Array.isArray(form.site_mappings) && form.site_mappings.length ? siteMappingsToUserDnsText(form.site_mappings) : form.user_group_dns_text)
+    );
+    const groupDns = linesToDnsList(groupDnsText);
     if (!groupDns.length) {
       sendNotification(`${normalizedRole} group DN required`);
       return;
     }
-    setAccessPreviewBusyRole(normalizedRole);
+    const activeBusyKey = busyKey || normalizedRole;
+    setAccessPreviewBusyRole(activeBusyKey);
     try {
       const resp = await fetch(`/api/directory/providers/${editingProvider.id}/effective-access`, {
         method: "POST",
@@ -656,7 +832,7 @@ export default function DirectoryServices() {
     } finally {
       setAccessPreviewBusyRole("");
     }
-  }, [editingProvider, form.admin_group_dns_text, form.user_group_dns_text, sendNotification]);
+  }, [editingProvider, form.admin_group_dns_text, form.site_mappings, form.user_group_dns_text, sendNotification]);
 
   const saveProvider = useCallback(async () => {
     const payload = providerPayload();
@@ -792,6 +968,17 @@ export default function DirectoryServices() {
       valueFormatter: (params) => formatTs(params.value),
     },
   ], []);
+
+  const availableSitesById = useMemo(() => {
+    const byId = new Map();
+    availableSites.forEach((site) => byId.set(Number(site.id), site));
+    return byId;
+  }, [availableSites]);
+
+  const siteAssignmentTarget = useMemo(
+    () => (form.site_mappings || []).find((mapping) => mapping.local_id === siteAssignmentTargetId) || null,
+    [form.site_mappings, siteAssignmentTargetId]
+  );
 
   const contextMenuActions = useMemo(() => {
     const row = menuRow;
@@ -957,6 +1144,13 @@ export default function DirectoryServices() {
       ? "System trust"
       : "No pinned certificate";
   const dnsOverrideCount = Object.keys(textToHostOverrides(form.host_overrides_text)).length;
+  const siteMappings = Array.isArray(form.site_mappings) && form.site_mappings.length
+    ? form.site_mappings
+    : [createSiteMapping(0)];
+  const assignedSiteNames = (mapping) =>
+    normalizeSiteIds(mapping?.site_ids || [])
+      .map((siteId) => availableSitesById.get(siteId)?.name || `Site ${siteId}`)
+      .filter(Boolean);
 
   if (!isAdmin) return null;
 
@@ -1092,15 +1286,29 @@ export default function DirectoryServices() {
         onClose={() => setEditorOpen(false)}
         maxWidth="md"
         fullWidth
-        PaperProps={{ sx: DIALOG_PAPER_SX }}
+        PaperProps={{
+          sx: {
+            ...DIALOG_PAPER_SX,
+            maxHeight: "calc(100vh - 48px)",
+            display: "flex",
+            flexDirection: "column",
+          },
+        }}
       >
-        <DialogTitle sx={DIALOG_TITLE_SX}>
+        <DialogTitle sx={{ ...DIALOG_TITLE_SX, flexShrink: 0 }}>
           <DialogHeaderBlock
             title={editingProvider ? "Edit Directory Provider" : "New Directory Provider"}
             subtitle="Saved providers must pass test before enablement."
           />
         </DialogTitle>
-        <DialogContent sx={DIALOG_CONTENT_SX}>
+        <DialogContent
+          sx={{
+            ...DIALOG_CONTENT_SX,
+            ...DIALOG_SCROLLBAR_SX,
+            overflowY: "auto",
+            minHeight: 0,
+          }}
+        >
           <Tabs
             value={activeDialogTabIndex}
             onChange={(_, value) => setDialogTab(DIALOG_TAB_DEFS[value]?.key || "basic")}
@@ -1275,8 +1483,8 @@ export default function DirectoryServices() {
               </SectionCard>
 
               <SectionCard
-                title="Role Mapping"
-                subtitle="Map directory groups to Borealis roles."
+                title="Admin Role Mapping"
+                subtitle="Map directory groups to global Borealis admin access."
                 action={
                   <FormControlLabel
                     sx={{ m: 0 }}
@@ -1299,19 +1507,6 @@ export default function DirectoryServices() {
                     onClick={() => previewEffectiveAccess("Admin")}
                   >
                     Display Effective Admin Access
-                  </Button>
-                </Box>
-                <FormTooltip title="Directory group DNs that grant Borealis User role. One group DN per line.">
-                  <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 12" } }} label="User Group DNs" placeholder="CN=Borealis_Operators,CN=Users,DC=bunny-lab,DC=io" multiline minRows={2} value={form.user_group_dns_text} onChange={(e) => updateForm("user_group_dns_text", e.target.value)} />
-                </FormTooltip>
-                <Box sx={{ gridColumn: { md: "span 12" }, display: "flex", justifyContent: "flex-end" }}>
-                  <Button
-                    sx={DIALOG_BUTTON_SX}
-                    startIcon={<SearchRoundedIcon />}
-                    disabled={accessPreviewBusyRole === "User" || !editingProvider?.id || linesToDnsList(form.user_group_dns_text).length === 0}
-                    onClick={() => previewEffectiveAccess("User")}
-                  >
-                    Display Effective User Access
                   </Button>
                 </Box>
               </SectionCard>
@@ -1342,6 +1537,115 @@ export default function DirectoryServices() {
                     ) : null}
                   </>
                 ) : null}
+              </SectionCard>
+            </Box>
+          ) : null}
+
+          {dialogTab === "sites" ? (
+            <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "repeat(12, 1fr)" }, gap: 2 }}>
+              <SectionCard
+                title="Directory Site Assignment"
+                subtitle="Directory admins remain global. User groups inherit only assigned sites."
+                action={
+                  <Button sx={DIALOG_BUTTON_SX} startIcon={<AddIcon />} onClick={addSiteMapping}>
+                    Add User Group
+                  </Button>
+                }
+              >
+                <Box
+                  sx={{
+                    ...DIALOG_SCROLLBAR_SX,
+                    gridColumn: "1 / -1",
+                    maxHeight: { xs: 390, md: 470 },
+                    overflowY: "auto",
+                    pr: 0.75,
+                    display: "grid",
+                    gridTemplateColumns: "1fr",
+                    gap: 1.25,
+                  }}
+                >
+                  {siteMappings.map((mapping, index) => {
+                    const siteNames = assignedSiteNames(mapping);
+                    return (
+                      <Box
+                        key={`site-tab-${mapping.local_id}`}
+                        sx={{
+                          border: "1px solid rgba(148,163,184,0.18)",
+                          borderRadius: 2,
+                          background: "rgba(15,23,42,0.34)",
+                          p: 1.25,
+                          display: "grid",
+                          gridTemplateColumns: { xs: "1fr", md: "repeat(12, 1fr)" },
+                          gap: 1.25,
+                        }}
+                      >
+                        <TextField
+                          sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 4" } }}
+                          label="Assignment Name"
+                          placeholder={`User Site Group ${index + 1}`}
+                          value={mapping.label || ""}
+                          onChange={(e) => updateSiteMapping(mapping.local_id, { label: e.target.value })}
+                        />
+                        <Box sx={{ gridColumn: { md: "span 8" }, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+                          <Button
+                            sx={DIALOG_BUTTON_SX}
+                            startIcon={<SearchRoundedIcon />}
+                            disabled={accessPreviewBusyRole === `User-${mapping.local_id}` || !editingProvider?.id || linesToDnsList(mapping.group_dns_text).length === 0}
+                            onClick={() => previewEffectiveAccess("User", mapping.group_dns_text, `User-${mapping.local_id}`)}
+                          >
+                            Display Effective User Access
+                          </Button>
+                          <Button sx={DIALOG_BUTTON_SX} startIcon={<LocationCityRoundedIcon />} onClick={() => openSiteAssignment(mapping)}>
+                            Assign Sites
+                          </Button>
+                          {siteMappings.length > 1 ? (
+                            <Button sx={DIALOG_BUTTON_SX} startIcon={<DeleteRoundedIcon />} onClick={() => removeSiteMapping(mapping.local_id)}>
+                              Remove
+                            </Button>
+                          ) : null}
+                        </Box>
+                        <FormTooltip title="Directory group DNs that grant Borealis User role. One group DN per line. Users in these groups inherit only the sites assigned to this section.">
+                          <TextField
+                            sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 7" } }}
+                            label="User Group DNs"
+                            placeholder="CN=Borealis_Operators,CN=Users,DC=bunny-lab,DC=io"
+                            multiline
+                            minRows={3}
+                            maxRows={6}
+                            value={mapping.group_dns_text || ""}
+                            onChange={(e) => updateSiteMapping(mapping.local_id, { group_dns_text: e.target.value })}
+                          />
+                        </FormTooltip>
+                        <Box sx={{ gridColumn: { md: "span 5" } }}>
+                          <Typography sx={{ color: "#94a3b8", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", mb: 0.75 }}>
+                            Assigned Sites
+                          </Typography>
+                          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
+                            {siteNames.length ? (
+                              siteNames.map((siteName) => (
+                                <Chip
+                                  key={`site-tab-${mapping.local_id}-${siteName}`}
+                                  label={siteName}
+                                  size="small"
+                                  variant="outlined"
+                                  sx={{
+                                    color: "#dbe8ff",
+                                    borderColor: "rgba(125,211,252,0.32)",
+                                    background: "rgba(16,37,58,0.7)",
+                                  }}
+                                />
+                              ))
+                            ) : (
+                              <Typography sx={{ color: "#94a3b8", fontSize: 13 }}>
+                                No sites assigned
+                              </Typography>
+                            )}
+                          </Box>
+                        </Box>
+                      </Box>
+                    );
+                  })}
+                </Box>
               </SectionCard>
             </Box>
           ) : null}
@@ -1381,7 +1685,7 @@ export default function DirectoryServices() {
             </Box>
           ) : null}
         </DialogContent>
-        <DialogActions sx={DIALOG_ACTIONS_SX}>
+        <DialogActions sx={{ ...DIALOG_ACTIONS_SX, flexShrink: 0 }}>
           <Button sx={DIALOG_BUTTON_SX} onClick={() => setEditorOpen(false)}>Cancel</Button>
           <Button sx={DIALOG_PRIMARY_BUTTON_SX} onClick={saveProvider}>Save</Button>
         </DialogActions>
@@ -1482,6 +1786,107 @@ export default function DirectoryServices() {
         </DialogContent>
         <DialogActions sx={DIALOG_ACTIONS_SX}>
           <Button sx={DIALOG_PRIMARY_BUTTON_SX} onClick={() => setAccessPreview(null)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(siteAssignmentTarget)}
+        onClose={() => setSiteAssignmentTargetId("")}
+        maxWidth="md"
+        fullWidth
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
+      >
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="Assign Sites"
+            subtitle={siteAssignmentTarget?.label || "User Site Group"}
+          />
+        </DialogTitle>
+        <DialogContent sx={{ ...DIALOG_CONTENT_SX, overflow: "hidden" }}>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 1.25 }}>
+            <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1, flexWrap: "wrap" }}>
+              <Typography sx={{ color: "#94a3b8", fontSize: 13 }}>
+                {siteAssignmentSelection.size} site{siteAssignmentSelection.size === 1 ? "" : "s"} selected
+              </Typography>
+              <Typography sx={{ color: "#94a3b8", fontSize: 13 }}>
+                {linesToDnsList(siteAssignmentTarget?.group_dns_text).length} group DN{linesToDnsList(siteAssignmentTarget?.group_dns_text).length === 1 ? "" : "s"}
+              </Typography>
+            </Box>
+            <Box
+              sx={{
+                ...DIALOG_SCROLLBAR_SX,
+                height: { xs: 360, md: 430 },
+                overflowY: "auto",
+                border: "1px solid rgba(148,163,184,0.22)",
+                borderRadius: 2,
+                background: "rgba(2,6,23,0.28)",
+              }}
+            >
+              {sitesLoading ? (
+                <Typography sx={{ color: "#94a3b8", fontSize: 13, p: 1.5 }}>
+                  Loading sites...
+                </Typography>
+              ) : availableSites.length ? (
+                availableSites.map((site) => {
+                  const siteId = Number(site.id);
+                  const checked = Number.isFinite(siteId) && siteAssignmentSelection.has(siteId);
+                  return (
+                    <Box
+                      key={site.id}
+                      onClick={() => {
+                        if (!Number.isFinite(siteId)) return;
+                        setSiteAssignmentSelection((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(siteId)) {
+                            next.delete(siteId);
+                          } else {
+                            next.add(siteId);
+                          }
+                          return next;
+                        });
+                      }}
+                      sx={{
+                        display: "grid",
+                        gridTemplateColumns: "44px minmax(0, 1fr) minmax(80px, 0.18fr)",
+                        gap: 1,
+                        alignItems: "center",
+                        px: 1,
+                        py: 1,
+                        cursor: "pointer",
+                        borderBottom: "1px solid rgba(148,163,184,0.14)",
+                        background: checked ? "rgba(125,211,252,0.16)" : "transparent",
+                        transition: "background 0.16s ease",
+                        "&:hover": {
+                          background: checked ? "rgba(125,211,252,0.2)" : "rgba(73,156,196,0.12)",
+                        },
+                      }}
+                    >
+                      <Checkbox checked={checked} sx={{ color: "#8fbfff", p: 0.5 }} />
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography sx={{ color: "#f4f7ff", fontSize: 14, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {site.name || `Site ${site.id}`}
+                        </Typography>
+                        <Typography sx={{ color: "#94a3b8", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {site.description || "No description"}
+                        </Typography>
+                      </Box>
+                      <Typography sx={{ color: "#cbd5e1", fontSize: 13, textAlign: "right", whiteSpace: "nowrap" }}>
+                        {Number(site.device_count || 0)} devices
+                      </Typography>
+                    </Box>
+                  );
+                })
+              ) : (
+                <Typography sx={{ color: "#94a3b8", fontSize: 13, p: 1.5 }}>
+                  No sites found.
+                </Typography>
+              )}
+            </Box>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button sx={DIALOG_BUTTON_SX} onClick={() => setSiteAssignmentTargetId("")}>Cancel</Button>
+          <Button sx={DIALOG_PRIMARY_BUTTON_SX} onClick={applySiteAssignment}>Apply Sites</Button>
         </DialogActions>
       </Dialog>
 

@@ -372,7 +372,7 @@ def _ensure_directory_services(conn: sqlite3.Connection, *, logger: Optional[log
                 email_attribute TEXT,
                 member_of_attribute TEXT,
                 group_search_base_dn TEXT,
-                nested_groups INTEGER NOT NULL DEFAULT 0,
+                nested_groups INTEGER NOT NULL DEFAULT 1,
                 kerberos_realm TEXT,
                 kerberos_kdc TEXT,
                 kerberos_keytab_encrypted TEXT,
@@ -421,6 +421,27 @@ def _ensure_directory_services(conn: sqlite3.Connection, *, logger: Optional[log
             """
             CREATE INDEX IF NOT EXISTS idx_directory_group_provider
                 ON directory_provider_group_mappings(provider_id)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS directory_provider_site_mappings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider_id INTEGER NOT NULL,
+                label TEXT,
+                group_dns_json TEXT NOT NULL DEFAULT '[]',
+                site_ids_json TEXT NOT NULL DEFAULT '[]',
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER,
+                updated_at INTEGER,
+                FOREIGN KEY(provider_id) REFERENCES directory_providers(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_directory_site_mapping_provider
+                ON directory_provider_site_mappings(provider_id, position)
             """
         )
     except Exception as exc:
