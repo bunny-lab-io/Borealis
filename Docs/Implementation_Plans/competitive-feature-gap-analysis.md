@@ -14,14 +14,14 @@ Turn the provided RMM competitor CSV into a Borealis roadmap analysis that is gr
 - Lens: roadmap priorities for the current Borealis single-node MSP/production target, not a pure procurement scorecard.
 
 ## Quick Conclusion
-Borealis already has real strengths in automation, remote access, technician tooling, product security, and Windows software management. The biggest roadmap gaps are the features MSPs use every day to replace incumbent RMM stacks:
+Borealis already has real strengths in automation, remote access, technician tooling, product security, directory-backed authentication, site-scoped RBAC, and Windows software management. The biggest roadmap gaps are the features MSPs use every day to replace incumbent RMM stacks:
 
 1. Patch management
 2. Integrations and ecosystem depth
 3. Technician background tooling
 4. Platform breadth
 5. Reporting, branding, and MSP packaging
-6. Enterprise security/compliance extras
+6. Enterprise assurance/compliance extras
 
 ## Competitor Pressure Snapshot
 The matrix suggests these gaps are not edge-case asks. They show up repeatedly across the 18-vendor comparison set.
@@ -95,6 +95,13 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 - Operators can toggle low-signal system processes, keep recently terminated processes visible, copy executable paths or command lines, and send `End Task` through the live `process_management` agent role.
 - This closes the old `Processes` gap materially, though event-log tooling, startup tooling, local account tooling, screenshot capture, chat, and broader technician background tools remain gaps.
 
+### Directory Services Delta Since The Initial Matrix Pass
+- Borealis now has an operator-facing Directory Services surface for LDAP/LDAPS-backed authentication.
+- Operators can configure directory providers, validate connections before enablement, trust LDAPS server certificates, and use host overrides when the Engine cannot resolve domain-controller FQDNs directly.
+- Borealis can map Active Directory groups to Borealis Admin and User roles, then assign specific user-group mappings to specific Borealis sites.
+- This materially narrows the old enterprise identity gap because directory-backed operators no longer require local Borealis passwords and can inherit access from AD group membership.
+- The remaining identity/security gap is now more specific: Borealis still lacks SAML/OIDC SSO, management IP allowlisting, SIEM export, customer lockbox, and formal assurance artifacts.
+
 ### Platform Coverage
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
 | --- | --- | --- | --- |
@@ -133,11 +140,12 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | --- | --- | --- | --- |
 | MFA | Shipped | `Docs/security-and-trust.md`, `Docs/api-reference.md` | Borealis requires MFA by default. |
 | Passkeys / modern auth | Shipped | `Docs/security-and-trust.md`, `Docs/api-reference.md` | Strong modern operator auth story. |
+| LDAP/LDAPS directory authentication | Shipped | `Data/Engine/services/API/access_management/directory_services.py`, `Data/Engine/web-interface/src/Access_Management/Directory_Services.jsx`, `Data/Engine/database.py` | Borealis now supports directory credential providers with LDAPS certificate trust, provider testing, AD group role mapping, and site-scoped operator assignment by directory group. |
 | Script/code signing | Shipped | `Docs/security-and-trust.md`, `Docs/assemblies.md` | Strong differentiator versus much of the field. |
 | Aegis secret protection | Shipped | `Docs/security-and-trust.md`, `Docs/engine-runtime.md`, `README.md` | Strong differentiator. |
-| Site-scoped RBAC | Shipped | `Docs/device-management.md`, `README.md` | Strong multi-operator control model. |
+| Site-scoped RBAC | Shipped | `Docs/device-management.md`, `README.md`, `Data/Engine/services/API/access_management/directory_services.py` | Strong multi-operator control model now extends to directory-backed user groups. |
 | Customer lockbox | Absent | `Docs/security-and-trust.md`, `Docs/logging-and-operations.md` | No tenancy-support lockbox pattern is documented. |
-| SAML / SSO | Absent | `Docs/security-and-trust.md`, `Docs/api-reference.md` | Security docs enumerate password, TOTP MFA, and passkeys, but no SAML/SSO flow or endpoints. |
+| SAML / SSO | Absent | `Docs/security-and-trust.md`, `Docs/api-reference.md` | LDAPS closes directory-backed authentication, but no SAML/OIDC web SSO flow or endpoints are documented. |
 | Management IP allowlisting | Absent | `Docs/security-and-trust.md`, `Docs/vpn-and-remote-access.md` | Borealis documents WireGuard transport port allowlists, not browser/API management IP allowlists. |
 | Log export / SIEM integration | Partial but still a gap | `Docs/logging-and-operations.md`, `Docs/api-reference.md` | Borealis exposes log APIs and retention management, but no SIEM export/integration is documented. |
 | Vendor assurance programs: VDP, bug bounty, SOC2/ISO, FedRAMP | Absent | `Docs/security-and-trust.md`, `README.md` | Product security is strong, but repo/docs do not show formal assurance-program artifacts. |
@@ -201,12 +209,13 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 - Immediate product implication:
   - Borealis currently feels more like a strong operator platform than a polished MSP reporting/customer-portal platform.
 
-### 6. Enterprise Security / Compliance Extras
+### 6. Enterprise Assurance / Compliance Extras
 - Why it ranks sixth:
   - These matter, but for Borealis's current target market they are usually less immediate than patching, integrations, and technician productivity.
+  - LDAPS directory authentication, AD group role mapping, and directory group site assignment now remove a meaningful identity-management gap that would otherwise make this rank higher.
 - Current Borealis position:
-  - Borealis is strong on actual product security primitives: Aegis, MFA, passkeys, code signing, scoped RBAC, short-lived tokens, and WireGuard.
-  - It is weak on the enterprise assurance/compliance layer that buyers often ask for in vendor reviews: SAML/SSO, management IP allowlisting, SIEM export, lockbox, VDP/bug bounty/compliance evidence.
+  - Borealis is strong on actual product security primitives: Aegis, MFA, passkeys, LDAPS directory authentication, AD group role mapping, directory group site assignment, code signing, scoped RBAC, short-lived tokens, and WireGuard.
+  - It is still weak on the enterprise assurance/compliance layer that buyers often ask for in vendor reviews: SAML/OIDC SSO, management IP allowlisting, SIEM export, lockbox, VDP/bug bounty/compliance evidence.
 - Immediate product implication:
   - This should follow the operational product gaps unless Borealis decides to target more compliance-heavy buyer segments sooner.
 
@@ -216,6 +225,7 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 - Customer-facing branding/custom-domain controls are absent.
 - Network-device/SNMP coverage is absent.
 - Local/domain user-account automation is not productized.
+- LDAP/LDAPS directory authentication is now shipped, but SAML/OIDC SSO and broader enterprise assurance controls remain gaps.
 - Software deployment/install policy remains absent even though software uninstall and override governance now exist.
 - File management and process management are now shipped, but event-log tooling, startup tooling, and local account tooling are still absent.
 - Reporting/export exists in pieces, but not as a first-class reporting product.
@@ -252,6 +262,10 @@ Borealis is not starting from zero. Several areas already compare well, and thes
 - Aegis, MFA, passkeys, short-lived tokens, and code signing:
   - `Docs/security-and-trust.md`
   - `Docs/engine-runtime.md`
+- LDAP/LDAPS directory authentication with AD group role and site assignment:
+  - `Data/Engine/services/API/access_management/directory_services.py`
+  - `Data/Engine/web-interface/src/Access_Management/Directory_Services.jsx`
+  - `Data/Engine/database.py`
 - Site-scoped RBAC and scoped targeting:
   - `Docs/device-management.md`
   - `README.md`
@@ -290,7 +304,7 @@ If Borealis chooses to close the top gaps, the public interface surface will lik
 - Possible tenant/client-facing data models if white-label/helpdesk features enter scope.
 
 ## Final Read
-Borealis already looks differentiated in automation, remote access, technician tooling, and security. The competitive gap is not that it lacks depth everywhere. The gap is that it still lacks several high-frequency MSP operating-system features that incumbents bundle into the same pane of glass.
+Borealis already looks differentiated in automation, remote access, technician tooling, directory-backed access control, and security. The competitive gap is not that it lacks depth everywhere. The gap is that it still lacks several high-frequency MSP operating-system features that incumbents bundle into the same pane of glass.
 
 If Borealis wants the fastest path toward feature-market fit, the roadmap should prioritize:
 - patch management first
