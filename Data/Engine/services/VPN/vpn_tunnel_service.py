@@ -117,6 +117,11 @@ class VpnSession:
     last_activity: float
     last_transport_probe_at: Optional[float] = None
     last_transport_confirmed_at: Optional[float] = None
+    last_agent_ready_at: Optional[float] = None
+    last_agent_ready_tunnel_id: str = ""
+    last_agent_ready_allowed_ports: Tuple[int, ...] = ()
+    last_agent_ready_reason: str = ""
+    last_agent_ready_service_state: str = ""
     last_shell_keepalive_log_at: Optional[float] = None
     operator_ids: set[str] = field(default_factory=set)
     firewall_rules: List[str] = field(default_factory=list)
@@ -148,6 +153,7 @@ class VpnTunnelService:
         self.idle_seconds = max(60, int(idle_seconds))
         self.persistent = _env_flag("BOREALIS_WIREGUARD_PERSISTENT", default=True)
         self._lock = threading.Lock()
+        self._ready_condition = threading.Condition(self._lock)
         self._listener_lock = threading.RLock()
         self._listener_runtime_ready = False
         self._sessions_by_agent: Dict[str, VpnSession] = {}
@@ -974,14 +980,121 @@ class VpnTunnelService:
             transport_payload.get("transport_ready")
         )
         status = "up" if listener_healthy and not recovery_in_progress else "recovering"
+        agent_ready = self._session_agent_ready(session, required_ports=())
         return {
             "status": status,
             "listener_healthy": listener_healthy,
             "recovery_in_progress": recovery_in_progress,
+            **agent_ready,
             "last_recovery_attempt_at": listener_payload.get("last_recovery_attempt_at"),
             "last_recovery_attempt_at_iso": listener_payload.get("last_recovery_attempt_at_iso", ""),
             **transport_payload,
         }
+
+    def _normalize_required_ports(self, required_ports: Optional[Iterable[int]]) -> Tuple[int, ...]:
+        raw_values: Iterable[Any]
+        if isinstance(required_ports, str):
+            raw_values = required_ports.replace(";", ",").split(",")
+        else:
+            raw_values = required_ports or []
+        ports: set[int] = set()
+        for raw_port in raw_values:
+            try:
+                port = int(raw_port)
+            except Exception:
+                continue
+            if 1 <= port <= 65535:
+                ports.add(port)
+        return tuple(sorted(ports))
+
+    def _session_agent_ready(
+        self,
+        session: VpnSession,
+        *,
+        required_ports: Optional[Iterable[int]] = None,
+    ) -> Dict[str, Any]:
+        required = self._normalize_required_ports(required_ports)
+        ready_ports = tuple(
+            sorted(
+                {
+                    int(port)
+                    for port in (session.last_agent_ready_allowed_ports or ())
+                    if 1 <= int(port) <= 65535
+                }
+            )
+        )
+        ready_tunnel = str(session.last_agent_ready_tunnel_id or "").strip()
+        tunnel_matches = bool(ready_tunnel and ready_tunnel == str(session.tunnel_id or "").strip())
+        ports_ready = all(port in ready_ports for port in required)
+        ready_at = session.last_agent_ready_at
+        agent_ready = bool(tunnel_matches and ports_ready and ready_at is not None)
+        return {
+            "agent_ready": agent_ready,
+            "agent_ready_reason": session.last_agent_ready_reason or "",
+            "agent_ready_service_state": session.last_agent_ready_service_state or "",
+            "agent_ready_required_ports": list(required),
+            "agent_ready_allowed_ports": list(ready_ports),
+            "agent_ready_tunnel_id": ready_tunnel,
+            "last_agent_ready_at": int(ready_at) if ready_at is not None else None,
+            "last_agent_ready_at_iso": self._ts_to_iso(ready_at) if ready_at is not None else "",
+        }
+
+    def _session_dispatch_ready_payload(
+        self,
+        session: VpnSession,
+        *,
+        required_ports: Optional[Iterable[int]] = None,
+        listener_health: Optional[Mapping[str, Any]] = None,
+        refresh_listener: bool = False,
+        now: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        payload = dict(self._session_payload(session, include_token=False))
+        runtime = dict(
+            self._session_runtime_payload(
+                session,
+                listener_health=listener_health,
+                refresh_listener=refresh_listener,
+                now=now,
+            )
+        )
+        agent_ready = self._session_agent_ready(session, required_ports=required_ports)
+        dispatch_ready = bool(
+            runtime.get("listener_healthy")
+            and not runtime.get("recovery_in_progress")
+            and agent_ready.get("agent_ready")
+        )
+        payload.update(runtime)
+        payload.update(agent_ready)
+        payload["dispatch_ready"] = dispatch_ready
+        payload["dispatch_ready_reason"] = (
+            "ready"
+            if dispatch_ready
+            else self._dispatch_not_ready_reason(
+                runtime,
+                agent_ready,
+                session_tunnel_id=str(session.tunnel_id or "").strip(),
+            )
+        )
+        return payload
+
+    def _dispatch_not_ready_reason(
+        self,
+        runtime: Mapping[str, Any],
+        agent_ready: Mapping[str, Any],
+        *,
+        session_tunnel_id: str,
+    ) -> str:
+        if not agent_ready.get("agent_ready"):
+            if not agent_ready.get("last_agent_ready_at"):
+                return "agent_ready_missing"
+            if agent_ready.get("agent_ready_tunnel_id") != session_tunnel_id:
+                return "agent_ready_stale_tunnel"
+            return "agent_ready_missing_required_ports"
+        if not runtime.get("listener_healthy"):
+            return str(runtime.get("peer_health_reason") or runtime.get("peer_health_source_reason") or "listener_unhealthy")
+        if runtime.get("recovery_in_progress"):
+            return "recovery_in_progress"
+        return "not_ready"
 
     def _build_listener_peer(self, session: VpnSession) -> Mapping[str, object]:
         peer = self.wg.build_peer_profile(
@@ -1378,6 +1491,123 @@ class VpnTunnelService:
             }
             for session in sessions
         ]
+
+    def record_agent_ready(
+        self,
+        agent_id: str,
+        *,
+        tunnel_id: str,
+        allowed_ports: Optional[Iterable[int]] = None,
+        reason: Optional[str] = None,
+        service_state: Optional[str] = None,
+        virtual_ip: Optional[str] = None,
+    ) -> Optional[Mapping[str, Any]]:
+        agent_key = str(agent_id or "").strip()
+        ready_tunnel = str(tunnel_id or "").strip()
+        if not agent_key or not ready_tunnel:
+            return None
+        with self._ready_condition:
+            session = self._sessions_by_agent.get(agent_key)
+            if not session:
+                self._service_log_event(
+                    "vpn_agent_ready_missing agent_id={0} tunnel_id={1}".format(agent_key, ready_tunnel),
+                    level="WARNING",
+                )
+                return None
+            if str(session.tunnel_id or "").strip() != ready_tunnel:
+                self._service_log_event(
+                    "vpn_agent_ready_stale agent_id={0} reported_tunnel_id={1} active_tunnel_id={2}".format(
+                        agent_key,
+                        ready_tunnel,
+                        session.tunnel_id,
+                    ),
+                    level="WARNING",
+                )
+                return None
+            reported_ip = str(virtual_ip or "").strip()
+            if reported_ip and reported_ip != str(session.virtual_ip or "").strip():
+                self._service_log_event(
+                    "vpn_agent_ready_ip_mismatch agent_id={0} tunnel_id={1} reported_virtual_ip={2} active_virtual_ip={3}".format(
+                        agent_key,
+                        ready_tunnel,
+                        reported_ip,
+                        session.virtual_ip,
+                    ),
+                    level="WARNING",
+                )
+            ready_ports = self._normalize_required_ports(allowed_ports or session.allowed_ports)
+            now = time.time()
+            session.last_agent_ready_at = now
+            session.last_agent_ready_tunnel_id = ready_tunnel
+            session.last_agent_ready_allowed_ports = ready_ports
+            session.last_agent_ready_reason = str(reason or "").strip()
+            session.last_agent_ready_service_state = str(service_state or "").strip()
+            session.last_activity = now
+            self._ready_condition.notify_all()
+        payload = self._session_dispatch_ready_payload(session, required_ports=ready_ports, now=now)
+        self._service_log_event(
+            "vpn_agent_ready agent_id={0} tunnel_id={1} allowed_ports={2} reason={3} service_state={4}".format(
+                agent_key,
+                ready_tunnel,
+                _format_ports(ready_ports),
+                str(reason or "").strip() or "-",
+                str(service_state or "").strip() or "-",
+            )
+        )
+        return payload
+
+    def wait_for_sessions_ready(
+        self,
+        agent_ids: Sequence[str],
+        *,
+        required_ports: Optional[Iterable[int]] = None,
+        timeout_seconds: float = 45.0,
+        poll_interval_seconds: float = 0.5,
+    ) -> Dict[str, Mapping[str, Any]]:
+        requested_ids = sorted({str(agent_id or "").strip() for agent_id in (agent_ids or []) if str(agent_id or "").strip()})
+        required = self._normalize_required_ports(required_ports)
+        if not requested_ids:
+            return {}
+        deadline = time.monotonic() + max(0.0, float(timeout_seconds or 0.0))
+        poll_interval = max(0.1, float(poll_interval_seconds or 0.5))
+        last_payload: Dict[str, Mapping[str, Any]] = {}
+        while True:
+            with self._ready_condition:
+                sessions = {agent_id: self._sessions_by_agent.get(agent_id) for agent_id in requested_ids}
+                active_sessions = [session for session in sessions.values() if session is not None]
+            listener_health = self._listener_health_payload(refresh=bool(active_sessions))
+            now = time.time()
+            payload: Dict[str, Mapping[str, Any]] = {}
+            for agent_id in requested_ids:
+                session = sessions.get(agent_id)
+                if session is None:
+                    continue
+                payload[agent_id] = self._session_dispatch_ready_payload(
+                    session,
+                    required_ports=required,
+                    listener_health=listener_health,
+                    now=now,
+                )
+            last_payload = payload
+            if len(payload) == len(requested_ids) and all(bool(item.get("dispatch_ready")) for item in payload.values()):
+                return payload
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                not_ready = ",".join(
+                    "{0}:{1}".format(agent_id, (last_payload.get(agent_id) or {}).get("dispatch_ready_reason") or "missing")
+                    for agent_id in requested_ids
+                )
+                self._service_log_event(
+                    "vpn_agent_ready_wait_timeout agents={0} required_ports={1} not_ready={2}".format(
+                        ",".join(requested_ids),
+                        _format_ports(required),
+                        not_ready or "-",
+                    ),
+                    level="WARNING",
+                )
+                return last_payload
+            with self._ready_condition:
+                self._ready_condition.wait(timeout=min(poll_interval, remaining))
 
     def listener_status(self, *, refresh: bool = False) -> Mapping[str, Any]:
         active_sessions = self._active_sessions()

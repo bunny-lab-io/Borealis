@@ -39,6 +39,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `POST /api/agent/details` (Device Authenticated) - hardware, inventory, and cached service payloads.
 - `POST /api/agent/script/request` (Device Authenticated) - request work or receive idle signal.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
+- `POST /api/agent/vpn/ready` (Device Authenticated) - active WireGuard tunnel readiness after service/config/firewall apply.
 - `POST /api/agent/vnc/ensure` (Device Authenticated) - advertise the current boot-scoped VNC credential and reconcile always-on VNC readiness.
 - `GET /api/agent/files/transfers/<transfer_id>/upload-item/<item_id>` (Device Authenticated) - fetch one Engine-staged upload item for the File Management role.
 - `GET /api/agent/files/transfers/<transfer_id>/status` (Device Authenticated) - fetch one File Management transfer control snapshot so the agent can honor cancel requests mid-transfer.

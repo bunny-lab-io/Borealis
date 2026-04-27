@@ -65,6 +65,21 @@ def test_role_session_config_matches_live_snapshot() -> None:
     assert role._session_config_matches_live(_build_session(endpoint="borealis.bunny-lab.io:30000")) is False
 
 
+def test_role_session_config_match_rejects_stale_allowed_ports() -> None:
+    role = Role.__new__(Role)
+    current = _build_session(endpoint="192.168.3.252:30000")
+    desired = _build_session(endpoint="192.168.3.252:30000")
+    desired.allowed_ports = "47002,5900,22,5986"
+    role.client = type("Client", (), {"session": current})()
+    role._read_live_config_snapshot = lambda: {
+        "virtual_ip": "10.255.0.15/32",
+        "endpoint": "192.168.3.252:30000",
+        "active_config": True,
+    }
+
+    assert role._session_config_matches_live(desired) is False
+
+
 def test_role_build_session_honors_force_restart_flag() -> None:
     role = Role.__new__(Role)
     role.ctx = type("Ctx", (), {"agent_id": "agent-1"})()
@@ -374,6 +389,7 @@ def test_role_run_ensure_cycle_uses_requested_reason() -> None:
     role._build_session = lambda payload: session
     role._session_config_matches_live = lambda current: False
     role._http_client = lambda: "signing-client"
+    role._notify_engine_ready = lambda _session, *, reason: captured.append(("ready", reason))
     role._log = lambda message, *, error=False: None
 
     role._run_ensure_cycle(reason="socket_connect")
@@ -381,6 +397,80 @@ def test_role_run_ensure_cycle_uses_requested_reason() -> None:
     assert ("reason", "socket_connect") in captured
     assert ("start_session", session) in captured
     assert ("signing_client", "signing-client") in captured
+    assert ("ready", "socket_connect") in captured
+
+
+def test_role_notify_engine_ready_posts_active_session() -> None:
+    role = Role.__new__(Role)
+    session = _build_session()
+    posted: list[tuple[str, dict, bool]] = []
+
+    class _Client:
+        @staticmethod
+        def _service_state() -> str:
+            return "RUNNING"
+
+    _Client.session = session
+
+    class _HttpClient:
+        @staticmethod
+        def post_json(path, payload, require_auth=False):
+            posted.append((path, payload, require_auth))
+            return {"ok": True}
+
+    role.client = _Client()
+    role.ctx = type("Ctx", (), {"agent_id": "agent-1"})()
+    role._http_client = lambda: _HttpClient()
+    role._log = lambda message, *, error=False: None
+    role._last_ready_notification_key = None
+    role._last_ready_notification_at = 0.0
+
+    role._notify_engine_ready(session, reason="vpn_tunnel_start")
+
+    assert posted == [
+        (
+            "/api/agent/vpn/ready",
+            {
+                "agent_id": "agent-1",
+                "tunnel_id": "tunnel-1",
+                "virtual_ip": "10.255.0.15/32",
+                "allowed_ports": [47002, 5900, 22],
+                "service_state": "RUNNING",
+                "reason": "vpn_tunnel_start",
+            },
+            True,
+        )
+    ]
+
+
+def test_role_notify_engine_ready_requires_running_service() -> None:
+    role = Role.__new__(Role)
+    session = _build_session()
+    posted: list[tuple[str, dict, bool]] = []
+
+    class _Client:
+        @staticmethod
+        def _service_state() -> str:
+            return "START_PENDING"
+
+    _Client.session = session
+
+    class _HttpClient:
+        @staticmethod
+        def post_json(path, payload, require_auth=False):
+            posted.append((path, payload, require_auth))
+            return {"ok": True}
+
+    role.client = _Client()
+    role.ctx = type("Ctx", (), {"agent_id": "agent-1"})()
+    role._http_client = lambda: _HttpClient()
+    role._log = lambda message, *, error=False: None
+    role._last_ready_notification_key = None
+    role._last_ready_notification_at = 0.0
+
+    role._notify_engine_ready(session, reason="vpn_tunnel_start")
+
+    assert posted == []
 
 
 def test_role_run_ensure_cycle_safe_logs_exceptions() -> None:

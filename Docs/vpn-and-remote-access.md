@@ -242,6 +242,7 @@ This section consolidates the troubleshooting context and environment notes for 
   - Agent: Agent\Borealis\Settings\WireGuard\Borealis.conf
   - Engine: Engine\WireGuard\borealis-wg.conf
 - Agent ensures the WireGuard tunnel on boot via `/api/agent/vpn/ensure`, then remote shell/VNC/SSH flow through it.
+- After the agent applies the tunnel config and local firewall allowlist, it calls `/api/agent/vpn/ready`. Engine-side shared Ansible waits for that active-tunnel readiness signal before admitting SSH/WinRM targets into generated inventories.
 - No idle teardown; tunnels and firewall rules stay in place while the agent is running.
 
 #### Recent changes (current repo state)
@@ -253,6 +254,7 @@ This section consolidates the troubleshooting context and environment notes for 
   - Service display name set to "Borealis - WireGuard - Agent".
   - Persistent tunnels with `PersistentKeepalive = 30`.
   - Applies an allowlist firewall rule using the engine /32 from allowed_ips and the Engine allowlist payload.
+  - Reports active tunnel readiness to `/api/agent/vpn/ready` after the service/config/firewall path is applied.
 - Data/Engine/services/VPN/wireguard_server.py
   - Engine config path: Engine\WireGuard\borealis-wg.conf (project root only).
   - Removed invalid "SaveConfig = false" line (WireGuard rejected it).
@@ -261,6 +263,7 @@ This section consolidates the troubleshooting context and environment notes for 
   - Uses an effective probe grace aligned with the WireGuard keepalive window before declaring `stale_handshake`.
   - Logs probe/confirmed/handshake ages during watchdog recovery to make transport failures easier to localize.
   - Throttles repetitive `shell_keepalive` confirmation logs so healthy quiet shells do not flood `tunnel.log`.
+  - Records agent-side readiness for active tunnels and exposes `dispatch_ready` for scheduled SSH/WinRM dispatch.
 - Data/Engine/services/WebSocket/vpn_shell.py
   - Adds readiness probes, idle shell keepalive pings, output timing diagnostics, and transport confirmations on shell output.
   - Tracks explicit close reasons (`close_request`, `superseded_sid`, `superseded_agent_session`, `ready_probe_failed`) so intentional closes no longer look like transport errors.

@@ -35,30 +35,40 @@ if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters
 
 
-_SHARED_ANSIBLE_VPN_PREP_WAIT_ENV = "BOREALIS_SHARED_ANSIBLE_VPN_PREP_WAIT_SECONDS"
-_SHARED_ANSIBLE_VPN_PREP_POLL_INTERVAL_ENV = "BOREALIS_SHARED_ANSIBLE_VPN_PREP_POLL_INTERVAL_SECONDS"
-_DEFAULT_SHARED_ANSIBLE_VPN_PREP_WAIT_SECONDS = 10.0
-_DEFAULT_SHARED_ANSIBLE_VPN_PREP_POLL_INTERVAL_SECONDS = 0.5
+_SHARED_ANSIBLE_VPN_READY_TIMEOUT_ENV = "BOREALIS_SHARED_ANSIBLE_VPN_READY_TIMEOUT_SECONDS"
+_SHARED_ANSIBLE_VPN_READY_POLL_INTERVAL_ENV = "BOREALIS_SHARED_ANSIBLE_VPN_READY_POLL_INTERVAL_SECONDS"
+_LEGACY_SHARED_ANSIBLE_VPN_PREP_WAIT_ENV = "BOREALIS_SHARED_ANSIBLE_VPN_PREP_WAIT_SECONDS"
+_LEGACY_SHARED_ANSIBLE_VPN_PREP_POLL_INTERVAL_ENV = "BOREALIS_SHARED_ANSIBLE_VPN_PREP_POLL_INTERVAL_SECONDS"
+_DEFAULT_SHARED_ANSIBLE_VPN_READY_TIMEOUT_SECONDS = 45.0
+_DEFAULT_SHARED_ANSIBLE_VPN_READY_POLL_INTERVAL_SECONDS = 0.5
 
 
-def _shared_ansible_vpn_prep_wait_seconds() -> float:
-    raw_value = str(os.getenv(_SHARED_ANSIBLE_VPN_PREP_WAIT_ENV, "") or "").strip()
+def _shared_ansible_vpn_ready_timeout_seconds() -> float:
+    raw_value = str(
+        os.getenv(_SHARED_ANSIBLE_VPN_READY_TIMEOUT_ENV, "")
+        or os.getenv(_LEGACY_SHARED_ANSIBLE_VPN_PREP_WAIT_ENV, "")
+        or ""
+    ).strip()
     if not raw_value:
-        return _DEFAULT_SHARED_ANSIBLE_VPN_PREP_WAIT_SECONDS
+        return _DEFAULT_SHARED_ANSIBLE_VPN_READY_TIMEOUT_SECONDS
     try:
         return max(0.0, float(raw_value))
     except Exception:
-        return _DEFAULT_SHARED_ANSIBLE_VPN_PREP_WAIT_SECONDS
+        return _DEFAULT_SHARED_ANSIBLE_VPN_READY_TIMEOUT_SECONDS
 
 
-def _shared_ansible_vpn_prep_poll_interval_seconds() -> float:
-    raw_value = str(os.getenv(_SHARED_ANSIBLE_VPN_PREP_POLL_INTERVAL_ENV, "") or "").strip()
+def _shared_ansible_vpn_ready_poll_interval_seconds() -> float:
+    raw_value = str(
+        os.getenv(_SHARED_ANSIBLE_VPN_READY_POLL_INTERVAL_ENV, "")
+        or os.getenv(_LEGACY_SHARED_ANSIBLE_VPN_PREP_POLL_INTERVAL_ENV, "")
+        or ""
+    ).strip()
     if not raw_value:
-        return _DEFAULT_SHARED_ANSIBLE_VPN_PREP_POLL_INTERVAL_SECONDS
+        return _DEFAULT_SHARED_ANSIBLE_VPN_READY_POLL_INTERVAL_SECONDS
     try:
         return max(0.1, float(raw_value))
     except Exception:
-        return _DEFAULT_SHARED_ANSIBLE_VPN_PREP_POLL_INTERVAL_SECONDS
+        return _DEFAULT_SHARED_ANSIBLE_VPN_READY_POLL_INTERVAL_SECONDS
 
 
 def _public_vpn_endpoint_host() -> str:
@@ -99,12 +109,12 @@ def _vpn_snapshot_ready(snapshot: object, requested_ids: List[str]) -> bool:
         payload = snapshot.get(agent_id)
         if not isinstance(payload, dict):
             return False
-    sample_payload = next((payload for payload in snapshot.values() if isinstance(payload, dict)), None)
-    if not isinstance(sample_payload, dict):
-        return False
-    if bool(sample_payload.get("recovery_in_progress")):
-        return False
-    return bool(sample_payload.get("listener_healthy"))
+        if "dispatch_ready" in payload:
+            if not bool(payload.get("dispatch_ready")):
+                return False
+        elif bool(payload.get("recovery_in_progress")) or not bool(payload.get("listener_healthy")):
+            return False
+    return True
 
 
 def _bootstrap_vpn_session(
@@ -269,20 +279,40 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
                 )
         snapshot = _active_vpn_session_snapshot()
         if requested_start:
-            deadline = time.monotonic() + _shared_ansible_vpn_prep_wait_seconds()
-            poll_interval = _shared_ansible_vpn_prep_poll_interval_seconds()
-            while True:
-                snapshot = _active_vpn_session_snapshot()
-                if _vpn_snapshot_ready(snapshot, requested_ids):
-                    break
-                if time.monotonic() >= deadline:
+            wait_ready = getattr(tunnel_service, "wait_for_sessions_ready", None)
+            if callable(wait_ready):
+                try:
+                    snapshot = dict(
+                        wait_ready(
+                            requested_ids,
+                            required_ports=required_ports,
+                            timeout_seconds=_shared_ansible_vpn_ready_timeout_seconds(),
+                            poll_interval_seconds=_shared_ansible_vpn_ready_poll_interval_seconds(),
+                        )
+                        or {}
+                    )
+                except Exception as exc:
                     adapters.service_log(
                         "scheduled_jobs",
-                        "vpn preparation readiness timed out before shared ansible dispatch",
-                        level="WARNING",
+                        f"vpn dispatch readiness wait failed err={exc}",
+                        level="ERROR",
                     )
-                    break
-                time.sleep(poll_interval)
+                    snapshot = _active_vpn_session_snapshot()
+            else:
+                deadline = time.monotonic() + _shared_ansible_vpn_ready_timeout_seconds()
+                poll_interval = _shared_ansible_vpn_ready_poll_interval_seconds()
+                while True:
+                    snapshot = _active_vpn_session_snapshot()
+                    if _vpn_snapshot_ready(snapshot, requested_ids):
+                        break
+                    if time.monotonic() >= deadline:
+                        adapters.service_log(
+                            "scheduled_jobs",
+                            "vpn dispatch readiness timed out before shared ansible dispatch",
+                            level="WARNING",
+                        )
+                        break
+                    time.sleep(poll_interval)
         for agent_id in requested_ids:
             payload = snapshot.get(agent_id)
             if isinstance(payload, dict):

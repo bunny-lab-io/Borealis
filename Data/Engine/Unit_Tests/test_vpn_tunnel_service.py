@@ -78,7 +78,10 @@ class _FakeWireGuardManager:
             "peer_count": len(self.current_peers),
         }
 
-    def peer_health(self, _public_key: str) -> dict[str, Any]:
+    def check_listener_health(self) -> dict[str, Any]:
+        return self.listener_status()
+
+    def check_peer_health(self, _public_key: str) -> dict[str, Any]:
         return {
             "healthy": True,
             "reason": "listener_running",
@@ -128,3 +131,36 @@ def test_request_agent_start_expands_allowed_ports_for_nondefault_ansible_transp
     assert wg.removed_rules == [["rule-agent-1"]]
     assert socketio.emits[-1][0] == "vpn_tunnel_start"
     assert socketio.emits[-1][1]["allowed_ports"] == [47002, 5900, 22, 2222]
+
+
+def test_wait_for_sessions_ready_requires_agent_ready_callback() -> None:
+    service, _wg, _socketio = _build_service()
+    session = service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+
+    before_ready = service.wait_for_sessions_ready(
+        ["agent-1"],
+        required_ports=[22],
+        timeout_seconds=0,
+    )
+
+    assert before_ready["agent-1"]["dispatch_ready"] is False
+    assert before_ready["agent-1"]["dispatch_ready_reason"] == "agent_ready_missing"
+
+    ready_payload = service.record_agent_ready(
+        "agent-1",
+        tunnel_id=str(session["tunnel_id"]),
+        allowed_ports=[22],
+        reason="unit_test",
+        service_state="RUNNING",
+        virtual_ip=str(session["virtual_ip"]),
+    )
+    after_ready = service.wait_for_sessions_ready(
+        ["agent-1"],
+        required_ports=[22],
+        timeout_seconds=0,
+    )
+
+    assert ready_payload is not None
+    assert ready_payload["dispatch_ready"] is True
+    assert after_ready["agent-1"]["dispatch_ready"] is True
+    assert after_ready["agent-1"]["agent_ready"] is True
