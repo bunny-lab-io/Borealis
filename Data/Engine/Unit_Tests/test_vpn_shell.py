@@ -355,6 +355,39 @@ def test_open_session_does_not_force_recovery_after_single_healthy_connect_failu
     assert tunnel_service.recover_calls == []
 
 
+def test_open_session_uses_short_tcp_connect_timeout_for_cold_probe(monkeypatch) -> None:
+    tcp = _PongSocket()
+    socketio = _DummySocketIO()
+    tunnel_service = _DummyTunnelService()
+    context = type(
+        "Ctx",
+        (),
+        {
+            "logger": logging.getLogger("test.vpn_shell"),
+            "wireguard_shell_port": 47002,
+            "vpn_tunnel_service": tunnel_service,
+        },
+    )()
+    bridge = VpnShellBridge(socketio, context)
+    timeouts: list[float | None] = []
+
+    def fake_create_connection(_address, timeout=None):
+        timeouts.append(timeout)
+        if len(timeouts) < 3:
+            raise TimeoutError("cold WireGuard path")
+        return tcp
+
+    monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+    monkeypatch.setattr(vpn_shell_module, "_RETRY_DELAY_SECONDS", 0.001)
+
+    session = bridge.open_session("sid-1", "agent-1")
+
+    assert session is not None
+    assert len(timeouts) == 3
+    assert all(timeout is not None and timeout <= 0.5 for timeout in timeouts)
+    assert tunnel_service.recover_calls == []
+
+
 def test_open_session_replaces_existing_agent_session(monkeypatch) -> None:
     tcp_first = _PongSocket()
     tcp_second = _PongSocket()
