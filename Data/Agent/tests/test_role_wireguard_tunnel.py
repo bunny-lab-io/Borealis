@@ -150,7 +150,7 @@ def test_linux_client_reuses_same_session_and_reapplies_mtu() -> None:
     assert calls == ["ensure_mtu"]
 
 
-def test_linux_client_refreshes_session_metadata_without_restart_for_tunnel_rotation() -> None:
+def test_linux_client_restarts_session_for_tunnel_rotation() -> None:
     client = LinuxWireGuardClient.__new__(LinuxWireGuardClient)
     client._session_lock = threading.Lock()
     client.session = _build_session()
@@ -172,7 +172,7 @@ def test_linux_client_refreshes_session_metadata_without_restart_for_tunnel_rota
 
     client.start_session(refreshed, signing_client=None)
 
-    assert calls == ["validate", "ensure_mtu"]
+    assert calls == ["validate", "bring_down", "write_config", "bring_down", "bring_up", "ensure_mtu"]
     assert client.session is refreshed
 
 
@@ -327,7 +327,7 @@ def test_windows_client_replacement_uses_single_restart_before_marking_session_s
     assert client.session is replacement
 
 
-def test_windows_client_refreshes_session_metadata_without_restart_for_tunnel_rotation() -> None:
+def test_windows_client_restarts_session_for_tunnel_rotation() -> None:
     client = _build_windows_client()
     client.session = _build_session()
     calls: list[str] = []
@@ -352,7 +352,7 @@ def test_windows_client_refreshes_session_metadata_without_restart_for_tunnel_ro
 
     client.start_session(refreshed, signing_client=None)
 
-    assert calls == ["validate"]
+    assert calls == ["validate", "write_config", "restart", "wait", "adapter", "display", "firewall"]
     assert client.session is refreshed
 
 

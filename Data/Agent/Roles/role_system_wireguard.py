@@ -751,7 +751,6 @@ class WireGuardClient:
         with self._session_lock:
             recovery_reason: Optional[str] = None
             prior_service_state: Optional[str] = None
-            metadata_refresh_only = False
             previous_tunnel_id = ""
             if self.session:
                 previous_tunnel_id = str(self.session.tunnel_id or "")
@@ -783,11 +782,21 @@ class WireGuardClient:
                     )
                 else:
                     prior_service_state = self._service_state()
-                    metadata_refresh_only = (
-                        prior_service_state in ("RUNNING", "START_PENDING")
-                        and _session_transport_equivalent(self.session, session)
-                        and not session.force_restart
-                    )
+                    if prior_service_state in ("RUNNING", "START_PENDING"):
+                        recovery_reason = session.restart_reason or "tunnel_id_changed"
+                        _write_log(
+                            "WireGuard session tunnel_id changed; restarting active session "
+                            "(existing_tunnel_id={0} new_tunnel_id={1}).".format(
+                                previous_tunnel_id or "-",
+                                session.tunnel_id or "-",
+                            )
+                        )
+                        self._log_recovery_event(
+                            "attempt",
+                            reason=recovery_reason,
+                            tunnel_id=session.tunnel_id,
+                            prior_state=prior_service_state,
+                        )
 
             try:
                 self._validate_token(session.token, signing_client=signing_client)
@@ -801,18 +810,6 @@ class WireGuardClient:
                         prior_state=prior_service_state,
                         detail="token_validation_failed",
                     )
-                return
-
-            if metadata_refresh_only:
-                _write_log(
-                    "WireGuard session metadata refresh: existing_tunnel_id={0} new_tunnel_id={1} service_state={2}".format(
-                        previous_tunnel_id or "-",
-                        session.tunnel_id or "-",
-                        prior_service_state or "-",
-                    )
-                )
-                self.session = session
-                self.idle_deadline = None
                 return
 
             if self.session and previous_tunnel_id and previous_tunnel_id != str(session.tunnel_id or ""):
@@ -1091,7 +1088,7 @@ class LinuxWireGuardClient:
         return False
 
     def _stop_session_locked(self, reason: str = "stop", ignore_missing: bool = False) -> None:
-        if not self._interface_exists() and not ignore_missing:
+        if not ignore_missing and not self._interface_exists():
             _write_log("WireGuard Linux interface not found when stopping session.")
         self._bring_down()
         self.session = None
@@ -1099,7 +1096,6 @@ class LinuxWireGuardClient:
 
     def start_session(self, session: SessionConfig, *, signing_client: Optional[Any] = None) -> None:
         with self._session_lock:
-            metadata_refresh_only = False
             previous_tunnel_id = ""
             if self.session and self.session.tunnel_id == session.tunnel_id:
                 same_config = _session_config_equivalent(self.session, session)
@@ -1117,27 +1113,19 @@ class LinuxWireGuardClient:
                     _write_log("WireGuard Linux session config drift detected; refreshing existing tunnel.")
             elif self.session:
                 previous_tunnel_id = str(self.session.tunnel_id or "")
-                metadata_refresh_only = (
-                    self._service_state() == "RUNNING"
-                    and _session_transport_equivalent(self.session, session)
-                    and not session.force_restart
-                )
+                if self._service_state() == "RUNNING":
+                    _write_log(
+                        "WireGuard Linux session tunnel_id changed; restarting active session "
+                        "(existing_tunnel_id={0} new_tunnel_id={1}).".format(
+                            previous_tunnel_id or "-",
+                            session.tunnel_id or "-",
+                        )
+                    )
 
             try:
                 self._validate_token(session.token, signing_client=signing_client)
             except Exception as exc:
                 _write_log(f"Refusing to start WireGuard Linux session: {exc}")
-                return
-
-            if metadata_refresh_only:
-                self._ensure_interface_mtu()
-                _write_log(
-                    "WireGuard Linux session metadata refresh: existing_tunnel_id={0} new_tunnel_id={1}".format(
-                        previous_tunnel_id or "-",
-                        session.tunnel_id or "-",
-                    )
-                )
-                self.session = session
                 return
 
             if self.session and previous_tunnel_id and previous_tunnel_id != str(session.tunnel_id or ""):
