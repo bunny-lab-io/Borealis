@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
 
 _CONNECT_WAIT_WINDOW_SECONDS = 20.0
 _CONNECT_TIMEOUT_SECONDS = 1.0
@@ -27,6 +27,22 @@ _FORCE_RESTART_AFTER_SECONDS = 5.0
 _IDLE_PING_IDLE_SECONDS = 2.5
 _IDLE_PING_INTERVAL_SECONDS = 2.5
 _IDLE_PING_TIMEOUT_SECONDS = 5.0
+
+_SHELL_FORCE_RECOVERY_REASONS = {
+    "transport_probe_pending",
+    "probe_grace",
+    "peer_missing",
+    "no_recent_handshake",
+    "stale_handshake",
+    "peer_health_failed",
+    "interface_down",
+    "wg_unavailable",
+    "wg_show_failed",
+    "wg_peers_failed",
+    "wg_latest_handshakes_failed",
+    "service_missing",
+    "service_unhealthy",
+}
 
 
 def _b64encode(data: bytes) -> str:
@@ -64,6 +80,19 @@ def _cooperative_sleep(seconds: float) -> None:
         eventlet.sleep(seconds)
     except Exception:
         time.sleep(seconds)
+
+
+def _shell_status_prefers_recovery(status: Any) -> bool:
+    if not isinstance(status, Mapping):
+        return False
+    if bool(status.get("recovery_in_progress")):
+        return False
+    reason = str(status.get("dispatch_ready_reason") or status.get("peer_health_reason") or "").strip()
+    if reason in _SHELL_FORCE_RECOVERY_REASONS:
+        return True
+    if status.get("transport_ready") is False:
+        return True
+    return False
 
 
 @dataclass
@@ -560,6 +589,14 @@ class VpnShellBridge:
             service.mark_transport_required(agent_id, reason="shell_connect")
         except Exception:
             self.logger.debug("Failed to mark shell transport activity for agent=%s", agent_id, exc_info=True)
+        force_restart_on_first_emit = False
+        try:
+            probe_status = service.status(agent_id)
+            if probe_status:
+                status = probe_status
+            force_restart_on_first_emit = _shell_status_prefers_recovery(probe_status)
+        except Exception:
+            self.logger.debug("Failed to read shell transport status for agent=%s", agent_id, exc_info=True)
         host = str(status.get("virtual_ip") or "").split("/")[0]
         port = int(self.context.wireguard_shell_port)
         tcp = None
@@ -568,6 +605,67 @@ class VpnShellBridge:
         connect_started_at = time.monotonic()
         connect_deadline = connect_started_at + _CONNECT_WAIT_WINDOW_SECONDS
         reemit_index = 0
+        early_force_recovery_emitted = False
+
+        def _emit_shell_agent_start(trigger_after: float, *, force_restart: bool) -> None:
+            nonlocal early_force_recovery_emitted
+            try:
+                service.request_agent_start(
+                    agent_id,
+                    force_restart=force_restart,
+                    reason="shell_connect_retry",
+                )
+                self._service_log_event(
+                    "vpn_shell_agent_start_emit agent_id={0} sid={1} trigger_elapsed={2} force_restart={3}".format(
+                        agent_id,
+                        sid,
+                        int(math.floor(trigger_after)),
+                        str(bool(force_restart)).lower(),
+                    )
+                )
+            except Exception:
+                self.logger.debug("Failed to re-emit vpn_tunnel_start for agent=%s", agent_id, exc_info=True)
+                self._service_log_event(
+                    "vpn_shell_agent_start_failed agent_id={0} sid={1} trigger_elapsed={2} force_restart={3}".format(
+                        agent_id,
+                        sid,
+                        int(math.floor(trigger_after)),
+                        str(bool(force_restart)).lower(),
+                    ),
+                    level="WARNING",
+                )
+            if force_restart:
+                try:
+                    service.recover_transport(
+                        agent_id,
+                        trigger="vpn_shell_connect",
+                        reason="shell_connect_retry",
+                    )
+                    self._service_log_event(
+                        "vpn_shell_transport_recovery agent_id={0} sid={1} trigger_elapsed={2}".format(
+                            agent_id,
+                            sid,
+                            int(math.floor(trigger_after)),
+                        ),
+                        level="WARNING",
+                    )
+                    if trigger_after < _FORCE_RESTART_AFTER_SECONDS:
+                        early_force_recovery_emitted = True
+                except Exception:
+                    self.logger.debug(
+                        "Failed to force WireGuard transport recovery for agent=%s",
+                        agent_id,
+                        exc_info=True,
+                    )
+                    self._service_log_event(
+                        "vpn_shell_transport_recovery_failed agent_id={0} sid={1} trigger_elapsed={2}".format(
+                            agent_id,
+                            sid,
+                            int(math.floor(trigger_after)),
+                        ),
+                        level="WARNING",
+                    )
+
         while True:
             now = time.monotonic()
             remaining = connect_deadline - now
@@ -578,61 +676,11 @@ class VpnShellBridge:
                 trigger_after = _REEMIT_START_AFTER_SECONDS[reemit_index]
                 if elapsed + 0.001 < trigger_after:
                     break
-                force_restart = trigger_after >= _FORCE_RESTART_AFTER_SECONDS
-                try:
-                    service.request_agent_start(
-                        agent_id,
-                        force_restart=force_restart,
-                        reason="shell_connect_retry",
-                    )
-                    self._service_log_event(
-                        "vpn_shell_agent_start_emit agent_id={0} sid={1} trigger_elapsed={2} force_restart={3}".format(
-                            agent_id,
-                            sid,
-                            int(math.floor(trigger_after)),
-                            str(bool(force_restart)).lower(),
-                        )
-                    )
-                except Exception:
-                    self.logger.debug("Failed to re-emit vpn_tunnel_start for agent=%s", agent_id, exc_info=True)
-                    self._service_log_event(
-                        "vpn_shell_agent_start_failed agent_id={0} sid={1} trigger_elapsed={2} force_restart={3}".format(
-                            agent_id,
-                            sid,
-                            int(math.floor(trigger_after)),
-                            str(bool(force_restart)).lower(),
-                        ),
-                        level="WARNING",
-                    )
-                if force_restart:
-                    try:
-                        service.recover_transport(
-                            agent_id,
-                            trigger="vpn_shell_connect",
-                            reason="shell_connect_retry",
-                        )
-                        self._service_log_event(
-                            "vpn_shell_transport_recovery agent_id={0} sid={1} trigger_elapsed={2}".format(
-                                agent_id,
-                                sid,
-                                int(math.floor(trigger_after)),
-                            ),
-                            level="WARNING",
-                        )
-                    except Exception:
-                        self.logger.debug(
-                            "Failed to force WireGuard transport recovery for agent=%s",
-                            agent_id,
-                            exc_info=True,
-                        )
-                        self._service_log_event(
-                            "vpn_shell_transport_recovery_failed agent_id={0} sid={1} trigger_elapsed={2}".format(
-                                agent_id,
-                                sid,
-                                int(math.floor(trigger_after)),
-                            ),
-                            level="WARNING",
-                        )
+                force_restart = (
+                    trigger_after >= _FORCE_RESTART_AFTER_SECONDS
+                    or (reemit_index == 0 and force_restart_on_first_emit)
+                )
+                _emit_shell_agent_start(trigger_after, force_restart=force_restart)
                 reemit_index += 1
 
             attempts += 1
@@ -651,6 +699,12 @@ class VpnShellBridge:
                 _configure_tcp_socket(tcp)
             except Exception as exc:
                 last_error = exc
+                if reemit_index > 0 and not early_force_recovery_emitted:
+                    elapsed_after_attempt = max(0.0, time.monotonic() - connect_started_at)
+                    force_restart_on_first_emit = False
+                    if elapsed_after_attempt < _FORCE_RESTART_AFTER_SECONDS:
+                        _emit_shell_agent_start(elapsed_after_attempt, force_restart=True)
+                        reemit_index = max(reemit_index, 1)
                 remaining = connect_deadline - time.monotonic()
                 if remaining > 0:
                     _cooperative_sleep(min(_RETRY_DELAY_SECONDS, remaining))

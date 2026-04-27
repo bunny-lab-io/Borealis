@@ -140,9 +140,12 @@ class _DummyTunnelService:
     def __init__(self) -> None:
         self.start_calls: list[tuple[str, bool, str]] = []
         self.confirm_calls: list[tuple[str, str]] = []
+        self.mark_calls: list[tuple[str, str]] = []
+        self.recover_calls: list[tuple[str, str, str]] = []
+        self.status_payload = {"virtual_ip": "10.255.0.20/32"}
 
     def status(self, _agent_id: str):
-        return {"virtual_ip": "10.255.0.20/32"}
+        return dict(self.status_payload)
 
     def request_agent_start(
         self,
@@ -154,11 +157,19 @@ class _DummyTunnelService:
         self.start_calls.append((agent_id, bool(force_restart), str(reason or "")))
         return {"status": "ok"}
 
+    def mark_transport_required(self, agent_id: str, *, reason: str | None = None) -> bool:
+        self.mark_calls.append((agent_id, str(reason or "")))
+        return True
+
     def bump_activity(self, _agent_id: str) -> None:
         return
 
     def confirm_transport_success(self, agent_id: str, *, reason: str | None = None) -> None:
         self.confirm_calls.append((agent_id, str(reason or "")))
+
+    def recover_transport(self, agent_id: str, *, trigger: str, reason: str | None = None):
+        self.recover_calls.append((agent_id, str(trigger or ""), str(reason or "")))
+        return {"status": "ok"}
 
 
 def test_shell_session_send_includes_message_metadata() -> None:
@@ -241,6 +252,78 @@ def test_open_session_enables_tcp_nodelay(monkeypatch) -> None:
     assert tcp.timeout == 15
     assert tunnel_service.start_calls == [("agent-1", False, "shell_connect_retry")]
     assert tunnel_service.confirm_calls == [("agent-1", "shell_connect_success")]
+
+
+def test_open_session_forces_recovery_when_probe_grace_pending(monkeypatch) -> None:
+    tcp = _PongSocket()
+    socketio = _DummySocketIO()
+    tunnel_service = _DummyTunnelService()
+    tunnel_service.status_payload.update(
+        {
+            "peer_health_reason": "probe_grace",
+            "transport_ready": True,
+        }
+    )
+    context = type(
+        "Ctx",
+        (),
+        {
+            "logger": logging.getLogger("test.vpn_shell"),
+            "wireguard_shell_port": 47002,
+            "vpn_tunnel_service": tunnel_service,
+        },
+    )()
+    bridge = VpnShellBridge(socketio, context)
+
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: tcp)
+
+    session = bridge.open_session("sid-1", "agent-1")
+
+    assert session is not None
+    assert tunnel_service.start_calls[0] == ("agent-1", True, "shell_connect_retry")
+    assert tunnel_service.recover_calls == [("agent-1", "vpn_shell_connect", "shell_connect_retry")]
+
+
+def test_open_session_forces_recovery_after_initial_connect_failure(monkeypatch) -> None:
+    tcp = _PongSocket()
+    socketio = _DummySocketIO()
+    tunnel_service = _DummyTunnelService()
+    tunnel_service.status_payload.update(
+        {
+            "peer_health_reason": "recent_transport_success",
+            "transport_ready": True,
+            "last_transport_confirmed_at": int(time.time()),
+            "confirmed_age_seconds": 1,
+        }
+    )
+    context = type(
+        "Ctx",
+        (),
+        {
+            "logger": logging.getLogger("test.vpn_shell"),
+            "wireguard_shell_port": 47002,
+            "vpn_tunnel_service": tunnel_service,
+        },
+    )()
+    bridge = VpnShellBridge(socketio, context)
+    attempts = 0
+
+    def fake_create_connection(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise TimeoutError("stale shell path")
+        return tcp
+
+    monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+    monkeypatch.setattr(vpn_shell_module, "_RETRY_DELAY_SECONDS", 0.001)
+
+    session = bridge.open_session("sid-1", "agent-1")
+
+    assert session is not None
+    assert tunnel_service.start_calls[0] == ("agent-1", False, "shell_connect_retry")
+    assert ("agent-1", True, "shell_connect_retry") in tunnel_service.start_calls
+    assert tunnel_service.recover_calls == [("agent-1", "vpn_shell_connect", "shell_connect_retry")]
 
 
 def test_open_session_replaces_existing_agent_session(monkeypatch) -> None:
