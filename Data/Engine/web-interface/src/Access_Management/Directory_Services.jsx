@@ -23,6 +23,7 @@ import ErrorOutlineRoundedIcon from "@mui/icons-material/ErrorOutlineRounded";
 import FileDownloadRoundedIcon from "@mui/icons-material/FileDownloadRounded";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import SyncIcon from "@mui/icons-material/Sync";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
@@ -213,6 +214,10 @@ export default function DirectoryServices() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [certificateReview, setCertificateReview] = useState(null);
   const [certificateBusy, setCertificateBusy] = useState(false);
+  const [lookupUsername, setLookupUsername] = useState("");
+  const [lookupPassword, setLookupPassword] = useState("");
+  const [lookupResult, setLookupResult] = useState(null);
+  const [lookupBusy, setLookupBusy] = useState(false);
   const [busyId, setBusyId] = useState(null);
   const gridRef = useRef(null);
   const sendNotification = useAppNotifications({
@@ -251,12 +256,16 @@ export default function DirectoryServices() {
   const openCreate = useCallback(() => {
     setEditingProvider(null);
     setForm({ ...emptyForm });
+    setLookupUsername("");
+    setLookupPassword("");
     setEditorOpen(true);
   }, []);
 
   const openEdit = useCallback((provider) => {
     setEditingProvider(provider);
     setForm(formFromProvider(provider));
+    setLookupUsername("");
+    setLookupPassword("");
     setEditorOpen(true);
     closeMenu();
   }, [closeMenu]);
@@ -335,6 +344,24 @@ export default function DirectoryServices() {
     setCertificateReview(null);
     sendNotification("LDAP certificate trusted");
   }, [certificateReview, sendNotification]);
+
+  const lookupDirectoryUser = useCallback(async () => {
+    if (!editingProvider?.id || !lookupUsername.trim()) return;
+    setLookupBusy(true);
+    try {
+      const resp = await fetch(`/api/directory/providers/${editingProvider.id}/lookup-user`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ username: lookupUsername.trim(), password: lookupPassword }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      setLookupResult({ ...data, ok: resp.ok });
+      if (!resp.ok) sendNotification(data?.message || data?.error || "Directory user lookup failed");
+    } finally {
+      setLookupBusy(false);
+    }
+  }, [editingProvider, lookupPassword, lookupUsername, sendNotification]);
 
   const saveProvider = useCallback(async () => {
     const payload = providerPayload();
@@ -639,6 +666,16 @@ export default function DirectoryServices() {
             <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 4" } }} label="Display Attribute" value={form.display_name_attribute} onChange={(e) => updateForm("display_name_attribute", e.target.value)} />
             <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 4" } }} label="MemberOf Attribute" value={form.member_of_attribute} onChange={(e) => updateForm("member_of_attribute", e.target.value)} />
             <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 12" } }} label="User Search Filter" value={form.user_search_filter} onChange={(e) => updateForm("user_search_filter", e.target.value)} />
+            <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 5" } }} label="Lookup Username" value={lookupUsername} onChange={(e) => setLookupUsername(e.target.value)} />
+            <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 5" } }} label="Lookup Password" type="password" value={lookupPassword} onChange={(e) => setLookupPassword(e.target.value)} />
+            <Button
+              sx={{ ...DIALOG_BUTTON_SX, gridColumn: { md: "span 2" }, minHeight: 44 }}
+              startIcon={<SearchRoundedIcon />}
+              disabled={lookupBusy || !editingProvider?.id || !lookupUsername.trim()}
+              onClick={lookupDirectoryUser}
+            >
+              Lookup
+            </Button>
             {form.provider_type === "active_directory" ? (
               <>
                 <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 6" } }} label="Kerberos Realm" value={form.kerberos_realm} onChange={(e) => updateForm("kerberos_realm", e.target.value)} />
@@ -711,6 +748,44 @@ export default function DirectoryServices() {
         <DialogActions sx={DIALOG_ACTIONS_SX}>
           <Button sx={DIALOG_BUTTON_SX} onClick={() => setCertificateReview(null)}>Deny</Button>
           <Button sx={DIALOG_PRIMARY_BUTTON_SX} onClick={trustCertificate}>Trust Certificate</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(lookupResult)}
+        onClose={() => setLookupResult(null)}
+        maxWidth="md"
+        fullWidth
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
+      >
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="Directory User Lookup"
+            subtitle={lookupResult?.login || lookupUsername}
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
+          <Box sx={{ display: "grid", gridTemplateColumns: "minmax(130px, 0.25fr) minmax(0, 1fr)", gap: 1.25, color: "#dbeafe" }}>
+            {[
+              ["Status", lookupResult?.ok ? "Found" : (lookupResult?.error || "Failed")],
+              ["Message", lookupResult?.message || ""],
+              ["Account", lookupResult?.account],
+              ["Display Name", lookupResult?.display_name],
+              ["DN", lookupResult?.dn],
+              ["Subject", lookupResult?.subject],
+              ["Mapped Role", lookupResult?.mapped_role || (lookupResult?.allowed === false ? "No matching group" : "")],
+              ["Password", lookupResult?.password_checked ? (lookupResult?.password_ok ? "OK" : (lookupResult?.password_message || "Failed")) : "Not checked"],
+              ["Groups", Array.isArray(lookupResult?.groups) ? lookupResult.groups.join("\n") : ""],
+            ].filter(([, value]) => value !== "").map(([label, value]) => (
+              <React.Fragment key={label}>
+                <Typography sx={{ color: "#94a3b8", fontSize: 13 }}>{label}</Typography>
+                <Typography sx={{ color: "#f8fafc", fontSize: 13, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{value || "-"}</Typography>
+              </React.Fragment>
+            ))}
+          </Box>
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button sx={DIALOG_PRIMARY_BUTTON_SX} onClick={() => setLookupResult(null)}>Close</Button>
         </DialogActions>
       </Dialog>
 

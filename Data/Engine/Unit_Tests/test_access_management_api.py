@@ -2358,6 +2358,58 @@ def test_directory_connection_target_expands_short_name_override_for_tls() -> No
     assert target["server_url"] == "ldaps://lab-dc-01.bunny-lab.io:636"
 
 
+def test_directory_user_lookup_reports_groups_and_password(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _admin_client(engine_harness)
+    create_response = client.post(
+        "/api/directory/providers",
+        json={
+            "name": "Lookup LDAP",
+            "provider_type": "ldap",
+            "server_urls": ["ldaps://ldap.example.com"],
+            "base_dn": "DC=example,DC=com",
+            "group_mappings": [
+                {"role": "Admin", "group_dn": "CN=Borealis Admins,DC=example,DC=com"},
+            ],
+        },
+    )
+    assert create_response.status_code == 200
+    provider_id = create_response.get_json()["provider"]["id"]
+
+    def fake_search(self, provider: Dict[str, Any], login_name: str) -> Dict[str, Any]:
+        assert login_name == "nicole.rappe"
+        return {
+            "dn": "CN=Nicole Rappe,CN=Users,DC=example,DC=com",
+            "account": "nicole.rappe@example.com",
+            "display_name": "Nicole Rappe",
+            "subject": "CN=Nicole Rappe,CN=Users,DC=example,DC=com",
+            "groups": ["CN=Borealis Admins,DC=example,DC=com"],
+        }
+
+    def fake_verify(self, provider: Dict[str, Any], user_dn: str, password: str) -> None:
+        assert user_dn == "CN=Nicole Rappe,CN=Users,DC=example,DC=com"
+        assert password == "correct-password"
+
+    monkeypatch.setattr(directory_services.DirectoryAuthenticationManager, "search_user", fake_search)
+    monkeypatch.setattr(directory_services.DirectoryAuthenticationManager, "_verify_ldap_password", fake_verify)
+
+    response = client.post(
+        f"/api/directory/providers/{provider_id}/lookup-user",
+        json={"username": "nicole.rappe", "password": "correct-password"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["found"] is True
+    assert payload["mapped_role"] == "Admin"
+    assert payload["allowed"] is True
+    assert payload["password_checked"] is True
+    assert payload["password_ok"] is True
+    assert payload["groups"] == ["CN=Borealis Admins,DC=example,DC=com"]
+
+
 def test_directory_users_surface_source_and_block_local_actions(engine_harness: EngineTestHarness) -> None:
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:

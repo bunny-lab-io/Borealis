@@ -29,6 +29,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `DELETE /api/directory/providers/<int:provider_id>` (Admin) - delete a provider with no cached directory users.
 - `POST /api/directory/providers/certificate` (Admin) - download LDAPS peer-certificate metadata and PEM for operator review before pinning trust.
 - `POST /api/directory/providers/<int:provider_id>/test` (Admin) - verify provider connectivity and mark provider test state.
+- `POST /api/directory/providers/<int:provider_id>/lookup-user` (Admin) - run provider-scoped user lookup diagnostics, including group-role mapping and optional password verification.
 - `POST /api/directory/providers/<int:provider_id>/sync` (Admin) - re-check cached users and disable cache entries no longer found in the provider.
 - `POST /api/users/<username>/directory-cache` (Admin) - enable or disable a cached directory user.
 - `GET /api/credentials` (Token Authenticated) - list stored remote-execution credentials.

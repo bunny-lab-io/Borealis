@@ -9,6 +9,7 @@
 # - DELETE /api/directory/providers/<provider_id> (Token Authenticated (Admin)) - Deletes a directory provider.
 # - POST /api/directory/providers/<provider_id>/test (Token Authenticated (Admin)) - Tests provider connectivity.
 # - POST /api/directory/providers/<provider_id>/sync (Token Authenticated (Admin)) - Syncs cached directory users.
+# - POST /api/directory/providers/<provider_id>/lookup-user (Token Authenticated (Admin)) - Looks up a directory user for provider diagnostics.
 # - POST /api/directory/providers/certificate (Token Authenticated (Admin)) - Downloads LDAPS certificate metadata for operator trust.
 # - POST /api/users/<username>/directory-cache (Token Authenticated (Admin)) - Enables or disables a cached directory user.
 # ======================================================
@@ -1361,6 +1362,66 @@ class DirectoryManagementService:
             self.manager._update_provider_sync(provider_id, "failed", message)
             return jsonify({"error": "sync_failed", "message": message}), 502
 
+    def lookup_user(self, provider_id: int):
+        requirement = self._require_admin()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+        provider = self.manager.load_provider(provider_id)
+        if not provider:
+            return jsonify({"error": "provider_not_found"}), 404
+        payload = request.get_json(silent=True) or {}
+        username = _clean_text(payload.get("username"))
+        password = _clean_text(payload.get("password"))
+        if not username:
+            return jsonify({"error": "username_required", "message": "Username is required."}), 400
+        try:
+            found = self.manager.search_user(provider, username)
+        except DirectoryAuthError as exc:
+            return jsonify({"error": exc.code, "message": str(exc)}), exc.status_code
+        except Exception as exc:
+            self.logger.debug("Directory user lookup failed for provider %s.", provider_id, exc_info=True)
+            return jsonify({"error": "directory_lookup_failed", "message": str(exc)}), 502
+        if not found:
+            return jsonify({"error": "directory_user_not_found", "message": "Directory user was not found."}), 404
+
+        groups = [_clean_text(group) for group in found.get("groups", []) if _clean_text(group)]
+        role = self.manager._mapped_role(provider, groups) or ""
+        provider_type = _normalize_provider_type(provider.get("provider_type"))
+        result: Dict[str, Any] = {
+            "status": "ok",
+            "found": True,
+            "provider_id": int(provider_id),
+            "provider_type": provider_type,
+            "login": username,
+            "account": _clean_text(found.get("account")),
+            "display_name": _clean_text(found.get("display_name")),
+            "dn": _clean_text(found.get("dn")),
+            "subject": _clean_text(found.get("subject")),
+            "groups": groups,
+            "group_count": len(groups),
+            "mapped_role": role,
+            "allowed": bool(role),
+            "password_checked": bool(password),
+            "password_ok": None,
+        }
+        if password:
+            try:
+                if provider_type == "active_directory":
+                    self.manager._verify_kerberos_password(provider, _clean_text(found.get("account")) or username, password)
+                else:
+                    self.manager._verify_ldap_password(provider, _clean_text(found.get("dn")), password)
+                result["password_ok"] = True
+            except DirectoryAuthError as exc:
+                result["password_ok"] = False
+                result["password_error"] = exc.code
+                result["password_message"] = str(exc)
+            except Exception as exc:
+                result["password_ok"] = False
+                result["password_error"] = "password_check_failed"
+                result["password_message"] = str(exc)
+        return jsonify(result)
+
     def fetch_certificate(self):
         requirement = self._require_admin()
         if requirement:
@@ -1657,6 +1718,10 @@ def register_directory_services(app: Flask, adapters: "EngineServiceAdapters") -
     @blueprint.route("/api/directory/providers/<int:provider_id>/sync", methods=["POST"])
     def _sync_provider(provider_id: int):
         return service.sync_provider(provider_id)
+
+    @blueprint.route("/api/directory/providers/<int:provider_id>/lookup-user", methods=["POST"])
+    def _lookup_user(provider_id: int):
+        return service.lookup_user(provider_id)
 
     @blueprint.route("/api/users/<username>/directory-cache", methods=["POST"])
     def _set_user_cache(username: str):
