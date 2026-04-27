@@ -254,7 +254,7 @@ def test_open_session_enables_tcp_nodelay(monkeypatch) -> None:
     assert tunnel_service.confirm_calls == [("agent-1", "shell_connect_success")]
 
 
-def test_open_session_forces_recovery_when_probe_grace_pending(monkeypatch) -> None:
+def test_open_session_waits_when_probe_grace_pending(monkeypatch) -> None:
     tcp = _PongSocket()
     socketio = _DummySocketIO()
     tunnel_service = _DummyTunnelService()
@@ -262,6 +262,36 @@ def test_open_session_forces_recovery_when_probe_grace_pending(monkeypatch) -> N
         {
             "peer_health_reason": "probe_grace",
             "transport_ready": True,
+        }
+    )
+    context = type(
+        "Ctx",
+        (),
+        {
+            "logger": logging.getLogger("test.vpn_shell"),
+            "wireguard_shell_port": 47002,
+            "vpn_tunnel_service": tunnel_service,
+        },
+    )()
+    bridge = VpnShellBridge(socketio, context)
+
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: tcp)
+
+    session = bridge.open_session("sid-1", "agent-1")
+
+    assert session is not None
+    assert tunnel_service.start_calls == [("agent-1", False, "shell_connect_retry")]
+    assert tunnel_service.recover_calls == []
+
+
+def test_open_session_forces_recovery_when_transport_is_stale(monkeypatch) -> None:
+    tcp = _PongSocket()
+    socketio = _DummySocketIO()
+    tunnel_service = _DummyTunnelService()
+    tunnel_service.status_payload.update(
+        {
+            "peer_health_reason": "stale_handshake",
+            "transport_ready": False,
         }
     )
     context = type(

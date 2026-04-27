@@ -29,8 +29,6 @@ _IDLE_PING_INTERVAL_SECONDS = 2.5
 _IDLE_PING_TIMEOUT_SECONDS = 5.0
 
 _SHELL_FORCE_RECOVERY_REASONS = {
-    "transport_probe_pending",
-    "probe_grace",
     "peer_missing",
     "no_recent_handshake",
     "stale_handshake",
@@ -88,6 +86,8 @@ def _shell_status_prefers_recovery(status: Any) -> bool:
     if bool(status.get("recovery_in_progress")):
         return False
     reason = str(status.get("dispatch_ready_reason") or status.get("peer_health_reason") or "").strip()
+    if reason in {"transport_probe_pending", "probe_grace"}:
+        return False
     if reason in _SHELL_FORCE_RECOVERY_REASONS:
         return True
     if status.get("transport_ready") is False:
