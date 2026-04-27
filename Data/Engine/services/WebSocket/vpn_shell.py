@@ -23,7 +23,8 @@ _CONNECT_WAIT_WINDOW_SECONDS = 20.0
 _CONNECT_TIMEOUT_SECONDS = 0.5
 _RETRY_DELAY_SECONDS = 0.15
 _REEMIT_START_AFTER_SECONDS = (0.0, 2.0, 5.0, 10.0)
-_FORCE_RESTART_AFTER_SECONDS = 2.0
+_LISTENER_RECOVERY_AFTER_SECONDS = 2.0
+_FORCE_RESTART_AFTER_SECONDS = 5.0
 _IDLE_PING_IDLE_SECONDS = 2.5
 _IDLE_PING_INTERVAL_SECONDS = 2.5
 _IDLE_PING_TIMEOUT_SECONDS = 5.0
@@ -605,8 +606,14 @@ class VpnShellBridge:
         connect_started_at = time.monotonic()
         connect_deadline = connect_started_at + _CONNECT_WAIT_WINDOW_SECONDS
         reemit_index = 0
+        listener_recovery_requested = False
 
-        def _emit_shell_agent_start(trigger_after: float, *, force_restart: bool) -> None:
+        def _emit_shell_agent_start(
+            trigger_after: float,
+            *,
+            force_restart: bool,
+            recover_listener: bool,
+        ) -> None:
             try:
                 service.request_agent_start(
                     agent_id,
@@ -632,7 +639,7 @@ class VpnShellBridge:
                     ),
                     level="WARNING",
                 )
-            if force_restart:
+            if recover_listener:
                 try:
                     service.recover_transport(
                         agent_id,
@@ -676,7 +683,16 @@ class VpnShellBridge:
                     trigger_after >= _FORCE_RESTART_AFTER_SECONDS
                     or (reemit_index == 0 and force_restart_on_first_emit)
                 )
-                _emit_shell_agent_start(trigger_after, force_restart=force_restart)
+                recover_listener = force_restart or (
+                    not listener_recovery_requested and trigger_after >= _LISTENER_RECOVERY_AFTER_SECONDS
+                )
+                _emit_shell_agent_start(
+                    trigger_after,
+                    force_restart=force_restart,
+                    recover_listener=recover_listener,
+                )
+                if recover_listener:
+                    listener_recovery_requested = True
                 reemit_index += 1
 
             attempts += 1

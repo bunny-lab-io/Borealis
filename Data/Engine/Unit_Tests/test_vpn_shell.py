@@ -355,7 +355,7 @@ def test_open_session_does_not_force_recovery_after_single_healthy_connect_failu
     assert tunnel_service.recover_calls == []
 
 
-def test_open_session_forces_recovery_after_probe_grace_connect_failures(monkeypatch) -> None:
+def test_open_session_recovers_listener_after_probe_grace_connect_failures(monkeypatch) -> None:
     tcp = _PongSocket()
     socketio = _DummySocketIO()
     tunnel_service = _DummyTunnelService()
@@ -384,7 +384,8 @@ def test_open_session_forces_recovery_after_probe_grace_connect_failures(monkeyp
 
     monkeypatch.setattr(socket, "create_connection", fake_create_connection)
     monkeypatch.setattr(vpn_shell_module, "_REEMIT_START_AFTER_SECONDS", (0.0, 0.002))
-    monkeypatch.setattr(vpn_shell_module, "_FORCE_RESTART_AFTER_SECONDS", 0.002)
+    monkeypatch.setattr(vpn_shell_module, "_LISTENER_RECOVERY_AFTER_SECONDS", 0.002)
+    monkeypatch.setattr(vpn_shell_module, "_FORCE_RESTART_AFTER_SECONDS", 0.004)
     monkeypatch.setattr(vpn_shell_module, "_CONNECT_TIMEOUT_SECONDS", 0.001)
     monkeypatch.setattr(vpn_shell_module, "_RETRY_DELAY_SECONDS", 0.001)
 
@@ -393,9 +394,57 @@ def test_open_session_forces_recovery_after_probe_grace_connect_failures(monkeyp
     assert session is not None
     assert tunnel_service.start_calls == [
         ("agent-1", False, "shell_connect_retry"),
-        ("agent-1", True, "shell_connect_retry"),
+        ("agent-1", False, "shell_connect_retry"),
     ]
     assert tunnel_service.recover_calls == [("agent-1", "vpn_shell_connect", "shell_connect_retry")]
+
+
+def test_open_session_forces_agent_restart_when_listener_recovery_fails(monkeypatch) -> None:
+    tcp = _PongSocket()
+    socketio = _DummySocketIO()
+    tunnel_service = _DummyTunnelService()
+    tunnel_service.status_payload.update(
+        {
+            "dispatch_ready_reason": "transport_probe_pending",
+            "peer_health_reason": "probe_grace",
+            "transport_ready": True,
+        }
+    )
+    context = type(
+        "Ctx",
+        (),
+        {
+            "logger": logging.getLogger("test.vpn_shell"),
+            "wireguard_shell_port": 47002,
+            "vpn_tunnel_service": tunnel_service,
+        },
+    )()
+    bridge = VpnShellBridge(socketio, context)
+
+    def fake_create_connection(*_args, **_kwargs):
+        if not any(force_restart for _agent_id, force_restart, _reason in tunnel_service.start_calls):
+            raise TimeoutError("stale shell path")
+        return tcp
+
+    monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+    monkeypatch.setattr(vpn_shell_module, "_REEMIT_START_AFTER_SECONDS", (0.0, 0.002, 0.004))
+    monkeypatch.setattr(vpn_shell_module, "_LISTENER_RECOVERY_AFTER_SECONDS", 0.002)
+    monkeypatch.setattr(vpn_shell_module, "_FORCE_RESTART_AFTER_SECONDS", 0.004)
+    monkeypatch.setattr(vpn_shell_module, "_CONNECT_TIMEOUT_SECONDS", 0.001)
+    monkeypatch.setattr(vpn_shell_module, "_RETRY_DELAY_SECONDS", 0.001)
+
+    session = bridge.open_session("sid-1", "agent-1")
+
+    assert session is not None
+    assert tunnel_service.start_calls == [
+        ("agent-1", False, "shell_connect_retry"),
+        ("agent-1", False, "shell_connect_retry"),
+        ("agent-1", True, "shell_connect_retry"),
+    ]
+    assert tunnel_service.recover_calls == [
+        ("agent-1", "vpn_shell_connect", "shell_connect_retry"),
+        ("agent-1", "vpn_shell_connect", "shell_connect_retry"),
+    ]
 
 
 def test_open_session_uses_short_tcp_connect_timeout_for_cold_probe(monkeypatch) -> None:
