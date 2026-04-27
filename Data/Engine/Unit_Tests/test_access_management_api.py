@@ -2410,6 +2410,56 @@ def test_directory_user_lookup_reports_groups_and_password(
     assert payload["groups"] == ["CN=Borealis Admins,DC=example,DC=com"]
 
 
+def test_directory_search_does_not_request_entryuuid_for_ad_compatible_ldap(engine_harness: EngineTestHarness) -> None:
+    captured: Dict[str, Any] = {}
+
+    class FakeEntry:
+        entry_dn = "CN=Nicole Rappe,CN=Users,DC=bunny-lab,DC=io"
+        entry_attributes_as_dict = {
+            "sAMAccountName": ["nicole.rappe"],
+            "displayName": ["Nicole Rappe"],
+            "memberOf": ["CN=Borealis_Operators,CN=Users,DC=bunny-lab,DC=io"],
+            "distinguishedName": ["CN=Nicole Rappe,CN=Users,DC=bunny-lab,DC=io"],
+        }
+
+    class FakeConnection:
+        entries = [FakeEntry()]
+
+        def search(self, base_dn: str, search_filter: str, search_scope: Any = None, attributes: Any = None) -> bool:
+            captured["base_dn"] = base_dn
+            captured["search_filter"] = search_filter
+            captured["attributes"] = list(attributes or [])
+            assert "entryUUID" not in captured["attributes"]
+            return True
+
+        def unbind(self) -> None:
+            pass
+
+    manager = directory_services.DirectoryAuthenticationManager(
+        db_conn_factory=lambda: sqlite3.connect(str(engine_harness.db_path)),
+        aegis_cipher_service=engine_harness.context.aegis_cipher_service,
+        logger=engine_harness.context.logger,
+    )
+    manager._service_connection = lambda _provider: FakeConnection()  # type: ignore[method-assign]
+
+    result = manager.search_user(
+        {
+            "provider_type": "ldap",
+            "base_dn": "CN=Users,DC=bunny-lab,DC=io",
+            "username_attribute": "sAMAccountName",
+            "display_name_attribute": "displayName",
+            "email_attribute": "mail",
+            "member_of_attribute": "memberOf",
+        },
+        "nicole.rappe",
+    )
+
+    assert result is not None
+    assert result["account"] == "nicole.rappe"
+    assert result["subject"] == "CN=Nicole Rappe,CN=Users,DC=bunny-lab,DC=io"
+    assert captured["search_filter"] == "(sAMAccountName=nicole.rappe)"
+
+
 def test_directory_users_surface_source_and_block_local_actions(engine_harness: EngineTestHarness) -> None:
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:

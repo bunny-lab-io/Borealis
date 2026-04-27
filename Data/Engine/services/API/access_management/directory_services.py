@@ -777,7 +777,6 @@ class DirectoryAuthenticationManager:
                         email_attr,
                         member_attr,
                         "distinguishedName",
-                        "entryUUID",
                         "objectGUID",
                     ]
                 )
