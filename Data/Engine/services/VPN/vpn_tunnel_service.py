@@ -1058,9 +1058,11 @@ class VpnTunnelService:
             )
         )
         agent_ready = self._session_agent_ready(session, required_ports=required_ports)
+        transport_probe_pending = runtime.get("peer_health_reason") == "probe_grace"
         dispatch_ready = bool(
             runtime.get("listener_healthy")
             and not runtime.get("recovery_in_progress")
+            and not transport_probe_pending
             and agent_ready.get("agent_ready")
         )
         payload.update(runtime)
@@ -1090,6 +1092,8 @@ class VpnTunnelService:
             if agent_ready.get("agent_ready_tunnel_id") != session_tunnel_id:
                 return "agent_ready_stale_tunnel"
             return "agent_ready_missing_required_ports"
+        if runtime.get("peer_health_reason") == "probe_grace":
+            return "transport_probe_pending"
         if not runtime.get("listener_healthy"):
             return str(runtime.get("peer_health_reason") or runtime.get("peer_health_source_reason") or "listener_unhealthy")
         if runtime.get("recovery_in_progress"):
@@ -1568,6 +1572,8 @@ class VpnTunnelService:
         required = self._normalize_required_ports(required_ports)
         if not requested_ids:
             return {}
+        for agent_id in requested_ids:
+            self.mark_transport_required(agent_id, reason="dispatch_ready_wait")
         deadline = time.monotonic() + max(0.0, float(timeout_seconds or 0.0))
         poll_interval = max(0.1, float(poll_interval_seconds or 0.5))
         last_payload: Dict[str, Mapping[str, Any]] = {}
