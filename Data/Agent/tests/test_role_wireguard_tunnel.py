@@ -26,6 +26,38 @@ def _build_session(*, endpoint: str = "borealis.bunny-lab.io:30000") -> SessionC
     )
 
 
+class _FakeUdpSocket:
+    def __init__(self, sent: list[tuple[bytes, tuple[str, int]]]) -> None:
+        self._sent = sent
+
+    def __enter__(self) -> "_FakeUdpSocket":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    def settimeout(self, value: float) -> None:
+        self.timeout = value
+
+    def sendto(self, data: bytes, address: tuple[str, int]) -> int:
+        self._sent.append((data, address))
+        return len(data)
+
+
+def _capture_udp_probe(monkeypatch) -> list[tuple[bytes, tuple[str, int]]]:
+    sent: list[tuple[bytes, tuple[str, int]]] = []
+    monkeypatch.setattr(
+        wireguard_role.socket,
+        "socket",
+        lambda *_args, **_kwargs: _FakeUdpSocket(sent),
+    )
+    return sent
+
+
+def test_engine_virtual_ip_from_allowed_ips_parses_host_route() -> None:
+    assert wireguard_role._engine_virtual_ip_from_allowed_ips("10.255.0.1/32") == "10.255.0.1"
+
+
 def test_session_config_equivalent_detects_endpoint_drift() -> None:
     current = _build_session(endpoint="borealis.bunny-lab.io:30000")
     desired = _build_session(endpoint="192.168.3.252:30000")
@@ -130,13 +162,14 @@ def test_linux_client_force_restart_skips_same_session_reuse() -> None:
     assert calls == ["write_config", "bring_down", "bring_up"]
 
 
-def test_linux_client_reuses_same_session_and_reapplies_mtu() -> None:
+def test_linux_client_reuses_same_session_and_reapplies_mtu(monkeypatch) -> None:
     client = LinuxWireGuardClient.__new__(LinuxWireGuardClient)
     client._session_lock = threading.Lock()
     client.session = _build_session()
     client.conf_path = None
     client._client_keys = {"private": "client-private"}
     calls: list[str] = []
+    sent = _capture_udp_probe(monkeypatch)
 
     client._service_state = lambda: "RUNNING"
     client._validate_token = lambda token, signing_client=None: None
@@ -148,6 +181,7 @@ def test_linux_client_reuses_same_session_and_reapplies_mtu() -> None:
     client.start_session(_build_session(), signing_client=None)
 
     assert calls == ["ensure_mtu"]
+    assert sent == [(b"borealis-wg-probe", ("10.255.0.1", 9))]
 
 
 def test_linux_client_restarts_session_for_tunnel_rotation() -> None:
@@ -215,6 +249,21 @@ def _build_windows_client() -> WireGuardClient:
     client.session = None
     client.idle_deadline = None
     return client
+
+
+def test_windows_client_reuses_same_session_and_primes_engine_path(monkeypatch) -> None:
+    client = _build_windows_client()
+    client.session = _build_session()
+    calls: list[str] = []
+    sent = _capture_udp_probe(monkeypatch)
+
+    client._service_state = lambda: "RUNNING"
+    client.bump_activity = lambda: calls.append("bump")
+
+    client.start_session(_build_session(), signing_client=None)
+
+    assert calls == ["bump"]
+    assert sent == [(b"borealis-wg-probe", ("10.255.0.1", 9))]
 
 
 def test_windows_client_repairs_stale_service_binding() -> None:

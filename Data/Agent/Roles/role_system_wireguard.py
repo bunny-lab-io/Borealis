@@ -20,6 +20,7 @@ import base64
 import ipaddress
 import json
 import os
+import socket
 import subprocess
 import threading
 import time
@@ -217,6 +218,45 @@ def _parse_allowed_ports(raw: Any) -> list[int]:
         if 1 <= port <= 65535:
             ports.append(port)
     return list(dict.fromkeys(ports))
+
+
+def _engine_virtual_ip_from_allowed_ips(allowed_ips: Any) -> str:
+    raw = str(allowed_ips or "").split(",", 1)[0].strip()
+    if not raw:
+        return ""
+    try:
+        return str(ipaddress.ip_interface(raw).ip)
+    except Exception:
+        return raw.split("/", 1)[0].strip()
+
+
+def _prime_engine_path(session: "SessionConfig", *, reason: str = "reuse") -> bool:
+    engine_ip = _engine_virtual_ip_from_allowed_ips(session.allowed_ips)
+    if not engine_ip:
+        return False
+    reason_text = str(reason or "reuse").strip() or "reuse"
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(0.1)
+            sock.sendto(b"borealis-wg-probe", (engine_ip, 9))
+        _write_log(
+            "WireGuard path prime sent engine_ip={0} tunnel_id={1} reason={2}".format(
+                engine_ip,
+                session.tunnel_id or "-",
+                reason_text,
+            )
+        )
+        return True
+    except Exception as exc:
+        _write_log(
+            "WireGuard path prime failed engine_ip={0} tunnel_id={1} reason={2} error={3}".format(
+                engine_ip,
+                session.tunnel_id or "-",
+                reason_text,
+                exc,
+            )
+        )
+        return False
 
 
 class SessionConfig:
@@ -765,6 +805,7 @@ class WireGuardClient:
                             )
                         )
                     elif prior_service_state in ("RUNNING", "START_PENDING") and same_config:
+                        _prime_engine_path(session, reason=session.restart_reason or "reuse")
                         _write_log("WireGuard session already active; reusing existing session.")
                         self.bump_activity()
                         return
@@ -1101,6 +1142,7 @@ class LinuxWireGuardClient:
                 same_config = _session_config_equivalent(self.session, session)
                 if self._service_state() == "RUNNING" and same_config and not session.force_restart:
                     self._ensure_interface_mtu()
+                    _prime_engine_path(session, reason=session.restart_reason or "reuse")
                     _write_log("WireGuard Linux session already active; reusing existing session.")
                     return
                 if session.force_restart:
