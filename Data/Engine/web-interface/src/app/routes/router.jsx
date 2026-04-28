@@ -175,6 +175,16 @@ export function buildAppRoutes() {
               ],
             },
             {
+              path: "software",
+              handle: {
+                title: "Software Audit",
+                breadcrumb: "Software",
+                navKey: "software",
+                pageKey: "software",
+              },
+              lazy: lazyNamed(() => import("../route-modules/softwareRoutes.jsx"), "SoftwareListRoute"),
+            },
+            {
               path: "filters",
               element: <RootShell />,
               handle: {

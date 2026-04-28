@@ -8,6 +8,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
   Menu,
   MenuItem,
   Paper,
@@ -16,8 +17,11 @@ import {
   Tooltip,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
+import AssessmentRoundedIcon from "@mui/icons-material/AssessmentRounded";
+import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
+import DevicesRoundedIcon from "@mui/icons-material/DevicesRounded";
+import DriveFileRenameOutlineRoundedIcon from "@mui/icons-material/DriveFileRenameOutlineRounded";
 import LocationCityIcon from "@mui/icons-material/LocationCity";
-import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import { AgGridReact } from "ag-grid-react";
@@ -178,6 +182,130 @@ const INSTALL_MENU_ITEM_SX = {
       "linear-gradient(90deg, rgba(125,211,252,0.16) 0%, rgba(192,132,252,0.14) 100%)",
   },
 };
+
+const SITE_CONTEXT_MENU_PAPER_SX = {
+  bgcolor: "rgba(8,12,24,0.96)",
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  backdropFilter: "blur(14px)",
+  borderRadius: 2,
+  minWidth: 288,
+  px: 0.8,
+  py: 0.8,
+};
+
+const SITE_CONTEXT_MENU_ITEM_SX = {
+  minHeight: 42,
+  borderRadius: 1.6,
+  color: MAGIC_UI.textBright,
+  alignItems: "center",
+  px: 1,
+  py: 0.85,
+  position: "relative",
+  overflow: "hidden",
+  "&:hover": {
+    backgroundColor: "rgba(88,166,255,0.12)",
+  },
+  "&::before": {
+    content: '""',
+    position: "absolute",
+    left: 0,
+    top: 8,
+    bottom: 8,
+    width: 3,
+    borderRadius: 999,
+    background: "transparent",
+  },
+  "&:hover::before": {
+    background: "#58a6ff",
+  },
+};
+
+const SITE_CONTEXT_MENU_DANGER_ITEM_SX = {
+  ...SITE_CONTEXT_MENU_ITEM_SX,
+  "&:hover": {
+    backgroundColor: "rgba(248,113,113,0.1)",
+  },
+  "&:hover::before": {
+    background: "#58a6ff",
+  },
+};
+
+const SITE_CONTEXT_MENU_SECTION_LABEL_SX = {
+  px: 1.2,
+  pt: 0.65,
+  pb: 0.45,
+  color: "rgba(148,163,184,0.72)",
+  fontSize: "0.68rem",
+  fontWeight: 700,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
+const SITE_CONTEXT_MENU_DIVIDER_SX = {
+  my: 0.55,
+  borderColor: "rgba(148,163,184,0.16)",
+};
+
+const SITE_CONTEXT_MENU_HEADER_SX = {
+  display: "flex",
+  alignItems: "center",
+  gap: 1,
+  px: 1.1,
+  pt: 0.55,
+  pb: 0.85,
+};
+
+const SITE_CONTEXT_MENU_HEADER_ICON_SX = {
+  width: 32,
+  height: 32,
+  borderRadius: 1.35,
+  flexShrink: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  border: "1px solid rgba(148,163,184,0.14)",
+  background: "rgba(255,255,255,0.04)",
+  color: "#8fd3ff",
+};
+
+const SITE_CONTEXT_MENU_ROW_ICON_SX = {
+  mt: 0.18,
+  mr: 1,
+  fontSize: 18,
+  flexShrink: 0,
+};
+
+const SITE_CONTEXT_MENU_LABEL_SX = {
+  color: MAGIC_UI.textBright,
+  fontSize: "0.84rem",
+  fontWeight: 500,
+  lineHeight: 1.2,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+const SITE_CONTEXT_MENU_DESCRIPTION_SX = {
+  color: "rgba(148,163,184,0.78)",
+  fontSize: "0.73rem",
+  lineHeight: 1.25,
+  mt: 0.25,
+};
+
+const SITE_CONTEXT_MENU_TRUNCATE_SX = {
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+const SITE_CONTEXT_MENU_GROUP_LABELS = {
+  primary: "Primary",
+  organize: "Organize",
+  danger: "Danger Zone",
+  view: "View",
+};
+
+const SITE_CONTEXT_MENU_GROUP_ORDER = ["primary", "organize", "danger", "view"];
 
 function normalizeInstallServerUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
@@ -384,7 +512,8 @@ export default function SiteList() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
-  const [actionsMenuAnchorEl, setActionsMenuAnchorEl] = useState(null);
+  const [renameSiteId, setRenameSiteId] = useState(null);
+  const [siteContextMenu, setSiteContextMenu] = useState({ open: false, top: 0, left: 0, row: null });
   const [installMenuAnchorEl, setInstallMenuAnchorEl] = useState(null);
   const [installMenuSite, setInstallMenuSite] = useState(null);
   const gridRef = useRef(null);
@@ -410,6 +539,18 @@ export default function SiteList() {
         /* noop */
       }
       navigate(APP_PATHS.devices);
+    },
+    [navigate]
+  );
+
+  const handleOpenSoftwareAuditForSite = useCallback(
+    (siteName) => {
+      try {
+        localStorage.setItem("software_audit_initial_site_filter", String(siteName || ""));
+      } catch {
+        /* noop */
+      }
+      navigate(APP_PATHS.software);
     },
     [navigate]
   );
@@ -585,10 +726,11 @@ export default function SiteList() {
     await handleCopyInstallCommand(osId, activeSite);
   }, [handleCloseInstallMenu, handleCopyInstallCommand, installMenuSite]);
 
-  const openRenameDialog = useCallback(() => {
-    const selId = selectedIds.size === 1 ? Array.from(selectedIds)[0] : null;
+  const openRenameDialog = useCallback((siteOverride = null) => {
+    const selId = siteOverride?.id ?? (selectedIds.size === 1 ? Array.from(selectedIds)[0] : null);
     if (selId == null) return;
-    const site = rows.find((row) => row.id === selId);
+    const site = siteOverride || rows.find((row) => row.id === selId);
+    setRenameSiteId(selId);
     setRenameValue(site?.name || "");
     setRenameOpen(true);
   }, [rows, selectedIds]);
@@ -730,11 +872,6 @@ export default function SiteList() {
         : !singleSelectedSite?.enrollment_code
           ? "The selected site is missing an enrollment code"
           : undefined;
-  const actionsActionTooltip = selectedIds.size === 0
-    ? "Select one or more sites to manage"
-    : selectedIds.size > 1
-      ? "Delete supports multiple sites; rename requires exactly one"
-      : undefined;
 
   const handleOpenInstallMenu = useCallback((event) => {
     if (!singleSelectedSite) return;
@@ -744,26 +881,37 @@ export default function SiteList() {
     setInstallMenuSite(singleSelectedSite);
   }, [singleSelectedSite]);
 
-  const handleOpenActionsMenu = useCallback((event) => {
-    if (!hasSelectedSites) return;
+  const handleOpenSiteContextMenu = useCallback((event, row, rowNode = null) => {
     event?.preventDefault?.();
     event?.stopPropagation?.();
-    setActionsMenuAnchorEl(event.currentTarget);
-  }, [hasSelectedSites]);
-
-  const handleCloseActionsMenu = useCallback(() => {
-    setActionsMenuAnchorEl(null);
+    if (rowNode && !rowNode.isSelected?.()) {
+      rowNode.setSelected?.(true, true);
+    }
+    setSiteContextMenu({
+      open: true,
+      top: Number(event?.clientY || 0),
+      left: Number(event?.clientX || 0),
+      row: row || null,
+    });
   }, []);
 
-  const handleOpenDeleteDialog = useCallback(() => {
-    handleCloseActionsMenu();
+  const handleCloseSiteContextMenu = useCallback(() => {
+    setSiteContextMenu({ open: false, top: 0, left: 0, row: null });
+  }, []);
+
+  const handleOpenDeleteDialog = useCallback((siteOverride = null) => {
+    handleCloseSiteContextMenu();
+    if (siteOverride?.id != null && !selectedIds.has(siteOverride.id)) {
+      setSelectedIds(new Set([siteOverride.id]));
+      setDeleteOpen(true);
+      return;
+    }
     if (!hasSelectedSites) return;
     setDeleteOpen(true);
-  }, [handleCloseActionsMenu, hasSelectedSites]);
+  }, [handleCloseSiteContextMenu, hasSelectedSites, selectedIds]);
 
   useEffect(() => {
     if (!hasSelectedSites) {
-      setActionsMenuAnchorEl(null);
       setInstallMenuAnchorEl(null);
       setInstallMenuSite(null);
       return;
@@ -784,15 +932,6 @@ export default function SiteList() {
   const pageHeaderActions = useMemo(
     () => [
       {
-        id: "site-actions",
-        label: "Actions",
-        icon: <MoreHorizIcon />,
-        tone: "secondary",
-        disabled: selectedIds.size === 0,
-        tooltip: actionsActionTooltip,
-        onClick: handleOpenActionsMenu,
-      },
-      {
         id: "install-site-agent",
         label: "Install Agent(s)",
         icon: <DownloadRoundedIcon />,
@@ -810,14 +949,108 @@ export default function SiteList() {
       },
     ],
     [
-      actionsActionTooltip,
       canOpenInstallMenu,
-      hasSelectedSites,
-      handleOpenActionsMenu,
       handleOpenInstallMenu,
       installActionTooltip,
-      selectedIds.size,
     ]
+  );
+
+  const siteContextRow = siteContextMenu.row || null;
+  const siteContextSubtitle = siteContextRow
+    ? `${Number(siteContextRow.device_count || 0).toLocaleString()} Device${Number(siteContextRow.device_count || 0) === 1 ? "" : "s"}`
+    : "Site";
+  const siteContextActions = useMemo(() => {
+    const row = siteContextMenu.row || null;
+    const unavailableReason = row ? "" : "Select a site first.";
+    const enrollmentCode = String(row?.enrollment_code || "").trim();
+    const deleteTargetCount = row?.id != null && selectedIds.has(row.id) ? selectedSiteRows.length : row ? 1 : 0;
+    return [
+      {
+        id: "display-site-devices",
+        group: "primary",
+        label: "Display Site Devices",
+        icon: DevicesRoundedIcon,
+        disabled: Boolean(unavailableReason),
+        disabledReason: unavailableReason,
+        description: "Open Devices with this site filter applied.",
+        onClick: () => {
+          handleCloseSiteContextMenu();
+          handleOpenDevicesForSite(row?.name || "");
+        },
+      },
+      {
+        id: "display-software-audit",
+        group: "primary",
+        label: "Display Software Audit",
+        icon: AssessmentRoundedIcon,
+        disabled: Boolean(unavailableReason),
+        disabledReason: unavailableReason,
+        description: "Open Software Audit filtered to this site.",
+        onClick: () => {
+          handleCloseSiteContextMenu();
+          handleOpenSoftwareAuditForSite(row?.name || "");
+        },
+      },
+      {
+        id: "copy-enrollment-code",
+        group: "primary",
+        label: "Copy Site Enrollment Code",
+        icon: ContentCopyIcon,
+        disabled: Boolean(unavailableReason) || !enrollmentCode,
+        disabledReason: unavailableReason || (!enrollmentCode ? "This site is missing an enrollment code." : ""),
+        description: "Copy the agent enrollment code for this site.",
+        onClick: () => {
+          handleCloseSiteContextMenu();
+          void handleCopy(enrollmentCode, row?.name || "");
+        },
+      },
+      {
+        id: "rename-site",
+        group: "organize",
+        label: "Rename",
+        icon: DriveFileRenameOutlineRoundedIcon,
+        disabled: Boolean(unavailableReason),
+        disabledReason: unavailableReason,
+        description: "Rename this site record.",
+        onClick: () => {
+          handleCloseSiteContextMenu();
+          openRenameDialog(row);
+        },
+      },
+      {
+        id: "delete-site",
+        group: "danger",
+        label: deleteTargetCount > 1 ? "Delete Selected Sites" : "Delete",
+        icon: DeleteRoundedIcon,
+        intent: "danger",
+        disabled: Boolean(unavailableReason),
+        disabledReason: unavailableReason,
+        description:
+          deleteTargetCount > 1
+            ? `Delete ${deleteTargetCount} selected site records.`
+            : "Delete this site record.",
+        onClick: () => handleOpenDeleteDialog(row),
+      },
+    ];
+  }, [
+    handleCloseSiteContextMenu,
+    handleCopy,
+    handleOpenDeleteDialog,
+    handleOpenDevicesForSite,
+    handleOpenSoftwareAuditForSite,
+    openRenameDialog,
+    selectedSiteRows.length,
+    selectedIds,
+    siteContextMenu.row,
+  ]);
+  const groupedSiteContextActions = useMemo(
+    () =>
+      SITE_CONTEXT_MENU_GROUP_ORDER.map((groupId) => ({
+        id: groupId,
+        label: SITE_CONTEXT_MENU_GROUP_LABELS[groupId],
+        actions: siteContextActions.filter((action) => action.group === groupId),
+      })).filter((group) => group.actions.length),
+    [siteContextActions]
   );
 
   useRoutePageChrome({
@@ -864,40 +1097,84 @@ export default function SiteList() {
         ))}
       </Menu>
       <Menu
-        anchorEl={actionsMenuAnchorEl}
-        open={Boolean(actionsMenuAnchorEl)}
-        onClose={handleCloseActionsMenu}
-        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-        transformOrigin={{ vertical: "top", horizontal: "left" }}
-        PaperProps={{ sx: INSTALL_MENU_PAPER_SX }}
+        open={Boolean(siteContextMenu.open)}
+        onClose={handleCloseSiteContextMenu}
+        anchorReference="anchorPosition"
+        anchorPosition={siteContextMenu.open ? { top: siteContextMenu.top, left: siteContextMenu.left } : undefined}
+        PaperProps={{ sx: SITE_CONTEXT_MENU_PAPER_SX }}
       >
-        <MenuItem
-          disabled={selectedIds.size !== 1}
-          onClick={() => {
-            handleCloseActionsMenu();
-            openRenameDialog();
-          }}
-          sx={INSTALL_MENU_ITEM_SX}
-        >
-          Rename
-        </MenuItem>
-        <MenuItem
-          onClick={handleOpenDeleteDialog}
-          sx={{
-            ...INSTALL_MENU_ITEM_SX,
-            color: "#ffb1b9",
-            "&:hover": {
-              background:
-                "linear-gradient(90deg, rgba(251,113,133,0.16) 0%, rgba(244,63,94,0.14) 100%)",
-            },
-            "&.Mui-focusVisible": {
-              background:
-                "linear-gradient(90deg, rgba(251,113,133,0.16) 0%, rgba(244,63,94,0.14) 100%)",
-            },
-          }}
-        >
-          Delete
-        </MenuItem>
+        <Box component="li" role="presentation" sx={SITE_CONTEXT_MENU_HEADER_SX}>
+          <Box sx={SITE_CONTEXT_MENU_HEADER_ICON_SX}>
+            <LocationCityIcon sx={{ fontSize: 19, color: "currentColor" }} />
+          </Box>
+          <Box sx={{ minWidth: 0 }}>
+            <Tooltip title={siteContextRow?.name || "Site"} placement="top-start">
+              <Typography
+                sx={{
+                  ...SITE_CONTEXT_MENU_TRUNCATE_SX,
+                  color: MAGIC_UI.textBright,
+                  fontSize: "0.88rem",
+                  fontWeight: 600,
+                  lineHeight: 1.2,
+                  maxWidth: 240,
+                }}
+              >
+                {siteContextRow?.name || "Site"}
+              </Typography>
+            </Tooltip>
+            <Tooltip title={siteContextSubtitle} placement="top-start">
+              <Typography
+                sx={{
+                  ...SITE_CONTEXT_MENU_TRUNCATE_SX,
+                  color: "rgba(148,163,184,0.82)",
+                  fontSize: "0.73rem",
+                  lineHeight: 1.25,
+                  mt: 0.22,
+                  maxWidth: 240,
+                }}
+              >
+                {siteContextSubtitle}
+              </Typography>
+            </Tooltip>
+          </Box>
+        </Box>
+        {groupedSiteContextActions.map((group) => (
+          <React.Fragment key={group.id}>
+            <Divider component="li" sx={SITE_CONTEXT_MENU_DIVIDER_SX} />
+            <Box component="li" role="presentation" sx={SITE_CONTEXT_MENU_SECTION_LABEL_SX}>{group.label}</Box>
+            {group.actions.map((action) => {
+              const Icon = action.icon;
+              const helperText = action.disabledReason || action.description || "";
+              return (
+                <MenuItem
+                  key={action.id}
+                  disabled={Boolean(action.disabled)}
+                  onClick={() => action.onClick?.()}
+                  sx={action.intent === "danger" ? SITE_CONTEXT_MENU_DANGER_ITEM_SX : SITE_CONTEXT_MENU_ITEM_SX}
+                >
+                  <Icon
+                    sx={{
+                      ...SITE_CONTEXT_MENU_ROW_ICON_SX,
+                      color: action.intent === "danger" ? "rgba(248,113,113,0.92)" : "rgba(226,232,240,0.92)",
+                    }}
+                  />
+                  <Box
+                    sx={{
+                      flex: 1,
+                      minWidth: 0,
+                      display: "flex",
+                      flexDirection: "column",
+                      justifyContent: helperText ? "flex-start" : "center",
+                    }}
+                  >
+                    <Typography sx={SITE_CONTEXT_MENU_LABEL_SX}>{action.label}</Typography>
+                    {helperText ? <Typography sx={SITE_CONTEXT_MENU_DESCRIPTION_SX}>{helperText}</Typography> : null}
+                  </Box>
+                </MenuItem>
+              );
+            })}
+          </React.Fragment>
+        ))}
       </Menu>
       <PageBodyFrame variant="grid">
         <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0 }}>
@@ -952,6 +1229,8 @@ export default function SiteList() {
               rowSelection={rowSelection}
               selectionColumnDef={selectionColumnDef}
               suppressCellFocus
+              suppressContextMenu
+              preventDefaultOnContextMenu
               pagination
               paginationPageSize={20}
               paginationPageSizeSelector={[20, 50, 100]}
@@ -978,6 +1257,7 @@ export default function SiteList() {
                 const selected = api.getSelectedNodes().map((n) => n.data?.id).filter((id) => id != null);
                 setSelectedIds(new Set(selected));
               }}
+              onCellContextMenu={(params) => handleOpenSiteContextMenu(params.event, params.data, params.node)}
               theme={myTheme}
             />
           </Box>
@@ -1032,11 +1312,14 @@ export default function SiteList() {
         open={renameOpen}
         value={renameValue}
         onChange={setRenameValue}
-        onCancel={() => setRenameOpen(false)}
+        onCancel={() => {
+          setRenameOpen(false);
+          setRenameSiteId(null);
+        }}
         onSave={async () => {
           const newName = (renameValue || "").trim();
           if (!newName) return;
-          const selId = selectedIds.size === 1 ? Array.from(selectedIds)[0] : null;
+          const selId = renameSiteId ?? (selectedIds.size === 1 ? Array.from(selectedIds)[0] : null);
           if (!selId) return;
           const oldName = rows.find((r) => r.id === selId)?.name || "Site";
           try {
@@ -1047,6 +1330,7 @@ export default function SiteList() {
             });
             if (res.ok) {
               setRenameOpen(false);
+              setRenameSiteId(null);
               sendNotification(`Site ${oldName} Renamed as ${newName} Successfully`);
               fetchSites();
             }

@@ -11,6 +11,7 @@ export const APP_PATHS = {
   login: "/login",
   sites: "/sites",
   devices: "/devices",
+  software: "/software",
   deviceApprovals: "/devices/approvals",
   agentDevices: "/devices/agents",
   sshDevices: "/devices/ssh",

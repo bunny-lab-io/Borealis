@@ -286,6 +286,8 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/DevTools/P
 - Official name: `Filter Slider`.
 - Purpose: a compact segmented control for switching between a small number of mutually exclusive grid views such as queue states, lifecycle states, or source categories.
 - Placement: render it at the top-left of the `stack` area on `grid_with_stack` pages or at the top-left of the local control row above a tabbed grid. Pair it with a short summary on the right when space allows.
+- Label placement: every Filter Slider must have a short label directly above it. When a page has multiple sliders, render them side by side in individual column blocks with `8px` label-to-slider spacing and about `8px` horizontal spacing between slider blocks.
+- Label styling: match the Assemblies page filter labels: Borealis blue `#58a6ff`, `11px` font size, `600` font weight, `1.1` line height, and `8px` left padding so the label aligns with the slider shell.
 - Visual treatment: use the rounded glass shell with `4px` inner padding, inactive transparent pills, active cyan-to-violet gradient pill, and inline count chips shown inside each segment when counts are useful.
 - Labels: keep labels short and mixed case, for example `Active`, `Archived`, `Windows Store`, or `Locally Installed`.
 - Counts: show live counts when the page has them; `0` is acceptable for placeholder categories that are not fully implemented yet.

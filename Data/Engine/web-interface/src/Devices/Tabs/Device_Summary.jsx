@@ -1458,7 +1458,7 @@ export default function DeviceSummary() {
       if (!burst) {
         return;
       }
-      [4000, 10000, 20000].forEach((delayMs) => {
+      [1200, 2500, 5000, 10000, 20000].forEach((delayMs) => {
         const timerId = window.setTimeout(() => {
           void reloadDeviceSummarySnapshot({ silent: true, includeAgents: false });
         }, delayMs);
