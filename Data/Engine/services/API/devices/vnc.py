@@ -603,6 +603,26 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             os.environ.get("BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS"),
             0.15,
         )
+        prewarm_backend = _should_prewarm_vnc_backend(
+            had_tunnel_payload=had_tunnel_payload,
+            socket_registered=socket_registered,
+            wait_profile=wait_profile,
+        )
+        if prewarm_backend:
+            fast_ready_wait = max(
+                fast_ready_wait,
+                _coerce_timeout(
+                    os.environ.get("BOREALIS_VNC_PREWARM_FAST_READY_WAIT_SECONDS"),
+                    2.0,
+                ),
+            )
+            fast_ready_poll = min(
+                fast_ready_poll,
+                _coerce_timeout(
+                    os.environ.get("BOREALIS_VNC_PREWARM_FAST_READY_POLL_INTERVAL_SECONDS"),
+                    0.15,
+                ),
+            )
         _trace(
             "E07",
             agent_id=agent_id,
@@ -622,11 +642,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 else "-"
             ),
         )
-        if _should_prewarm_vnc_backend(
-            had_tunnel_payload=had_tunnel_payload,
-            socket_registered=socket_registered,
-            wait_profile=wait_profile,
-        ):
+        if prewarm_backend:
             prewarm_reason = "vnc_backend_prewarm"
             prewarm_ok = False
             try:
@@ -641,6 +657,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 reason=prewarm_reason,
                 prewarm_ok=prewarm_ok,
                 ready_profile=wait_profile["mode"],
+                fast_wait_seconds=fast_ready_wait,
             )
         fast_ready = _wait_for_backend_ready(
             host,

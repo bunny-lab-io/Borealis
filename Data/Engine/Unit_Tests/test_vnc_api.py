@@ -340,7 +340,7 @@ def test_vnc_establish_prewarm_cached_online_tunnel_before_fast_probe(
     response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
 
     assert response.status_code == 200
-    assert wait_calls == [0.75]
+    assert wait_calls == [2.0]
     assert fake_tunnel.connect_calls == []
     assert fake_tunnel.transport_marks == [("test-device-agent", "vnc_backend_prewarm")]
     assert fake_tunnel.start_calls == [("test-device-agent", False, "vnc_backend_prewarm")]
