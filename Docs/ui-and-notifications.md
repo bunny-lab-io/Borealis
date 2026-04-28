@@ -16,7 +16,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - Navigation: `Data/Engine/web-interface/src/Navigation_Sidebar.jsx`.
 - Watchdog authoring: `Data/Engine/web-interface/src/Automation/Watchdogs/`.
 - Alerts queue: `Data/Engine/web-interface/src/Alerting/Active_Alerts.jsx`.
-- Page template reference: `Data/Engine/web-interface/src/Admin/Page_Template.jsx` (layout only).
+- Page style template reference: `Data/Engine/web-interface/src/DevTools/Page_Style_Template.jsx` (layout only).
 
 ## Operator Bootstrap Gate
 - Borealis now resolves `/api/bootstrap/state` before it attempts `/api/auth/me` or renders the normal login form.
@@ -111,7 +111,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 ## Related Documentation
 - [Engine Runtime](engine-runtime.md)
 - [API Reference](api-reference.md)
-- [Technical Debt](technical-debt.md)
+- [Technical Debt issues](https://github.com/bunny-lab-io/Borealis/issues?q=is%3Aissue%20label%3A%22Technical%20Debt%22)
 - [Logging and Operations](logging-and-operations.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
 - [Flow Editor and Nodes](flow-editor-and-nodes.md)
@@ -130,11 +130,11 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - Add further shared topics here (for example, triage process, security posture deltas) instead of growing `AGENTS.md`.
 
 ### Shared UI (MagicUI + AG Grid) (Full)
-Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page_Template.jsx` as the canonical visual reference (no API/business logic). Keep this doc as the single source of truth for styling rules and AG Grid behavior.
+Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/DevTools/Page_Style_Template.jsx` as the canonical visual reference (no API/business logic). Keep this doc as the single source of truth for styling rules and AG Grid behavior.
 
 - Toast notifications: see the Toast Notifications section below for endpoint, payload, severity variants, and quick test commands.
 
-#### Page Template Reference
+#### Page Style Template Reference
 - Purpose: visual-only baseline for new pages; copy structure but wire your data in real pages.
 - Header: small Material icon left of the title, subtitle beneath, utility buttons on the top-right.
 - Body: primary pages should render their main content through `Data/Engine/web-interface/src/PageBodyFrame.jsx` so the shared body shell, outer inset, subtitle-to-body spacing, and edge-bleed behavior stay consistent.
@@ -436,7 +436,7 @@ const NAV_TAB_COLORS = {
 - `GitHub Project | About Borealis`
 - `Cancel | Save Filter`
 - Canonical examples:
-- Visual reference page: `Data/Engine/web-interface/src/Admin/Page_Template.jsx`
+- Visual reference page: `Data/Engine/web-interface/src/DevTools/Page_Style_Template.jsx`
 - Shared header owner: `Data/Engine/web-interface/src/app/shell/AppShell.jsx`
 - Shared button rail/tokens: `Data/Engine/web-interface/src/Page_Header_Actions.jsx`
 
@@ -506,7 +506,7 @@ const NAV_TAB_COLORS = {
 - Row hover baseline: use a darker Borealis blue hover state (`--ag-row-hover-color: "rgba(73,156,196,0.2)"`) so hover stays in the same color family as selected rows without matching the selected intensity.
 - Selected row highlight baseline: use `backgroundColor: "rgba(125,211,252,0.2) !important"` with `boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)"` so checkbox selection state reads in Borealis blue.
 - Inline grid text inputs: when a page embeds a MUI `TextField` inside AG Grid (for example, Device Description), use `MAGIC_UI.accentA` (`#7dd3fc`) for hover/focus border color.
-- Example: follow the scaffolding in `Engine/web-interface/src/Scheduling/Scheduled_Jobs_List.jsx` and the structure in `Data/Engine/web-interface/src/Admin/Page_Template.jsx`.
+- Example: follow the scaffolding in `Engine/web-interface/src/Scheduling/Scheduled_Jobs_List.jsx` and the structure in `Data/Engine/web-interface/src/DevTools/Page_Style_Template.jsx`.
 - Server Info layout pattern: use Quartz AG Grid sections for service state, public-edge certificates, and live operator sessions, with concise glass summary cards above the grids for the most important runtime signals.
 
 ### Toast Notifications (Full)

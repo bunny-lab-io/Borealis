@@ -1,7 +1,7 @@
 import React from "react";
 import ServerInfo, { loadServerOverviewPageData } from "../../Admin/Server_Info.jsx";
 import LogManagement from "../../Admin/Log_Management.jsx";
-import PageTemplate from "../../Admin/Page_Template.jsx";
+import DevTools from "../../DevTools/Dev_Tools.jsx";
 
 export async function ServerRouteLoader({ request }) {
   return loadServerOverviewPageData(request);
@@ -15,6 +15,6 @@ export function LogsRoute() {
   return <LogManagement />;
 }
 
-export function PageTemplateRoute() {
-  return <PageTemplate />;
+export function DevToolsRoute() {
+  return <DevTools />;
 }

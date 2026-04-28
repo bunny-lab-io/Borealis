@@ -40,7 +40,7 @@ This page is the navigation hub for the Borealis documentation set. The knowledg
 - [UI and Notifications](ui-and-notifications.md)
 - [Migrating Pages to React Router](migrating-pages-to-react-router.md)
 - [API Reference](api-reference.md)
-- [Technical Debt](technical-debt.md)
+- [Technical Debt issues](https://github.com/bunny-lab-io/Borealis/issues?q=is%3Aissue%20label%3A%22Technical%20Debt%22)
 
 ### Integrations
 - [Integrations](integrations.md)
@@ -67,7 +67,7 @@ None. This index only links to other pages.
 - Use `migrating-pages-to-react-router.md` when moving legacy WebUI pages onto the shared router and app shell.
 - Use `api-reference.md` and `integrations.md` for public API surfaces and external service behavior.
 - Use `security-and-trust.md` for enrollment, tokens, and code-signing behavior.
-- Use `technical-debt.md` when documenting workarounds, non-standard build steps, or dev/prod drift.
+- Use GitHub issues labeled `Technical Debt` when documenting workarounds, non-standard build steps, or dev/prod drift.
 
 ### Where the truth lives in code
 - Engine source code: `Data/Engine/` (edit here).

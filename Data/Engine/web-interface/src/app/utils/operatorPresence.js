@@ -20,7 +20,8 @@ const OPERATOR_PRESENCE_PAGE_LABELS = Object.freeze({
   server: "Server Info",
   logs: "Log Management",
   "device-approvals": "Device Approvals",
-  "page-template": "Page Template",
+  "dev-tools": "Dev Tools",
+  "page-template": "Page Style Template",
 });
 
 export function formatOperatorPresencePage(pageKey, pageTitle) {

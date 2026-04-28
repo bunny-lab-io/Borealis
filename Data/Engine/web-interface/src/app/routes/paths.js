@@ -46,7 +46,9 @@ export const APP_PATHS = {
   siteAssignment: "/users/site-assignment",
   server: "/server",
   logs: "/logs",
-  pageTemplate: "/page-template",
+  devTools: "/dev-tools",
+  pageStyleTemplate: "/dev-tools?tab=page_style_template",
+  pageTemplate: "/dev-tools?tab=page_style_template",
 };
 
 export function normalizeAppRedirectTarget(value) {

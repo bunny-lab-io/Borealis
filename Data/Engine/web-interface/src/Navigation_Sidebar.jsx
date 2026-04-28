@@ -7,6 +7,8 @@ import {
   AccordionDetails,
   Typography,
   Box,
+  Menu,
+  MenuItem,
   ListItemButton,
   ListItemText,
   Divider,
@@ -27,6 +29,7 @@ import {
   PersonOutline as UserIcon,
   AccountTree as DirectoryIcon,
   AdminPanelSettings as AdminPanelSettingsIcon,
+  DashboardCustomizeRounded as PageStyleTemplateIcon,
   ReceiptLong as LogsIcon,
 } from "@mui/icons-material";
 import { useNavigate } from "react-router-dom";
@@ -43,6 +46,7 @@ const COLORS = {
   itemActiveBg:
     "linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
 };
+const DEVELOPER_MODE_STORAGE_KEY = "borealis_sidebar_developer_mode";
 
 const NAV_SECTIONS = Object.freeze([
   {
@@ -167,11 +171,32 @@ const NAV_SECTIONS = Object.freeze([
       },
     ],
   },
+  {
+    id: "developer",
+    title: "Dev Tools",
+    adminOnly: true,
+    developerOnly: true,
+    items: [
+      {
+        icon: PageStyleTemplateIcon,
+        label: "Page Style Template",
+        navKey: "dev-tools",
+        to: APP_PATHS.pageStyleTemplate,
+      },
+    ],
+  },
 ]);
 
 function NavigationSidebar({ activeNavKey, isAdmin = false }) {
   const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(false);
+  const [developerModeEnabled, setDeveloperModeEnabled] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return window.localStorage.getItem(DEVELOPER_MODE_STORAGE_KEY) === "1";
+  });
+  const [contextMenuPosition, setContextMenuPosition] = useState(null);
   const [expandedNav, setExpandedNav] = useState({
     sites: true,
     devices: true,
@@ -184,9 +209,38 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
   });
 
   const visibleSections = useMemo(
-    () => NAV_SECTIONS.filter((section) => !section.adminOnly || isAdmin),
-    [isAdmin]
+    () =>
+      NAV_SECTIONS.filter((section) => {
+        if (section.adminOnly && !isAdmin) {
+          return false;
+        }
+        if (section.developerOnly && !developerModeEnabled) {
+          return false;
+        }
+        return true;
+      }),
+    [developerModeEnabled, isAdmin]
   );
+
+  const closeContextMenu = () => {
+    setContextMenuPosition(null);
+  };
+
+  const handleSidebarContextMenu = (event) => {
+    event.preventDefault();
+    setContextMenuPosition({ mouseX: event.clientX + 2, mouseY: event.clientY - 6 });
+  };
+
+  const handleDeveloperModeToggle = () => {
+    setDeveloperModeEnabled((current) => {
+      const next = !current;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(DEVELOPER_MODE_STORAGE_KEY, next ? "1" : "0");
+      }
+      return next;
+    });
+    closeContextMenu();
+  };
 
   const Section = ({ title, k, children }) => (
     <Accordion
@@ -291,6 +345,7 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
 
   return (
     <Box
+      onContextMenu={handleSidebarContextMenu}
       sx={{
         width: collapsed ? 45 : 260,
         flexShrink: 0,
@@ -378,6 +433,135 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
       </Box>
 
       <Divider sx={{ borderColor: COLORS.line }} />
+      <Menu
+        open={Boolean(contextMenuPosition)}
+        onClose={closeContextMenu}
+        anchorReference="anchorPosition"
+        anchorPosition={
+          contextMenuPosition
+            ? { top: contextMenuPosition.mouseY, left: contextMenuPosition.mouseX }
+            : undefined
+        }
+        PaperProps={{
+          sx: {
+            width: 320,
+            maxWidth: "calc(100vw - 24px)",
+            borderRadius: 2,
+            border: "1px solid rgba(148, 163, 184, 0.28)",
+            background: "rgba(8,12,24,0.96)",
+            color: COLORS.textActive,
+            backdropFilter: "blur(14px) saturate(140%)",
+            boxShadow: "0 22px 52px rgba(2, 6, 23, 0.72)",
+            p: 0.75,
+            overflow: "hidden",
+          },
+        }}
+        MenuListProps={{
+          dense: true,
+          sx: { p: 0 },
+        }}
+      >
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            px: 1,
+            py: 1,
+          }}
+        >
+          <Box sx={{ display: "flex", color: COLORS.cyan }}>
+            <PageStyleTemplateIcon fontSize="small" />
+          </Box>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography
+              noWrap
+              sx={{
+                color: COLORS.textActive,
+                fontSize: "0.86rem",
+                fontWeight: 700,
+              }}
+            >
+              Navigation
+            </Typography>
+            <Typography
+              noWrap
+              sx={{
+                color: "rgba(203, 213, 225, 0.68)",
+                fontSize: "0.74rem",
+              }}
+            >
+              Sidebar visibility controls
+            </Typography>
+          </Box>
+        </Box>
+        <Divider sx={{ borderColor: "rgba(148, 163, 184, 0.14)", my: 0.5 }} />
+        <Typography
+          sx={{
+            px: 1,
+            pt: 0.8,
+            pb: 0.45,
+            color: "rgba(203, 213, 225, 0.62)",
+            fontSize: "0.68rem",
+            fontWeight: 800,
+            letterSpacing: 0.8,
+            textTransform: "uppercase",
+          }}
+        >
+          View
+        </Typography>
+        <MenuItem
+          onClick={handleDeveloperModeToggle}
+          sx={{
+            position: "relative",
+            alignItems: "flex-start",
+            gap: 1,
+            px: 1,
+            py: 0.95,
+            borderRadius: 1.2,
+            color: COLORS.textActive,
+            whiteSpace: "normal",
+            "&:before": {
+              content: '""',
+              position: "absolute",
+              left: 0,
+              top: 8,
+              bottom: 8,
+              width: 3,
+              borderRadius: 999,
+              backgroundColor: COLORS.cyan,
+              opacity: 0,
+              transition: "opacity 160ms ease",
+            },
+            "&:hover": {
+              backgroundColor: "rgba(125, 211, 252, 0.08)",
+              "&:before": {
+                opacity: 1,
+              },
+            },
+          }}
+        >
+          <Box sx={{ display: "flex", mt: 0.15, color: COLORS.cyan }}>
+            <PageStyleTemplateIcon fontSize="small" />
+          </Box>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography sx={{ fontSize: "0.82rem", fontWeight: 700 }}>
+              {developerModeEnabled ? "Disable Developer Mode" : "Enable Developer Mode"}
+            </Typography>
+            <Typography
+              sx={{
+                color: "rgba(203, 213, 225, 0.68)",
+                fontSize: "0.74rem",
+                lineHeight: 1.35,
+              }}
+            >
+              {developerModeEnabled
+                ? "Hide Dev Tools from the sidebar."
+                : "Show Dev Tools in the sidebar."}
+            </Typography>
+          </Box>
+        </MenuItem>
+      </Menu>
     </Box>
   );
 }

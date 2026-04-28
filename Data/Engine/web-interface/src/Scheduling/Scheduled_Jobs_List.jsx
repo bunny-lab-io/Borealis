@@ -55,7 +55,7 @@ import { APP_PATHS } from "../app/routes/paths.js";
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 // -----------------------------------------------------------------------------
-//  MagicUI x Quartz Theme (parity with Page_Template)
+//  MagicUI x Quartz Theme (parity with Page_Style_Template)
 // -----------------------------------------------------------------------------
 const gridTheme = themeQuartz.withParams({
   accentColor: "#7dd3fc",

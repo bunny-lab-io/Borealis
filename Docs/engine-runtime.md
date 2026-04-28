@@ -38,7 +38,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - [API Reference](api-reference.md)
 - [Logging and Operations](logging-and-operations.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
-- [Technical Debt](technical-debt.md)
+- [Technical Debt issues](https://github.com/bunny-lab-io/Borealis/issues?q=is%3Aissue%20label%3A%22Technical%20Debt%22)
 - [Watchdogs](watchdogs.md)
 - [Device Alerts](device-alerts.md)
 - [Aegis Cipher](features_to_implement/aegis_cipher.md)

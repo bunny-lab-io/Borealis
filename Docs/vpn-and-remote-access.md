@@ -154,7 +154,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - Legacy WebSocket tunnels are retired; only WireGuard is supported.
 - VNC requires UltraVNC running on the agent.
 - The Engine still uses one shared WireGuard listener/interface, so a true interface-level failure remains a shared outage until the watchdog or operator recovery path restores it.
-- On weaker agents, VNC can still expose residual transport issues, but the proxy now keeps UltraVNC continuously available between sessions, fast-probes healthy listeners before bootstrap, confirms successful backend connects as transport success, and avoids repeated forced recovery churn per browser session; see `Docs/technical-debt.md` for any remaining field issues.
+- On weaker agents, VNC can still expose residual transport issues, but the proxy now keeps UltraVNC continuously available between sessions, fast-probes healthy listeners before bootstrap, confirms successful backend connects as transport success, and avoids repeated forced recovery churn per browser session; see GitHub issues labeled `Technical Debt` for any remaining field issues.
 
 ### Reverse VPN Tunnels (WireGuard) - Full Reference
 #### 1) High-level model

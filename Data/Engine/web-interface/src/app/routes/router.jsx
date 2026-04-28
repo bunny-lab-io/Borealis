@@ -514,17 +514,21 @@ export function buildAppRoutes() {
                   ),
                 },
                 {
-                  path: "page-template",
+                  path: "dev-tools",
                   handle: {
-                    title: "Page Template",
-                    breadcrumb: "Page Template",
-                    navKey: "page-template",
-                    pageKey: "page-template",
+                    title: "Dev Tools",
+                    breadcrumb: "Dev Tools",
+                    navKey: "dev-tools",
+                    pageKey: "dev-tools",
                   },
                   lazy: lazyNamed(
                     () => import("../route-modules/adminRoutes.jsx"),
-                    "PageTemplateRoute"
+                    "DevToolsRoute"
                   ),
+                },
+                {
+                  path: "page-template",
+                  element: <Navigate to={APP_PATHS.pageStyleTemplate} replace />,
                 },
               ],
             },

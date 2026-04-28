@@ -19,7 +19,7 @@ Use this file as the entrypoint for Codex instructions. The full knowledgebase n
 - UI and notifications: `Docs/ui-and-notifications.md` (MagicUI styling, AG Grid rules, toast notifications, UI handoffs) and `Docs/migrating-pages-to-react-router.md` (route migration runbook).
 - API and integrations: `Docs/api-reference.md` and `Docs/integrations.md`.
 - Security and trust: `Docs/security-and-trust.md` (enrollment, tokens, code signing, sequence diagrams).
-- Technical debt: `Docs/technical-debt.md` (patches, workarounds, dev/prod mismatches).
+- Technical debt: GitHub issues labeled `Technical Debt` (patches, workarounds, dev/prod mismatches).
 
 Precedence: follow domain docs first; where overlap exists, the domain page wins. The Codex Agent sections inside each page are the authoritative agent guidance.
 
@@ -32,10 +32,10 @@ Precedence: follow domain docs first; where overlap exists, the domain page wins
 
 ## UI / AG Grid
 - MagicUI styling language and AG Grid rules are consolidated in `Docs/ui-and-notifications.md`.
-- Visual example: `Data/Engine/web-interface/src/Admin/Page_Template.jsx` (reference only - no business logic). Use it to mirror layout, spacing, and selection column behavior.
+- Visual example: `Data/Engine/web-interface/src/DevTools/Page_Style_Template.jsx` (reference only - no business logic). Use it to mirror layout, spacing, and selection column behavior.
 
 ## Technical Debt Logging
-- If you add a patchy workaround, non-standard build step, or dev/prod behavior divergence, log it in `Docs/technical-debt.md` using the template there.
+- If you add a patchy workaround, non-standard build step, or dev/prod behavior divergence, create or update a GitHub issue with the `Technical Debt` label.
 
 ## SBOM Maintenance
 - Keep `SBOM.md` in the repo root updated whenever Borealis adds, removes, vendors, or downloads third-party software for the Engine or Agent.
