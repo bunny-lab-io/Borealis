@@ -13,6 +13,7 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - Borealis now renders an explicit WireGuard `MTU = 1420` on both the Engine listener and Agent client configs by default, configurable through `BOREALIS_WIREGUARD_MTU`, so jumbo-frame auto-detection cannot stall larger SSH/Ansible transfers on mixed-MTU paths.
 - No idle teardown while the agent service is running.
 - Agent recovery: if the Windows agent receives the same `tunnel_id` again and its WireGuard service is stopped or unhealthy, it rerenders the config and attempts an in-place service recovery instead of assuming the tunnel is still healthy.
+- Agent reuse path: when the agent receives the same active tunnel config, it sends a short outbound UDP probe toward the Engine /32 before returning, so WireGuard can refresh the peer path without restarting the client service.
 - Engine recovery: in persistent mode the Engine keeps one Linux WireGuard interface online, updates peers live one at a time during normal connect/disconnect activity, and only falls back to full peer reconciliation when the listener is unhealthy. A watchdog validates listener health every 15 seconds, uses an effective probe grace aligned with WireGuard keepalive timing before declaring `stale_handshake`, and rate-limits full recovery attempts to one every 30 seconds while active sessions exist.
 - Linux listener routing: the Engine explicitly restores the configured WireGuard peer-subnet route on `borealis-wg` during listener bring-up and runtime reapply, which keeps `/32` Engine listener addressing able to reach agent `/32` peers after interface repairs.
 - Session-scoped transport confirmations: shell output and shell idle-keepalive pongs can refresh tunnel health without requiring visible operator traffic, which keeps quiet RemoteShell sessions from being mistaken for a dead tunnel.
@@ -37,7 +38,7 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - Agent runs UltraVNC as a Windows service; once the agent has its current controller credential and Engine /32 firewall scope, Borealis keeps the VNC listener running continuously instead of standing it down between sessions, and `/api/vnc/disconnect` now makes the caller leave the collaboration session or closes it entirely when requested.
 - `POST /api/vnc/handoff` remains available only to reassign the session owner metadata; it no longer forces reconnects or changes who can interact. `GET /api/vnc/sessions` exposes active-session inventory for the WebUI and admin/server overview.
 - `POST /api/agent/vnc/ensure` now returns readiness detail (`ready`, `service_state`, `listener_state`, `last_ready_at`, and session metadata) so the Engine can wait for the listener before minting browser bootstrap data.
-- Before the proxy connects, the Engine first fast-probes the agent's advertised UltraVNC listener; it only re-emits tunnel startup with `reason=vnc_bootstrap` when that probe misses and the backend likely still needs a refresh.
+- Before the proxy connects, the Engine prewarms the cached WireGuard path for registered agents, then fast-probes the agent's advertised UltraVNC listener; prewarmed fast probes use a slightly longer window (`BOREALIS_VNC_PREWARM_FAST_READY_WAIT_SECONDS`, default 2.0 seconds) so the Agent path-prime acknowledgement can land before the Engine falls back to `reason=vnc_bootstrap`.
 - After soft browser disconnects (`operator_disconnect` and `component_unmount`), the Windows VNC role preserves a short reconnect-grace snapshot (default 45 seconds via `BOREALIS_VNC_DISCONNECT_GRACE_SECONDS`) for session metadata, but the UltraVNC listener itself now stays running instead of dropping to standby.
 - When the last participant disconnects without explicitly closing the session, the Engine now retains that collaboration session briefly so a quick reconnect can reuse the same VNC password instead of forcing a brand-new UltraVNC restart.
 - Fast-path VNC establish now uses a short optimistic probe window (`BOREALIS_VNC_FAST_READY_WAIT_SECONDS`, default 0.75 seconds, with `BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS`, default 0.15 seconds) so healthy listeners connect without restarting WireGuard or UltraVNC.
@@ -127,6 +128,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - Keepalive is handled by WireGuard (`PersistentKeepalive = 30` seconds).
 - The agent periodically calls `/api/agent/vpn/ensure` to heal the tunnel if it drops.
 - On Windows agents, same-session ensure calls also recover a stopped `WireGuardTunnel$Borealis` service instead of returning early when the `tunnel_id` matches.
+- Same-session ensure calls send a short outbound UDP probe to the Engine /32 before returning from reuse, which wakes WireGuard peer state for shell/VNC retries without churning the tunnel service.
 - The Engine listener watchdog keeps shared listener state honest for all sessions, mutates peers live on the persistent interface during routine changes, uses an effective probe grace aligned with the WireGuard keepalive window before declaring `stale_handshake`, and marks status APIs as recovering while full peer reconciliation is underway.
 - Quiet shell sessions no longer depend on operator traffic alone; shell keepalive pongs and shell output can confirm transport health between commands.
 - VNC still shares the same listener recovery path, but Borealis now keeps UltraVNC continuously available between sessions, fast-probes the backend before reissuing bootstrap events, and uses a longer default readiness wait before `vnc_connect_retry`, so the shared listener is less likely to churn during normal reconnects.
@@ -242,6 +244,7 @@ This section consolidates the troubleshooting context and environment notes for 
   - Agent: Agent\Borealis\Settings\WireGuard\Borealis.conf
   - Engine: Engine\WireGuard\borealis-wg.conf
 - Agent ensures the WireGuard tunnel on boot via `/api/agent/vpn/ensure`, then remote shell/VNC/SSH flow through it.
+- After the agent applies the tunnel config and local firewall allowlist, it calls `/api/agent/vpn/ready`. Engine-side shared Ansible waits for that active-tunnel readiness signal before admitting SSH/WinRM targets into generated inventories.
 - No idle teardown; tunnels and firewall rules stay in place while the agent is running.
 
 #### Recent changes (current repo state)
@@ -253,6 +256,7 @@ This section consolidates the troubleshooting context and environment notes for 
   - Service display name set to "Borealis - WireGuard - Agent".
   - Persistent tunnels with `PersistentKeepalive = 30`.
   - Applies an allowlist firewall rule using the engine /32 from allowed_ips and the Engine allowlist payload.
+  - Reports active tunnel readiness to `/api/agent/vpn/ready` after the service/config/firewall path is applied.
 - Data/Engine/services/VPN/wireguard_server.py
   - Engine config path: Engine\WireGuard\borealis-wg.conf (project root only).
   - Removed invalid "SaveConfig = false" line (WireGuard rejected it).
@@ -261,6 +265,7 @@ This section consolidates the troubleshooting context and environment notes for 
   - Uses an effective probe grace aligned with the WireGuard keepalive window before declaring `stale_handshake`.
   - Logs probe/confirmed/handshake ages during watchdog recovery to make transport failures easier to localize.
   - Throttles repetitive `shell_keepalive` confirmation logs so healthy quiet shells do not flood `tunnel.log`.
+  - Records agent-side readiness for active tunnels and exposes `dispatch_ready` for scheduled SSH/WinRM dispatch.
 - Data/Engine/services/WebSocket/vpn_shell.py
   - Adds readiness probes, idle shell keepalive pings, output timing diagnostics, and transport confirmations on shell output.
   - Tracks explicit close reasons (`close_request`, `superseded_sid`, `superseded_agent_session`, `ready_probe_failed`) so intentional closes no longer look like transport errors.

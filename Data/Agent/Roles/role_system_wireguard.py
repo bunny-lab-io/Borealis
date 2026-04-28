@@ -20,6 +20,7 @@ import base64
 import ipaddress
 import json
 import os
+import socket
 import subprocess
 import threading
 import time
@@ -217,6 +218,45 @@ def _parse_allowed_ports(raw: Any) -> list[int]:
         if 1 <= port <= 65535:
             ports.append(port)
     return list(dict.fromkeys(ports))
+
+
+def _engine_virtual_ip_from_allowed_ips(allowed_ips: Any) -> str:
+    raw = str(allowed_ips or "").split(",", 1)[0].strip()
+    if not raw:
+        return ""
+    try:
+        return str(ipaddress.ip_interface(raw).ip)
+    except Exception:
+        return raw.split("/", 1)[0].strip()
+
+
+def _prime_engine_path(session: "SessionConfig", *, reason: str = "reuse") -> bool:
+    engine_ip = _engine_virtual_ip_from_allowed_ips(session.allowed_ips)
+    if not engine_ip:
+        return False
+    reason_text = str(reason or "reuse").strip() or "reuse"
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(0.1)
+            sock.sendto(b"borealis-wg-probe", (engine_ip, 9))
+        _write_log(
+            "WireGuard path prime sent engine_ip={0} tunnel_id={1} reason={2}".format(
+                engine_ip,
+                session.tunnel_id or "-",
+                reason_text,
+            )
+        )
+        return True
+    except Exception as exc:
+        _write_log(
+            "WireGuard path prime failed engine_ip={0} tunnel_id={1} reason={2} error={3}".format(
+                engine_ip,
+                session.tunnel_id or "-",
+                reason_text,
+                exc,
+            )
+        )
+        return False
 
 
 class SessionConfig:
@@ -751,7 +791,6 @@ class WireGuardClient:
         with self._session_lock:
             recovery_reason: Optional[str] = None
             prior_service_state: Optional[str] = None
-            metadata_refresh_only = False
             previous_tunnel_id = ""
             if self.session:
                 previous_tunnel_id = str(self.session.tunnel_id or "")
@@ -766,6 +805,7 @@ class WireGuardClient:
                             )
                         )
                     elif prior_service_state in ("RUNNING", "START_PENDING") and same_config:
+                        _prime_engine_path(session, reason=session.restart_reason or "reuse")
                         _write_log("WireGuard session already active; reusing existing session.")
                         self.bump_activity()
                         return
@@ -783,11 +823,21 @@ class WireGuardClient:
                     )
                 else:
                     prior_service_state = self._service_state()
-                    metadata_refresh_only = (
-                        prior_service_state in ("RUNNING", "START_PENDING")
-                        and _session_transport_equivalent(self.session, session)
-                        and not session.force_restart
-                    )
+                    if prior_service_state in ("RUNNING", "START_PENDING"):
+                        recovery_reason = session.restart_reason or "tunnel_id_changed"
+                        _write_log(
+                            "WireGuard session tunnel_id changed; restarting active session "
+                            "(existing_tunnel_id={0} new_tunnel_id={1}).".format(
+                                previous_tunnel_id or "-",
+                                session.tunnel_id or "-",
+                            )
+                        )
+                        self._log_recovery_event(
+                            "attempt",
+                            reason=recovery_reason,
+                            tunnel_id=session.tunnel_id,
+                            prior_state=prior_service_state,
+                        )
 
             try:
                 self._validate_token(session.token, signing_client=signing_client)
@@ -801,18 +851,6 @@ class WireGuardClient:
                         prior_state=prior_service_state,
                         detail="token_validation_failed",
                     )
-                return
-
-            if metadata_refresh_only:
-                _write_log(
-                    "WireGuard session metadata refresh: existing_tunnel_id={0} new_tunnel_id={1} service_state={2}".format(
-                        previous_tunnel_id or "-",
-                        session.tunnel_id or "-",
-                        prior_service_state or "-",
-                    )
-                )
-                self.session = session
-                self.idle_deadline = None
                 return
 
             if self.session and previous_tunnel_id and previous_tunnel_id != str(session.tunnel_id or ""):
@@ -1091,7 +1129,7 @@ class LinuxWireGuardClient:
         return False
 
     def _stop_session_locked(self, reason: str = "stop", ignore_missing: bool = False) -> None:
-        if not self._interface_exists() and not ignore_missing:
+        if not ignore_missing and not self._interface_exists():
             _write_log("WireGuard Linux interface not found when stopping session.")
         self._bring_down()
         self.session = None
@@ -1099,12 +1137,12 @@ class LinuxWireGuardClient:
 
     def start_session(self, session: SessionConfig, *, signing_client: Optional[Any] = None) -> None:
         with self._session_lock:
-            metadata_refresh_only = False
             previous_tunnel_id = ""
             if self.session and self.session.tunnel_id == session.tunnel_id:
                 same_config = _session_config_equivalent(self.session, session)
                 if self._service_state() == "RUNNING" and same_config and not session.force_restart:
                     self._ensure_interface_mtu()
+                    _prime_engine_path(session, reason=session.restart_reason or "reuse")
                     _write_log("WireGuard Linux session already active; reusing existing session.")
                     return
                 if session.force_restart:
@@ -1117,27 +1155,19 @@ class LinuxWireGuardClient:
                     _write_log("WireGuard Linux session config drift detected; refreshing existing tunnel.")
             elif self.session:
                 previous_tunnel_id = str(self.session.tunnel_id or "")
-                metadata_refresh_only = (
-                    self._service_state() == "RUNNING"
-                    and _session_transport_equivalent(self.session, session)
-                    and not session.force_restart
-                )
+                if self._service_state() == "RUNNING":
+                    _write_log(
+                        "WireGuard Linux session tunnel_id changed; restarting active session "
+                        "(existing_tunnel_id={0} new_tunnel_id={1}).".format(
+                            previous_tunnel_id or "-",
+                            session.tunnel_id or "-",
+                        )
+                    )
 
             try:
                 self._validate_token(session.token, signing_client=signing_client)
             except Exception as exc:
                 _write_log(f"Refusing to start WireGuard Linux session: {exc}")
-                return
-
-            if metadata_refresh_only:
-                self._ensure_interface_mtu()
-                _write_log(
-                    "WireGuard Linux session metadata refresh: existing_tunnel_id={0} new_tunnel_id={1}".format(
-                        previous_tunnel_id or "-",
-                        session.tunnel_id or "-",
-                    )
-                )
-                self.session = session
                 return
 
             if self.session and previous_tunnel_id and previous_tunnel_id != str(session.tunnel_id or ""):
@@ -1300,6 +1330,8 @@ class Role:
         self._ensure_cycle_lock = threading.Lock()
         self._ensure_thread_lock = threading.Lock()
         self._ensure_thread: Optional[threading.Thread] = None
+        self._last_ready_notification_key: Optional[tuple[str, str]] = None
+        self._last_ready_notification_at = 0.0
         try:
             self._log(
                 "WireGuard role initialized runtime_root={0} config_path={1}".format(
@@ -1334,6 +1366,9 @@ class Role:
         return endpoint
 
     def _session_config_matches_live(self, session: SessionConfig) -> bool:
+        current = getattr(getattr(self, "client", None), "session", None)
+        if current is not None and not _session_transport_equivalent(current, session):
+            return False
         snapshot = self._read_live_config_snapshot()
         if not snapshot.get("active_config"):
             return False
@@ -1607,6 +1642,68 @@ class Role:
             return None
         return payload
 
+    def _session_is_active(self, session: SessionConfig) -> tuple[bool, str]:
+        current = getattr(self.client, "session", None)
+        current_tunnel = ""
+        try:
+            current_tunnel = str(getattr(current, "tunnel_id", "") or "")
+        except Exception:
+            current_tunnel = ""
+        if current_tunnel != str(session.tunnel_id or ""):
+            return False, ""
+        try:
+            wait_for_state = getattr(self.client, "_wait_for_service_state", None)
+            if callable(wait_for_state):
+                service_state = str(
+                    wait_for_state(
+                        healthy_states=("RUNNING",),
+                        timeout_seconds=8.0,
+                        poll_interval=0.5,
+                    )
+                    or ""
+                )
+            else:
+                service_state = str(self.client._service_state() or "")
+        except Exception:
+            service_state = ""
+        return service_state == "RUNNING", service_state
+
+    def _notify_engine_ready(self, session: SessionConfig, *, reason: str) -> None:
+        active, service_state = self._session_is_active(session)
+        if not active:
+            return
+        ready_reason = str(reason or "unknown")
+        allowed_ports = ",".join(str(port) for port in _parse_allowed_ports(session.allowed_ports))
+        key = (str(session.tunnel_id or ""), allowed_ports)
+        now = time.time()
+        if ready_reason == "agent_boot" and self._last_ready_notification_key == key:
+            if now - float(self._last_ready_notification_at or 0.0) < 60.0:
+                return
+        client = self._http_client()
+        if client is None:
+            return
+        payload = {
+            "agent_id": self.ctx.agent_id,
+            "tunnel_id": session.tunnel_id,
+            "virtual_ip": session.virtual_ip,
+            "allowed_ports": _parse_allowed_ports(session.allowed_ports),
+            "service_state": service_state,
+            "reason": ready_reason,
+        }
+        try:
+            client.post_json("/api/agent/vpn/ready", payload, require_auth=True)
+            self._last_ready_notification_key = key
+            self._last_ready_notification_at = now
+            self._log(
+                "WireGuard readiness reported to Engine (reason={0} tunnel_id={1} ports={2}).".format(
+                    ready_reason,
+                    session.tunnel_id or "-",
+                    allowed_ports or "-",
+                )
+            )
+        except Exception as exc:
+            self._log(f"WireGuard readiness report failed: {exc}", error=True)
+
     def _run_ensure_cycle(self, *, reason: str = "agent_boot") -> None:
         with self._ensure_cycle_lock:
             payload = self._request_persistent_session(reason=reason)
@@ -1630,6 +1727,7 @@ class Role:
             service_ready = state in ("RUNNING", "START_PENDING")
             if incoming_tunnel and incoming_tunnel == current_tunnel and service_ready:
                 if self._session_config_matches_live(session):
+                    self._notify_engine_ready(session, reason=reason)
                     return
                 self._log("WireGuard persistent ensure detected config drift; forcing live session refresh.")
                 try:
@@ -1638,6 +1736,7 @@ class Role:
                     self._log(f"WireGuard config refresh stop failed: {exc}", error=True)
             self._log("WireGuard persistent session ensure received.")
             self.client.start_session(session, signing_client=self._http_client())
+            self._notify_engine_ready(session, reason=reason)
 
     def _run_ensure_cycle_safe(self, *, reason: str, source: str) -> None:
         try:
@@ -1695,6 +1794,7 @@ class Role:
                 return
             self._log("WireGuard start request received.")
             self.client.start_session(session, signing_client=self._http_client())
+            self._notify_engine_ready(session, reason="vpn_tunnel_start")
 
         @sio.on("vpn_tunnel_stop")
         async def _vpn_tunnel_stop(payload):

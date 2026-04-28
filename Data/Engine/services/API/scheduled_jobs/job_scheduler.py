@@ -88,6 +88,7 @@ RESOLUTION_STATUS_ELIGIBLE = "eligible"
 RESOLUTION_STATUS_SKIPPED = "skipped"
 RESOLUTION_STATUS_UNRESOLVED = "unresolved"
 RESOLUTION_REASON_REMOTE_PREFLIGHT_FAILED = "remote_preflight_failed"
+RESOLUTION_REASON_WIREGUARD_NOT_READY = "wireguard_not_ready"
 ENGINE_LOCAL_ALIAS = "borealis-engine-01"
 CREDENTIAL_RESET_REQUIRED_MESSAGE = (
     "The credential associated with this scheduled job can no longer be decrypted due to the "
@@ -1411,6 +1412,20 @@ class JobScheduler:
                     required_ports=[requested_port],
                 )
                 session = vpn_sessions.get(agent_id) or {}
+                if session and session.get("dispatch_ready") is False:
+                    ready_reason = str(session.get("dispatch_ready_reason") or "not_ready")
+                    _update_target_rows(
+                        inventory_hostname=host_alias,
+                        resolved_connection=transport_mode,
+                        resolution_status=RESOLUTION_STATUS_SKIPPED,
+                        resolution_reason=RESOLUTION_REASON_WIREGUARD_NOT_READY,
+                    )
+                    _finalize_dispatch_failure(
+                        run_status=RUN_STATUS_SKIPPED,
+                        skip_reason=SKIP_REASON_NO_ELIGIBLE_TARGETS,
+                        error=f"Managed WireGuard session is not ready for this target ({ready_reason}).",
+                    )
+                    return None
                 wireguard_peer_ip = str(session.get("virtual_ip") or "").split("/", 1)[0]
                 if not wireguard_peer_ip:
                     _update_target_rows(
@@ -4151,7 +4166,11 @@ class JobScheduler:
             elif run_mode_norm == "ssh":
                 session = vpn_sessions.get(agent_id) or {}
                 wireguard_peer_ip = str(session.get("virtual_ip") or "").split("/", 1)[0]
-                if not wireguard_peer_ip:
+                if session and session.get("dispatch_ready") is False:
+                    resolution_status = RESOLUTION_STATUS_SKIPPED
+                    resolution_reason = RESOLUTION_REASON_WIREGUARD_NOT_READY
+                    preflight_error = str(session.get("dispatch_ready_reason") or "not_ready")
+                elif not wireguard_peer_ip:
                     resolution_status = RESOLUTION_STATUS_SKIPPED
                     resolution_reason = "wireguard_unavailable"
                 else:
@@ -4198,7 +4217,11 @@ class JobScheduler:
             elif run_mode_norm == "winrm":
                 session = vpn_sessions.get(agent_id) or {}
                 wireguard_peer_ip = str(session.get("virtual_ip") or "").split("/", 1)[0]
-                if not wireguard_peer_ip:
+                if session and session.get("dispatch_ready") is False:
+                    resolution_status = RESOLUTION_STATUS_SKIPPED
+                    resolution_reason = RESOLUTION_REASON_WIREGUARD_NOT_READY
+                    preflight_error = str(session.get("dispatch_ready_reason") or "not_ready")
+                elif not wireguard_peer_ip:
                     resolution_status = RESOLUTION_STATUS_SKIPPED
                     resolution_reason = "wireguard_unavailable"
                 else:

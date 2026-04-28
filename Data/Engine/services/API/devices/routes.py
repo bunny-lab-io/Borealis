@@ -7,6 +7,7 @@
 # - POST /api/agent/script/request (Device Authenticated) - Provides script execution payloads or idle signals to agents.
 # - GET /api/agent/software-management/overrides (Device Authenticated) - Returns file-backed software-management override hints for agent-side inventory/icon collection.
 # - POST /api/agent/vpn/ensure (Device Authenticated) - Ensures persistent WireGuard tunnel material.
+# - POST /api/agent/vpn/ready (Device Authenticated) - Records agent-side WireGuard readiness for the active tunnel.
 # - POST /api/agent/vnc/ensure (Device Authenticated) - Ensures VNC readiness and refreshes the Engine's cached agent VNC credential.
 # ======================================================
 
@@ -546,7 +547,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "auth_context_missing"}), 500
 
         body = request.get_json(silent=True) or {}
-        requested_agent = (body.get("agent_id") or "").strip()
+        requested_agent = str(body.get("agent_id") or "").strip()
         guid = normalize_guid(ctx.guid)
 
         resolved_agent = _resolve_agent_id_for_guid(guid, requested_agent)
@@ -624,6 +625,68 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             _context_hint(ctx),
         )
         return jsonify(response_payload), 200
+
+    @blueprint.route("/api/agent/vpn/ready", methods=["POST"])
+    @require_device_auth(auth_manager)
+    def vpn_ready():
+        ctx = _auth_context()
+        if ctx is None:
+            return jsonify({"error": "auth_context_missing"}), 500
+
+        body = request.get_json(silent=True) or {}
+        requested_agent = str(body.get("agent_id") or "").strip()
+        guid = normalize_guid(ctx.guid)
+        resolved_agent = _resolve_agent_id_for_guid(guid, requested_agent)
+        tunnel_id = str(body.get("tunnel_id") or "").strip()
+        if not resolved_agent:
+            log("VPN_Tunnel/tunnel", f"vpn_agent_ready_missing_agent guid={guid}", _context_hint(ctx), level="ERROR")
+            return jsonify({"error": "agent_id_missing"}), 404
+        if not tunnel_id:
+            return jsonify({"error": "tunnel_id_required"}), 400
+        if requested_agent and requested_agent != resolved_agent:
+            log(
+                "VPN_Tunnel/tunnel",
+                "vpn_agent_ready_agent_mismatch requested={0} resolved={1}".format(
+                    requested_agent, resolved_agent
+                ),
+                _context_hint(ctx),
+                level="WARNING",
+            )
+
+        try:
+            tunnel_service = _get_tunnel_service(adapters)
+            payload = tunnel_service.record_agent_ready(
+                resolved_agent,
+                tunnel_id=tunnel_id,
+                allowed_ports=body.get("allowed_ports") or (),
+                reason=body.get("reason"),
+                service_state=body.get("service_state"),
+                virtual_ip=body.get("virtual_ip"),
+            )
+        except Exception as exc:
+            log(
+                "VPN_Tunnel/tunnel",
+                "vpn_agent_ready_failed agent_id={0} tunnel_id={1} error={2}".format(
+                    resolved_agent,
+                    tunnel_id,
+                    str(exc),
+                ),
+                _context_hint(ctx),
+                level="ERROR",
+            )
+            return jsonify({"error": "ready_record_failed", "detail": str(exc)}), 500
+        if not payload:
+            return jsonify({"error": "tunnel_not_found"}), 404
+        log(
+            "VPN_Tunnel/tunnel",
+            "vpn_agent_ready_response agent_id={0} tunnel_id={1} dispatch_ready={2}".format(
+                resolved_agent,
+                tunnel_id,
+                str(bool(payload.get("dispatch_ready"))).lower() if isinstance(payload, dict) else "false",
+            ),
+            _context_hint(ctx),
+        )
+        return jsonify(dict(payload)), 200
 
     @blueprint.route("/api/agent/vnc/ensure", methods=["POST"])
     @require_device_auth(auth_manager)

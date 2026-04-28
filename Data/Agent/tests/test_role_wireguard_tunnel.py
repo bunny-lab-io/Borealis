@@ -26,6 +26,38 @@ def _build_session(*, endpoint: str = "borealis.bunny-lab.io:30000") -> SessionC
     )
 
 
+class _FakeUdpSocket:
+    def __init__(self, sent: list[tuple[bytes, tuple[str, int]]]) -> None:
+        self._sent = sent
+
+    def __enter__(self) -> "_FakeUdpSocket":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    def settimeout(self, value: float) -> None:
+        self.timeout = value
+
+    def sendto(self, data: bytes, address: tuple[str, int]) -> int:
+        self._sent.append((data, address))
+        return len(data)
+
+
+def _capture_udp_probe(monkeypatch) -> list[tuple[bytes, tuple[str, int]]]:
+    sent: list[tuple[bytes, tuple[str, int]]] = []
+    monkeypatch.setattr(
+        wireguard_role.socket,
+        "socket",
+        lambda *_args, **_kwargs: _FakeUdpSocket(sent),
+    )
+    return sent
+
+
+def test_engine_virtual_ip_from_allowed_ips_parses_host_route() -> None:
+    assert wireguard_role._engine_virtual_ip_from_allowed_ips("10.255.0.1/32") == "10.255.0.1"
+
+
 def test_session_config_equivalent_detects_endpoint_drift() -> None:
     current = _build_session(endpoint="borealis.bunny-lab.io:30000")
     desired = _build_session(endpoint="192.168.3.252:30000")
@@ -63,6 +95,21 @@ def test_role_session_config_matches_live_snapshot() -> None:
 
     assert role._session_config_matches_live(_build_session(endpoint="192.168.3.252:30000")) is True
     assert role._session_config_matches_live(_build_session(endpoint="borealis.bunny-lab.io:30000")) is False
+
+
+def test_role_session_config_match_rejects_stale_allowed_ports() -> None:
+    role = Role.__new__(Role)
+    current = _build_session(endpoint="192.168.3.252:30000")
+    desired = _build_session(endpoint="192.168.3.252:30000")
+    desired.allowed_ports = "47002,5900,22,5986"
+    role.client = type("Client", (), {"session": current})()
+    role._read_live_config_snapshot = lambda: {
+        "virtual_ip": "10.255.0.15/32",
+        "endpoint": "192.168.3.252:30000",
+        "active_config": True,
+    }
+
+    assert role._session_config_matches_live(desired) is False
 
 
 def test_role_build_session_honors_force_restart_flag() -> None:
@@ -115,13 +162,14 @@ def test_linux_client_force_restart_skips_same_session_reuse() -> None:
     assert calls == ["write_config", "bring_down", "bring_up"]
 
 
-def test_linux_client_reuses_same_session_and_reapplies_mtu() -> None:
+def test_linux_client_reuses_same_session_and_reapplies_mtu(monkeypatch) -> None:
     client = LinuxWireGuardClient.__new__(LinuxWireGuardClient)
     client._session_lock = threading.Lock()
     client.session = _build_session()
     client.conf_path = None
     client._client_keys = {"private": "client-private"}
     calls: list[str] = []
+    sent = _capture_udp_probe(monkeypatch)
 
     client._service_state = lambda: "RUNNING"
     client._validate_token = lambda token, signing_client=None: None
@@ -133,9 +181,10 @@ def test_linux_client_reuses_same_session_and_reapplies_mtu() -> None:
     client.start_session(_build_session(), signing_client=None)
 
     assert calls == ["ensure_mtu"]
+    assert sent == [(b"borealis-wg-probe", ("10.255.0.1", 9))]
 
 
-def test_linux_client_refreshes_session_metadata_without_restart_for_tunnel_rotation() -> None:
+def test_linux_client_restarts_session_for_tunnel_rotation() -> None:
     client = LinuxWireGuardClient.__new__(LinuxWireGuardClient)
     client._session_lock = threading.Lock()
     client.session = _build_session()
@@ -157,7 +206,7 @@ def test_linux_client_refreshes_session_metadata_without_restart_for_tunnel_rota
 
     client.start_session(refreshed, signing_client=None)
 
-    assert calls == ["validate", "ensure_mtu"]
+    assert calls == ["validate", "bring_down", "write_config", "bring_down", "bring_up", "ensure_mtu"]
     assert client.session is refreshed
 
 
@@ -200,6 +249,21 @@ def _build_windows_client() -> WireGuardClient:
     client.session = None
     client.idle_deadline = None
     return client
+
+
+def test_windows_client_reuses_same_session_and_primes_engine_path(monkeypatch) -> None:
+    client = _build_windows_client()
+    client.session = _build_session()
+    calls: list[str] = []
+    sent = _capture_udp_probe(monkeypatch)
+
+    client._service_state = lambda: "RUNNING"
+    client.bump_activity = lambda: calls.append("bump")
+
+    client.start_session(_build_session(), signing_client=None)
+
+    assert calls == ["bump"]
+    assert sent == [(b"borealis-wg-probe", ("10.255.0.1", 9))]
 
 
 def test_windows_client_repairs_stale_service_binding() -> None:
@@ -312,7 +376,7 @@ def test_windows_client_replacement_uses_single_restart_before_marking_session_s
     assert client.session is replacement
 
 
-def test_windows_client_refreshes_session_metadata_without_restart_for_tunnel_rotation() -> None:
+def test_windows_client_restarts_session_for_tunnel_rotation() -> None:
     client = _build_windows_client()
     client.session = _build_session()
     calls: list[str] = []
@@ -337,7 +401,7 @@ def test_windows_client_refreshes_session_metadata_without_restart_for_tunnel_ro
 
     client.start_session(refreshed, signing_client=None)
 
-    assert calls == ["validate"]
+    assert calls == ["validate", "write_config", "restart", "wait", "adapter", "display", "firewall"]
     assert client.session is refreshed
 
 
@@ -374,6 +438,7 @@ def test_role_run_ensure_cycle_uses_requested_reason() -> None:
     role._build_session = lambda payload: session
     role._session_config_matches_live = lambda current: False
     role._http_client = lambda: "signing-client"
+    role._notify_engine_ready = lambda _session, *, reason: captured.append(("ready", reason))
     role._log = lambda message, *, error=False: None
 
     role._run_ensure_cycle(reason="socket_connect")
@@ -381,6 +446,80 @@ def test_role_run_ensure_cycle_uses_requested_reason() -> None:
     assert ("reason", "socket_connect") in captured
     assert ("start_session", session) in captured
     assert ("signing_client", "signing-client") in captured
+    assert ("ready", "socket_connect") in captured
+
+
+def test_role_notify_engine_ready_posts_active_session() -> None:
+    role = Role.__new__(Role)
+    session = _build_session()
+    posted: list[tuple[str, dict, bool]] = []
+
+    class _Client:
+        @staticmethod
+        def _service_state() -> str:
+            return "RUNNING"
+
+    _Client.session = session
+
+    class _HttpClient:
+        @staticmethod
+        def post_json(path, payload, require_auth=False):
+            posted.append((path, payload, require_auth))
+            return {"ok": True}
+
+    role.client = _Client()
+    role.ctx = type("Ctx", (), {"agent_id": "agent-1"})()
+    role._http_client = lambda: _HttpClient()
+    role._log = lambda message, *, error=False: None
+    role._last_ready_notification_key = None
+    role._last_ready_notification_at = 0.0
+
+    role._notify_engine_ready(session, reason="vpn_tunnel_start")
+
+    assert posted == [
+        (
+            "/api/agent/vpn/ready",
+            {
+                "agent_id": "agent-1",
+                "tunnel_id": "tunnel-1",
+                "virtual_ip": "10.255.0.15/32",
+                "allowed_ports": [47002, 5900, 22],
+                "service_state": "RUNNING",
+                "reason": "vpn_tunnel_start",
+            },
+            True,
+        )
+    ]
+
+
+def test_role_notify_engine_ready_requires_running_service() -> None:
+    role = Role.__new__(Role)
+    session = _build_session()
+    posted: list[tuple[str, dict, bool]] = []
+
+    class _Client:
+        @staticmethod
+        def _service_state() -> str:
+            return "START_PENDING"
+
+    _Client.session = session
+
+    class _HttpClient:
+        @staticmethod
+        def post_json(path, payload, require_auth=False):
+            posted.append((path, payload, require_auth))
+            return {"ok": True}
+
+    role.client = _Client()
+    role.ctx = type("Ctx", (), {"agent_id": "agent-1"})()
+    role._http_client = lambda: _HttpClient()
+    role._log = lambda message, *, error=False: None
+    role._last_ready_notification_key = None
+    role._last_ready_notification_at = 0.0
+
+    role._notify_engine_ready(session, reason="vpn_tunnel_start")
+
+    assert posted == []
 
 
 def test_role_run_ensure_cycle_safe_logs_exceptions() -> None:

@@ -47,8 +47,8 @@ GitHub Issue: <link or "not yet">
 ```
 
 ## Current Triage Snapshot
-- Resolved after 2026-04-27 review: `TD-20260331-01`.
-- Still ongoing after 2026-04-27 review: `TD-20260427-01`, `TD-20260416-01`, `TD-20260326-01`, `TD-20260319-03`, `TD-20260319-04`, `TD-20260419-01`, `TD-20260315-01`, `TD-20260325-01`, `TD-20260321-01`, `TD-20260218-01`, `TD-20260421-01`, `TD-20260416-02`, `TD-20260422-01`, `TD-20260319-02`, `TD-20260319-05`, `TD-20260405-01`, `TD-20260405-02`, `TD-20260210-01`.
+- Resolved after 2026-04-27 review: `TD-20260331-01`, `TD-20260319-03`.
+- Still ongoing after 2026-04-27 review: `TD-20260427-01`, `TD-20260416-01`, `TD-20260326-01`, `TD-20260319-04`, `TD-20260419-01`, `TD-20260315-01`, `TD-20260325-01`, `TD-20260321-01`, `TD-20260218-01`, `TD-20260421-01`, `TD-20260416-02`, `TD-20260422-01`, `TD-20260319-02`, `TD-20260319-05`, `TD-20260405-01`, `TD-20260405-02`, `TD-20260210-01`.
 
 ## Ongoing Issues
 ID: TD-20260427-01
@@ -94,21 +94,6 @@ Removal Criteria: Device persistence always stores the authoritative live `agent
 Files: `Data/Engine/services/API/devices/routes.py`, `Data/Engine/services/API/devices/tunnel.py`, `Data/Engine/services/API/devices/management.py`
 Evidence: `_repair_agent_id_binding()` and `_resolve_requested_agent_id()` remain active fallback paths, so the removal criteria is not met.
 Next Step: Audit hostname-based device upserts and merge paths so `guid`, `hostname`, and `agent_id` cannot drift out of sync in the `devices` table.
-GitHub Issue: not yet
-
-ID: TD-20260319-03
-Status: mitigated
-Priority: P1
-Owner: Engine
-Date Added: 2026-03-19
-Summary: Shared Ansible remote targeting still relies on a bounded WireGuard readiness window before SSH/WinRM execution.
-Impact: If Borealis preflights too soon after re-priming an agent tunnel, healthy remote devices can be skipped or delayed even though the WireGuard path becomes reachable a few seconds later.
-Root Cause: Tunnel session reuse and agent-side `vpn_agent_ensure_response` completion are asynchronous, but scheduler-side readiness still uses timed polling instead of an explicit per-target tunnel-ready signal.
-Current Mitigation: `Data/Engine/services/API/scheduled_jobs/management.py` bootstraps missing shared-run WireGuard sessions, then polls for requested-session presence plus healthy listener state for up to `10.0` seconds by default via `BOREALIS_SHARED_ANSIBLE_VPN_PREP_WAIT_SECONDS`. SSH now defers host reachability, authentication, and task connectivity to Ansible instead of running scheduler-side SSH banner/session probes. WinRM still uses bounded TCP preflight and marks failed targets with `remote_preflight_failed`. `Data/Engine/services/ansible/runner.py` enforces a shared-run subprocess timeout and isolates SSH trust state to a per-run `ssh_known_hosts` file.
-Removal Criteria: Borealis has an explicit tunnel-readiness signal or peer-handshake visibility from the VPN service that removes the fixed warm-up window.
-Files: `Data/Engine/services/API/scheduled_jobs/management.py`, `Data/Engine/services/API/scheduled_jobs/job_scheduler.py`, `Data/Engine/services/ansible/runner.py`, `Docs/scheduled-jobs.md`
-Evidence: `_DEFAULT_SHARED_ANSIBLE_VPN_PREP_WAIT_SECONDS = 10.0` remains in code, while `Docs/scheduled-jobs.md` documents that remote targets still require an active WireGuard peer IP before inventory generation.
-Next Step: Replace the bounded readiness poll with an explicit per-target tunnel-ready signal or peer-handshake visibility from the VPN service.
 GitHub Issue: not yet
 
 ID: TD-20260319-04
@@ -322,6 +307,22 @@ Next Step: Track upstream noVNC packaging changes and remove the patch when safe
 GitHub Issue: not yet
 
 ## Resolved Issues
+ID: TD-20260319-03
+Status: resolved
+Priority: n/a
+Owner: Engine + Agent
+Date Added: 2026-03-19
+Resolved: 2026-04-27
+Summary: Shared Ansible remote targeting previously relied on a bounded WireGuard readiness window before SSH/WinRM execution.
+Impact: If Borealis preflighted too soon after re-priming an agent tunnel, healthy remote devices could be skipped or delayed even though the WireGuard path became reachable a few seconds later.
+Root Cause: Tunnel session reuse and agent-side tunnel application were asynchronous, while scheduler-side readiness treated session/listener presence as enough proof for dispatch.
+Current Mitigation: No active mitigation required beyond the readiness callback path.
+Removal Criteria: Met. Agents call `/api/agent/vpn/ready` after applying the active WireGuard config and local firewall allowlist, `VpnTunnelService.wait_for_sessions_ready()` waits for that signal for the current tunnel and required ports, and scheduled SSH/WinRM targets with `dispatch_ready=false` are skipped as `wireguard_not_ready` instead of entering preflight or inventory early.
+Files: `Data/Agent/Roles/role_system_wireguard.py`, `Data/Engine/services/API/devices/routes.py`, `Data/Engine/services/VPN/vpn_tunnel_service.py`, `Data/Engine/services/API/scheduled_jobs/management.py`, `Data/Engine/services/API/scheduled_jobs/job_scheduler.py`, `Docs/scheduled-jobs.md`, `Docs/vpn-and-remote-access.md`
+Evidence: `Data/Agent/Roles/role_system_wireguard.py` posts `/api/agent/vpn/ready`; `Data/Engine/services/VPN/vpn_tunnel_service.py` records `agent_ready` / `dispatch_ready`; `Data/Engine/services/API/scheduled_jobs/management.py` waits through `wait_for_sessions_ready()`; `Data/Engine/services/API/scheduled_jobs/job_scheduler.py` handles `wireguard_not_ready`.
+Next Step: Reopen with a new debt entry only if fresh scheduled Ansible logs show `wireguard_not_ready` for agents that subsequently report readiness in the same run window.
+GitHub Issue: not yet
+
 ID: TD-20260331-01
 Status: resolved
 Priority: n/a

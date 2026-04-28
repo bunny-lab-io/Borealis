@@ -236,7 +236,7 @@ def _ready_wait_profile(
             "initial_wait_seconds": warm_ready_wait_seconds,
             "retry_wait_seconds": warm_retry_wait_seconds,
             "poll_seconds": warm_poll_seconds,
-            "post_bootstrap_grace_seconds": _coerce_timeout(
+            "post_bootstrap_grace_seconds": _coerce_nonnegative_timeout(
                 os.environ.get("BOREALIS_VNC_WARM_POST_BOOTSTRAP_GRACE_SECONDS"),
                 1.5,
             ),
@@ -244,7 +244,7 @@ def _ready_wait_profile(
                 os.environ.get("BOREALIS_VNC_WARM_POST_BOOTSTRAP_GRACE_POLL_INTERVAL_SECONDS"),
                 min(warm_poll_seconds, 0.15),
             ),
-            "soft_retry_wait_seconds": _coerce_timeout(
+            "soft_retry_wait_seconds": _coerce_nonnegative_timeout(
                 os.environ.get("BOREALIS_VNC_WARM_SOFT_RETRY_WAIT_SECONDS"),
                 1.5,
             ),
@@ -274,7 +274,7 @@ def _ready_wait_profile(
             "initial_wait_seconds": refresh_ready_wait_seconds,
             "retry_wait_seconds": refresh_retry_wait_seconds,
             "poll_seconds": refresh_poll_seconds,
-            "post_bootstrap_grace_seconds": _coerce_timeout(
+            "post_bootstrap_grace_seconds": _coerce_nonnegative_timeout(
                 os.environ.get("BOREALIS_VNC_REFRESH_POST_BOOTSTRAP_GRACE_SECONDS"),
                 1.0,
             ),
@@ -282,7 +282,7 @@ def _ready_wait_profile(
                 os.environ.get("BOREALIS_VNC_REFRESH_POST_BOOTSTRAP_GRACE_POLL_INTERVAL_SECONDS"),
                 min(refresh_poll_seconds, 0.15),
             ),
-            "soft_retry_wait_seconds": _coerce_timeout(
+            "soft_retry_wait_seconds": _coerce_nonnegative_timeout(
                 os.environ.get("BOREALIS_VNC_REFRESH_SOFT_RETRY_WAIT_SECONDS"),
                 1.0,
             ),
@@ -312,7 +312,7 @@ def _ready_wait_profile(
             "initial_wait_seconds": socket_ready_wait_seconds,
             "retry_wait_seconds": socket_retry_wait_seconds,
             "poll_seconds": socket_poll_seconds,
-            "post_bootstrap_grace_seconds": _coerce_timeout(
+            "post_bootstrap_grace_seconds": _coerce_nonnegative_timeout(
                 os.environ.get("BOREALIS_VNC_SOCKET_POST_BOOTSTRAP_GRACE_SECONDS"),
                 1.5,
             ),
@@ -320,7 +320,7 @@ def _ready_wait_profile(
                 os.environ.get("BOREALIS_VNC_SOCKET_POST_BOOTSTRAP_GRACE_POLL_INTERVAL_SECONDS"),
                 min(socket_poll_seconds, 0.15),
             ),
-            "soft_retry_wait_seconds": _coerce_timeout(
+            "soft_retry_wait_seconds": _coerce_nonnegative_timeout(
                 os.environ.get("BOREALIS_VNC_SOCKET_SOFT_RETRY_WAIT_SECONDS"),
                 1.5,
             ),
@@ -369,6 +369,21 @@ def _agent_socket_registered(context: Any, agent_id: str) -> Optional[bool]:
         if hasattr(context, "logger"):
             context.logger.debug("Failed to inspect agent socket registration for %s", agent_id, exc_info=True)
         return None
+
+
+def _should_prewarm_vnc_backend(
+    *,
+    had_tunnel_payload: bool,
+    socket_registered: Optional[bool],
+    wait_profile: Dict[str, Any],
+) -> bool:
+    if not had_tunnel_payload or socket_registered is not True:
+        return False
+    return _normalize_text(wait_profile.get("mode")) in {
+        "fresh_refresh",
+        "socket_online",
+        "warm_reconnect",
+    }
 
 
 def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
@@ -588,6 +603,26 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             os.environ.get("BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS"),
             0.15,
         )
+        prewarm_backend = _should_prewarm_vnc_backend(
+            had_tunnel_payload=had_tunnel_payload,
+            socket_registered=socket_registered,
+            wait_profile=wait_profile,
+        )
+        if prewarm_backend:
+            fast_ready_wait = max(
+                fast_ready_wait,
+                _coerce_timeout(
+                    os.environ.get("BOREALIS_VNC_PREWARM_FAST_READY_WAIT_SECONDS"),
+                    2.0,
+                ),
+            )
+            fast_ready_poll = min(
+                fast_ready_poll,
+                _coerce_timeout(
+                    os.environ.get("BOREALIS_VNC_PREWARM_FAST_READY_POLL_INTERVAL_SECONDS"),
+                    0.15,
+                ),
+            )
         _trace(
             "E07",
             agent_id=agent_id,
@@ -607,6 +642,23 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 else "-"
             ),
         )
+        if prewarm_backend:
+            prewarm_reason = "vnc_backend_prewarm"
+            prewarm_ok = False
+            try:
+                _restart_tunnel(prewarm_reason)
+                prewarm_ok = True
+            except Exception:
+                logger.debug("Failed to prewarm VNC backend tunnel agent_id=%s", agent_id, exc_info=True)
+            _trace(
+                "E07P",
+                agent_id=agent_id,
+                session_id=collaboration_session.session_id,
+                reason=prewarm_reason,
+                prewarm_ok=prewarm_ok,
+                ready_profile=wait_profile["mode"],
+                fast_wait_seconds=fast_ready_wait,
+            )
         fast_ready = _wait_for_backend_ready(
             host,
             vnc_port,

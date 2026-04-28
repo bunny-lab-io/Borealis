@@ -240,6 +240,7 @@ def test_vnc_establish_uses_longer_initial_wait_and_shorter_retry_wait(
     fake_tunnel = _FakeTunnelService()
     wait_calls: list[float] = []
     _register_agent_credential(engine_harness)
+    engine_harness.context.agent_socket_registry = None
     engine_harness.context.emit_agent_event = lambda agent_id, event, payload: True
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
@@ -303,6 +304,48 @@ def test_vnc_establish_uses_shorter_waits_for_cached_online_agents(
         ("test-device-agent", False, "vnc_bootstrap"),
         ("test-device-agent", True, "vnc_connect_retry"),
     ]
+
+
+def test_vnc_establish_prewarm_cached_online_tunnel_before_fast_probe(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    wait_calls: list[float] = []
+    emitted_events: list[tuple[str, str, dict[str, Any]]] = []
+    _register_agent_credential(engine_harness)
+    engine_harness.context.agent_socket_registry = SimpleNamespace(
+        is_registered=lambda agent_id: True
+    )
+    engine_harness.context.emit_agent_event = (
+        lambda agent_id, event, payload: emitted_events.append((agent_id, event, dict(payload))) or True
+    )
+    fake_tunnel.session_payload = lambda agent_id, include_token=False: {
+        "tunnel_id": "tun-vnc-1",
+        "agent_id": agent_id,
+        "virtual_ip": "10.255.0.2/32",
+        "engine_virtual_ip": "10.255.0.1/32",
+    }
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+
+    def _fake_wait(*_args, **kwargs):
+        wait_calls.append(float(kwargs["timeout_seconds"]))
+        return True
+
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", _fake_wait)
+
+    response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+
+    assert response.status_code == 200
+    assert wait_calls == [2.0]
+    assert fake_tunnel.connect_calls == []
+    assert fake_tunnel.transport_marks == [("test-device-agent", "vnc_backend_prewarm")]
+    assert fake_tunnel.start_calls == [("test-device-agent", False, "vnc_backend_prewarm")]
+    assert fake_tunnel.transport_recovers == []
+    assert emitted_events == []
 
 
 def test_vnc_establish_uses_post_bootstrap_grace_before_retry_for_cached_online_agents(
