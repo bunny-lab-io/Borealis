@@ -1055,6 +1055,23 @@ export default function DeviceList({
         mergeFilters({ site });
         localStorage.removeItem('device_list_initial_site_filter');
       }
+
+      const hostnamesJson = localStorage.getItem("device_list_initial_hostnames_filter");
+      if (hostnamesJson) {
+        const hostnames = JSON.parse(hostnamesJson);
+        if (Array.isArray(hostnames) && hostnames.length) {
+          setSavedFilterPreview({
+            id: "software-audit",
+            name: "Software Audit",
+            matched_device_count: hostnames.length,
+          });
+          setSavedFilterHostnames(
+            new Set(hostnames.map((hostname) => String(hostname || "").trim().toLowerCase()).filter(Boolean))
+          );
+          setSavedFilterPreviewError("");
+        }
+        localStorage.removeItem("device_list_initial_hostnames_filter");
+      }
     } catch {}
   }, [COL_LABELS.site, mergeFilters]);
 

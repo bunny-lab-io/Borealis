@@ -825,7 +825,7 @@ function isSoftwareIconCleared(row = {}) {
   return ["1", "true", "yes", "on"].includes(String(flag || "").trim().toLowerCase());
 }
 
-function buildIconOverrideDialogState(row = {}) {
+export function buildIconOverrideDialogState(row = {}) {
   const metadata = getSoftwareMetadata(row);
   const parsedQuiet = splitWindowsCommandLine(String(metadata?.quiet_uninstall_string || "").trim());
   const parsedUninstall = splitWindowsCommandLine(String(metadata?.uninstall_string || "").trim());
@@ -840,7 +840,7 @@ function buildIconOverrideDialogState(row = {}) {
   };
 }
 
-function buildUninstallOverrideDialogState(row = {}) {
+export function buildUninstallOverrideDialogState(row = {}) {
   const metadata = getSoftwareMetadata(row);
   const commandPreview =
     getUninstallCommandPreview(row) ||
