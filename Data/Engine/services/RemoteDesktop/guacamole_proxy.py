@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import logging
 import socket
 import threading
@@ -198,7 +199,9 @@ def guacamole_connect_arguments(session: GuacamoleVncSession, names: List[str]) 
     return resolved
 
 
-def _split_guacamole_instruction_strings(raw_text: str) -> Optional[List[Tuple[str, str, List[str]]]]:
+def _extract_complete_guacamole_instruction_strings(
+    raw_text: str,
+) -> Tuple[List[Tuple[str, str, List[str]]], str]:
     position = 0
     instruction_start = 0
     elements: List[str] = []
@@ -206,7 +209,7 @@ def _split_guacamole_instruction_strings(raw_text: str) -> Optional[List[Tuple[s
     while position < len(raw_text):
         dot_index = raw_text.find(".", position)
         if dot_index < 0:
-            return None
+            return instructions, raw_text[instruction_start:]
         length_text = raw_text[position:dot_index]
         if not length_text.isdigit():
             raise ValueError("invalid_guacamole_element_length")
@@ -214,7 +217,7 @@ def _split_guacamole_instruction_strings(raw_text: str) -> Optional[List[Tuple[s
         value_start = dot_index + 1
         value_end = value_start + element_length
         if len(raw_text) <= value_end:
-            return None
+            return instructions, raw_text[instruction_start:]
         value = raw_text[value_start:value_end]
         delimiter = raw_text[value_end]
         if delimiter not in {",", ";"}:
@@ -227,6 +230,13 @@ def _split_guacamole_instruction_strings(raw_text: str) -> Optional[List[Tuple[s
             elements = []
             instruction_start = position
     if elements:
+        return instructions, raw_text[instruction_start:]
+    return instructions, ""
+
+
+def _split_guacamole_instruction_strings(raw_text: str) -> Optional[List[Tuple[str, str, List[str]]]]:
+    instructions, remaining = _extract_complete_guacamole_instruction_strings(raw_text)
+    if remaining:
         return None
     return instructions
 
@@ -394,6 +404,12 @@ async def proxy_guacamole_vnc_session(
 ) -> None:
     reader: Any = None
     writer: Any = None
+    client_instruction_count = 0
+    client_ping_count = 0
+    client_message_count = 0
+    server_instruction_count = 0
+    server_message_count = 0
+    server_byte_count = 0
     try:
         reader, writer, uuid_value = await _open_ready_guacd(
             session=session,
@@ -421,6 +437,8 @@ async def proxy_guacamole_vnc_session(
                 else:
                     raw_text = str(message or "")
                     raw_bytes = raw_text.encode("utf-8")
+                nonlocal client_instruction_count, client_message_count, client_ping_count
+                client_message_count += 1
 
                 forward_text = raw_text
                 ping_args: List[List[str]] = []
@@ -429,6 +447,14 @@ async def proxy_guacamole_vnc_session(
                     forward_text, ping_args, disconnect_requested = _filter_client_payload_for_guacd(raw_text)
                 except ValueError:
                     logger.debug("Forwarding unparsable Guacamole client payload to guacd")
+                if ping_args:
+                    client_ping_count += len(ping_args)
+                if forward_text:
+                    try:
+                        instructions = _split_guacamole_instruction_strings(forward_text) or []
+                        client_instruction_count += len(instructions)
+                    except ValueError:
+                        pass
 
                 for args in ping_args:
                     await websocket.send(encode_instruction("", *args))
@@ -444,18 +470,53 @@ async def proxy_guacamole_vnc_session(
                     return
 
         async def _guacd_to_ws() -> None:
+            nonlocal server_byte_count, server_instruction_count, server_message_count
+            decoder = codecs.getincrementaldecoder("utf-8")()
+            instruction_buffer = ""
             while True:
                 data = await reader.read(8192)
                 if not data:
                     break
-                await websocket.send(data.decode("utf-8", errors="replace"))
+                server_byte_count += len(data)
+                instruction_buffer += decoder.decode(data)
+                instructions, instruction_buffer = _extract_complete_guacamole_instruction_strings(instruction_buffer)
+                if not instructions:
+                    continue
+                server_instruction_count += len(instructions)
+                server_message_count += 1
+                await websocket.send("".join(raw_instruction for raw_instruction, _opcode, _args in instructions))
+            trailing = decoder.decode(b"", final=True)
+            if trailing:
+                instruction_buffer += trailing
+            if instruction_buffer:
+                logger.debug(
+                    "Guacamole VNC bridge dropped incomplete guacd payload agent_id=%s session_id=%s bytes=%s",
+                    session.agent_id,
+                    session.session_id or "-",
+                    len(instruction_buffer),
+                )
 
-        tasks = [asyncio.create_task(_ws_to_guacd()), asyncio.create_task(_guacd_to_ws())]
+        tasks = [
+            asyncio.create_task(_ws_to_guacd(), name="browser_to_guacd"),
+            asyncio.create_task(_guacd_to_ws(), name="guacd_to_browser"),
+        ]
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        logger.info(
+            "Guacamole VNC bridge completed agent_id=%s session_id=%s done=%s client_messages=%s client_instructions=%s client_pings=%s server_messages=%s server_instructions=%s server_bytes=%s",
+            session.agent_id,
+            session.session_id or "-",
+            ",".join(task.get_name() for task in done),
+            client_message_count,
+            client_instruction_count,
+            client_ping_count,
+            server_message_count,
+            server_instruction_count,
+            server_byte_count,
+        )
         for task in done:
             task.result()
     finally:

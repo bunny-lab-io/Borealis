@@ -139,6 +139,21 @@ def test_guacamole_filters_internal_ping_before_guacd() -> None:
     assert disconnect is False
 
 
+def test_guacamole_extracts_complete_instruction_strings() -> None:
+    first = encode_instruction("sync", "12345")
+    second = encode_instruction("mouse", "10", "20", "1")
+    partial = "4."
+
+    instructions, remaining = guacamole_proxy._extract_complete_guacamole_instruction_strings(first + second + partial)
+
+    assert [(opcode, args) for _raw, opcode, args in instructions] == [
+        ("sync", ["12345"]),
+        ("mouse", ["10", "20", "1"]),
+    ]
+    assert "".join(raw for raw, _opcode, _args in instructions) == first + second
+    assert remaining == partial
+
+
 def test_guacamole_proxy_retries_until_backend_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     first_reader = _FakeReader([encode_instruction("error", "Authentication failed.").encode("utf-8")])
     second_reader = _FakeReader(
