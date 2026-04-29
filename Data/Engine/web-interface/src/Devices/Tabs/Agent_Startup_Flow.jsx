@@ -26,6 +26,8 @@ const RUNTIME_FLOW_START_Y = 198;
 const RUNTIME_FLOW_ROW_GAP = 106;
 const STEADY_FLOW_X = 2940;
 const STEADY_FLOW_Y = 315;
+const DEFAULT_FLOW_VIEWPORT = Object.freeze({ x: 40, y: 120, zoom: 0.5 });
+const FLOW_DRAFT_LAYOUT_STORAGE_KEY = "borealis.agentHealth.startupFlowDraftLayout.v1";
 
 const STARTUP_FLOW_DEFINITIONS = Object.freeze([
   { id: "process_start", label: "Agent process started", milestoneKeys: ["process_start"], x: 20, y: 315 },
@@ -535,6 +537,35 @@ function buildLayoutCopyPayload(nodes, viewport) {
   );
 }
 
+function readDraftLayout() {
+  if (typeof window === "undefined") return { positions: {}, viewport: DEFAULT_FLOW_VIEWPORT };
+  try {
+    const raw = window.localStorage.getItem(FLOW_DRAFT_LAYOUT_STORAGE_KEY);
+    if (!raw) return { positions: {}, viewport: DEFAULT_FLOW_VIEWPORT };
+    const parsed = JSON.parse(raw);
+    const positions = parsed?.positions && typeof parsed.positions === "object" ? parsed.positions : {};
+    const viewport = parsed?.viewport && typeof parsed.viewport === "object" ? parsed.viewport : DEFAULT_FLOW_VIEWPORT;
+    return { positions, viewport };
+  } catch {
+    return { positions: {}, viewport: DEFAULT_FLOW_VIEWPORT };
+  }
+}
+
+function writeDraftLayout(positions, viewport) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      FLOW_DRAFT_LAYOUT_STORAGE_KEY,
+      JSON.stringify({
+        positions,
+        viewport,
+      })
+    );
+  } catch {
+    // Temporary layout tooling should never block live health rendering.
+  }
+}
+
 function mergeNodesPreservingPositions(nextNodes, currentNodes, positionOverrides) {
   if (!currentNodes.length) {
     return nextNodes.map((node) => ({
@@ -569,9 +600,12 @@ export default function AgentStartupFlow({
 }) {
   const rows = Array.isArray(milestones) ? milestones : [];
   const { nodes, edges } = useStartupFlowElements(rows, runtimeRows, formatTimestamp, onRuntimeNodeOpen);
-  const [editableNodes, setEditableNodes] = useState(nodes);
-  const [nodePositionOverrides, setNodePositionOverrides] = useState({});
-  const [viewport, setViewport] = useState({ x: 0, y: 0, zoom: 1 });
+  const draftLayout = useMemo(() => readDraftLayout(), []);
+  const [nodePositionOverrides, setNodePositionOverrides] = useState(draftLayout.positions);
+  const [viewport, setViewport] = useState(draftLayout.viewport);
+  const [editableNodes, setEditableNodes] = useState(() =>
+    mergeNodesPreservingPositions(nodes, [], draftLayout.positions)
+  );
   useEffect(() => {
     setEditableNodes((currentNodes) => mergeNodesPreservingPositions(nodes, currentNodes, nodePositionOverrides));
   }, [nodePositionOverrides, nodes]);
@@ -583,11 +617,19 @@ export default function AgentStartupFlow({
         positionChanges.forEach((change) => {
           nextOverrides[change.id] = change.position;
         });
+        writeDraftLayout(nextOverrides, viewport);
         return nextOverrides;
       });
     }
     setEditableNodes((currentNodes) => applyNodeChanges(changes, currentNodes));
-  }, []);
+  }, [viewport]);
+  const handleMove = useCallback(
+    (_, nextViewport) => {
+      setViewport(nextViewport);
+      writeDraftLayout(nodePositionOverrides, nextViewport);
+    },
+    [nodePositionOverrides]
+  );
   const handleNodeClick = useCallback((_, node) => {
     if (node?.type === "runtimeHealth" && typeof node?.data?.onOpen === "function") {
       node.data.onOpen(node.data.entry);
@@ -677,8 +719,7 @@ export default function AgentStartupFlow({
         nodes={editableNodes}
         edges={edges}
         nodeTypes={STARTUP_FLOW_NODE_TYPES}
-        fitView
-        fitViewOptions={{ padding: 0.04, minZoom: 0.2, maxZoom: 1.25 }}
+        defaultViewport={viewport}
         minZoom={0.2}
         maxZoom={1.25}
         onNodesChange={handleNodesChange}
@@ -692,7 +733,7 @@ export default function AgentStartupFlow({
         zoomOnDoubleClick={false}
         preventScrolling={false}
         selectionOnDrag={false}
-        onMove={(_, nextViewport) => setViewport(nextViewport)}
+        onMove={handleMove}
         onNodeClick={handleNodeClick}
         onNodeContextMenu={handleNodeContextMenu}
         onPaneContextMenu={handlePaneContextMenu}
