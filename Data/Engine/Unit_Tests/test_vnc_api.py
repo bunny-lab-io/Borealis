@@ -134,6 +134,49 @@ class _FakeRegistry:
         return SimpleNamespace(token="session-token")
 
 
+class _FakeGuacamoleRegistry:
+    def __init__(self) -> None:
+        self.created: list[dict[str, Any]] = []
+
+    def create(
+        self,
+        *,
+        agent_id: str,
+        host: str,
+        port: int,
+        password: str,
+        operator_id: Any,
+        session_id: str = "",
+        participant_id: str = "",
+        role: str = "",
+        width: int = 0,
+        height: int = 0,
+        restart_tunnel: Any = None,
+        confirm_transport: Any = None,
+        on_open: Any = None,
+        on_close: Any = None,
+    ):
+        self.created.append(
+            {
+                "agent_id": agent_id,
+                "host": host,
+                "port": port,
+                "password": password,
+                "operator_id": operator_id,
+                "session_id": session_id,
+                "participant_id": participant_id,
+                "role": role,
+                "width": width,
+                "height": height,
+                "on_open": on_open,
+                "on_close": on_close,
+            }
+        )
+        _ = restart_tunnel
+        _ = confirm_transport
+        return SimpleNamespace(token="guacamole-token")
+
+
 class _FakeProxy:
     def __init__(self) -> None:
         self.disconnect_session_calls: list[tuple[str, str]] = []
@@ -230,6 +273,135 @@ def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestH
         ("test-device-agent", "vnc_backend_ready"),
         ("test-device-agent", "vnc_backend_connect"),
     ]
+
+
+def test_vnc_establish_rejects_unknown_viewer(engine_harness: EngineTestHarness) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _register_agent_credential(engine_harness)
+
+    response = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "viewer": "rdp"},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "invalid_viewer"
+
+
+def test_vnc_establish_guacamole_returns_server_side_token_without_password(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    fake_registry = _FakeGuacamoleRegistry()
+    engine_harness.context.public_base_url = "https://borealis.example.com"
+    _register_agent_credential(
+        engine_harness,
+        password="secretpw",
+        display_topology=[
+            {
+                "id": "1",
+                "display_index": 1,
+                "label": "1",
+                "left": 0,
+                "top": 0,
+                "right": 1920,
+                "bottom": 1080,
+                "width": 1920,
+                "height": 1080,
+                "primary": True,
+            }
+        ],
+    )
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        vnc_api,
+        "guacd_health",
+        lambda _context: {
+            "enabled": True,
+            "available": True,
+            "reason": "ready",
+            "host": "127.0.0.1",
+            "port": 4822,
+        },
+    )
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: fake_registry)
+
+    response = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "viewer": "guacamole"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["viewer"] == "guacamole"
+    assert payload["token"] == "guacamole-token"
+    assert payload["guacamole_ws_path"] == "/remote-desktop/vnc/guacamole"
+    assert payload["guacamole_ws_url"] == "wss://borealis.example.com/remote-desktop/vnc/guacamole"
+    assert "vnc_password" not in payload
+    assert fake_registry.created[0]["password"] == "secretpw"
+    assert fake_registry.created[0]["host"] == "10.255.0.2"
+    assert fake_registry.created[0]["width"] == 1920
+    assert fake_registry.created[0]["height"] == 1080
+
+
+def test_vnc_establish_guacamole_unavailable_returns_503(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    _register_agent_credential(engine_harness)
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        vnc_api,
+        "guacd_health",
+        lambda _context: {
+            "enabled": True,
+            "available": False,
+            "reason": "connection refused",
+            "host": "127.0.0.1",
+            "port": 4822,
+        },
+    )
+
+    response = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "viewer": "guacamole"},
+    )
+
+    assert response.status_code == 503
+    payload = response.get_json()
+    assert payload["error"] == "guacamole_unavailable"
+
+
+def test_vnc_viewers_reports_guacamole_health(engine_harness: EngineTestHarness, monkeypatch) -> None:
+    client = _client_with_admin_session(engine_harness)
+    monkeypatch.setattr(
+        vnc_api,
+        "guacd_health",
+        lambda _context: {
+            "enabled": True,
+            "available": True,
+            "reason": "ready",
+            "host": "127.0.0.1",
+            "port": 4822,
+        },
+    )
+
+    response = client.get("/api/vnc/viewers")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    viewers = {viewer["id"]: viewer for viewer in payload["viewers"]}
+    assert viewers["novnc"]["available"] is True
+    assert viewers["guacamole"]["available"] is True
+    assert payload["guacamole"]["ws_path"] == "/remote-desktop/vnc/guacamole"
 
 
 def test_vnc_establish_uses_longer_initial_wait_and_shorter_retry_wait(

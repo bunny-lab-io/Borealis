@@ -12,6 +12,8 @@ import {
   Switch,
   LinearProgress,
   Stack,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import {
@@ -36,6 +38,7 @@ import {
 } from "@mui/icons-material";
 import RFB from "@novnc/novnc/lib/rfb";
 import { APP_PATHS } from "../../app/routes/paths.js";
+import Guacamole from "../../vendor/guacamole/guacamole-common-js.js";
 
 const MAGIC_UI = {
   panelBorder: "rgba(148, 163, 184, 0.35)",
@@ -295,6 +298,22 @@ function lockNoVncCursor(client, host = null) {
 const VNC_AUTO_RETRY_ATTEMPTS = 3;
 const VNC_AUTO_RETRY_DELAY_MS = 1500;
 const VNC_OPEN_TIMEOUT_MS = 12000;
+const VNC_VIEWER_STORAGE_KEY = "borealis.remoteDesktop.vncViewer";
+
+function storedVncViewer() {
+  if (typeof window === "undefined") return "novnc";
+  try {
+    return window.localStorage.getItem(VNC_VIEWER_STORAGE_KEY) === "guacamole"
+      ? "guacamole"
+      : "novnc";
+  } catch {
+    return "novnc";
+  }
+}
+
+function normalizeViewerForClient(value) {
+  return normalizeText(value).toLowerCase() === "guacamole" ? "guacamole" : "novnc";
+}
 const ALL_DISPLAYS_ID = "__all_displays__";
 const CONNECTION_FLOW_STEPS = Object.freeze([
   {
@@ -323,6 +342,12 @@ const CONNECTION_FLOW_STEPS = Object.freeze([
     detail: "Finalizing the live desktop stream for control.",
   },
 ]);
+
+function sendGuacamoleKeysym(client, keysym) {
+  if (!client || keysym == null || typeof client.sendKeyEvent !== "function") return;
+  client.sendKeyEvent(1, keysym);
+  client.sendKeyEvent(0, keysym);
+}
 
 async function writeClipboardText(text) {
   if (!navigator?.clipboard?.writeText) return;
@@ -633,11 +658,17 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const [loading, setLoading] = useState(false);
   const [viewOnly, setViewOnly] = useState(false);
   const [clipboardSync, setClipboardSync] = useState(false);
+  const [selectedViewer, setSelectedViewer] = useState(storedVncViewer);
+  const [viewerAvailability, setViewerAvailability] = useState({
+    novnc: { enabled: true, available: true },
+    guacamole: { enabled: false, available: false, reason: "" },
+  });
   const [sessionId, setSessionId] = useState("");
   const [, setParticipantId] = useState("");
   const performanceLevel = 2;
   const [displayMode, setDisplayMode] = useState("fit");
   const [expandedSidebarSections, setExpandedSidebarSections] = useState({
+    viewer: true,
     display: true,
     clipboard: true,
     power: true,
@@ -731,6 +762,12 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const qualityLevel = Math.min(8, Math.max(0, performanceLevel));
   const compressionLevel = Math.max(0, 8 - qualityLevel);
   const dragViewport = false;
+  const activeViewer =
+    selectedViewer === "guacamole" && viewerAvailability.guacamole?.available
+      ? "guacamole"
+      : "novnc";
+  const activeViewerLabel = activeViewer === "guacamole" ? "Apache Guacamole" : "noVNC";
+  const guacamoleAvailable = Boolean(viewerAvailability.guacamole?.available);
   const effectiveViewOnly = viewOnly;
   const effectiveResizeSession = resizeSession && displayMode === "fit";
   const normalizedDisplayTopology = useMemo(
@@ -839,6 +876,47 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   }, [agentId]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(VNC_VIEWER_STORAGE_KEY, selectedViewer);
+    } catch {
+      /* ignore */
+    }
+  }, [selectedViewer]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadViewers = async () => {
+      try {
+        const resp = await fetch("/api/vnc/viewers", { credentials: "include" });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || cancelled) return;
+        const next = { novnc: { enabled: true, available: true } };
+        for (const viewer of Array.isArray(data?.viewers) ? data.viewers : []) {
+          const id = normalizeText(viewer?.id);
+          if (!id) continue;
+          next[id] = {
+            enabled: Boolean(viewer?.enabled),
+            available: Boolean(viewer?.available),
+            reason: normalizeText(viewer?.reason),
+          };
+        }
+        setViewerAvailability((previous) => ({
+          ...previous,
+          ...next,
+          guacamole: next.guacamole || previous.guacamole,
+        }));
+      } catch {
+        /* keep noVNC available */
+      }
+    };
+    loadViewers();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     clipboardSyncRef.current = clipboardSync;
   }, [clipboardSync]);
 
@@ -913,6 +991,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     try {
       const client = rfbRef.current;
       if (client) {
+        if (client.__borealisKeyboard) {
+          client.__borealisKeyboard.onkeydown = null;
+          client.__borealisKeyboard.onkeyup = null;
+        }
+        if (client.__borealisMouse) {
+          client.__borealisMouse.onmousedown = null;
+          client.__borealisMouse.onmouseup = null;
+          client.__borealisMouse.onmousemove = null;
+        }
         client.disconnect();
       }
     } catch {
@@ -954,6 +1041,30 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const configureDisplaySurface = useCallback((client, mode) => {
     const fitViewport = mode === "fit";
     const host = displayRef.current;
+    if (client?.__borealisViewer === "guacamole") {
+      const display = typeof client.getDisplay === "function" ? client.getDisplay() : null;
+      const element = display?.getElement?.() || host?.firstElementChild || null;
+      const width = Number(display?.getWidth?.() || 0);
+      const height = Number(display?.getHeight?.() || 0);
+      if (element?.style) {
+        element.style.display = "block";
+        element.style.margin = "auto";
+        element.style.boxShadow = VNC_CANVAS_BOX_SHADOW;
+        element.style.transformOrigin = "top left";
+      }
+      if (display && typeof display.scale === "function") {
+        const hostWidth = Math.max(1, Number(host?.clientWidth || 0));
+        const hostHeight = Math.max(1, Number(host?.clientHeight || 0));
+        let scale = 1;
+        if (mode === "fit" && width > 0 && height > 0) {
+          scale = Math.min(hostWidth / width, hostHeight / height);
+        } else if (mode === "scaled" && height > 0) {
+          scale = hostHeight / height;
+        }
+        display.scale(Number.isFinite(scale) && scale > 0 ? scale : 1);
+      }
+      return;
+    }
     const screen = client?._screen || host?.firstElementChild || null;
     const canvas = client?._canvas || null;
     if (screen?.style) {
@@ -976,6 +1087,18 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   }, []);
 
   const syncFramebufferSize = useCallback((client) => {
+    if (client?.__borealisViewer === "guacamole") {
+      const display = typeof client.getDisplay === "function" ? client.getDisplay() : null;
+      const width = Number(display?.getWidth?.() || 0);
+      const height = Number(display?.getHeight?.() || 0);
+      setFramebufferSize((previous) => {
+        if (previous.width === width && previous.height === height) {
+          return previous;
+        }
+        return { width, height };
+      });
+      return { width, height };
+    }
     const display = client?._display;
     const width = Number(display?._fb_width || display?._fbWidth || client?._fbWidth || 0);
     const height = Number(display?._fb_height || display?._fbHeight || client?._fbHeight || 0);
@@ -989,6 +1112,20 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   }, []);
 
   const syncRenderedCanvasSize = useCallback((client) => {
+    if (client?.__borealisViewer === "guacamole") {
+      const display = typeof client.getDisplay === "function" ? client.getDisplay() : null;
+      const element = display?.getElement?.() || null;
+      const rect = typeof element?.getBoundingClientRect === "function" ? element.getBoundingClientRect() : null;
+      const width = Math.max(0, Math.round(Number(rect?.width || element?.clientWidth || 0)));
+      const height = Math.max(0, Math.round(Number(rect?.height || element?.clientHeight || 0)));
+      setRenderedCanvasSize((previous) => {
+        if (previous.width === width && previous.height === height) {
+          return previous;
+        }
+        return { width, height };
+      });
+      return { width, height };
+    }
     const canvas = client?._canvas || null;
     const screen = client?._screen || null;
     const canvasRect =
@@ -1297,6 +1434,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   useEffect(() => {
     const rfb = rfbRef.current;
     if (!rfb) return;
+    if (rfb.__borealisViewer === "guacamole") return;
     lockNoVncCursor(rfb, displayRef.current);
     rfb.viewOnly = effectiveViewOnly;
     rfb.dragViewport = dragViewport;
@@ -1322,7 +1460,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       const resp = await fetch("/api/vnc/establish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_id: agentId, remove_wallpaper: true }),
+        body: JSON.stringify({ agent_id: agentId, remove_wallpaper: true, viewer: activeViewer }),
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
@@ -1345,10 +1483,188 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       }
       throw err;
     }
-  }, [agentId, applySessionBootstrap, handleAgentOnboarding]);
+  }, [activeViewer, agentId, applySessionBootstrap, handleAgentOnboarding]);
+
+  const openGuacamoleSession = useCallback(
+    async (data, options = {}) => {
+      const connectToken = Number(options.connectToken || 0);
+      const attempt = Number(options.attempt || 1);
+      const maxAttempts = Number(options.maxAttempts || VNC_AUTO_RETRY_ATTEMPTS);
+      const wsUrl = data?.guacamole_ws_url || buildWsUrl(data?.guacamole_ws_path, "");
+      const token = data?.token || "";
+      const displayHost = displayRef.current;
+      if (!wsUrl || !token) {
+        throw new Error("Guacamole session unavailable.");
+      }
+      if (!displayHost) {
+        throw new Error("VNC display container missing.");
+      }
+      displayHost.innerHTML = "";
+      displayHost.tabIndex = 0;
+      displayHost.focus?.();
+      setVncStage("connecting_ws");
+      setStatusMessage(
+        attempt > 1
+          ? `Establishing ${activeViewerLabel}... attempt ${attempt}/${maxAttempts}`
+          : `Establishing ${activeViewerLabel}...`
+      );
+
+      const tunnel = new Guacamole.WebSocketTunnel(wsUrl);
+      const client = new Guacamole.Client(tunnel);
+      client.__borealisViewer = "guacamole";
+      const display = client.getDisplay();
+      const displayElement = display.getElement();
+      displayElement.style.margin = "auto";
+      displayElement.style.boxShadow = VNC_CANVAS_BOX_SHADOW;
+      displayHost.appendChild(displayElement);
+      const mouse = new Guacamole.Mouse(displayElement);
+      mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (mouseState) => {
+        if (!effectiveViewOnly) {
+          client.sendMouseState(mouseState);
+        }
+      };
+      const keyboard = new Guacamole.Keyboard(displayHost);
+      keyboard.onkeydown = (keysym) => {
+        if (effectiveViewOnly) return false;
+        client.sendKeyEvent(1, keysym);
+        return true;
+      };
+      keyboard.onkeyup = (keysym) => {
+        if (effectiveViewOnly) return;
+        client.sendKeyEvent(0, keysym);
+      };
+      client.__borealisMouse = mouse;
+      client.__borealisKeyboard = keyboard;
+      rfbRef.current = client;
+
+      return await new Promise((resolve, reject) => {
+        let settled = false;
+        let connected = false;
+        const isStaleAttempt = () => connectToken && connectAttemptRef.current !== connectToken;
+        const cleanup = () => {
+          keyboard.onkeydown = null;
+          keyboard.onkeyup = null;
+          mouse.onmousedown = null;
+          mouse.onmouseup = null;
+          mouse.onmousemove = null;
+        };
+        const finishResolve = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
+          resolve();
+        };
+        const finishReject = (error, retryable = true) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
+          cleanup();
+          const err = error instanceof Error ? error : new Error(String(error || "Guacamole session unavailable."));
+          err.retryable = retryable;
+          reject(err);
+        };
+
+        client.onerror = (status) => {
+          if (isStaleAttempt()) return;
+          const message = status?.message || status?.code || "Guacamole connection failed.";
+          setSessionState("error");
+          setVncStage("error");
+          setStatusMessage(String(message));
+          finishReject(String(message), true);
+        };
+        client.onstatechange = (state) => {
+          if (isStaleAttempt()) {
+            try {
+              client.disconnect();
+            } catch {
+              /* ignore */
+            }
+            return;
+          }
+          if (state === Guacamole.Client.State.CONNECTED) {
+            connected = true;
+            syncFramebufferSize(client);
+            configureDisplaySurface(client, displayMode);
+            if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+              window.requestAnimationFrame(() => syncRenderedCanvasSize(client));
+            } else {
+              syncRenderedCanvasSize(client);
+            }
+            setSessionState("connected");
+            setVncStage("connected");
+            setCapabilities({});
+            setStatusMessage("");
+            finishResolve();
+          } else if (state === Guacamole.Client.State.DISCONNECTED) {
+            cleanup();
+            rfbRef.current = null;
+            if (!connected) {
+              setSessionState("connecting");
+              setVncStage("retrying");
+              finishReject("Guacamole proxy disconnected before the desktop became available.", true);
+              return;
+            }
+            const wasManual = manualDisconnectRef.current;
+            manualDisconnectRef.current = false;
+            setSessionState("idle");
+            setSessionId("");
+            setParticipantId("");
+            resetDisconnectedViewState();
+            clipboardLastRef.current = "";
+            setVncStage((prev) => (prev === "error" ? prev : "disconnected"));
+            if (!wasManual && sessionIdRef.current) {
+              setStatusMessage("Desktop stream closed. Reconnect or claim control when the session is ready.");
+            }
+          } else if (state === Guacamole.Client.State.WAITING) {
+            setVncStage("handshaking");
+          }
+        };
+        client.onclipboard = (stream, mimetype) => {
+          if (!String(mimetype || "").startsWith("text/")) return;
+          const reader = new Guacamole.StringReader(stream);
+          let text = "";
+          reader.ontext = (chunk) => {
+            text += chunk;
+          };
+          reader.onend = () => {
+            clipboardLastRef.current = text;
+            if (clipboardSyncRef.current) {
+              writeClipboardText(text);
+            }
+          };
+        };
+        const timeoutId = setTimeout(() => {
+          if (connected) return;
+          try {
+            client.disconnect();
+          } catch {
+            /* ignore */
+          }
+          finishReject("Guacamole connection timed out.", true);
+        }, VNC_OPEN_TIMEOUT_MS);
+        try {
+          client.connect(`token=${encodeURIComponent(token)}`);
+        } catch (error) {
+          finishReject(error, true);
+        }
+      });
+    },
+    [
+      activeViewerLabel,
+      configureDisplaySurface,
+      displayMode,
+      effectiveViewOnly,
+      resetDisconnectedViewState,
+      syncFramebufferSize,
+      syncRenderedCanvasSize,
+    ]
+  );
 
   const openVncSession = useCallback(
     async (data, options = {}) => {
+      if (normalizeViewerForClient(data?.viewer || activeViewer) === "guacamole") {
+        return openGuacamoleSession(data, options);
+      }
       const connectToken = Number(options.connectToken || 0);
       const attempt = Number(options.attempt || 1);
       const maxAttempts = Number(options.maxAttempts || VNC_AUTO_RETRY_ATTEMPTS);
@@ -1521,10 +1837,12 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       });
     },
     [
+      activeViewer,
       compressionLevel,
       configureDisplaySurface,
       displayMode,
       dragViewport,
+      openGuacamoleSession,
       qualityLevel,
       resetDisconnectedViewState,
       effectiveResizeSession,
@@ -1651,7 +1969,11 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         if (rfbRef.current !== current) break;
         const keysym = keysymFromChar(char);
         if (keysym == null) continue;
-        rfb.sendKey(keysym, null);
+        if (rfb.__borealisViewer === "guacamole") {
+          sendGuacamoleKeysym(rfb, keysym);
+        } else {
+          rfb.sendKey(keysym, null);
+        }
         // Slow down to improve reliability on large pastes.
         await sleep(20);
       }
@@ -1680,6 +2002,18 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       setStatusMessage("Clipboard is empty or unavailable.");
       return;
     }
+    if (rfb.__borealisViewer === "guacamole" && typeof rfb.createClipboardStream === "function") {
+      try {
+        const stream = rfb.createClipboardStream("text/plain");
+        const writer = new Guacamole.StringWriter(stream);
+        writer.sendText(text);
+        writer.sendEnd();
+        setStatusMessage("Clipboard pasted.");
+        return;
+      } catch {
+        // fall back to keystroke injection below
+      }
+    }
     if (typeof rfb.clipboardPasteFrom === "function") {
       try {
         rfb.clipboardPasteFrom(text);
@@ -1700,7 +2034,16 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       return;
     }
     try {
-      rfb.sendCtrlAltDel();
+      if (rfb.__borealisViewer === "guacamole") {
+        rfb.sendKeyEvent(1, 0xffe3);
+        rfb.sendKeyEvent(1, 0xffe9);
+        rfb.sendKeyEvent(1, 0xffff);
+        rfb.sendKeyEvent(0, 0xffff);
+        rfb.sendKeyEvent(0, 0xffe9);
+        rfb.sendKeyEvent(0, 0xffe3);
+      } else {
+        rfb.sendCtrlAltDel();
+      }
       setStatusMessage("Sent Ctrl+Alt+Del.");
     } catch {
       setStatusMessage("Failed to send Ctrl+Alt+Del.");
@@ -1735,6 +2078,13 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
 
   const syncViewportSelection = useCallback((selectionIds, options = {}) => {
     const rfb = rfbRef.current;
+    if (rfb?.__borealisViewer === "guacamole") {
+      configureDisplaySurface(rfb, displayMode);
+      syncFramebufferSize(rfb);
+      syncRenderedCanvasSize(rfb);
+      setViewportHint("");
+      return;
+    }
     const display = rfb?._display;
     if (!display) {
       setViewportHint("Viewport controls unavailable.");
@@ -2550,6 +2900,50 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           }}
         >
           <Box sx={{ flex: 1, overflowY: "auto" }}>
+            <SidebarSection
+              sectionId="viewer"
+              title="Viewer"
+            >
+              <Box sx={{ px: 2, py: 1.25 }}>
+                <ToggleButtonGroup
+                  exclusive
+                  fullWidth
+                  size="small"
+                  value={activeViewer}
+                  onChange={(_, value) => {
+                    if (!value || loading || isConnected) return;
+                    setSelectedViewer(value);
+                  }}
+                  sx={{
+                    "& .MuiToggleButton-root": {
+                      color: SIDEBAR_THEME.text,
+                      borderColor: SIDEBAR_THEME.border,
+                      textTransform: "none",
+                      fontSize: "0.78rem",
+                      fontWeight: 700,
+                      lineHeight: 1.1,
+                      px: 1,
+                    },
+                    "& .Mui-selected": {
+                      color: "#08111f !important",
+                      background: "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%) !important",
+                    },
+                  }}
+                >
+                  <ToggleButton value="novnc" disabled={loading || isConnected}>
+                    noVNC
+                  </ToggleButton>
+                  <ToggleButton value="guacamole" disabled={loading || isConnected || !guacamoleAvailable}>
+                    Guacamole
+                  </ToggleButton>
+                </ToggleButtonGroup>
+                {selectedViewer === "guacamole" && !guacamoleAvailable ? (
+                  <Typography variant="caption" sx={{ mt: 0.75, display: "block", color: SIDEBAR_THEME.muted }}>
+                    Guacamole unavailable.
+                  </Typography>
+                ) : null}
+              </Box>
+            </SidebarSection>
             <SidebarSection
               sectionId="display"
               title="Display & Focus"

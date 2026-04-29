@@ -155,10 +155,15 @@ class EngineContext:
     vnc_ws_host: str
     vnc_ws_port: int
     vnc_session_ttl_seconds: int
+    guacamole_enabled: bool
+    guacd_host: str
+    guacd_port: int
+    guacamole_vnc_ws_path: str
     wireguard_server_manager: Optional[Any] = None
     assembly_cache: Optional[Any] = None
     vnc_proxy: Optional[Any] = None
     vnc_registry: Optional[Any] = None
+    guacamole_vnc_registry: Optional[Any] = None
     aegis_cipher_service: Optional[Any] = None
     workflow_runtime: Optional[Any] = None
     watchdog_runtime: Optional[Any] = None
@@ -201,6 +206,10 @@ def _build_engine_context(settings: EngineSettings, logger: logging.Logger) -> E
         vnc_ws_host=settings.vnc_ws_host,
         vnc_ws_port=settings.vnc_ws_port,
         vnc_session_ttl_seconds=settings.vnc_session_ttl_seconds,
+        guacamole_enabled=settings.guacamole_enabled,
+        guacd_host=settings.guacd_host,
+        guacd_port=settings.guacd_port,
+        guacamole_vnc_ws_path=settings.guacamole_vnc_ws_path,
         assembly_cache=None,
         aegis_cipher_service=None,
         workflow_runtime=None,

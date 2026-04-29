@@ -127,6 +127,10 @@ VNC_PORT = 5900
 VNC_WS_HOST = "127.0.0.1"
 VNC_WS_PORT = 4823
 VNC_SESSION_TTL_SECONDS = 120
+GUACAMOLE_ENABLED = True
+GUACD_HOST = "127.0.0.1"
+GUACD_PORT = 4822
+GUACAMOLE_VNC_WS_PATH = "/remote-desktop/vnc/guacamole"
 
 # WireGuard port allowlist (Engine -> Agent /32)
 WIREGUARD_PORT_ALLOWLIST = (
@@ -364,6 +368,10 @@ class EngineSettings:
     vnc_ws_host: str
     vnc_ws_port: int
     vnc_session_ttl_seconds: int
+    guacamole_enabled: bool
+    guacd_host: str
+    guacd_port: int
+    guacamole_vnc_ws_path: str
     raw: MutableMapping[str, Any] = field(default_factory=dict)
 
     def to_flask_config(self) -> MutableMapping[str, Any]:
@@ -379,6 +387,10 @@ class EngineSettings:
             "PUBLIC_VNC_PATH": self.public_vnc_path,
             "PUBLIC_WIREGUARD_HOST": self.public_wireguard_host,
             "PUBLIC_WIREGUARD_PORT": self.public_wireguard_port,
+            "GUACAMOLE_ENABLED": self.guacamole_enabled,
+            "GUACD_HOST": self.guacd_host,
+            "GUACD_PORT": self.guacd_port,
+            "GUACAMOLE_VNC_WS_PATH": self.guacamole_vnc_ws_path,
             "DISABLE_ENGINE_TLS": self.disable_engine_tls,
             "LETSENCRYPT_SETTINGS_PATH": self.letsencrypt_settings_path,
             "DATABASE_URL": self.database_url,
@@ -695,6 +707,33 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         minimum=30,
         maximum=3600,
     )
+    guacamole_enabled = _parse_bool(
+        runtime_config.get("GUACAMOLE_ENABLED")
+        if runtime_config.get("GUACAMOLE_ENABLED") is not None
+        else os.environ.get("BOREALIS_GUACAMOLE_ENABLED"),
+        default=GUACAMOLE_ENABLED,
+    )
+    guacd_host = str(
+        runtime_config.get("GUACD_HOST")
+        or os.environ.get("BOREALIS_GUACD_HOST")
+        or GUACD_HOST
+    ).strip() or GUACD_HOST
+    guacd_port = _parse_int(
+        runtime_config.get("GUACD_PORT") or os.environ.get("BOREALIS_GUACD_PORT"),
+        default=GUACD_PORT,
+        minimum=1,
+        maximum=65535,
+    )
+    guacamole_vnc_ws_path = str(
+        runtime_config.get("GUACAMOLE_VNC_WS_PATH")
+        or os.environ.get("BOREALIS_GUACAMOLE_VNC_WS_PATH")
+        or f"{public_vnc_path}/guacamole"
+        or GUACAMOLE_VNC_WS_PATH
+    ).strip() or GUACAMOLE_VNC_WS_PATH
+    if not guacamole_vnc_ws_path.startswith("/"):
+        guacamole_vnc_ws_path = f"/{guacamole_vnc_ws_path}"
+    if len(guacamole_vnc_ws_path) > 1:
+        guacamole_vnc_ws_path = guacamole_vnc_ws_path.rstrip("/")
 
     api_groups = _parse_api_groups(
         runtime_config.get("API_GROUPS") or os.environ.get("BOREALIS_API_GROUPS")
@@ -762,6 +801,10 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         vnc_ws_host=vnc_ws_host,
         vnc_ws_port=vnc_ws_port,
         vnc_session_ttl_seconds=vnc_session_ttl_seconds,
+        guacamole_enabled=guacamole_enabled,
+        guacd_host=guacd_host,
+        guacd_port=guacd_port,
+        guacamole_vnc_ws_path=guacamole_vnc_ws_path,
         raw=runtime_config,
     )
     return settings

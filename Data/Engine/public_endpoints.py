@@ -80,6 +80,17 @@ def public_vnc_path(context: Any) -> str:
     return path
 
 
+def public_guacamole_vnc_path(context: Any) -> str:
+    path = _normalize_text(getattr(context, "guacamole_vnc_ws_path", None))
+    if not path:
+        path = f"{public_vnc_path(context)}/guacamole"
+    if not path.startswith("/"):
+        path = f"/{path}"
+    if len(path) > 1 and path.endswith("/"):
+        path = path.rstrip("/")
+    return path
+
+
 def wireguard_endpoint(context: Any, req: Optional[Any] = None) -> tuple[str, int]:
     host = _normalize_text(getattr(context, "public_wireguard_host", None)) or public_hostname(context, req=req)
     port = int(getattr(context, "public_wireguard_port", None) or getattr(context, "wireguard_port", 30000))
@@ -100,4 +111,3 @@ def build_websocket_url(
     parts = urlsplit(base)
     query_string = urlencode({key: value for key, value in (query or {}).items() if value is not None})
     return urlunsplit((scheme, parts.netloc, path, query_string, ""))
-

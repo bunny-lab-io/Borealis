@@ -12,6 +12,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - Login/bootstrap gate: `Data/Engine/web-interface/src/app/routes/LoginRoute.jsx` and `Data/Engine/web-interface/src/app/routes/BootstrapEntry.jsx`.
 - Providers: `Data/Engine/web-interface/src/app/providers/` for bootstrap/auth session state and page chrome metadata.
 - Global socket: `window.BorealisSocket` (Socket.IO client).
+- Remote Desktop: `Data/Engine/web-interface/src/Devices/Tabs/Remote_Desktop.jsx` exposes a viewer selector for noVNC and Apache Guacamole VNC. Viewer choice is browser-local and stored in `localStorage`.
 - Shared operator presence: authenticated browsers emit `operator_presence_sync` and `operator_presence_clear` on the shared socket; the Engine emits `server_operator_presence_changed` so informational admin pages can refresh live operator session data without waiting for their poll interval.
 - Navigation: `Data/Engine/web-interface/src/Navigation_Sidebar.jsx`.
 - Watchdog authoring: `Data/Engine/web-interface/src/Automation/Watchdogs/`.

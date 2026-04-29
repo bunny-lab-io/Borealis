@@ -1492,6 +1492,12 @@ NODE_DIR="${SCRIPT_DIR}/Dependencies/NodeJS"
 NODE_BIN="${NODE_DIR}/bin/node"
 NPM_BIN="${NODE_DIR}/bin/npm"
 NPX_BIN="${NODE_DIR}/bin/npx"
+GUACAMOLE_VERSION="${BOREALIS_GUACAMOLE_VERSION:-1.6.0}"
+GUACAMOLE_BASE_URL="https://downloads.apache.org/guacamole/${GUACAMOLE_VERSION}/source"
+GUACAMOLE_ROOT="${SCRIPT_DIR}/Dependencies/ApacheGuacamole/${GUACAMOLE_VERSION}"
+GUACAMOLE_PREFIX="${GUACAMOLE_ROOT}/install"
+GUACD_HOST="${BOREALIS_GUACD_HOST:-127.0.0.1}"
+GUACD_PORT="${BOREALIS_GUACD_PORT:-4822}"
 
 install_node_portable() {
   if [[ -x "$NPM_BIN" ]]; then return 0; fi
@@ -1524,11 +1530,159 @@ install_server_dependencies() {
   install_wireguard_tools_best_effort engine
   install_traefik_best_effort
   install_node_portable
+  install_guacamole_source_build || ui_warn "Apache Guacamole VNC support unavailable; noVNC remains available."
 }
 
 install_agent_dependencies() {
   install_shared_dependencies
   install_wireguard_tools_best_effort agent
+}
+
+resolve_guacd_binary() {
+  if [[ -n "${BOREALIS_GUACD_BIN:-}" && -x "${BOREALIS_GUACD_BIN}" ]]; then
+    echo "${BOREALIS_GUACD_BIN}"
+    return 0
+  fi
+  if [[ -x "${GUACAMOLE_PREFIX}/sbin/guacd" ]]; then
+    echo "${GUACAMOLE_PREFIX}/sbin/guacd"
+    return 0
+  fi
+  if [[ -x "${GUACAMOLE_PREFIX}/bin/guacd" ]]; then
+    echo "${GUACAMOLE_PREFIX}/bin/guacd"
+    return 0
+  fi
+  if command_exists guacd; then
+    command -v guacd
+    return 0
+  fi
+  echo ""
+}
+
+verify_sha256_file() {
+  local artifact="$1"
+  local sha_file="$2"
+  [[ -f "${artifact}" && -f "${sha_file}" ]] || return 1
+  local expected actual
+  expected="$(awk '{print $1; exit}' "${sha_file}" 2>/dev/null || true)"
+  [[ -n "${expected}" ]] || return 1
+  if command_exists sha256sum; then
+    actual="$(sha256sum "${artifact}" | awk '{print $1}')"
+  else
+    local py_bin
+    py_bin="$(resolve_python_bin)"
+    [[ -n "${py_bin}" ]] || return 1
+    actual="$("${py_bin}" - "${artifact}" <<'PY'
+import hashlib
+import sys
+
+digest = hashlib.sha256()
+with open(sys.argv[1], "rb") as fh:
+    for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+        digest.update(chunk)
+print(digest.hexdigest())
+PY
+)"
+  fi
+  [[ "${actual}" == "${expected}" ]]
+}
+
+install_guacamole_build_dependencies_best_effort() {
+  if [[ -x "${GUACAMOLE_PREFIX}/sbin/guacd" || -x "${GUACAMOLE_PREFIX}/bin/guacd" ]]; then
+    return 0
+  fi
+  if ! allow_system_package_install; then
+    write_engine_log "Apache Guacamole build dependencies not installed because package-manager installation is disabled." "engine-supervision.log"
+    return 1
+  fi
+  detect_distro
+  case "$DISTRO_ID" in
+    ubuntu|debian|linuxmint|pop)
+      run_privileged_quiet apt update -qq || true
+      run_privileged_quiet env DEBIAN_FRONTEND=noninteractive apt install -y \
+        build-essential autoconf automake libtool pkg-config \
+        libcairo2-dev libjpeg-turbo8-dev libpng-dev libuuid1 uuid-dev \
+        libvncserver-dev libssl-dev libwebp-dev libgcrypt20-dev || return 1
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      if command_exists dnf; then
+        run_privileged_quiet dnf install -y \
+          gcc gcc-c++ make autoconf automake libtool pkgconfig \
+          cairo-devel libjpeg-turbo-devel libpng-devel libuuid-devel \
+          libvncserver-devel openssl-devel libwebp-devel libgcrypt-devel || return 1
+      else
+        run_privileged_quiet yum install -y \
+          gcc gcc-c++ make autoconf automake libtool pkgconfig \
+          cairo-devel libjpeg-turbo-devel libpng-devel libuuid-devel \
+          libvncserver-devel openssl-devel libwebp-devel libgcrypt-devel || return 1
+      fi
+      ;;
+    arch)
+      run_privileged_quiet pacman -Sy --noconfirm \
+        base-devel autoconf automake libtool pkgconf cairo libjpeg-turbo \
+        libpng util-linux-libs libvncserver openssl libwebp libgcrypt || return 1
+      ;;
+    *)
+      ui_warn "Unsupported distro '${DISTRO_ID}' for automated Apache Guacamole build dependency install."
+      return 1
+      ;;
+  esac
+}
+
+install_guacamole_source_build() {
+  if [[ -x "${GUACAMOLE_PREFIX}/sbin/guacd" || -x "${GUACAMOLE_PREFIX}/bin/guacd" ]]; then
+    write_engine_log "Apache Guacamole guacd available." "engine-supervision.log"
+    return 0
+  fi
+  mkdir -p "${GUACAMOLE_ROOT}/source" "${GUACAMOLE_ROOT}/licenses"
+  local server_archive="guacamole-server-${GUACAMOLE_VERSION}.tar.gz"
+  local client_archive="guacamole-client-${GUACAMOLE_VERSION}.tar.gz"
+  local server_path="${GUACAMOLE_ROOT}/source/${server_archive}"
+  local client_path="${GUACAMOLE_ROOT}/source/${client_archive}"
+  local server_sha="${server_path}.sha256"
+  local client_sha="${client_path}.sha256"
+
+  download_file "${GUACAMOLE_BASE_URL}/${server_archive}" "${server_path}" || return 1
+  download_file "${GUACAMOLE_BASE_URL}/${server_archive}.sha256" "${server_sha}" || return 1
+  download_file "${GUACAMOLE_BASE_URL}/${client_archive}" "${client_path}" || return 1
+  download_file "${GUACAMOLE_BASE_URL}/${client_archive}.sha256" "${client_sha}" || return 1
+  verify_sha256_file "${server_path}" "${server_sha}" || return 1
+  verify_sha256_file "${client_path}" "${client_sha}" || return 1
+
+  install_guacamole_build_dependencies_best_effort || {
+    ui_warn "Apache Guacamole build dependencies missing. Install libvncserver/libvncclient development packages and rerun Borealis.sh."
+    return 1
+  }
+
+  local build_root="${GUACAMOLE_ROOT}/build"
+  rm -rf "${build_root}"
+  mkdir -p "${build_root}"
+  tar -xzf "${server_path}" -C "${build_root}"
+  tar -xzf "${client_path}" -C "${build_root}"
+  cp "${build_root}/guacamole-server-${GUACAMOLE_VERSION}/LICENSE" "${GUACAMOLE_ROOT}/licenses/guacamole-server-LICENSE" 2>/dev/null || true
+  cp "${build_root}/guacamole-server-${GUACAMOLE_VERSION}/NOTICE" "${GUACAMOLE_ROOT}/licenses/guacamole-server-NOTICE" 2>/dev/null || true
+  cp "${build_root}/guacamole-client-${GUACAMOLE_VERSION}/LICENSE" "${GUACAMOLE_ROOT}/licenses/guacamole-client-LICENSE" 2>/dev/null || true
+  cp "${build_root}/guacamole-client-${GUACAMOLE_VERSION}/NOTICE" "${GUACAMOLE_ROOT}/licenses/guacamole-client-NOTICE" 2>/dev/null || true
+
+  (
+    cd "${build_root}/guacamole-server-${GUACAMOLE_VERSION}"
+    ./configure \
+      --prefix="${GUACAMOLE_PREFIX}" \
+      --with-vnc \
+      --with-rdp=no \
+      --with-ssh=no \
+      --with-telnet=no \
+      --disable-kubernetes \
+      --disable-guacenc \
+      --disable-guaclog
+    make -j"$(nproc 2>/dev/null || echo 2)"
+    make install
+  )
+
+  if [[ ! -x "$(resolve_guacd_binary)" ]]; then
+    return 1
+  fi
+  write_engine_log "Apache Guacamole ${GUACAMOLE_VERSION} built from source with VNC support." "engine-supervision.log"
+  return 0
 }
 
 install_wireguard_tools_best_effort() {
@@ -2790,6 +2944,50 @@ print_traefik_service_status() {
   print_systemd_unit_summary "${unit_name}" "Traefik edge"
 }
 
+ensure_guacd_systemd_service() {
+  local guacd_bin
+  guacd_bin="$(resolve_guacd_binary)"
+  if [[ -z "${guacd_bin}" || ! -x "${guacd_bin}" ]]; then
+    write_engine_log "Apache Guacamole guacd not installed; skipping guacd systemd service." "engine-supervision.log"
+    return 0
+  fi
+  local unit_name="borealis-guacd.service"
+  local unit_path="/etc/systemd/system/${unit_name}"
+  local tmp_unit
+  tmp_unit="$(ensure_engine_log_dir)/${unit_name}"
+  mkdir -p "${SCRIPT_DIR}/Engine/Logs"
+  cat > "${tmp_unit}" <<EOF
+[Unit]
+Description=Borealis Apache Guacamole Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${SCRIPT_DIR}
+Environment=LD_LIBRARY_PATH=${GUACAMOLE_PREFIX}/lib:${GUACAMOLE_PREFIX}/lib64
+ExecStart=/usr/bin/env bash -lc 'exec "${guacd_bin}" -f -b "${GUACD_HOST}" -l "${GUACD_PORT}" -L info >>"${SCRIPT_DIR}/Engine/Logs/guacd.log" 2>&1'
+Restart=always
+RestartSec=5
+KillMode=process
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  run_privileged_quiet cp "${tmp_unit}" "${unit_path}" || return 1
+  run_privileged_quiet systemctl daemon-reload || return 1
+  run_privileged_quiet systemctl enable "${unit_name}" || return 1
+  run_privileged_quiet systemctl restart "${unit_name}" || return 1
+  write_engine_log "Systemd service '${unit_name}' installed/restarted."
+  return 0
+}
+
+print_guacd_service_status() {
+  local unit_name="borealis-guacd.service"
+  print_systemd_unit_summary "${unit_name}" "Apache Guacamole"
+}
+
 # ---- Engine web interface staging (parity with Ensure-EngineWebInterface) ----
 ensure_engine_web_interface() {
   local project_root="$1"
@@ -2967,9 +3165,14 @@ cd "\${ENGINE_DIR}"
 
 export BOREALIS_PROJECT_ROOT="\${PROJECT_ROOT}"
 export BOREALIS_ENGINE_MODE="\${MODE}"
+export BOREALIS_GUACAMOLE_ENABLED="\${BOREALIS_GUACAMOLE_ENABLED:-1}"
+export BOREALIS_GUACD_HOST="\${BOREALIS_GUACD_HOST:-${GUACD_HOST}}"
+export BOREALIS_GUACD_PORT="\${BOREALIS_GUACD_PORT:-${GUACD_PORT}}"
+export BOREALIS_GUACAMOLE_VNC_WS_PATH="\${BOREALIS_GUACAMOLE_VNC_WS_PATH:-/remote-desktop/vnc/guacamole}"
 export ANSIBLE_COLLECTIONS_PATH="\${PROJECT_ROOT}/Engine/Ansible/collections"
 export ANSIBLE_COLLECTIONS_PATHS="\${ANSIBLE_COLLECTIONS_PATH}"
-export PATH="\${NODE_BIN_DIR}:\${PATH}"
+export PATH="\${NODE_BIN_DIR}:${GUACAMOLE_PREFIX}/sbin:${GUACAMOLE_PREFIX}/bin:\${PATH}"
+export LD_LIBRARY_PATH="${GUACAMOLE_PREFIX}/lib:${GUACAMOLE_PREFIX}/lib64:\${LD_LIBRARY_PATH:-}"
 if [[ -f "\${ENGINE_DB_ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
   . "\${ENGINE_DB_ENV_FILE}"
@@ -3036,8 +3239,8 @@ ensure_engine_systemd_service() {
   cat > "${tmp_unit}" <<EOF
 [Unit]
 Description=Borealis Engine Service
-After=network-online.target ${pg_service}.service borealis-traefik.service
-Wants=network-online.target ${pg_service}.service borealis-traefik.service
+After=network-online.target ${pg_service}.service borealis-traefik.service borealis-guacd.service
+Wants=network-online.target ${pg_service}.service borealis-traefik.service borealis-guacd.service
 
 [Service]
 Type=simple
@@ -3067,6 +3270,7 @@ print_engine_service_status() {
 
 print_engine_runtime_status_summary() {
   print_traefik_service_status
+  print_guacd_service_status
   print_engine_service_status
   print_wireguard_listener_status
 }
@@ -3144,6 +3348,7 @@ configure_engine_supervision() {
   local mode="$1" # production|developer
   if command_exists systemctl; then
     ensure_traefik_systemd_service
+    ensure_guacd_systemd_service
     ensure_engine_systemd_service "${mode}"
     return 0
   fi

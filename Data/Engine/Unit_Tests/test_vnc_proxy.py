@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from Data.Engine.services.RemoteDesktop.guacamole_proxy import GuacamoleSessionRegistry
 from Data.Engine.services.RemoteDesktop import vnc_proxy
 
 
@@ -171,3 +172,21 @@ def test_connect_vnc_suppresses_duplicate_recovery_for_same_agent_within_cooldow
 
     assert restart_reasons_one == ["vnc_connect_retry"]
     assert restart_reasons_two == []
+
+
+def test_guacamole_registry_consumes_tokens_once() -> None:
+    registry = GuacamoleSessionRegistry(ttl_seconds=120, logger=logging.getLogger("test.guac.registry"))
+
+    session = registry.create(
+        agent_id="agent-1",
+        host="10.255.0.6",
+        port=5900,
+        password="secretpw",
+        operator_id="admin",
+        session_id="session-1",
+        participant_id="participant-1",
+        role="controller",
+    )
+
+    assert registry.consume(session.token) is not None
+    assert registry.consume(session.token) is None

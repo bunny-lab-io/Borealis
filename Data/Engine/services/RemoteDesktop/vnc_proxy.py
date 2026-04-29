@@ -20,6 +20,14 @@ from urllib.parse import parse_qs, urlsplit
 
 import websockets
 
+from .guacamole_proxy import (
+    DEFAULT_GUACD_HOST,
+    DEFAULT_GUACD_PORT,
+    GUACAMOLE_WS_PATH,
+    GuacamoleSessionRegistry,
+    proxy_guacamole_vnc_session,
+)
+
 VNC_WS_PATH = "/remote-desktop/vnc"
 _MAX_MESSAGE_SIZE = 100_000_000
 _CONNECT_WAIT_WINDOW_SECONDS = 20.0
@@ -60,6 +68,7 @@ class ActiveVncConnection:
     agent_id: str
     operator_id: str
     role: str
+    viewer: str = "novnc"
 
 
 class VncSessionRegistry:
@@ -143,18 +152,26 @@ class VncProxyServer:
         port: int,
         registry: VncSessionRegistry,
         logger: logging.Logger,
+        guacamole_registry: Optional[GuacamoleSessionRegistry] = None,
         emit_agent_event: Optional[Callable[[str, str, Any], bool]] = None,
         resolver: Optional[Callable[[str], Optional[Tuple[str, int]]]] = None,
         path: str = VNC_WS_PATH,
+        guacamole_path: str = GUACAMOLE_WS_PATH,
+        guacd_host: str = DEFAULT_GUACD_HOST,
+        guacd_port: int = DEFAULT_GUACD_PORT,
         ssl_context: Optional[Any] = None,
     ) -> None:
         self.host = host
         self.port = port
         self.registry = registry
+        self.guacamole_registry = guacamole_registry
         self.logger = logger
         self._emit_agent_event = emit_agent_event
         self._resolver = resolver
         self.path = path or VNC_WS_PATH
+        self.guacamole_path = str(guacamole_path or GUACAMOLE_WS_PATH)
+        self.guacd_host = str(guacd_host or DEFAULT_GUACD_HOST)
+        self.guacd_port = int(guacd_port or DEFAULT_GUACD_PORT)
         self.ssl_context = ssl_context
         self._thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -213,6 +230,9 @@ class VncProxyServer:
         if normalized_path and not normalized_path.startswith("/"):
             normalized_path = f"/{normalized_path}"
         if normalized_path != self.path:
+            if normalized_path == self.guacamole_path:
+                await self._handle_guacamole_client(websocket, parsed, raw_path)
+                return
             self.logger.warning("VNC proxy rejected request with invalid path: %s", raw_path)
             await websocket.close(code=1008, reason="invalid_path")
             return
@@ -250,7 +270,7 @@ class VncProxyServer:
                 close_reason = "vnc_unavailable"
                 await websocket.close(code=1011, reason="vnc_unavailable")
                 return
-            connection_id = self._register_active_connection(session, websocket)
+            connection_id = self._register_active_connection(session, websocket, viewer="novnc")
             if callable(session.on_open):
                 try:
                     session.on_open()
@@ -306,6 +326,82 @@ class VncProxyServer:
                     self.logger.debug("Failed to notify VNC session close agent_id=%s", session.agent_id, exc_info=True)
             logger.info(
                 "VNC session ended agent_id=%s session_id=%s participant_id=%s role=%s reason=%s",
+                agent_id,
+                session.session_id or "-",
+                session.participant_id or "-",
+                session.role or "-",
+                close_reason,
+            )
+
+    async def _handle_guacamole_client(self, websocket: Any, parsed: Any, raw_path: str) -> None:
+        registry = self.guacamole_registry
+        if registry is None:
+            self.logger.warning("Guacamole proxy rejected request without registry: %s", raw_path)
+            await websocket.close(code=1011, reason="guacamole_unavailable")
+            return
+        query = parse_qs(parsed.query or "")
+        token = (query.get("token") or [""])[0]
+        session = registry.consume(token)
+        host = session.host if session else ""
+        port = session.port if session else 0
+        agent_id = session.agent_id if session else ""
+        if not host or not port or not agent_id:
+            token_hint = token[:8] if token else "-"
+            self.logger.warning("Guacamole proxy rejected session (token=%s)", token_hint)
+            await websocket.close(code=1008, reason="invalid_session")
+            return
+
+        logger = self.logger.getChild("guacamole")
+        connection_id = ""
+        close_reason = "session_end"
+        logger.info(
+            "Guacamole VNC session start agent_id=%s session_id=%s participant_id=%s role=%s",
+            agent_id,
+            session.session_id or "-",
+            session.participant_id or "-",
+            session.role or "-",
+        )
+        try:
+            connection_id = self._register_active_connection(session, websocket, viewer="guacamole")
+            if callable(session.on_open):
+                try:
+                    session.on_open()
+                except Exception:
+                    self.logger.debug(
+                        "Failed to notify Guacamole VNC session open agent_id=%s",
+                        session.agent_id,
+                        exc_info=True,
+                    )
+            try:
+                await proxy_guacamole_vnc_session(
+                    websocket=websocket,
+                    session=session,
+                    logger=logger,
+                    guacd_host=self.guacd_host,
+                    guacd_port=self.guacd_port,
+                )
+            except Exception as exc:
+                logger.warning("Guacamole VNC bridge failed: %s", exc)
+                close_reason = "guacamole_unavailable"
+                await websocket.close(code=1011, reason="guacamole_unavailable")
+                return
+        finally:
+            websocket_close_reason = getattr(websocket, "close_reason", None)
+            if websocket_close_reason and close_reason == "session_end":
+                close_reason = str(websocket_close_reason).strip()[:120] or close_reason
+            if connection_id:
+                self._unregister_active_connection(connection_id)
+            if callable(session.on_close):
+                try:
+                    session.on_close(close_reason)
+                except Exception:
+                    self.logger.debug(
+                        "Failed to notify Guacamole VNC session close agent_id=%s",
+                        session.agent_id,
+                        exc_info=True,
+                    )
+            logger.info(
+                "Guacamole VNC session ended agent_id=%s session_id=%s participant_id=%s role=%s reason=%s",
                 agent_id,
                 session.session_id or "-",
                 session.participant_id or "-",
@@ -407,7 +503,7 @@ class VncProxyServer:
         except Exception:
             self.logger.debug("Failed to emit vnc_stop for agent_id=%s", session.agent_id, exc_info=True)
 
-    def _register_active_connection(self, session: VncSession, websocket: Any) -> str:
+    def _register_active_connection(self, session: Any, websocket: Any, *, viewer: str = "novnc") -> str:
         connection_id = uuid.uuid4().hex
         record = ActiveVncConnection(
             connection_id=connection_id,
@@ -417,6 +513,7 @@ class VncProxyServer:
             agent_id=session.agent_id or "",
             operator_id=session.operator_id or "",
             role=session.role or "",
+            viewer=viewer,
         )
         with self._active_connections_lock:
             self._active_connections[connection_id] = record
@@ -476,6 +573,16 @@ class VncProxyServer:
             reason=reason,
         )
 
+
+def _ensure_guacamole_registry(context: Any, logger: logging.Logger) -> GuacamoleSessionRegistry:
+    registry = getattr(context, "guacamole_vnc_registry", None)
+    if registry is None:
+        ttl = int(getattr(context, "vnc_session_ttl_seconds", 120))
+        registry = GuacamoleSessionRegistry(ttl_seconds=ttl, logger=logger)
+        setattr(context, "guacamole_vnc_registry", registry)
+    return registry
+
+
 def ensure_vnc_proxy(
     context: Any,
     *,
@@ -490,6 +597,7 @@ def ensure_vnc_proxy(
         ttl = int(getattr(context, "vnc_session_ttl_seconds", 120))
         registry = VncSessionRegistry(ttl_seconds=ttl, logger=logger)
         setattr(context, "vnc_registry", registry)
+    guacamole_registry = _ensure_guacamole_registry(context, logger)
 
     proxy = getattr(context, "vnc_proxy", None)
     if proxy is None:
@@ -498,9 +606,13 @@ def ensure_vnc_proxy(
             port=int(getattr(context, "vnc_ws_port", 4823)),
             registry=registry,
             logger=logger.getChild("vnc_proxy"),
+            guacamole_registry=guacamole_registry,
             emit_agent_event=getattr(context, "emit_agent_event", None),
             resolver=resolver,
             path=str(getattr(context, "public_vnc_path", VNC_WS_PATH)),
+            guacamole_path=str(getattr(context, "guacamole_vnc_ws_path", GUACAMOLE_WS_PATH)),
+            guacd_host=str(getattr(context, "guacd_host", DEFAULT_GUACD_HOST)),
+            guacd_port=int(getattr(context, "guacd_port", DEFAULT_GUACD_PORT)),
             ssl_context=None,
         )
         setattr(context, "vnc_proxy", proxy)
@@ -509,6 +621,11 @@ def ensure_vnc_proxy(
             proxy._resolver = resolver  # type: ignore[attr-defined]
         except Exception:
             pass
+    if proxy is not None:
+        proxy.guacamole_registry = guacamole_registry
+        proxy.guacamole_path = str(getattr(context, "guacamole_vnc_ws_path", GUACAMOLE_WS_PATH))
+        proxy.guacd_host = str(getattr(context, "guacd_host", DEFAULT_GUACD_HOST))
+        proxy.guacd_port = int(getattr(context, "guacd_port", DEFAULT_GUACD_PORT))
 
     if not proxy.ensure_started():
         logger.error("VNC proxy failed to start; VNC sessions unavailable.")
@@ -516,4 +633,23 @@ def ensure_vnc_proxy(
     return registry
 
 
-__all__ = ["VNC_WS_PATH", "VncSessionRegistry", "VncProxyServer", "ensure_vnc_proxy"]
+def ensure_guacamole_vnc_proxy(
+    context: Any,
+    *,
+    logger: Optional[logging.Logger] = None,
+    resolver: Optional[Callable[[str], Optional[Tuple[str, int]]]] = None,
+) -> Optional[GuacamoleSessionRegistry]:
+    if logger is None:
+        logger = context.logger if hasattr(context, "logger") else logging.getLogger("borealis.engine.vnc")
+    if ensure_vnc_proxy(context, logger=logger, resolver=resolver) is None:
+        return None
+    return _ensure_guacamole_registry(context, logger)
+
+
+__all__ = [
+    "VNC_WS_PATH",
+    "VncSessionRegistry",
+    "VncProxyServer",
+    "ensure_guacamole_vnc_proxy",
+    "ensure_vnc_proxy",
+]
