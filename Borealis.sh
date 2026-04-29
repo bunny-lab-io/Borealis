@@ -1548,7 +1548,6 @@ install_server_dependencies() {
   install_wireguard_tools_best_effort engine
   install_traefik_best_effort
   install_node_portable
-  install_guacamole_source_build || ui_warn "Apache Guacamole VNC support unavailable; noVNC remains available."
 }
 
 install_agent_dependencies() {
@@ -1648,6 +1647,7 @@ install_guacamole_build_dependencies_best_effort() {
 
 install_guacamole_source_build() {
   if [[ -x "${GUACAMOLE_PREFIX}/sbin/guacd" || -x "${GUACAMOLE_PREFIX}/bin/guacd" ]]; then
+    ui_info "Apache Guacamole guacd already installed at $(resolve_guacd_binary)."
     write_engine_log "Apache Guacamole guacd available." "engine-supervision.log"
     return 0
   fi
@@ -1659,13 +1659,19 @@ install_guacamole_source_build() {
   local server_sha="${server_path}.sha256"
   local client_sha="${client_path}.sha256"
 
+  ui_info "Downloading Apache Guacamole ${GUACAMOLE_VERSION} server source..."
   download_file "${GUACAMOLE_BASE_URL}/${server_archive}" "${server_path}" || return 1
+  ui_info "Downloading Apache Guacamole ${GUACAMOLE_VERSION} server checksum..."
   download_file "${GUACAMOLE_BASE_URL}/${server_archive}.sha256" "${server_sha}" || return 1
+  ui_info "Downloading Apache Guacamole ${GUACAMOLE_VERSION} client source for LICENSE/NOTICE..."
   download_file "${GUACAMOLE_BASE_URL}/${client_archive}" "${client_path}" || return 1
+  ui_info "Downloading Apache Guacamole ${GUACAMOLE_VERSION} client checksum..."
   download_file "${GUACAMOLE_BASE_URL}/${client_archive}.sha256" "${client_sha}" || return 1
+  ui_info "Verifying Apache Guacamole source checksums..."
   verify_sha256_file "${server_path}" "${server_sha}" || return 1
   verify_sha256_file "${client_path}" "${client_sha}" || return 1
 
+  ui_info "Installing Apache Guacamole build dependencies when package installation is allowed..."
   install_guacamole_build_dependencies_best_effort || {
     ui_warn "Apache Guacamole build dependencies missing. Install with: $(guacamole_dependency_hint)"
     return 1
@@ -1674,8 +1680,10 @@ install_guacamole_source_build() {
   local build_root="${GUACAMOLE_ROOT}/build"
   rm -rf "${build_root}"
   mkdir -p "${build_root}"
+  ui_info "Extracting Apache Guacamole source archives..."
   tar -xzf "${server_path}" -C "${build_root}"
   tar -xzf "${client_path}" -C "${build_root}"
+  ui_info "Preserving Apache Guacamole LICENSE and NOTICE files..."
   cp "${build_root}/guacamole-server-${GUACAMOLE_VERSION}/LICENSE" "${GUACAMOLE_ROOT}/licenses/guacamole-server-LICENSE" 2>/dev/null || true
   cp "${build_root}/guacamole-server-${GUACAMOLE_VERSION}/NOTICE" "${GUACAMOLE_ROOT}/licenses/guacamole-server-NOTICE" 2>/dev/null || true
   cp "${build_root}/guacamole-client-${GUACAMOLE_VERSION}/LICENSE" "${GUACAMOLE_ROOT}/licenses/guacamole-client-LICENSE" 2>/dev/null || true
@@ -1683,7 +1691,8 @@ install_guacamole_source_build() {
 
   (
     cd "${build_root}/guacamole-server-${GUACAMOLE_VERSION}"
-    ./configure \
+    ui_info "Configuring Apache Guacamole Server for VNC-only guacd..."
+    run_logged_command ./configure \
       --prefix="${GUACAMOLE_PREFIX}" \
       --with-vnc \
       --with-rdp=no \
@@ -1692,14 +1701,25 @@ install_guacamole_source_build() {
       --disable-kubernetes \
       --disable-guacenc \
       --disable-guaclog
-    make -j"$(nproc 2>/dev/null || echo 2)"
-    make install
+    ui_info "Building Apache Guacamole Server. This can take several minutes..."
+    run_logged_command make -j"$(nproc 2>/dev/null || echo 2)"
+    ui_info "Installing Apache Guacamole Server into ${GUACAMOLE_PREFIX}..."
+    run_logged_command make install
   )
 
   if [[ ! -x "$(resolve_guacd_binary)" ]]; then
     return 1
   fi
+  ui_success "Apache Guacamole guacd installed at $(resolve_guacd_binary)."
   write_engine_log "Apache Guacamole ${GUACAMOLE_VERSION} built from source with VNC support." "engine-supervision.log"
+  return 0
+}
+
+configure_guacamole_vnc_runtime() {
+  if install_guacamole_source_build; then
+    return 0
+  fi
+  ui_warn "Apache Guacamole VNC support unavailable; noVNC remains available."
   return 0
 }
 
@@ -3644,7 +3664,7 @@ server_menu() {
   if [[ "${engine_immediate_launch}" -eq 1 ]]; then
     set_step_plan 7
   else
-    set_step_plan 9
+    set_step_plan 10
   fi
 
   run_step "Verifying Runtime Dependencies" install_server_dependencies
@@ -3669,6 +3689,7 @@ server_menu() {
 
   run_step "Prepare Engine Python Environment" create_engine_venv_and_stage_data
   run_step "Install Engine Python Dependencies" install_engine_python_deps
+  run_step "Configure Apache Guacamole VNC Runtime" configure_guacamole_vnc_runtime
   run_step "Configure Borealis Traefik Edge" ensure_engine_public_edge_runtime "$borealis_operation_mode"
   run_step "Configure Engine Ansible Runtime" configure_engine_ansible_runtime
   run_step "Configure Vite Engine Frontend" configure_engine_frontend "$borealis_operation_mode"
