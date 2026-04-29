@@ -1,9 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Button, Dialog, DialogActions, DialogContent, Stack, Tooltip, Typography } from "@mui/material";
-import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
-import RadioButtonUncheckedRoundedIcon from "@mui/icons-material/RadioButtonUncheckedRounded";
-import ErrorOutlineRoundedIcon from "@mui/icons-material/ErrorOutlineRounded";
-import AutorenewRoundedIcon from "@mui/icons-material/AutorenewRounded";
+import { Box, Button, Dialog, DialogActions, DialogContent, Stack, Typography } from "@mui/material";
 import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
 import HubRoundedIcon from "@mui/icons-material/HubRounded";
 import { AgGridReact } from "ag-grid-react";
@@ -15,6 +11,7 @@ import {
   DialogHeaderBlock,
 } from "../../DialogStyles.jsx";
 import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
+import AgentStartupFlow, { normalizeMilestoneState } from "./Agent_Startup_Flow.jsx";
 
 const SUMMARY_FIELD_TEXT_COLOR = "#58a6ff";
 const SUMMARY_DEFAULT_TEXT_COLOR = "#f4f7ff";
@@ -344,119 +341,6 @@ function Island({ title, icon = null, meta = "", children, sx = {} }) {
   );
 }
 
-function normalizeMilestoneState(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (["complete", "active", "failed", "pending", "skipped"].includes(normalized)) return normalized;
-  if (normalized === "healthy") return "complete";
-  if (normalized === "recovering") return "active";
-  if (normalized === "unhealthy") return "failed";
-  return "pending";
-}
-
-function AgentStartupTimeline({ milestones, formatTimestamp }) {
-  const rows = Array.isArray(milestones) ? milestones : [];
-  if (!rows.length) {
-    return (
-      <Box
-        sx={{
-          borderRadius: 2,
-          border: `1px dashed ${MAGIC_UI.panelBorder}`,
-          px: 1.4,
-          py: 1.2,
-          color: MAGIC_UI.textMuted,
-          fontSize: "0.84rem",
-        }}
-      >
-        Awaiting startup telemetry
-      </Box>
-    );
-  }
-  return (
-    <Box
-      sx={{
-        height: "100%",
-        "@keyframes agentHealthFlowPulse": {
-          "0%": { boxShadow: "0 0 0 0 rgba(125, 201, 255, 0.38)" },
-          "100%": { boxShadow: "0 0 0 10px rgba(125, 201, 255, 0)" },
-        },
-        "@keyframes agentHealthFlowSpin": {
-          "100%": { transform: "rotate(360deg)" },
-        },
-      }}
-    >
-      {rows.map((step, index) => {
-        const isLast = index === rows.length - 1;
-        const state = normalizeMilestoneState(step?.state);
-        const iconColor =
-          state === "complete"
-            ? MAGIC_UI.accentC
-            : state === "active"
-              ? MAGIC_UI.accentA
-              : state === "failed"
-                ? "#ff7b89"
-                : "rgba(148, 163, 184, 0.58)";
-        const labelColor = state === "pending" || state === "skipped" ? MAGIC_UI.textMuted : MAGIC_UI.textBright;
-        const detailColor = state === "failed" ? "#ff7b89" : state === "active" ? MAGIC_UI.accentA : MAGIC_UI.textMuted;
-        const connectorColor =
-          state === "complete"
-            ? "linear-gradient(180deg, rgba(52,211,153,0.9), rgba(52,211,153,0.16))"
-            : state === "active"
-              ? "linear-gradient(180deg, rgba(125,201,255,0.95), rgba(125,201,255,0.18))"
-              : state === "failed"
-                ? "linear-gradient(180deg, rgba(255,123,137,0.9), rgba(255,123,137,0.18))"
-                : "rgba(148,163,184,0.18)";
-        const showStepDetail = state === "active" || state === "failed";
-        const timestamp = step?.completed_at || step?.updated_at || step?.started_at || null;
-        return (
-          <Box key={step?.key || `${index}`} sx={{ display: "flex", alignItems: "stretch", gap: 1.25, width: "100%" }}>
-            <Box sx={{ width: 22, display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
-              <Tooltip title={timestamp ? formatTimestamp(timestamp) : ""} arrow placement="left">
-                <Box
-                  sx={{
-                    width: 20,
-                    height: 20,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: iconColor,
-                    borderRadius: "50%",
-                    ...(state === "active"
-                      ? { background: "rgba(125, 201, 255, 0.12)", animation: "agentHealthFlowPulse 1.8s ease-out infinite" }
-                      : null),
-                  }}
-                >
-                  {state === "complete" ? (
-                    <CheckCircleRoundedIcon sx={{ fontSize: 18 }} />
-                  ) : state === "active" ? (
-                    <AutorenewRoundedIcon sx={{ fontSize: 18, animation: "agentHealthFlowSpin 1.15s linear infinite" }} />
-                  ) : state === "failed" ? (
-                    <ErrorOutlineRoundedIcon sx={{ fontSize: 18 }} />
-                  ) : (
-                    <RadioButtonUncheckedRoundedIcon sx={{ fontSize: 18 }} />
-                  )}
-                </Box>
-              </Tooltip>
-              {!isLast ? (
-                <Box sx={{ mt: 0.4, mb: 0.2, width: 2, flexGrow: 1, minHeight: showStepDetail ? 24 : 16, borderRadius: 999, background: connectorColor }} />
-              ) : null}
-            </Box>
-            <Box sx={{ pt: 0.05, pb: isLast ? 0 : 0.75, minWidth: 0, textAlign: "left" }}>
-              <Typography sx={{ color: labelColor, fontSize: "0.88rem", fontWeight: state === "active" || state === "complete" ? 650 : 500 }}>
-                {String(step?.label || step?.key || `Step ${index + 1}`)}
-              </Typography>
-              {showStepDetail || step?.detail ? (
-                <Typography sx={{ mt: 0.2, color: detailColor, fontSize: "0.76rem", lineHeight: 1.35 }}>
-                  {String(step?.detail || "")}
-                </Typography>
-              ) : null}
-            </Box>
-          </Box>
-        );
-      })}
-    </Box>
-  );
-}
-
 export default function AgentHealthTab({
   agentRoleHealth,
   summaryDataReady = true,
@@ -581,7 +465,7 @@ export default function AgentHealthTab({
           sx={{ height: "100%", display: "flex", flexDirection: "column" }}
         >
           <Box sx={{ flex: 1, minHeight: 0 }}>
-            <AgentStartupTimeline milestones={milestones} formatTimestamp={formatTimestamp} />
+            <AgentStartupFlow milestones={milestones} formatTimestamp={formatTimestamp} />
           </Box>
         </Island>
         <Stack spacing={1.6} sx={{ minWidth: 0, height: "100%" }}>

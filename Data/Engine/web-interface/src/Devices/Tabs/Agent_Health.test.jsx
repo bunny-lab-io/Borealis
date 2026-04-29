@@ -4,6 +4,25 @@ import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import AgentHealthTab from "./Agent_Health.jsx";
 
+vi.mock("reactflow", () => ({
+  default: ({ nodes = [], edges = [], children }) => (
+    <div data-testid="startup-flow">
+      {nodes.map((node) => (
+        <div key={node.id}>{node.data?.label}</div>
+      ))}
+      {edges.map((edge) => (
+        <div key={edge.id} data-testid="startup-flow-edge">
+          {edge.source}-{edge.target}
+        </div>
+      ))}
+      {children}
+    </div>
+  ),
+  Background: () => <div data-testid="startup-flow-background" />,
+  Handle: () => null,
+  Position: { Top: "top", Bottom: "bottom" },
+}));
+
 vi.mock("ag-grid-react", () => ({
   AgGridReact: ({ rowData = [] }) => (
     <div data-testid="ag-grid">
@@ -22,7 +41,7 @@ afterEach(() => {
 });
 
 describe("AgentHealthTab", () => {
-  it("renders startup timeline telemetry and hides system heartbeat from role grids", () => {
+  it("renders startup flow telemetry and hides system heartbeat from role grids", () => {
     const milestones = [
       { key: "process_start", label: "Agent process started", state: "complete" },
       { key: "wireguard_online", label: "WireGuard tunnel online", state: "complete" },
@@ -60,6 +79,8 @@ describe("AgentHealthTab", () => {
     );
 
     expect(screen.getByText("Startup Timeline")).toBeInTheDocument();
+    expect(screen.getByTestId("startup-flow")).toBeInTheDocument();
+    expect(screen.getByText("Agent process started")).toBeInTheDocument();
     expect(screen.getByText("WireGuard tunnel online")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "WireGuard VPN" })).toBeInTheDocument();
     expect(screen.queryByText("Current Phase")).not.toBeInTheDocument();

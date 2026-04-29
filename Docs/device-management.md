@@ -41,8 +41,8 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ## Device Agent Health
 - Device Summary includes a right-anchored `Agent Health` tab separate from the normal left-side tab sequence.
-- The Agent Health tab shows a linked startup timeline with complete, active, failed, pending, and skipped states plus separate Roles and Services grids.
-- Startup timeline data comes from the agent SYSTEM heartbeat role and appears as `system:system_heartbeat`; normal role/service health rows remain separate.
+- The Agent Health tab shows a visual startup flow with complete, active, failed, pending, and skipped states plus separate Roles and Services grids.
+- Startup flow data comes from the agent SYSTEM heartbeat role and appears as `system:system_heartbeat`; normal role/service health rows remain separate.
 - The tab listens for `agent_status_changed` on `window.BorealisSocket` and silently refreshes current-device telemetry when the Engine commits a new status update.
 
 ## Device File Management
@@ -201,7 +201,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 ### Status computation
 - Online/offline is computed from `last_seen` (online if within ~300 seconds).
 - UI tables use the derived `status` field from the API payload.
-- Agent Health timeline status is not a replacement for online/offline. It explains startup progression, especially auth, Socket.IO, role loading, WireGuard, inventory, and steady-state milestones.
+- Agent Health startup flow status is not a replacement for online/offline. It explains startup progression, especially auth, Socket.IO, role loading, WireGuard, inventory, and steady-state milestones.
 
 ### Device identity and keys
 - Device identity is tied to GUID + SSL fingerprint + token version.
