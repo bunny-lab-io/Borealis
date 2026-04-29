@@ -255,7 +255,8 @@ function buildRetryableError(message, retryable = true) {
 
 const VNC_AUTO_RETRY_ATTEMPTS = 3;
 const VNC_AUTO_RETRY_DELAY_MS = 1500;
-const VNC_OPEN_TIMEOUT_MS = 12000;
+const VNC_OPEN_TIMEOUT_MS = 30000;
+const VNC_READY_STABILIZE_MS = 1800;
 const ALL_DISPLAYS_ID = "__all_displays__";
 const CONNECTION_FLOW_STEPS = Object.freeze([
   {
@@ -1071,6 +1072,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       );
 
       const tunnel = new Guacamole.WebSocketTunnel(wsUrl);
+      tunnel.receiveTimeout = Math.max(Number(tunnel.receiveTimeout || 0), VNC_OPEN_TIMEOUT_MS + 5000);
+      tunnel.unstableThreshold = Math.max(Number(tunnel.unstableThreshold || 0), 5000);
       const client = new Guacamole.Client(tunnel);
       client.__borealisViewer = "guacamole";
       const display = client.getDisplay();
@@ -1096,9 +1099,23 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
 
       return await new Promise((resolve, reject) => {
         let settled = false;
-        let connected = false;
+        let tunnelConnected = false;
+        let desktopReady = false;
+        let sawDesktopSync = false;
+        let stableTimerId = 0;
         const isStaleAttempt = () => connectToken && connectAttemptRef.current !== connectToken;
+        const clearStableTimer = () => {
+          if (stableTimerId) {
+            window.clearTimeout(stableTimerId);
+            stableTimerId = 0;
+          }
+        };
         const cleanup = () => {
+          clearStableTimer();
+          client.onsync = null;
+          if (display) {
+            display.onresize = null;
+          }
           keyboard.onkeydown = null;
           keyboard.onkeyup = null;
           mouse.onmousedown = null;
@@ -1108,7 +1125,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         const finishResolve = () => {
           if (settled) return;
           settled = true;
+          desktopReady = true;
           clearTimeout(timeoutId);
+          clearStableTimer();
+          syncFramebufferSize(client);
+          configureDisplaySurface(client, displayMode);
+          syncRenderedCanvasSize(client);
+          setSessionState("connected");
+          setVncStage("connected");
+          setStatusMessage("");
           resolve();
         };
         const finishReject = (error, retryable = true) => {
@@ -1119,6 +1144,23 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           const err = error instanceof Error ? error : new Error(String(error || "Guacamole session unavailable."));
           err.retryable = retryable;
           reject(err);
+        };
+        const armDesktopReady = () => {
+          if (settled || isStaleAttempt() || desktopReady || !sawDesktopSync) return;
+          const size = syncFramebufferSize(client);
+          if (!size.width || !size.height) return;
+          configureDisplaySurface(client, displayMode);
+          if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+            window.requestAnimationFrame(() => syncRenderedCanvasSize(client));
+          } else {
+            syncRenderedCanvasSize(client);
+          }
+          setSessionState("connecting");
+          setVncStage("handshaking");
+          setStatusMessage("Waiting for desktop video...");
+          if (!stableTimerId) {
+            stableTimerId = window.setTimeout(finishResolve, VNC_READY_STABILIZE_MS);
+          }
         };
 
         client.onerror = (status) => {
@@ -1139,7 +1181,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
             return;
           }
           if (state === Guacamole.Client.State.CONNECTED) {
-            connected = true;
+            tunnelConnected = true;
             syncFramebufferSize(client);
             configureDisplaySurface(client, displayMode);
             if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
@@ -1147,17 +1189,19 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
             } else {
               syncRenderedCanvasSize(client);
             }
-            setSessionState("connected");
-            setVncStage("connected");
-            setStatusMessage("");
-            finishResolve();
+            armDesktopReady();
           } else if (state === Guacamole.Client.State.DISCONNECTED) {
             cleanup();
             remoteClientRef.current = null;
-            if (!connected) {
+            if (!desktopReady) {
               setSessionState("connecting");
               setVncStage("retrying");
-              finishReject("Guacamole proxy disconnected before the desktop became available.", true);
+              finishReject(
+                tunnelConnected
+                  ? "Guacamole proxy disconnected before desktop video stabilized."
+                  : "Guacamole proxy disconnected before the desktop became available.",
+                true
+              );
               return;
             }
             const wasManual = manualDisconnectRef.current;
@@ -1175,6 +1219,17 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
             setVncStage("handshaking");
           }
         };
+        display.onresize = () => {
+          if (isStaleAttempt()) return;
+          syncFramebufferSize(client);
+          configureDisplaySurface(client, displayMode);
+          armDesktopReady();
+        };
+        client.onsync = () => {
+          if (isStaleAttempt()) return;
+          sawDesktopSync = true;
+          armDesktopReady();
+        };
         client.onclipboard = (stream, mimetype) => {
           if (!String(mimetype || "").startsWith("text/")) return;
           const reader = new Guacamole.StringReader(stream);
@@ -1190,7 +1245,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           };
         };
         const timeoutId = setTimeout(() => {
-          if (connected) return;
+          if (desktopReady) return;
           try {
             client.disconnect();
           } catch {

@@ -22,7 +22,9 @@ GUACAMOLE_WS_PATH = "/remote-desktop/vnc/guacamole"
 DEFAULT_GUACD_HOST = "127.0.0.1"
 DEFAULT_GUACD_PORT = 4822
 _GUACD_CONNECT_TIMEOUT_SECONDS = 3.0
-_GUACD_HANDSHAKE_TIMEOUT_SECONDS = 10.0
+_GUACD_HANDSHAKE_TIMEOUT_SECONDS = 5.0
+_GUACD_READY_ATTEMPTS = 7
+_GUACD_READY_RETRY_DELAY_SECONDS = 1.25
 
 
 @dataclass
@@ -233,6 +235,16 @@ async def _write_instruction(writer: Any, opcode: Any, *args: Any) -> None:
     await writer.drain()
 
 
+async def _close_writer(writer: Any) -> None:
+    if writer is None:
+        return
+    try:
+        writer.close()
+        await writer.wait_closed()
+    except Exception:
+        pass
+
+
 async def _handshake_guacd(
     *,
     reader: Any,
@@ -269,6 +281,50 @@ async def _handshake_guacd(
     return ready_args[0] if ready_args else uuid.uuid4().hex
 
 
+async def _open_ready_guacd(
+    *,
+    session: GuacamoleVncSession,
+    logger: logging.Logger,
+    guacd_host: str,
+    guacd_port: int,
+) -> Tuple[Any, Any, str]:
+    last_error: Optional[BaseException] = None
+    for attempt in range(1, _GUACD_READY_ATTEMPTS + 1):
+        reader: Any = None
+        writer: Any = None
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(guacd_host, int(guacd_port)),
+                timeout=_GUACD_CONNECT_TIMEOUT_SECONDS,
+            )
+            uuid_value = await _handshake_guacd(reader=reader, writer=writer, session=session)
+            if attempt > 1:
+                logger.info(
+                    "Guacamole VNC backend became ready after retry agent_id=%s session_id=%s attempt=%s",
+                    session.agent_id,
+                    session.session_id or "-",
+                    attempt,
+                )
+            return reader, writer, uuid_value
+        except Exception as exc:
+            last_error = exc
+            await _close_writer(writer)
+            if attempt >= _GUACD_READY_ATTEMPTS:
+                break
+            logger.warning(
+                "Guacamole VNC backend not ready agent_id=%s session_id=%s attempt=%s/%s error=%s",
+                session.agent_id,
+                session.session_id or "-",
+                attempt,
+                _GUACD_READY_ATTEMPTS,
+                str(exc)[:180],
+            )
+            await asyncio.sleep(_GUACD_READY_RETRY_DELAY_SECONDS)
+    if last_error is not None:
+        raise RuntimeError(str(last_error) or "guacd_unavailable") from last_error
+    raise RuntimeError("guacd_unavailable")
+
+
 async def proxy_guacamole_vnc_session(
     *,
     websocket: Any,
@@ -280,17 +336,23 @@ async def proxy_guacamole_vnc_session(
     reader: Any = None
     writer: Any = None
     try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(guacd_host, int(guacd_port)),
-            timeout=_GUACD_CONNECT_TIMEOUT_SECONDS,
+        reader, writer, uuid_value = await _open_ready_guacd(
+            session=session,
+            logger=logger,
+            guacd_host=guacd_host,
+            guacd_port=guacd_port,
         )
-        uuid_value = await _handshake_guacd(reader=reader, writer=writer, session=session)
         if callable(session.confirm_transport):
             try:
                 session.confirm_transport("vnc_backend_connect")
             except Exception:
                 logger.debug("Failed to confirm Guacamole VNC transport agent_id=%s", session.agent_id, exc_info=True)
         await websocket.send(encode_instruction("", uuid_value))
+        if callable(session.on_open):
+            try:
+                session.on_open()
+            except Exception:
+                logger.debug("Failed to notify Guacamole VNC session open agent_id=%s", session.agent_id, exc_info=True)
 
         async def _ws_to_guacd() -> None:
             async for message in websocket:
@@ -335,12 +397,7 @@ async def proxy_guacamole_vnc_session(
         for task in done:
             task.result()
     finally:
-        if writer is not None:
-            try:
-                writer.close()
-                await writer.wait_closed()
-            except Exception:
-                pass
+        await _close_writer(writer)
 
 
 __all__ = [

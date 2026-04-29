@@ -153,15 +153,6 @@ class VncProxyServer:
         )
         try:
             connection_id = self._register_active_connection(session, websocket)
-            if callable(session.on_open):
-                try:
-                    session.on_open()
-                except Exception:
-                    self.logger.debug(
-                        "Failed to notify Guacamole VNC session open agent_id=%s",
-                        session.agent_id,
-                        exc_info=True,
-                    )
             try:
                 await proxy_guacamole_vnc_session(
                     websocket=websocket,

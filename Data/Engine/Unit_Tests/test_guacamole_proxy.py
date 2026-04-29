@@ -7,12 +7,64 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+
+import pytest
+
+from Data.Engine.services.RemoteDesktop import guacamole_proxy
 from Data.Engine.services.RemoteDesktop.guacamole_proxy import (
     GuacamoleProtocolParser,
     GuacamoleVncSession,
     encode_instruction,
     guacamole_connect_arguments,
 )
+
+
+class _FakeReader:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = list(chunks)
+
+    async def read(self, _size: int) -> bytes:
+        if self.chunks:
+            return self.chunks.pop(0)
+        await asyncio.sleep(60)
+        return b""
+
+
+class _FakeWriter:
+    def __init__(self) -> None:
+        self.writes: list[bytes] = []
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.writes.append(data)
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        return None
+
+
+class _FakeWebSocket:
+    def __init__(self, messages: list[str]) -> None:
+        self.messages = list(messages)
+        self.sent: list[str] = []
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> str:
+        if self.messages:
+            return self.messages.pop(0)
+        raise StopAsyncIteration
+
+    async def send(self, message: str) -> None:
+        self.sent.append(message)
 
 
 def test_guacamole_instruction_parser_handles_split_frames() -> None:
@@ -59,3 +111,51 @@ def test_guacamole_connect_arguments_are_server_side_only() -> None:
     )
 
     assert values == ["10.255.0.4", "5900", "secretpw", "", "", "true", "24", "3", ""]
+
+
+def test_guacamole_proxy_retries_until_backend_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    first_reader = _FakeReader([encode_instruction("error", "Authentication failed.").encode("utf-8")])
+    second_reader = _FakeReader(
+        [
+            encode_instruction("args", "hostname", "port", "password").encode("utf-8"),
+            encode_instruction("ready", "uuid-1").encode("utf-8"),
+        ]
+    )
+    writers: list[_FakeWriter] = []
+    readers = [first_reader, second_reader]
+
+    async def _fake_open_connection(_host: str, _port: int):
+        writer = _FakeWriter()
+        writers.append(writer)
+        return readers[len(writers) - 1], writer
+
+    monkeypatch.setattr(guacamole_proxy.asyncio, "open_connection", _fake_open_connection)
+    monkeypatch.setattr(guacamole_proxy, "_GUACD_READY_RETRY_DELAY_SECONDS", 0)
+    opened: list[bool] = []
+    session = GuacamoleVncSession(
+        token="token",
+        agent_id="agent-1",
+        host="10.255.0.4",
+        port=5900,
+        password="secretpw",
+        created_at=0,
+        expires_at=120,
+        session_id="session-1",
+        on_open=lambda: opened.append(True),
+    )
+    websocket = _FakeWebSocket([encode_instruction("disconnect")])
+
+    asyncio.run(
+        guacamole_proxy.proxy_guacamole_vnc_session(
+            websocket=websocket,
+            session=session,
+            logger=logging.getLogger("test.guacamole.proxy"),
+            guacd_host="127.0.0.1",
+            guacd_port=4822,
+        )
+    )
+
+    assert len(writers) == 2
+    assert writers[0].closed is True
+    assert websocket.sent[0] == encode_instruction("", "uuid-1")
+    assert opened == [True]
