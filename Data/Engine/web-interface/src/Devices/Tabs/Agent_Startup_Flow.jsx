@@ -1,5 +1,5 @@
-import React, { useMemo } from "react";
-import { Box, GlobalStyles, Tooltip, Typography } from "@mui/material";
+import React, { useCallback, useMemo } from "react";
+import { Box, Button, GlobalStyles, Tooltip, Typography } from "@mui/material";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import RadioButtonUncheckedRoundedIcon from "@mui/icons-material/RadioButtonUncheckedRounded";
 import ErrorOutlineRoundedIcon from "@mui/icons-material/ErrorOutlineRounded";
@@ -18,32 +18,26 @@ const HIDDEN_HANDLE_STYLE = {
   pointerEvents: "none",
 };
 
-const STARTUP_FLOW_NODE_WIDTH = 196;
+const STARTUP_FLOW_NODE_WIDTH = 256;
+const RUNTIME_FLOW_NODE_WIDTH = 256;
+const RUNTIME_FLOW_COLUMNS = Object.freeze([70, 382, 694, 1006]);
+const RUNTIME_FLOW_START_Y = 640;
+const RUNTIME_FLOW_ROW_GAP = 106;
 
 const STARTUP_FLOW_DEFINITIONS = Object.freeze([
-  { id: "process_start", label: "Agent process started", milestoneKeys: ["process_start"], x: 430, y: 0 },
-  { id: "server_config_loaded", label: "Server configuration loaded", milestoneKeys: ["server_config_loaded"], x: 170, y: 108 },
-  { id: "identity_loaded", label: "Device identity loaded", milestoneKeys: ["identity_loaded"], x: 690, y: 108 },
-  { id: "engine_authentication", label: "Engine authentication", milestoneKeys: ["authenticating", "authenticated"], x: 430, y: 246 },
-  { id: "status_channel_online", label: "Status channel online", milestoneKeys: ["status_channel_online"], x: 80, y: 410 },
-  { id: "engine_socket", label: "Engine socket", milestoneKeys: ["socket_connecting", "socket_connected"], x: 430, y: 410 },
-  { id: "agent_role_loading", label: "Agent role loading", milestoneKeys: ["roles_loading", "roles_ready"], x: 780, y: 410 },
-  { id: "helper_broker_ready", label: "Current-user broker ready", milestoneKeys: ["helper_broker_ready"], x: 520, y: 570 },
-  { id: "inventory_ready", label: "Inventory telemetry ready", milestoneKeys: ["inventory_ready"], x: 760, y: 570 },
-  { id: "wireguard_tunnel", label: "WireGuard tunnel", milestoneKeys: ["wireguard_starting", "wireguard_online"], x: 1000, y: 570 },
-  { id: "steady_state_online", label: "Agent steady state online", milestoneKeys: ["steady_state_online"], x: 430, y: 760 },
+  { id: "process_start", label: "Agent process started", milestoneKeys: ["process_start"], x: 522, y: 0 },
+  { id: "server_config_loaded", label: "Server configuration loaded", milestoneKeys: ["server_config_loaded"], x: 200, y: 122 },
+  { id: "identity_loaded", label: "Device identity loaded", milestoneKeys: ["identity_loaded"], x: 844, y: 122 },
+  { id: "engine_authentication", label: "Engine authentication", milestoneKeys: ["authenticating", "authenticated"], x: 522, y: 270 },
+  { id: "status_channel_online", label: "Status channel online", milestoneKeys: ["status_channel_online"], x: 120, y: 455 },
+  { id: "agent_role_loading", label: "Agent role loading", milestoneKeys: ["roles_loading", "roles_ready"], x: 522, y: 455 },
+  { id: "engine_socket", label: "Engine socket", milestoneKeys: ["socket_connecting", "socket_connected"], x: 924, y: 455 },
 ]);
 
 const STARTUP_FLOW_JUNCTIONS = Object.freeze([
-  { id: "identity_join", x: 519, y: 210, sources: ["server_config_loaded", "identity_loaded"] },
-  { id: "runtime_split", x: 519, y: 372, sources: ["engine_authentication"] },
-  { id: "roles_split", x: 869, y: 528, sources: ["agent_role_loading"] },
-  {
-    id: "steady_join",
-    x: 519,
-    y: 720,
-    sources: ["status_channel_online", "engine_socket", "helper_broker_ready", "inventory_ready", "wireguard_tunnel"],
-  },
+  { id: "identity_join", x: 641, y: 228, sources: ["server_config_loaded", "identity_loaded"] },
+  { id: "runtime_split", x: 641, y: 406, sources: ["engine_authentication"] },
+  { id: "runtime_health_split", x: 641, y: 588, sources: ["agent_role_loading"] },
 ]);
 
 const STARTUP_FLOW_EDGES = Object.freeze([
@@ -54,18 +48,9 @@ const STARTUP_FLOW_EDGES = Object.freeze([
   ["identity_join", "engine_authentication"],
   ["engine_authentication", "runtime_split"],
   ["runtime_split", "status_channel_online"],
-  ["runtime_split", "engine_socket"],
   ["runtime_split", "agent_role_loading"],
-  ["agent_role_loading", "roles_split"],
-  ["roles_split", "helper_broker_ready"],
-  ["roles_split", "inventory_ready"],
-  ["roles_split", "wireguard_tunnel"],
-  ["status_channel_online", "steady_join"],
-  ["engine_socket", "steady_join"],
-  ["helper_broker_ready", "steady_join"],
-  ["inventory_ready", "steady_join"],
-  ["wireguard_tunnel", "steady_join"],
-  ["steady_join", "steady_state_online"],
+  ["runtime_split", "engine_socket"],
+  ["agent_role_loading", "runtime_health_split"],
 ]);
 
 const STARTUP_STATE_META = Object.freeze({
@@ -82,6 +67,16 @@ const EDGE_STYLE_BY_STATE = Object.freeze({
   failed: { stroke: "#ff7b89", strokeWidth: 2.5, strokeDasharray: "6 3" },
   pending: { stroke: "rgba(148, 163, 184, 0.34)", strokeWidth: 1.8, strokeDasharray: "6 5" },
   skipped: { stroke: "rgba(176, 184, 200, 0.36)", strokeWidth: 1.8, strokeDasharray: "5 6" },
+});
+
+const RUNTIME_STATUS_COLOR_BY_CODE = Object.freeze({
+  healthy: MAGIC_UI.accentC,
+  loaded: MAGIC_UI.accentC,
+  recovering: "#ffb347",
+  pending: MAGIC_UI.accentA,
+  unhealthy: "#ff7b89",
+  unsupported: "rgba(176, 184, 200, 0.74)",
+  unknown: "rgba(176, 184, 200, 0.74)",
 });
 
 export function normalizeMilestoneState(value) {
@@ -115,6 +110,24 @@ function deriveJunctionState(sourceIds, stateByKey) {
   if (states.some((state) => state === "active")) return "active";
   if (states.length && states.every((state) => state === "complete" || state === "skipped")) return "complete";
   return "pending";
+}
+
+function normalizeRuntimeHealthState(statusCode) {
+  const normalized = String(statusCode || "").trim().toLowerCase();
+  if (normalized === "healthy" || normalized === "loaded") return "complete";
+  if (normalized === "recovering" || normalized === "pending") return "active";
+  if (normalized === "unhealthy") return "failed";
+  if (normalized === "unsupported") return "skipped";
+  return "pending";
+}
+
+function getRuntimeStatusColor(statusCode) {
+  const normalized = String(statusCode || "").trim().toLowerCase();
+  return RUNTIME_STATUS_COLOR_BY_CODE[normalized] || RUNTIME_STATUS_COLOR_BY_CODE.unknown;
+}
+
+function buildRuntimeNodeId(entry, index) {
+  return `runtime_health_${index}_${String(entry?.id || entry?.name || "node").replace(/[^a-zA-Z0-9_-]+/g, "_")}`;
 }
 
 function resolveGroupedMilestones(definition, milestoneByKey) {
@@ -237,9 +250,91 @@ function AgentStartupFlowJunction({ data }) {
   );
 }
 
-const STARTUP_FLOW_NODE_TYPES = Object.freeze({ startupMilestone: AgentStartupFlowNode, flowJunction: AgentStartupFlowJunction });
+function AgentRuntimeHealthNode({ data }) {
+  const state = normalizeRuntimeHealthState(data?.entry?.statusCode);
+  const color = getRuntimeStatusColor(data?.entry?.statusCode);
+  const meta = STARTUP_STATE_META[state] || STARTUP_STATE_META.pending;
+  const Icon = meta.Icon;
+  const status = String(data?.entry?.status || "Unknown").trim();
+  const checked = String(data?.entry?.lastCheckedText || "").trim();
+  return (
+    <Button
+      type="button"
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof data?.onOpen === "function") data.onOpen(data.entry);
+      }}
+      sx={{
+        width: RUNTIME_FLOW_NODE_WIDTH,
+        minHeight: 76,
+        px: 1.15,
+        py: 0.9,
+        borderRadius: 2,
+        border: `1px solid ${color}`,
+        background: `linear-gradient(145deg, rgba(7,11,24,0.96), ${color}18)`,
+        boxShadow: "0 14px 32px rgba(2,6,23,0.48)",
+        color: MAGIC_UI.textBright,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "flex-start",
+        gap: 1,
+        textAlign: "left",
+        textTransform: "none",
+        overflow: "hidden",
+        cursor: "pointer",
+        "&:hover": {
+          background: `linear-gradient(145deg, rgba(10,17,33,0.98), ${color}24)`,
+          boxShadow: `0 0 0 1px ${color}44, 0 18px 38px rgba(2,6,23,0.55)`,
+        },
+      }}
+    >
+      <Handle type="target" position={Position.Top} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
+      <Handle type="source" position={Position.Bottom} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
+      <Box
+        sx={{
+          width: 24,
+          height: 24,
+          borderRadius: "50%",
+          flexShrink: 0,
+          color,
+          background: `${color}18`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Icon
+          sx={{
+            fontSize: 18,
+            animation: state === "active" ? "agentStartupFlowSpin 1.15s linear infinite" : "none",
+          }}
+        />
+      </Box>
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.78rem", fontWeight: 740, lineHeight: 1.2 }} noWrap>
+          {data?.label || "Runtime check"}
+        </Typography>
+        <Typography sx={{ mt: 0.2, color, fontSize: "0.7rem", fontWeight: 680, lineHeight: 1.2 }} noWrap>
+          {status}
+        </Typography>
+        {checked ? (
+          <Typography sx={{ mt: 0.15, color: MAGIC_UI.textMuted, fontSize: "0.66rem", lineHeight: 1.2 }} noWrap>
+            {checked}
+          </Typography>
+        ) : null}
+      </Box>
+    </Button>
+  );
+}
 
-function useStartupFlowElements(milestones, formatTimestamp) {
+const STARTUP_FLOW_NODE_TYPES = Object.freeze({
+  startupMilestone: AgentStartupFlowNode,
+  flowJunction: AgentStartupFlowJunction,
+  runtimeHealth: AgentRuntimeHealthNode,
+});
+
+function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRuntimeNodeOpen) {
   return useMemo(() => {
     const milestoneByKey = buildMilestoneLookup(milestones);
     const stateByKey = {};
@@ -275,8 +370,88 @@ function useStartupFlowElements(milestones, formatTimestamp) {
         selectable: false,
       };
     });
-    const nodes = [...milestoneNodes, ...junctionNodes];
-    const edges = STARTUP_FLOW_EDGES.map(([source, target]) => {
+    const runtimeNodes = (Array.isArray(runtimeRows) ? runtimeRows : []).map((entry, index) => {
+      const columnIndex = index % RUNTIME_FLOW_COLUMNS.length;
+      const rowIndex = Math.floor(index / RUNTIME_FLOW_COLUMNS.length);
+      const id = buildRuntimeNodeId(entry, index);
+      const state = normalizeRuntimeHealthState(entry?.statusCode);
+      stateByKey[id] = state;
+      return {
+        id,
+        type: "runtimeHealth",
+        position: { x: RUNTIME_FLOW_COLUMNS[columnIndex], y: RUNTIME_FLOW_START_Y + rowIndex * RUNTIME_FLOW_ROW_GAP },
+        data: {
+          label: entry?.name || `Runtime ${index + 1}`,
+          entry,
+          onOpen: onRuntimeNodeOpen,
+        },
+        draggable: false,
+        selectable: false,
+      };
+    });
+    const runtimeNodeIds = runtimeNodes.map((node) => node.id);
+    const runtimeJoinY = RUNTIME_FLOW_START_Y + Math.max(1, Math.ceil(runtimeNodes.length / RUNTIME_FLOW_COLUMNS.length)) * RUNTIME_FLOW_ROW_GAP;
+    const steadyJoinY = runtimeJoinY + 84;
+    const steadyStateY = steadyJoinY + 78;
+    const runtimeJoinSources = runtimeNodeIds.length ? runtimeNodeIds : ["runtime_health_split"];
+    const runtimeHealthJoinState = deriveJunctionState(runtimeJoinSources, stateByKey);
+    stateByKey.runtime_health_join = runtimeHealthJoinState;
+    const steadyJoinState = deriveJunctionState(["status_channel_online", "engine_socket", "runtime_health_join"], stateByKey);
+    stateByKey.steady_join = steadyJoinState;
+    const dynamicJunctions = [
+      {
+        id: "runtime_health_join",
+        type: "flowJunction",
+        position: { x: 641, y: runtimeJoinY },
+        data: { state: runtimeHealthJoinState },
+        draggable: false,
+        selectable: false,
+      },
+      {
+        id: "steady_join",
+        type: "flowJunction",
+        position: { x: 641, y: steadyJoinY },
+        data: { state: steadyJoinState },
+        draggable: false,
+        selectable: false,
+      },
+    ];
+    const steadyStateMilestone = milestoneByKey.steady_state_online || {};
+    const steadyStateState = normalizeMilestoneState(steadyStateMilestone?.state);
+    stateByKey.steady_state_online = steadyStateState;
+    const steadyStateNode = {
+      id: "steady_state_online",
+      type: "startupMilestone",
+      position: { x: 522, y: steadyStateY },
+      data: {
+        id: "steady_state_online",
+        label: "Agent steady state online",
+        detail: steadyStateMilestone?.detail || STARTUP_STATE_META[steadyStateState]?.label || "",
+        state: steadyStateState,
+        timestampText:
+          steadyStateMilestone?.completed_at || steadyStateMilestone?.updated_at || steadyStateMilestone?.started_at
+            ? formatTimestamp(steadyStateMilestone.completed_at || steadyStateMilestone.updated_at || steadyStateMilestone.started_at)
+            : "",
+      },
+      draggable: false,
+      selectable: false,
+    };
+    const runtimeEdges = runtimeNodeIds.length
+      ? runtimeNodeIds.flatMap((runtimeNodeId) => [
+          ["runtime_health_split", runtimeNodeId],
+          [runtimeNodeId, "runtime_health_join"],
+        ])
+      : [["runtime_health_split", "runtime_health_join"]];
+    const allEdges = [
+      ...STARTUP_FLOW_EDGES,
+      ...runtimeEdges,
+      ["status_channel_online", "steady_join"],
+      ["engine_socket", "steady_join"],
+      ["runtime_health_join", "steady_join"],
+      ["steady_join", "steady_state_online"],
+    ];
+    const nodes = [...milestoneNodes, ...junctionNodes, ...runtimeNodes, ...dynamicJunctions, steadyStateNode];
+    const edges = allEdges.map(([source, target]) => {
       const edgeState = getEdgeState(stateByKey[source], stateByKey[target]);
       return {
         id: `${source}-${target}`,
@@ -289,12 +464,66 @@ function useStartupFlowElements(milestones, formatTimestamp) {
       };
     });
     return { nodes, edges };
-  }, [formatTimestamp, milestones]);
+  }, [formatTimestamp, milestones, onRuntimeNodeOpen, runtimeRows]);
 }
 
-export default function AgentStartupFlow({ milestones, formatTimestamp = (value) => String(value || "") }) {
+function copyTextToClipboard(text) {
+  const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : null;
+  if (clipboard && typeof clipboard.writeText === "function") {
+    clipboard.writeText(text).catch(() => {});
+  }
+}
+
+function buildNodeCopyPayload(node) {
+  return JSON.stringify(
+    {
+      id: node?.id || "",
+      type: node?.type || "",
+      label: node?.data?.label || node?.data?.entry?.name || "",
+      x: Math.round(Number(node?.position?.x || 0)),
+      y: Math.round(Number(node?.position?.y || 0)),
+    },
+    null,
+    2
+  );
+}
+
+export default function AgentStartupFlow({
+  milestones,
+  runtimeRows = [],
+  formatTimestamp = (value) => String(value || ""),
+  onRuntimeNodeOpen = null,
+}) {
   const rows = Array.isArray(milestones) ? milestones : [];
-  const { nodes, edges } = useStartupFlowElements(rows, formatTimestamp);
+  const { nodes, edges } = useStartupFlowElements(rows, runtimeRows, formatTimestamp, onRuntimeNodeOpen);
+  const handleNodeClick = useCallback((_, node) => {
+    if (node?.type === "runtimeHealth" && typeof node?.data?.onOpen === "function") {
+      node.data.onOpen(node.data.entry);
+    }
+  }, []);
+  const handleNodeContextMenu = useCallback((event, node) => {
+    event.preventDefault();
+    copyTextToClipboard(buildNodeCopyPayload(node));
+  }, []);
+  const handlePaneContextMenu = useCallback(
+    (event) => {
+      event.preventDefault();
+      copyTextToClipboard(
+        JSON.stringify(
+          nodes.map((node) => ({
+            id: node.id,
+            type: node.type,
+            label: node.data?.label || node.data?.entry?.name || "",
+            x: Math.round(Number(node.position?.x || 0)),
+            y: Math.round(Number(node.position?.y || 0)),
+          })),
+          null,
+          2
+        )
+      );
+    },
+    [nodes]
+  );
   if (!rows.length) {
     return (
       <Box
@@ -321,9 +550,9 @@ export default function AgentStartupFlow({ milestones, formatTimestamp = (value)
         overflow: "hidden",
         borderRadius: 2,
         background: "rgba(3,7,18,0.28)",
-        "@keyframes agentStartupFlowSpin": {
-          "100%": { transform: "rotate(360deg)" },
-        },
+          "@keyframes agentStartupFlowSpin": {
+            "100%": { transform: "rotate(360deg)" },
+          },
       }}
     >
       <GlobalStyles
@@ -361,6 +590,9 @@ export default function AgentStartupFlow({ milestones, formatTimestamp = (value)
         zoomOnDoubleClick={false}
         preventScrolling={false}
         selectionOnDrag={false}
+        onNodeClick={handleNodeClick}
+        onNodeContextMenu={handleNodeContextMenu}
+        onPaneContextMenu={handlePaneContextMenu}
         proOptions={{ hideAttribution: true }}
         style={{ background: "transparent" }}
       >

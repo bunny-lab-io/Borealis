@@ -7,9 +7,15 @@ import AgentHealthTab from "./Agent_Health.jsx";
 vi.mock("reactflow", () => ({
   default: ({ nodes = [], edges = [], children }) => (
     <div data-testid="startup-flow">
-      {nodes.map((node) => (
-        <div key={node.id}>{node.data?.label}</div>
-      ))}
+      {nodes.map((node) =>
+        node.type === "runtimeHealth" ? (
+          <button key={node.id} type="button">
+            {node.data?.label}
+          </button>
+        ) : (
+          <div key={node.id}>{node.data?.label}</div>
+        )
+      )}
       {edges.map((edge) => (
         <div key={edge.id} data-testid="startup-flow-edge">
           {edge.source}-{edge.target}
@@ -72,8 +78,7 @@ describe("AgentHealthTab", () => {
     expect(screen.getByTestId("startup-flow")).toBeInTheDocument();
     expect(screen.getByText("Agent process started")).toBeInTheDocument();
     expect(screen.getByText("Engine authentication")).toBeInTheDocument();
-    expect(screen.getByText("WireGuard tunnel")).toBeInTheDocument();
-    expect(screen.getByText("Runtime Health")).toBeInTheDocument();
+    expect(screen.getByText("Agent role loading")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /WireGuard VPN/i })).toBeInTheDocument();
     expect(screen.queryByText("Current Phase")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Startup Timeline" })).not.toBeInTheDocument();

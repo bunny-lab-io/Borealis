@@ -41,7 +41,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ## Device Agent Health
 - Device Summary includes a right-anchored `Agent Health` tab separate from the normal left-side tab sequence.
-- The Agent Health tab shows a visual startup flow with complete, active, failed, pending, and skipped states plus clickable runtime-health nodes for roles and services.
+- The Agent Health tab shows a visual startup flow with complete, active, failed, pending, and skipped states plus clickable role/service runtime-health nodes inside the flow graph.
 - Startup flow data comes from the agent SYSTEM heartbeat role and appears as `system:system_heartbeat`; normal role/service health rows remain separate.
 - The tab listens for `agent_status_changed` on `window.BorealisSocket` and silently refreshes current-device telemetry when the Engine commits a new status update.
 
