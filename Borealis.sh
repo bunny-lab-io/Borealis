@@ -1499,6 +1499,24 @@ GUACAMOLE_PREFIX="${GUACAMOLE_ROOT}/install"
 GUACD_HOST="${BOREALIS_GUACD_HOST:-127.0.0.1}"
 GUACD_PORT="${BOREALIS_GUACD_PORT:-4822}"
 
+guacamole_dependency_hint() {
+  detect_distro
+  case "$DISTRO_ID" in
+    ubuntu|debian|linuxmint|pop)
+      echo "apt install -y build-essential autoconf automake libtool pkg-config libcairo2-dev libjpeg-turbo8-dev libpng-dev uuid-dev libvncserver-dev libssl-dev libwebp-dev libgcrypt20-dev"
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      echo "dnf install -y gcc gcc-c++ make autoconf automake libtool pkgconfig cairo-devel libjpeg-turbo-devel libpng-devel libuuid-devel libvncserver-devel openssl-devel libwebp-devel libgcrypt-devel"
+      ;;
+    arch)
+      echo "pacman -Sy --noconfirm base-devel autoconf automake libtool pkgconf cairo libjpeg-turbo libpng util-linux-libs libvncserver openssl libwebp libgcrypt"
+      ;;
+    *)
+      echo "install Guacamole server build tools plus LibVNCServer/LibVNCClient development headers"
+      ;;
+  esac
+}
+
 install_node_portable() {
   if [[ -x "$NPM_BIN" ]]; then return 0; fi
   mkdir -p "$NODE_DIR"
@@ -1649,7 +1667,7 @@ install_guacamole_source_build() {
   verify_sha256_file "${client_path}" "${client_sha}" || return 1
 
   install_guacamole_build_dependencies_best_effort || {
-    ui_warn "Apache Guacamole build dependencies missing. Install libvncserver/libvncclient development packages and rerun Borealis.sh."
+    ui_warn "Apache Guacamole build dependencies missing. Install with: $(guacamole_dependency_hint)"
     return 1
   }
 
@@ -2984,6 +3002,12 @@ EOF
 }
 
 print_guacd_service_status() {
+  local guacd_bin
+  guacd_bin="$(resolve_guacd_binary)"
+  if [[ -z "${guacd_bin}" || ! -x "${guacd_bin}" ]]; then
+    ui_warn "Apache Guacamole: unavailable (guacd not installed; noVNC remains available)"
+    return 0
+  fi
   local unit_name="borealis-guacd.service"
   print_systemd_unit_summary "${unit_name}" "Apache Guacamole"
 }
@@ -3141,6 +3165,12 @@ ensure_engine_service_runner() {
   elif command_exists npm; then
     npm_cmd="$(command -v npm)"
   fi
+  local guacamole_enabled_default=0
+  local guacd_bin
+  guacd_bin="$(resolve_guacd_binary)"
+  if [[ -n "${guacd_bin}" && -x "${guacd_bin}" ]]; then
+    guacamole_enabled_default=1
+  fi
 
   mkdir -p "$(dirname "${runner_path}")"
   cat > "${runner_path}" <<EOF
@@ -3165,7 +3195,7 @@ cd "\${ENGINE_DIR}"
 
 export BOREALIS_PROJECT_ROOT="\${PROJECT_ROOT}"
 export BOREALIS_ENGINE_MODE="\${MODE}"
-export BOREALIS_GUACAMOLE_ENABLED="\${BOREALIS_GUACAMOLE_ENABLED:-1}"
+export BOREALIS_GUACAMOLE_ENABLED="\${BOREALIS_GUACAMOLE_ENABLED:-${guacamole_enabled_default}}"
 export BOREALIS_GUACD_HOST="\${BOREALIS_GUACD_HOST:-${GUACD_HOST}}"
 export BOREALIS_GUACD_PORT="\${BOREALIS_GUACD_PORT:-${GUACD_PORT}}"
 export BOREALIS_GUACAMOLE_VNC_WS_PATH="\${BOREALIS_GUACAMOLE_VNC_WS_PATH:-/remote-desktop/vnc/guacamole}"
@@ -3235,12 +3265,18 @@ ensure_engine_systemd_service() {
     write_engine_log "Engine systemd unit generation failed: runner script missing."
     return 1
   }
+  local guacd_unit_dependency=""
+  local guacd_bin
+  guacd_bin="$(resolve_guacd_binary)"
+  if [[ -n "${guacd_bin}" && -x "${guacd_bin}" ]]; then
+    guacd_unit_dependency=" borealis-guacd.service"
+  fi
 
   cat > "${tmp_unit}" <<EOF
 [Unit]
 Description=Borealis Engine Service
-After=network-online.target ${pg_service}.service borealis-traefik.service borealis-guacd.service
-Wants=network-online.target ${pg_service}.service borealis-traefik.service borealis-guacd.service
+After=network-online.target ${pg_service}.service borealis-traefik.service${guacd_unit_dependency}
+Wants=network-online.target ${pg_service}.service borealis-traefik.service${guacd_unit_dependency}
 
 [Service]
 Type=simple
