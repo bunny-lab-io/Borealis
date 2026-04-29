@@ -59,7 +59,7 @@ COMPLETION_PREDECESSORS = {
     "socket_connected": ("socket_connecting", "authenticated", "authenticating"),
     "roles_ready": ("roles_loading",),
     "wireguard_online": ("wireguard_starting",),
-    "steady_state_online": ("status_channel_online",),
+    "steady_state_online": ("inventory_ready", "status_channel_online"),
 }
 
 

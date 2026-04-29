@@ -59,6 +59,7 @@ def test_heartbeat_successors_close_active_predecessors() -> None:
     controller.complete("roles_ready", "SYSTEM roles loaded.")
     controller.record("wireguard_starting", "active", "Ensuring tunnel.")
     controller.complete("wireguard_online", "WireGuard tunnel is online.")
+    controller.complete("steady_state_online", "Heartbeat accepted by Engine.")
 
     states = {item["key"]: item["state"] for item in controller.payload()["milestones"]}
     assert states["authenticating"] == "complete"
@@ -66,7 +67,8 @@ def test_heartbeat_successors_close_active_predecessors() -> None:
     assert states["socket_connecting"] == "complete"
     assert states["roles_loading"] == "complete"
     assert states["wireguard_starting"] == "complete"
-    assert controller.payload()["status"] == "recovering"
+    assert states["inventory_ready"] == "complete"
+    assert controller.payload()["status"] == "healthy"
     assert controller.payload()["last_error"] is None
 
 
