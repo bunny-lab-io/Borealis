@@ -198,22 +198,54 @@ def guacamole_connect_arguments(session: GuacamoleVncSession, names: List[str]) 
     return resolved
 
 
+def _split_guacamole_instruction_strings(raw_text: str) -> Optional[List[Tuple[str, str, List[str]]]]:
+    position = 0
+    instruction_start = 0
+    elements: List[str] = []
+    instructions: List[Tuple[str, str, List[str]]] = []
+    while position < len(raw_text):
+        dot_index = raw_text.find(".", position)
+        if dot_index < 0:
+            return None
+        length_text = raw_text[position:dot_index]
+        if not length_text.isdigit():
+            raise ValueError("invalid_guacamole_element_length")
+        element_length = int(length_text)
+        value_start = dot_index + 1
+        value_end = value_start + element_length
+        if len(raw_text) <= value_end:
+            return None
+        value = raw_text[value_start:value_end]
+        delimiter = raw_text[value_end]
+        if delimiter not in {",", ";"}:
+            raise ValueError("invalid_guacamole_element_delimiter")
+        position = value_end + 1
+        elements.append(value)
+        if delimiter == ";":
+            if elements:
+                instructions.append((raw_text[instruction_start:position], elements[0], elements[1:]))
+            elements = []
+            instruction_start = position
+    if elements:
+        return None
+    return instructions
+
+
 def _filter_client_payload_for_guacd(raw_text: str) -> Tuple[str, List[List[str]], bool]:
-    parser = GuacamoleProtocolParser()
-    instructions = parser.feed(raw_text)
-    if parser._buffer or parser._elements:
+    instructions = _split_guacamole_instruction_strings(raw_text)
+    if instructions is None:
         return raw_text, [], False
 
     forwarded: List[str] = []
     ping_args: List[List[str]] = []
     disconnect = False
-    for opcode, args in instructions:
+    for raw_instruction, opcode, args in instructions:
         if opcode == "" and args and args[0] == "ping":
             ping_args.append(args)
             continue
         if opcode == "disconnect":
             disconnect = True
-        forwarded.append(encode_instruction(opcode, *args))
+        forwarded.append(raw_instruction)
     return "".join(forwarded), ping_args, disconnect
 
 
