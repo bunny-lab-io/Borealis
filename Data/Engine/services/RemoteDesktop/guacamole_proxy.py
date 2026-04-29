@@ -182,7 +182,7 @@ def guacamole_connect_arguments(session: GuacamoleVncSession, names: List[str]) 
         "swap-red-blue": "",
         "cursor": "remote",
         "clipboard-encoding": "UTF-8",
-        "autoretry": "true",
+        "autoretry": "3",
         "resize-method": "display-update",
     }
     return [values.get(str(name or ""), "") for name in names]

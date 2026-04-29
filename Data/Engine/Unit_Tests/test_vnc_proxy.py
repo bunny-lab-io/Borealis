@@ -190,3 +190,25 @@ def test_guacamole_registry_consumes_tokens_once() -> None:
 
     assert registry.consume(session.token) is not None
     assert registry.consume(session.token) is None
+
+
+def test_vnc_proxy_accepts_guacamole_websocket_subprotocol(monkeypatch) -> None:
+    proxy = _build_proxy()
+    captured: dict[str, object] = {}
+
+    class _FakeServer:
+        async def wait_closed(self) -> None:
+            return None
+
+    async def _fake_serve(handler, host: str, port: int, **kwargs):
+        captured["handler"] = handler
+        captured["host"] = host
+        captured["port"] = port
+        captured.update(kwargs)
+        return _FakeServer()
+
+    monkeypatch.setattr(vnc_proxy.websockets, "serve", _fake_serve)
+
+    asyncio.run(proxy._serve())
+
+    assert captured["subprotocols"] == [vnc_proxy.GUACAMOLE_WEBSOCKET_SUBPROTOCOL]

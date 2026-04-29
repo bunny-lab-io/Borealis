@@ -29,6 +29,7 @@ from .guacamole_proxy import (
 )
 
 VNC_WS_PATH = "/remote-desktop/vnc"
+GUACAMOLE_WEBSOCKET_SUBPROTOCOL = "guacamole"
 _MAX_MESSAGE_SIZE = 100_000_000
 _CONNECT_WAIT_WINDOW_SECONDS = 20.0
 _CONNECT_TIMEOUT_SECONDS = 1.0
@@ -212,6 +213,7 @@ class VncProxyServer:
                 max_size=_MAX_MESSAGE_SIZE,
                 ping_interval=20,
                 ping_timeout=20,
+                subprotocols=[GUACAMOLE_WEBSOCKET_SUBPROTOCOL],
             )
         except Exception:
             self._failed.set()
