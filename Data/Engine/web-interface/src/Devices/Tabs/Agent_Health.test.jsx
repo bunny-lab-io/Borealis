@@ -26,7 +26,8 @@ vi.mock("reactflow", () => ({
   ),
   Background: () => <div data-testid="startup-flow-background" />,
   Handle: () => null,
-  Position: { Top: "top", Bottom: "bottom" },
+  Position: { Top: "top", Bottom: "bottom", Left: "left", Right: "right" },
+  applyNodeChanges: (_changes, nodes) => nodes,
 }));
 
 afterEach(() => {

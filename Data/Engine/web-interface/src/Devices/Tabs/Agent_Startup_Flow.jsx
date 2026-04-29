@@ -1,11 +1,12 @@
-import React, { useCallback, useMemo } from "react";
-import { Box, Button, GlobalStyles, Tooltip, Typography } from "@mui/material";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Box, Button, GlobalStyles, IconButton, Tooltip, Typography } from "@mui/material";
+import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import RadioButtonUncheckedRoundedIcon from "@mui/icons-material/RadioButtonUncheckedRounded";
 import ErrorOutlineRoundedIcon from "@mui/icons-material/ErrorOutlineRounded";
 import AutorenewRoundedIcon from "@mui/icons-material/AutorenewRounded";
 import RemoveCircleOutlineRoundedIcon from "@mui/icons-material/RemoveCircleOutlineRounded";
-import ReactFlow, { Background, Handle, Position } from "reactflow";
+import ReactFlow, { Background, Handle, Position, applyNodeChanges } from "reactflow";
 import "reactflow/dist/style.css";
 import { MAGIC_UI } from "./Shared.jsx";
 
@@ -20,24 +21,26 @@ const HIDDEN_HANDLE_STYLE = {
 
 const STARTUP_FLOW_NODE_WIDTH = 256;
 const RUNTIME_FLOW_NODE_WIDTH = 256;
-const RUNTIME_FLOW_COLUMNS = Object.freeze([70, 382, 694, 1006]);
-const RUNTIME_FLOW_START_Y = 640;
+const RUNTIME_FLOW_COLUMNS = Object.freeze([1570, 1885, 2200, 2515]);
+const RUNTIME_FLOW_START_Y = 198;
 const RUNTIME_FLOW_ROW_GAP = 106;
+const STEADY_FLOW_X = 2940;
+const STEADY_FLOW_Y = 315;
 
 const STARTUP_FLOW_DEFINITIONS = Object.freeze([
-  { id: "process_start", label: "Agent process started", milestoneKeys: ["process_start"], x: 522, y: 0 },
-  { id: "server_config_loaded", label: "Server configuration loaded", milestoneKeys: ["server_config_loaded"], x: 200, y: 122 },
-  { id: "identity_loaded", label: "Device identity loaded", milestoneKeys: ["identity_loaded"], x: 844, y: 122 },
-  { id: "engine_authentication", label: "Engine authentication", milestoneKeys: ["authenticating", "authenticated"], x: 522, y: 270 },
-  { id: "status_channel_online", label: "Status channel online", milestoneKeys: ["status_channel_online"], x: 120, y: 455 },
-  { id: "agent_role_loading", label: "Agent role loading", milestoneKeys: ["roles_loading", "roles_ready"], x: 522, y: 455 },
-  { id: "engine_socket", label: "Engine socket", milestoneKeys: ["socket_connecting", "socket_connected"], x: 924, y: 455 },
+  { id: "process_start", label: "Agent process started", milestoneKeys: ["process_start"], x: 20, y: 315 },
+  { id: "server_config_loaded", label: "Server configuration loaded", milestoneKeys: ["server_config_loaded"], x: 360, y: 190 },
+  { id: "identity_loaded", label: "Device identity loaded", milestoneKeys: ["identity_loaded"], x: 360, y: 440 },
+  { id: "engine_authentication", label: "Engine authentication", milestoneKeys: ["authenticating", "authenticated"], x: 770, y: 315 },
+  { id: "status_channel_online", label: "Status channel online", milestoneKeys: ["status_channel_online"], x: 1180, y: 100 },
+  { id: "agent_role_loading", label: "Agent role loading", milestoneKeys: ["roles_loading", "roles_ready"], x: 1180, y: 315 },
+  { id: "engine_socket", label: "Engine socket", milestoneKeys: ["socket_connecting", "socket_connected"], x: 1180, y: 530 },
 ]);
 
 const STARTUP_FLOW_JUNCTIONS = Object.freeze([
-  { id: "identity_join", x: 641, y: 228, sources: ["server_config_loaded", "identity_loaded"] },
-  { id: "runtime_split", x: 641, y: 406, sources: ["engine_authentication"] },
-  { id: "runtime_health_split", x: 641, y: 588, sources: ["agent_role_loading"] },
+  { id: "identity_join", x: 690, y: 340, sources: ["server_config_loaded", "identity_loaded"] },
+  { id: "runtime_split", x: 1088, y: 340, sources: ["engine_authentication"] },
+  { id: "runtime_health_split", x: 1488, y: 340, sources: ["agent_role_loading"] },
 ]);
 
 const STARTUP_FLOW_EDGES = Object.freeze([
@@ -195,8 +198,8 @@ function AgentStartupFlowNode({ data }) {
           overflow: "hidden",
         }}
       >
-        <Handle type="target" position={Position.Top} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
-        <Handle type="source" position={Position.Bottom} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
+        <Handle type="target" position={Position.Left} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
+        <Handle type="source" position={Position.Right} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
         <Box
           sx={{
             width: 24,
@@ -244,8 +247,8 @@ function AgentStartupFlowJunction({ data }) {
         boxShadow: `0 0 18px ${meta.color}55`,
       }}
     >
-      <Handle type="target" position={Position.Top} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
-      <Handle type="source" position={Position.Bottom} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
+      <Handle type="target" position={Position.Left} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
+      <Handle type="source" position={Position.Right} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
     </Box>
   );
 }
@@ -289,8 +292,8 @@ function AgentRuntimeHealthNode({ data }) {
         },
       }}
     >
-      <Handle type="target" position={Position.Top} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
-      <Handle type="source" position={Position.Bottom} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
+      <Handle type="target" position={Position.Left} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
+      <Handle type="source" position={Position.Right} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
       <Box
         sx={{
           width: 24,
@@ -390,9 +393,9 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
       };
     });
     const runtimeNodeIds = runtimeNodes.map((node) => node.id);
-    const runtimeJoinY = RUNTIME_FLOW_START_Y + Math.max(1, Math.ceil(runtimeNodes.length / RUNTIME_FLOW_COLUMNS.length)) * RUNTIME_FLOW_ROW_GAP;
-    const steadyJoinY = runtimeJoinY + 84;
-    const steadyStateY = steadyJoinY + 78;
+    const runtimeJoinY = STEADY_FLOW_Y + 24;
+    const steadyJoinY = STEADY_FLOW_Y + 24;
+    const steadyStateY = STEADY_FLOW_Y;
     const runtimeJoinSources = runtimeNodeIds.length ? runtimeNodeIds : ["runtime_health_split"];
     const runtimeHealthJoinState = deriveJunctionState(runtimeJoinSources, stateByKey);
     stateByKey.runtime_health_join = runtimeHealthJoinState;
@@ -402,7 +405,7 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
       {
         id: "runtime_health_join",
         type: "flowJunction",
-        position: { x: 641, y: runtimeJoinY },
+        position: { x: 2820, y: runtimeJoinY },
         data: { state: runtimeHealthJoinState },
         draggable: false,
         selectable: false,
@@ -410,7 +413,7 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
       {
         id: "steady_join",
         type: "flowJunction",
-        position: { x: 641, y: steadyJoinY },
+        position: { x: 2880, y: steadyJoinY },
         data: { state: steadyJoinState },
         draggable: false,
         selectable: false,
@@ -422,7 +425,7 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
     const steadyStateNode = {
       id: "steady_state_online",
       type: "startupMilestone",
-      position: { x: 522, y: steadyStateY },
+      position: { x: STEADY_FLOW_X, y: steadyStateY },
       data: {
         id: "steady_state_online",
         label: "Agent steady state online",
@@ -470,7 +473,30 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
 function copyTextToClipboard(text) {
   const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : null;
   if (clipboard && typeof clipboard.writeText === "function") {
-    clipboard.writeText(text).catch(() => {});
+    clipboard.writeText(text).catch(() => {
+      fallbackCopyTextToClipboard(text);
+    });
+    return;
+  }
+  fallbackCopyTextToClipboard(text);
+}
+
+function fallbackCopyTextToClipboard(text) {
+  if (typeof document === "undefined") return;
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    document.execCommand("copy");
+  } catch {
+    // Clipboard is best-effort for temporary layout tooling.
+  } finally {
+    document.body.removeChild(textarea);
   }
 }
 
@@ -496,6 +522,13 @@ export default function AgentStartupFlow({
 }) {
   const rows = Array.isArray(milestones) ? milestones : [];
   const { nodes, edges } = useStartupFlowElements(rows, runtimeRows, formatTimestamp, onRuntimeNodeOpen);
+  const [editableNodes, setEditableNodes] = useState(nodes);
+  useEffect(() => {
+    setEditableNodes(nodes);
+  }, [nodes]);
+  const handleNodesChange = useCallback((changes) => {
+    setEditableNodes((currentNodes) => applyNodeChanges(changes, currentNodes));
+  }, []);
   const handleNodeClick = useCallback((_, node) => {
     if (node?.type === "runtimeHealth" && typeof node?.data?.onOpen === "function") {
       node.data.onOpen(node.data.entry);
@@ -510,7 +543,7 @@ export default function AgentStartupFlow({
       event.preventDefault();
       copyTextToClipboard(
         JSON.stringify(
-          nodes.map((node) => ({
+          editableNodes.map((node) => ({
             id: node.id,
             type: node.type,
             label: node.data?.label || node.data?.entry?.name || "",
@@ -522,7 +555,24 @@ export default function AgentStartupFlow({
         )
       );
     },
-    [nodes]
+    [editableNodes]
+  );
+  const handleCopyLayout = useCallback(
+    () =>
+      copyTextToClipboard(
+        JSON.stringify(
+          editableNodes.map((node) => ({
+            id: node.id,
+            type: node.type,
+            label: node.data?.label || node.data?.entry?.name || "",
+            x: Math.round(Number(node.position?.x || 0)),
+            y: Math.round(Number(node.position?.y || 0)),
+          })),
+          null,
+          2
+        )
+      ),
+    [editableNodes]
   );
   if (!rows.length) {
     return (
@@ -550,11 +600,28 @@ export default function AgentStartupFlow({
         overflow: "hidden",
         borderRadius: 2,
         background: "rgba(3,7,18,0.28)",
-          "@keyframes agentStartupFlowSpin": {
-            "100%": { transform: "rotate(360deg)" },
-          },
+        position: "relative",
+        "@keyframes agentStartupFlowSpin": {
+          "100%": { transform: "rotate(360deg)" },
+        },
       }}
     >
+      <Box sx={{ position: "absolute", top: 8, right: 8, zIndex: 10, display: "flex", gap: 0.5 }}>
+        <Tooltip title="Copy current node layout JSON" arrow>
+          <IconButton
+            size="small"
+            onClick={handleCopyLayout}
+            sx={{
+              color: MAGIC_UI.accentA,
+              border: `1px solid ${MAGIC_UI.panelBorder}`,
+              background: "rgba(7,11,24,0.86)",
+              "&:hover": { background: "rgba(88,166,255,0.14)" },
+            }}
+          >
+            <ContentCopyRoundedIcon sx={{ fontSize: 17 }} />
+          </IconButton>
+        </Tooltip>
+      </Box>
       <GlobalStyles
         styles={{
           "@keyframes agentStartupFlowDash": {
@@ -573,16 +640,17 @@ export default function AgentStartupFlow({
         }}
       />
       <ReactFlow
-        nodes={nodes}
+        nodes={editableNodes}
         edges={edges}
         nodeTypes={STARTUP_FLOW_NODE_TYPES}
         fitView
         fitViewOptions={{ padding: 0.04, minZoom: 0.2, maxZoom: 1.25 }}
         minZoom={0.2}
         maxZoom={1.25}
-        nodesDraggable={false}
+        onNodesChange={handleNodesChange}
+        nodesDraggable
         nodesConnectable={false}
-        elementsSelectable={false}
+        elementsSelectable
         panOnDrag
         zoomOnScroll={false}
         zoomOnPinch
