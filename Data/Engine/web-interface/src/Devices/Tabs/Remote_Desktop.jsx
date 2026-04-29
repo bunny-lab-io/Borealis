@@ -39,6 +39,8 @@ import {
   RadioButtonUncheckedRounded as StagePendingIcon,
 } from "@mui/icons-material";
 import { APP_PATHS } from "../../app/routes/paths.js";
+import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
+import { useAuth } from "../../app/providers/AuthContext.jsx";
 import {
   DIALOG_ACTIONS_SX,
   DIALOG_BODY_TEXT_SX,
@@ -270,8 +272,10 @@ const VNC_AUTO_RETRY_ATTEMPTS = 3;
 const VNC_AUTO_RETRY_DELAY_MS = 1500;
 const VNC_OPEN_TIMEOUT_MS = 30000;
 const VNC_READY_STABILIZE_MS = 1800;
-const VNC_UNSTABLE_THRESHOLD_MS = 5 * 60 * 1000;
-const VNC_RECEIVE_TIMEOUT_MS = 6 * 60 * 1000;
+const VNC_IDLE_WARNING_MS = 5 * 60 * 1000;
+const VNC_IDLE_DISCONNECT_MS = 6 * 60 * 1000;
+const VNC_TUNNEL_UNSTABLE_THRESHOLD_MS = VNC_IDLE_WARNING_MS;
+const VNC_TUNNEL_RECEIVE_TIMEOUT_MS = VNC_IDLE_DISCONNECT_MS;
 const ALL_DISPLAYS_ID = "__all_displays__";
 const CONNECTION_FLOW_STEPS = Object.freeze([
   {
@@ -572,6 +576,13 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { deviceId } = useParams();
+  const { user } = useAuth();
+  const notifyOperator = useAppNotifications({
+    title: "Remote Desktop",
+    icon: "warning",
+    variant: "warning",
+    username: user || undefined,
+  });
   const device = useMemo(() => {
     if (providedDevice) {
       return providedDevice;
@@ -634,10 +645,17 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const viewfinderCanvasRefs = useRef(new Map());
   const agentIdRef = useRef("");
   const sessionIdRef = useRef("");
+  const sessionStateRef = useRef(sessionState);
   const clipboardSyncRef = useRef(clipboardSync);
   const clipboardLastRef = useRef("");
   const connectAttemptRef = useRef(0);
   const manualDisconnectRef = useRef(false);
+  const idleWarningTimerRef = useRef(0);
+  const idleDisconnectTimerRef = useRef(0);
+  const lastDesktopActivityAtRef = useRef(0);
+  const idleWarningShownRef = useRef(false);
+  const idleDisconnectInFlightRef = useRef(false);
+  const tunnelWarningShownRef = useRef(false);
   const forcedViewportKeyRef = useRef("");
   const viewfinderDragRef = useRef({
     active: false,
@@ -824,28 +842,23 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
 
+  useEffect(() => {
+    sessionStateRef.current = sessionState;
+  }, [sessionState]);
+
   const cancelPendingConnect = useCallback(() => {
     connectAttemptRef.current += 1;
   }, []);
 
   const notifyAgentOnboarding = useCallback(async () => {
-    try {
-      await fetch("/api/notifications/notify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          title: "Agent Onboarding Underway",
-          message:
-            "Please wait for the agent to finish onboarding into Borealis. It takes about 1 minute to finish the process.",
-          icon: "info",
-          variant: "info",
-        }),
-      });
-    } catch {
-      /* ignore notification transport errors */
-    }
-  }, []);
+    await notifyOperator({
+      title: "Agent Onboarding Underway",
+      message:
+        "Please wait for the agent to finish onboarding into Borealis. It takes about 1 minute to finish the process.",
+      icon: "info",
+      variant: "info",
+    });
+  }, [notifyOperator]);
 
   const handleAgentOnboarding = useCallback(async () => {
     await notifyAgentOnboarding();
@@ -1005,6 +1018,76 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     }
   }, [cancelPendingConnect, disconnectVnc, resetDisconnectedViewState, teardownDisplay]);
 
+  const clearIdleTimers = useCallback(() => {
+    if (idleWarningTimerRef.current) {
+      window.clearTimeout(idleWarningTimerRef.current);
+      idleWarningTimerRef.current = 0;
+    }
+    if (idleDisconnectTimerRef.current) {
+      window.clearTimeout(idleDisconnectTimerRef.current);
+      idleDisconnectTimerRef.current = 0;
+    }
+  }, []);
+
+  const warnIdleOperator = useCallback(() => {
+    if (sessionStateRef.current !== "connected" || idleWarningShownRef.current) return;
+    idleWarningShownRef.current = true;
+    void notifyOperator({
+      title: "Remote Desktop Idle Warning",
+      message:
+        "No desktop interaction detected for 5 minutes. Interact with the remote desktop within 1 minute or the session will disconnect.",
+      icon: "warning",
+      variant: "warning",
+    });
+  }, [notifyOperator]);
+
+  const disconnectIdleSession = useCallback(() => {
+    if (sessionStateRef.current !== "connected" || idleDisconnectInFlightRef.current) return;
+    idleDisconnectInFlightRef.current = true;
+    void notifyOperator({
+      title: "Remote Desktop Idle Timeout",
+      message: "Remote desktop session disconnected after 6 minutes without desktop interaction.",
+      icon: "warning",
+      variant: "warning",
+    });
+    void handleDisconnect();
+  }, [handleDisconnect, notifyOperator]);
+
+  const scheduleIdleTimers = useCallback(() => {
+    clearIdleTimers();
+    if (sessionStateRef.current !== "connected" || typeof window === "undefined") return;
+    idleWarningTimerRef.current = window.setTimeout(warnIdleOperator, VNC_IDLE_WARNING_MS);
+    idleDisconnectTimerRef.current = window.setTimeout(disconnectIdleSession, VNC_IDLE_DISCONNECT_MS);
+  }, [clearIdleTimers, disconnectIdleSession, warnIdleOperator]);
+
+  const registerDesktopActivity = useCallback(() => {
+    const now = Date.now();
+    if (!idleWarningShownRef.current && now - lastDesktopActivityAtRef.current < 1000) {
+      return;
+    }
+    lastDesktopActivityAtRef.current = now;
+    idleWarningShownRef.current = false;
+    idleDisconnectInFlightRef.current = false;
+    if (sessionStateRef.current === "connected") {
+      scheduleIdleTimers();
+    }
+  }, [scheduleIdleTimers]);
+
+  useEffect(() => {
+    if (sessionState !== "connected") {
+      clearIdleTimers();
+      idleWarningShownRef.current = false;
+      idleDisconnectInFlightRef.current = false;
+      tunnelWarningShownRef.current = false;
+      return undefined;
+    }
+    idleWarningShownRef.current = false;
+    idleDisconnectInFlightRef.current = false;
+    tunnelWarningShownRef.current = false;
+    scheduleIdleTimers();
+    return clearIdleTimers;
+  }, [clearIdleTimers, scheduleIdleTimers, sessionState]);
+
   const handleReturnToDevice = useCallback(() => {
     if (deviceRouteId) {
       navigate(APP_PATHS.device(deviceRouteId), {
@@ -1094,8 +1177,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       );
 
       const tunnel = new Guacamole.WebSocketTunnel(wsUrl);
-      tunnel.receiveTimeout = Math.max(Number(tunnel.receiveTimeout || 0), VNC_RECEIVE_TIMEOUT_MS);
-      tunnel.unstableThreshold = Math.max(Number(tunnel.unstableThreshold || 0), VNC_UNSTABLE_THRESHOLD_MS);
+      tunnel.receiveTimeout = Math.max(Number(tunnel.receiveTimeout || 0), VNC_TUNNEL_RECEIVE_TIMEOUT_MS);
+      tunnel.unstableThreshold = Math.max(Number(tunnel.unstableThreshold || 0), VNC_TUNNEL_UNSTABLE_THRESHOLD_MS);
       const client = new Guacamole.Client(tunnel);
       client.__borealisViewer = "guacamole";
       const display = client.getDisplay();
@@ -1105,14 +1188,17 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       displayHost.appendChild(displayElement);
       const mouse = new Guacamole.Mouse(displayElement);
       mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (mouseState) => {
+        registerDesktopActivity();
         client.sendMouseState(mouseState, true);
       };
       const keyboard = new Guacamole.Keyboard(displayHost);
       keyboard.onkeydown = (keysym) => {
+        registerDesktopActivity();
         client.sendKeyEvent(1, keysym);
         return true;
       };
       keyboard.onkeyup = (keysym) => {
+        registerDesktopActivity();
         client.sendKeyEvent(0, keysym);
       };
       client.__borealisMouse = mouse;
@@ -1134,6 +1220,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         };
         const cleanup = () => {
           clearStableTimer();
+          tunnel.onstatechange = null;
           client.onsync = null;
           if (display) {
             display.onresize = null;
@@ -1185,12 +1272,36 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           }
         };
 
+        tunnel.onstatechange = (state) => {
+          if (isStaleAttempt()) return;
+          if (state === Guacamole.Tunnel.State.OPEN) {
+            tunnelWarningShownRef.current = false;
+            return;
+          }
+          if (state === Guacamole.Tunnel.State.UNSTABLE && !tunnelWarningShownRef.current) {
+            tunnelWarningShownRef.current = true;
+            void notifyOperator({
+              title: "Remote Desktop Connection Unstable",
+              message:
+                "Remote desktop tunnel appears unstable. Input or video may pause until traffic recovers.",
+              icon: "warning",
+              variant: "warning",
+            });
+          }
+        };
+
         client.onerror = (status) => {
           if (isStaleAttempt()) return;
           const message = status?.message || status?.code || "Guacamole connection failed.";
           setSessionState("error");
           setVncStage("error");
           setStatusMessage(String(message));
+          void notifyOperator({
+            title: "Remote Desktop Connection Issue",
+            message: `Remote desktop tunnel reported a problem: ${String(message)}`,
+            icon: "warning",
+            variant: "warning",
+          });
           finishReject(String(message), true);
         };
         client.onstatechange = (state) => {
@@ -1285,6 +1396,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     [
       configureDisplaySurface,
       displayMode,
+      notifyOperator,
+      registerDesktopActivity,
       resetDisconnectedViewState,
       syncFramebufferSize,
       syncRenderedCanvasSize,
