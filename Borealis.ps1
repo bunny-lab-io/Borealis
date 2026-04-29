@@ -1660,7 +1660,7 @@ ListenPort = 0
         throw "$logPrefix Driver still missing after adapter provisioning and pnputil fallback."
     }
 
-    # UltraVNC Server (always-on VNC backend for noVNC)
+    # UltraVNC Server (always-on VNC backend for Apache Guacamole)
     Run-Step "Dependency: UltraVNC Server" {
         $uvncZipUrl = $env:BOREALIS_ULTRAVNC_ZIP_URL
         if (-not $uvncZipUrl) {

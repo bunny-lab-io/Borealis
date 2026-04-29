@@ -936,7 +936,6 @@ def _collect_vnc_session_payload(adapters: "EngineServiceAdapters") -> Dict[str,
             "active_session_count": 0,
             "active_sessions": [],
             "viewers": {
-                "novnc": {"available": True},
                 "guacamole": {
                     "enabled": bool(guacamole.get("enabled")),
                     "available": bool(guacamole.get("enabled")) and bool(guacamole.get("available")),
@@ -954,7 +953,6 @@ def _collect_vnc_session_payload(adapters: "EngineServiceAdapters") -> Dict[str,
         "active_session_count": len(snapshots),
         "active_sessions": snapshots,
         "viewers": {
-            "novnc": {"available": True},
             "guacamole": {
                 "enabled": bool(guacamole.get("enabled")),
                 "available": bool(guacamole.get("enabled")) and bool(guacamole.get("available")),

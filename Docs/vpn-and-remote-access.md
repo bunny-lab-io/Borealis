@@ -2,7 +2,7 @@
 [Back to Docs Index](index.md) | [Index (HTML)](index.html)
 
 ## Purpose
-Document Borealis remote access features: WireGuard reverse VPN tunnels, remote PowerShell, and VNC via noVNC or Apache Guacamole.
+Document Borealis remote access features: WireGuard reverse VPN tunnels, remote PowerShell, and VNC via Apache Guacamole.
 
 ## WireGuard Reverse VPN (High Level)
 - Outbound-only: agents initiate tunnels to the Engine; no inbound listeners on devices.
@@ -28,11 +28,10 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - Engine and agent each keep only one active shell session per browser/session owner and close superseded sessions explicitly.
 - Shell port default: 47002 (configurable).
 
-## VNC Viewers
-- Engine issues VNC session info via `/api/vnc/establish`. The request accepts `viewer = novnc | guacamole` and defaults to `novnc`.
-- noVNC connects through the same public Borealis origin at `/remote-desktop/vnc` and receives the current agent-advertised UltraVNC password for browser-side VNC authentication.
+## VNC Viewer
+- Engine issues Apache Guacamole VNC session info via `/api/vnc/establish`. The optional `viewer` field accepts `guacamole` and defaults to `guacamole`.
 - Apache Guacamole connects through `/remote-desktop/vnc/guacamole`; the browser receives only a Borealis one-time token, while the Engine injects the UltraVNC host, port, and password into local `guacd`.
-- `GET /api/vnc/viewers` reports viewer availability. noVNC is always available; Guacamole is available only when `guacd` is enabled and reachable.
+- `GET /api/vnc/viewers` reports Guacamole availability. Remote Desktop is available only when `guacd` is enabled and reachable.
 - Guacamole v1 is VNC-only. RDP, SSH, and Telnet protocol plugins are not exposed.
 - Borealis keeps one shared interactive collaboration session per device. Everyone who joins the session can type, click, and interact concurrently.
 - VNC authentication is handled by a single shared UltraVNC password plus a Borealis one-time session token for the WebSocket proxy.
@@ -53,7 +52,7 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 ## Public Edge Configuration
 Borealis expects the public HTTPS identity to live on the embedded Traefik instance running on the engine host.
 - The supported public entrypoint is the embedded Borealis Traefik + Let's Encrypt edge.
-- Borealis web traffic, `/api`, `/socket.io`, noVNC, and Guacamole VNC all stay on that same HTTPS origin.
+- Borealis web traffic, `/api`, `/socket.io`, and Guacamole VNC all stay on that same HTTPS origin.
 - WireGuard remains a separate direct UDP service on port `30000`; it is not terminated or proxied through the HTTPS edge.
 - Do not configure a separate public VNC endpoint. Borealis VNC stays same-origin at `/remote-desktop/vnc`.
 
@@ -63,8 +62,8 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - `GET /api/tunnel/active` (Token Authenticated) - list active tunnels with the same listener-health fields.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - agent-side persistent tunnel bootstrap.
 - `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure VNC readiness, advertise the agent's current boot-scoped UltraVNC credential, and return active session metadata.
-- `GET /api/vnc/viewers` (Token Authenticated) - report noVNC and Apache Guacamole VNC viewer availability.
-- `POST /api/vnc/establish` (Token Authenticated) - establish or join a VNC collaboration session with `viewer = novnc | guacamole`.
+- `GET /api/vnc/viewers` (Token Authenticated) - report Apache Guacamole VNC availability.
+- `POST /api/vnc/establish` (Token Authenticated) - establish or join an Apache Guacamole VNC collaboration session.
 - `POST /api/vnc/disconnect` (Token Authenticated) - leave or close a VNC collaboration session.
 - `POST /api/vnc/handoff` (Token Authenticated) - reassign session-owner metadata inside a shared VNC collaboration session.
 - `GET /api/vnc/sessions` (Token Authenticated) - list active VNC collaboration sessions.
@@ -190,10 +189,10 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - `GET /api/tunnel/active` -> lists active VPN tunnel sessions (tunnel_id, agent_id, virtual_ip, last_activity, etc.) plus the same shared listener-health fields.
 - `POST /api/agent/vpn/ensure` -> device-authenticated tunnel bootstrap for persistent mode.
 - `POST /api/agent/vnc/ensure` -> device-authenticated VNC readiness check, active session bootstrap, and agent credential advertisement for the Windows agent.
-- `GET /api/vnc/viewers` -> report noVNC and Apache Guacamole VNC viewer availability.
+- `GET /api/vnc/viewers` -> report Apache Guacamole VNC availability.
 - `POST /api/shell/establish` -> establish remote shell session.
 - `POST /api/shell/disconnect` -> disconnect remote shell session.
-- `POST /api/vnc/establish` -> establish or join a VNC collaboration session with `viewer = novnc | guacamole`.
+- `POST /api/vnc/establish` -> establish or join an Apache Guacamole VNC collaboration session.
 - `POST /api/vnc/disconnect` -> leave or close a VNC collaboration session.
 - `POST /api/vnc/handoff` -> reassign session-owner metadata.
 - `GET /api/vnc/sessions` -> list active VNC collaboration sessions.

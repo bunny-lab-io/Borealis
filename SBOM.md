@@ -80,7 +80,6 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - @simplewebauthn/browser - MIT - https://github.com/MasterKale/SimpleWebAuthn/blob/master/LICENSE
 - ag-grid-community - MIT - https://spdx.org/licenses/MIT.html
 - ag-grid-react - MIT - https://spdx.org/licenses/MIT.html
-- @novnc/novnc - MPL-2.0 - https://spdx.org/licenses/MPL-2.0.html
 - Apache Guacamole Server (`guacd` and VNC plugin) 1.6.0 - Apache-2.0 - https://github.com/apache/guacamole-server/blob/1.6.0/LICENSE
 - Apache Guacamole Client (`guacamole-common-js`) 1.6.0 - Apache-2.0 - https://github.com/apache/guacamole-client/blob/1.6.0/LICENSE
 - LibVNCServer / LibVNCClient - GPL-2.0-or-later - https://github.com/LibVNC/libvncserver/blob/master/COPYING

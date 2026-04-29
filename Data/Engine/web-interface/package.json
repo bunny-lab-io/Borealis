@@ -7,8 +7,7 @@
     "build": "vite build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "preview": "vite preview",
-    "postinstall": "node scripts/patch-novnc.js"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
@@ -22,7 +21,6 @@
     "@mui/x-tree-view": "8.10.0",
     "ag-grid-community": "34.2.0",
     "ag-grid-react": "34.2.0",
-    "@novnc/novnc": "1.6.0",
     "dayjs": "1.11.18",
     "normalize.css": "8.0.1",
     "prismjs": "1.30.0",

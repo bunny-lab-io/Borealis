@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from cryptography import x509
@@ -32,6 +33,18 @@ def _admin_client(harness: EngineTestHarness):
 
 
 def _user_client(harness: EngineTestHarness):
+    conn = sqlite3.connect(harness.db_path)
+    try:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO users (username, display_name, password_sha512, role, last_login, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("operator", "Operator", "test", "User", 0, 0, 0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     client = harness.app.test_client()
     with client.session_transaction() as sess:
         sess["username"] = "operator"

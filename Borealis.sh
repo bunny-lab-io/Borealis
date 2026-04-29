@@ -1719,7 +1719,7 @@ configure_guacamole_vnc_runtime() {
   if install_guacamole_source_build; then
     return 0
   fi
-  ui_warn "Apache Guacamole VNC support unavailable; noVNC remains available."
+  ui_warn "Apache Guacamole VNC support unavailable; Remote Desktop remains unavailable until guacd is installed."
   return 0
 }
 
@@ -3025,7 +3025,7 @@ print_guacd_service_status() {
   local guacd_bin
   guacd_bin="$(resolve_guacd_binary)"
   if [[ -z "${guacd_bin}" || ! -x "${guacd_bin}" ]]; then
-    ui_warn "Apache Guacamole: unavailable (guacd not installed; noVNC remains available)"
+    ui_warn "Apache Guacamole: unavailable (guacd not installed; Remote Desktop unavailable)"
     return 0
   fi
   local unit_name="borealis-guacd.service"

@@ -1,10 +1,10 @@
 # ======================================================
 # Data\Engine\services\API\devices\vnc.py
-# Description: VNC session bootstrap for noVNC WebSocket tunnels.
+# Description: VNC session bootstrap for Apache Guacamole tunnels.
 #
 # API Endpoints (if applicable):
-# - GET /api/vnc/viewers (Token Authenticated) - Report noVNC and Apache Guacamole viewer availability.
-# - POST /api/vnc/establish (Token Authenticated) - Establish or join a collaboration-aware VNC session for noVNC or Apache Guacamole.
+# - GET /api/vnc/viewers (Token Authenticated) - Report Apache Guacamole availability.
+# - POST /api/vnc/establish (Token Authenticated) - Establish or join a collaboration-aware Apache Guacamole VNC session.
 # - POST /api/vnc/disconnect (Token Authenticated) - Leave or close a collaboration-aware VNC session.
 # - POST /api/vnc/handoff (Token Authenticated) - Reassign session-owner metadata to another session participant.
 # - GET /api/vnc/sessions (Token Authenticated) - List active collaboration-aware VNC sessions.
@@ -22,11 +22,11 @@ from typing import Any, Dict, Optional, Tuple
 from flask import Blueprint, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from ....public_endpoints import build_websocket_url, public_guacamole_vnc_path, public_vnc_path, wireguard_endpoint
+from ....public_endpoints import build_websocket_url, public_guacamole_vnc_path, wireguard_endpoint
 from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
 from ...RemoteDesktop.guacamole_proxy import guacd_health
-from ...RemoteDesktop.vnc_proxy import ensure_guacamole_vnc_proxy, ensure_vnc_proxy
+from ...RemoteDesktop.vnc_proxy import ensure_guacamole_vnc_proxy
 from ...RemoteDesktop.vnc_sessions import ensure_vnc_collaboration_manager
 from .tunnel import _get_tunnel_service, _resolve_requested_agent_id
 
@@ -110,9 +110,9 @@ def _clone_display_virtual_bounds(value: Any) -> dict[str, Any]:
 
 def _normalize_viewer(value: Any) -> str:
     viewer = _normalize_text(value).lower()
-    if viewer in {"", "novnc", "no-vnc", "no_vnc"}:
-        return "novnc"
     if viewer in {"guacamole", "apache-guacamole", "apache_guacamole", "guac"}:
+        return "guacamole"
+    if not viewer:
         return "guacamole"
     return viewer
 
@@ -477,10 +477,10 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         operator_id: Optional[str],
         *,
         remove_wallpaper: bool,
-        viewer: str = "novnc",
+        viewer: str = "guacamole",
     ) -> Tuple[Dict[str, Any], int]:
         normalized_viewer = _normalize_viewer(viewer)
-        if normalized_viewer not in {"novnc", "guacamole"}:
+        if normalized_viewer != "guacamole":
             return {"error": "invalid_viewer"}, 400
         manager = ensure_vnc_collaboration_manager(adapters.context, logger=logger)
         _trace(
@@ -996,77 +996,36 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 reason=reason,
             )
 
-        if normalized_viewer == "guacamole":
-            health = guacd_health(adapters.context)
-            if not bool(health.get("enabled")) or not bool(health.get("available")):
-                return {
-                    "error": "guacamole_unavailable",
-                    "detail": health.get("reason") or "unavailable",
-                }, 503
-            registry = ensure_guacamole_vnc_proxy(adapters.context, logger=logger)
-            if registry is None:
-                return {"error": "guacamole_proxy_unavailable"}, 503
-            width, height = _initial_display_size(display_virtual_bounds, display_topology)
-            guacamole_session = registry.create(
-                agent_id=agent_id,
-                host=host,
-                port=vnc_port,
-                password=collaboration_session.controller_password,
-                operator_id=operator_id,
-                session_id=collaboration_session.session_id,
-                participant_id=participant.participant_id,
-                role=participant.role,
-                width=width,
-                height=height,
-                restart_tunnel=_restart_tunnel,
-                confirm_transport=_confirm_transport,
-                on_open=_on_open,
-                on_close=_on_close,
-            )
-            ws_path = public_guacamole_vnc_path(adapters.context)
-            ws_url = build_websocket_url(adapters.context, request, ws_path)
-            _service_log_event(
-                "vnc_session_ready agent_id={0} session_id={1} role={2} credential_revision={3} viewer=guacamole".format(
-                    agent_id,
-                    collaboration_session.session_id,
-                    participant.role,
-                    collaboration_session.credential_revision,
-                )
-            )
-            base_payload.update(
-                {
-                    "guacamole_ws_url": ws_url,
-                    "guacamole_ws_path": ws_path,
-                    "token": guacamole_session.token,
-                }
-            )
-            return base_payload, 200
-
-        registry = ensure_vnc_proxy(adapters.context, logger=logger)
+        health = guacd_health(adapters.context)
+        if not bool(health.get("enabled")) or not bool(health.get("available")):
+            return {
+                "error": "guacamole_unavailable",
+                "detail": health.get("reason") or "unavailable",
+            }, 503
+        registry = ensure_guacamole_vnc_proxy(adapters.context, logger=logger)
         if registry is None:
-            return {"error": "vnc_proxy_unavailable"}, 503
-        vnc_session = registry.create(
+            return {"error": "guacamole_proxy_unavailable"}, 503
+        width, height = _initial_display_size(display_virtual_bounds, display_topology)
+        guacamole_session = registry.create(
             agent_id=agent_id,
             host=host,
             port=vnc_port,
+            password=collaboration_session.controller_password,
             operator_id=operator_id,
             session_id=collaboration_session.session_id,
             participant_id=participant.participant_id,
             role=participant.role,
+            width=width,
+            height=height,
             restart_tunnel=_restart_tunnel,
             confirm_transport=_confirm_transport,
             on_open=_on_open,
             on_close=_on_close,
         )
-        ws_path = public_vnc_path(adapters.context)
-        ws_url = build_websocket_url(
-            adapters.context,
-            request,
-            ws_path,
-            query={"token": vnc_session.token},
-        )
+        ws_path = public_guacamole_vnc_path(adapters.context)
+        ws_url = build_websocket_url(adapters.context, request, ws_path)
         _service_log_event(
-            "vnc_session_ready agent_id={0} session_id={1} role={2} credential_revision={3} viewer=novnc".format(
+            "vnc_session_ready agent_id={0} session_id={1} role={2} credential_revision={3} viewer=guacamole".format(
                 agent_id,
                 collaboration_session.session_id,
                 participant.role,
@@ -1075,10 +1034,9 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         )
         base_payload.update(
             {
-                "ws_url": ws_url,
-                "ws_path": ws_path,
-                "token": vnc_session.token,
-                "vnc_password": collaboration_session.controller_password,
+                "guacamole_ws_url": ws_url,
+                "guacamole_ws_path": ws_path,
+                "token": guacamole_session.token,
             }
         )
         return base_payload, 200
@@ -1104,7 +1062,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
 
         remove_wallpaper = _normalize_bool(body.get("remove_wallpaper"), default=True)
         viewer = _normalize_viewer(body.get("viewer"))
-        if viewer not in {"novnc", "guacamole"}:
+        if viewer != "guacamole":
             return jsonify({"error": "invalid_viewer"}), 400
 
         payload, status = _issue_session(
@@ -1125,14 +1083,8 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         health = guacd_health(adapters.context)
         return jsonify(
             {
-                "default_viewer": "novnc",
+                "default_viewer": "guacamole",
                 "viewers": [
-                    {
-                        "id": "novnc",
-                        "label": "noVNC",
-                        "enabled": True,
-                        "available": True,
-                    },
                     {
                         "id": "guacamole",
                         "label": "Apache Guacamole",
