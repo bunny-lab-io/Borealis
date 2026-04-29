@@ -3765,19 +3765,25 @@ async def connect_loop():
             await asyncio.sleep(_SOCKETIO_RECONNECT_PAUSE_SECONDS)
             continue
         attempt += 1
+        heartbeat_stage = "auth"
         try:
-            if SYSTEM_SERVICE_MODE:
-                try:
-                    _heartbeat_record("socket_connecting", "active", f"Socket connect attempt {attempt}.")
-                    _heartbeat_flush(reason="socket_connecting")
-                except Exception:
-                    pass
             _log_agent(
                 f'connect_loop attempt={attempt} starting authentication phase',
                 fname='agent.log',
             )
             _sync_tray_status({}, client=client)
+            if SYSTEM_SERVICE_MODE:
+                try:
+                    _heartbeat_record("authenticating", "active", f"Socket connect attempt {attempt} authentication.")
+                except Exception:
+                    pass
             client.ensure_authenticated()
+            if SYSTEM_SERVICE_MODE:
+                try:
+                    _heartbeat_complete("authenticated", "Engine device authentication succeeded.")
+                    _heartbeat_flush(reason="authenticated")
+                except Exception:
+                    pass
             auth_snapshot = {
                 'guid_present': bool(client.guid),
                 'access_token': bool(client.access_token),
@@ -3788,6 +3794,13 @@ async def connect_loop():
                 f"connect_loop attempt={attempt} auth snapshot: {_format_debug_pairs(auth_snapshot)}",
                 fname='agent.log',
             )
+            heartbeat_stage = "socket"
+            if SYSTEM_SERVICE_MODE:
+                try:
+                    _heartbeat_record("socket_connecting", "active", f"Socket connect attempt {attempt}.")
+                    _heartbeat_flush(reason="socket_connecting")
+                except Exception:
+                    pass
             client.configure_socketio(sio)
             try:
                 setattr(sio, "connection_error", None)
@@ -3875,8 +3888,12 @@ async def connect_loop():
                     _record_tray_error("transport", detail, client=client, socket_connected=False)
             if SYSTEM_SERVICE_MODE:
                 try:
-                    _heartbeat_fail("socket_connecting", detail)
-                    _heartbeat_flush(reason="socket_connect_failed")
+                    if heartbeat_stage == "auth":
+                        _heartbeat_fail("authenticating", detail)
+                        _heartbeat_flush(reason="auth_failed")
+                    else:
+                        _heartbeat_fail("socket_connecting", detail)
+                        _heartbeat_flush(reason="socket_connect_failed")
                 except Exception:
                     pass
 

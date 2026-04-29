@@ -48,6 +48,28 @@ def test_heartbeat_role_health_registers_system_heartbeat_timeline() -> None:
     assert "wireguard_online" in report["details"]["milestones_json"]
 
 
+def test_heartbeat_successors_close_active_predecessors() -> None:
+    controller = HeartbeatController()
+
+    controller.fail("authenticating", "SSLError: EOF")
+    controller.complete("authenticated", "Engine device authentication succeeded.")
+    controller.record("socket_connecting", "active", "Socket connect attempt 1.")
+    controller.complete("socket_connected", "Socket.IO connection established.")
+    controller.record("roles_loading", "active", "Loading SYSTEM roles.")
+    controller.complete("roles_ready", "SYSTEM roles loaded.")
+    controller.record("wireguard_starting", "active", "Ensuring tunnel.")
+    controller.complete("wireguard_online", "WireGuard tunnel is online.")
+
+    states = {item["key"]: item["state"] for item in controller.payload()["milestones"]}
+    assert states["authenticating"] == "complete"
+    assert states["authenticated"] == "complete"
+    assert states["socket_connecting"] == "complete"
+    assert states["roles_loading"] == "complete"
+    assert states["wireguard_starting"] == "complete"
+    assert controller.payload()["status"] == "recovering"
+    assert controller.payload()["last_error"] is None
+
+
 def test_role_wrapper_uses_singleton_controller_hooks() -> None:
     client = _FakeHttpClient()
     ctx = type(

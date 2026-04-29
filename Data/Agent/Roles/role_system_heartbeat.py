@@ -53,6 +53,14 @@ MILESTONE_DEFINITIONS = OrderedDict(
 )
 
 VALID_STATES = {"pending", "active", "complete", "failed", "skipped"}
+COMPLETION_PREDECESSORS = {
+    "authenticated": ("authenticating",),
+    "status_channel_online": ("authenticated", "authenticating"),
+    "socket_connected": ("socket_connecting", "authenticated", "authenticating"),
+    "roles_ready": ("roles_loading",),
+    "wireguard_online": ("wireguard_starting",),
+    "steady_state_online": ("status_channel_online",),
+}
 
 
 def _now() -> int:
@@ -144,18 +152,51 @@ class HeartbeatController:
             }
         return self._milestones[normalized]
 
+    def _complete_predecessors_locked(self, key: str, now: int) -> None:
+        current_label = str(self._ensure_milestone(key).get("label") or key).strip()
+        for predecessor_key in COMPLETION_PREDECESSORS.get(key, ()):
+            predecessor = self._ensure_milestone(predecessor_key)
+            previous_state = predecessor.get("state")
+            if previous_state == "complete":
+                continue
+            if not predecessor.get("started_at"):
+                predecessor["started_at"] = now
+            predecessor["state"] = "complete"
+            if not predecessor.get("detail"):
+                predecessor["detail"] = f"Completed before {current_label.lower()}."
+            elif previous_state == "failed":
+                predecessor["detail"] = f"Recovered before {current_label.lower()}."
+            predecessor["updated_at"] = now
+            predecessor["completed_at"] = now
+
+    def _recalculate_status_locked(self) -> None:
+        has_failure = any(item.get("state") == "failed" for item in self._milestones.values())
+        if has_failure:
+            self._status = "unhealthy"
+            return
+        if isinstance(self._last_error, dict):
+            failed_key = str(self._last_error.get("milestone") or "").strip()
+            if failed_key and self._ensure_milestone(failed_key).get("state") != "failed":
+                self._last_error = None
+        steady_state = self._ensure_milestone("steady_state_online").get("state")
+        self._status = "healthy" if steady_state == "complete" else "recovering"
+
     def record(self, key: str, state: str = "active", detail: str = "", *, message: str = "") -> None:
         normalized_key = _clean_text(key) or "unknown"
         normalized_state = _normalize_state(state)
         now = _now()
         with self._lock:
             item = self._ensure_milestone(normalized_key)
+            previous_state = item.get("state")
+            if normalized_state == "active" and previous_state == "complete":
+                return
             if not item.get("started_at"):
                 item["started_at"] = now
             item["state"] = normalized_state
             item["detail"] = _clean_text(detail)
             item["updated_at"] = now
             if normalized_state == "complete":
+                self._complete_predecessors_locked(normalized_key, now)
                 item["completed_at"] = int(item.get("completed_at") or now)
             elif normalized_state in {"active", "failed"}:
                 item["completed_at"] = 0
@@ -168,8 +209,7 @@ class HeartbeatController:
                     "detail": _clean_text(detail),
                     "at": now,
                 }
-            elif self._status != "unhealthy":
-                self._status = "healthy" if normalized_key == "steady_state_online" and normalized_state == "complete" else "recovering"
+            self._recalculate_status_locked()
             self._dirty = True
 
     def complete(self, key: str, detail: str = "", *, message: str = "") -> None:
