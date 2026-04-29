@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 GUACAMOLE_WS_PATH = "/remote-desktop/vnc/guacamole"
+GUACAMOLE_PROTOCOL_VERSION = "VERSION_1_5_0"
 DEFAULT_GUACD_HOST = "127.0.0.1"
 DEFAULT_GUACD_PORT = 4822
 _GUACD_CONNECT_TIMEOUT_SECONDS = 3.0
@@ -187,7 +188,33 @@ def guacamole_connect_arguments(session: GuacamoleVncSession, names: List[str]) 
         "clipboard-encoding": "UTF-8",
         "autoretry": "3",
     }
-    return [values.get(str(name or ""), "") for name in names]
+    resolved: List[str] = []
+    for index, name in enumerate(names):
+        normalized = str(name or "")
+        if index == 0 and normalized.startswith("VERSION_"):
+            resolved.append(GUACAMOLE_PROTOCOL_VERSION)
+            continue
+        resolved.append(values.get(normalized, ""))
+    return resolved
+
+
+def _filter_client_payload_for_guacd(raw_text: str) -> Tuple[str, List[List[str]], bool]:
+    parser = GuacamoleProtocolParser()
+    instructions = parser.feed(raw_text)
+    if parser._buffer or parser._elements:
+        return raw_text, [], False
+
+    forwarded: List[str] = []
+    ping_args: List[List[str]] = []
+    disconnect = False
+    for opcode, args in instructions:
+        if opcode == "" and args and args[0] == "ping":
+            ping_args.append(args)
+            continue
+        if opcode == "disconnect":
+            disconnect = True
+        forwarded.append(encode_instruction(opcode, *args))
+    return "".join(forwarded), ping_args, disconnect
 
 
 def guacd_health(context: Any, *, timeout_seconds: float = 0.35) -> Dict[str, Any]:
@@ -363,22 +390,25 @@ async def proxy_guacamole_vnc_session(
                     raw_text = str(message or "")
                     raw_bytes = raw_text.encode("utf-8")
 
-                instructions: List[Tuple[str, List[str]]] = []
+                forward_text = raw_text
+                ping_args: List[List[str]] = []
+                disconnect_requested = False
                 try:
-                    instructions = GuacamoleProtocolParser().feed(raw_text)
+                    forward_text, ping_args, disconnect_requested = _filter_client_payload_for_guacd(raw_text)
                 except ValueError:
                     logger.debug("Forwarding unparsable Guacamole client payload to guacd")
 
-                if len(instructions) == 1:
-                    opcode, args = instructions[0]
-                    if opcode == "" and args and args[0] == "ping":
-                        await websocket.send(encode_instruction("", *args))
-                        continue
+                for args in ping_args:
+                    await websocket.send(encode_instruction("", *args))
 
-                if raw_bytes:
+                if forward_text:
+                    writer.write(forward_text.encode("utf-8"))
+                    await writer.drain()
+                elif raw_bytes and not ping_args:
                     writer.write(raw_bytes)
                     await writer.drain()
-                if any(opcode == "disconnect" for opcode, _args in instructions):
+
+                if disconnect_requested:
                     return
 
         async def _guacd_to_ws() -> None:
@@ -403,6 +433,7 @@ async def proxy_guacamole_vnc_session(
 __all__ = [
     "DEFAULT_GUACD_HOST",
     "DEFAULT_GUACD_PORT",
+    "GUACAMOLE_PROTOCOL_VERSION",
     "GUACAMOLE_WS_PATH",
     "GuacamoleProtocolParser",
     "GuacamoleSessionRegistry",

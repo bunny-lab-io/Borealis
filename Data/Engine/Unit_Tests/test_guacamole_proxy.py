@@ -98,6 +98,7 @@ def test_guacamole_connect_arguments_are_server_side_only() -> None:
     values = guacamole_connect_arguments(
         session,
         [
+            guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
             "hostname",
             "port",
             "password",
@@ -110,14 +111,45 @@ def test_guacamole_connect_arguments_are_server_side_only() -> None:
         ],
     )
 
-    assert values == ["10.255.0.4", "5900", "secretpw", "", "", "true", "24", "3", ""]
+    assert values == [
+        guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
+        "10.255.0.4",
+        "5900",
+        "secretpw",
+        "",
+        "",
+        "true",
+        "24",
+        "3",
+        "",
+    ]
+
+
+def test_guacamole_filters_internal_ping_before_guacd() -> None:
+    payload = (
+        encode_instruction("sync", "12345")
+        + encode_instruction("", "ping", "67890")
+        + encode_instruction("mouse", "10", "20", "1")
+    )
+
+    forwarded, ping_args, disconnect = guacamole_proxy._filter_client_payload_for_guacd(payload)
+
+    assert forwarded == encode_instruction("sync", "12345") + encode_instruction("mouse", "10", "20", "1")
+    assert ping_args == [["ping", "67890"]]
+    assert disconnect is False
 
 
 def test_guacamole_proxy_retries_until_backend_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     first_reader = _FakeReader([encode_instruction("error", "Authentication failed.").encode("utf-8")])
     second_reader = _FakeReader(
         [
-            encode_instruction("args", "hostname", "port", "password").encode("utf-8"),
+            encode_instruction(
+                "args",
+                guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
+                "hostname",
+                "port",
+                "password",
+            ).encode("utf-8"),
             encode_instruction("ready", "uuid-1").encode("utf-8"),
         ]
     )
@@ -159,3 +191,11 @@ def test_guacamole_proxy_retries_until_backend_ready(monkeypatch: pytest.MonkeyP
     assert writers[0].closed is True
     assert websocket.sent[0] == encode_instruction("", "uuid-1")
     assert opened == [True]
+    handshake = GuacamoleProtocolParser().feed(b"".join(writers[1].writes).decode("utf-8"))
+    connect_args = next(args for opcode, args in handshake if opcode == "connect")
+    assert connect_args == [
+        guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
+        "10.255.0.4",
+        "5900",
+        "secretpw",
+    ]
