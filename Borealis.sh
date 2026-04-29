@@ -1607,26 +1607,25 @@ install_guacamole_build_dependencies_best_effort() {
   if [[ -x "${GUACAMOLE_PREFIX}/sbin/guacd" || -x "${GUACAMOLE_PREFIX}/bin/guacd" ]]; then
     return 0
   fi
-  if ! allow_system_package_install; then
-    write_engine_log "Apache Guacamole build dependencies not installed because package-manager installation is disabled." "engine-supervision.log"
-    return 1
-  fi
   detect_distro
   case "$DISTRO_ID" in
     ubuntu|debian|linuxmint|pop)
-      run_privileged_quiet apt update -qq || true
+      ui_info "Installing Apache Guacamole build dependencies with apt..."
+      run_privileged_quiet apt update -qq || return 1
       run_privileged_quiet env DEBIAN_FRONTEND=noninteractive apt install -y \
         build-essential autoconf automake libtool pkg-config \
-        libcairo2-dev libjpeg-turbo8-dev libpng-dev libuuid1 uuid-dev \
+        libcairo2-dev libjpeg-turbo8-dev libpng-dev uuid-dev \
         libvncserver-dev libssl-dev libwebp-dev libgcrypt20-dev || return 1
       ;;
     rhel|centos|fedora|rocky|almalinux)
       if command_exists dnf; then
+        ui_info "Installing Apache Guacamole build dependencies with dnf..."
         run_privileged_quiet dnf install -y \
           gcc gcc-c++ make autoconf automake libtool pkgconfig \
           cairo-devel libjpeg-turbo-devel libpng-devel libuuid-devel \
           libvncserver-devel openssl-devel libwebp-devel libgcrypt-devel || return 1
       else
+        ui_info "Installing Apache Guacamole build dependencies with yum..."
         run_privileged_quiet yum install -y \
           gcc gcc-c++ make autoconf automake libtool pkgconfig \
           cairo-devel libjpeg-turbo-devel libpng-devel libuuid-devel \
@@ -1634,6 +1633,7 @@ install_guacamole_build_dependencies_best_effort() {
       fi
       ;;
     arch)
+      ui_info "Installing Apache Guacamole build dependencies with pacman..."
       run_privileged_quiet pacman -Sy --noconfirm \
         base-devel autoconf automake libtool pkgconf cairo libjpeg-turbo \
         libpng util-linux-libs libvncserver openssl libwebp libgcrypt || return 1
@@ -1671,7 +1671,7 @@ install_guacamole_source_build() {
   verify_sha256_file "${server_path}" "${server_sha}" || return 1
   verify_sha256_file "${client_path}" "${client_sha}" || return 1
 
-  ui_info "Installing Apache Guacamole build dependencies when package installation is allowed..."
+  ui_info "Installing Apache Guacamole build dependencies..."
   install_guacamole_build_dependencies_best_effort || {
     ui_warn "Apache Guacamole build dependencies missing. Install with: $(guacamole_dependency_hint)"
     return 1
