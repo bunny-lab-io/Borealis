@@ -514,6 +514,21 @@ function buildNodeCopyPayload(node) {
   );
 }
 
+function mergeNodesPreservingPositions(nextNodes, currentNodes) {
+  if (!currentNodes.length) return nextNodes;
+  const currentById = new Map(currentNodes.map((node) => [node.id, node]));
+  return nextNodes.map((node) => {
+    const currentNode = currentById.get(node.id);
+    if (!currentNode) return node;
+    return {
+      ...node,
+      position: currentNode.position || node.position,
+      selected: currentNode.selected,
+      dragging: currentNode.dragging,
+    };
+  });
+}
+
 export default function AgentStartupFlow({
   milestones,
   runtimeRows = [],
@@ -524,7 +539,7 @@ export default function AgentStartupFlow({
   const { nodes, edges } = useStartupFlowElements(rows, runtimeRows, formatTimestamp, onRuntimeNodeOpen);
   const [editableNodes, setEditableNodes] = useState(nodes);
   useEffect(() => {
-    setEditableNodes(nodes);
+    setEditableNodes((currentNodes) => mergeNodesPreservingPositions(nodes, currentNodes));
   }, [nodes]);
   const handleNodesChange = useCallback((changes) => {
     setEditableNodes((currentNodes) => applyNodeChanges(changes, currentNodes));
