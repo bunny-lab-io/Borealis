@@ -23,27 +23,17 @@ vi.mock("reactflow", () => ({
   Position: { Top: "top", Bottom: "bottom" },
 }));
 
-vi.mock("ag-grid-react", () => ({
-  AgGridReact: ({ rowData = [] }) => (
-    <div data-testid="ag-grid">
-      {rowData.map((row) => (
-        <button key={row.id} type="button">
-          {row.name}
-        </button>
-      ))}
-    </div>
-  ),
-}));
-
 afterEach(() => {
   vi.useRealTimers();
   delete window.BorealisSocket;
 });
 
 describe("AgentHealthTab", () => {
-  it("renders startup flow telemetry and hides system heartbeat from role grids", () => {
+  it("renders grouped startup flow telemetry and runtime health nodes", () => {
     const milestones = [
       { key: "process_start", label: "Agent process started", state: "complete" },
+      { key: "authenticating", label: "Authenticating with Engine", state: "complete" },
+      { key: "authenticated", label: "Engine authentication complete", state: "complete" },
       { key: "wireguard_online", label: "WireGuard tunnel online", state: "complete" },
     ];
 
@@ -81,8 +71,10 @@ describe("AgentHealthTab", () => {
     expect(screen.getByText("Startup Timeline")).toBeInTheDocument();
     expect(screen.getByTestId("startup-flow")).toBeInTheDocument();
     expect(screen.getByText("Agent process started")).toBeInTheDocument();
-    expect(screen.getByText("WireGuard tunnel online")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "WireGuard VPN" })).toBeInTheDocument();
+    expect(screen.getByText("Engine authentication")).toBeInTheDocument();
+    expect(screen.getByText("WireGuard tunnel")).toBeInTheDocument();
+    expect(screen.getByText("Runtime Health")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /WireGuard VPN/i })).toBeInTheDocument();
     expect(screen.queryByText("Current Phase")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Startup Timeline" })).not.toBeInTheDocument();
   });

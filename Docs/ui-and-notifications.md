@@ -72,7 +72,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - Alerts relies on AG Grid's built-in column filters rather than a page-level custom filter bar.
 - Device Summary includes a `Watchdogs` tab so operators can acknowledge incidents, suppress a watchdog for one device, or launch a prefilled device-scoped watchdog draft.
 - Device Summary includes a right-anchored `Agent Health` tab. Keep agent-health tab composition in `Data/Engine/web-interface/src/Devices/Tabs/Agent_Health.jsx`, with focused helper components beside it under `Data/Engine/web-interface/src/Devices/Tabs/`; the Summary tab should not contain an agent-health island or summary-section nav item.
-- The Agent Health tab should show a visual startup flow like Remote Desktop readiness flows, plus Roles and Services grids. Flow states are `complete`, `active`, `failed`, `pending`, and `skipped`; active nodes use the same spinner language as the linear readiness view.
+- The Agent Health tab should show a visual startup flow like Remote Desktop readiness flows, plus clickable runtime-health nodes for roles and services. Flow states are `complete`, `active`, `failed`, `pending`, and `skipped`; active nodes use the same spinner language as the linear readiness view.
 - Agent Health refreshes silently from `agent_status_changed` on `window.BorealisSocket`; avoid toasts for routine startup progression.
 - Filesystem browser surfaces should follow the explorer pattern now established in the Device Summary `File Management` tab:
   - use a single AG Grid with a custom tree-style `Name` column when operators benefit from seeing the broader hierarchy while working

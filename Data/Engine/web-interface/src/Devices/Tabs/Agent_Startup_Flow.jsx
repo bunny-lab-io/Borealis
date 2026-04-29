@@ -21,32 +21,28 @@ const HIDDEN_HANDLE_STYLE = {
 const STARTUP_FLOW_NODE_WIDTH = 196;
 
 const STARTUP_FLOW_DEFINITIONS = Object.freeze([
-  { id: "process_start", label: "Agent process started", x: 430, y: 0 },
-  { id: "server_config_loaded", label: "Server configuration loaded", x: 170, y: 98 },
-  { id: "identity_loaded", label: "Device identity loaded", x: 690, y: 98 },
-  { id: "authenticating", label: "Authenticating with Engine", x: 430, y: 214 },
-  { id: "authenticated", label: "Engine authentication complete", x: 430, y: 326 },
-  { id: "status_channel_online", label: "Status channel online", x: 40, y: 466 },
-  { id: "socket_connecting", label: "Opening Engine socket", x: 330, y: 466 },
-  { id: "roles_loading", label: "Loading agent roles", x: 720, y: 466 },
-  { id: "socket_connected", label: "Engine socket connected", x: 330, y: 588 },
-  { id: "roles_ready", label: "Agent roles ready", x: 720, y: 588 },
-  { id: "helper_broker_ready", label: "Current-user broker ready", x: 520, y: 734 },
-  { id: "inventory_ready", label: "Inventory telemetry ready", x: 760, y: 734 },
-  { id: "wireguard_starting", label: "WireGuard tunnel starting", x: 1000, y: 734 },
-  { id: "wireguard_online", label: "WireGuard tunnel online", x: 1000, y: 856 },
-  { id: "steady_state_online", label: "Agent steady state online", x: 430, y: 1000 },
+  { id: "process_start", label: "Agent process started", milestoneKeys: ["process_start"], x: 430, y: 0 },
+  { id: "server_config_loaded", label: "Server configuration loaded", milestoneKeys: ["server_config_loaded"], x: 170, y: 108 },
+  { id: "identity_loaded", label: "Device identity loaded", milestoneKeys: ["identity_loaded"], x: 690, y: 108 },
+  { id: "engine_authentication", label: "Engine authentication", milestoneKeys: ["authenticating", "authenticated"], x: 430, y: 246 },
+  { id: "status_channel_online", label: "Status channel online", milestoneKeys: ["status_channel_online"], x: 80, y: 410 },
+  { id: "engine_socket", label: "Engine socket", milestoneKeys: ["socket_connecting", "socket_connected"], x: 430, y: 410 },
+  { id: "agent_role_loading", label: "Agent role loading", milestoneKeys: ["roles_loading", "roles_ready"], x: 780, y: 410 },
+  { id: "helper_broker_ready", label: "Current-user broker ready", milestoneKeys: ["helper_broker_ready"], x: 520, y: 570 },
+  { id: "inventory_ready", label: "Inventory telemetry ready", milestoneKeys: ["inventory_ready"], x: 760, y: 570 },
+  { id: "wireguard_tunnel", label: "WireGuard tunnel", milestoneKeys: ["wireguard_starting", "wireguard_online"], x: 1000, y: 570 },
+  { id: "steady_state_online", label: "Agent steady state online", milestoneKeys: ["steady_state_online"], x: 430, y: 760 },
 ]);
 
 const STARTUP_FLOW_JUNCTIONS = Object.freeze([
-  { id: "identity_join", x: 519, y: 184, sources: ["server_config_loaded", "identity_loaded"] },
-  { id: "runtime_split", x: 519, y: 430, sources: ["authenticated"] },
-  { id: "roles_split", x: 809, y: 696, sources: ["roles_ready"] },
+  { id: "identity_join", x: 519, y: 210, sources: ["server_config_loaded", "identity_loaded"] },
+  { id: "runtime_split", x: 519, y: 372, sources: ["engine_authentication"] },
+  { id: "roles_split", x: 869, y: 528, sources: ["agent_role_loading"] },
   {
     id: "steady_join",
     x: 519,
-    y: 954,
-    sources: ["status_channel_online", "socket_connected", "helper_broker_ready", "inventory_ready", "wireguard_online"],
+    y: 720,
+    sources: ["status_channel_online", "engine_socket", "helper_broker_ready", "inventory_ready", "wireguard_tunnel"],
   },
 ]);
 
@@ -55,24 +51,20 @@ const STARTUP_FLOW_EDGES = Object.freeze([
   ["process_start", "identity_loaded"],
   ["server_config_loaded", "identity_join"],
   ["identity_loaded", "identity_join"],
-  ["identity_join", "authenticating"],
-  ["authenticating", "authenticated"],
-  ["authenticated", "runtime_split"],
+  ["identity_join", "engine_authentication"],
+  ["engine_authentication", "runtime_split"],
   ["runtime_split", "status_channel_online"],
-  ["runtime_split", "socket_connecting"],
-  ["runtime_split", "roles_loading"],
-  ["socket_connecting", "socket_connected"],
-  ["roles_loading", "roles_ready"],
-  ["roles_ready", "roles_split"],
+  ["runtime_split", "engine_socket"],
+  ["runtime_split", "agent_role_loading"],
+  ["agent_role_loading", "roles_split"],
   ["roles_split", "helper_broker_ready"],
   ["roles_split", "inventory_ready"],
-  ["roles_split", "wireguard_starting"],
-  ["wireguard_starting", "wireguard_online"],
+  ["roles_split", "wireguard_tunnel"],
   ["status_channel_online", "steady_join"],
-  ["socket_connected", "steady_join"],
+  ["engine_socket", "steady_join"],
   ["helper_broker_ready", "steady_join"],
   ["inventory_ready", "steady_join"],
-  ["wireguard_online", "steady_join"],
+  ["wireguard_tunnel", "steady_join"],
   ["steady_join", "steady_state_online"],
 ]);
 
@@ -123,6 +115,41 @@ function deriveJunctionState(sourceIds, stateByKey) {
   if (states.some((state) => state === "active")) return "active";
   if (states.length && states.every((state) => state === "complete" || state === "skipped")) return "complete";
   return "pending";
+}
+
+function resolveGroupedMilestones(definition, milestoneByKey) {
+  return (definition.milestoneKeys || [definition.id]).map((key) => {
+    const milestone = milestoneByKey[key] || {};
+    return {
+      key,
+      label: milestone?.label || key,
+      detail: String(milestone?.detail || "").trim(),
+      state: normalizeMilestoneState(milestone?.state),
+      timestamp: milestone?.completed_at || milestone?.updated_at || milestone?.started_at || null,
+    };
+  });
+}
+
+function resolveGroupedState(groupedMilestones) {
+  if (groupedMilestones.some((milestone) => milestone.state === "failed")) return "failed";
+  const terminalState = groupedMilestones[groupedMilestones.length - 1]?.state || "pending";
+  if (terminalState === "complete" || terminalState === "skipped") return "complete";
+  if (groupedMilestones.some((milestone) => milestone.state === "active" || milestone.state === "complete")) return "active";
+  return terminalState;
+}
+
+function selectGroupedMilestone(groupedMilestones, state) {
+  if (state === "failed") return groupedMilestones.find((milestone) => milestone.state === "failed") || groupedMilestones[0];
+  if (state === "active") {
+    return (
+      [...groupedMilestones].reverse().find((milestone) => milestone.state === "active" || milestone.state === "complete") ||
+      groupedMilestones[0]
+    );
+  }
+  if (state === "complete") {
+    return [...groupedMilestones].reverse().find((milestone) => milestone.state === "complete" || milestone.state === "skipped") || groupedMilestones[0];
+  }
+  return groupedMilestones[0];
 }
 
 function AgentStartupFlowNode({ data }) {
@@ -217,20 +244,20 @@ function useStartupFlowElements(milestones, formatTimestamp) {
     const milestoneByKey = buildMilestoneLookup(milestones);
     const stateByKey = {};
     const milestoneNodes = STARTUP_FLOW_DEFINITIONS.map((definition) => {
-      const milestone = milestoneByKey[definition.id] || {};
-      const state = normalizeMilestoneState(milestone?.state);
+      const groupedMilestones = resolveGroupedMilestones(definition, milestoneByKey);
+      const state = resolveGroupedState(groupedMilestones);
+      const displayMilestone = selectGroupedMilestone(groupedMilestones, state) || {};
       stateByKey[definition.id] = state;
-      const timestamp = milestone?.completed_at || milestone?.updated_at || milestone?.started_at || null;
       return {
         id: definition.id,
         type: "startupMilestone",
         position: { x: definition.x, y: definition.y },
         data: {
           id: definition.id,
-          label: milestone?.label || definition.label,
-          detail: milestone?.detail || "",
+          label: definition.label,
+          detail: displayMilestone.detail || STARTUP_STATE_META[state]?.label || "",
           state,
-          timestampText: timestamp ? formatTimestamp(timestamp) : "",
+          timestampText: displayMilestone.timestamp ? formatTimestamp(displayMilestone.timestamp) : "",
         },
         draggable: false,
         selectable: false,

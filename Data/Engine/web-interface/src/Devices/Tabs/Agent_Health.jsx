@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Button, Dialog, DialogActions, DialogContent, Stack, Typography } from "@mui/material";
+import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
+import RadioButtonUncheckedRoundedIcon from "@mui/icons-material/RadioButtonUncheckedRounded";
+import ErrorOutlineRoundedIcon from "@mui/icons-material/ErrorOutlineRounded";
+import AutorenewRoundedIcon from "@mui/icons-material/AutorenewRounded";
 import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
 import HubRoundedIcon from "@mui/icons-material/HubRounded";
-import { AgGridReact } from "ag-grid-react";
 import {
   DIALOG_ACTIONS_SX,
   DIALOG_BUTTON_SX,
@@ -10,17 +13,10 @@ import {
   DIALOG_PAPER_SX,
   DialogHeaderBlock,
 } from "../../DialogStyles.jsx";
-import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
+import { MAGIC_UI } from "./Shared.jsx";
 import AgentStartupFlow, { normalizeMilestoneState } from "./Agent_Startup_Flow.jsx";
 
-const SUMMARY_FIELD_TEXT_COLOR = "#58a6ff";
 const SUMMARY_DEFAULT_TEXT_COLOR = "#f4f7ff";
-const ROLE_HEALTH_LAST_CHECKED_COLOR = "rgba(226,232,240,0.72)";
-const SUMMARY_GRID_STYLE = {
-  width: "100%",
-  height: "100%",
-  fontFamily: gridFontFamily,
-};
 
 const AGENT_HEALTH_KIND = Object.freeze({
   role: "role",
@@ -88,6 +84,14 @@ function normalizeRoleHealthStatusText(value) {
 function getRoleHealthStatusColor(statusCode) {
   const normalized = String(statusCode || "").trim().toLowerCase();
   return ROLE_HEALTH_STATUS_COLOR_BY_CODE[normalized] || SUMMARY_DEFAULT_TEXT_COLOR;
+}
+
+function getRoleHealthStatusIcon(statusCode) {
+  const normalized = String(statusCode || "").trim().toLowerCase();
+  if (normalized === "healthy" || normalized === "loaded") return CheckCircleRoundedIcon;
+  if (normalized === "recovering" || normalized === "pending") return AutorenewRoundedIcon;
+  if (normalized === "unhealthy") return ErrorOutlineRoundedIcon;
+  return RadioButtonUncheckedRoundedIcon;
 }
 
 function resolveAgentHealthPresentation(item, index = 0) {
@@ -196,136 +200,123 @@ function buildAgentHealthMeta(rows, emptyText, fallbackText) {
   return parts.join(" • ");
 }
 
-function getAgentHealthGridHeight(count) {
-  return Math.max(190, Math.min(360, 58 + Math.max(3, count) * 42));
-}
-
-const AgentHealthLinkCell = React.memo(function AgentHealthLinkCell(props) {
-  const row = props?.data || null;
-  const onOpen = props?.onOpen;
-  const value = String(props?.value || row?.name || "").trim();
-  if (!value) return null;
+function RuntimeHealthEmptyState({ children }) {
   return (
-    <Button
-      type="button"
-      onClick={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (row && typeof onOpen === "function") onOpen(row);
-      }}
+    <Box
       sx={{
-        minWidth: 0,
-        px: 0,
-        py: 0,
-        justifyContent: "flex-start",
-        textTransform: "none",
-        color: SUMMARY_FIELD_TEXT_COLOR,
-        fontWeight: 400,
-        textDecoration: "none",
-        "&:hover": { background: "transparent", color: "#7dd3fc" },
-      }}
-    >
-      {value}
-    </Button>
-  );
-});
-
-function createAgentHealthColumnDefs(nameHeader, onOpen) {
-  return [
-    {
-      field: "name",
-      headerName: nameHeader,
-      width: 220,
-      flex: 1.1,
-      sortable: false,
-      filter: false,
-      cellRenderer: AgentHealthLinkCell,
-      cellRendererParams: { onOpen },
-      cellStyle: { color: SUMMARY_FIELD_TEXT_COLOR },
-      tooltipValueGetter: (params) => params?.data?.detail || params?.value || "",
-    },
-    {
-      field: "status",
-      headerName: "Status",
-      width: 170,
-      flex: 0.7,
-      sortable: false,
-      filter: false,
-      cellStyle: (params) => ({
-        color: getRoleHealthStatusColor(params?.data?.statusCode),
-        fontWeight: 600,
-      }),
-      tooltipValueGetter: (params) => params?.data?.detail || params?.value || "",
-    },
-    {
-      field: "lastCheckedText",
-      headerName: "Last Checked",
-      width: 220,
-      flex: 0.85,
-      sortable: false,
-      filter: false,
-      cellStyle: { color: ROLE_HEALTH_LAST_CHECKED_COLOR },
-    },
-  ];
-}
-
-function SummarySectionGrid({ sectionKey, rowData, columnDefs, height, stretch = false }) {
-  const defaultColDef = useMemo(
-    () => ({
-      sortable: false,
-      resizable: true,
-      filter: false,
-      flex: 1,
-      minWidth: 140,
-      cellStyle: { color: SUMMARY_DEFAULT_TEXT_COLOR },
-    }),
-    []
-  );
-  return (
-    <GridShell
-      sx={{
-        height,
-        flex: stretch ? { xs: "0 0 auto", xl: 1 } : "initial",
-        minHeight: stretch ? 0 : undefined,
-        "& .ag-cell, & .ag-cell-wrapper, & .ag-cell-value": {
-          display: "flex",
-          alignItems: "center",
-          minHeight: "100%",
-        },
-        "& .ag-cell-value": { width: "100%" },
-      }}
-    >
-      <AgGridReact
-        rowData={rowData}
-        columnDefs={columnDefs}
-        defaultColDef={defaultColDef}
-        pagination={false}
-        animateRows={false}
-        suppressCellFocus
-        getRowId={(params) => params.data?.id ?? `${sectionKey}-${params.rowIndex}`}
-        theme={DEVICE_DETAILS_GRID_THEME}
-        style={SUMMARY_GRID_STYLE}
-      />
-    </GridShell>
-  );
-}
-
-function SummaryGridPlaceholder({ height, stretch = false }) {
-  return (
-    <GridShell
-      sx={{
-        height,
-        flex: stretch ? { xs: "0 0 auto", xl: 1 } : "initial",
-        minHeight: stretch ? 0 : undefined,
+        borderRadius: 2,
+        border: `1px dashed ${MAGIC_UI.panelBorder}`,
+        px: 1.25,
+        py: 1,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
+        color: MAGIC_UI.textMuted,
+        minHeight: 86,
       }}
     >
-      <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted, letterSpacing: 0.2 }}>
-        Loading telemetry...
+      <Typography variant="caption" sx={{ color: "inherit", letterSpacing: 0.2 }}>
+        {children}
       </Typography>
-    </GridShell>
+    </Box>
+  );
+}
+
+function RuntimeHealthNode({ entry, onOpen }) {
+  const color = getRoleHealthStatusColor(entry?.statusCode);
+  const Icon = getRoleHealthStatusIcon(entry?.statusCode);
+  const statusText = String(entry?.status || "Unknown");
+  const lastChecked = String(entry?.lastCheckedText || "").trim();
+  return (
+    <Button
+      type="button"
+      onClick={() => onOpen(entry)}
+      sx={{
+        width: "100%",
+        minHeight: 74,
+        px: 1,
+        py: 0.9,
+        borderRadius: 2,
+        border: `1px solid ${color}`,
+        background: `linear-gradient(145deg, rgba(7,11,24,0.96), ${color}18)`,
+        boxShadow: "0 14px 32px rgba(2,6,23,0.44)",
+        color: MAGIC_UI.textBright,
+        textTransform: "none",
+        justifyContent: "flex-start",
+        textAlign: "left",
+        overflow: "hidden",
+        "&:hover": {
+          background: `linear-gradient(145deg, rgba(10,17,33,0.98), ${color}24)`,
+          boxShadow: `0 0 0 1px ${color}44, 0 18px 38px rgba(2,6,23,0.55)`,
+        },
+      }}
+    >
+      <Box
+        sx={{
+          width: 24,
+          height: 24,
+          borderRadius: "50%",
+          mr: 1,
+          flexShrink: 0,
+          color,
+          background: `${color}18`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Icon
+          sx={{
+            fontSize: 18,
+            animation:
+              entry?.statusCode === "recovering" || entry?.statusCode === "pending"
+                ? "agentRuntimeNodeSpin 1.15s linear infinite"
+                : "none",
+          }}
+        />
+      </Box>
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.78rem", fontWeight: 720, lineHeight: 1.2 }} noWrap>
+          {entry?.name || "Unknown"}
+        </Typography>
+        <Typography sx={{ mt: 0.25, color, fontSize: "0.7rem", fontWeight: 650, lineHeight: 1.2 }} noWrap>
+          {statusText}
+        </Typography>
+        {lastChecked ? (
+          <Typography sx={{ mt: 0.15, color: MAGIC_UI.textMuted, fontSize: "0.66rem", lineHeight: 1.2 }} noWrap>
+            {lastChecked}
+          </Typography>
+        ) : null}
+      </Box>
+    </Button>
+  );
+}
+
+function RuntimeHealthNodeGroup({ title, rows, emptyText, onOpen }) {
+  const meta = buildAgentHealthMeta(rows, emptyText, `${rows.length} reporting`);
+  return (
+    <Box sx={{ minHeight: 0 }}>
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, mb: 0.9 }}>
+        <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.82rem", fontWeight: 760 }}>{title}</Typography>
+        <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.72rem", textAlign: "right" }}>{meta}</Typography>
+      </Box>
+      {rows.length ? (
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: { xs: "1fr", md: "repeat(auto-fit, minmax(190px, 1fr))" },
+            gap: 1,
+            minWidth: 0,
+          }}
+        >
+          {rows.map((entry) => (
+            <RuntimeHealthNode key={entry.id} entry={entry} onOpen={onOpen} />
+          ))}
+        </Box>
+      ) : (
+        <RuntimeHealthEmptyState>{emptyText}</RuntimeHealthEmptyState>
+      )}
+    </Box>
   );
 }
 
@@ -429,8 +420,7 @@ export default function AgentHealthTab({
   const milestones = useMemo(() => parseJsonArray(startupRole?.detailsMap?.milestones_json), [startupRole]);
   const roleRows = useMemo(() => agentHealthRows.filter((row) => row.healthKind === AGENT_HEALTH_KIND.role), [agentHealthRows]);
   const serviceRows = useMemo(() => agentHealthRows.filter((row) => row.healthKind === AGENT_HEALTH_KIND.service), [agentHealthRows]);
-  const roleMeta = useMemo(() => buildAgentHealthMeta(roleRows, "No role telemetry reported yet", `${roleRows.length} roles reporting`), [roleRows]);
-  const serviceMeta = useMemo(() => buildAgentHealthMeta(serviceRows, "No service telemetry reported yet", `${serviceRows.length} services reporting`), [serviceRows]);
+  const runtimeMeta = useMemo(() => buildAgentHealthMeta(agentHealthRows, "No runtime telemetry reported yet", `${agentHealthRows.length} checks reporting`), [agentHealthRows]);
   const timelineMeta = useMemo(() => {
     if (!milestones.length) return "Awaiting startup telemetry";
     const active = milestones.find((item) => normalizeMilestoneState(item?.state) === "active");
@@ -440,10 +430,6 @@ export default function AgentHealthTab({
     return `${milestones.filter((item) => normalizeMilestoneState(item?.state) === "complete").length}/${milestones.length} complete`;
   }, [milestones]);
 
-  const roleGridHeight = useMemo(() => ({ xs: getAgentHealthGridHeight(roleRows.length), xl: "100%" }), [roleRows.length]);
-  const serviceGridHeight = useMemo(() => ({ xs: getAgentHealthGridHeight(serviceRows.length), xl: "100%" }), [serviceRows.length]);
-  const roleColumns = useMemo(() => createAgentHealthColumnDefs("Role", setDialogEntry), []);
-  const serviceColumns = useMemo(() => createAgentHealthColumnDefs("Service", setDialogEntry), []);
   const dialogTitle = dialogEntry?.name ? `Agent Health Details - ${dialogEntry.name}` : "Agent Health Details";
   const dialogContent = useMemo(() => buildAgentHealthDialogContent(dialogEntry, tunnelInfo), [dialogEntry, tunnelInfo]);
 
@@ -498,36 +484,30 @@ export default function AgentHealthTab({
             <AgentStartupFlow milestones={milestones} formatTimestamp={formatTimestamp} />
           </Box>
         </Island>
-        <Stack spacing={1.6} sx={{ minWidth: 0, minHeight: 0, height: { xs: "auto", xl: "100%" } }}>
-          <Box sx={{ flex: { xs: "0 0 auto", xl: "1 1 0" }, minWidth: 0, minHeight: 0, display: "flex" }}>
-            <Island
-              title="Roles"
-              icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 18 }} />}
-              meta={roleMeta}
-              sx={{ flex: 1, display: "flex", flexDirection: "column" }}
-            >
-              {summaryDataReady ? (
-                <SummarySectionGrid sectionKey="agent-health-roles" rowData={roleRows} columnDefs={roleColumns} height={roleGridHeight} stretch />
-              ) : (
-                <SummaryGridPlaceholder height={roleGridHeight} stretch />
-              )}
-            </Island>
-          </Box>
-          <Box sx={{ flex: { xs: "0 0 auto", xl: "1 1 0" }, minWidth: 0, minHeight: 0, display: "flex" }}>
-            <Island
-              title="Services"
-              icon={<HubRoundedIcon sx={{ fontSize: 18 }} />}
-              meta={serviceMeta}
-              sx={{ flex: 1, display: "flex", flexDirection: "column" }}
-            >
-              {summaryDataReady ? (
-                <SummarySectionGrid sectionKey="agent-health-services" rowData={serviceRows} columnDefs={serviceColumns} height={serviceGridHeight} stretch />
-              ) : (
-                <SummaryGridPlaceholder height={serviceGridHeight} stretch />
-              )}
-            </Island>
-          </Box>
-        </Stack>
+        <Island
+          title="Runtime Health"
+          icon={<HubRoundedIcon sx={{ fontSize: 18 }} />}
+          meta={runtimeMeta}
+          sx={{
+            height: { xs: "auto", xl: "100%" },
+            display: "flex",
+            flexDirection: "column",
+            "@keyframes agentRuntimeNodeSpin": {
+              "100%": { transform: "rotate(360deg)" },
+            },
+          }}
+        >
+          <Stack spacing={1.4} sx={{ flex: 1, minHeight: 0, overflowY: { xs: "visible", xl: "auto" }, pr: { xs: 0, xl: 0.4 } }}>
+            {summaryDataReady ? (
+              <>
+                <RuntimeHealthNodeGroup title="Roles" rows={roleRows} emptyText="No role telemetry reported yet" onOpen={setDialogEntry} />
+                <RuntimeHealthNodeGroup title="Services" rows={serviceRows} emptyText="No service telemetry reported yet" onOpen={setDialogEntry} />
+              </>
+            ) : (
+              <RuntimeHealthEmptyState>Loading telemetry...</RuntimeHealthEmptyState>
+            )}
+          </Stack>
+        </Island>
       </Box>
       <Dialog
         open={Boolean(dialogEntry)}
