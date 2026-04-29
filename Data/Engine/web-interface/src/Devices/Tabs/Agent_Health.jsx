@@ -317,7 +317,7 @@ function SummaryGridPlaceholder({ height }) {
   );
 }
 
-function Island({ title, icon = null, meta = "", children }) {
+function Island({ title, icon = null, meta = "", children, sx = {} }) {
   return (
     <Box
       sx={{
@@ -327,6 +327,7 @@ function Island({ title, icon = null, meta = "", children }) {
         boxShadow: "0 24px 70px rgba(2,6,23,0.45)",
         p: 1.6,
         minWidth: 0,
+        ...sx,
       }}
     >
       <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1.5, mb: 1.3 }}>
@@ -352,7 +353,7 @@ function normalizeMilestoneState(value) {
   return "pending";
 }
 
-function AgentStartupTimeline({ milestones, startupRole, formatTimestamp }) {
+function AgentStartupTimeline({ milestones, formatTimestamp }) {
   const rows = Array.isArray(milestones) ? milestones : [];
   if (!rows.length) {
     return (
@@ -373,6 +374,7 @@ function AgentStartupTimeline({ milestones, startupRole, formatTimestamp }) {
   return (
     <Box
       sx={{
+        height: "100%",
         "@keyframes agentHealthFlowPulse": {
           "0%": { boxShadow: "0 0 0 0 rgba(125, 201, 255, 0.38)" },
           "100%": { boxShadow: "0 0 0 10px rgba(125, 201, 255, 0)" },
@@ -382,97 +384,75 @@ function AgentStartupTimeline({ milestones, startupRole, formatTimestamp }) {
         },
       }}
     >
-      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1.15fr) minmax(0, 0.85fr)" }, gap: 2 }}>
-        <Box sx={{ minWidth: 0 }}>
-          {rows.map((step, index) => {
-            const isLast = index === rows.length - 1;
-            const state = normalizeMilestoneState(step?.state);
-            const iconColor =
-              state === "complete"
-                ? MAGIC_UI.accentC
-                : state === "active"
-                  ? MAGIC_UI.accentA
-                  : state === "failed"
-                    ? "#ff7b89"
-                    : "rgba(148, 163, 184, 0.58)";
-            const labelColor = state === "pending" || state === "skipped" ? MAGIC_UI.textMuted : MAGIC_UI.textBright;
-            const detailColor = state === "failed" ? "#ff7b89" : state === "active" ? MAGIC_UI.accentA : MAGIC_UI.textMuted;
-            const connectorColor =
-              state === "complete"
-                ? "linear-gradient(180deg, rgba(52,211,153,0.9), rgba(52,211,153,0.16))"
-                : state === "active"
-                  ? "linear-gradient(180deg, rgba(125,201,255,0.95), rgba(125,201,255,0.18))"
-                  : state === "failed"
-                    ? "linear-gradient(180deg, rgba(255,123,137,0.9), rgba(255,123,137,0.18))"
-                    : "rgba(148,163,184,0.18)";
-            const showStepDetail = state === "active" || state === "failed";
-            const timestamp = step?.completed_at || step?.updated_at || step?.started_at || null;
-            return (
-              <Box key={step?.key || `${index}`} sx={{ display: "flex", alignItems: "stretch", gap: 1.25, width: "100%" }}>
-                <Box sx={{ width: 22, display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
-                  <Tooltip title={timestamp ? formatTimestamp(timestamp) : ""} arrow placement="left">
-                    <Box
-                      sx={{
-                        width: 20,
-                        height: 20,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        color: iconColor,
-                        borderRadius: "50%",
-                        ...(state === "active"
-                          ? { background: "rgba(125, 201, 255, 0.12)", animation: "agentHealthFlowPulse 1.8s ease-out infinite" }
-                          : null),
-                      }}
-                    >
-                      {state === "complete" ? (
-                        <CheckCircleRoundedIcon sx={{ fontSize: 18 }} />
-                      ) : state === "active" ? (
-                        <AutorenewRoundedIcon sx={{ fontSize: 18, animation: "agentHealthFlowSpin 1.15s linear infinite" }} />
-                      ) : state === "failed" ? (
-                        <ErrorOutlineRoundedIcon sx={{ fontSize: 18 }} />
-                      ) : (
-                        <RadioButtonUncheckedRoundedIcon sx={{ fontSize: 18 }} />
-                      )}
-                    </Box>
-                  </Tooltip>
-                  {!isLast ? (
-                    <Box sx={{ mt: 0.4, mb: 0.2, width: 2, flexGrow: 1, minHeight: showStepDetail ? 24 : 16, borderRadius: 999, background: connectorColor }} />
-                  ) : null}
+      {rows.map((step, index) => {
+        const isLast = index === rows.length - 1;
+        const state = normalizeMilestoneState(step?.state);
+        const iconColor =
+          state === "complete"
+            ? MAGIC_UI.accentC
+            : state === "active"
+              ? MAGIC_UI.accentA
+              : state === "failed"
+                ? "#ff7b89"
+                : "rgba(148, 163, 184, 0.58)";
+        const labelColor = state === "pending" || state === "skipped" ? MAGIC_UI.textMuted : MAGIC_UI.textBright;
+        const detailColor = state === "failed" ? "#ff7b89" : state === "active" ? MAGIC_UI.accentA : MAGIC_UI.textMuted;
+        const connectorColor =
+          state === "complete"
+            ? "linear-gradient(180deg, rgba(52,211,153,0.9), rgba(52,211,153,0.16))"
+            : state === "active"
+              ? "linear-gradient(180deg, rgba(125,201,255,0.95), rgba(125,201,255,0.18))"
+              : state === "failed"
+                ? "linear-gradient(180deg, rgba(255,123,137,0.9), rgba(255,123,137,0.18))"
+                : "rgba(148,163,184,0.18)";
+        const showStepDetail = state === "active" || state === "failed";
+        const timestamp = step?.completed_at || step?.updated_at || step?.started_at || null;
+        return (
+          <Box key={step?.key || `${index}`} sx={{ display: "flex", alignItems: "stretch", gap: 1.25, width: "100%" }}>
+            <Box sx={{ width: 22, display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
+              <Tooltip title={timestamp ? formatTimestamp(timestamp) : ""} arrow placement="left">
+                <Box
+                  sx={{
+                    width: 20,
+                    height: 20,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: iconColor,
+                    borderRadius: "50%",
+                    ...(state === "active"
+                      ? { background: "rgba(125, 201, 255, 0.12)", animation: "agentHealthFlowPulse 1.8s ease-out infinite" }
+                      : null),
+                  }}
+                >
+                  {state === "complete" ? (
+                    <CheckCircleRoundedIcon sx={{ fontSize: 18 }} />
+                  ) : state === "active" ? (
+                    <AutorenewRoundedIcon sx={{ fontSize: 18, animation: "agentHealthFlowSpin 1.15s linear infinite" }} />
+                  ) : state === "failed" ? (
+                    <ErrorOutlineRoundedIcon sx={{ fontSize: 18 }} />
+                  ) : (
+                    <RadioButtonUncheckedRoundedIcon sx={{ fontSize: 18 }} />
+                  )}
                 </Box>
-                <Box sx={{ pt: 0.05, pb: isLast ? 0 : 0.75, minWidth: 0, textAlign: "left" }}>
-                  <Typography sx={{ color: labelColor, fontSize: "0.88rem", fontWeight: state === "active" || state === "complete" ? 650 : 500 }}>
-                    {String(step?.label || step?.key || `Step ${index + 1}`)}
-                  </Typography>
-                  {showStepDetail || step?.detail ? (
-                    <Typography sx={{ mt: 0.2, color: detailColor, fontSize: "0.76rem", lineHeight: 1.35 }}>
-                      {String(step?.detail || "")}
-                    </Typography>
-                  ) : null}
-                </Box>
-              </Box>
-            );
-          })}
-        </Box>
-        <Box
-          sx={{
-            minWidth: 0,
-            borderRadius: 2,
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            background: "rgba(3,7,18,0.48)",
-            p: 1.3,
-            alignSelf: "start",
-          }}
-        >
-          <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.82rem", fontWeight: 750 }}>Current Phase</Typography>
-          <Typography sx={{ mt: 0.5, color: MAGIC_UI.accentA, fontSize: "0.95rem", fontWeight: 760 }}>
-            {startupRole?.detailsMap?.message || startupRole?.detail || "Startup telemetry active"}
-          </Typography>
-          <Typography sx={{ mt: 0.7, color: MAGIC_UI.textMuted, fontSize: "0.78rem", lineHeight: 1.45 }}>
-            Boot ID: {startupRole?.detailsMap?.boot_id || "Unavailable"}
-          </Typography>
-        </Box>
-      </Box>
+              </Tooltip>
+              {!isLast ? (
+                <Box sx={{ mt: 0.4, mb: 0.2, width: 2, flexGrow: 1, minHeight: showStepDetail ? 24 : 16, borderRadius: 999, background: connectorColor }} />
+              ) : null}
+            </Box>
+            <Box sx={{ pt: 0.05, pb: isLast ? 0 : 0.75, minWidth: 0, textAlign: "left" }}>
+              <Typography sx={{ color: labelColor, fontSize: "0.88rem", fontWeight: state === "active" || state === "complete" ? 650 : 500 }}>
+                {String(step?.label || step?.key || `Step ${index + 1}`)}
+              </Typography>
+              {showStepDetail || step?.detail ? (
+                <Typography sx={{ mt: 0.2, color: detailColor, fontSize: "0.76rem", lineHeight: 1.35 }}>
+                  {String(step?.detail || "")}
+                </Typography>
+              ) : null}
+            </Box>
+          </Box>
+        );
+      })}
     </Box>
   );
 }
@@ -585,29 +565,56 @@ export default function AgentHealthTab({
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 1.6, minWidth: 0, width: "100%" }}>
-      <Island title="Startup Timeline" icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 18 }} />} meta={timelineMeta}>
-        <AgentStartupTimeline milestones={milestones} startupRole={startupRole} formatTimestamp={formatTimestamp} />
-      </Island>
-      <Stack direction={{ xs: "column", xl: "row" }} spacing={1.6} sx={{ minWidth: 0 }}>
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Island title="Roles" icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 18 }} />} meta={roleMeta}>
-            {summaryDataReady ? (
-              <SummarySectionGrid sectionKey="agent-health-roles" rowData={roleRows} columnDefs={roleColumns} height={gridHeight(roleRows.length)} />
-            ) : (
-              <SummaryGridPlaceholder height={gridHeight(roleRows.length)} />
-            )}
-          </Island>
-        </Box>
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Island title="Services" icon={<HubRoundedIcon sx={{ fontSize: 18 }} />} meta={serviceMeta}>
-            {summaryDataReady ? (
-              <SummarySectionGrid sectionKey="agent-health-services" rowData={serviceRows} columnDefs={serviceColumns} height={gridHeight(serviceRows.length)} />
-            ) : (
-              <SummaryGridPlaceholder height={gridHeight(serviceRows.length)} />
-            )}
-          </Island>
-        </Box>
-      </Stack>
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: { xs: "1fr", xl: "minmax(0, 1fr) minmax(360px, 0.9fr)" },
+          alignItems: "stretch",
+          gap: 1.6,
+          minWidth: 0,
+        }}
+      >
+        <Island
+          title="Startup Timeline"
+          icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 18 }} />}
+          meta={timelineMeta}
+          sx={{ height: "100%", display: "flex", flexDirection: "column" }}
+        >
+          <Box sx={{ flex: 1, minHeight: 0 }}>
+            <AgentStartupTimeline milestones={milestones} formatTimestamp={formatTimestamp} />
+          </Box>
+        </Island>
+        <Stack spacing={1.6} sx={{ minWidth: 0, height: "100%" }}>
+          <Box sx={{ flex: 1, minWidth: 0, display: "flex" }}>
+            <Island
+              title="Roles"
+              icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 18 }} />}
+              meta={roleMeta}
+              sx={{ flex: 1, display: "flex", flexDirection: "column" }}
+            >
+              {summaryDataReady ? (
+                <SummarySectionGrid sectionKey="agent-health-roles" rowData={roleRows} columnDefs={roleColumns} height={gridHeight(roleRows.length)} />
+              ) : (
+                <SummaryGridPlaceholder height={gridHeight(roleRows.length)} />
+              )}
+            </Island>
+          </Box>
+          <Box sx={{ flex: 1, minWidth: 0, display: "flex" }}>
+            <Island
+              title="Services"
+              icon={<HubRoundedIcon sx={{ fontSize: 18 }} />}
+              meta={serviceMeta}
+              sx={{ flex: 1, display: "flex", flexDirection: "column" }}
+            >
+              {summaryDataReady ? (
+                <SummarySectionGrid sectionKey="agent-health-services" rowData={serviceRows} columnDefs={serviceColumns} height={gridHeight(serviceRows.length)} />
+              ) : (
+                <SummaryGridPlaceholder height={gridHeight(serviceRows.length)} />
+              )}
+            </Island>
+          </Box>
+        </Stack>
+      </Box>
       <Dialog
         open={Boolean(dialogEntry)}
         onClose={() => setDialogEntry(null)}

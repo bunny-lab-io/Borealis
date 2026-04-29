@@ -62,6 +62,7 @@ describe("AgentHealthTab", () => {
     expect(screen.getByText("Startup Timeline")).toBeInTheDocument();
     expect(screen.getByText("WireGuard tunnel online")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "WireGuard VPN" })).toBeInTheDocument();
+    expect(screen.queryByText("Current Phase")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Startup Timeline" })).not.toBeInTheDocument();
   });
 
