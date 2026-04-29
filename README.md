@@ -5,7 +5,7 @@ Borealis was created to replace a pile of separate homelab and real-world operat
 
 It combines the useful parts of various RMM platforms, Ansible/AWX-style automation, scheduled jobs, watchdog remediation, remote desktop and interactive shell access, file/software/process/service management, and credential-backed infrastructure execution into one single operator interface.
 
-## Development Pace
+## Project Development Pace
 Borealis is maintained by one person while working a full-time IT job. Progress is iterative, and some internals get reworked as better architecture emerges. Current focus is turning the strong automation and remote-operations core into a broader MSP-ready platform.
 
 ## Feature Support Matrix
