@@ -236,17 +236,13 @@ function AgentStartupFlowNode({ data }) {
 }
 
 function AgentStartupFlowJunction({ data }) {
-  const state = normalizeMilestoneState(data?.state);
-  const meta = STARTUP_STATE_META[state] || STARTUP_STATE_META.pending;
   return (
     <Box
       sx={{
-        width: 18,
-        height: 18,
-        borderRadius: "50%",
-        border: `1px solid ${meta.color}`,
-        background: "rgba(7,11,24,0.96)",
-        boxShadow: `0 0 18px ${meta.color}55`,
+        width: 1,
+        height: 1,
+        opacity: 0,
+        pointerEvents: "none",
       }}
     >
       <Handle type="target" position={Position.Left} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
