@@ -18,46 +18,62 @@ const HIDDEN_HANDLE_STYLE = {
   pointerEvents: "none",
 };
 
-const STARTUP_FLOW_NODE_WIDTH = 218;
+const STARTUP_FLOW_NODE_WIDTH = 196;
 
 const STARTUP_FLOW_DEFINITIONS = Object.freeze([
-  { id: "process_start", label: "Agent process started", x: 410, y: 0 },
-  { id: "server_config_loaded", label: "Server configuration loaded", x: 215, y: 92 },
-  { id: "identity_loaded", label: "Device identity loaded", x: 605, y: 92 },
-  { id: "authenticating", label: "Authenticating with Engine", x: 410, y: 184 },
-  { id: "authenticated", label: "Engine authentication complete", x: 410, y: 276 },
-  { id: "status_channel_online", label: "Status channel online", x: 65, y: 390 },
-  { id: "socket_connecting", label: "Opening Engine socket", x: 315, y: 390 },
-  { id: "roles_loading", label: "Loading agent roles", x: 645, y: 390 },
-  { id: "socket_connected", label: "Engine socket connected", x: 315, y: 504 },
-  { id: "roles_ready", label: "Agent roles ready", x: 645, y: 504 },
-  { id: "helper_broker_ready", label: "Current-user broker ready", x: 480, y: 618 },
-  { id: "inventory_ready", label: "Inventory telemetry ready", x: 645, y: 618 },
-  { id: "wireguard_starting", label: "WireGuard tunnel starting", x: 810, y: 618 },
-  { id: "wireguard_online", label: "WireGuard tunnel online", x: 810, y: 732 },
-  { id: "steady_state_online", label: "Agent steady state online", x: 410, y: 846 },
+  { id: "process_start", label: "Agent process started", x: 430, y: 0 },
+  { id: "server_config_loaded", label: "Server configuration loaded", x: 170, y: 98 },
+  { id: "identity_loaded", label: "Device identity loaded", x: 690, y: 98 },
+  { id: "authenticating", label: "Authenticating with Engine", x: 430, y: 214 },
+  { id: "authenticated", label: "Engine authentication complete", x: 430, y: 326 },
+  { id: "status_channel_online", label: "Status channel online", x: 40, y: 466 },
+  { id: "socket_connecting", label: "Opening Engine socket", x: 330, y: 466 },
+  { id: "roles_loading", label: "Loading agent roles", x: 720, y: 466 },
+  { id: "socket_connected", label: "Engine socket connected", x: 330, y: 588 },
+  { id: "roles_ready", label: "Agent roles ready", x: 720, y: 588 },
+  { id: "helper_broker_ready", label: "Current-user broker ready", x: 520, y: 734 },
+  { id: "inventory_ready", label: "Inventory telemetry ready", x: 760, y: 734 },
+  { id: "wireguard_starting", label: "WireGuard tunnel starting", x: 1000, y: 734 },
+  { id: "wireguard_online", label: "WireGuard tunnel online", x: 1000, y: 856 },
+  { id: "steady_state_online", label: "Agent steady state online", x: 430, y: 1000 },
+]);
+
+const STARTUP_FLOW_JUNCTIONS = Object.freeze([
+  { id: "identity_join", x: 519, y: 184, sources: ["server_config_loaded", "identity_loaded"] },
+  { id: "runtime_split", x: 519, y: 430, sources: ["authenticated"] },
+  { id: "roles_split", x: 809, y: 696, sources: ["roles_ready"] },
+  {
+    id: "steady_join",
+    x: 519,
+    y: 954,
+    sources: ["status_channel_online", "socket_connected", "helper_broker_ready", "inventory_ready", "wireguard_online"],
+  },
 ]);
 
 const STARTUP_FLOW_EDGES = Object.freeze([
   ["process_start", "server_config_loaded"],
   ["process_start", "identity_loaded"],
-  ["server_config_loaded", "authenticating"],
-  ["identity_loaded", "authenticating"],
+  ["server_config_loaded", "identity_join"],
+  ["identity_loaded", "identity_join"],
+  ["identity_join", "authenticating"],
   ["authenticating", "authenticated"],
-  ["authenticated", "status_channel_online"],
-  ["authenticated", "socket_connecting"],
-  ["authenticated", "roles_loading"],
+  ["authenticated", "runtime_split"],
+  ["runtime_split", "status_channel_online"],
+  ["runtime_split", "socket_connecting"],
+  ["runtime_split", "roles_loading"],
   ["socket_connecting", "socket_connected"],
   ["roles_loading", "roles_ready"],
-  ["roles_ready", "helper_broker_ready"],
-  ["roles_ready", "inventory_ready"],
-  ["roles_ready", "wireguard_starting"],
+  ["roles_ready", "roles_split"],
+  ["roles_split", "helper_broker_ready"],
+  ["roles_split", "inventory_ready"],
+  ["roles_split", "wireguard_starting"],
   ["wireguard_starting", "wireguard_online"],
-  ["status_channel_online", "steady_state_online"],
-  ["socket_connected", "steady_state_online"],
-  ["helper_broker_ready", "steady_state_online"],
-  ["inventory_ready", "steady_state_online"],
-  ["wireguard_online", "steady_state_online"],
+  ["status_channel_online", "steady_join"],
+  ["socket_connected", "steady_join"],
+  ["helper_broker_ready", "steady_join"],
+  ["inventory_ready", "steady_join"],
+  ["wireguard_online", "steady_join"],
+  ["steady_join", "steady_state_online"],
 ]);
 
 const STARTUP_STATE_META = Object.freeze({
@@ -69,11 +85,11 @@ const STARTUP_STATE_META = Object.freeze({
 });
 
 const EDGE_STYLE_BY_STATE = Object.freeze({
-  complete: { stroke: MAGIC_UI.accentC, strokeWidth: 2.25 },
-  active: { stroke: MAGIC_UI.accentA, strokeWidth: 2.5, strokeDasharray: "8 5" },
-  failed: { stroke: "#ff7b89", strokeWidth: 2.5 },
-  pending: { stroke: "rgba(148, 163, 184, 0.32)", strokeWidth: 1.8, strokeDasharray: "7 7" },
-  skipped: { stroke: "rgba(176, 184, 200, 0.34)", strokeWidth: 1.8, strokeDasharray: "4 7" },
+  complete: { stroke: MAGIC_UI.accentC, strokeWidth: 2.25, strokeDasharray: "6 3" },
+  active: { stroke: MAGIC_UI.accentA, strokeWidth: 2.5, strokeDasharray: "6 3" },
+  failed: { stroke: "#ff7b89", strokeWidth: 2.5, strokeDasharray: "6 3" },
+  pending: { stroke: "rgba(148, 163, 184, 0.34)", strokeWidth: 1.8, strokeDasharray: "6 5" },
+  skipped: { stroke: "rgba(176, 184, 200, 0.36)", strokeWidth: 1.8, strokeDasharray: "5 6" },
 });
 
 export function normalizeMilestoneState(value) {
@@ -99,6 +115,14 @@ function buildMilestoneLookup(milestones) {
     if (key) acc[key] = milestone;
     return acc;
   }, {});
+}
+
+function deriveJunctionState(sourceIds, stateByKey) {
+  const states = sourceIds.map((sourceId) => stateByKey[sourceId] || "pending");
+  if (states.some((state) => state === "failed")) return "failed";
+  if (states.some((state) => state === "active")) return "active";
+  if (states.length && states.every((state) => state === "complete" || state === "skipped")) return "complete";
+  return "pending";
 }
 
 function AgentStartupFlowNode({ data }) {
@@ -166,13 +190,33 @@ function AgentStartupFlowNode({ data }) {
   );
 }
 
-const STARTUP_FLOW_NODE_TYPES = Object.freeze({ startupMilestone: AgentStartupFlowNode });
+function AgentStartupFlowJunction({ data }) {
+  const state = normalizeMilestoneState(data?.state);
+  const meta = STARTUP_STATE_META[state] || STARTUP_STATE_META.pending;
+  return (
+    <Box
+      sx={{
+        width: 18,
+        height: 18,
+        borderRadius: "50%",
+        border: `1px solid ${meta.color}`,
+        background: "rgba(7,11,24,0.96)",
+        boxShadow: `0 0 18px ${meta.color}55`,
+      }}
+    >
+      <Handle type="target" position={Position.Top} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
+      <Handle type="source" position={Position.Bottom} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
+    </Box>
+  );
+}
+
+const STARTUP_FLOW_NODE_TYPES = Object.freeze({ startupMilestone: AgentStartupFlowNode, flowJunction: AgentStartupFlowJunction });
 
 function useStartupFlowElements(milestones, formatTimestamp) {
   return useMemo(() => {
     const milestoneByKey = buildMilestoneLookup(milestones);
     const stateByKey = {};
-    const nodes = STARTUP_FLOW_DEFINITIONS.map((definition) => {
+    const milestoneNodes = STARTUP_FLOW_DEFINITIONS.map((definition) => {
       const milestone = milestoneByKey[definition.id] || {};
       const state = normalizeMilestoneState(milestone?.state);
       stateByKey[definition.id] = state;
@@ -192,6 +236,19 @@ function useStartupFlowElements(milestones, formatTimestamp) {
         selectable: false,
       };
     });
+    const junctionNodes = STARTUP_FLOW_JUNCTIONS.map((junction) => {
+      const state = deriveJunctionState(junction.sources, stateByKey);
+      stateByKey[junction.id] = state;
+      return {
+        id: junction.id,
+        type: "flowJunction",
+        position: { x: junction.x, y: junction.y },
+        data: { state },
+        draggable: false,
+        selectable: false,
+      };
+    });
+    const nodes = [...milestoneNodes, ...junctionNodes];
     const edges = STARTUP_FLOW_EDGES.map(([source, target]) => {
       const edgeState = getEdgeState(stateByKey[source], stateByKey[target]);
       return {
@@ -199,7 +256,7 @@ function useStartupFlowElements(milestones, formatTimestamp) {
         source,
         target,
         type: "smoothstep",
-        animated: edgeState === "active",
+        animated: true,
         className: `agent-startup-flow-edge agent-startup-flow-edge-${edgeState}`,
         style: EDGE_STYLE_BY_STATE[edgeState] || EDGE_STYLE_BY_STATE.pending,
       };
@@ -249,7 +306,7 @@ export default function AgentStartupFlow({ milestones, formatTimestamp = (value)
             "100%": { strokeDashoffset: -26 },
           },
           ".agent-startup-flow .react-flow__edge.animated .react-flow__edge-path": {
-            animation: "agentStartupFlowDash 1.15s linear infinite",
+            animation: "agentStartupFlowDash 1.1s linear infinite",
           },
           ".agent-startup-flow .react-flow__handle": {
             pointerEvents: "none",
