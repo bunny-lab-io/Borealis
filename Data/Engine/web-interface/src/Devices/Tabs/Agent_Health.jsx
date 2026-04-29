@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Button, Dialog, DialogActions, DialogContent, Stack, Typography } from "@mui/material";
 import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
 import HubRoundedIcon from "@mui/icons-material/HubRounded";
@@ -196,6 +196,10 @@ function buildAgentHealthMeta(rows, emptyText, fallbackText) {
   return parts.join(" • ");
 }
 
+function getAgentHealthGridHeight(count) {
+  return Math.max(190, Math.min(360, 58 + Math.max(3, count) * 42));
+}
+
 const AgentHealthLinkCell = React.memo(function AgentHealthLinkCell(props) {
   const row = props?.data || null;
   const onOpen = props?.onOpen;
@@ -265,7 +269,7 @@ function createAgentHealthColumnDefs(nameHeader, onOpen) {
   ];
 }
 
-function SummarySectionGrid({ sectionKey, rowData, columnDefs, height }) {
+function SummarySectionGrid({ sectionKey, rowData, columnDefs, height, stretch = false }) {
   const defaultColDef = useMemo(
     () => ({
       sortable: false,
@@ -281,6 +285,8 @@ function SummarySectionGrid({ sectionKey, rowData, columnDefs, height }) {
     <GridShell
       sx={{
         height,
+        flex: stretch ? { xs: "0 0 auto", xl: 1 } : "initial",
+        minHeight: stretch ? 0 : undefined,
         "& .ag-cell, & .ag-cell-wrapper, & .ag-cell-value": {
           display: "flex",
           alignItems: "center",
@@ -304,9 +310,18 @@ function SummarySectionGrid({ sectionKey, rowData, columnDefs, height }) {
   );
 }
 
-function SummaryGridPlaceholder({ height }) {
+function SummaryGridPlaceholder({ height, stretch = false }) {
   return (
-    <GridShell sx={{ height, display: "flex", alignItems: "center", justifyContent: "center" }}>
+    <GridShell
+      sx={{
+        height,
+        flex: stretch ? { xs: "0 0 auto", xl: 1 } : "initial",
+        minHeight: stretch ? 0 : undefined,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
       <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted, letterSpacing: 0.2 }}>
         Loading telemetry...
       </Typography>
@@ -324,6 +339,7 @@ function Island({ title, icon = null, meta = "", children, sx = {} }) {
         boxShadow: "0 24px 70px rgba(2,6,23,0.45)",
         p: 1.6,
         minWidth: 0,
+        minHeight: 0,
         ...sx,
       }}
     >
@@ -424,7 +440,8 @@ export default function AgentHealthTab({
     return `${milestones.filter((item) => normalizeMilestoneState(item?.state) === "complete").length}/${milestones.length} complete`;
   }, [milestones]);
 
-  const gridHeight = useCallback((count) => Math.max(190, Math.min(360, 58 + Math.max(3, count) * 42)), []);
+  const roleGridHeight = useMemo(() => ({ xs: getAgentHealthGridHeight(roleRows.length), xl: "100%" }), [roleRows.length]);
+  const serviceGridHeight = useMemo(() => ({ xs: getAgentHealthGridHeight(serviceRows.length), xl: "100%" }), [serviceRows.length]);
   const roleColumns = useMemo(() => createAgentHealthColumnDefs("Role", setDialogEntry), []);
   const serviceColumns = useMemo(() => createAgentHealthColumnDefs("Service", setDialogEntry), []);
   const dialogTitle = dialogEntry?.name ? `Agent Health Details - ${dialogEntry.name}` : "Agent Health Details";
@@ -448,13 +465,26 @@ export default function AgentHealthTab({
   }, [hostname, onRequestRefresh]);
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 1.6, minWidth: 0, width: "100%" }}>
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 1.6,
+        minWidth: 0,
+        minHeight: { xs: 0, xl: "calc(100vh - 236px)" },
+        height: { xs: "auto", xl: "calc(100vh - 236px)" },
+        flex: "1 1 auto",
+        width: "100%",
+      }}
+    >
       <Box
         sx={{
           display: "grid",
           gridTemplateColumns: { xs: "1fr", xl: "minmax(0, 1fr) minmax(360px, 0.9fr)" },
           alignItems: "stretch",
           gap: 1.6,
+          flex: { xs: "0 0 auto", xl: 1 },
+          minHeight: 0,
           minWidth: 0,
         }}
       >
@@ -462,14 +492,14 @@ export default function AgentHealthTab({
           title="Startup Timeline"
           icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 18 }} />}
           meta={timelineMeta}
-          sx={{ height: "100%", display: "flex", flexDirection: "column" }}
+          sx={{ height: { xs: "auto", xl: "100%" }, display: "flex", flexDirection: "column" }}
         >
           <Box sx={{ flex: 1, minHeight: 0 }}>
             <AgentStartupFlow milestones={milestones} formatTimestamp={formatTimestamp} />
           </Box>
         </Island>
-        <Stack spacing={1.6} sx={{ minWidth: 0, height: "100%" }}>
-          <Box sx={{ flex: 1, minWidth: 0, display: "flex" }}>
+        <Stack spacing={1.6} sx={{ minWidth: 0, minHeight: 0, height: { xs: "auto", xl: "100%" } }}>
+          <Box sx={{ flex: { xs: "0 0 auto", xl: "1 1 0" }, minWidth: 0, minHeight: 0, display: "flex" }}>
             <Island
               title="Roles"
               icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 18 }} />}
@@ -477,13 +507,13 @@ export default function AgentHealthTab({
               sx={{ flex: 1, display: "flex", flexDirection: "column" }}
             >
               {summaryDataReady ? (
-                <SummarySectionGrid sectionKey="agent-health-roles" rowData={roleRows} columnDefs={roleColumns} height={gridHeight(roleRows.length)} />
+                <SummarySectionGrid sectionKey="agent-health-roles" rowData={roleRows} columnDefs={roleColumns} height={roleGridHeight} stretch />
               ) : (
-                <SummaryGridPlaceholder height={gridHeight(roleRows.length)} />
+                <SummaryGridPlaceholder height={roleGridHeight} stretch />
               )}
             </Island>
           </Box>
-          <Box sx={{ flex: 1, minWidth: 0, display: "flex" }}>
+          <Box sx={{ flex: { xs: "0 0 auto", xl: "1 1 0" }, minWidth: 0, minHeight: 0, display: "flex" }}>
             <Island
               title="Services"
               icon={<HubRoundedIcon sx={{ fontSize: 18 }} />}
@@ -491,9 +521,9 @@ export default function AgentHealthTab({
               sx={{ flex: 1, display: "flex", flexDirection: "column" }}
             >
               {summaryDataReady ? (
-                <SummarySectionGrid sectionKey="agent-health-services" rowData={serviceRows} columnDefs={serviceColumns} height={gridHeight(serviceRows.length)} />
+                <SummarySectionGrid sectionKey="agent-health-services" rowData={serviceRows} columnDefs={serviceColumns} height={serviceGridHeight} stretch />
               ) : (
-                <SummaryGridPlaceholder height={gridHeight(serviceRows.length)} />
+                <SummaryGridPlaceholder height={serviceGridHeight} stretch />
               )}
             </Island>
           </Box>

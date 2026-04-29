@@ -264,7 +264,9 @@ export default function AgentStartupFlow({ milestones, formatTimestamp = (value)
         edges={edges}
         nodeTypes={STARTUP_FLOW_NODE_TYPES}
         fitView
-        fitViewOptions={{ padding: 0.14 }}
+        fitViewOptions={{ padding: 0.04, minZoom: 0.2, maxZoom: 1.25 }}
+        minZoom={0.2}
+        maxZoom={1.25}
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable={false}
