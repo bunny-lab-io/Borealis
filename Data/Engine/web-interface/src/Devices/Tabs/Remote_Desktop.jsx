@@ -574,7 +574,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const [vncStage, setVncStage] = useState("idle");
   const [statusMessage, setStatusMessage] = useState("");
   const [loading, setLoading] = useState(false);
-  const [viewOnly, setViewOnly] = useState(false);
   const [clipboardSync, setClipboardSync] = useState(false);
   const [guacamoleAvailability, setGuacamoleAvailability] = useState({
     enabled: false,
@@ -663,7 +662,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     [device, deviceRouteId]
   );
   const guacamoleAvailable = Boolean(guacamoleAvailability.available);
-  const effectiveViewOnly = viewOnly;
   const normalizedDisplayTopology = useMemo(
     () => normalizeDisplayTopology(displayTopology),
     [displayTopology]
@@ -1082,18 +1080,14 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       displayHost.appendChild(displayElement);
       const mouse = new Guacamole.Mouse(displayElement);
       mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (mouseState) => {
-        if (!effectiveViewOnly) {
-          client.sendMouseState(mouseState);
-        }
+        client.sendMouseState(mouseState, true);
       };
       const keyboard = new Guacamole.Keyboard(displayHost);
       keyboard.onkeydown = (keysym) => {
-        if (effectiveViewOnly) return false;
         client.sendKeyEvent(1, keysym);
         return true;
       };
       keyboard.onkeyup = (keysym) => {
-        if (effectiveViewOnly) return;
         client.sendKeyEvent(0, keysym);
       };
       client.__borealisMouse = mouse;
@@ -1214,7 +1208,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     [
       configureDisplaySurface,
       displayMode,
-      effectiveViewOnly,
       resetDisconnectedViewState,
       syncFramebufferSize,
       syncRenderedCanvasSize,
@@ -1320,10 +1313,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const injectClipboardKeystrokes = useCallback(async (prefilledText = "") => {
     const client = remoteClientRef.current;
     if (!client) return;
-    if (effectiveViewOnly) {
-      setStatusMessage("Clipboard input is disabled while view only is enabled.");
-      return;
-    }
     let text = prefilledText || "";
     if (!text && navigator?.clipboard?.readText) {
       try {
@@ -1350,49 +1339,11 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     } catch {
       setStatusMessage("Failed to inject keystrokes.");
     }
-  }, [effectiveViewOnly]);
-
-  const pasteClipboardText = useCallback(async () => {
-    const client = remoteClientRef.current;
-    if (!client) return;
-    if (effectiveViewOnly) {
-      setStatusMessage("Clipboard input is disabled while view only is enabled.");
-      return;
-    }
-    let text = "";
-    if (navigator?.clipboard?.readText) {
-      try {
-        text = await navigator.clipboard.readText();
-      } catch {
-        text = "";
-      }
-    }
-    if (!text) {
-      setStatusMessage("Clipboard is empty or unavailable.");
-      return;
-    }
-    if (typeof client.createClipboardStream === "function") {
-      try {
-        const stream = client.createClipboardStream("text/plain");
-        const writer = new Guacamole.StringWriter(stream);
-        writer.sendText(text);
-        writer.sendEnd();
-        setStatusMessage("Clipboard pasted.");
-        return;
-      } catch {
-        // fall back to keystroke injection below
-      }
-    }
-    await injectClipboardKeystrokes(text);
-  }, [effectiveViewOnly, injectClipboardKeystrokes]);
+  }, []);
 
   const handleCtrlAltDel = useCallback(() => {
     const client = remoteClientRef.current;
     if (!client) return;
-    if (effectiveViewOnly) {
-      setStatusMessage("Keyboard input is disabled while view only is enabled.");
-      return;
-    }
     try {
       client.sendKeyEvent(1, 0xffe3);
       client.sendKeyEvent(1, 0xffe9);
@@ -1404,18 +1355,11 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     } catch {
       setStatusMessage("Failed to send Ctrl+Alt+Del.");
     }
-  }, [effectiveViewOnly]);
+  }, []);
 
-  const handlePowerAction = useCallback(
-    (_action) => {
-      if (effectiveViewOnly) {
-        setStatusMessage("Power controls are disabled while view only is enabled.");
-        return;
-      }
-      setStatusMessage("Power controls are unavailable through Apache Guacamole VNC.");
-    },
-    [effectiveViewOnly]
-  );
+  const handlePowerAction = useCallback((_action) => {
+    setStatusMessage("Power controls are unavailable through Apache Guacamole VNC.");
+  }, []);
 
   const syncViewportSelection = useCallback((_selectionIds, _options = {}) => {
     const client = remoteClientRef.current;
@@ -2331,23 +2275,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                     ))}
                   </Box>
                 ) : null}
-                <SidebarNavRow
-                  icon={<DesktopIcon fontSize="small" />}
-                  label="View only"
-                  active={displaySettingsEnabled && effectiveViewOnly}
-                  disabled={!displaySettingsEnabled}
-                  onClick={() => setViewOnly((previous) => !previous)}
-                  trailing={
-                    <Switch
-                      checked={effectiveViewOnly}
-                      onClick={(event) => event.stopPropagation()}
-                      onChange={(event) => setViewOnly(event.target.checked)}
-                      disabled={!displaySettingsEnabled}
-                      size="small"
-                      color="info"
-                    />
-                  }
-                />
               </>
             </SidebarSection>
 
@@ -2374,21 +2301,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                 }
               />
               <SidebarNavRow
-                icon={<ClipboardIcon fontSize="small" />}
-                label="Paste Clipboard"
-                disabled={!showClipboardActions || effectiveViewOnly}
-                onClick={pasteClipboardText}
-              />
-              <SidebarNavRow
                 icon={<KeyboardIcon fontSize="small" />}
                 label="Inject Keystrokes"
-                disabled={!showClipboardActions || effectiveViewOnly}
+                disabled={!showClipboardActions}
                 onClick={() => injectClipboardKeystrokes()}
               />
               <SidebarNavRow
                 icon={<KeyboardCommandKeyIcon fontSize="small" />}
                 label="Send Ctrl+Alt+Del"
-                disabled={!showClipboardActions || effectiveViewOnly}
+                disabled={!showClipboardActions}
                 onClick={handleCtrlAltDel}
               />
               </>
