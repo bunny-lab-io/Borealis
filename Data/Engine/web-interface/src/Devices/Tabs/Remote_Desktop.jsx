@@ -50,6 +50,7 @@ const MAGIC_UI = {
 const VNC_STAGE_BACKGROUND = "#0b1325";
 const VNC_CANVAS_BOX_SHADOW =
   "0 0 0 1px rgba(125, 183, 255, 0.18), 0 18px 42px rgba(2, 6, 23, 0.4)";
+const VNC_OPERATOR_CURSOR = "default";
 
 const SIDEBAR_THEME = {
   panel:
@@ -250,6 +251,45 @@ function buildRetryableError(message, retryable = true) {
   const error = message instanceof Error ? message : new Error(String(message || "Request failed."));
   error.retryable = retryable;
   return error;
+}
+
+function applyOperatorCursor(client, host = null) {
+  [host, client?._screen, client?._canvas].forEach((node) => {
+    if (!node?.style?.setProperty) return;
+    node.style.setProperty("cursor", VNC_OPERATOR_CURSOR, "important");
+  });
+
+  const noVncCursorCanvas = client?._cursor?._canvas;
+  if (noVncCursorCanvas?.style?.setProperty) {
+    noVncCursorCanvas.style.setProperty("visibility", "hidden", "important");
+  }
+}
+
+function lockNoVncCursor(client, host = null) {
+  if (!client) return;
+  client.__borealisCursorHost = host || client.__borealisCursorHost || null;
+  const applyCursor = () => applyOperatorCursor(client, client.__borealisCursorHost);
+
+  if (client.__borealisCursorLocked) {
+    applyCursor();
+    return;
+  }
+
+  client.__borealisCursorLocked = true;
+  client._refreshCursor = applyCursor;
+  client.showDotCursor = false;
+
+  if (client._cursor) {
+    client._cursor.change = applyCursor;
+    client._cursor.clear = applyCursor;
+    client._cursor.move = applyCursor;
+    client._cursor._showCursor = () => {};
+    client._cursor._hideCursor = () => {};
+    client._cursor._updateVisibility = () => {};
+    client._cursor._updatePosition = () => {};
+  }
+
+  applyCursor();
 }
 
 const VNC_AUTO_RETRY_ATTEMPTS = 3;
@@ -932,6 +972,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       canvas.style.margin = fitViewport ? "auto" : "0";
       canvas.style.boxShadow = VNC_CANVAS_BOX_SHADOW;
     }
+    lockNoVncCursor(client, host);
   }, []);
 
   const syncFramebufferSize = useCallback((client) => {
@@ -1256,7 +1297,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   useEffect(() => {
     const rfb = rfbRef.current;
     if (!rfb) return;
-    rfb.showDotCursor = true;
+    lockNoVncCursor(rfb, displayRef.current);
     rfb.viewOnly = effectiveViewOnly;
     rfb.dragViewport = dragViewport;
     rfb.resizeSession = effectiveResizeSession;
@@ -1327,8 +1368,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       const rfb = new RFB(displayHost, tunnelUrl, {
         credentials: { password: vncPassword },
       });
-      // Always show a local dot cursor so we never lose pointer visibility.
-      rfb.showDotCursor = true;
+      lockNoVncCursor(rfb, displayHost);
       rfb.background = VNC_STAGE_BACKGROUND;
       rfb.resizeSession = effectiveResizeSession;
       rfb.dragViewport = dragViewport;
@@ -3013,6 +3053,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                         flex: "0 0 auto",
                         maxWidth: "none",
                         maxHeight: "none",
+                        cursor: `${VNC_OPERATOR_CURSOR} !important`,
                         boxShadow: VNC_CANVAS_BOX_SHADOW,
                       },
                     }}
