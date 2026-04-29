@@ -532,25 +532,19 @@ export default function SiteList() {
   );
 
   const handleOpenDevicesForSite = useCallback(
-    (siteName) => {
-      try {
-        localStorage.setItem("device_list_initial_site_filter", String(siteName || ""));
-      } catch {
-        /* noop */
-      }
-      navigate(APP_PATHS.devices);
+    (site) => {
+      const siteId = site?.id;
+      if (siteId == null || siteId === "") return;
+      navigate(`${APP_PATHS.devices}?site=${encodeURIComponent(String(siteId))}`);
     },
     [navigate]
   );
 
   const handleOpenSoftwareAuditForSite = useCallback(
-    (siteName) => {
-      try {
-        localStorage.setItem("software_audit_initial_site_filter", String(siteName || ""));
-      } catch {
-        /* noop */
-      }
-      navigate(APP_PATHS.software);
+    (site) => {
+      const siteId = site?.id;
+      if (siteId == null || siteId === "") return;
+      navigate(`${APP_PATHS.software}?site=${encodeURIComponent(String(siteId))}`);
     },
     [navigate]
   );
@@ -781,7 +775,7 @@ export default function SiteList() {
           onMouseDown={stopGridRowSelectionEvent}
           onClick={(event) => {
             stopGridRowSelectionEvent(event);
-            handleOpenDevicesForSite(params.value);
+            handleOpenDevicesForSite(params.data);
           }}
         >
           {params.value}
@@ -975,7 +969,7 @@ export default function SiteList() {
         description: "Open Devices with this site filter applied.",
         onClick: () => {
           handleCloseSiteContextMenu();
-          handleOpenDevicesForSite(row?.name || "");
+          handleOpenDevicesForSite(row);
         },
       },
       {
@@ -988,7 +982,7 @@ export default function SiteList() {
         description: "Open Software Audit filtered to this site.",
         onClick: () => {
           handleCloseSiteContextMenu();
-          handleOpenSoftwareAuditForSite(row?.name || "");
+          handleOpenSoftwareAuditForSite(row);
         },
       },
       {

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLoaderData, useNavigate } from "react-router-dom";
+import { useLoaderData, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -49,12 +49,16 @@ export async function loadWatchdogListPageData(request) {
   const progress = createRouteRequestPlan(request, 4);
   try {
     await requireAuthenticatedRequest(request, progress);
+    const pageUrl = new URL(request.url);
+    const selectedSiteId = String(pageUrl.searchParams.get("site") || "").trim();
+    const siteQuery = selectedSiteId ? `&site=${encodeURIComponent(selectedSiteId)}` : "";
     const [activePayload, archivedPayload] = await Promise.all([
-      progress.fetchJson("/api/watchdogs?archived=0"),
-      progress.fetchJson("/api/watchdogs?archived=1"),
+      progress.fetchJson(`/api/watchdogs?archived=0${siteQuery}`),
+      progress.fetchJson(`/api/watchdogs?archived=1${siteQuery}`),
     ]);
 
     return {
+      selectedSiteId,
       items: Array.isArray(activePayload?.items) ? activePayload.items : [],
       archivedItems: Array.isArray(archivedPayload?.items) ? archivedPayload.items : [],
       initialError: "",
@@ -74,6 +78,7 @@ export async function loadWatchdogListPageData(request) {
 export default function WatchdogList() {
   const loaderData = useLoaderData();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const gridRef = useRef(null);
   const [items, setItems] = useState(() => (Array.isArray(loaderData?.items) ? loaderData.items : []));
   const [archivedItems, setArchivedItems] = useState(() =>
@@ -83,6 +88,10 @@ export default function WatchdogList() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(() => String(loaderData?.initialError || ""));
   const [selectedIds, setSelectedIds] = useState([]);
+  const selectedSiteId = useMemo(
+    () => String(searchParams.get("site") || "").trim(),
+    [searchParams]
+  );
 
   const rowSelection = useMemo(
     () => ({
@@ -117,9 +126,10 @@ export default function WatchdogList() {
     setLoading(true);
     setError("");
     try {
+      const siteQuery = selectedSiteId ? `&site=${encodeURIComponent(selectedSiteId)}` : "";
       const [activeResp, archivedResp] = await Promise.all([
-        fetch("/api/watchdogs?archived=0", { credentials: "include" }),
-        fetch("/api/watchdogs?archived=1", { credentials: "include" }),
+        fetch(`/api/watchdogs?archived=0${siteQuery}`, { credentials: "include" }),
+        fetch(`/api/watchdogs?archived=1${siteQuery}`, { credentials: "include" }),
       ]);
       const activeData = await activeResp.json().catch(() => ({}));
       const archivedData = await archivedResp.json().catch(() => ({}));
@@ -136,17 +146,17 @@ export default function WatchdogList() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedSiteId]);
 
   useEffect(() => {
-    if (!loaderData) {
+    if (!loaderData || String(loaderData?.selectedSiteId || "") !== selectedSiteId) {
       loadItems();
       return;
     }
     setItems(Array.isArray(loaderData?.items) ? loaderData.items : []);
     setArchivedItems(Array.isArray(loaderData?.archivedItems) ? loaderData.archivedItems : []);
     setError(String(loaderData?.initialError || ""));
-  }, [loadItems, loaderData]);
+  }, [loadItems, loaderData, selectedSiteId]);
 
   useEffect(() => {
     const socket = typeof window !== "undefined" ? window.BorealisSocket : null;

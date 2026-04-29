@@ -1,6 +1,6 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/web-interface/src/Navigation_Sidebar.jsx
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Accordion,
   AccordionSummary,
@@ -12,6 +12,7 @@ import {
   ListItemButton,
   ListItemText,
   Divider,
+  Tooltip,
 } from "@mui/material";
 import {
   ExpandMore as ExpandMoreIcon,
@@ -24,6 +25,7 @@ import {
   Apps as AssembliesIcon,
   Policy as WatchdogIcon,
   NotificationsActive as AlertsIcon,
+  SettingsRounded as SettingsIcon,
   LocationCity as SitesIcon,
   Dns as ServerInfoIcon,
   VpnKey as CredentialIcon,
@@ -33,7 +35,7 @@ import {
   DashboardCustomizeRounded as PageStyleTemplateIcon,
   ReceiptLong as LogsIcon,
 } from "@mui/icons-material";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { APP_PATHS } from "./app/routes/paths.js";
 
 const COLORS = {
@@ -48,8 +50,54 @@ const COLORS = {
     "linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
 };
 const DEVELOPER_MODE_STORAGE_KEY = "borealis_sidebar_developer_mode";
+const SITE_SCOPED_NAV_KEYS = new Set([
+  "alerts",
+  "devices",
+  "filters",
+  "watchdogs",
+  "jobs",
+  "software",
+]);
 
-const NAV_SECTIONS = Object.freeze([
+function buildSiteScopedPath(path, siteId, extraParams = {}) {
+  const params = new URLSearchParams();
+  params.set("site", String(siteId || ""));
+  Object.entries(extraParams).forEach(([key, value]) => {
+    if (value != null && value !== "") {
+      params.set(key, String(value));
+    }
+  });
+  return `${path}?${params.toString()}`;
+}
+
+function EllipsisTooltip({ children, title, tooltipTitle, ...typographyProps }) {
+  const ref = useRef(null);
+  const [showTooltip, setShowTooltip] = useState(false);
+  const resolvedTitle = tooltipTitle || title || children || "";
+
+  const updateOverflow = () => {
+    const node = ref.current;
+    if (!node) return;
+    setShowTooltip(node.scrollWidth > node.clientWidth);
+  };
+
+  return (
+    <Tooltip title={showTooltip ? resolvedTitle : ""} placement="top-start">
+      <Typography
+        {...typographyProps}
+        ref={ref}
+        noWrap
+        onMouseEnter={updateOverflow}
+        onFocus={updateOverflow}
+        title=""
+      >
+        {children}
+      </Typography>
+    </Tooltip>
+  );
+}
+
+const BASE_NAV_SECTIONS = Object.freeze([
   {
     id: "sites",
     title: "Sites",
@@ -196,7 +244,9 @@ const NAV_SECTIONS = Object.freeze([
 
 function NavigationSidebar({ activeNavKey, isAdmin = false }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
+  const [sites, setSites] = useState([]);
   const [developerModeEnabled, setDeveloperModeEnabled] = useState(() => {
     if (typeof window === "undefined") {
       return false;
@@ -215,9 +265,103 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
     developer: true,
   });
 
+  const selectedSiteId = useMemo(() => {
+    const params = new URLSearchParams(location.search || "");
+    return String(params.get("site") || "").trim();
+  }, [location.search]);
+
+  useEffect(() => {
+    if (!selectedSiteId) return;
+    let active = true;
+    const loadSites = async () => {
+      try {
+        const response = await fetch("/api/sites", { credentials: "include", cache: "no-store" });
+        const payload = await response.json().catch(() => ({}));
+        if (!active) return;
+        setSites(Array.isArray(payload?.sites) ? payload.sites : []);
+      } catch {
+        if (active) setSites([]);
+      }
+    };
+    void loadSites();
+    return () => {
+      active = false;
+    };
+  }, [selectedSiteId]);
+
+  const selectedSite = useMemo(
+    () => sites.find((site) => String(site?.id) === selectedSiteId) || null,
+    [selectedSiteId, sites]
+  );
+
+  const siteScopedSection = useMemo(() => {
+    if (!selectedSiteId) return null;
+    const siteName = String(selectedSite?.name || `Site ${selectedSiteId}`).trim();
+    return {
+      id: `site-${selectedSiteId}`,
+      title: siteName,
+      siteScoped: true,
+      items: [
+        {
+          icon: AlertsIcon,
+          label: "Alerts",
+          navKey: "alerts",
+          to: buildSiteScopedPath(APP_PATHS.alerts, selectedSiteId),
+        },
+        {
+          icon: DevicesIcon,
+          label: "Devices",
+          navKey: "devices",
+          to: buildSiteScopedPath(APP_PATHS.devices, selectedSiteId),
+        },
+        {
+          icon: FilterIcon,
+          label: "Filters",
+          navKey: "filters",
+          to: buildSiteScopedPath(APP_PATHS.filters, selectedSiteId),
+        },
+        {
+          icon: WatchdogIcon,
+          label: "Watchdogs",
+          navKey: "watchdogs",
+          to: buildSiteScopedPath(APP_PATHS.watchdogs, selectedSiteId),
+        },
+        {
+          icon: ScheduleIcon,
+          label: "Scheduled Jobs",
+          navKey: "jobs",
+          to: buildSiteScopedPath(APP_PATHS.jobs, selectedSiteId),
+        },
+        {
+          icon: SoftwareIcon,
+          label: "Software Audit",
+          navKey: "software",
+          to: buildSiteScopedPath(APP_PATHS.software, selectedSiteId),
+        },
+        {
+          icon: SettingsIcon,
+          label: "Settings",
+          navKey: "site-settings",
+          to: buildSiteScopedPath(APP_PATHS.sites, selectedSiteId, { section: "settings" }),
+        },
+      ],
+    };
+  }, [selectedSite, selectedSiteId]);
+
+  const navSections = useMemo(() => {
+    if (!siteScopedSection) return BASE_NAV_SECTIONS;
+    const sitesIndex = BASE_NAV_SECTIONS.findIndex((section) => section.id === "sites");
+    if (sitesIndex < 0) return [siteScopedSection, ...BASE_NAV_SECTIONS];
+    return [
+      ...BASE_NAV_SECTIONS.slice(0, sitesIndex + 1),
+      siteScopedSection,
+      ...BASE_NAV_SECTIONS.slice(sitesIndex + 1),
+    ];
+  }, [siteScopedSection]);
+
   const visibleSections = useMemo(
     () =>
-      NAV_SECTIONS.filter((section) => {
+      navSections.filter((section) => {
         if (section.adminOnly && !isAdmin) {
           return false;
         }
@@ -226,7 +370,7 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
         }
         return true;
       }),
-    [developerModeEnabled, isAdmin]
+    [developerModeEnabled, isAdmin, navSections]
   );
 
   const closeContextMenu = () => {
@@ -251,7 +395,7 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
 
   const Section = ({ title, k, children }) => (
     <Accordion
-      expanded={collapsed ? true : expandedNav[k]}
+      expanded={collapsed ? true : (expandedNav[k] ?? true)}
       onChange={(_, e) => {
         if (collapsed) return;
         setExpandedNav((s) => ({ ...s, [k]: e }));
@@ -273,6 +417,7 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
             m: 0,
             py: 0.5,
             display: collapsed ? "none" : "flex",
+            minWidth: 0,
           },
           display: collapsed ? "none" : "flex",
           backgroundColor: "rgba(255,255,255,0.02)",
@@ -283,24 +428,26 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
         title={collapsed ? title : undefined}
       >
         {collapsed ? null : (
-          <Typography
+          <EllipsisTooltip
+            noWrap
             sx={{
               fontSize: "0.85rem",
               color: COLORS.cyan,
               fontWeight: 700,
               letterSpacing: 0.3,
+              minWidth: 0,
             }}
           >
             {title}
-          </Typography>
+          </EllipsisTooltip>
         )}
       </AccordionSummary>
       <AccordionDetails sx={{ p: 0 }}>{children}</AccordionDetails>
     </Accordion>
   );
 
-  const NavItem = ({ icon, label, navKey, to, indent = 0 }) => {
-    const active = activeNavKey === navKey;
+  const NavItem = ({ icon, label, navKey, to, indent = 0, activeOverride }) => {
+    const active = activeOverride ?? activeNavKey === navKey;
     return (
       <ListItemButton
         onClick={() => navigate(to)}
@@ -338,13 +485,23 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
           </Box>
         )}
         <ListItemText
-          primary={label}
+          disableTypography
+          primary={
+            <EllipsisTooltip
+              component="span"
+              sx={{
+                display: "block",
+                fontSize: "0.8rem",
+                fontWeight: active ? 600 : 400,
+                letterSpacing: 0.2,
+                lineHeight: 1.45,
+                color: "inherit",
+              }}
+            >
+              {label}
+            </EllipsisTooltip>
+          }
           sx={{ display: collapsed ? "none" : "block" }}
-          primaryTypographyProps={{
-            fontSize: "0.8rem",
-            fontWeight: active ? 600 : 400,
-            letterSpacing: 0.2,
-          }}
         />
       </ListItemButton>
     );
@@ -394,6 +551,11 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
                 );
               }
               const IconComponent = item.icon;
+              const activeOverride = section.siteScoped
+                ? activeNavKey === item.navKey
+                : selectedSiteId && SITE_SCOPED_NAV_KEYS.has(item.navKey)
+                  ? false
+                  : undefined;
               return (
                 <NavItem
                   key={item.navKey}
@@ -402,6 +564,7 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
                   navKey={item.navKey}
                   to={item.to}
                   indent={item.indent || 0}
+                  activeOverride={activeOverride}
                 />
               );
             })}

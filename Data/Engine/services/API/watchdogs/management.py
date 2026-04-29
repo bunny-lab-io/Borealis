@@ -70,6 +70,16 @@ def register_management(app: Flask, adapters: "EngineServiceAdapters") -> None:
     def _require_user() -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[Dict[str, Any], int]]]:
         return auth.require_user()
 
+    def _site_query_arg() -> Optional[int]:
+        raw = request.args.get("site") or request.args.get("site_id")
+        if raw in (None, ""):
+            return None
+        try:
+            site_id = int(str(raw).strip())
+        except Exception:
+            return None
+        return site_id if site_id > 0 else None
+
     @blueprint.route("/api/watchdogs", methods=["GET"])
     def list_watchdogs():
         user, error = _require_user()
@@ -79,7 +89,7 @@ def register_management(app: Flask, adapters: "EngineServiceAdapters") -> None:
         archived = None
         if archived_raw is not None:
             archived = str(archived_raw).strip().lower() in {"1", "true", "yes", "on"}
-        return jsonify({"items": runtime.list_watchdogs(user=user, archived=archived)})
+        return jsonify({"items": runtime.list_watchdogs(user=user, archived=archived, site_id=_site_query_arg())})
 
     @blueprint.route("/api/watchdogs/metadata", methods=["GET"])
     def watchdog_metadata():
@@ -191,10 +201,11 @@ def register_management(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if error:
             return jsonify(error[0]), error[1]
         state = request.args.get("state") or "open"
+        site_id = _site_query_arg()
         return jsonify(
             {
-                "items": runtime.list_incidents(user=user, state=state),
-                "counts": runtime.list_incident_counts(user=user),
+                "items": runtime.list_incidents(user=user, state=state, site_id=site_id),
+                "counts": runtime.list_incident_counts(user=user, site_id=site_id),
             }
         )
 

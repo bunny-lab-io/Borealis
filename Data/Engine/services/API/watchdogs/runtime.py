@@ -1542,7 +1542,15 @@ class WatchdogRuntimeService:
         *,
         user: Optional[Mapping[str, Any]] = None,
         archived: Optional[bool] = None,
+        site_id: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
+        selected_site_id = _coerce_optional_int(site_id)
+        if selected_site_id is not None and not self._site_access.user_can_access_site(
+            user,
+            selected_site_id,
+            allow_unassigned_admin_only=False,
+        ):
+            return []
         conn = self._conn()
         try:
             cur = conn.cursor()
@@ -1608,6 +1616,18 @@ class WatchdogRuntimeService:
             record["action_summaries"] = _build_action_summaries(record.get("actions") or {})
             if self._watchdog_visible_to_user(record, user, all_site_ids=all_site_ids):
                 hydrated.append(record)
+        if selected_site_id is not None:
+            device_snapshot = self._get_watchdog_device_snapshot()
+            hydrated = [
+                record
+                for record in hydrated
+                if self._watchdog_targets_site(
+                    record,
+                    selected_site_id,
+                    devices=device_snapshot,
+                    all_site_ids=all_site_ids,
+                )
+            ]
         return hydrated
 
     def _row_to_watchdog(self, row: Any) -> Dict[str, Any]:
@@ -1804,6 +1824,27 @@ class WatchdogRuntimeService:
                 _clean_text(item.get("hostname")).lower(),
             ),
         )
+
+    def _watchdog_targets_site(
+        self,
+        watchdog: Mapping[str, Any],
+        site_id: Any,
+        *,
+        devices: Optional[Sequence[Mapping[str, Any]]] = None,
+        all_site_ids: Optional[set[int]] = None,
+    ) -> bool:
+        selected_site_id = _coerce_optional_int(site_id)
+        if selected_site_id is None:
+            return True
+        try:
+            resolved_targets = self.resolve_targets(
+                watchdog,
+                devices=devices,
+                all_site_ids=all_site_ids,
+            )
+        except Exception:
+            return False
+        return any(_coerce_optional_int(device.get("site_id")) == selected_site_id for device in resolved_targets)
 
     def _load_active_overrides(self, watchdog_id: int) -> Dict[str, Dict[str, Any]]:
         conn = self._conn()
@@ -3912,10 +3953,18 @@ class WatchdogRuntimeService:
         *,
         user: Optional[Mapping[str, Any]] = None,
         state: str = "open",
+        site_id: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
         normalized_state = _clean_text(state).lower()
         if normalized_state not in VALID_INCIDENT_QUERY_STATES:
             normalized_state = "open"
+        selected_site_id = _coerce_optional_int(site_id)
+        if selected_site_id is not None and not self._site_access.user_can_access_site(
+            user,
+            selected_site_id,
+            allow_unassigned_admin_only=False,
+        ):
+            return []
         visible_watchdog_ids = self._visible_watchdog_ids_for_user(user)
         if visible_watchdog_ids is not None and not visible_watchdog_ids:
             return []
@@ -3937,6 +3986,9 @@ class WatchdogRuntimeService:
             if normalized_state != "all":
                 clauses.append("i.state = ?")
                 params.append(normalized_state)
+            if selected_site_id is not None:
+                clauses.append("i.site_id = ?")
+                params.append(selected_site_id)
             if visible_watchdog_ids is not None:
                 placeholders = ",".join("?" for _ in visible_watchdog_ids)
                 clauses.append(f"i.watchdog_id IN ({placeholders})")
@@ -3982,8 +4034,16 @@ class WatchdogRuntimeService:
         self,
         *,
         user: Optional[Mapping[str, Any]] = None,
+        site_id: Optional[Any] = None,
     ) -> Dict[str, int]:
         counts = {state: 0 for state in VALID_INCIDENT_STATES}
+        selected_site_id = _coerce_optional_int(site_id)
+        if selected_site_id is not None:
+            for incident in self.list_incidents(user=user, state="all", site_id=selected_site_id):
+                state = _clean_text(incident.get("state")).lower()
+                if state in counts:
+                    counts[state] += 1
+            return counts
         visible_watchdog_ids = self._visible_watchdog_ids_for_user(user)
         if visible_watchdog_ids is not None and not visible_watchdog_ids:
             return counts

@@ -23,7 +23,7 @@ import Inventory2RoundedIcon from "@mui/icons-material/Inventory2Rounded";
 import LockOpenRoundedIcon from "@mui/icons-material/LockOpenRounded";
 import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
 import { AgGridReact } from "ag-grid-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { ConfirmDeleteDialog } from "../Dialogs.jsx";
 import {
   DIALOG_ACTIONS_SX,
@@ -581,6 +581,7 @@ export default function SoftwareList() {
   const gridRef = useRef(null);
   const softwareRefreshTimersRef = useRef([]);
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const notifyOperator = useAppNotifications();
   const [softwareRows, setSoftwareRows] = useState([]);
   const [loadError, setLoadError] = useState("");
@@ -603,6 +604,10 @@ export default function SoftwareList() {
     reason: "",
     submitting: false,
   });
+  const selectedSiteId = useMemo(
+    () => String(searchParams.get("site") || "").trim(),
+    [searchParams]
+  );
 
   useRoutePageChrome({
     title: PAGE_TITLE,
@@ -662,15 +667,24 @@ export default function SoftwareList() {
     }
   }, []);
 
+  useEffect(() => {
+    if (!selectedSiteId) return;
+    const rowSiteName = softwareRows.find((row) => String(row?.site_id ?? "") === selectedSiteId)?.site_name;
+    setSiteFilter(text(rowSiteName) || `Site ${selectedSiteId}`);
+  }, [selectedSiteId, softwareRows]);
+
   const siteScopedRows = useMemo(
     () =>
       softwareRows.filter((row) => {
-        if (siteFilter && text(row.site_name).toLowerCase() !== siteFilter.toLowerCase()) {
+        if (selectedSiteId && String(row?.site_id ?? "") !== selectedSiteId) {
+          return false;
+        }
+        if (!selectedSiteId && siteFilter && text(row.site_name).toLowerCase() !== siteFilter.toLowerCase()) {
           return false;
         }
         return true;
       }),
-    [siteFilter, softwareRows]
+    [selectedSiteId, siteFilter, softwareRows]
   );
 
   const platformCountRows = useMemo(
@@ -1130,7 +1144,14 @@ export default function SoftwareList() {
                 </Typography>
                 <Button
                   size="small"
-                  onClick={() => setSiteFilter("")}
+                  onClick={() => {
+                    setSiteFilter("");
+                    if (selectedSiteId) {
+                      const nextParams = new URLSearchParams(searchParams);
+                      nextParams.delete("site");
+                      setSearchParams(nextParams, { replace: true });
+                    }
+                  }}
                   sx={{
                     minWidth: 0,
                     px: 1,

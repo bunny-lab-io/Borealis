@@ -5448,6 +5448,55 @@ class JobScheduler:
                     return f'Filter "{record.get("name") or filter_id}" is archived and cannot be scheduled.'
             return None
 
+        def _parse_site_query(raw_value: Any) -> Optional[int]:
+            if raw_value in (None, ""):
+                return None
+            try:
+                site_id = int(str(raw_value).strip())
+            except Exception:
+                return None
+            return site_id if site_id > 0 else None
+
+        def _job_targets_match_site(
+            raw_targets: Any,
+            site_id: int,
+            *,
+            device_inventory_cache: Optional[Sequence[Dict[str, Any]]] = None,
+        ) -> bool:
+            try:
+                targets = json.loads(raw_targets or "[]") if isinstance(raw_targets, str) else list(raw_targets or [])
+            except Exception:
+                targets = []
+            if not targets:
+                return False
+            selected_site_id = int(site_id)
+            for target in targets:
+                if not isinstance(target, dict):
+                    continue
+                try:
+                    target_site_id = int(str(target.get("site_id") or target.get("siteId") or "").strip())
+                except Exception:
+                    target_site_id = None
+                if target_site_id == selected_site_id:
+                    return True
+            try:
+                _target_hosts, target_meta = self._filter_matcher.resolve_target_entries(
+                    targets,
+                    devices=list(device_inventory_cache or []),
+                )
+            except Exception:
+                return False
+            for target in (target_meta or {}).get("resolved_targets") or []:
+                if not isinstance(target, dict):
+                    continue
+                try:
+                    target_site_id = int(str(target.get("site_id") or "").strip())
+                except Exception:
+                    target_site_id = None
+                if target_site_id == selected_site_id:
+                    return True
+            return False
+
         def _is_workflow_component(component: Any) -> bool:
             if not isinstance(component, dict):
                 return False
@@ -5569,20 +5618,46 @@ class JobScheduler:
                 return json.dumps(requirement[0]), requirement[1], {"Content-Type": "application/json"}
             user = self._current_user() or {}
             try:
+                from flask import request
+                selected_site_id = _parse_site_query(request.args.get("site") or request.args.get("site_id"))
+                if selected_site_id is not None and not self._site_access.user_can_access_site(
+                    user,
+                    selected_site_id,
+                    allow_unassigned_admin_only=False,
+                ):
+                    return json.dumps({"jobs": []}), 200, {"Content-Type": "application/json"}
                 conn = self._conn()
-                cur = conn.cursor()
-                cur.execute(
-                    """
-                    SELECT id, name, components_json, targets_json, schedule_type, start_ts,
-                           duration_stop_enabled, expiration, execution_context, credential_id,
-                           use_service_account, enabled, created_at, updated_at
-                    FROM scheduled_jobs
-                    ORDER BY created_at DESC
-                    """
-                )
-                rows_raw = cur.fetchall()
-                rows = [_job_row_to_dict(r) for r in rows_raw if self._job_visible_to_user(user, r[3])]
-                conn.close()
+                try:
+                    cur = conn.cursor()
+                    cur.execute(
+                        """
+                        SELECT id, name, components_json, targets_json, schedule_type, start_ts,
+                               duration_stop_enabled, expiration, execution_context, credential_id,
+                               use_service_account, enabled, created_at, updated_at
+                        FROM scheduled_jobs
+                        ORDER BY created_at DESC
+                        """
+                    )
+                    rows_raw = cur.fetchall()
+                finally:
+                    conn.close()
+                device_inventory_cache = None
+                if selected_site_id is not None:
+                    try:
+                        device_inventory_cache = self._filter_matcher.fetch_devices()
+                    except Exception:
+                        device_inventory_cache = []
+                rows = []
+                for r in rows_raw:
+                    if not self._job_visible_to_user(user, r[3]):
+                        continue
+                    if selected_site_id is not None and not _job_targets_match_site(
+                        r[3],
+                        selected_site_id,
+                        device_inventory_cache=device_inventory_cache,
+                    ):
+                        continue
+                    rows.append(_job_row_to_dict(r))
                 return json.dumps({"jobs": rows}), 200, {"Content-Type": "application/json"}
             except Exception as e:
                 return json.dumps({"error": str(e)}), 500, {"Content-Type": "application/json"}
@@ -6215,6 +6290,7 @@ class JobScheduler:
                         effective_records.append(
                             {
                                 "hostname": hostname,
+                                "site_id": target.get("site_id"),
                                 "site_name": str(target.get("site_name") or "").strip(),
                                 "inventory_hostname": _inventory_hostname_for_target(
                                     hostname,
@@ -6238,6 +6314,7 @@ class JobScheduler:
                             effective_records.append(
                                 {
                                     "hostname": display_host,
+                                    "site_id": None,
                                     "site_name": "",
                                     "inventory_hostname": "",
                                     "resolution_status": "",
@@ -6267,6 +6344,8 @@ class JobScheduler:
                     out.append({
                         "hostname": rec.get("hostname") or "",
                         "online": host_key in online,
+                        "site_id": rec.get("site_id"),
+                        "site_name": rec.get("site_name") or "",
                         "site": rec.get("site_name") or "",
                         "inventory_hostname": rec.get("inventory_hostname") or "",
                         "wireguard_peer_ip": rec.get("wireguard_peer_ip") or "",

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -103,14 +103,19 @@ function normalizeArray(value) {
 
 export default function ActiveAlerts() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const gridRef = useRef(null);
-  const [stateTab, setStateTab] = useState("");
+  const [stateTab, setStateTab] = useState("open");
   const [incidents, setIncidents] = useState([]);
   const [queueCounts, setQueueCounts] = useState({ open: 0, suppressed: 0, resolved: 0 });
   const [loading, setLoading] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
   const [error, setError] = useState("");
   const [selectedIncidentIds, setSelectedIncidentIds] = useState([]);
+  const selectedSiteId = useMemo(
+    () => String(searchParams.get("site") || "").trim(),
+    [searchParams]
+  );
 
   const getRowId = useCallback((params) => String(params.data?.id ?? ""), []);
 
@@ -146,7 +151,8 @@ export default function ActiveAlerts() {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/watchdogs/incidents?state=all", {
+      const siteQuery = selectedSiteId ? `&site=${encodeURIComponent(selectedSiteId)}` : "";
+      const response = await fetch(`/api/watchdogs/incidents?state=all${siteQuery}`, {
         credentials: "include",
         cache: "no-store",
       });
@@ -170,7 +176,7 @@ export default function ActiveAlerts() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedSiteId]);
 
   useEffect(() => {
     loadIncidents();
@@ -179,7 +185,7 @@ export default function ActiveAlerts() {
   useEffect(() => {
     setSelectedIncidentIds([]);
     gridRef.current?.api?.deselectAll?.();
-  }, [stateTab]);
+  }, [selectedSiteId, stateTab]);
 
   useEffect(() => {
     const socket = typeof window !== "undefined" ? window.BorealisSocket : null;

@@ -5,7 +5,7 @@ import React, {
   useRef,
   useState
 } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Paper,
   Box,
@@ -171,6 +171,7 @@ function ResultsBar({ counts }) {
 
 export default function ScheduledJobsList({ refreshToken }) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -186,6 +187,10 @@ export default function ScheduledJobsList({ refreshToken }) {
     icon: "schedule",
     variant: "info",
   });
+  const selectedSiteId = useMemo(
+    () => String(searchParams.get("site") || "").trim(),
+    [searchParams]
+  );
 
   const autoSizeTrackedColumns = useCallback(() => {
     const api = gridApiRef.current;
@@ -270,7 +275,8 @@ export default function ScheduledJobsList({ refreshToken }) {
         setError("");
       }
       try {
-        const resp = await fetch("/api/scheduled_jobs");
+        const siteQuery = selectedSiteId ? `?site=${encodeURIComponent(selectedSiteId)}` : "";
+        const resp = await fetch(`/api/scheduled_jobs${siteQuery}`);
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) {
           throw new Error(data?.error || `HTTP ${resp.status}`);
@@ -452,7 +458,7 @@ export default function ScheduledJobsList({ refreshToken }) {
         }
       }
     },
-    [assemblyIndex, deriveRowKey]
+    [assemblyIndex, deriveRowKey, selectedSiteId]
   );
 
   useEffect(() => {
@@ -497,7 +503,7 @@ export default function ScheduledJobsList({ refreshToken }) {
   const filteredRows = useMemo(() => {
     if (jobFilterMode === "all") return rows;
     return rows.filter((row) => row?.categoryFlags?.[jobFilterMode]);
-  }, [rows, jobFilterMode]);
+  }, [jobFilterMode, rows]);
   const activeFilterLabel = useMemo(() => {
     const match = FILTER_OPTIONS.find((option) => option.key === jobFilterMode);
     return match ? match.label : jobFilterMode;

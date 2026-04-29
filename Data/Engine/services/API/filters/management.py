@@ -419,6 +419,19 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
             return jsonify(payload), status
         archived_raw = str(request.args.get("archived") or "0").strip().lower()
         archived = archived_raw in {"1", "true", "yes", "archived"}
+        site_raw = request.args.get("site") or request.args.get("site_id")
+        try:
+            selected_site_id = int(str(site_raw).strip()) if site_raw not in (None, "") else None
+        except Exception:
+            selected_site_id = None
+        if selected_site_id is not None and selected_site_id <= 0:
+            selected_site_id = None
+        if selected_site_id is not None and not site_access.user_can_access_site(
+            user,
+            selected_site_id,
+            allow_unassigned_admin_only=False,
+        ):
+            return jsonify({"filters": [], "archived": archived})
         ids = _load_ordered_filter_ids(archived=archived)
         records = matcher.load_filters(ids, include_archived=True)
         all_site_ids = _load_all_site_ids()
@@ -427,6 +440,21 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
             for filter_id in ids
             if int(filter_id) in records and _filter_visible_to_user(records[int(filter_id)], user, all_site_ids=all_site_ids)
         ]
+        if selected_site_id is not None and ordered:
+            try:
+                visible_devices = matcher.fetch_devices(allowed_site_ids=site_access.site_ids_for_user(user))
+            except Exception:
+                visible_devices = []
+            selected_site_key = str(selected_site_id)
+            site_scoped: List[Dict[str, Any]] = []
+            for record in ordered:
+                try:
+                    matched_devices = matcher.match_filter_devices(record, devices=visible_devices)
+                except Exception:
+                    matched_devices = []
+                if any(str(device.get("site_id") or "") == selected_site_key for device in matched_devices):
+                    site_scoped.append(record)
+            ordered = site_scoped
         _attach_counts_and_usage(ordered, user=user)
         return jsonify({"filters": ordered, "archived": archived})
 

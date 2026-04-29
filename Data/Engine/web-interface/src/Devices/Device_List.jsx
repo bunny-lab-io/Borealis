@@ -1,7 +1,7 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/web-interface/src/Devices/Device_List.jsx
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useLoaderData, useNavigate } from "react-router-dom";
+import { useLoaderData, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Alert,
   Paper,
@@ -564,6 +564,7 @@ export default function DeviceList({
 }) {
   const loaderData = useLoaderData();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { isAdmin, user } = useAuth();
   const initialRows = useMemo(
     () => filterDeviceRowsByMode(loaderData?.rows, filterMode),
@@ -576,6 +577,10 @@ export default function DeviceList({
   const initialSites = useMemo(
     () => (Array.isArray(loaderData?.sites) ? loaderData.sites : []),
     [loaderData?.sites]
+  );
+  const selectedSiteId = useMemo(
+    () => String(searchParams.get("site") || "").trim(),
+    [searchParams]
   );
   const initialError = String(loaderData?.initialError || "");
   const [rows, setRows] = useState(() => initialRows);
@@ -1056,6 +1061,18 @@ export default function DeviceList({
         localStorage.removeItem('device_list_initial_site_filter');
       }
 
+      if (selectedSiteId) {
+        setColumns((prev) => {
+          const hasSite = prev.some((c) => c.id === 'site');
+          if (hasSite) return prev;
+          const next = [...prev];
+          const statusIndex = next.findIndex((c) => c.id === 'status');
+          const insertAt = statusIndex >= 0 ? statusIndex + 1 : 0;
+          next.splice(insertAt, 0, { id: 'site', label: COL_LABELS.site });
+          return next;
+        });
+      }
+
       const hostnamesJson = localStorage.getItem("device_list_initial_hostnames_filter");
       if (hostnamesJson) {
         const hostnames = JSON.parse(hostnamesJson);
@@ -1073,7 +1090,7 @@ export default function DeviceList({
         localStorage.removeItem("device_list_initial_hostnames_filter");
       }
     } catch {}
-  }, [COL_LABELS.site, mergeFilters]);
+  }, [COL_LABELS.site, mergeFilters, selectedSiteId]);
 
   useEffect(() => {
     let active = true;
@@ -1127,8 +1144,11 @@ export default function DeviceList({
             savedFilterHostnames.has(String(row?.hostname || "").trim().toLowerCase())
           )
         : rows;
-    return [...filteredRows].sort(compareDeviceRowsBySiteThenHostname);
-  }, [rows, savedFilterHostnames]);
+    const siteScopedRows = selectedSiteId
+      ? filteredRows.filter((row) => String(row?.siteId ?? "") === selectedSiteId)
+      : filteredRows;
+    return [...siteScopedRows].sort(compareDeviceRowsBySiteThenHostname);
+  }, [rows, savedFilterHostnames, selectedSiteId]);
 
   const applyView = useCallback((view) => {
     if (!view || view.id === "default") {

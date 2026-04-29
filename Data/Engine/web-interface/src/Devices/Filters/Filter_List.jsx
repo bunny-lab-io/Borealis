@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLoaderData, useNavigate } from "react-router-dom";
+import { useLoaderData, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -271,12 +271,16 @@ export async function loadDeviceFilterListPageData(request) {
   const progress = createRouteRequestPlan(request, 4);
   try {
     await requireAuthenticatedRequest(request, progress);
+    const pageUrl = new URL(request.url);
+    const selectedSiteId = String(pageUrl.searchParams.get("site") || "").trim();
+    const siteQuery = selectedSiteId ? `&site=${encodeURIComponent(selectedSiteId)}` : "";
     const [activePayload, archivedPayload] = await Promise.all([
-      progress.fetchJson("/api/device_filters?archived=0"),
-      progress.fetchJson("/api/device_filters?archived=1"),
+      progress.fetchJson(`/api/device_filters?archived=0${siteQuery}`),
+      progress.fetchJson(`/api/device_filters?archived=1${siteQuery}`),
     ]);
 
     return {
+      selectedSiteId,
       filterCollections: {
         active: Array.isArray(activePayload?.filters) ? activePayload.filters : [],
         archived: Array.isArray(archivedPayload?.filters) ? archivedPayload.filters : [],
@@ -297,6 +301,7 @@ export async function loadDeviceFilterListPageData(request) {
 export default function DeviceFilterList({ refreshToken }) {
   const loaderData = useLoaderData();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const gridRef = useRef(null);
   const [tab, setTab] = useState("active");
   const [filterCollections, setFilterCollections] = useState(
@@ -306,6 +311,10 @@ export default function DeviceFilterList({ refreshToken }) {
   const [error, setError] = useState(() => String(loaderData?.initialError || ""));
   const [actionError, setActionError] = useState("");
   const [jobsDialog, setJobsDialog] = useState({ open: false, jobs: [], title: "" });
+  const selectedSiteId = useMemo(
+    () => String(searchParams.get("site") || "").trim(),
+    [searchParams]
+  );
   const filters = useMemo(() => {
     if (tab === "archived") return filterCollections.archived || [];
     if (tab === "active") return filterCollections.active || [];
@@ -323,8 +332,9 @@ export default function DeviceFilterList({ refreshToken }) {
     setLoading(true);
     setError("");
     try {
+      const siteQuery = selectedSiteId ? `&site=${encodeURIComponent(selectedSiteId)}` : "";
       const loadBucket = async (archived) => {
-        const response = await fetch(`/api/device_filters?archived=${archived ? "1" : "0"}`);
+        const response = await fetch(`/api/device_filters?archived=${archived ? "1" : "0"}${siteQuery}`);
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
           throw new Error(data?.message || data?.error || `Failed to load filters (${response.status})`);
@@ -342,16 +352,16 @@ export default function DeviceFilterList({ refreshToken }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedSiteId]);
 
   useEffect(() => {
-    if (!loaderData) {
+    if (!loaderData || String(loaderData?.selectedSiteId || "") !== selectedSiteId) {
       loadFilters();
       return;
     }
     setFilterCollections(loaderData?.filterCollections || { active: [], archived: [] });
     setError(String(loaderData?.initialError || ""));
-  }, [loadFilters, loaderData, refreshToken]);
+  }, [loadFilters, loaderData, refreshToken, selectedSiteId]);
 
   const handleViewDevices = useCallback(
     (filter) => {
