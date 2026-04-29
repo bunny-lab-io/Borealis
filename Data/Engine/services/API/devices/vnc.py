@@ -25,7 +25,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from ....public_endpoints import build_websocket_url, public_guacamole_vnc_path, wireguard_endpoint
 from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
-from ...RemoteDesktop.guacamole_proxy import guacd_health
+from ...RemoteDesktop.guacamole_proxy import guacd_health, normalize_guacamole_performance_preference
 from ...RemoteDesktop.vnc_proxy import ensure_guacamole_vnc_proxy
 from ...RemoteDesktop.vnc_sessions import ensure_vnc_collaboration_manager
 from .tunnel import _get_tunnel_service, _resolve_requested_agent_id
@@ -478,10 +478,12 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         *,
         remove_wallpaper: bool,
         viewer: str = "guacamole",
+        performance_preference: int = 0,
     ) -> Tuple[Dict[str, Any], int]:
         normalized_viewer = _normalize_viewer(viewer)
         if normalized_viewer != "guacamole":
             return {"error": "invalid_viewer"}, 400
+        normalized_performance_preference = normalize_guacamole_performance_preference(performance_preference)
         manager = ensure_vnc_collaboration_manager(adapters.context, logger=logger)
         _trace(
             "E01",
@@ -490,6 +492,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             remote=_request_remote() or "-",
             remove_wallpaper=remove_wallpaper,
             viewer=normalized_viewer,
+            performance_preference=normalized_performance_preference,
         )
         agent_credential = manager.get_agent_credential(agent_id)
         recent_credential_refresh = False
@@ -981,6 +984,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             "tunnel_id": session_payload.get("tunnel_id"),
             "engine_virtual_ip": session_payload.get("engine_virtual_ip"),
             "vnc_port": vnc_port,
+            "performance_preference": normalized_performance_preference,
         }
 
         def _on_open() -> None:
@@ -1017,6 +1021,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             role=participant.role,
             width=width,
             height=height,
+            performance_preference=normalized_performance_preference,
             restart_tunnel=_restart_tunnel,
             confirm_transport=_confirm_transport,
             on_open=_on_open,
@@ -1064,12 +1069,16 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         viewer = _normalize_viewer(body.get("viewer"))
         if viewer != "guacamole":
             return jsonify({"error": "invalid_viewer"}), 400
+        performance_preference = normalize_guacamole_performance_preference(
+            body.get("performance_preference")
+        )
 
         payload, status = _issue_session(
             agent_id,
             operator_id,
             remove_wallpaper=remove_wallpaper,
             viewer=viewer,
+            performance_preference=performance_preference,
         )
         return jsonify(payload), status
 

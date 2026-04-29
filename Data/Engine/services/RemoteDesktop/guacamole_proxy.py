@@ -27,6 +27,13 @@ _GUACD_CONNECT_TIMEOUT_SECONDS = 3.0
 _GUACD_HANDSHAKE_TIMEOUT_SECONDS = 5.0
 _GUACD_READY_ATTEMPTS = 7
 _GUACD_READY_RETRY_DELAY_SECONDS = 1.25
+_GUACAMOLE_VNC_PERFORMANCE_ARGUMENTS: Dict[int, Dict[str, str]] = {
+    -2: {"compress-level": "1", "quality-level": "3", "force-lossless": ""},
+    -1: {"compress-level": "3", "quality-level": "5", "force-lossless": ""},
+    0: {"compress-level": "", "quality-level": "", "force-lossless": ""},
+    1: {"compress-level": "7", "quality-level": "8", "force-lossless": ""},
+    2: {"compress-level": "9", "quality-level": "9", "force-lossless": "true"},
+}
 
 
 @dataclass
@@ -45,6 +52,7 @@ class GuacamoleVncSession:
     width: int = 1024
     height: int = 768
     dpi: int = 96
+    performance_preference: int = 0
     restart_tunnel: Optional[Callable[[str], None]] = None
     confirm_transport: Optional[Callable[[str], None]] = None
     on_open: Optional[Callable[[], None]] = None
@@ -78,6 +86,7 @@ class GuacamoleSessionRegistry:
         width: int = 1024,
         height: int = 768,
         dpi: int = 96,
+        performance_preference: int = 0,
         restart_tunnel: Optional[Callable[[str], None]] = None,
         confirm_transport: Optional[Callable[[str], None]] = None,
         on_open: Optional[Callable[[], None]] = None,
@@ -100,6 +109,7 @@ class GuacamoleSessionRegistry:
             width=max(1, int(width or 1024)),
             height=max(1, int(height or 768)),
             dpi=max(1, int(dpi or 96)),
+            performance_preference=normalize_guacamole_performance_preference(performance_preference),
             restart_tunnel=restart_tunnel,
             confirm_transport=confirm_transport,
             on_open=on_open,
@@ -136,6 +146,21 @@ def encode_instruction(opcode: Any, *args: Any) -> str:
     parts.extend("" if arg is None else str(arg) for arg in args)
     encoded = [f"{len(part)}.{part}" for part in parts]
     return ",".join(encoded) + ";"
+
+
+def normalize_guacamole_performance_preference(value: Any) -> int:
+    try:
+        if isinstance(value, bool):
+            raise ValueError("bool_not_supported")
+        normalized = int(value)
+    except (TypeError, ValueError):
+        normalized = 0
+    return max(-2, min(2, normalized))
+
+
+def guacamole_vnc_performance_arguments(preference: Any) -> Dict[str, str]:
+    normalized = normalize_guacamole_performance_preference(preference)
+    return dict(_GUACAMOLE_VNC_PERFORMANCE_ARGUMENTS.get(normalized) or _GUACAMOLE_VNC_PERFORMANCE_ARGUMENTS[0])
 
 
 class GuacamoleProtocolParser:
@@ -189,6 +214,7 @@ def guacamole_connect_arguments(session: GuacamoleVncSession, names: List[str]) 
         "clipboard-encoding": "UTF-8",
         "autoretry": "3",
     }
+    values.update(guacamole_vnc_performance_arguments(session.performance_preference))
     resolved: List[str] = []
     for index, name in enumerate(names):
         normalized = str(name or "")
@@ -533,6 +559,8 @@ __all__ = [
     "GuacamoleVncSession",
     "encode_instruction",
     "guacamole_connect_arguments",
+    "guacamole_vnc_performance_arguments",
     "guacd_health",
+    "normalize_guacamole_performance_preference",
     "proxy_guacamole_vnc_session",
 ]

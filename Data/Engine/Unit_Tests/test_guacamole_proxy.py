@@ -125,6 +125,37 @@ def test_guacamole_connect_arguments_are_server_side_only() -> None:
     ]
 
 
+def test_guacamole_connect_arguments_include_performance_preference() -> None:
+    session = GuacamoleVncSession(
+        token="token",
+        agent_id="agent-1",
+        host="10.255.0.4",
+        port=5900,
+        password="secretpw",
+        created_at=0,
+        expires_at=120,
+        role="controller",
+        performance_preference=2,
+    )
+
+    values = guacamole_connect_arguments(
+        session,
+        [
+            guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
+            "force-lossless",
+            "compress-level",
+            "quality-level",
+        ],
+    )
+
+    assert values == [
+        guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
+        "true",
+        "9",
+        "9",
+    ]
+
+
 def test_guacamole_filters_internal_ping_before_guacd() -> None:
     payload = (
         encode_instruction("sync", "12345")

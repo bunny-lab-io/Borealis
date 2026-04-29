@@ -13,6 +13,7 @@ import {
   Divider,
   ListItemButton,
   ListItemText,
+  Slider,
   Switch,
   LinearProgress,
   Stack,
@@ -277,6 +278,10 @@ const VNC_IDLE_DISCONNECT_MS = 6 * 60 * 1000;
 const VNC_TUNNEL_UNSTABLE_THRESHOLD_MS = VNC_IDLE_WARNING_MS;
 const VNC_TUNNEL_RECEIVE_TIMEOUT_MS = VNC_IDLE_DISCONNECT_MS;
 const ALL_DISPLAYS_ID = "__all_displays__";
+const REMOTE_DESKTOP_PERFORMANCE_STORAGE_KEY = "borealis_remote_desktop_performance_preference";
+const PERFORMANCE_PREFERENCE_MIN = -2;
+const PERFORMANCE_PREFERENCE_MAX = 2;
+const PERFORMANCE_PREFERENCE_DEFAULT = 0;
 const CONNECTION_FLOW_STEPS = Object.freeze([
   {
     id: "tunnel",
@@ -304,6 +309,12 @@ const CONNECTION_FLOW_STEPS = Object.freeze([
     detail: "Finalizing the live desktop stream for control.",
   },
 ]);
+
+function normalizePerformancePreference(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return PERFORMANCE_PREFERENCE_DEFAULT;
+  return Math.max(PERFORMANCE_PREFERENCE_MIN, Math.min(PERFORMANCE_PREFERENCE_MAX, parsed));
+}
 
 function sendGuacamoleKeysym(client, keysym) {
   if (!client || keysym == null || typeof client.sendKeyEvent !== "function") return;
@@ -611,6 +622,16 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const [sessionId, setSessionId] = useState("");
   const [, setParticipantId] = useState("");
   const [displayMode, setDisplayMode] = useState("fit");
+  const [performancePreference, setPerformancePreference] = useState(() => {
+    if (typeof window === "undefined") return PERFORMANCE_PREFERENCE_DEFAULT;
+    try {
+      return normalizePerformancePreference(
+        window.localStorage.getItem(REMOTE_DESKTOP_PERFORMANCE_STORAGE_KEY)
+      );
+    } catch {
+      return PERFORMANCE_PREFERENCE_DEFAULT;
+    }
+  });
   const [expandedSidebarSections, setExpandedSidebarSections] = useState({
     display: true,
     clipboard: true,
@@ -837,6 +858,18 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   useEffect(() => {
     clipboardSyncRef.current = clipboardSync;
   }, [clipboardSync]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        REMOTE_DESKTOP_PERFORMANCE_STORAGE_KEY,
+        String(normalizePerformancePreference(performancePreference))
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [performancePreference]);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -1121,7 +1154,12 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       const resp = await fetch("/api/vnc/establish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_id: agentId, remove_wallpaper: true, viewer: "guacamole" }),
+        body: JSON.stringify({
+          agent_id: agentId,
+          remove_wallpaper: true,
+          viewer: "guacamole",
+          performance_preference: normalizePerformancePreference(performancePreference),
+        }),
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
@@ -1144,13 +1182,34 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       }
       throw err;
     }
-  }, [agentId, applySessionBootstrap, handleAgentOnboarding]);
+  }, [agentId, applySessionBootstrap, handleAgentOnboarding, performancePreference]);
 
   const handleClipboardSyncAttempt = useCallback(() => {
     setClipboardSync(false);
     clipboardSyncRef.current = false;
     setClipboardNotImplementedOpen(true);
   }, []);
+
+  const handlePerformancePreferenceChange = useCallback((_event, value) => {
+    setPerformancePreference(normalizePerformancePreference(Array.isArray(value) ? value[0] : value));
+  }, []);
+
+  const handlePerformancePreferenceCommitted = useCallback(
+    (_event, value) => {
+      const normalized = normalizePerformancePreference(Array.isArray(value) ? value[0] : value);
+      setPerformancePreference(normalized);
+      if (sessionStateRef.current === "connected") {
+        setStatusMessage("Speed/quality preference will apply on reconnect.");
+        void notifyOperator({
+          title: "Remote Desktop Preference Saved",
+          message: "Speed/quality preference will apply on the next remote desktop reconnect.",
+          icon: "info",
+          variant: "info",
+        });
+      }
+    },
+    [notifyOperator]
+  );
 
   const openGuacamoleSession = useCallback(
     async (data, options = {}) => {
@@ -2542,12 +2601,69 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
               sectionId="session"
               title="Session Control"
             >
+              <>
               <SidebarNavRow
                 icon={<StopIcon fontSize="small" />}
                 label="Disconnect"
                 disabled={!isConnected}
                 onClick={handleDisconnect}
               />
+              <Box sx={{ px: 1.5, pt: 1, pb: 1.25 }}>
+                <Stack
+                  direction="row"
+                  alignItems="center"
+                  justifyContent="space-between"
+                  sx={{ mb: 0.5 }}
+                >
+                  <Typography
+                    variant="caption"
+                    sx={{ color: SIDEBAR_THEME.muted, fontWeight: 700 }}
+                  >
+                    Speed
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    sx={{ color: SIDEBAR_THEME.muted, fontWeight: 700 }}
+                  >
+                    Quality
+                  </Typography>
+                </Stack>
+                <Slider
+                  value={performancePreference}
+                  min={PERFORMANCE_PREFERENCE_MIN}
+                  max={PERFORMANCE_PREFERENCE_MAX}
+                  step={1}
+                  size="small"
+                  onChange={handlePerformancePreferenceChange}
+                  onChangeCommitted={handlePerformancePreferenceCommitted}
+                  aria-label="Remote desktop speed quality preference"
+                  sx={{
+                    color: NAV_COLORS.cyan,
+                    height: 4,
+                    px: 0.25,
+                    "& .MuiSlider-rail": {
+                      opacity: 0.28,
+                      backgroundColor: "rgba(148,163,184,0.75)",
+                    },
+                    "& .MuiSlider-track": {
+                      border: 0,
+                      background:
+                        "linear-gradient(90deg, rgba(125,183,255,0.95), rgba(192,132,252,0.9))",
+                    },
+                    "& .MuiSlider-thumb": {
+                      width: 14,
+                      height: 14,
+                      backgroundColor: "#dbeafe",
+                      border: "1px solid rgba(125,183,255,0.72)",
+                      boxShadow: "0 0 0 4px rgba(125,183,255,0.12)",
+                      "&:hover, &.Mui-focusVisible": {
+                        boxShadow: "0 0 0 6px rgba(125,183,255,0.18)",
+                      },
+                    },
+                  }}
+                />
+              </Box>
+              </>
             </SidebarSection>
           </Box>
 

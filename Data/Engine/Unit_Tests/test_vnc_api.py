@@ -132,6 +132,7 @@ class _FakeRegistry:
         width: int = 0,
         height: int = 0,
         dpi: int = 0,
+        performance_preference: int = 0,
         restart_tunnel: Any = None,
         confirm_transport: Any = None,
         on_open: Any = None,
@@ -150,6 +151,7 @@ class _FakeRegistry:
                 "width": width,
                 "height": height,
                 "dpi": dpi,
+                "performance_preference": performance_preference,
                 "on_open": on_open,
                 "on_close": on_close,
             }
@@ -176,6 +178,7 @@ class _FakeGuacamoleRegistry:
         role: str = "",
         width: int = 0,
         height: int = 0,
+        performance_preference: int = 0,
         restart_tunnel: Any = None,
         confirm_transport: Any = None,
         on_open: Any = None,
@@ -193,6 +196,7 @@ class _FakeGuacamoleRegistry:
                 "role": role,
                 "width": width,
                 "height": height,
+                "performance_preference": performance_preference,
                 "on_open": on_open,
                 "on_close": on_close,
             }
@@ -278,6 +282,8 @@ def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestH
     assert fake_registry.created[0]["role"] == "controller"
     assert fake_registry.created[0]["width"] == 2944
     assert fake_registry.created[0]["height"] == 1380
+    assert fake_registry.created[0]["performance_preference"] == 0
+    assert payload["performance_preference"] == 0
     assert payload["participant_role"] == "controller"
     assert payload["view_only"] is False
     assert payload["session"]["controller_operator_id"] == "admin"
@@ -363,7 +369,11 @@ def test_vnc_establish_guacamole_returns_server_side_token_without_password(
 
     response = client.post(
         "/api/vnc/establish",
-        json={"agent_id": "test-device-agent", "viewer": "guacamole"},
+        json={
+            "agent_id": "test-device-agent",
+            "viewer": "guacamole",
+            "performance_preference": 2,
+        },
     )
 
     assert response.status_code == 200
@@ -377,6 +387,8 @@ def test_vnc_establish_guacamole_returns_server_side_token_without_password(
     assert fake_registry.created[0]["host"] == "10.255.0.2"
     assert fake_registry.created[0]["width"] == 1920
     assert fake_registry.created[0]["height"] == 1080
+    assert fake_registry.created[0]["performance_preference"] == 2
+    assert payload["performance_preference"] == 2
 
 
 def test_vnc_establish_guacamole_unavailable_returns_503(
