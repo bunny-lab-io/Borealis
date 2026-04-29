@@ -39,23 +39,14 @@ const STARTUP_FLOW_DEFINITIONS = Object.freeze([
   { id: "engine_socket", label: "Engine socket", milestoneKeys: ["socket_connecting", "socket_connected"], x: 1180, y: 530 },
 ]);
 
-const STARTUP_FLOW_JUNCTIONS = Object.freeze([
-  { id: "identity_join", x: 690, y: 340, sources: ["server_config_loaded", "identity_loaded"] },
-  { id: "runtime_split", x: 1088, y: 340, sources: ["engine_authentication"] },
-  { id: "runtime_health_split", x: 1488, y: 340, sources: ["agent_role_loading"] },
-]);
-
 const STARTUP_FLOW_EDGES = Object.freeze([
   ["process_start", "server_config_loaded"],
   ["process_start", "identity_loaded"],
-  ["server_config_loaded", "identity_join"],
-  ["identity_loaded", "identity_join"],
-  ["identity_join", "engine_authentication"],
-  ["engine_authentication", "runtime_split"],
-  ["runtime_split", "status_channel_online"],
-  ["runtime_split", "agent_role_loading"],
-  ["runtime_split", "engine_socket"],
-  ["agent_role_loading", "runtime_health_split"],
+  ["server_config_loaded", "engine_authentication"],
+  ["identity_loaded", "engine_authentication"],
+  ["engine_authentication", "status_channel_online"],
+  ["engine_authentication", "agent_role_loading"],
+  ["engine_authentication", "engine_socket"],
 ]);
 
 const STARTUP_STATE_META = Object.freeze({
@@ -107,14 +98,6 @@ function buildMilestoneLookup(milestones) {
     if (key) acc[key] = milestone;
     return acc;
   }, {});
-}
-
-function deriveJunctionState(sourceIds, stateByKey) {
-  const states = sourceIds.map((sourceId) => stateByKey[sourceId] || "pending");
-  if (states.some((state) => state === "failed")) return "failed";
-  if (states.some((state) => state === "active")) return "active";
-  if (states.length && states.every((state) => state === "complete" || state === "skipped")) return "complete";
-  return "pending";
 }
 
 function normalizeRuntimeHealthState(statusCode) {
@@ -235,22 +218,6 @@ function AgentStartupFlowNode({ data }) {
   );
 }
 
-function AgentStartupFlowJunction({ data }) {
-  return (
-    <Box
-      sx={{
-        width: 1,
-        height: 1,
-        opacity: 0,
-        pointerEvents: "none",
-      }}
-    >
-      <Handle type="target" position={Position.Left} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
-      <Handle type="source" position={Position.Right} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
-    </Box>
-  );
-}
-
 function AgentRuntimeHealthNode({ data }) {
   const state = normalizeRuntimeHealthState(data?.entry?.statusCode);
   const color = getRuntimeStatusColor(data?.entry?.statusCode);
@@ -331,7 +298,6 @@ function AgentRuntimeHealthNode({ data }) {
 
 const STARTUP_FLOW_NODE_TYPES = Object.freeze({
   startupMilestone: AgentStartupFlowNode,
-  flowJunction: AgentStartupFlowJunction,
   runtimeHealth: AgentRuntimeHealthNode,
 });
 
@@ -359,18 +325,6 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
         selectable: true,
       };
     });
-    const junctionNodes = STARTUP_FLOW_JUNCTIONS.map((junction) => {
-      const state = deriveJunctionState(junction.sources, stateByKey);
-      stateByKey[junction.id] = state;
-      return {
-        id: junction.id,
-        type: "flowJunction",
-        position: { x: junction.x, y: junction.y },
-        data: { state },
-        draggable: true,
-        selectable: true,
-      };
-    });
     const runtimeNodes = (Array.isArray(runtimeRows) ? runtimeRows : []).map((entry, index) => {
       const columnIndex = index % RUNTIME_FLOW_COLUMNS.length;
       const rowIndex = Math.floor(index / RUNTIME_FLOW_COLUMNS.length);
@@ -391,32 +345,7 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
       };
     });
     const runtimeNodeIds = runtimeNodes.map((node) => node.id);
-    const runtimeJoinY = STEADY_FLOW_Y + 24;
-    const steadyJoinY = STEADY_FLOW_Y + 24;
     const steadyStateY = STEADY_FLOW_Y;
-    const runtimeJoinSources = runtimeNodeIds.length ? runtimeNodeIds : ["runtime_health_split"];
-    const runtimeHealthJoinState = deriveJunctionState(runtimeJoinSources, stateByKey);
-    stateByKey.runtime_health_join = runtimeHealthJoinState;
-    const steadyJoinState = deriveJunctionState(["status_channel_online", "engine_socket", "runtime_health_join"], stateByKey);
-    stateByKey.steady_join = steadyJoinState;
-    const dynamicJunctions = [
-      {
-        id: "runtime_health_join",
-        type: "flowJunction",
-        position: { x: 2820, y: runtimeJoinY },
-        data: { state: runtimeHealthJoinState },
-        draggable: true,
-        selectable: true,
-      },
-      {
-        id: "steady_join",
-        type: "flowJunction",
-        position: { x: 2880, y: steadyJoinY },
-        data: { state: steadyJoinState },
-        draggable: true,
-        selectable: true,
-      },
-    ];
     const steadyStateMilestone = milestoneByKey.steady_state_online || {};
     const steadyStateState = normalizeMilestoneState(steadyStateMilestone?.state);
     stateByKey.steady_state_online = steadyStateState;
@@ -439,19 +368,17 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
     };
     const runtimeEdges = runtimeNodeIds.length
       ? runtimeNodeIds.flatMap((runtimeNodeId) => [
-          ["runtime_health_split", runtimeNodeId],
-          [runtimeNodeId, "runtime_health_join"],
+          ["agent_role_loading", runtimeNodeId],
+          [runtimeNodeId, "steady_state_online"],
         ])
-      : [["runtime_health_split", "runtime_health_join"]];
+      : [["agent_role_loading", "steady_state_online"]];
     const allEdges = [
       ...STARTUP_FLOW_EDGES,
       ...runtimeEdges,
-      ["status_channel_online", "steady_join"],
-      ["engine_socket", "steady_join"],
-      ["runtime_health_join", "steady_join"],
-      ["steady_join", "steady_state_online"],
+      ["status_channel_online", "steady_state_online"],
+      ["engine_socket", "steady_state_online"],
     ];
-    const nodes = [...milestoneNodes, ...junctionNodes, ...runtimeNodes, ...dynamicJunctions, steadyStateNode];
+    const nodes = [...milestoneNodes, ...runtimeNodes, steadyStateNode];
     const edges = allEdges.map(([source, target]) => {
       const edgeState = getEdgeState(stateByKey[source], stateByKey[target]);
       return {
