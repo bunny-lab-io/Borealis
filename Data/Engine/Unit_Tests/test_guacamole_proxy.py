@@ -45,7 +45,17 @@ def test_guacamole_connect_arguments_are_server_side_only() -> None:
 
     values = guacamole_connect_arguments(
         session,
-        ["hostname", "port", "password", "username", "read-only", "color-depth", "autoretry", "resize-method"],
+        [
+            "hostname",
+            "port",
+            "password",
+            "username",
+            "read-only",
+            "disable-display-resize",
+            "color-depth",
+            "autoretry",
+            "resize-method",
+        ],
     )
 
-    assert values == ["10.255.0.4", "5900", "secretpw", "", "", "24", "3", ""]
+    assert values == ["10.255.0.4", "5900", "secretpw", "", "", "true", "24", "3", ""]

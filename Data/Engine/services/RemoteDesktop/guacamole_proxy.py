@@ -178,6 +178,7 @@ def guacamole_connect_arguments(session: GuacamoleVncSession, names: List[str]) 
         "password": session.password,
         "username": "",
         "read-only": "true" if str(session.role or "").lower() == "view_only" else "",
+        "disable-display-resize": "true",
         "color-depth": "24",
         "swap-red-blue": "",
         "cursor": "remote",
