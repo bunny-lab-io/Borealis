@@ -357,8 +357,8 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
           state,
           timestampText: displayMilestone.timestamp ? formatTimestamp(displayMilestone.timestamp) : "",
         },
-        draggable: false,
-        selectable: false,
+        draggable: true,
+        selectable: true,
       };
     });
     const junctionNodes = STARTUP_FLOW_JUNCTIONS.map((junction) => {
@@ -369,8 +369,8 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
         type: "flowJunction",
         position: { x: junction.x, y: junction.y },
         data: { state },
-        draggable: false,
-        selectable: false,
+        draggable: true,
+        selectable: true,
       };
     });
     const runtimeNodes = (Array.isArray(runtimeRows) ? runtimeRows : []).map((entry, index) => {
@@ -388,8 +388,8 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
           entry,
           onOpen: onRuntimeNodeOpen,
         },
-        draggable: false,
-        selectable: false,
+        draggable: true,
+        selectable: true,
       };
     });
     const runtimeNodeIds = runtimeNodes.map((node) => node.id);
@@ -407,16 +407,16 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
         type: "flowJunction",
         position: { x: 2820, y: runtimeJoinY },
         data: { state: runtimeHealthJoinState },
-        draggable: false,
-        selectable: false,
+        draggable: true,
+        selectable: true,
       },
       {
         id: "steady_join",
         type: "flowJunction",
         position: { x: 2880, y: steadyJoinY },
         data: { state: steadyJoinState },
-        draggable: false,
-        selectable: false,
+        draggable: true,
+        selectable: true,
       },
     ];
     const steadyStateMilestone = milestoneByKey.steady_state_online || {};
@@ -436,8 +436,8 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
             ? formatTimestamp(steadyStateMilestone.completed_at || steadyStateMilestone.updated_at || steadyStateMilestone.started_at)
             : "",
       },
-      draggable: false,
-      selectable: false,
+      draggable: true,
+      selectable: true,
     };
     const runtimeEdges = runtimeNodeIds.length
       ? runtimeNodeIds.flatMap((runtimeNodeId) => [
