@@ -514,6 +514,27 @@ function buildNodeCopyPayload(node) {
   );
 }
 
+function buildLayoutCopyPayload(nodes, viewport) {
+  return JSON.stringify(
+    {
+      viewport: {
+        x: Math.round(Number(viewport?.x || 0)),
+        y: Math.round(Number(viewport?.y || 0)),
+        zoom: Number(Number(viewport?.zoom || 1).toFixed(4)),
+      },
+      nodes: nodes.map((node) => ({
+        id: node.id,
+        type: node.type,
+        label: node.data?.label || node.data?.entry?.name || "",
+        x: Math.round(Number(node.position?.x || 0)),
+        y: Math.round(Number(node.position?.y || 0)),
+      })),
+    },
+    null,
+    2
+  );
+}
+
 function mergeNodesPreservingPositions(nextNodes, currentNodes) {
   if (!currentNodes.length) return nextNodes;
   const currentById = new Map(currentNodes.map((node) => [node.id, node]));
@@ -538,6 +559,7 @@ export default function AgentStartupFlow({
   const rows = Array.isArray(milestones) ? milestones : [];
   const { nodes, edges } = useStartupFlowElements(rows, runtimeRows, formatTimestamp, onRuntimeNodeOpen);
   const [editableNodes, setEditableNodes] = useState(nodes);
+  const [viewport, setViewport] = useState({ x: 0, y: 0, zoom: 1 });
   useEffect(() => {
     setEditableNodes((currentNodes) => mergeNodesPreservingPositions(nodes, currentNodes));
   }, [nodes]);
@@ -556,38 +578,13 @@ export default function AgentStartupFlow({
   const handlePaneContextMenu = useCallback(
     (event) => {
       event.preventDefault();
-      copyTextToClipboard(
-        JSON.stringify(
-          editableNodes.map((node) => ({
-            id: node.id,
-            type: node.type,
-            label: node.data?.label || node.data?.entry?.name || "",
-            x: Math.round(Number(node.position?.x || 0)),
-            y: Math.round(Number(node.position?.y || 0)),
-          })),
-          null,
-          2
-        )
-      );
+      copyTextToClipboard(buildLayoutCopyPayload(editableNodes, viewport));
     },
-    [editableNodes]
+    [editableNodes, viewport]
   );
   const handleCopyLayout = useCallback(
-    () =>
-      copyTextToClipboard(
-        JSON.stringify(
-          editableNodes.map((node) => ({
-            id: node.id,
-            type: node.type,
-            label: node.data?.label || node.data?.entry?.name || "",
-            x: Math.round(Number(node.position?.x || 0)),
-            y: Math.round(Number(node.position?.y || 0)),
-          })),
-          null,
-          2
-        )
-      ),
-    [editableNodes]
+    () => copyTextToClipboard(buildLayoutCopyPayload(editableNodes, viewport)),
+    [editableNodes, viewport]
   );
   if (!rows.length) {
     return (
@@ -673,6 +670,7 @@ export default function AgentStartupFlow({
         zoomOnDoubleClick={false}
         preventScrolling={false}
         selectionOnDrag={false}
+        onMove={(_, nextViewport) => setViewport(nextViewport)}
         onNodeClick={handleNodeClick}
         onNodeContextMenu={handleNodeContextMenu}
         onPaneContextMenu={handlePaneContextMenu}
