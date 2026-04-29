@@ -535,15 +535,26 @@ function buildLayoutCopyPayload(nodes, viewport) {
   );
 }
 
-function mergeNodesPreservingPositions(nextNodes, currentNodes) {
-  if (!currentNodes.length) return nextNodes;
+function mergeNodesPreservingPositions(nextNodes, currentNodes, positionOverrides) {
+  if (!currentNodes.length) {
+    return nextNodes.map((node) => ({
+      ...node,
+      position: positionOverrides[node.id] || node.position,
+    }));
+  }
   const currentById = new Map(currentNodes.map((node) => [node.id, node]));
   return nextNodes.map((node) => {
     const currentNode = currentById.get(node.id);
-    if (!currentNode) return node;
+    const overridePosition = positionOverrides[node.id];
+    if (!currentNode) {
+      return {
+        ...node,
+        position: overridePosition || node.position,
+      };
+    }
     return {
       ...node,
-      position: currentNode.position || node.position,
+      position: overridePosition || currentNode.position || node.position,
       selected: currentNode.selected,
       dragging: currentNode.dragging,
     };
@@ -559,11 +570,22 @@ export default function AgentStartupFlow({
   const rows = Array.isArray(milestones) ? milestones : [];
   const { nodes, edges } = useStartupFlowElements(rows, runtimeRows, formatTimestamp, onRuntimeNodeOpen);
   const [editableNodes, setEditableNodes] = useState(nodes);
+  const [nodePositionOverrides, setNodePositionOverrides] = useState({});
   const [viewport, setViewport] = useState({ x: 0, y: 0, zoom: 1 });
   useEffect(() => {
-    setEditableNodes((currentNodes) => mergeNodesPreservingPositions(nodes, currentNodes));
-  }, [nodes]);
+    setEditableNodes((currentNodes) => mergeNodesPreservingPositions(nodes, currentNodes, nodePositionOverrides));
+  }, [nodePositionOverrides, nodes]);
   const handleNodesChange = useCallback((changes) => {
+    const positionChanges = changes.filter((change) => change.type === "position" && change.id && change.position);
+    if (positionChanges.length) {
+      setNodePositionOverrides((currentOverrides) => {
+        const nextOverrides = { ...currentOverrides };
+        positionChanges.forEach((change) => {
+          nextOverrides[change.id] = change.position;
+        });
+        return nextOverrides;
+      });
+    }
     setEditableNodes((currentNodes) => applyNodeChanges(changes, currentNodes));
   }, []);
   const handleNodeClick = useCallback((_, node) => {
