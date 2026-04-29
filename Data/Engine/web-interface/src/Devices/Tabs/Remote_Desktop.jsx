@@ -6,6 +6,10 @@ import {
   AccordionSummary,
   Box,
   Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
   ListItemButton,
   ListItemText,
@@ -35,6 +39,15 @@ import {
   RadioButtonUncheckedRounded as StagePendingIcon,
 } from "@mui/icons-material";
 import { APP_PATHS } from "../../app/routes/paths.js";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BODY_TEXT_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../../DialogStyles.jsx";
 import Guacamole from "../../vendor/guacamole/guacamole-common-js.js";
 
 const MAGIC_UI = {
@@ -257,6 +270,8 @@ const VNC_AUTO_RETRY_ATTEMPTS = 3;
 const VNC_AUTO_RETRY_DELAY_MS = 1500;
 const VNC_OPEN_TIMEOUT_MS = 30000;
 const VNC_READY_STABILIZE_MS = 1800;
+const VNC_RECEIVE_TIMEOUT_MS = 90000;
+const VNC_UNSTABLE_THRESHOLD_MS = 30000;
 const ALL_DISPLAYS_ID = "__all_displays__";
 const CONNECTION_FLOW_STEPS = Object.freeze([
   {
@@ -576,6 +591,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const [statusMessage, setStatusMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [clipboardSync, setClipboardSync] = useState(false);
+  const [clipboardNotImplementedOpen, setClipboardNotImplementedOpen] = useState(false);
   const [guacamoleAvailability, setGuacamoleAvailability] = useState({
     enabled: false,
     available: false,
@@ -1047,6 +1063,12 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     }
   }, [agentId, applySessionBootstrap, handleAgentOnboarding]);
 
+  const handleClipboardSyncAttempt = useCallback(() => {
+    setClipboardSync(false);
+    clipboardSyncRef.current = false;
+    setClipboardNotImplementedOpen(true);
+  }, []);
+
   const openGuacamoleSession = useCallback(
     async (data, options = {}) => {
       const connectToken = Number(options.connectToken || 0);
@@ -1072,8 +1094,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       );
 
       const tunnel = new Guacamole.WebSocketTunnel(wsUrl);
-      tunnel.receiveTimeout = Math.max(Number(tunnel.receiveTimeout || 0), VNC_OPEN_TIMEOUT_MS + 5000);
-      tunnel.unstableThreshold = Math.max(Number(tunnel.unstableThreshold || 0), 5000);
+      tunnel.receiveTimeout = Math.max(Number(tunnel.receiveTimeout || 0), VNC_RECEIVE_TIMEOUT_MS);
+      tunnel.unstableThreshold = Math.max(Number(tunnel.unstableThreshold || 0), VNC_UNSTABLE_THRESHOLD_MS);
       const client = new Guacamole.Client(tunnel);
       client.__borealisViewer = "guacamole";
       const display = client.getDisplay();
@@ -2015,6 +2037,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       vncStage === "error");
 
   return (
+    <>
     <Box
       className="remote-desktop-shell"
       sx={{
@@ -2341,14 +2364,20 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
               <SidebarNavRow
                 icon={<ClipboardIcon fontSize="small" />}
                 label="Sync Clipboard"
-                active={showClipboardActions && clipboardSync}
+                active={false}
                 disabled={!showClipboardActions}
-                onClick={() => setClipboardSync((previous) => !previous)}
+                onClick={handleClipboardSyncAttempt}
                 trailing={
                   <Switch
-                    checked={clipboardSync}
-                    onClick={(event) => event.stopPropagation()}
-                    onChange={(event) => setClipboardSync(event.target.checked)}
+                    checked={false}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleClipboardSyncAttempt();
+                    }}
+                    onChange={(event) => {
+                      event.preventDefault();
+                      setClipboardSync(false);
+                    }}
                     disabled={!showClipboardActions}
                     size="small"
                     color="info"
@@ -2744,5 +2773,27 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         </Box>
       </Box>
     </Box>
+    <Dialog
+      open={clipboardNotImplementedOpen}
+      onClose={() => setClipboardNotImplementedOpen(false)}
+      maxWidth="xs"
+      fullWidth
+      PaperProps={{ sx: DIALOG_PAPER_SX }}
+    >
+      <DialogTitle sx={DIALOG_TITLE_SX}>
+        <DialogHeaderBlock title="Not Implemented Yet" />
+      </DialogTitle>
+      <DialogContent sx={DIALOG_CONTENT_SX}>
+        <Typography sx={DIALOG_BODY_TEXT_SX}>
+          Not Implemented Yet: This feature is not yet functional with the new Guacamole-based remote desktop system.
+        </Typography>
+      </DialogContent>
+      <DialogActions sx={DIALOG_ACTIONS_SX}>
+        <Button onClick={() => setClipboardNotImplementedOpen(false)} sx={DIALOG_BUTTON_SX}>
+          Close
+        </Button>
+      </DialogActions>
+    </Dialog>
+    </>
   );
 }
