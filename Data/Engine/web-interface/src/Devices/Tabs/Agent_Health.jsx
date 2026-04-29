@@ -471,8 +471,8 @@ export default function AgentHealthTab({
         flexDirection: "column",
         gap: 1.6,
         minWidth: 0,
-        minHeight: { xs: 0, xl: "calc(100vh - 236px)" },
-        height: { xs: "auto", xl: "calc(100vh - 236px)" },
+        minHeight: { xs: 0, xl: "calc(100vh - 272px)" },
+        height: { xs: "auto", xl: "calc(100vh - 272px)" },
         flex: "1 1 auto",
         width: "100%",
       }}
