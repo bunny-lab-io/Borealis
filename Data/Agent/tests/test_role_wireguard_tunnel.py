@@ -85,6 +85,25 @@ def test_role_resolve_endpoint_preserves_engine_token_endpoint() -> None:
     assert resolved == "borealis.bunny-lab.io:30000"
 
 
+def test_role_agent_status_hooks_report_wireguard_milestones() -> None:
+    events = []
+    role = Role.__new__(Role)
+    role._agent_status_record = lambda key, state, detail: events.append(("record", key, state, detail))
+    role._agent_status_complete = lambda key, detail: events.append(("complete", key, detail))
+    role._agent_status_failed = lambda key, detail: events.append(("failed", key, detail))
+    role._agent_status_flush = lambda *, reason="": events.append(("flush", reason))
+
+    role._record_agent_status("wireguard_starting", "active", "starting")
+    role._complete_agent_status("wireguard_online", "online")
+    role._fail_agent_status("wireguard_starting", "failed")
+
+    assert ("record", "wireguard_starting", "active", "starting") in events
+    assert ("complete", "wireguard_online", "online") in events
+    assert ("failed", "wireguard_starting", "failed") in events
+    assert ("flush", "wireguard_online") in events
+    assert ("flush", "wireguard_starting") in events
+
+
 def test_role_session_config_matches_live_snapshot() -> None:
     role = Role.__new__(Role)
     role._read_live_config_snapshot = lambda: {

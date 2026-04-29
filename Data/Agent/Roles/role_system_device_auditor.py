@@ -1824,6 +1824,12 @@ class Role:
                     else:
                         try:
                             await client.async_post_json("/api/agent/details", payload, require_auth=True)
+                            complete_hook = hooks.get('agent_status_complete')
+                            flush_hook = hooks.get('agent_status_flush')
+                            if callable(complete_hook):
+                                complete_hook("inventory_ready", "Device inventory accepted by Engine.")
+                            if callable(flush_hook):
+                                flush_hook(reason="inventory_ready")
                         except Exception:
                             pass
                         try:

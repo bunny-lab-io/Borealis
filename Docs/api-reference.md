@@ -55,6 +55,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 
 ### Devices and Inventory
 - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
+- `POST /api/agent/status` (Device Authenticated) - update `devices.last_seen`, upsert the `system:system_heartbeat` startup timeline row in `agent_role_health`, and emit `agent_status_changed` for Device Summary Agent Health refresh.
 - `POST /api/agent/details` (Device Authenticated) - full hardware, inventory, and cached service payload.
 - `POST /api/agent/script/request` (Device Authenticated) - request work or idle signal.
 - `GET /api/agent/software-management/overrides` (Device Authenticated) - file-backed software icon override rules used by the agent `software_management` role during inventory refresh.

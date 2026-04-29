@@ -23,6 +23,7 @@ from Data.Engine.services.API.devices import management as device_management
 from Data.Engine.services.API.devices import routes as device_routes
 from Data.Engine.services.API.devices import software_icons as software_icons_module
 from Data.Engine.services.API.devices import software_uninstall as software_uninstall_module
+from Data.Engine.services.API.devices.agent_role_health import normalize_agent_role_health, serialize_agent_role_health
 from Data.Engine.services.API.devices.service_inventory import serialize_device_services
 from Data.Engine.services.API.devices import tunnel as tunnel_api
 from Data.Engine.services.VPN.vpn_tunnel_service import (
@@ -2014,6 +2015,87 @@ def test_agent_heartbeat_returns_assigned_site(engine_harness: EngineTestHarness
     assert payload["status"] == "ok"
     assert payload["site_name"] == "Main Lab"
     assert payload["site_id"] == 1
+
+
+def test_agent_status_updates_startup_timeline_without_replacing_other_roles(
+    engine_harness: EngineTestHarness,
+) -> None:
+    existing_health = {
+        "reported_at": 1_700_000_500,
+        "roles": [
+            {
+                "role_id": "system:wireguard_tunnel",
+                "role_name": "wireguard_tunnel",
+                "role_label": "WireGuard VPN",
+                "context": "system",
+                "status": "healthy",
+                "status_code": "healthy",
+                "last_checked_at": 1_700_000_500,
+            }
+        ],
+    }
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        conn.execute(
+            "UPDATE devices SET last_seen = ?, agent_role_health = ? WHERE hostname = ?",
+            (1_700_000_500, serialize_agent_role_health(existing_health), "test-device"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/agent/status",
+        headers=_device_headers(),
+        json={
+            "hostname": "test-device",
+            "service_mode": "system",
+            "boot_id": "boot-test-1",
+            "phase": "wireguard_online",
+            "status": "complete",
+            "message": "WireGuard tunnel is online.",
+            "milestones": [
+                {"key": "process_start", "label": "Agent process started", "state": "complete"},
+                {"key": "wireguard_online", "label": "WireGuard tunnel online", "state": "complete"},
+            ],
+            "last_error": None,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["site_name"] == "Main Lab"
+    assert payload["site_id"] == 1
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        row = conn.execute(
+            "SELECT last_seen, agent_role_health FROM devices WHERE hostname = ?",
+            ("test-device",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert int(row[0]) >= 1_700_000_500
+    normalized = normalize_agent_role_health(row[1])
+    roles = {str(item.get("role_id") or ""): item for item in normalized.get("roles") or []}
+    assert "system:wireguard_tunnel" in roles
+    assert "system:system_heartbeat" in roles
+    startup = roles["system:system_heartbeat"]
+    assert startup["status_code"] == "healthy"
+    assert startup["details"]["boot_id"] == "boot-test-1"
+    milestones = json.loads(startup["details"]["milestones_json"])
+    assert milestones[-1]["key"] == "wireguard_online"
+
+
+def test_agent_status_requires_device_auth(engine_harness: EngineTestHarness) -> None:
+    client = engine_harness.app.test_client()
+    response = client.post("/api/agent/status", json={"phase": "process_start"})
+
+    assert response.status_code == 401
 
 
 def test_agent_software_management_overrides_endpoint_returns_icon_overrides(
