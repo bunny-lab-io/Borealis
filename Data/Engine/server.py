@@ -155,10 +155,15 @@ class EngineContext:
     vnc_ws_host: str
     vnc_ws_port: int
     vnc_session_ttl_seconds: int
+    guacamole_enabled: bool
+    guacd_host: str
+    guacd_port: int
+    guacamole_vnc_ws_path: str
     wireguard_server_manager: Optional[Any] = None
     assembly_cache: Optional[Any] = None
     vnc_proxy: Optional[Any] = None
     vnc_registry: Optional[Any] = None
+    guacamole_vnc_registry: Optional[Any] = None
     aegis_cipher_service: Optional[Any] = None
     workflow_runtime: Optional[Any] = None
     watchdog_runtime: Optional[Any] = None
@@ -201,6 +206,10 @@ def _build_engine_context(settings: EngineSettings, logger: logging.Logger) -> E
         vnc_ws_host=settings.vnc_ws_host,
         vnc_ws_port=settings.vnc_ws_port,
         vnc_session_ttl_seconds=settings.vnc_session_ttl_seconds,
+        guacamole_enabled=settings.guacamole_enabled,
+        guacd_host=settings.guacd_host,
+        guacd_port=settings.guacd_port,
+        guacamole_vnc_ws_path=settings.guacamole_vnc_ws_path,
         assembly_cache=None,
         aegis_cipher_service=None,
         workflow_runtime=None,
@@ -341,7 +350,7 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
         return response
 
     from .services import API, WebSocket, WebUI  # Local import to avoid circular deps during bootstrap
-    from .services.RemoteDesktop.vnc_proxy import ensure_vnc_proxy
+    from .services.RemoteDesktop.vnc_proxy import ensure_guacamole_vnc_proxy
 
     API.register_api(app, context)
     WebUI.register_web_ui(app, context)
@@ -353,13 +362,13 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
         except Exception:
             logger.error("Failed to start agent release channel manager.", exc_info=True)
     try:
-        registry = ensure_vnc_proxy(context, logger=logger.getChild("vnc_proxy"))
+        registry = ensure_guacamole_vnc_proxy(context, logger=logger.getChild("guacamole_proxy"))
         if registry is None:
-            logger.error("VNC proxy failed to pre-start; sessions will attempt lazy start.")
+            logger.error("Guacamole Remote Desktop proxy failed to pre-start; sessions will attempt lazy start.")
         else:
-            logger.info("VNC proxy pre-started on %s:%s.", context.vnc_ws_host, context.vnc_ws_port)
+            logger.info("Guacamole Remote Desktop proxy pre-started on %s:%s.", context.vnc_ws_host, context.vnc_ws_port)
     except Exception:
-        logger.error("Failed to pre-start VNC proxy.", exc_info=True)
+        logger.error("Failed to pre-start Guacamole Remote Desktop proxy.", exc_info=True)
 
     logger.debug("Engine application factory completed initialisation.")
 

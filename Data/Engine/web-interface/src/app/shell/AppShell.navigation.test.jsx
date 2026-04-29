@@ -124,4 +124,59 @@ describe("AppShell buffered navigation", () => {
       expect(screen.getByText("Slow Page")).toBeInTheDocument();
     });
   });
+
+  it("hides the primary navigation sidebar on the remote desktop page", async () => {
+    const router = createMemoryRouter(
+      [
+        {
+          path: "/",
+          element: (
+            <AuthContext.Provider value={buildAuthValue()}>
+              <PageChromeProvider>
+                <AppShell />
+              </PageChromeProvider>
+            </AuthContext.Provider>
+          ),
+          children: [
+            {
+              path: "devices/:deviceId",
+              element: <div>Device Summary</div>,
+              handle: {
+                title: "Device Details",
+                breadcrumb: "Device",
+                navKey: "devices",
+                pageKey: "device",
+              },
+            },
+            {
+              path: "devices/:deviceId/remote-desktop",
+              element: <div>Remote Desktop</div>,
+              handle: {
+                breadcrumb: "Remote Desktop",
+                navKey: "devices",
+                pageKey: "device-remote-desktop",
+              },
+            },
+          ],
+        },
+      ],
+      {
+        initialEntries: ["/devices/agent-1/remote-desktop"],
+      }
+    );
+
+    render(<RouterProvider router={router} />);
+
+    expect(screen.getByText("Remote Desktop")).toBeInTheDocument();
+    expect(screen.queryByText("Sidebar")).not.toBeInTheDocument();
+
+    await act(async () => {
+      await router.navigate("/devices/agent-1");
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Device Summary")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Sidebar")).toBeInTheDocument();
+  });
 });

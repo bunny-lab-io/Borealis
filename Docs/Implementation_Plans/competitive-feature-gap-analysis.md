@@ -41,7 +41,7 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
 | --- | --- | --- | --- |
 | Remote shell / technician command line | Shipped | `Docs/vpn-and-remote-access.md`, `Docs/agent-runtime.md`, `Docs/api-reference.md` | Borealis ships WireGuard-backed remote shell plus SYSTEM/current-user script execution. |
-| Remote desktop | Shipped | `Docs/vpn-and-remote-access.md`, `Docs/architecture-overview.md` | Same-origin VNC/noVNC is a real product surface. |
+| Remote desktop | Shipped | `Docs/vpn-and-remote-access.md`, `Docs/architecture-overview.md` | Same-origin Apache Guacamole VNC is a real product surface. |
 | PowerShell / script execution | Shipped | `Docs/assemblies.md`, `Docs/agent-runtime.md`, `README.md` | Borealis supports quick jobs, scheduled jobs, and signed PowerShell/Batch/Bash execution. |
 | Service inventory and service control | Shipped | `Docs/device-management.md`, `Docs/api-reference.md` | Device APIs expose cached services plus start/stop/restart actions. |
 | Installed software inventory, uninstall, and software override governance | Shipped | `Docs/device-management.md`, `Docs/api-reference.md`, `Docs/Software Management/adding-software-to-icon-overrides.md`, `Docs/Software Management/adding-software-to-uninstall-overrides.md`, `Docs/Software Management/adding-software-to-uninstall-blocklist.md` | Borealis now has a first-class Installed Software surface with row-level uninstall, global icon overrides, global uninstall overrides, uninstall block/unblock, on-demand `Query Software Changes`, and uninstall progress/history in Activity History. |

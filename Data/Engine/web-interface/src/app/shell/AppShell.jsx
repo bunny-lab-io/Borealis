@@ -160,6 +160,7 @@ export default function AppShell() {
   const defaultChrome = useMemo(() => resolvePageChromeDefaults(matches), [matches]);
   const activeNavKey = useMemo(() => resolveActiveNavKey(matches), [matches]);
   const currentPageKey = useMemo(() => resolveCurrentPageKey(matches), [matches]);
+  const hideNavigationSidebar = currentPageKey === "device-remote-desktop";
 
   const resolvedChrome = useMemo(
     () => ({
@@ -706,10 +707,12 @@ export default function AppShell() {
             backgroundColor: "#040711",
           }}
         >
-          <NavigationSidebar
-            activeNavKey={activeNavKey}
-            isAdmin={isAdmin}
-          />
+          {hideNavigationSidebar ? null : (
+            <NavigationSidebar
+              activeNavKey={activeNavKey}
+              isAdmin={isAdmin}
+            />
+          )}
           <Box
             sx={{
               flexGrow: 1,

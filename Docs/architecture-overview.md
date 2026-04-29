@@ -10,7 +10,7 @@ Explain how Borealis is structured and how the core components interact end to e
 - Agent: Python runtime that enrolls, reports inventory, executes scripts, and opens VPN tunnels.
 - PostgreSQL database: stores devices, approvals, schedules, activity history, tokens, configuration records, and assemblies.
 - Assemblies: script definitions stored in PostgreSQL `assemblies.*` tables, with Aurora as the official authoring repo and a bundled seed snapshot kept in the Borealis repo.
-- Remote access: WireGuard reverse VPN, remote PowerShell, and VNC via noVNC.
+- Remote access: WireGuard reverse VPN, remote PowerShell, and VNC via Apache Guacamole.
 
 ## How the Pieces Talk
 - Enrollment: agent calls `/api/agent/enroll/request` and `/api/agent/enroll/poll`, operator approves, Engine issues tokens and cert bundle.
@@ -19,7 +19,7 @@ Explain how Borealis is structured and how the core components interact end to e
 - Scheduled jobs: scheduler reads jobs from DB, resolves targets (including filters), then emits quick jobs.
 - VPN tunnels: agent calls `/api/agent/vpn/ensure`, Engine emits `vpn_tunnel_start`, agent keeps WireGuard client online.
 - Remote shell: UI uses Socket.IO `vpn_shell_*` events, Engine bridges to agent TCP shell over WireGuard.
-- VNC: operator calls `/api/vnc/establish`, Engine creates or joins a collaboration session, waits for agent listener readiness, then proxies noVNC WebSocket traffic to the agent VNC server.
+- VNC: operator calls `/api/vnc/establish`, Engine creates or joins a collaboration session, waits for agent listener readiness, then proxies Apache Guacamole WebSocket traffic through local `guacd` to the agent VNC server.
 - Notifications: operator or services call `/api/notifications/notify`, WebUI receives `borealis_notification` events.
 
 ## Directory Map (High Level)

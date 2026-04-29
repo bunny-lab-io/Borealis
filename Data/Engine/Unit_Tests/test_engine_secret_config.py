@@ -120,3 +120,7 @@ def test_runtime_config_loads_public_edge_settings(tmp_path: Path, monkeypatch) 
     assert settings.tls_key_path is None
     assert settings.tls_bundle_path is None
     assert settings.vnc_ws_host == "127.0.0.1"
+    assert settings.guacamole_enabled is True
+    assert settings.guacd_host == "127.0.0.1"
+    assert settings.guacd_port == 4822
+    assert settings.guacamole_vnc_ws_path == "/remote-desktop/vnc/guacamole"

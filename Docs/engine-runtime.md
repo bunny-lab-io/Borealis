@@ -11,7 +11,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - WebUI serving: `Data/Engine/services/WebUI/` (SPA static assets and 404 fallback).
 - Realtime events: `Data/Engine/services/WebSocket/` (quick job results, VPN shell bridge).
 - VPN orchestration: `Data/Engine/services/VPN/` (WireGuard server manager + tunnel service).
-- Remote desktop proxy: `Data/Engine/services/RemoteDesktop/` (VNC WebSocket bridge).
+- Remote desktop proxy: `Data/Engine/services/RemoteDesktop/` (Apache Guacamole VNC bridge through local `guacd`).
 - Assemblies: `Data/Engine/assembly_management/` and `Data/Engine/services/assemblies/`.
 - Watchdog runtime: `Data/Engine/services/API/watchdogs/`.
 
@@ -52,7 +52,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 ### EngineContext and lifecycle
 - `Data/Engine/server.py` builds an `EngineContext` that includes:
   - TLS paths, WireGuard settings, scheduler, Socket.IO instance.
-  - VNC proxy settings (VNC port, ws host/port, session TTL).
+- VNC proxy settings (VNC port, ws host/port, session TTL, Guacamole path, and `guacd` host/port).
 - The app factory wires in:
   - API registration: `API.register_api(app, context)`
   - WebUI static hosting: `WebUI.register_web_ui(app, context)`
@@ -100,9 +100,12 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Tunnel orchestration: `Data/Engine/services/VPN/vpn_tunnel_service.py`.
 - VNC collaboration state: `Data/Engine/services/RemoteDesktop/vnc_sessions.py`.
 - VNC proxy: `Data/Engine/services/RemoteDesktop/vnc_proxy.py`.
-- API entrypoints: `/api/vnc/establish`, `/api/vnc/disconnect`, `/api/vnc/handoff`, `/api/vnc/sessions`, `/api/shell/establish`, `/api/shell/disconnect`.
+- Guacamole VNC bridge: `Data/Engine/services/RemoteDesktop/guacamole_proxy.py`.
+- API entrypoints: `/api/vnc/viewers`, `/api/vnc/establish`, `/api/vnc/disconnect`, `/api/vnc/handoff`, `/api/vnc/sessions`, `/api/shell/establish`, `/api/shell/disconnect`.
 - Persistent tunnels are established by agents via `POST /api/agent/vpn/ensure`, then marked dispatch-ready by `POST /api/agent/vpn/ready` after the active service/config/firewall path is applied.
 - The Engine caches each agent's currently advertised VNC password in memory, reuses that credential across collaboration sessions until the agent restarts or the agent-side daily VNC credential rotation publishes a new revision, fast-probes the advertised UltraVNC listener before re-emitting bootstrap events, waits for agent listener readiness before returning browser bootstrap data when that fast probe misses, and exposes active remote desktop session inventory in `GET /api/server/overview`.
+- Apache Guacamole is the sole browser remote desktop path. Guacamole VNC uses local `guacd` on `127.0.0.1:4822` by default, is served through `/remote-desktop/vnc/guacamole`, and never returns the UltraVNC password to the browser.
+- `Borealis.sh` builds Apache Guacamole Server 1.6.0 from official source under `Dependencies/ApacheGuacamole/1.6.0`, with VNC enabled and RDP/SSH/Telnet disabled. `borealis-guacd.service` runs the daemon on loopback when systemd is available.
 
 ### Assembly runtime
 - Assembly cache is initialized in `Data/Engine/assembly_management` and attached to `context.assembly_cache`.

@@ -189,7 +189,8 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 
 ### VNC
 - `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure always-on VNC tunnel/readiness state, refresh the Engine's cached agent VNC credential, and return active session metadata for the agent.
-- `POST /api/vnc/establish` (Token Authenticated) - establish or join a VNC collaboration session for an in-scope device.
+- `GET /api/vnc/viewers` (Token Authenticated) - report Apache Guacamole VNC availability.
+- `POST /api/vnc/establish` (Token Authenticated) - establish or join an Apache Guacamole VNC collaboration session for an in-scope device. Optional `viewer` accepts `guacamole` and defaults to `guacamole`.
 - `POST /api/vnc/disconnect` (Token Authenticated) - leave or close a VNC collaboration session for an in-scope device.
 - `POST /api/vnc/handoff` (Token Authenticated) - reassign session-owner metadata inside an active shared VNC collaboration session.
 - `GET /api/vnc/sessions` (Token Authenticated) - list active VNC collaboration sessions visible within the current operator's site scope.

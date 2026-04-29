@@ -168,7 +168,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Windows is the reference path and has the broadest tested feature surface.
 - Linux agents run from the script-staged Python runtime through `Borealis.sh --Agent`, not shipped binaries.
 - Linux agents load the standard Agent roles and currently support WireGuard VPN, remote Bash/script execution, file/folder interaction, and Engine-side Ansible reachability to remote Linux devices.
-- Linux does not have a system tray/helper UI yet, and remote desktop remains Windows-only through the UltraVNC/noVNC path.
+- Linux does not have a system tray/helper UI yet, and remote desktop remains Windows-only through the UltraVNC/Apache Guacamole path.
 - Linux service control, process management, and software management code paths exist but need validation before they should be described as parity features.
 
 #### Ansible support

@@ -37,6 +37,7 @@ from flask import Blueprint, Flask, jsonify, request
 from ....edge_runtime import DEFAULT_ACME_STORAGE_PATH, PROJECT_ROOT, load_settings
 from ....public_endpoints import public_hostname as resolve_public_hostname
 from ....public_endpoints import public_vnc_path as resolve_public_vnc_path
+from ...RemoteDesktop.guacamole_proxy import guacd_health
 from ....public_endpoints import wireguard_endpoint
 from ....security import signing
 from ...ansible.runtime_settings import (
@@ -929,10 +930,18 @@ def _collect_operator_session_count(adapters: "EngineServiceAdapters") -> int:
 
 def _collect_vnc_session_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]:
     manager = getattr(adapters.context, "vnc_collaboration_manager", None)
+    guacamole = guacd_health(adapters.context)
     if manager is None or not hasattr(manager, "list_sessions") or not hasattr(manager, "session_snapshot"):
         return {
             "active_session_count": 0,
             "active_sessions": [],
+            "viewers": {
+                "guacamole": {
+                    "enabled": bool(guacamole.get("enabled")),
+                    "available": bool(guacamole.get("enabled")) and bool(guacamole.get("available")),
+                    "reason": str(guacamole.get("reason") or ""),
+                },
+            },
         }
     try:
         sessions = list(manager.list_sessions())
@@ -943,6 +952,13 @@ def _collect_vnc_session_payload(adapters: "EngineServiceAdapters") -> Dict[str,
     return {
         "active_session_count": len(snapshots),
         "active_sessions": snapshots,
+        "viewers": {
+            "guacamole": {
+                "enabled": bool(guacamole.get("enabled")),
+                "available": bool(guacamole.get("enabled")) and bool(guacamole.get("available")),
+                "reason": str(guacamole.get("reason") or ""),
+            },
+        },
     }
 
 

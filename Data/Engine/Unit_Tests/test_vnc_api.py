@@ -10,9 +10,26 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from Data.Engine.services.API.devices import vnc as vnc_api
 
 from .conftest import EngineTestHarness
+
+
+@pytest.fixture(autouse=True)
+def _guacd_ready(monkeypatch):
+    monkeypatch.setattr(
+        vnc_api,
+        "guacd_health",
+        lambda _context: {
+            "enabled": True,
+            "available": True,
+            "reason": "ready",
+            "host": "127.0.0.1",
+            "port": 4822,
+        },
+    )
 
 
 def _client_with_admin_session(harness: EngineTestHarness):
@@ -108,9 +125,14 @@ class _FakeRegistry:
         host: str,
         port: int,
         operator_id: Any,
+        password: str = "",
         session_id: str = "",
         participant_id: str = "",
         role: str = "",
+        width: int = 0,
+        height: int = 0,
+        dpi: int = 0,
+        performance_preference: int = 0,
         restart_tunnel: Any = None,
         confirm_transport: Any = None,
         on_open: Any = None,
@@ -121,10 +143,15 @@ class _FakeRegistry:
                 "agent_id": agent_id,
                 "host": host,
                 "port": port,
+                "password": password,
                 "operator_id": operator_id,
                 "session_id": session_id,
                 "participant_id": participant_id,
                 "role": role,
+                "width": width,
+                "height": height,
+                "dpi": dpi,
+                "performance_preference": performance_preference,
                 "on_open": on_open,
                 "on_close": on_close,
             }
@@ -132,6 +159,51 @@ class _FakeRegistry:
         self.restart_callbacks.append(restart_tunnel)
         self.confirm_callbacks.append(confirm_transport)
         return SimpleNamespace(token="session-token")
+
+
+class _FakeGuacamoleRegistry:
+    def __init__(self) -> None:
+        self.created: list[dict[str, Any]] = []
+
+    def create(
+        self,
+        *,
+        agent_id: str,
+        host: str,
+        port: int,
+        password: str,
+        operator_id: Any,
+        session_id: str = "",
+        participant_id: str = "",
+        role: str = "",
+        width: int = 0,
+        height: int = 0,
+        performance_preference: int = 0,
+        restart_tunnel: Any = None,
+        confirm_transport: Any = None,
+        on_open: Any = None,
+        on_close: Any = None,
+    ):
+        self.created.append(
+            {
+                "agent_id": agent_id,
+                "host": host,
+                "port": port,
+                "password": password,
+                "operator_id": operator_id,
+                "session_id": session_id,
+                "participant_id": participant_id,
+                "role": role,
+                "width": width,
+                "height": height,
+                "performance_preference": performance_preference,
+                "on_open": on_open,
+                "on_close": on_close,
+            }
+        )
+        _ = restart_tunnel
+        _ = confirm_transport
+        return SimpleNamespace(token="guacamole-token")
 
 
 class _FakeProxy:
@@ -186,7 +258,7 @@ def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestH
     )
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: fake_registry)
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: fake_registry)
     monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
 
     response = client.post(
@@ -196,14 +268,22 @@ def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestH
 
     assert response.status_code == 200
     payload = response.get_json()
+    assert payload["viewer"] == "guacamole"
     assert payload["token"] == "session-token"
-    assert payload["ws_path"] == "/remote-desktop/vnc"
-    assert payload["ws_url"] == "wss://borealis.example.com/remote-desktop/vnc?token=session-token"
+    assert payload["guacamole_ws_path"] == "/remote-desktop/vnc/guacamole"
+    assert payload["guacamole_ws_url"] == "wss://borealis.example.com/remote-desktop/vnc/guacamole"
+    assert "vnc_password" not in payload
+    assert "ws_url" not in payload
     assert fake_registry.created[0]["agent_id"] == "test-device-agent"
     assert fake_registry.created[0]["host"] == "10.255.0.2"
     assert fake_registry.created[0]["port"] == 5900
+    assert fake_registry.created[0]["password"] == "bootpass"
     assert fake_registry.created[0]["operator_id"] == "admin"
     assert fake_registry.created[0]["role"] == "controller"
+    assert fake_registry.created[0]["width"] == 2944
+    assert fake_registry.created[0]["height"] == 1380
+    assert fake_registry.created[0]["performance_preference"] == 0
+    assert payload["performance_preference"] == 0
     assert payload["participant_role"] == "controller"
     assert payload["view_only"] is False
     assert payload["session"]["controller_operator_id"] == "admin"
@@ -232,6 +312,142 @@ def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestH
     ]
 
 
+def test_vnc_establish_rejects_unknown_viewer(engine_harness: EngineTestHarness) -> None:
+    client = _client_with_admin_session(engine_harness)
+    _register_agent_credential(engine_harness)
+
+    response = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "viewer": "rdp"},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "invalid_viewer"
+
+
+def test_vnc_establish_guacamole_returns_server_side_token_without_password(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    fake_registry = _FakeGuacamoleRegistry()
+    engine_harness.context.public_base_url = "https://borealis.example.com"
+    _register_agent_credential(
+        engine_harness,
+        password="secretpw",
+        display_topology=[
+            {
+                "id": "1",
+                "display_index": 1,
+                "label": "1",
+                "left": 0,
+                "top": 0,
+                "right": 1920,
+                "bottom": 1080,
+                "width": 1920,
+                "height": 1080,
+                "primary": True,
+            }
+        ],
+    )
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        vnc_api,
+        "guacd_health",
+        lambda _context: {
+            "enabled": True,
+            "available": True,
+            "reason": "ready",
+            "host": "127.0.0.1",
+            "port": 4822,
+        },
+    )
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: fake_registry)
+
+    response = client.post(
+        "/api/vnc/establish",
+        json={
+            "agent_id": "test-device-agent",
+            "viewer": "guacamole",
+            "performance_preference": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["viewer"] == "guacamole"
+    assert payload["token"] == "guacamole-token"
+    assert payload["guacamole_ws_path"] == "/remote-desktop/vnc/guacamole"
+    assert payload["guacamole_ws_url"] == "wss://borealis.example.com/remote-desktop/vnc/guacamole"
+    assert "vnc_password" not in payload
+    assert fake_registry.created[0]["password"] == "secretpw"
+    assert fake_registry.created[0]["host"] == "10.255.0.2"
+    assert fake_registry.created[0]["width"] == 1920
+    assert fake_registry.created[0]["height"] == 1080
+    assert fake_registry.created[0]["performance_preference"] == 2
+    assert payload["performance_preference"] == 2
+
+
+def test_vnc_establish_guacamole_unavailable_returns_503(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    _register_agent_credential(engine_harness)
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        vnc_api,
+        "guacd_health",
+        lambda _context: {
+            "enabled": True,
+            "available": False,
+            "reason": "connection refused",
+            "host": "127.0.0.1",
+            "port": 4822,
+        },
+    )
+
+    response = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "viewer": "guacamole"},
+    )
+
+    assert response.status_code == 503
+    payload = response.get_json()
+    assert payload["error"] == "guacamole_unavailable"
+
+
+def test_vnc_viewers_reports_guacamole_health(engine_harness: EngineTestHarness, monkeypatch) -> None:
+    client = _client_with_admin_session(engine_harness)
+    monkeypatch.setattr(
+        vnc_api,
+        "guacd_health",
+        lambda _context: {
+            "enabled": True,
+            "available": True,
+            "reason": "ready",
+            "host": "127.0.0.1",
+            "port": 4822,
+        },
+    )
+
+    response = client.get("/api/vnc/viewers")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    viewers = {viewer["id"]: viewer for viewer in payload["viewers"]}
+    assert payload["default_viewer"] == "guacamole"
+    assert set(viewers) == {"guacamole"}
+    assert viewers["guacamole"]["available"] is True
+    assert payload["guacamole"]["ws_path"] == "/remote-desktop/vnc/guacamole"
+
+
 def test_vnc_establish_uses_longer_initial_wait_and_shorter_retry_wait(
     engine_harness: EngineTestHarness,
     monkeypatch,
@@ -244,7 +460,7 @@ def test_vnc_establish_uses_longer_initial_wait_and_shorter_retry_wait(
     engine_harness.context.emit_agent_event = lambda agent_id, event, payload: True
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
 
     def _fake_wait(*_args, **kwargs):
         wait_calls.append(float(kwargs["timeout_seconds"]))
@@ -286,7 +502,7 @@ def test_vnc_establish_uses_shorter_waits_for_cached_online_agents(
     monkeypatch.setenv("BOREALIS_VNC_SOCKET_POST_BOOTSTRAP_GRACE_SECONDS", "0")
     monkeypatch.setenv("BOREALIS_VNC_SOCKET_SOFT_RETRY_WAIT_SECONDS", "0")
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
 
     def _fake_wait(*_args, **kwargs):
         wait_calls.append(float(kwargs["timeout_seconds"]))
@@ -329,7 +545,7 @@ def test_vnc_establish_prewarm_cached_online_tunnel_before_fast_probe(
     }
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
 
     def _fake_wait(*_args, **kwargs):
         wait_calls.append(float(kwargs["timeout_seconds"]))
@@ -368,7 +584,7 @@ def test_vnc_establish_uses_post_bootstrap_grace_before_retry_for_cached_online_
     monkeypatch.setenv("BOREALIS_VNC_SOCKET_POST_BOOTSTRAP_GRACE_POLL_INTERVAL_SECONDS", "0.1")
     monkeypatch.setenv("BOREALIS_VNC_SOCKET_SOFT_RETRY_WAIT_SECONDS", "0")
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
 
     def _fake_wait(*_args, **kwargs):
         wait_calls.append(float(kwargs["timeout_seconds"]))
@@ -409,7 +625,7 @@ def test_vnc_establish_uses_soft_retry_before_transport_recovery_for_cached_onli
     monkeypatch.setenv("BOREALIS_VNC_SOCKET_SOFT_RETRY_WAIT_SECONDS", "1.5")
     monkeypatch.setenv("BOREALIS_VNC_SOCKET_SOFT_RETRY_POLL_INTERVAL_SECONDS", "0.1")
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
 
     def _fake_wait(*_args, **kwargs):
         wait_calls.append(float(kwargs["timeout_seconds"]))
@@ -470,7 +686,7 @@ def test_vnc_establish_uses_shorter_waits_for_recently_healthy_reconnects(
     monkeypatch.setenv("BOREALIS_VNC_WARM_POST_BOOTSTRAP_GRACE_SECONDS", "0")
     monkeypatch.setenv("BOREALIS_VNC_WARM_SOFT_RETRY_WAIT_SECONDS", "0")
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
 
     def _fake_wait(*_args, **kwargs):
         wait_calls.append(float(kwargs["timeout_seconds"]))
@@ -499,7 +715,7 @@ def test_vnc_establish_defaults_without_display_topology(
     _register_agent_credential(engine_harness)
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
     monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
 
     response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
@@ -521,7 +737,7 @@ def test_vnc_establish_skips_bootstrap_settle_when_fast_probe_succeeds(
     _register_agent_credential(engine_harness)
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
     monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
     monkeypatch.setattr(vnc_api.time, "sleep", lambda seconds: sleep_calls.append(float(seconds)))
 
@@ -551,7 +767,7 @@ def test_vnc_handoff_updates_session_owner_without_forcing_reconnect(
     )
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
     monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
 
     controller_response = admin_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
@@ -600,7 +816,7 @@ def test_vnc_disconnect_keeps_shared_session_active_for_remaining_participants(
     )
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
     monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
 
     controller_response = admin_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
@@ -655,7 +871,7 @@ def test_vnc_disconnect_retains_last_controller_session_for_warm_reconnect(
     )
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
     monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
 
     establish_response = admin_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
@@ -686,7 +902,8 @@ def test_vnc_disconnect_retains_last_controller_session_for_warm_reconnect(
     assert reconnect_payload["participant_id"] == establish_payload["participant_id"]
     assert reconnect_payload["participant_role"] == "controller"
     assert reconnect_payload["credential_revision"] == establish_payload["credential_revision"]
-    assert reconnect_payload["vnc_password"] == establish_payload["vnc_password"]
+    assert reconnect_payload["viewer"] == "guacamole"
+    assert "vnc_password" not in reconnect_payload
     assert reconnect_payload["session"]["state"] == "active"
 
 
@@ -698,7 +915,7 @@ def test_vnc_establish_requires_advertised_agent_credential(
     fake_tunnel = _FakeTunnelService()
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
     monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
 
     response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
@@ -744,7 +961,7 @@ def test_vnc_establish_requests_agent_credential_refresh_when_cache_is_empty(
     engine_harness.context.emit_agent_event = _emit
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: fake_registry)
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: fake_registry)
     monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
 
     response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
@@ -794,7 +1011,7 @@ def test_vnc_establish_uses_shorter_waits_after_fresh_credential_refresh(
     monkeypatch.setenv("BOREALIS_VNC_REFRESH_POST_BOOTSTRAP_GRACE_SECONDS", "0")
     monkeypatch.setenv("BOREALIS_VNC_REFRESH_SOFT_RETRY_WAIT_SECONDS", "0")
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: fake_registry)
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: fake_registry)
 
     def _fake_wait(*_args, **kwargs):
         wait_calls.append(float(kwargs["timeout_seconds"]))
@@ -852,7 +1069,7 @@ def test_vnc_establish_returns_agent_socket_missing_when_backend_needs_bootstrap
     )
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
     monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: False)
 
     response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
@@ -876,7 +1093,7 @@ def test_vnc_establish_returns_agent_socket_missing_when_vnc_start_emit_fails(
     engine_harness.context.emit_agent_event = lambda agent_id, event, payload: False
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
-    monkeypatch.setattr(vnc_api, "ensure_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
 
     wait_calls: list[float] = []
 
