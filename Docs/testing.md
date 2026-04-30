@@ -50,6 +50,15 @@ Runs all Agent Python unit tests from Windows PowerShell.
 - WebUI tests require `Engine/web-interface/node_modules` and staged `Engine/web-interface/Unit_Tests`.
 - If the WebUI runtime is stale, run the normal Engine redeploy path first so `Data/Engine/web-interface/Unit_Tests` is copied into the runtime tree.
 
+## Shared Test Helpers
+- Shared Engine helpers live under `Data/Engine/Unit_Tests/support/`.
+- Shared Agent helpers live under `Data/Agent/Unit_Tests/support/`.
+- Engine helper focus: authenticated Flask clients, temporary Engine database access, and fake devices with valid defaults.
+- Software inventory helpers isolate icon override, uninstall override, and uninstall blocklist JSON so unit tests do not depend on live operator config.
+- Agent helper focus: Role objects built with `__new__`, fake status hooks, and future fake Agent/device runtime pieces.
+- Prefer small helpers such as `admin_client(engine_harness)`, `make_device(...)`, and `set_device_services(...)`.
+- Avoid one giant fake Borealis environment helper. Build reusable pieces instead: one helper for Engine/client state, one helper for devices, one helper for Role runtime hooks, and so on.
+
 ## Current Known Failures
 - The formalization keeps current failing tests visible instead of deleting or hiding them.
 - See [Testing Regressions](testing-regressions.md) for known failure status and cleanup guidance.
@@ -59,6 +68,8 @@ Runs all Agent Python unit tests from Windows PowerShell.
 - Use `PYTHONDONTWRITEBYTECODE=1` when running tests so `__pycache__` does not appear under source folders.
 - Keep result artifacts under `Unit_Test_Results/`; do not write reports under `Data/Engine`, `Data/Agent`, or `Data/Engine/web-interface`.
 - When adding tests, place them under the appropriate `Unit_Tests` folder and update this page if the operator command changes.
+- When tests need fake Engine, fake device, or fake Role state, add the helper under the nearest `support/` package first, then call it from individual tests.
+- Keep helper defaults realistic enough for existing Borealis code paths, and make test-specific differences explicit through keyword overrides.
 - When a test captures a known regression, add or update a row in `testing-regressions.md` so operators know whether the failure is current, fixed, stale, environment-specific, or flaky.
 
 ## Related Documentation

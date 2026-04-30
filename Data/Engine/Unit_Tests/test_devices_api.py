@@ -24,7 +24,6 @@ from Data.Engine.services.API.devices import routes as device_routes
 from Data.Engine.services.API.devices import software_icons as software_icons_module
 from Data.Engine.services.API.devices import software_uninstall as software_uninstall_module
 from Data.Engine.services.API.devices.agent_role_health import normalize_agent_role_health, serialize_agent_role_health
-from Data.Engine.services.API.devices.service_inventory import serialize_device_services
 from Data.Engine.services.API.devices import tunnel as tunnel_api
 from Data.Engine.services.VPN.vpn_tunnel_service import (
     PEER_ACTIVITY_WINDOW_SECONDS,
@@ -34,14 +33,18 @@ from Data.Engine.services.VPN.vpn_tunnel_service import (
 )
 
 from .conftest import EngineTestHarness
-
-
-def _client_with_admin_session(harness: EngineTestHarness):
-    client = harness.app.test_client()
-    with client.session_transaction() as sess:
-        sess["username"] = "admin"
-        sess["role"] = "Admin"
-    return client
+from .support.devices import (
+    set_device_services,
+    set_device_software,
+    set_seed_device_agent_id,
+    set_seed_device_guid,
+)
+from .support.engine import admin_client
+from .support.software_config import (
+    isolate_software_icon_overrides,
+    isolate_uninstall_blocklist,
+    isolate_uninstall_overrides,
+)
 
 
 def _device_headers() -> dict:
@@ -79,52 +82,6 @@ def _patch_repo_call(monkeypatch: pytest.MonkeyPatch, calls: dict) -> None:
         raise request_exception("network error")
 
     monkeypatch.setattr(github_integration.requests, "get", fake_get)
-
-
-def _set_test_device_guid(engine_harness: EngineTestHarness, guid: str) -> None:
-    conn = sqlite3.connect(str(engine_harness.db_path))
-    try:
-        cur = conn.cursor()
-        cur.execute("UPDATE devices SET guid = ? WHERE hostname = ?", (guid, "test-device"))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _set_test_device_agent_id(engine_harness: EngineTestHarness, agent_id: str) -> None:
-    conn = sqlite3.connect(str(engine_harness.db_path))
-    try:
-        cur = conn.cursor()
-        cur.execute("UPDATE devices SET agent_id = ? WHERE hostname = ?", (agent_id, "test-device"))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _set_test_device_services(engine_harness: EngineTestHarness, payload: Any) -> None:
-    conn = sqlite3.connect(str(engine_harness.db_path))
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "UPDATE devices SET services = ? WHERE hostname = ?",
-            (serialize_device_services(payload), "test-device"),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _set_test_device_software(engine_harness: EngineTestHarness, payload: Any) -> None:
-    conn = sqlite3.connect(str(engine_harness.db_path))
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "UPDATE devices SET software = ? WHERE hostname = ?",
-            (json.dumps(payload or []), "test-device"),
-        )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def test_tunnel_service_creation_is_singleton_under_concurrency(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -481,7 +438,7 @@ class _FakeTunnelApiService:
 
 
 def test_list_devices(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     response = client.get("/api/devices")
     assert response.status_code == 200
     payload = response.get_json()
@@ -510,7 +467,7 @@ def test_vpn_service_startup_logs_removed_stale_interfaces() -> None:
 
 
 def test_device_hostname_search_requires_three_characters(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     response = client.get("/api/devices/search?hostname=te")
     assert response.status_code == 200
     payload = response.get_json()
@@ -518,7 +475,7 @@ def test_device_hostname_search_requires_three_characters(engine_harness: Engine
 
 
 def test_device_hostname_search_returns_matches(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     response = client.get("/api/devices/search?hostname=tes")
     assert response.status_code == 200
     payload = response.get_json()
@@ -528,7 +485,7 @@ def test_device_hostname_search_returns_matches(engine_harness: EngineTestHarnes
 
 
 def test_list_agents(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     response = client.get("/api/agents")
     assert response.status_code == 200
     payload = response.get_json()
@@ -540,7 +497,7 @@ def test_list_agents(engine_harness: EngineTestHarness) -> None:
 
 
 def test_list_agents_includes_helper_contexts_for_upgraded_system_socket(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     engine_harness.context.agent_socket_registry = SimpleNamespace(
         snapshot=lambda: {
             "test-device-agent": {
@@ -562,7 +519,7 @@ def test_list_agents_includes_helper_contexts_for_upgraded_system_socket(engine_
 
 
 def test_device_details(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     response = client.get("/api/device/details/test-device")
     assert response.status_code == 200
     payload = response.get_json()
@@ -570,9 +527,9 @@ def test_device_details(engine_harness: EngineTestHarness) -> None:
 
 
 def test_device_services_action_and_refresh(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     now_ts = int(time.time())
-    _set_test_device_services(
+    set_device_services(
         engine_harness,
         {
             "reported_at": now_ts - 120,
@@ -645,7 +602,7 @@ def test_device_description_requires_login(engine_harness: EngineTestHarness) ->
 
 
 def test_device_description_update(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     response = client.post(
         "/api/device/description/test-device",
         json={"description": "Updated"},
@@ -655,7 +612,14 @@ def test_device_description_update(engine_harness: EngineTestHarness) -> None:
     assert detail["description"] == "Updated"
 
 
-def test_agent_details_syncs_normalized_software_inventory(engine_harness: EngineTestHarness) -> None:
+def test_agent_details_syncs_normalized_software_inventory(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    isolate_software_icon_overrides(monkeypatch, tmp_path)
+    isolate_uninstall_blocklist(monkeypatch, tmp_path)
+    isolate_uninstall_overrides(monkeypatch, tmp_path)
     client = engine_harness.app.test_client()
     response = client.post(
         "/api/agent/details",
@@ -727,8 +691,8 @@ def test_agent_details_syncs_normalized_software_inventory(engine_harness: Engin
         ("Google Chrome", "124.0.6367.92", "local_installed"),
     ]
 
-    admin_client = _client_with_admin_session(engine_harness)
-    detail_response = admin_client.get("/api/device/details/test-device")
+    client = admin_client(engine_harness)
+    detail_response = client.get("/api/device/details/test-device")
     assert detail_response.status_code == 200
     software = detail_response.get_json()["software"]
     assert software == [
@@ -884,8 +848,8 @@ def test_agent_details_merge_top_level_software_metadata_into_existing_metadata(
         }
     ]
 
-    admin_client = _client_with_admin_session(engine_harness)
-    detail_response = admin_client.get("/api/device/details/test-device")
+    client = admin_client(engine_harness)
+    detail_response = client.get("/api/device/details/test-device")
     assert detail_response.status_code == 200
     assert detail_response.get_json()["software"] == [
         {
@@ -975,8 +939,8 @@ def test_agent_details_persists_software_icon_assets(engine_harness: EngineTestH
     assert bytes(row[2]) == icon_bytes
     assert row[3] == len(icon_bytes)
 
-    admin_client = _client_with_admin_session(engine_harness)
-    detail_response = admin_client.get("/api/device/details/test-device")
+    client = admin_client(engine_harness)
+    detail_response = client.get("/api/device/details/test-device")
     assert detail_response.status_code == 200
     assert detail_response.get_json()["software"] == [
         {
@@ -1108,8 +1072,8 @@ def test_agent_details_accepts_session_and_process_shape_upgrade_without_blockin
     assert icon_row[0] == icon_hash
     assert bytes(icon_row[1]) == icon_bytes
 
-    admin_client = _client_with_admin_session(engine_harness)
-    detail_response = admin_client.get("/api/device/details/test-device")
+    client = admin_client(engine_harness)
+    detail_response = client.get("/api/device/details/test-device")
     assert detail_response.status_code == 200
     detail_payload = detail_response.get_json()
     assert detail_payload["sessions"] == [
@@ -1192,7 +1156,7 @@ def test_device_software_icon_endpoint_serves_cached_asset(engine_harness: Engin
     finally:
         conn.close()
 
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     response = client.get(f"/api/device/software/icon/{icon_hash}")
 
     assert response.status_code == 200
@@ -1201,8 +1165,8 @@ def test_device_software_icon_endpoint_serves_cached_asset(engine_harness: Engin
 
 
 def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _client_with_admin_session(engine_harness)
-    _set_test_device_software(
+    client = admin_client(engine_harness)
+    set_device_software(
         engine_harness,
         [
             {
@@ -1299,7 +1263,7 @@ def test_device_processes_snapshot_uses_system_socket(
     engine_harness: EngineTestHarness,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     calls: list[tuple[str, str, str, dict[str, Any], float]] = []
 
     monkeypatch.setattr(
@@ -1362,7 +1326,7 @@ def test_device_process_terminate_sends_system_socket_request_and_notifies(
     engine_harness: EngineTestHarness,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     calls: list[tuple[str, str, str, dict[str, Any], float]] = []
     socket_events: list[tuple[str, Any]] = []
 
@@ -1422,8 +1386,8 @@ def test_device_process_terminate_sends_system_socket_request_and_notifies(
 
 
 def test_device_software_uninstall_requires_supported_metadata(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
-    _set_test_device_software(
+    client = admin_client(engine_harness)
+    set_device_software(
         engine_harness,
         [
             {
@@ -1452,7 +1416,7 @@ def test_device_software_uninstall_requires_supported_metadata(engine_harness: E
 def test_quick_job_progress_updates_activity_history_and_broadcasts(
     engine_harness: EngineTestHarness,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     socket_client = engine_harness.context.socketio.test_client(
         engine_harness.app,
         flask_test_client=client,
@@ -1557,8 +1521,8 @@ def test_quick_job_progress_updates_activity_history_and_broadcasts(
 def test_device_software_uninstall_rejects_non_removable_windows_store_package(
     engine_harness: EngineTestHarness,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
-    _set_test_device_software(
+    client = admin_client(engine_harness)
+    set_device_software(
         engine_harness,
         [
             {
@@ -1617,8 +1581,8 @@ def test_device_software_uninstall_rejects_non_removable_windows_store_package(
 def test_device_software_uninstall_supports_windows_store_package_family_without_removability_hint(
     engine_harness: EngineTestHarness,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
-    _set_test_device_software(
+    client = admin_client(engine_harness)
+    set_device_software(
         engine_harness,
         [
             {
@@ -1661,8 +1625,8 @@ def test_device_software_uninstall_supports_windows_store_package_family_without
 def test_device_software_uninstall_supports_install_location_derived_windows_rules(
     engine_harness: EngineTestHarness,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
-    _set_test_device_software(
+    client = admin_client(engine_harness)
+    set_device_software(
         engine_harness,
         [
             {
@@ -1738,36 +1702,26 @@ def test_device_software_uninstall_applies_file_override(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
-    override_path = tmp_path / "software_uninstall_overrides.json"
-    override_path.write_text(
-        json.dumps(
+    client = admin_client(engine_harness)
+    isolate_uninstall_blocklist(monkeypatch, tmp_path)
+    isolate_uninstall_overrides(
+        monkeypatch,
+        tmp_path,
+        rules=[
             {
-                "windows_uninstall_overrides": [
-                    {
-                        "rule_id": "uninstall_override_fedora_media_writer",
-                        "source": "local_installed",
-                        "name": "Fedora Media Writer",
-                        "version": "5.2.8",
-                        "publisher_contains_any": ["Fedora Project"],
-                        "strategy": "direct_command",
-                        "quiet_uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe" remove --confirm-command',
-                        "summary": "Uses a verified Fedora Media Writer unattended uninstall command override.",
-                    }
-                ]
+                "rule_id": "uninstall_override_fedora_media_writer",
+                "source": "local_installed",
+                "name": "Fedora Media Writer",
+                "version": "5.2.8",
+                "publisher_contains_any": ["Fedora Project"],
+                "strategy": "direct_command",
+                "quiet_uninstall_string": '"C:\\Program Files\\Fedora Media Writer\\uninstall.exe" remove --confirm-command',
+                "summary": "Uses a verified Fedora Media Writer unattended uninstall command override.",
             }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(software_uninstall_module, "_UNINSTALL_OVERRIDES_PATH", override_path)
-    monkeypatch.setattr(software_uninstall_module, "_UNINSTALL_OVERRIDES_CACHE_MTIME_NS", None)
-    monkeypatch.setattr(
-        software_uninstall_module,
-        "_UNINSTALL_OVERRIDES_CACHE",
-        {"windows_uninstall_overrides": []},
+        ],
     )
 
-    _set_test_device_software(
+    set_device_software(
         engine_harness,
         [
             {
@@ -1816,8 +1770,8 @@ def test_device_software_uninstall_applies_file_override(
 def test_device_software_uninstall_blocks_known_interactive_quiet_string(
     engine_harness: EngineTestHarness,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
-    _set_test_device_software(
+    client = admin_client(engine_harness)
+    set_device_software(
         engine_harness,
         [
             {
@@ -1887,8 +1841,8 @@ def test_device_software_uninstall_blocks_known_interactive_quiet_string(
 def test_device_software_uninstall_marks_steam_protocol_titles_as_unsupported(
     engine_harness: EngineTestHarness,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
-    _set_test_device_software(
+    client = admin_client(engine_harness)
+    set_device_software(
         engine_harness,
         [
             {
@@ -1954,8 +1908,8 @@ def test_device_software_uninstall_marks_steam_protocol_titles_as_unsupported(
 def test_device_software_uninstall_marks_install_location_only_steam_titles_as_unsupported(
     engine_harness: EngineTestHarness,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
-    _set_test_device_software(
+    client = admin_client(engine_harness)
+    set_device_software(
         engine_harness,
         [
             {
@@ -2138,7 +2092,7 @@ def test_device_software_icon_override_persists_rule_and_requests_refresh(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     override_path = tmp_path / "software_icons_overrides.json"
     override_path.write_text(json.dumps({"windows_icon_overrides": []}), encoding="utf-8")
     monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_PATH", override_path)
@@ -2148,7 +2102,7 @@ def test_device_software_icon_override_persists_rule_and_requests_refresh(
         "_SOFTWARE_ICON_OVERRIDES_CACHE",
         {"windows_icon_overrides": []},
     )
-    _set_test_device_software(
+    set_device_software(
         engine_harness,
         [
             {
@@ -2217,7 +2171,7 @@ def test_device_software_icon_override_can_clear_icon_and_request_refresh(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     override_path = tmp_path / "software_icons_overrides.json"
     override_path.write_text(json.dumps({"windows_icon_overrides": []}), encoding="utf-8")
     monkeypatch.setattr(software_icons_module, "_SOFTWARE_ICON_OVERRIDES_PATH", override_path)
@@ -2227,7 +2181,7 @@ def test_device_software_icon_override_can_clear_icon_and_request_refresh(
         "_SOFTWARE_ICON_OVERRIDES_CACHE",
         {"windows_icon_overrides": []},
     )
-    _set_test_device_software(
+    set_device_software(
         engine_harness,
         [
             {
@@ -2295,7 +2249,7 @@ def test_device_software_icon_override_replaces_legacy_same_name_rule(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     override_path = tmp_path / "software_icons_overrides.json"
     override_path.write_text(
         json.dumps(
@@ -2320,7 +2274,7 @@ def test_device_software_icon_override_replaces_legacy_same_name_rule(
         "_SOFTWARE_ICON_OVERRIDES_CACHE",
         {"windows_icon_overrides": []},
     )
-    _set_test_device_software(
+    set_device_software(
         engine_harness,
         [
             {
@@ -2364,7 +2318,7 @@ def test_device_details_backfills_global_icon_override_hash_from_other_device_in
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     override_path = tmp_path / "software_icons_overrides.json"
     override_path.write_text(
         json.dumps(
@@ -2387,7 +2341,7 @@ def test_device_details_backfills_global_icon_override_hash_from_other_device_in
         "_SOFTWARE_ICON_OVERRIDES_CACHE",
         {"windows_icon_overrides": []},
     )
-    _set_test_device_software(
+    set_device_software(
         engine_harness,
         [
             {
@@ -2454,7 +2408,7 @@ def test_device_details_backfills_global_icon_override_hash_from_devices_payload
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     override_path = tmp_path / "software_icons_overrides.json"
     override_path.write_text(
         json.dumps(
@@ -2477,7 +2431,7 @@ def test_device_details_backfills_global_icon_override_hash_from_devices_payload
         "_SOFTWARE_ICON_OVERRIDES_CACHE",
         {"windows_icon_overrides": []},
     )
-    _set_test_device_software(
+    set_device_software(
         engine_harness,
         [
             {
@@ -2547,7 +2501,7 @@ def test_device_by_guid_backfills_global_icon_override_hash_from_devices_payload
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     override_path = tmp_path / "software_icons_overrides.json"
     override_path.write_text(
         json.dumps(
@@ -2570,7 +2524,7 @@ def test_device_by_guid_backfills_global_icon_override_hash_from_devices_payload
         "_SOFTWARE_ICON_OVERRIDES_CACHE",
         {"windows_icon_overrides": []},
     )
-    _set_test_device_software(
+    set_device_software(
         engine_harness,
         [
             {
@@ -2640,7 +2594,7 @@ def test_device_details_applies_clear_icon_override_even_for_stale_rows(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     override_path = tmp_path / "software_icons_overrides.json"
     override_path.write_text(
         json.dumps(
@@ -2663,7 +2617,7 @@ def test_device_details_applies_clear_icon_override_even_for_stale_rows(
         "_SOFTWARE_ICON_OVERRIDES_CACHE",
         {"windows_icon_overrides": []},
     )
-    _set_test_device_software(
+    set_device_software(
         engine_harness,
         [
             {
@@ -2697,7 +2651,7 @@ def test_device_software_uninstall_override_hotloads_into_detail_enrichment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     override_path = tmp_path / "software_uninstall_overrides.json"
     override_path.write_text(json.dumps({"windows_uninstall_overrides": []}), encoding="utf-8")
     monkeypatch.setattr(software_uninstall_module, "_UNINSTALL_OVERRIDES_PATH", override_path)
@@ -2707,7 +2661,7 @@ def test_device_software_uninstall_override_hotloads_into_detail_enrichment(
         "_UNINSTALL_OVERRIDES_CACHE",
         {"windows_uninstall_overrides": []},
     )
-    _set_test_device_software(
+    set_device_software(
         engine_harness,
         [
             {
@@ -2772,7 +2726,7 @@ def test_device_software_uninstall_block_and_unblock_hotload(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     blocklist_path = tmp_path / "software_uninstall_blocklist.json"
     blocklist_path.write_text(json.dumps({"windows_quiet_uninstall_blocklist": []}), encoding="utf-8")
     monkeypatch.setattr(software_uninstall_module, "_UNINSTALL_BLOCKLIST_PATH", blocklist_path)
@@ -2782,7 +2736,7 @@ def test_device_software_uninstall_block_and_unblock_hotload(
         "_UNINSTALL_BLOCKLIST_CACHE",
         {"windows_quiet_uninstall_blocklist": []},
     )
-    _set_test_device_software(
+    set_device_software(
         engine_harness,
         [
             {
@@ -2886,7 +2840,7 @@ def test_device_software_refresh_route_requests_system_refresh(
     engine_harness: EngineTestHarness,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     targeted_events: list[tuple[str, str, str, dict[str, Any]]] = []
     monkeypatch.setattr(
         engine_harness.context,
@@ -2910,7 +2864,7 @@ def test_device_software_refresh_route_requests_system_refresh(
 
 
 def test_device_list_views_lifecycle(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     create_resp = client.post(
         "/api/device_list_views",
         json={"name": "Custom", "columns": ["hostname"], "filters": {"site": "Main"}},
@@ -2947,7 +2901,7 @@ def test_repo_current_hash_uses_cache(engine_harness: EngineTestHarness, monkeyp
 
     _patch_repo_call(monkeypatch, calls)
 
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     first = client.get("/api/repo/current_hash?repo=test/test&branch=main")
     assert first.status_code == 200
     assert first.get_json()["sha"] == "abc123"
@@ -2975,7 +2929,7 @@ def test_repo_current_hash_allows_device_token(engine_harness: EngineTestHarness
 
 
 def test_agent_hash_list_permissions(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     forbidden = client.get("/api/agent/hash_list", environ_base={"REMOTE_ADDR": "192.0.2.10"})
     assert forbidden.status_code == 403
     allowed = client.get("/api/agent/hash_list", environ_base={"REMOTE_ADDR": "127.0.0.1"})
@@ -2985,7 +2939,7 @@ def test_agent_hash_list_permissions(engine_harness: EngineTestHarness) -> None:
 
 
 def test_sites_lifecycle(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     create_resp = client.post(
         "/api/sites",
         json={"name": "Edge", "description": "Edge location"},
@@ -3019,7 +2973,7 @@ def test_sites_lifecycle(engine_harness: EngineTestHarness) -> None:
 
 
 def test_admin_device_approvals(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     list_resp = client.get("/api/admin/device-approvals")
     approvals = list_resp.get_json()["approvals"]
     assert approvals and approvals[0]["status"] == "pending"
@@ -3498,7 +3452,7 @@ def test_vpn_service_suppresses_device_activity_history(engine_harness: EngineTe
 
 
 def test_tunnel_status_endpoint_exposes_listener_health(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     fake_service = _FakeTunnelApiService(
         status_payload={
             "tunnel_id": "tun-1",
@@ -3529,8 +3483,8 @@ def test_tunnel_status_endpoint_resolves_guid_to_agent_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     valid_guid = "3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9"
-    _set_test_device_guid(engine_harness, valid_guid)
-    client = _client_with_admin_session(engine_harness)
+    set_seed_device_guid(engine_harness, valid_guid)
+    client = admin_client(engine_harness)
     fake_service = _FakeTunnelApiService(
         status_payload=lambda agent_id: {
             "tunnel_id": "tun-1",
@@ -3560,8 +3514,8 @@ def test_resolve_requested_agent_id_prefers_live_system_socket_for_stale_binding
     valid_guid = "3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9"
     stale_agent_id = "test-device_08FB4B0D-FE6B-4D41-B09B-7947851BFD7A_SYSTEM"
     live_agent_id = "test-device_3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9_SYSTEM"
-    _set_test_device_guid(engine_harness, valid_guid)
-    _set_test_device_agent_id(engine_harness, stale_agent_id)
+    set_seed_device_guid(engine_harness, valid_guid)
+    set_seed_device_agent_id(engine_harness, stale_agent_id)
     adapters = SimpleNamespace(
         db_conn_factory=lambda: sqlite3.connect(str(engine_harness.db_path)),
         context=SimpleNamespace(
@@ -3581,8 +3535,8 @@ def test_tunnel_connect_endpoint_resolves_guid_to_agent_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     valid_guid = "3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9"
-    _set_test_device_guid(engine_harness, valid_guid)
-    client = _client_with_admin_session(engine_harness)
+    set_seed_device_guid(engine_harness, valid_guid)
+    client = admin_client(engine_harness)
     fake_service = _FakeTunnelApiService(status_payload=None, active_payloads=[])
     monkeypatch.setattr(tunnel_api, "_get_tunnel_service", lambda _adapters: fake_service)
 
@@ -3601,8 +3555,8 @@ def test_agent_vpn_ensure_repairs_stale_agent_binding(
     valid_guid = "3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9"
     stale_agent_id = "test-device_08FB4B0D-FE6B-4D41-B09B-7947851BFD7A_SYSTEM"
     live_agent_id = "test-device_3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9_SYSTEM"
-    _set_test_device_guid(engine_harness, valid_guid)
-    _set_test_device_agent_id(engine_harness, stale_agent_id)
+    set_seed_device_guid(engine_harness, valid_guid)
+    set_seed_device_agent_id(engine_harness, stale_agent_id)
 
     fake_service = _FakeTunnelApiService(status_payload=None, active_payloads=[])
     monkeypatch.setattr(device_routes, "_get_tunnel_service", lambda _adapters: fake_service)
@@ -3639,8 +3593,8 @@ def test_agent_vnc_ensure_creates_passive_tunnel_when_missing(
 ) -> None:
     valid_guid = "3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9"
     live_agent_id = "test-device_3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9_SYSTEM"
-    _set_test_device_guid(engine_harness, valid_guid)
-    _set_test_device_agent_id(engine_harness, live_agent_id)
+    set_seed_device_guid(engine_harness, valid_guid)
+    set_seed_device_agent_id(engine_harness, live_agent_id)
 
     fake_service = _FakeTunnelApiService(status_payload=None, active_payloads=[])
     monkeypatch.setattr(device_routes, "_get_tunnel_service", lambda _adapters: fake_service)
@@ -3684,7 +3638,7 @@ def test_tunnel_status_endpoint_returns_down_health_defaults(
     engine_harness: EngineTestHarness,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     fake_service = _FakeTunnelApiService(status_payload=None, active_payloads=[])
     monkeypatch.setattr(tunnel_api, "_get_tunnel_service", lambda _adapters: fake_service)
 
@@ -3699,7 +3653,7 @@ def test_tunnel_status_endpoint_returns_down_health_defaults(
 
 
 def test_tunnel_active_endpoint_exposes_listener_health(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
     fake_service = _FakeTunnelApiService(
         status_payload=None,
         active_payloads=[

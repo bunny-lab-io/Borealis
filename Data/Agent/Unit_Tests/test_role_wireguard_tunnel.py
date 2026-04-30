@@ -13,6 +13,8 @@ from Data.Agent.Roles.role_system_wireguard import (
     _session_transport_equivalent,
 )
 
+from Data.Agent.Unit_Tests.support.roles import install_role_status_hooks
+
 
 def _build_session(*, endpoint: str = "borealis.bunny-lab.io:30000") -> SessionConfig:
     return SessionConfig(
@@ -86,12 +88,8 @@ def test_role_resolve_endpoint_preserves_engine_token_endpoint() -> None:
 
 
 def test_role_agent_status_hooks_report_wireguard_milestones() -> None:
-    events = []
     role = Role.__new__(Role)
-    role._agent_status_record = lambda key, state, detail: events.append(("record", key, state, detail))
-    role._agent_status_complete = lambda key, detail: events.append(("complete", key, detail))
-    role._agent_status_failed = lambda key, detail: events.append(("failed", key, detail))
-    role._agent_status_flush = lambda *, reason="": events.append(("flush", reason))
+    events = install_role_status_hooks(role)
 
     role._record_agent_status("wireguard_starting", "active", "starting")
     role._complete_agent_status("wireguard_online", "online")
@@ -459,7 +457,7 @@ def test_role_run_ensure_cycle_uses_requested_reason() -> None:
     role._http_client = lambda: "signing-client"
     role._notify_engine_ready = lambda _session, *, reason: captured.append(("ready", reason))
     role._log = lambda message, *, error=False: None
-    role._agent_status_record = lambda key, state, detail: captured.append(("status", key, state, detail))
+    install_role_status_hooks(role, captured)
 
     role._run_ensure_cycle(reason="socket_connect")
 
@@ -547,8 +545,7 @@ def test_role_run_ensure_cycle_safe_logs_exceptions() -> None:
     captured: list[tuple[str, bool]] = []
     role._run_ensure_cycle = lambda *, reason="agent_boot": (_ for _ in ()).throw(RuntimeError("boom"))
     role._log = lambda message, *, error=False: captured.append((message, error))
-    role._agent_status_failed = lambda key, detail: captured.append((f"{key}: {detail}", True))
-    role._agent_status_flush = lambda *, reason: captured.append((f"flush: {reason}", False))
+    install_role_status_hooks(role)
 
     role._run_ensure_cycle_safe(reason="socket_connect", source="immediate")
 
