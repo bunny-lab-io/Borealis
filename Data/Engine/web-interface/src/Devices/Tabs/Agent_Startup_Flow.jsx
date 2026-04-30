@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Button, GlobalStyles, IconButton, Tooltip, Typography } from "@mui/material";
 import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
@@ -26,6 +26,7 @@ const RUNTIME_FLOW_START_Y = 198;
 const RUNTIME_FLOW_ROW_GAP = 106;
 const STEADY_FLOW_X = 2940;
 const STEADY_FLOW_Y = 315;
+const SNAP_THRESHOLD_PX = 8;
 const DEFAULT_FLOW_VIEWPORT = Object.freeze({ x: 40, y: 120, zoom: 0.5 });
 const FLOW_DRAFT_LAYOUT_STORAGE_KEY = "borealis.agentHealth.startupFlowDraftLayout.v1";
 
@@ -524,14 +525,91 @@ export default function AgentStartupFlow({
   const rows = Array.isArray(milestones) ? milestones : [];
   const { nodes, edges } = useStartupFlowElements(rows, runtimeRows, formatTimestamp, onRuntimeNodeOpen);
   const draftLayout = useMemo(() => readDraftLayout(), []);
+  const wrapperRef = useRef(null);
+  const movingFlowSize = useRef({ width: STARTUP_FLOW_NODE_WIDTH, height: 76 });
   const [nodePositionOverrides, setNodePositionOverrides] = useState(draftLayout.positions);
   const [viewport, setViewport] = useState(draftLayout.viewport);
+  const [guides, setGuides] = useState([]);
+  const [activeGuides, setActiveGuides] = useState([]);
   const [editableNodes, setEditableNodes] = useState(() =>
     mergeNodesPreservingPositions(nodes, [], draftLayout.positions)
   );
   useEffect(() => {
     setEditableNodes((currentNodes) => mergeNodesPreservingPositions(nodes, currentNodes, nodePositionOverrides));
   }, [nodePositionOverrides, nodes]);
+  const screenToFlowPosition = useCallback(
+    (point) => {
+      const wrapperRect = wrapperRef.current?.getBoundingClientRect();
+      const zoom = Math.max(Number(viewport?.zoom || 1), 0.01);
+      if (!wrapperRect) return { x: 0, y: 0 };
+      return {
+        x: (point.x - wrapperRect.left - Number(viewport?.x || 0)) / zoom,
+        y: (point.y - wrapperRect.top - Number(viewport?.y || 0)) / zoom,
+      };
+    },
+    [viewport]
+  );
+  const computeGuides = useCallback(
+    (dragNode) => {
+      const wrapper = wrapperRef.current;
+      if (!wrapper || !dragNode?.id) return;
+      const wrapperRect = wrapper.getBoundingClientRect();
+      const dragEl = wrapper.querySelector(`.react-flow__node[data-id="${dragNode.id}"]`);
+      if (dragEl) {
+        const rect = dragEl.getBoundingClientRect();
+        const topLeft = screenToFlowPosition({ x: rect.left, y: rect.top });
+        const topRight = screenToFlowPosition({ x: rect.right, y: rect.top });
+        const bottomLeft = screenToFlowPosition({ x: rect.left, y: rect.bottom });
+        movingFlowSize.current = {
+          width: Math.max(topRight.x - topLeft.x, STARTUP_FLOW_NODE_WIDTH),
+          height: Math.max(bottomLeft.y - topLeft.y, 66),
+        };
+      }
+
+      const nextGuides = [];
+      editableNodes.forEach((node) => {
+        if (!node?.id || node.id === dragNode.id) return;
+        const el = wrapper.querySelector(`.react-flow__node[data-id="${node.id}"]`);
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        const relLeft = rect.left - wrapperRect.left;
+        const relTop = rect.top - wrapperRect.top;
+        const relRight = relLeft + rect.width;
+        const relBottom = relTop + rect.height;
+        const relCenterX = relLeft + rect.width / 2;
+        const relCenterY = relTop + rect.height / 2;
+        const topLeft = screenToFlowPosition({ x: rect.left, y: rect.top });
+        const topRight = screenToFlowPosition({ x: rect.right, y: rect.top });
+        const bottomLeft = screenToFlowPosition({ x: rect.left, y: rect.bottom });
+        const center = screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+        nextGuides.push({ xFlow: topLeft.x, xPx: relLeft });
+        nextGuides.push({ xFlow: center.x, xPx: relCenterX });
+        nextGuides.push({ xFlow: topRight.x, xPx: relRight });
+        nextGuides.push({ yFlow: topLeft.y, yPx: relTop });
+        nextGuides.push({ yFlow: center.y, yPx: relCenterY });
+        nextGuides.push({ yFlow: bottomLeft.y, yPx: relBottom });
+      });
+      setGuides(nextGuides);
+    },
+    [editableNodes, screenToFlowPosition]
+  );
+  const persistNodePosition = useCallback(
+    (nodeId, position) => {
+      if (!nodeId || !position) return;
+      setNodePositionOverrides((currentOverrides) => {
+        const nextOverrides = {
+          ...currentOverrides,
+          [nodeId]: {
+            x: position.x,
+            y: position.y,
+          },
+        };
+        writeDraftLayout(nextOverrides, viewport);
+        return nextOverrides;
+      });
+    },
+    [viewport]
+  );
   const handleNodesChange = useCallback((changes) => {
     const positionChanges = changes.filter((change) => change.type === "position" && change.id && change.position);
     if (positionChanges.length) {
@@ -546,6 +624,80 @@ export default function AgentStartupFlow({
     }
     setEditableNodes((currentNodes) => applyNodeChanges(changes, currentNodes));
   }, [viewport]);
+  const handleNodeDrag = useCallback(
+    (_, node) => {
+      if (!node?.id) return;
+      const threshold = SNAP_THRESHOLD_PX / Math.max(Number(viewport?.zoom || 1), 0.01);
+      const { width, height } = movingFlowSize.current;
+      let bestX = null;
+      let bestY = null;
+      guides.forEach((guide) => {
+        if (guide.xFlow != null) {
+          [
+            { value: node.position.x, offset: 0 },
+            { value: node.position.x + width / 2, offset: width / 2 },
+            { value: node.position.x + width, offset: width },
+          ].forEach((candidate) => {
+            const distance = Math.abs(candidate.value - guide.xFlow);
+            if (distance < threshold && (!bestX || distance < bestX.distance)) {
+              bestX = { distance, x: guide.xFlow - candidate.offset, xPx: guide.xPx };
+            }
+          });
+        }
+        if (guide.yFlow != null) {
+          [
+            { value: node.position.y, offset: 0 },
+            { value: node.position.y + height / 2, offset: height / 2 },
+            { value: node.position.y + height, offset: height },
+          ].forEach((candidate) => {
+            const distance = Math.abs(candidate.value - guide.yFlow);
+            if (distance < threshold && (!bestY || distance < bestY.distance)) {
+              bestY = { distance, y: guide.yFlow - candidate.offset, yPx: guide.yPx };
+            }
+          });
+        }
+      });
+      if (!bestX && !bestY) {
+        setActiveGuides([]);
+        return;
+      }
+      const snappedPosition = {
+        x: bestX ? bestX.x : node.position.x,
+        y: bestY ? bestY.y : node.position.y,
+      };
+      setEditableNodes((currentNodes) =>
+        applyNodeChanges(
+          [
+            {
+              id: node.id,
+              type: "position",
+              position: snappedPosition,
+            },
+          ],
+          currentNodes
+        )
+      );
+      persistNodePosition(node.id, snappedPosition);
+      setActiveGuides([
+        ...(bestX ? [{ xPx: bestX.xPx }] : []),
+        ...(bestY ? [{ yPx: bestY.yPx }] : []),
+      ]);
+    },
+    [guides, persistNodePosition, viewport]
+  );
+  const handleNodeDragStop = useCallback(
+    (_, node) => {
+      setGuides([]);
+      setActiveGuides([]);
+      if (!node?.id) return;
+      setEditableNodes((currentNodes) => {
+        const currentNode = currentNodes.find((entry) => entry.id === node.id);
+        if (currentNode?.position) persistNodePosition(node.id, currentNode.position);
+        return currentNodes;
+      });
+    },
+    [persistNodePosition]
+  );
   const handleMove = useCallback(
     (_, nextViewport) => {
       setViewport(nextViewport);
@@ -592,6 +744,7 @@ export default function AgentStartupFlow({
   return (
     <Box
       className="agent-startup-flow"
+      ref={wrapperRef}
       sx={{
         height: "100%",
         minHeight: { xs: 520, md: 620 },
@@ -636,6 +789,24 @@ export default function AgentStartupFlow({
           ".agent-startup-flow .react-flow__attribution": {
             display: "none",
           },
+          ".agent-startup-flow-helper-line": {
+            position: "absolute",
+            zIndex: 9,
+            pointerEvents: "none",
+            background: MAGIC_UI.accentA,
+            boxShadow: `0 0 12px ${MAGIC_UI.accentA}`,
+            opacity: 0.95,
+          },
+          ".agent-startup-flow-helper-line-vertical": {
+            top: 0,
+            width: 1,
+            height: "100%",
+          },
+          ".agent-startup-flow-helper-line-horizontal": {
+            left: 0,
+            height: 1,
+            width: "100%",
+          },
         }}
       />
       <ReactFlow
@@ -656,6 +827,9 @@ export default function AgentStartupFlow({
         zoomOnDoubleClick={false}
         preventScrolling={false}
         selectionOnDrag={false}
+        onNodeDragStart={(_, node) => computeGuides(node)}
+        onNodeDrag={handleNodeDrag}
+        onNodeDragStop={handleNodeDragStop}
         onMove={handleMove}
         onNodeClick={handleNodeClick}
         onNodeContextMenu={handleNodeContextMenu}
@@ -665,6 +839,21 @@ export default function AgentStartupFlow({
       >
         <Background variant="lines" gap={42} size={1} color="rgba(148, 163, 184, 0.14)" />
       </ReactFlow>
+      {activeGuides.map((guide, index) =>
+        guide.xPx != null ? (
+          <Box
+            key={`x-${index}`}
+            className="agent-startup-flow-helper-line agent-startup-flow-helper-line-vertical"
+            sx={{ left: `${guide.xPx}px` }}
+          />
+        ) : (
+          <Box
+            key={`y-${index}`}
+            className="agent-startup-flow-helper-line agent-startup-flow-helper-line-horizontal"
+            sx={{ top: `${guide.yPx}px` }}
+          />
+        )
+      )}
     </Box>
   );
 }
