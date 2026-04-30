@@ -20,10 +20,7 @@ const HIDDEN_HANDLE_STYLE = {
 };
 
 const STARTUP_FLOW_NODE_WIDTH = 256;
-const RUNTIME_FLOW_NODE_WIDTH = 256;
-const RUNTIME_FLOW_COLUMNS = Object.freeze([1570, 1885, 2200, 2515]);
-const RUNTIME_FLOW_START_Y = 198;
-const RUNTIME_FLOW_ROW_GAP = 106;
+const RUNTIME_FLOW_GROUP_WIDTH = 390;
 const STEADY_FLOW_X = 2940;
 const STEADY_FLOW_Y = 315;
 const SNAP_THRESHOLD_PX = 8;
@@ -115,8 +112,56 @@ function getRuntimeStatusColor(statusCode) {
   return RUNTIME_STATUS_COLOR_BY_CODE[normalized] || RUNTIME_STATUS_COLOR_BY_CODE.unknown;
 }
 
-function buildRuntimeNodeId(entry, index) {
-  return `runtime_health_${index}_${String(entry?.id || entry?.name || "node").replace(/[^a-zA-Z0-9_-]+/g, "_")}`;
+function colorWithAlpha(color, alpha) {
+  const text = String(color || "").trim();
+  const boundedAlpha = Math.min(Math.max(Number(alpha), 0), 1);
+  if (/^#[0-9a-f]{6}$/i.test(text)) {
+    const suffix = Math.round(boundedAlpha * 255).toString(16).padStart(2, "0");
+    return `${text}${suffix}`;
+  }
+  const rgbaMatch = text.match(/^rgba?\(([^)]+)\)$/i);
+  if (rgbaMatch) {
+    const channels = rgbaMatch[1].split(",").slice(0, 3).map((part) => part.trim()).join(", ");
+    return `rgba(${channels}, ${boundedAlpha})`;
+  }
+  return text;
+}
+
+function resolveRuntimeGroupState(runtimeRows, milestoneState) {
+  const rows = Array.isArray(runtimeRows) ? runtimeRows : [];
+  if (!rows.length && milestoneState === "complete") return "active";
+  const runtimeStates = rows.map((entry) => normalizeRuntimeHealthState(entry?.statusCode));
+  if (milestoneState === "failed" || runtimeStates.some((state) => state === "failed")) return "failed";
+  if (runtimeStates.some((state) => state === "active" || state === "pending")) return "active";
+  if (rows.length && runtimeStates.every((state) => state === "complete" || state === "skipped")) return "complete";
+  if (milestoneState === "active") return "active";
+  return milestoneState || "pending";
+}
+
+function buildRuntimeGroupSummary(runtimeRows) {
+  const rows = Array.isArray(runtimeRows) ? runtimeRows : [];
+  const counts = rows.reduce(
+    (acc, entry) => {
+      const kind = String(entry?.healthKind || "role").toLowerCase() === "service" ? "service" : "role";
+      const state = normalizeRuntimeHealthState(entry?.statusCode);
+      acc[kind].total += 1;
+      if (state === "complete") acc[kind].healthy += 1;
+      if (state === "failed") acc[kind].failed += 1;
+      if (state === "active" || state === "pending") acc[kind].working += 1;
+      return acc;
+    },
+    {
+      role: { total: 0, healthy: 0, failed: 0, working: 0 },
+      service: { total: 0, healthy: 0, failed: 0, working: 0 },
+    }
+  );
+  const pieces = [];
+  if (counts.role.total) pieces.push(`${counts.role.healthy}/${counts.role.total} roles healthy`);
+  if (counts.service.total) pieces.push(`${counts.service.healthy}/${counts.service.total} services healthy`);
+  return {
+    counts,
+    text: pieces.length ? pieces.join(" · ") : "Awaiting role telemetry",
+  };
 }
 
 function resolveGroupedMilestones(definition, milestoneByKey) {
@@ -219,87 +264,162 @@ function AgentStartupFlowNode({ data }) {
   );
 }
 
-function AgentRuntimeHealthNode({ data }) {
-  const state = normalizeRuntimeHealthState(data?.entry?.statusCode);
-  const color = getRuntimeStatusColor(data?.entry?.statusCode);
-  const meta = STARTUP_STATE_META[state] || STARTUP_STATE_META.pending;
-  const Icon = meta.Icon;
-  const status = String(data?.entry?.status || "Unknown").trim();
-  const checked = String(data?.entry?.lastCheckedText || "").trim();
+function AgentRuntimeHealthGroupNode({ data }) {
+  const rows = Array.isArray(data?.runtimeRows) ? data.runtimeRows : [];
+  const state = normalizeMilestoneState(data?.state);
+  const groupMeta = STARTUP_STATE_META[state] || STARTUP_STATE_META.pending;
+  const GroupIcon = groupMeta.Icon;
+  const summary = buildRuntimeGroupSummary(rows);
+  const timestamp = data?.timestampText || "";
+  const groupedRows = [
+    { key: "role", label: "Roles", rows: rows.filter((entry) => String(entry?.healthKind || "role").toLowerCase() !== "service") },
+    { key: "service", label: "Services", rows: rows.filter((entry) => String(entry?.healthKind || "").toLowerCase() === "service") },
+  ].filter((group) => group.rows.length);
   return (
-    <Button
-      type="button"
-      onClick={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (typeof data?.onOpen === "function") data.onOpen(data.entry);
-      }}
+    <Box
       sx={{
-        width: RUNTIME_FLOW_NODE_WIDTH,
-        minHeight: 76,
+        width: RUNTIME_FLOW_GROUP_WIDTH,
+        minHeight: 88,
         px: 1.15,
-        py: 0.9,
+        py: 1,
         borderRadius: 2,
-        border: `1px solid ${color}`,
-        background: `linear-gradient(145deg, rgba(7,11,24,0.96), ${color}18)`,
-        boxShadow: "0 14px 32px rgba(2,6,23,0.48)",
+        border: `1px solid ${state === "pending" ? "rgba(148, 163, 184, 0.26)" : groupMeta.color}`,
+        background: `linear-gradient(145deg, rgba(7,11,24,0.97), ${groupMeta.bg})`,
+        boxShadow:
+          state === "active"
+            ? `0 0 0 1px ${groupMeta.color}44, 0 18px 44px rgba(2,6,23,0.62), 0 0 28px ${groupMeta.color}36`
+            : "0 16px 36px rgba(2,6,23,0.54)",
         color: MAGIC_UI.textBright,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "flex-start",
-        gap: 1,
         textAlign: "left",
-        textTransform: "none",
+        userSelect: "none",
+        position: "relative",
         overflow: "hidden",
-        cursor: "pointer",
-        "&:hover": {
-          background: `linear-gradient(145deg, rgba(10,17,33,0.98), ${color}24)`,
-          boxShadow: `0 0 0 1px ${color}44, 0 18px 38px rgba(2,6,23,0.55)`,
-        },
       }}
     >
       <Handle type="target" position={Position.Left} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
       <Handle type="source" position={Position.Right} style={HIDDEN_HANDLE_STYLE} isConnectable={false} />
-      <Box
-        sx={{
-          width: 24,
-          height: 24,
-          borderRadius: "50%",
-          flexShrink: 0,
-          color,
-          background: `${color}18`,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Icon
-          sx={{
-            fontSize: 18,
-            animation: state === "active" ? "agentStartupFlowSpin 1.15s linear infinite" : "none",
-          }}
-        />
-      </Box>
-      <Box sx={{ minWidth: 0, flex: 1 }}>
-        <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.78rem", fontWeight: 740, lineHeight: 1.2 }} noWrap>
-          {data?.label || "Runtime check"}
-        </Typography>
-        <Typography sx={{ mt: 0.2, color, fontSize: "0.7rem", fontWeight: 680, lineHeight: 1.2 }} noWrap>
-          {status}
-        </Typography>
-        {checked ? (
-          <Typography sx={{ mt: 0.15, color: MAGIC_UI.textMuted, fontSize: "0.66rem", lineHeight: 1.2 }} noWrap>
-            {checked}
+      <Tooltip title={timestamp} arrow placement="top">
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
+          <Box
+            sx={{
+              width: 24,
+              height: 24,
+              borderRadius: "50%",
+              flexShrink: 0,
+              color: groupMeta.color,
+              background: groupMeta.bg,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <GroupIcon
+              sx={{
+                fontSize: 19,
+                animation: state === "active" ? "agentStartupFlowSpin 1.15s linear infinite" : "none",
+              }}
+            />
+          </Box>
+          <Box sx={{ minWidth: 0, flex: 1 }}>
+            <Typography sx={{ color: state === "pending" || state === "skipped" ? MAGIC_UI.textMuted : MAGIC_UI.textBright, fontSize: "0.78rem", fontWeight: 760, lineHeight: 1.2 }} noWrap>
+              {data?.label || "Agent runtime health"}
+            </Typography>
+            <Typography sx={{ mt: 0.25, color: state === "failed" ? "#ff7b89" : state === "active" ? MAGIC_UI.accentA : MAGIC_UI.textMuted, fontSize: "0.68rem", lineHeight: 1.2 }} noWrap>
+              {summary.text}
+            </Typography>
+          </Box>
+        </Box>
+      </Tooltip>
+      <Box sx={{ mt: 0.9, display: "flex", flexDirection: "column", gap: 0.7 }}>
+        {groupedRows.length ? (
+          groupedRows.map((group) => (
+            <Box key={group.key} sx={{ minWidth: 0 }}>
+              <Typography
+                sx={{
+                  mb: 0.35,
+                  color: MAGIC_UI.textMuted,
+                  fontSize: "0.58rem",
+                  fontWeight: 800,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                }}
+              >
+                {group.label}
+              </Typography>
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 0.35 }}>
+                {group.rows.map((entry, index) => {
+                  const rowState = normalizeRuntimeHealthState(entry?.statusCode);
+                  const rowColor = getRuntimeStatusColor(entry?.statusCode);
+                  const rowMeta = STARTUP_STATE_META[rowState] || STARTUP_STATE_META.pending;
+                  const RowIcon = rowMeta.Icon;
+                  return (
+                    <Button
+                      key={entry?.id || `${group.key}-${index}`}
+                      className="nodrag"
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (typeof data?.onOpen === "function") data.onOpen(entry);
+                      }}
+                      sx={{
+                        width: "100%",
+                        minHeight: 32,
+                        px: 0.65,
+                        py: 0.4,
+                        borderRadius: 1.3,
+                        border: `1px solid ${colorWithAlpha(rowColor, 0.28)}`,
+                        background: colorWithAlpha(rowColor, 0.06),
+                        color: MAGIC_UI.textBright,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "flex-start",
+                        gap: 0.65,
+                        textAlign: "left",
+                        textTransform: "none",
+                        overflow: "hidden",
+                        "&:hover": {
+                          borderColor: colorWithAlpha(rowColor, 0.68),
+                          background: colorWithAlpha(rowColor, 0.11),
+                        },
+                      }}
+                    >
+                      <RowIcon
+                        sx={{
+                          color: rowColor,
+                          fontSize: 15,
+                          flexShrink: 0,
+                          animation: rowState === "active" ? "agentStartupFlowSpin 1.15s linear infinite" : "none",
+                        }}
+                      />
+                      <Box sx={{ minWidth: 0, flex: 1 }}>
+                        <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.66rem", fontWeight: 740, lineHeight: 1.12 }} noWrap>
+                          {entry?.name || `Runtime ${index + 1}`}
+                        </Typography>
+                        <Typography sx={{ mt: 0.1, color: rowColor, fontSize: "0.59rem", fontWeight: 700, lineHeight: 1.1 }} noWrap>
+                          {entry?.status || "Unknown"}
+                          {entry?.lastCheckedText ? ` · ${entry.lastCheckedText}` : ""}
+                        </Typography>
+                      </Box>
+                    </Button>
+                  );
+                })}
+              </Box>
+            </Box>
+          ))
+        ) : (
+          <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.68rem", lineHeight: 1.35 }}>
+            Role telemetry has not reported yet.
           </Typography>
-        ) : null}
+        )}
       </Box>
-    </Button>
+    </Box>
   );
 }
 
 const STARTUP_FLOW_NODE_TYPES = Object.freeze({
   startupMilestone: AgentStartupFlowNode,
-  runtimeHealth: AgentRuntimeHealthNode,
+  runtimeHealthGroup: AgentRuntimeHealthGroupNode,
 });
 
 function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRuntimeNodeOpen) {
@@ -308,12 +428,16 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
     const stateByKey = {};
     const milestoneNodes = STARTUP_FLOW_DEFINITIONS.map((definition) => {
       const groupedMilestones = resolveGroupedMilestones(definition, milestoneByKey);
-      const state = resolveGroupedState(groupedMilestones);
+      const milestoneState = resolveGroupedState(groupedMilestones);
+      const state =
+        definition.id === "agent_role_loading"
+          ? resolveRuntimeGroupState(runtimeRows, milestoneState)
+          : milestoneState;
       const displayMilestone = selectGroupedMilestone(groupedMilestones, state) || {};
       stateByKey[definition.id] = state;
       return {
         id: definition.id,
-        type: "startupMilestone",
+        type: definition.id === "agent_role_loading" ? "runtimeHealthGroup" : "startupMilestone",
         position: { x: definition.x, y: definition.y },
         data: {
           id: definition.id,
@@ -321,31 +445,13 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
           detail: displayMilestone.detail || STARTUP_STATE_META[state]?.label || "",
           state,
           timestampText: displayMilestone.timestamp ? formatTimestamp(displayMilestone.timestamp) : "",
+          runtimeRows: definition.id === "agent_role_loading" ? runtimeRows : [],
+          onOpen: definition.id === "agent_role_loading" ? onRuntimeNodeOpen : null,
         },
         draggable: true,
         selectable: true,
       };
     });
-    const runtimeNodes = (Array.isArray(runtimeRows) ? runtimeRows : []).map((entry, index) => {
-      const columnIndex = index % RUNTIME_FLOW_COLUMNS.length;
-      const rowIndex = Math.floor(index / RUNTIME_FLOW_COLUMNS.length);
-      const id = buildRuntimeNodeId(entry, index);
-      const state = normalizeRuntimeHealthState(entry?.statusCode);
-      stateByKey[id] = state;
-      return {
-        id,
-        type: "runtimeHealth",
-        position: { x: RUNTIME_FLOW_COLUMNS[columnIndex], y: RUNTIME_FLOW_START_Y + rowIndex * RUNTIME_FLOW_ROW_GAP },
-        data: {
-          label: entry?.name || `Runtime ${index + 1}`,
-          entry,
-          onOpen: onRuntimeNodeOpen,
-        },
-        draggable: true,
-        selectable: true,
-      };
-    });
-    const runtimeNodeIds = runtimeNodes.map((node) => node.id);
     const steadyStateY = STEADY_FLOW_Y;
     const steadyStateMilestone = milestoneByKey.steady_state_online || {};
     const steadyStateState = normalizeMilestoneState(steadyStateMilestone?.state);
@@ -367,14 +473,12 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
       draggable: true,
       selectable: true,
     };
-    const runtimeEdges = runtimeNodeIds.map((runtimeNodeId) => ["agent_role_loading", runtimeNodeId]);
     const allEdges = [
       ...STARTUP_FLOW_EDGES,
-      ...runtimeEdges,
       ["status_channel_online", "steady_state_online"],
       ["engine_socket", "steady_state_online"],
     ];
-    const nodes = [...milestoneNodes, ...runtimeNodes, steadyStateNode];
+    const nodes = [...milestoneNodes, steadyStateNode];
     const edges = allEdges.map(([source, target]) => {
       const edgeState = getEdgeState(stateByKey[source], stateByKey[target]);
       return {
@@ -700,11 +804,6 @@ export default function AgentStartupFlow({
     },
     [nodePositionOverrides]
   );
-  const handleNodeClick = useCallback((_, node) => {
-    if (node?.type === "runtimeHealth" && typeof node?.data?.onOpen === "function") {
-      node.data.onOpen(node.data.entry);
-    }
-  }, []);
   const handleNodeContextMenu = useCallback((event, node) => {
     event.preventDefault();
     copyTextToClipboard(buildNodeCopyPayload(node));
@@ -826,7 +925,6 @@ export default function AgentStartupFlow({
         onNodeDrag={handleNodeDrag}
         onNodeDragStop={handleNodeDragStop}
         onMove={handleMove}
-        onNodeClick={handleNodeClick}
         onNodeContextMenu={handleNodeContextMenu}
         onPaneContextMenu={handlePaneContextMenu}
         proOptions={{ hideAttribution: true }}
