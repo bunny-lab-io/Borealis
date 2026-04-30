@@ -367,12 +367,7 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
       draggable: true,
       selectable: true,
     };
-    const runtimeEdges = runtimeNodeIds.length
-      ? runtimeNodeIds.flatMap((runtimeNodeId) => [
-          ["agent_role_loading", runtimeNodeId],
-          [runtimeNodeId, "steady_state_online"],
-        ])
-      : [["agent_role_loading", "steady_state_online"]];
+    const runtimeEdges = runtimeNodeIds.map((runtimeNodeId) => ["agent_role_loading", runtimeNodeId]);
     const allEdges = [
       ...STARTUP_FLOW_EDGES,
       ...runtimeEdges,
