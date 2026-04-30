@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createQuickJobDraft, normalizeQuickJobTargets } from "./quickJob.js";
+import { createQuickJobDraft, normalizeQuickJobTargets } from "@/app/utils/quickJob.js";
 
 describe("createQuickJobDraft", () => {
   it("normalizes hostnames and creates one-shot navigation state", () => {

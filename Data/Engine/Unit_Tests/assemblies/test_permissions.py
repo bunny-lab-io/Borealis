@@ -1,5 +1,5 @@
 # ======================================================
-# Data\Engine\tests\assemblies\test_permissions.py
+# Data\Engine\Unit_Tests\assemblies\test_permissions.py
 # Description: Verifies Assembly API domain guards and Dev Mode permissions.
 #
 # API Endpoints (if applicable): None

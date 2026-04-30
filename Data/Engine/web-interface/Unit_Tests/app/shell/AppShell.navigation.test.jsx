@@ -2,35 +2,35 @@ import React from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import { AuthContext } from "../providers/AuthContext.jsx";
-import { PageChromeProvider } from "../providers/PageChromeContext.jsx";
-import AppShell from "./AppShell.jsx";
+import { AuthContext } from "@/app/providers/AuthContext.jsx";
+import { PageChromeProvider } from "@/app/providers/PageChromeContext.jsx";
+import AppShell from "@/app/shell/AppShell.jsx";
 
-vi.mock("../../Dialogs.jsx", () => ({
+vi.mock("@/Dialogs.jsx", () => ({
   NotAuthorizedDialog: () => null,
 }));
 
-vi.mock("../../Navigation_Sidebar.jsx", () => ({
+vi.mock("@/Navigation_Sidebar.jsx", () => ({
   default: () => <div>Sidebar</div>,
 }));
 
-vi.mock("../../GlobalDeviceSearch.jsx", () => ({
+vi.mock("@/GlobalDeviceSearch.jsx", () => ({
   default: () => <div>Search</div>,
 }));
 
-vi.mock("../../Notifications.jsx", () => ({
+vi.mock("@/Notifications.jsx", () => ({
   default: () => null,
 }));
 
-vi.mock("../../Page_Header_Actions.jsx", () => ({
+vi.mock("@/Page_Header_Actions.jsx", () => ({
   PageHeaderActionRail: () => null,
 }));
 
-vi.mock("../../Access_Management/Aegis_Cipher_Dialog.jsx", () => ({
+vi.mock("@/Access_Management/Aegis_Cipher_Dialog.jsx", () => ({
   default: () => null,
 }));
 
-vi.mock("../runtime/bootstrapClientRuntime.js", () => ({
+vi.mock("@/app/runtime/bootstrapClientRuntime.js", () => ({
   getBorealisSocket: () => null,
 }));
 

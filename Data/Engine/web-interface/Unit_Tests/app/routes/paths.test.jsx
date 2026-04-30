@@ -5,7 +5,7 @@ import {
   buildSiteAssignmentPath,
   buildSitesPath,
   normalizeAppRedirectTarget,
-} from "./paths.js";
+} from "@/app/routes/paths.js";
 
 describe("route path helpers", () => {
   it("builds canonical resource routes", () => {

@@ -1,5 +1,5 @@
 # ======================================================
-# Data\Engine\tests\assemblies\test_official_catalog.py
+# Data\Engine\Unit_Tests\assemblies\test_official_catalog.py
 # Description: Verifies Aurora checkout crawling, update detection, and metadata persistence.
 #
 # API Endpoints (if applicable): None

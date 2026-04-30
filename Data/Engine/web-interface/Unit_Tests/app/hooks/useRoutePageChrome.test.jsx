@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   EMPTY_PAGE_CHROME,
   PageChromeContext,
-} from "../providers/PageChromeContext.jsx";
-import { useRoutePageChrome } from "./useRoutePageChrome.js";
+} from "@/app/providers/PageChromeContext.jsx";
+import { useRoutePageChrome } from "@/app/hooks/useRoutePageChrome.js";
 
 function Harness({ meta, onValue }) {
   useRoutePageChrome(meta);

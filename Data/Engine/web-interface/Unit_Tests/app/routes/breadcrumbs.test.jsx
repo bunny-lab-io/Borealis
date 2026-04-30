@@ -6,7 +6,7 @@ import {
   resolveActiveNavKey,
   resolveCurrentPageKey,
   resolvePageChromeDefaults,
-} from "./breadcrumbs.js";
+} from "@/app/routes/breadcrumbs.js";
 
 describe("breadcrumb and nav helpers", () => {
   const matches = [

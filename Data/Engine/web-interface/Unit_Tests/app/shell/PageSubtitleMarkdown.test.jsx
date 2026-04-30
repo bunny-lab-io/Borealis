@@ -2,7 +2,9 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
-import PageSubtitleMarkdown, { parsePageSubtitleMarkdown } from "./PageSubtitleMarkdown.jsx";
+import PageSubtitleMarkdown, {
+  parsePageSubtitleMarkdown,
+} from "@/app/shell/PageSubtitleMarkdown.jsx";
 
 describe("PageSubtitleMarkdown", () => {
   it("keeps plain subtitle text unchanged when no markdown links are present", () => {

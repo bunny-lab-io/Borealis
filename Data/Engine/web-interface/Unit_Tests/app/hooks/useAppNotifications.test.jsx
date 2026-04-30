@@ -1,11 +1,11 @@
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { useAppNotifications } from "./useAppNotifications.js";
+import { useAppNotifications } from "@/app/hooks/useAppNotifications.js";
 
 const postAppNotificationMock = vi.fn();
 
-vi.mock("../utils/notifications.js", () => ({
+vi.mock("@/app/utils/notifications.js", () => ({
   postAppNotification: (...args) => postAppNotificationMock(...args),
 }));
 

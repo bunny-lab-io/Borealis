@@ -2,7 +2,7 @@ import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
-import { useUrlTabState } from "./useUrlTabState.js";
+import { useUrlTabState } from "@/app/hooks/useUrlTabState.js";
 
 function UrlTabHarness() {
   const { activeKey, setActiveKey } = useUrlTabState({

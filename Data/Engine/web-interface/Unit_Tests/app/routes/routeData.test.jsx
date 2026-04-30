@@ -7,7 +7,7 @@ import {
   requireAdminRequest,
   requireAuthenticatedRequest,
   RouteDataError,
-} from "./routeData.js";
+} from "@/app/routes/routeData.js";
 
 function jsonResponse(body, init = {}) {
   return new Response(JSON.stringify(body), {

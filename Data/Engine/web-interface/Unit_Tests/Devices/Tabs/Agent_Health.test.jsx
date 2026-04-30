@@ -2,7 +2,7 @@ import React from "react";
 import fs from "node:fs";
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import AgentHealthTab from "./Agent_Health.jsx";
+import AgentHealthTab from "@/Devices/Tabs/Agent_Health.jsx";
 
 vi.mock("reactflow", () => ({
   default: ({ nodes = [], edges = [], children }) => (
@@ -120,7 +120,10 @@ describe("AgentHealthTab", () => {
   });
 
   it("keeps Agent Health as a right-anchored Device Summary tab", () => {
-    const source = fs.readFileSync(new URL("./Device_Summary.jsx", import.meta.url), "utf8");
+    const source = fs.readFileSync(
+      new URL("../../../src/Devices/Tabs/Device_Summary.jsx", import.meta.url),
+      "utf8"
+    );
 
     expect(source).toContain('key: "agent_health"');
     expect(source).toContain('label: "Agent Health"');

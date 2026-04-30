@@ -2,8 +2,8 @@ import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
-import { AuthContext } from "../providers/AuthContext.jsx";
-import { RequireAdmin, RequireAuth } from "./guards.jsx";
+import { AuthContext } from "@/app/providers/AuthContext.jsx";
+import { RequireAdmin, RequireAuth } from "@/app/routes/guards.jsx";
 
 function renderGuardedRouter({ authValue, guardElement, initialEntries, protectedPath }) {
   const router = createMemoryRouter(

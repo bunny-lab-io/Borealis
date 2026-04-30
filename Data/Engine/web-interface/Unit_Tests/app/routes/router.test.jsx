@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAppRoutes } from "./router.jsx";
+import { buildAppRoutes } from "@/app/routes/router.jsx";
 
 function collectRoutes(routes, prefix = "", results = []) {
   routes.forEach((route) => {
