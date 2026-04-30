@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Button, GlobalStyles, IconButton, Tooltip, Typography } from "@mui/material";
+import { Box, GlobalStyles, IconButton, Tooltip, Typography } from "@mui/material";
 import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import RadioButtonUncheckedRoundedIcon from "@mui/icons-material/RadioButtonUncheckedRounded";
@@ -162,6 +162,48 @@ function buildRuntimeGroupSummary(runtimeRows) {
     counts,
     text: pieces.length ? pieces.join(" · ") : "Awaiting role telemetry",
   };
+}
+
+function buildRuntimeHealthTooltip(entry) {
+  if (!entry) return "";
+  const details = entry.detailsMap && typeof entry.detailsMap === "object" ? entry.detailsMap : {};
+  const detailRows = Object.entries(details)
+    .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== "")
+    .slice(0, 8);
+  return (
+    <Box sx={{ maxWidth: 360, py: 0.25 }}>
+      <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.8rem", fontWeight: 760, lineHeight: 1.25 }}>
+        {entry.name || "Runtime health"}
+      </Typography>
+      <Typography sx={{ mt: 0.55, color: MAGIC_UI.textMuted, fontSize: "0.7rem", lineHeight: 1.35 }}>
+        Status: {entry.status || "Unknown"}
+      </Typography>
+      {entry.lastCheckedText ? (
+        <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.7rem", lineHeight: 1.35 }}>
+          Last checked: {entry.lastCheckedText}
+        </Typography>
+      ) : null}
+      {entry.contextLabel ? (
+        <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.7rem", lineHeight: 1.35 }}>
+          Context: {entry.contextLabel}
+        </Typography>
+      ) : null}
+      {detailRows.length ? (
+        <Box sx={{ mt: 0.55 }}>
+          {detailRows.map(([key, value]) => (
+            <Typography key={key} sx={{ color: MAGIC_UI.textMuted, fontSize: "0.68rem", lineHeight: 1.35 }}>
+              {String(key).replace(/[_-]+/g, " ")}: {String(value)}
+            </Typography>
+          ))}
+        </Box>
+      ) : null}
+      {entry.detail ? (
+        <Typography sx={{ mt: 0.65, color: MAGIC_UI.textBright, fontSize: "0.69rem", lineHeight: 1.35, whiteSpace: "pre-wrap" }}>
+          {entry.detail}
+        </Typography>
+      ) : null}
+    </Box>
+  );
 }
 
 function resolveGroupedMilestones(definition, milestoneByKey) {
@@ -332,8 +374,8 @@ function AgentRuntimeHealthGroupNode({ data }) {
       </Tooltip>
       <Box sx={{ mt: 0.9, display: "flex", flexDirection: "column", gap: 0.7 }}>
         {groupedRows.length ? (
-          groupedRows.map((group) => (
-            <Box key={group.key} sx={{ minWidth: 0 }}>
+          groupedRows.map((group, groupIndex) => (
+            <Box key={group.key} sx={{ minWidth: 0, mt: groupIndex > 0 ? 0.75 : 0 }}>
               <Typography
                 sx={{
                   mb: 0.35,
@@ -353,55 +395,54 @@ function AgentRuntimeHealthGroupNode({ data }) {
                   const rowMeta = STARTUP_STATE_META[rowState] || STARTUP_STATE_META.pending;
                   const RowIcon = rowMeta.Icon;
                   return (
-                    <Button
+                    <Tooltip
                       key={entry?.id || `${group.key}-${index}`}
-                      className="nodrag"
-                      type="button"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        if (typeof data?.onOpen === "function") data.onOpen(entry);
-                      }}
-                      sx={{
-                        width: "100%",
-                        minHeight: 32,
-                        px: 0.65,
-                        py: 0.4,
-                        borderRadius: 1.3,
-                        border: `1px solid ${colorWithAlpha(rowColor, 0.28)}`,
-                        background: colorWithAlpha(rowColor, 0.06),
-                        color: MAGIC_UI.textBright,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "flex-start",
-                        gap: 0.65,
-                        textAlign: "left",
-                        textTransform: "none",
-                        overflow: "hidden",
-                        "&:hover": {
-                          borderColor: colorWithAlpha(rowColor, 0.68),
-                          background: colorWithAlpha(rowColor, 0.11),
-                        },
-                      }}
+                      title={buildRuntimeHealthTooltip(entry)}
+                      arrow
+                      placement="right"
                     >
-                      <RowIcon
+                      <Box
+                        className="nodrag"
                         sx={{
-                          color: rowColor,
-                          fontSize: 15,
-                          flexShrink: 0,
-                          animation: rowState === "active" ? "agentStartupFlowSpin 1.15s linear infinite" : "none",
+                          width: "100%",
+                          minHeight: 32,
+                          px: 0.65,
+                          py: 0.4,
+                          borderRadius: 1.3,
+                          border: `1px solid ${colorWithAlpha(rowColor, 0.28)}`,
+                          background: colorWithAlpha(rowColor, 0.06),
+                          color: MAGIC_UI.textBright,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "flex-start",
+                          gap: 0.65,
+                          textAlign: "left",
+                          overflow: "hidden",
+                          cursor: "help",
+                          "&:hover": {
+                            borderColor: colorWithAlpha(rowColor, 0.68),
+                            background: colorWithAlpha(rowColor, 0.11),
+                          },
                         }}
-                      />
-                      <Box sx={{ minWidth: 0, flex: 1 }}>
-                        <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.66rem", fontWeight: 740, lineHeight: 1.12 }} noWrap>
-                          {entry?.name || `Runtime ${index + 1}`}
-                        </Typography>
-                        <Typography sx={{ mt: 0.1, color: rowColor, fontSize: "0.59rem", fontWeight: 700, lineHeight: 1.1 }} noWrap>
-                          {entry?.status || "Unknown"}
-                          {entry?.lastCheckedText ? ` · ${entry.lastCheckedText}` : ""}
-                        </Typography>
+                      >
+                        <RowIcon
+                          sx={{
+                            color: rowColor,
+                            fontSize: 15,
+                            flexShrink: 0,
+                            animation: rowState === "active" ? "agentStartupFlowSpin 1.15s linear infinite" : "none",
+                          }}
+                        />
+                        <Box sx={{ minWidth: 0, flex: 1 }}>
+                          <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.66rem", fontWeight: 740, lineHeight: 1.12 }} noWrap>
+                            {entry?.name || `Runtime ${index + 1}`}
+                          </Typography>
+                          <Typography sx={{ mt: 0.1, color: rowColor, fontSize: "0.59rem", fontWeight: 700, lineHeight: 1.1 }} noWrap>
+                            {entry?.status || "Unknown"}
+                          </Typography>
+                        </Box>
                       </Box>
-                    </Button>
+                    </Tooltip>
                   );
                 })}
               </Box>
@@ -422,7 +463,7 @@ const STARTUP_FLOW_NODE_TYPES = Object.freeze({
   runtimeHealthGroup: AgentRuntimeHealthGroupNode,
 });
 
-function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRuntimeNodeOpen) {
+function useStartupFlowElements(milestones, runtimeRows, formatTimestamp) {
   return useMemo(() => {
     const milestoneByKey = buildMilestoneLookup(milestones);
     const stateByKey = {};
@@ -446,7 +487,6 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
           state,
           timestampText: displayMilestone.timestamp ? formatTimestamp(displayMilestone.timestamp) : "",
           runtimeRows: definition.id === "agent_role_loading" ? runtimeRows : [],
-          onOpen: definition.id === "agent_role_loading" ? onRuntimeNodeOpen : null,
         },
         draggable: true,
         selectable: true,
@@ -492,7 +532,7 @@ function useStartupFlowElements(milestones, runtimeRows, formatTimestamp, onRunt
       };
     });
     return { nodes, edges };
-  }, [formatTimestamp, milestones, onRuntimeNodeOpen, runtimeRows]);
+  }, [formatTimestamp, milestones, runtimeRows]);
 }
 
 function copyTextToClipboard(text) {
@@ -619,10 +659,9 @@ export default function AgentStartupFlow({
   milestones,
   runtimeRows = [],
   formatTimestamp = (value) => String(value || ""),
-  onRuntimeNodeOpen = null,
 }) {
   const rows = Array.isArray(milestones) ? milestones : [];
-  const { nodes, edges } = useStartupFlowElements(rows, runtimeRows, formatTimestamp, onRuntimeNodeOpen);
+  const { nodes, edges } = useStartupFlowElements(rows, runtimeRows, formatTimestamp);
   const draftLayout = useMemo(() => readDraftLayout(), []);
   const wrapperRef = useRef(null);
   const movingFlowSize = useRef({ width: STARTUP_FLOW_NODE_WIDTH, height: 76 });

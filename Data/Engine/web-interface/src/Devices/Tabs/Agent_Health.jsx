@@ -1,13 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Box, Button, Dialog, DialogActions, DialogContent, Typography } from "@mui/material";
+import React, { useEffect, useMemo, useRef } from "react";
+import { Box, Typography } from "@mui/material";
 import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
-import {
-  DIALOG_ACTIONS_SX,
-  DIALOG_BUTTON_SX,
-  DIALOG_CONTENT_SX,
-  DIALOG_PAPER_SX,
-  DialogHeaderBlock,
-} from "../../DialogStyles.jsx";
 import { MAGIC_UI } from "./Shared.jsx";
 import AgentStartupFlow, { normalizeMilestoneState } from "./Agent_Startup_Flow.jsx";
 
@@ -89,71 +82,6 @@ function parseJsonArray(value) {
   }
 }
 
-function parseAgentHealthHostPort(detailText) {
-  const text = String(detailText || "").trim();
-  const match = text.match(/\b(?:Listening on\s+)?([^\s:]+):(\d{1,5})\b/i);
-  if (!match) return { host: "", port: "" };
-  return { host: String(match[1] || "").trim(), port: String(match[2] || "").trim() };
-}
-
-function parseAgentHealthTunnelId(detailText) {
-  const text = String(detailText || "").trim();
-  const match = text.match(/\btunnel_id=([^\s]+)/i);
-  return match ? String(match[1] || "").trim() : "";
-}
-
-function formatAgentHealthDialogValue(value, fallback = "Unavailable") {
-  const text = String(value || "").trim();
-  return text || fallback;
-}
-
-function buildAgentHealthDialogContent(entry, tunnelInfo) {
-  if (!entry) return "";
-  const details = entry.detailsMap && typeof entry.detailsMap === "object" ? entry.detailsMap : {};
-  const lines = [];
-  const appendLine = (label, value, fallback = "Unavailable") => {
-    lines.push(`${label}: ${formatAgentHealthDialogValue(value, fallback)}`);
-  };
-  const presentationKey = String(entry.presentationKey || "").trim().toLowerCase();
-  const parsedHostPort = parseAgentHealthHostPort(entry.detail);
-  const fallbackWireGuardPeerIp = tunnelInfo?.virtual_ip ? String(tunnelInfo.virtual_ip).split("/")[0] : "";
-  const fallbackTunnelId = String(tunnelInfo?.tunnel_id || "").trim();
-
-  appendLine("Running Status", details.running_status || entry.status, "Unknown");
-  switch (presentationKey) {
-    case "remoteshell":
-    case "remoteshellservice":
-      appendLine("IP", details.listener_ip || parsedHostPort.host, "Unavailable");
-      appendLine("Port", details.listener_port || parsedHostPort.port, "Unavailable");
-      appendLine("Shell Binary", details.shell_binary, "Unavailable");
-      break;
-    case "wireguard":
-    case "wireguardtunnel":
-    case "wireguardservice":
-    case "wireguardvpn":
-      appendLine("Peer IP", details.wireguard_peer_ip || fallbackWireGuardPeerIp, "Inactive");
-      appendLine("Tunnel ID", details.tunnel_id || parseAgentHealthTunnelId(entry.detail) || fallbackTunnelId, "Unavailable");
-      appendLine("Endpoint", details.endpoint, "Unavailable");
-      break;
-    case "vnc":
-    case "ultravnc":
-    case "ultravncservice":
-      appendLine("Service State", details.service_state || details.running_status, "Unknown");
-      appendLine("Listener State", details.listener_state, "Unknown");
-      appendLine("Ready", details.ready, "Unknown");
-      break;
-    default:
-      appendLine("Context", entry.contextLabel, "Unknown");
-      break;
-  }
-  if (entry.detail) {
-    lines.push("");
-    lines.push("Detail:");
-    lines.push(entry.detail);
-  }
-  return lines.join("\n");
-}
-
 function Island({ title, icon = null, meta = "", children, sx = {} }) {
   return (
     <Box
@@ -186,11 +114,9 @@ export default function AgentHealthTab({
   agentRoleHealth,
   summaryDataReady = true,
   formatTimestamp = (value) => String(value || ""),
-  tunnelInfo = null,
   hostname = "",
   onRequestRefresh = null,
 }) {
-  const [dialogEntry, setDialogEntry] = useState(null);
   const refreshTimerRef = useRef(null);
   const payload = agentRoleHealth && typeof agentRoleHealth === "object" ? agentRoleHealth : {};
   const items = Array.isArray(payload?.roles) ? payload.roles : [];
@@ -261,9 +187,6 @@ export default function AgentHealthTab({
     return `${milestones.filter((item) => normalizeMilestoneState(item?.state) === "complete").length}/${milestones.length} complete`;
   }, [milestones]);
 
-  const dialogTitle = dialogEntry?.name ? `Agent Health Details - ${dialogEntry.name}` : "Agent Health Details";
-  const dialogContent = useMemo(() => buildAgentHealthDialogContent(dialogEntry, tunnelInfo), [dialogEntry, tunnelInfo]);
-
   useEffect(() => {
     const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
     const expectedHost = String(hostname || "").trim().toLowerCase();
@@ -316,45 +239,10 @@ export default function AgentHealthTab({
               milestones={milestones}
               runtimeRows={summaryDataReady ? agentHealthRows : []}
               formatTimestamp={formatTimestamp}
-              onRuntimeNodeOpen={setDialogEntry}
             />
           </Box>
         </Island>
       </Box>
-      <Dialog
-        open={Boolean(dialogEntry)}
-        onClose={() => setDialogEntry(null)}
-        fullWidth
-        maxWidth="sm"
-        PaperProps={{ sx: DIALOG_PAPER_SX }}
-      >
-        <DialogHeaderBlock title={dialogTitle} subtitle="Current health telemetry and runtime details." />
-        <DialogContent sx={DIALOG_CONTENT_SX}>
-          <Box
-            component="pre"
-            sx={{
-              m: 0,
-              p: 1.4,
-              borderRadius: 2,
-              border: `1px solid ${MAGIC_UI.panelBorder}`,
-              background: "rgba(3,7,18,0.64)",
-              color: MAGIC_UI.textBright,
-              fontFamily: '"IBM Plex Mono", Consolas, monospace',
-              fontSize: "0.82rem",
-              lineHeight: 1.55,
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-            }}
-          >
-            {dialogContent || "No details reported."}
-          </Box>
-        </DialogContent>
-        <DialogActions sx={DIALOG_ACTIONS_SX}>
-          <Button onClick={() => setDialogEntry(null)} sx={DIALOG_BUTTON_SX}>
-            Close
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Box>
   );
 }
