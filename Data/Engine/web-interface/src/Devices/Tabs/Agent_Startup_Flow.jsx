@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, GlobalStyles, IconButton, Tooltip, Typography } from "@mui/material";
+import { animate, stagger } from "animejs";
 import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import RadioButtonUncheckedRoundedIcon from "@mui/icons-material/RadioButtonUncheckedRounded";
@@ -250,6 +251,7 @@ function AgentStartupFlowNode({ data }) {
   return (
     <Tooltip title={timestamp} arrow placement="top">
       <Box
+        className={`agent-startup-card agent-startup-card-${state}`}
         sx={{
           width: STARTUP_FLOW_NODE_WIDTH,
           minHeight: 66,
@@ -319,6 +321,7 @@ function AgentRuntimeHealthGroupNode({ data }) {
   ].filter((group) => group.rows.length);
   return (
     <Box
+      className={`agent-startup-card agent-runtime-health-group agent-startup-card-${state}`}
       sx={{
         width: RUNTIME_FLOW_GROUP_WIDTH,
         minHeight: 88,
@@ -402,7 +405,7 @@ function AgentRuntimeHealthGroupNode({ data }) {
                       placement="right"
                     >
                       <Box
-                        className="nodrag"
+                        className={`nodrag agent-runtime-health-row agent-runtime-health-row-${rowState}`}
                         sx={{
                           width: "100%",
                           minHeight: 32,
@@ -655,6 +658,19 @@ function mergeNodesPreservingPositions(nextNodes, currentNodes, positionOverride
   });
 }
 
+function cleanupAnimeInstances(instances) {
+  instances.forEach((instance) => {
+    if (!instance) return;
+    if (typeof instance.revert === "function") {
+      instance.revert();
+      return;
+    }
+    if (typeof instance.cancel === "function") {
+      instance.cancel();
+    }
+  });
+}
+
 export default function AgentStartupFlow({
   milestones,
   runtimeRows = [],
@@ -662,6 +678,21 @@ export default function AgentStartupFlow({
 }) {
   const rows = Array.isArray(milestones) ? milestones : [];
   const { nodes, edges } = useStartupFlowElements(rows, runtimeRows, formatTimestamp);
+  const animationSignature = useMemo(
+    () =>
+      [
+        nodes
+          .map((node) => {
+            const runtimeState = Array.isArray(node.data?.runtimeRows)
+              ? node.data.runtimeRows.map((entry) => `${entry.id}:${entry.statusCode}`).join(",")
+              : "";
+            return `${node.id}:${node.type}:${node.data?.state}:${runtimeState}`;
+          })
+          .join("|"),
+        edges.map((edge) => `${edge.id}:${edge.className}`).join("|"),
+      ].join("::"),
+    [edges, nodes]
+  );
   const draftLayout = useMemo(() => readDraftLayout(), []);
   const wrapperRef = useRef(null);
   const movingFlowSize = useRef({ width: STARTUP_FLOW_NODE_WIDTH, height: 76 });
@@ -858,6 +889,84 @@ export default function AgentStartupFlow({
     () => copyTextToClipboard(buildLayoutCopyPayload(editableNodes, viewport)),
     [editableNodes, viewport]
   );
+  useEffect(() => {
+    const root = wrapperRef.current;
+    if (!root || !rows.length) return undefined;
+    const animations = [];
+    let frame = window.requestAnimationFrame(() => {
+      const cards = root.querySelectorAll(".agent-startup-card");
+      if (cards.length) {
+        animations.push(
+          animate(cards, {
+            opacity: [0.82, 1],
+            scale: [0.985, 1],
+            duration: 420,
+            delay: stagger(34),
+            ease: "outCubic",
+          })
+        );
+      }
+
+      const paths = root.querySelectorAll(".react-flow__edge-path");
+      paths.forEach((path, index) => {
+        const length = typeof path.getTotalLength === "function" ? path.getTotalLength() : 140;
+        path.style.strokeDasharray = "8 5";
+        path.style.strokeDashoffset = `${length}`;
+        animations.push(
+          animate(path, {
+            strokeDashoffset: [length, 0],
+            duration: 720,
+            delay: 70 + index * 54,
+            ease: "outCubic",
+          })
+        );
+      });
+
+      const activePaths = root.querySelectorAll(".agent-startup-flow-edge-active .react-flow__edge-path");
+      if (activePaths.length) {
+        animations.push(
+          animate(activePaths, {
+            strokeDashoffset: [0, -52],
+            duration: 980,
+            loop: true,
+            ease: "linear",
+          })
+        );
+      }
+
+      const activeCards = root.querySelectorAll(".agent-startup-card-active, .agent-runtime-health-row-active");
+      if (activeCards.length) {
+        animations.push(
+          animate(activeCards, {
+            scale: [1, 1.018],
+            filter: ["brightness(1)", "brightness(1.24)"],
+            duration: 860,
+            loop: true,
+            alternate: true,
+            ease: "inOutSine",
+          })
+        );
+      }
+
+      const steadyOnline = root.querySelector('.react-flow__node[data-id="steady_state_online"] .agent-startup-card-complete');
+      if (steadyOnline) {
+        animations.push(
+          animate(steadyOnline, {
+            filter: ["drop-shadow(0 0 0 rgba(52,211,153,0))", "drop-shadow(0 0 16px rgba(52,211,153,.42))"],
+            duration: 1600,
+            loop: true,
+            alternate: true,
+            ease: "inOutSine",
+          })
+        );
+      }
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      frame = null;
+      cleanupAnimeInstances(animations);
+    };
+  }, [animationSignature, rows.length]);
   if (!rows.length) {
     return (
       <Box
@@ -909,13 +1018,6 @@ export default function AgentStartupFlow({
       </Box>
       <GlobalStyles
         styles={{
-          "@keyframes agentStartupFlowDash": {
-            "0%": { strokeDashoffset: 0 },
-            "100%": { strokeDashoffset: -26 },
-          },
-          ".agent-startup-flow .react-flow__edge.animated .react-flow__edge-path": {
-            animation: "agentStartupFlowDash 1.1s linear infinite",
-          },
           ".agent-startup-flow .react-flow__handle": {
             pointerEvents: "none",
           },
