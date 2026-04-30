@@ -59,6 +59,29 @@ except Exception:
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from role_health import RoleHealthRegistry
+try:
+    from Roles.role_system_heartbeat import (
+        initialize_early as _heartbeat_initialize_early,
+        record_milestone as _heartbeat_record,
+        complete_milestone as _heartbeat_complete,
+        fail_milestone as _heartbeat_fail,
+        flush_status as _heartbeat_flush,
+    )
+except Exception:
+    def _heartbeat_initialize_early(*args, **kwargs):
+        return None
+
+    def _heartbeat_record(*args, **kwargs):
+        return None
+
+    def _heartbeat_complete(*args, **kwargs):
+        return None
+
+    def _heartbeat_fail(*args, **kwargs):
+        return None
+
+    def _heartbeat_flush(*args, **kwargs):
+        return False
 
 def _iter_exception_chain(exc: BaseException):
     seen = set()
@@ -229,6 +252,11 @@ _PLANNED_SHUTDOWN_REASON: Optional[str] = None
 _bootstrap_log(
     f'agent.py loaded; SYSTEM_SERVICE_MODE={SYSTEM_SERVICE_MODE}; SESSION_HELPER_MODE={SESSION_HELPER_MODE}; argv={sys.argv!r}'
 )
+if SYSTEM_SERVICE_MODE:
+    try:
+        _heartbeat_initialize_early(service_mode=SERVICE_MODE)
+    except Exception:
+        pass
 def _argv_get(flag: str, default: str = None):
     try:
         if flag in sys.argv:
@@ -1373,6 +1401,11 @@ class ConfigManager:
 
 CONFIG = ConfigManager(CONFIG_PATH)
 CONFIG.load()
+if SYSTEM_SERVICE_MODE:
+    try:
+        _heartbeat_complete("server_config_loaded", f"Config loaded from {CONFIG_PATH}.")
+    except Exception:
+        pass
 
 
 class AgentHttpClient:
@@ -2578,6 +2611,11 @@ def _collect_heartbeat_metrics() -> Dict[str, Any]:
 IDENTITY = _key_store().load_or_create_identity()
 SSL_KEY_FINGERPRINT = IDENTITY.fingerprint
 PUBLIC_KEY_B64 = IDENTITY.public_key_b64
+if SYSTEM_SERVICE_MODE:
+    try:
+        _heartbeat_complete("identity_loaded", f"Identity fingerprint {SSL_KEY_FINGERPRINT[:16]}.")
+    except Exception:
+        pass
 
 
 def get_server_url() -> str:
@@ -2916,6 +2954,12 @@ async def send_heartbeat():
                 "service_mode": SERVICE_MODE,
             }
             response = await client.async_post_json("/api/agent/heartbeat", payload, require_auth=True)
+            if SYSTEM_SERVICE_MODE:
+                try:
+                    _heartbeat_complete("steady_state_online", "Heartbeat accepted by Engine.")
+                    _heartbeat_flush(reason="heartbeat")
+                except Exception:
+                    pass
             tray_updates = {
                 "last_heartbeat_success_at": int(time.time()),
                 "last_error_kind": "",
@@ -2932,6 +2976,11 @@ async def send_heartbeat():
         except Exception as exc:
             _log_agent(f'Heartbeat post failed: {exc}', fname='agent.error.log')
             _record_tray_error("transport", _describe_exception(exc), client=client, socket_connected=False)
+            if SYSTEM_SERVICE_MODE:
+                try:
+                    _heartbeat_fail("steady_state_online", _describe_exception(exc))
+                except Exception:
+                    pass
         await asyncio.sleep(60)
 
 
@@ -3319,6 +3368,12 @@ async def connect():
     _log_agent('Connected to server.')
     _clear_tray_error_if_matches("tls", "transport", client=http_client())
     _sync_tray_status({"socket_connected": True}, client=http_client())
+    if SYSTEM_SERVICE_MODE:
+        try:
+            _heartbeat_complete("socket_connected", "Socket.IO connection established.")
+            _heartbeat_flush(reason="socket_connected")
+        except Exception:
+            pass
     try:
         sid = getattr(sio, 'sid', None)
         transport = getattr(sio, 'transport', None)
@@ -3710,13 +3765,25 @@ async def connect_loop():
             await asyncio.sleep(_SOCKETIO_RECONNECT_PAUSE_SECONDS)
             continue
         attempt += 1
+        heartbeat_stage = "auth"
         try:
             _log_agent(
                 f'connect_loop attempt={attempt} starting authentication phase',
                 fname='agent.log',
             )
             _sync_tray_status({}, client=client)
+            if SYSTEM_SERVICE_MODE:
+                try:
+                    _heartbeat_record("authenticating", "active", f"Socket connect attempt {attempt} authentication.")
+                except Exception:
+                    pass
             client.ensure_authenticated()
+            if SYSTEM_SERVICE_MODE:
+                try:
+                    _heartbeat_complete("authenticated", "Engine device authentication succeeded.")
+                    _heartbeat_flush(reason="authenticated")
+                except Exception:
+                    pass
             auth_snapshot = {
                 'guid_present': bool(client.guid),
                 'access_token': bool(client.access_token),
@@ -3727,6 +3794,13 @@ async def connect_loop():
                 f"connect_loop attempt={attempt} auth snapshot: {_format_debug_pairs(auth_snapshot)}",
                 fname='agent.log',
             )
+            heartbeat_stage = "socket"
+            if SYSTEM_SERVICE_MODE:
+                try:
+                    _heartbeat_record("socket_connecting", "active", f"Socket connect attempt {attempt}.")
+                    _heartbeat_flush(reason="socket_connecting")
+                except Exception:
+                    pass
             client.configure_socketio(sio)
             try:
                 setattr(sio, "connection_error", None)
@@ -3812,6 +3886,16 @@ async def connect_loop():
                 current_error_kind = str(_TRAY_STATUS_STATE.get("last_error_kind") or "").strip().lower()
                 if current_error_kind != "auth":
                     _record_tray_error("transport", detail, client=client, socket_connected=False)
+            if SYSTEM_SERVICE_MODE:
+                try:
+                    if heartbeat_stage == "auth":
+                        _heartbeat_fail("authenticating", detail)
+                        _heartbeat_flush(reason="auth_failed")
+                    else:
+                        _heartbeat_fail("socket_connecting", detail)
+                        _heartbeat_flush(reason="socket_connect_failed")
+                except Exception:
+                    pass
 
             message = (
                 f"connect_loop attempt={attempt} server unavailable: {detail}. "
@@ -3855,12 +3939,30 @@ if __name__=='__main__':
     client = None
     if not SESSION_HELPER_MODE:
         client = http_client()
+        if SYSTEM_SERVICE_MODE:
+            try:
+                _heartbeat_initialize_early(
+                    hooks={
+                        'http_client': http_client,
+                        'log_agent': lambda message, **kwargs: _log_agent(message, **kwargs),
+                    },
+                    service_mode=SERVICE_MODE,
+                )
+            except Exception:
+                pass
         try:
+            if SYSTEM_SERVICE_MODE:
+                _heartbeat_record("authenticating", "active", "Requesting Engine authentication.")
             client.ensure_authenticated()
+            if SYSTEM_SERVICE_MODE:
+                _heartbeat_complete("authenticated", "Engine device authentication succeeded.")
+                _heartbeat_flush(reason="authenticated")
         except Exception as exc:
             _log_agent(f'Authentication bootstrap failed: {exc}', fname='agent.error.log')
             print(f"[WARN] Authentication bootstrap failed: {exc}")
             _record_tray_error("auth", _describe_exception(exc), client=client, socket_connected=False)
+            if SYSTEM_SERVICE_MODE:
+                _heartbeat_fail("authenticating", _describe_exception(exc))
         try:
             build_id = _current_agent_build_id(sync=True)
             if build_id:
@@ -3880,6 +3982,10 @@ if __name__=='__main__':
             'process_restart_request_now': _process_tray_restart_request_now,
             'sync_tray_status': _sync_tray_status,
             'launch_manual_agent_update': _launch_manual_agent_update,
+            'agent_status_record': _heartbeat_record,
+            'agent_status_complete': _heartbeat_complete,
+            'agent_status_failed': _heartbeat_fail,
+            'agent_status_flush': _heartbeat_flush,
         }
         def _request_system_service_action(service_name: str, action: str, requested_by: str) -> None:
             manager = ROLE_MANAGER_SYS
@@ -3906,6 +4012,11 @@ if __name__=='__main__':
         if not SESSION_HELPER_MODE:
             base_hooks['http_client'] = http_client
         if SYSTEM_SERVICE_MODE:
+            try:
+                _heartbeat_record("roles_loading", "active", "Loading SYSTEM agent roles.")
+            except Exception:
+                pass
+        if SYSTEM_SERVICE_MODE:
             SESSION_HELPER_BROKER = SessionHelperBroker(
                 loop=loop,
                 log=lambda message: _log_agent(message, fname='agent.log'),
@@ -3923,6 +4034,10 @@ if __name__=='__main__':
                 _log_agent(f'Failed to register currentuser helper health reporter: {exc}', fname='agent.error.log')
             base_hooks['dispatch_currentuser_quick_job'] = SESSION_HELPER_BROKER.dispatch_currentuser_quick_job
             base_hooks['session_inventory_enricher'] = SESSION_HELPER_BROKER.enrich_session_inventory
+            try:
+                _heartbeat_complete("helper_broker_ready", "Current-user session broker initialized.")
+            except Exception:
+                pass
         if SESSION_HELPER_MODE:
             def _shutdown_helper_runtime() -> None:
                 try:
@@ -3990,11 +4105,22 @@ if __name__=='__main__':
                 hooks=hooks_system,
             )
             ROLE_MANAGER_SYS.load()
+            try:
+                _heartbeat_complete("roles_ready", "SYSTEM roles loaded.")
+                _heartbeat_flush(reason="roles_ready")
+            except Exception:
+                pass
     except Exception as e:
         try:
             _bootstrap_log(f'role load init failed: {e}')
         except Exception:
             pass
+        if SYSTEM_SERVICE_MODE:
+            try:
+                _heartbeat_fail("roles_loading", _describe_exception(e) if isinstance(e, BaseException) else str(e))
+                _heartbeat_flush(reason="roles_loading_failed")
+            except Exception:
+                pass
     _sync_tray_status({}, client=client)
     try:
         if not SESSION_HELPER_MODE:

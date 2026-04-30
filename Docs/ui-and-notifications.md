@@ -71,6 +71,9 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - Alerts starts in an unfiltered all-alerts view; clicking a status pill applies that queue filter, and clicking the same pill again clears it back to all alerts.
 - Alerts relies on AG Grid's built-in column filters rather than a page-level custom filter bar.
 - Device Summary includes a `Watchdogs` tab so operators can acknowledge incidents, suppress a watchdog for one device, or launch a prefilled device-scoped watchdog draft.
+- Device Summary includes a right-anchored `Agent Health` tab. Keep agent-health tab composition in `Data/Engine/web-interface/src/Devices/Tabs/Agent_Health.jsx`, with focused helper components beside it under `Data/Engine/web-interface/src/Devices/Tabs/`; the Summary tab should not contain an agent-health island or summary-section nav item.
+- The Agent Health tab should show a visual startup flow like Remote Desktop readiness flows, plus clickable role/service runtime-health nodes inside the flow graph. Flow states are `complete`, `active`, `failed`, `pending`, and `skipped`; active nodes use the same spinner language as the linear readiness view.
+- Agent Health refreshes silently from `agent_status_changed` on `window.BorealisSocket`; avoid toasts for routine startup progression.
 - Filesystem browser surfaces should follow the explorer pattern now established in the Device Summary `File Management` tab:
   - use a single AG Grid with a custom tree-style `Name` column when operators benefit from seeing the broader hierarchy while working
   - keep the current working directory URL-synced through a stable query key such as `working_directory` so browser refreshes, post-action refreshes, and shared links reopen the same folder depth instead of collapsing back to the roots view
@@ -108,6 +111,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - `POST /api/device/files/<hostname>/download` (Token Authenticated) - start a File Management download transfer.
 - `GET /api/device/processes/<hostname>?max_age_seconds=<seconds>` (Token Authenticated) - hydrate the Device Summary `Processes` tab with a live process snapshot.
 - `POST /api/device/processes/<hostname>/terminate` (Token Authenticated) - end one process from the Device Summary `Processes` context menu.
+- `POST /api/agent/status` (Device Authenticated) - agent startup status source for the Device Summary Agent Health timeline.
 
 ## Related Documentation
 - [Engine Runtime](engine-runtime.md)

@@ -1,0 +1,248 @@
+import React, { useEffect, useMemo, useRef } from "react";
+import { Box, Typography } from "@mui/material";
+import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
+import { MAGIC_UI } from "./Shared.jsx";
+import AgentStartupFlow, { normalizeMilestoneState } from "./Agent_Startup_Flow.jsx";
+
+const AGENT_HEALTH_KIND = Object.freeze({
+  role: "role",
+  service: "service",
+});
+
+const AGENT_HEALTH_PRESENTATION_BY_KEY = Object.freeze({
+  deviceaudit: { label: "Device Auditor", kind: AGENT_HEALTH_KIND.role },
+  deviceauditor: { label: "Device Auditor", kind: AGENT_HEALTH_KIND.role },
+  contextsystem: { label: "System Context", kind: AGENT_HEALTH_KIND.role },
+  contextcurrentuser: { label: "Current User Context", kind: AGENT_HEALTH_KIND.role },
+  remoteshell: { label: "Remote Shell", kind: AGENT_HEALTH_KIND.role },
+  remoteshellservice: { label: "Remote Shell", kind: AGENT_HEALTH_KIND.role },
+  servicecontrol: { label: "Service Control", kind: AGENT_HEALTH_KIND.role },
+  servicemanagement: { label: "Service Management", kind: AGENT_HEALTH_KIND.role },
+  softwaremanagement: { label: "Software Management", kind: AGENT_HEALTH_KIND.role },
+  scriptexeccurrentuser: { label: "Script Execution - CURRENTUSER", kind: AGENT_HEALTH_KIND.role },
+  scriptexecsystem: { label: "Script Execution - SYSTEM", kind: AGENT_HEALTH_KIND.role },
+  processmanagement: { label: "Process Management", kind: AGENT_HEALTH_KIND.role },
+  filemanagement: { label: "File Management", kind: AGENT_HEALTH_KIND.role },
+  vnc: { label: "UltraVNC", kind: AGENT_HEALTH_KIND.service },
+  ultravnc: { label: "UltraVNC", kind: AGENT_HEALTH_KIND.service },
+  ultravncservice: { label: "UltraVNC", kind: AGENT_HEALTH_KIND.service },
+  wireguard: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
+  wireguardtunnel: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
+  wireguardservice: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
+  wireguardvpn: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
+});
+
+const HIDDEN_AGENT_HEALTH_KEYS = Object.freeze(
+  new Set(["macro", "macroautomation", "macros", "screenshot", "screenshotcapture", "nodescreenshot", "systemheartbeat", "startuptimeline"])
+);
+
+function compactAgentHealthKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function formatRoleHealthContext(context) {
+  const normalized = String(context || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (normalized === "system") return "System";
+  if (normalized === "currentuser" || normalized === "current_user" || normalized === "interactive") return "Current User";
+  return normalized.replace(/[_-]+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function normalizeRoleHealthStatusText(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "Unknown";
+  return normalized.replace(/[_-]+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function resolveAgentHealthPresentation(item, index = 0) {
+  const rawRoleName = String(item?.role_name || item?.role || "").trim();
+  const rawRoleLabel = String(item?.role_label || "").trim();
+  const presentation =
+    AGENT_HEALTH_PRESENTATION_BY_KEY[compactAgentHealthKey(rawRoleName)] ||
+    AGENT_HEALTH_PRESENTATION_BY_KEY[compactAgentHealthKey(rawRoleLabel)] ||
+    null;
+  return {
+    label: presentation?.label || rawRoleLabel || rawRoleName || `Role ${index + 1}`,
+    kind: presentation?.kind || AGENT_HEALTH_KIND.role,
+  };
+}
+
+function parseJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  const text = String(value || "").trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function Island({ title, icon = null, meta = "", children, sx = {} }) {
+  return (
+    <Box
+      sx={{
+        borderRadius: 3,
+        border: `1px solid ${MAGIC_UI.panelBorder}`,
+        background: "linear-gradient(180deg, rgba(15,23,42,0.78), rgba(7,11,24,0.92))",
+        boxShadow: "0 24px 70px rgba(2,6,23,0.45)",
+        p: 1.6,
+        minWidth: 0,
+        minHeight: 0,
+        ...sx,
+      }}
+    >
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1.5, mb: 1.3 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, minWidth: 0 }}>
+          {icon ? <Box sx={{ color: MAGIC_UI.accentA, display: "inline-flex", alignItems: "center" }}>{icon}</Box> : null}
+          <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.95rem", fontWeight: 760 }}>{title}</Typography>
+        </Box>
+        {meta ? (
+          <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.78rem", textAlign: "right" }}>{meta}</Typography>
+        ) : null}
+      </Box>
+      {children}
+    </Box>
+  );
+}
+
+export default function AgentHealthTab({
+  agentRoleHealth,
+  summaryDataReady = true,
+  formatTimestamp = (value) => String(value || ""),
+  hostname = "",
+  onRequestRefresh = null,
+}) {
+  const refreshTimerRef = useRef(null);
+  const payload = agentRoleHealth && typeof agentRoleHealth === "object" ? agentRoleHealth : {};
+  const items = Array.isArray(payload?.roles) ? payload.roles : [];
+
+  const agentHealthRows = useMemo(() => {
+    const normalizedItems = items.map((item, index) => {
+      const rawRoleName = String(item?.role_name || item?.role || "").trim();
+      const rawRoleLabel = String(item?.role_label || item?.label || "").trim();
+      const presentation = resolveAgentHealthPresentation(item, index);
+      return {
+        id: item?.role_id || `${presentation.kind}-${presentation.label}-${index}`,
+        baseLabel: presentation.label,
+        presentationKey: compactAgentHealthKey(rawRoleName || rawRoleLabel || presentation.label),
+        healthKind: presentation.kind,
+        sourceRoleName: rawRoleName,
+        sourceRoleLabel: rawRoleLabel,
+        contextLabel: formatRoleHealthContext(item?.context),
+        status: normalizeRoleHealthStatusText(item?.status || item?.status_code || "Unknown"),
+        statusCode: String(item?.status_code || item?.status || "unknown").trim().toLowerCase(),
+        lastCheckedAt: item?.last_checked_at ?? null,
+        lastCheckedText: formatTimestamp(item?.last_checked_at),
+        detail: String(item?.detail || "").trim(),
+        detailsMap: item?.details && typeof item.details === "object" ? item.details : {},
+      };
+    });
+    const visibleItems = normalizedItems.filter(
+      (item) => !HIDDEN_AGENT_HEALTH_KEYS.has(String(item.presentationKey || "").trim().toLowerCase())
+    );
+    const labelCounts = visibleItems.reduce((acc, item) => {
+      const key = `${item.healthKind}:${String(item.baseLabel || "").trim().toLowerCase()}`;
+      if (key !== `${item.healthKind}:`) {
+        acc[key] = (acc[key] || 0) + 1;
+      }
+      return acc;
+    }, {});
+    return visibleItems
+      .map((item) => {
+        const labelKey = `${item.healthKind}:${String(item.baseLabel || "").trim().toLowerCase()}`;
+        const name =
+          item.contextLabel && labelCounts[labelKey] > 1 ? `${item.baseLabel} (${item.contextLabel})` : item.baseLabel;
+        return { ...item, name };
+      })
+      .sort((left, right) => String(left.name || "").localeCompare(String(right.name || "")));
+  }, [formatTimestamp, items]);
+
+  const startupRole = useMemo(() => {
+    for (const item of items) {
+      const roleName = compactAgentHealthKey(item?.role_name || item?.role || "");
+      const roleLabel = compactAgentHealthKey(item?.role_label || item?.label || "");
+      if (roleName === "systemheartbeat" || roleLabel === "startuptimeline") {
+        return {
+          detail: String(item?.detail || "").trim(),
+          statusCode: String(item?.status_code || item?.status || "unknown").trim().toLowerCase(),
+          detailsMap: item?.details && typeof item.details === "object" ? item.details : {},
+        };
+      }
+    }
+    return null;
+  }, [items]);
+
+  const milestones = useMemo(() => parseJsonArray(startupRole?.detailsMap?.milestones_json), [startupRole]);
+  const timelineMeta = useMemo(() => {
+    if (!milestones.length) return "Awaiting startup telemetry";
+    const active = milestones.find((item) => normalizeMilestoneState(item?.state) === "active");
+    if (active) return `Active: ${active.label || active.key}`;
+    const failed = milestones.find((item) => normalizeMilestoneState(item?.state) === "failed");
+    if (failed) return `Needs attention: ${failed.label || failed.key}`;
+    return `${milestones.filter((item) => normalizeMilestoneState(item?.state) === "complete").length}/${milestones.length} complete`;
+  }, [milestones]);
+
+  useEffect(() => {
+    const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
+    const expectedHost = String(hostname || "").trim().toLowerCase();
+    if (!socket || !expectedHost || typeof onRequestRefresh !== "function") return undefined;
+    const handler = (eventPayload = {}) => {
+      const payloadHost = String(eventPayload?.hostname || "").trim().toLowerCase();
+      if (payloadHost && payloadHost !== expectedHost) return;
+      if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = window.setTimeout(() => onRequestRefresh({ silent: true, includeAgents: false }), 250);
+    };
+    socket.on("agent_status_changed", handler);
+    return () => {
+      if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current);
+      socket.off("agent_status_changed", handler);
+    };
+  }, [hostname, onRequestRefresh]);
+
+  return (
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 1.6,
+        minWidth: 0,
+        minHeight: { xs: 0, xl: "calc(100vh - 272px)" },
+        height: { xs: "auto", xl: "calc(100vh - 272px)" },
+        flex: "1 1 auto",
+        width: "100%",
+      }}
+    >
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: "1fr",
+          alignItems: "stretch",
+          gap: 1.6,
+          flex: { xs: "0 0 auto", xl: 1 },
+          minHeight: 0,
+          minWidth: 0,
+        }}
+      >
+        <Island
+          title="Startup Timeline"
+          icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 18 }} />}
+          meta={timelineMeta}
+          sx={{ height: { xs: "auto", xl: "100%" }, display: "flex", flexDirection: "column" }}
+        >
+          <Box sx={{ flex: 1, minHeight: 0 }}>
+            <AgentStartupFlow
+              milestones={milestones}
+              runtimeRows={summaryDataReady ? agentHealthRows : []}
+              formatTimestamp={formatTimestamp}
+            />
+          </Box>
+        </Island>
+      </Box>
+    </Box>
+  );
+}

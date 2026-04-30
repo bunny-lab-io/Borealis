@@ -1325,6 +1325,10 @@ class Role:
         hooks = getattr(ctx, "hooks", {}) or {}
         self._log_hook = hooks.get("log_agent")
         self._http_client_factory = hooks.get("http_client")
+        self._agent_status_record = hooks.get("agent_status_record")
+        self._agent_status_complete = hooks.get("agent_status_complete")
+        self._agent_status_failed = hooks.get("agent_status_failed")
+        self._agent_status_flush = hooks.get("agent_status_flush")
         self._last_tunnel_snapshot: Dict[str, Any] = {}
         self._ensure_stop = threading.Event()
         self._ensure_cycle_lock = threading.Lock()
@@ -1360,6 +1364,43 @@ class Role:
         except Exception:
             return None
         return None
+
+    def _record_agent_status(self, key: str, state: str, detail: str) -> None:
+        hook = self._agent_status_record
+        if not callable(hook):
+            return
+        try:
+            hook(key, state, detail)
+        except Exception:
+            pass
+
+    def _complete_agent_status(self, key: str, detail: str) -> None:
+        hook = self._agent_status_complete
+        if callable(hook):
+            try:
+                hook(key, detail)
+            except Exception:
+                pass
+        flush_hook = self._agent_status_flush
+        if callable(flush_hook):
+            try:
+                flush_hook(reason=key)
+            except Exception:
+                pass
+
+    def _fail_agent_status(self, key: str, detail: str) -> None:
+        hook = self._agent_status_failed
+        if callable(hook):
+            try:
+                hook(key, detail)
+            except Exception:
+                pass
+        flush_hook = self._agent_status_flush
+        if callable(flush_hook):
+            try:
+                flush_hook(reason=key)
+            except Exception:
+                pass
 
     def _resolve_endpoint(self, endpoint: Optional[str], token: Dict[str, Any]) -> Optional[str]:
         _ = token
@@ -1694,6 +1735,10 @@ class Role:
             client.post_json("/api/agent/vpn/ready", payload, require_auth=True)
             self._last_ready_notification_key = key
             self._last_ready_notification_at = now
+            self._complete_agent_status(
+                "wireguard_online",
+                "WireGuard tunnel is online (peer={0}).".format(str(session.virtual_ip or "").split("/", 1)[0] or "-"),
+            )
             self._log(
                 "WireGuard readiness reported to Engine (reason={0} tunnel_id={1} ports={2}).".format(
                     ready_reason,
@@ -1706,6 +1751,7 @@ class Role:
 
     def _run_ensure_cycle(self, *, reason: str = "agent_boot") -> None:
         with self._ensure_cycle_lock:
+            self._record_agent_status("wireguard_starting", "active", f"Ensuring WireGuard tunnel (reason={reason}).")
             payload = self._request_persistent_session(reason=reason)
             if not payload:
                 return
@@ -1746,6 +1792,7 @@ class Role:
                 f"WireGuard ensure cycle failed (source={source} reason={reason}): {exc}",
                 error=True,
             )
+            self._fail_agent_status("wireguard_starting", str(exc))
 
     def _ensure_loop(self) -> None:
         if ENSURE_INITIAL_DELAY_SECONDS:
@@ -1789,6 +1836,7 @@ class Role:
         @sio.on("vpn_tunnel_start")
         async def _vpn_tunnel_start(payload):
             self._start_ensure_thread(reason="vpn_tunnel_start")
+            self._record_agent_status("wireguard_starting", "active", "Received WireGuard tunnel start request.")
             session = self._build_session(payload)
             if not session:
                 return

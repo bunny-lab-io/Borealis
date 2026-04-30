@@ -14,10 +14,6 @@ import {
   Menu,
   MenuItem,
   TextField,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
 } from "@mui/material";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import StorageRoundedIcon from "@mui/icons-material/StorageRounded";
@@ -35,14 +31,6 @@ import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded
 import FolderRoundedIcon from "@mui/icons-material/FolderRounded";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import { ClearDeviceActivityDialog } from "../../Dialogs.jsx";
-import {
-  DIALOG_ACTIONS_SX,
-  DIALOG_BUTTON_SX,
-  DIALOG_CONTENT_SX,
-  DIALOG_PAPER_SX,
-  DIALOG_TITLE_SX,
-  DialogHeaderBlock,
-} from "../../DialogStyles.jsx";
 import { AgGridReact } from "ag-grid-react";
 import ActivityHistoryTab from "./Activity_History.jsx";
 import InstalledSoftwareTab from "./Installed_Software.jsx";
@@ -50,6 +38,7 @@ import DeviceWatchdogsTab from "./Device_Watchdogs.jsx";
 import RemoteShellTab from "./Remote_Shell.jsx";
 import RemoteFileManagementTab from "./Remote_File_Management.jsx";
 import ProcessManagementTab from "./Process_Management.jsx";
+import AgentHealthTab from "./Agent_Health.jsx";
 import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
 import ServiceList from "./Service_List.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
@@ -68,16 +57,6 @@ import { createQuickJobDraft, normalizeQuickJobTargets } from "../../app/utils/q
 
 const TUNNEL_STATUS_POLL_INTERVAL_MS = 15000;
 const DEVICE_DETAILS_POLL_INTERVAL_MS = 60000;
-const ROLE_HEALTH_LAST_CHECKED_COLOR = "rgba(123, 137, 161, 0.9)";
-const ROLE_HEALTH_STATUS_COLOR_BY_CODE = Object.freeze({
-  healthy: "#00d18c",
-  recovering: "#ffb347",
-  unhealthy: "#ff7b89",
-  pending: "#8fbfff",
-  loaded: "#e2e8f0",
-  unsupported: "#94a3b8",
-  unknown: "#b0b8c8",
-});
 
 const PAGE_ICON = DeveloperBoardRoundedIcon;
 
@@ -98,7 +77,6 @@ const BOREALIS_LINK_HOVER_COLOR = "#a8d4ff";
 
 const BASE_GRID_HEIGHTS = {
   topLevel: 300,
-  agentRolesHealth: 240,
   storage: 300,
   memory: 260,
   network: 260,
@@ -123,6 +101,7 @@ const TOP_TABS = [
   { key: "watchdogs", label: "Watchdogs", icon: PolicyIcon },
   { key: "activity", label: "Activity History", icon: ListAltRoundedIcon },
   { key: "shell", label: "Remote Shell", icon: TerminalRoundedIcon },
+  { key: "agent_health", label: "Agent Health", icon: DeveloperBoardRoundedIcon, align: "right" },
 ];
 const DEVICE_DETAILS_TAB_URL_BY_KEY = Object.freeze({
   summary: "device_summary",
@@ -133,6 +112,7 @@ const DEVICE_DETAILS_TAB_URL_BY_KEY = Object.freeze({
   watchdogs: "watchdogs",
   activity: "activity_history",
   shell: "remote_shell",
+  agent_health: "agent_health",
 });
 const DEVICE_DETAILS_TAB_KEY_BY_URL = Object.freeze({
   device_summary: "summary",
@@ -148,6 +128,8 @@ const DEVICE_DETAILS_TAB_KEY_BY_URL = Object.freeze({
   activity: "activity",
   remote_shell: "shell",
   shell: "shell",
+  agent_health: "agent_health",
+  health: "agent_health",
 });
 
 const resolveDeviceId = (device) =>
@@ -160,21 +142,10 @@ const resolveDeviceId = (device) =>
 
 const SUMMARY_SECTIONS = [
   { key: "top-level", label: "Top-Level", icon: InfoOutlinedIcon },
-  { key: "agent-health", label: "Agent Health", icon: DeveloperBoardRoundedIcon },
   { key: "storage", label: "Storage", icon: StorageRoundedIcon },
   { key: "memory", label: "Memory", icon: MemoryRoundedIcon },
   { key: "network", label: "Network", icon: LanRoundedIcon },
 ];
-
-function formatRoleHealthContext(context) {
-  const normalized = String(context || "").trim().toLowerCase();
-  if (!normalized) return "";
-  if (normalized === "system") return "System";
-  if (normalized === "currentuser" || normalized === "current_user" || normalized === "interactive") {
-    return "Current User";
-  }
-  return normalized.replace(/[_-]+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
-}
 
 function normalizeTunnelInfoState(data = {}) {
   return {
@@ -203,85 +174,6 @@ function tunnelInfoMatches(left, right) {
   );
 }
 
-function normalizeRoleHealthStatusText(value) {
-  const text = String(value || "").trim();
-  if (!text) return "Unknown";
-  if (/^[a-z0-9_-]+$/i.test(text)) {
-    return text.replace(/[_-]+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
-  }
-  return text;
-}
-
-function getRoleHealthStatusColor(statusCode) {
-  const normalized = String(statusCode || "").trim().toLowerCase();
-  return ROLE_HEALTH_STATUS_COLOR_BY_CODE[normalized] || SUMMARY_DEFAULT_TEXT_COLOR;
-}
-
-const AGENT_HEALTH_KIND = Object.freeze({
-  role: "role",
-  service: "service",
-});
-
-const AGENT_HEALTH_PRESENTATION_BY_KEY = Object.freeze({
-  deviceaudit: { label: "Device Auditor", kind: AGENT_HEALTH_KIND.role },
-  deviceauditor: { label: "Device Auditor", kind: AGENT_HEALTH_KIND.role },
-  contextsystem: { label: "System Context", kind: AGENT_HEALTH_KIND.role },
-  contextcurrentuser: { label: "Current User Context", kind: AGENT_HEALTH_KIND.role },
-  remoteshell: { label: "Remote Shell", kind: AGENT_HEALTH_KIND.role },
-  remoteshellservice: { label: "Remote Shell", kind: AGENT_HEALTH_KIND.role },
-  servicecontrol: { label: "Service Control", kind: AGENT_HEALTH_KIND.role },
-  servicemanagement: { label: "Service Management", kind: AGENT_HEALTH_KIND.role },
-  softwaremanagement: { label: "Software Management", kind: AGENT_HEALTH_KIND.role },
-  scriptexeccurrentuser: { label: "Script Execution - CURRENTUSER", kind: AGENT_HEALTH_KIND.role },
-  scriptexecsystem: { label: "Script Execution - SYSTEM", kind: AGENT_HEALTH_KIND.role },
-  nodescreenshot: { label: "Node Screenshot", kind: AGENT_HEALTH_KIND.role },
-  macros: { label: "Macro Automation", kind: AGENT_HEALTH_KIND.role },
-  vnc: { label: "UltraVNC", kind: AGENT_HEALTH_KIND.service },
-  ultravnc: { label: "UltraVNC", kind: AGENT_HEALTH_KIND.service },
-  ultravncservice: { label: "UltraVNC", kind: AGENT_HEALTH_KIND.service },
-  wireguard: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
-  wireguardtunnel: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
-  wireguardservice: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
-  wireguardvpn: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
-});
-
-const LEGACY_AGENT_HEALTH_KEYS = Object.freeze(
-  new Set(["macro", "macroautomation", "macros", "screenshot", "screenshotcapture", "nodescreenshot"])
-);
-
-function compactAgentHealthKey(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "");
-}
-
-function resolveAgentHealthPresentation(item, index = 0) {
-  const rawRoleName = String(item?.role_name || item?.role || "").trim();
-  const rawRoleLabel = String(item?.role_label || "").trim();
-  const presentation =
-    AGENT_HEALTH_PRESENTATION_BY_KEY[compactAgentHealthKey(rawRoleName)] ||
-    AGENT_HEALTH_PRESENTATION_BY_KEY[compactAgentHealthKey(rawRoleLabel)] ||
-    null;
-  return {
-    label: presentation?.label || rawRoleLabel || rawRoleName || `Role ${index + 1}`,
-    kind: presentation?.kind || AGENT_HEALTH_KIND.role,
-  };
-}
-
-function parseAgentHealthHostPort(detailText) {
-  const text = String(detailText || "").trim();
-  const match = text.match(/\b(?:Listening on\s+)?([^\s:]+):(\d{1,5})\b/i);
-  if (!match) return { host: "", port: "" };
-  return { host: String(match[1] || "").trim(), port: String(match[2] || "").trim() };
-}
-
-function parseAgentHealthTunnelId(detailText) {
-  const text = String(detailText || "").trim();
-  const match = text.match(/\btunnel_id=([^\s]+)/i);
-  return match ? String(match[1] || "").trim() : "";
-}
-
 function describeAgentUpdateState(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) return "No recent updater activity";
@@ -295,113 +187,6 @@ function describeAgentUpdateState(value) {
   if (normalized === "failed") return "Last update attempt failed";
   if (normalized === "idle") return "No recent updater activity";
   return normalized.replace(/[_-]+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
-}
-
-function formatAgentHealthDialogValue(value, fallback = "Unavailable") {
-  const text = String(value || "").trim();
-  return text || fallback;
-}
-
-function buildAgentHealthDialogContent(entry, tunnelInfo) {
-  if (!entry) return "";
-  const details = entry.detailsMap && typeof entry.detailsMap === "object" ? entry.detailsMap : {};
-  const lines = [];
-  const appendLine = (label, value, fallback = "Unavailable") => {
-    lines.push(`${label}: ${formatAgentHealthDialogValue(value, fallback)}`);
-  };
-  const appendMultilineSection = (label, value) => {
-    const text = String(value || "").trim();
-    if (!text) return;
-    lines.push("");
-    lines.push(`${label}:`);
-    for (const line of text.split(/\r?\n/)) {
-      const trimmed = String(line || "").trim();
-      if (trimmed) {
-        lines.push(trimmed);
-      }
-    }
-  };
-
-  const presentationKey = String(entry.presentationKey || "").trim().toLowerCase();
-  const parsedHostPort = parseAgentHealthHostPort(entry.detail);
-  const fallbackWireGuardPeerIp = tunnelInfo?.virtual_ip ? String(tunnelInfo.virtual_ip).split("/")[0] : "";
-  const fallbackTunnelId = String(tunnelInfo?.tunnel_id || "").trim();
-
-  appendLine("Running Status", details.running_status || entry.status, "Unknown");
-
-  switch (presentationKey) {
-    case "deviceaudit":
-    case "deviceauditor":
-      appendLine("Reporter Task", details.reporter_task, "Unknown");
-      appendLine("Report Interval", details.report_interval, "Unknown");
-      break;
-    case "macro":
-    case "macros":
-      appendLine("Configured Tasks", details.configured_tasks, "0");
-      appendLine("Active Tasks", details.active_tasks, "0");
-      break;
-    case "remoteshell":
-    case "remoteshellservice":
-      appendLine("IP", details.listener_ip || parsedHostPort.host, "Unavailable");
-      appendLine("Port", details.listener_port || parsedHostPort.port, "Unavailable");
-      appendLine("Shell Binary", details.shell_binary, "Unavailable");
-      break;
-    case "screenshot":
-    case "nodescreenshot":
-      appendLine("Configured Regions", details.configured_regions, "0");
-      appendLine("Active Tasks", details.active_tasks, "0");
-      appendLine("Visible Overlays", details.visible_overlays, "0");
-      break;
-    case "scriptexeccurrentuser":
-    case "contextcurrentuser":
-      appendLine("Execution Context", details.execution_context, "CURRENTUSER");
-      appendLine("Listener State", details.listener_state, "Unknown");
-      appendMultilineSection("Loaded Helper Sessions", details.loaded_helper_sessions);
-      appendMultilineSection("Pending Helper Sessions", details.pending_helper_sessions);
-      break;
-    case "scriptexecsystem":
-    case "contextsystem":
-      appendLine("Execution Context", details.execution_context, "SYSTEM");
-      appendLine("Listener State", details.listener_state, "Unknown");
-      appendLine("Queued Lanes", details.queued_lanes, "Unavailable");
-      appendLine("Active Lanes", details.active_lanes, "Unavailable");
-      break;
-    case "servicemanagement":
-      appendLine("Service Count", details.service_count, "0");
-      appendLine("Last Refresh", details.last_refresh_at, "Unavailable");
-      break;
-    case "softwaremanagement":
-      appendLine("Software Count", details.software_count, "0");
-      appendLine("Icon Payloads", details.icon_payload_count, "0");
-      appendLine("Last Refresh", details.last_refresh_at, "Unavailable");
-      break;
-    case "vnc":
-    case "ultravnc":
-    case "ultravncservice":
-      appendLine("IP", details.listener_ip, "Unavailable");
-      appendLine("Port", details.listener_port, "Unavailable");
-      appendLine("Service Name", details.service_name, "Unavailable");
-      break;
-    case "wireguardtunnel":
-    case "wireguard":
-    case "wireguardservice":
-    case "wireguardvpn":
-      appendLine("WireGuard Peer IP", details.wireguard_peer_ip || fallbackWireGuardPeerIp, "Inactive");
-      appendLine("Tunnel ID", details.tunnel_id || parseAgentHealthTunnelId(entry.detail) || fallbackTunnelId, "Inactive");
-      appendLine("Endpoint", details.endpoint, "Unavailable");
-      break;
-    default:
-      break;
-  }
-
-  appendLine("Last Checked", entry.lastCheckedText, "Unknown");
-
-  if (String(entry.detail || "").trim()) {
-    lines.push("");
-    lines.push(`Details: ${String(entry.detail).trim()}`);
-  }
-
-  return lines.join("\n");
 }
 
 const SUMMARY_GRID_STYLE = {
@@ -790,95 +575,6 @@ export async function loadDeviceSummaryPageData(request, routeDeviceId) {
   }
 }
 
-function buildAgentHealthMeta(rows, emptyText, fallbackText) {
-  if (!rows.length) return emptyText;
-  const counts = rows.reduce((acc, row) => {
-    const key = String(row.statusCode || "unknown").trim().toLowerCase();
-    acc[key] = (acc[key] || 0) + 1;
-    return acc;
-  }, {});
-  const parts = [];
-  if (counts.healthy) parts.push(`${counts.healthy} healthy`);
-  if (counts.recovering) parts.push(`${counts.recovering} recovering`);
-  if (counts.unhealthy) parts.push(`${counts.unhealthy} unhealthy`);
-  if (counts.pending) parts.push(`${counts.pending} pending`);
-  if (!parts.length) parts.push(fallbackText);
-  return parts.join(" • ");
-}
-
-function createAgentHealthColumnDefs(nameHeader, onOpen) {
-  return [
-    {
-      field: "name",
-      headerName: nameHeader,
-      width: 220,
-      flex: 1.1,
-      sortable: false,
-      filter: false,
-      cellRenderer: AgentHealthLinkCell,
-      cellRendererParams: { onOpen },
-      cellStyle: { color: SUMMARY_FIELD_TEXT_COLOR },
-      tooltipValueGetter: (params) => params?.data?.detail || params?.value || "",
-    },
-    {
-      field: "status",
-      headerName: "Status",
-      width: 170,
-      flex: 0.7,
-      sortable: false,
-      filter: false,
-      cellStyle: (params) => ({
-        color: getRoleHealthStatusColor(params?.data?.statusCode),
-        fontWeight: 600,
-      }),
-      tooltipValueGetter: (params) => params?.data?.detail || params?.value || "",
-    },
-    {
-      field: "lastCheckedText",
-      headerName: "Last Checked",
-      width: 220,
-      flex: 0.85,
-      sortable: false,
-      filter: false,
-      cellStyle: { color: ROLE_HEALTH_LAST_CHECKED_COLOR },
-    },
-  ];
-}
-
-const AgentHealthLinkCell = React.memo(function AgentHealthLinkCell(props) {
-  const row = props?.data || null;
-  const onOpen = props?.onOpen;
-  const value = String(props?.value || row?.name || "").trim();
-  if (!value) return null;
-  return (
-    <Button
-      size="small"
-      onClick={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        onOpen?.(row);
-      }}
-      sx={{
-        minWidth: 0,
-        px: 0,
-        py: 0,
-        justifyContent: "flex-start",
-        textTransform: "none",
-        color: SUMMARY_FIELD_TEXT_COLOR,
-        fontWeight: 400,
-        textDecoration: "none",
-        "&:hover": {
-          background: "transparent",
-          color: "#7dd3fc",
-          textDecoration: "none",
-        },
-      }}
-    >
-      {value}
-    </Button>
-  );
-});
-
 const isStorageUsageAlert = (usageValue) =>
   typeof usageValue === "number" &&
   !Number.isNaN(usageValue) &&
@@ -1225,11 +921,6 @@ export default function DeviceSummary() {
     keyByUrl: DEVICE_DETAILS_TAB_KEY_BY_URL,
     urlByKey: DEVICE_DETAILS_TAB_URL_BY_KEY,
   });
-  const tab = useMemo(() => {
-    const matchIndex = TOP_TABS.findIndex((tabDef) => tabDef.key === activeTabKey);
-    return matchIndex >= 0 ? matchIndex : 0;
-  }, [activeTabKey]);
-
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const legacyTab = String(params.get("tab") || "").trim().toLowerCase();
@@ -1277,7 +968,6 @@ export default function DeviceSummary() {
   const [summaryScrollOffset, setSummaryScrollOffset] = useState(0);
   const [summaryBottomSpacer, setSummaryBottomSpacer] = useState(0);
   const [tunnelInfo, setTunnelInfo] = useState(TUNNEL_INFO_IDLE);
-  const [agentHealthDialogEntry, setAgentHealthDialogEntry] = useState(null);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [releaseChannelMenuPosition, setReleaseChannelMenuPosition] = useState(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
@@ -1344,23 +1034,7 @@ export default function DeviceSummary() {
     });
   }, [agent, device, deviceId]);
   const canLaunchQuickJob = quickJobTargets.length > 0;
-  const shouldPollTunnelStatus = activeTabKey === "shell" || activeTabKey === "vnc";
-  const openAgentHealthDialog = useCallback((entry) => {
-    if (!entry) return;
-    setAgentHealthDialogEntry(entry);
-  }, []);
-  const closeAgentHealthDialog = useCallback(() => {
-    setAgentHealthDialogEntry(null);
-  }, []);
-  const agentHealthDialogTitle = useMemo(() => {
-    if (!agentHealthDialogEntry?.name) return "Agent Health Details";
-    return `Agent Health Details  - ${agentHealthDialogEntry.name}`;
-  }, [agentHealthDialogEntry]);
-  const agentHealthDialogContent = useMemo(
-    () => buildAgentHealthDialogContent(agentHealthDialogEntry, tunnelInfo),
-    [agentHealthDialogEntry, tunnelInfo]
-  );
-
+  const shouldPollTunnelStatus = activeTabKey === "shell" || activeTabKey === "vnc" || activeTabKey === "agent_health";
   useEffect(() => {
     setConnectionError("");
   }, [connectionDraft]);
@@ -2461,84 +2135,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                   </Island>
                 </Box>
 
-                <Box id="device-summary-agent-health" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
-                  <Island
-                    title="Agent Health"
-                    icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 18 }} />}
-                    meta={agentHealthMeta}
-                    sx={{ mb: 0 }}
-                  >
-                    <Stack direction={{ xs: "column", xl: "row" }} spacing={1.6} sx={{ minWidth: 0 }}>
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Box sx={{ mb: 1.2 }}>
-                          <Typography
-                            sx={{
-                              color: SUMMARY_FIELD_TEXT_COLOR,
-                              fontSize: "0.88rem",
-                              fontWeight: 700,
-                              letterSpacing: 0.3,
-                              textTransform: "none",
-                              display: "block",
-                            }}
-                          >
-                            Roles
-                          </Typography>
-                          <Typography
-                            variant="caption"
-                            sx={{ color: MAGIC_UI.textMuted, letterSpacing: 0.16, display: "block", mt: 0.25 }}
-                          >
-                            {agentRoleHealthMeta}
-                          </Typography>
-                        </Box>
-                        {summaryDataReady ? (
-                          <SummarySectionGrid
-                            sectionKey="agent-health-roles"
-                            rowData={agentRoleHealthRows}
-                            columnDefs={agentRoleHealthColumnDefs}
-                            defaultColDef={defaultGridColDef}
-                            height={agentHealthGridHeight}
-                          />
-                        ) : (
-                          <SummaryGridPlaceholder height={agentHealthGridHeight} />
-                        )}
-                      </Box>
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Box sx={{ mb: 1.2 }}>
-                          <Typography
-                            sx={{
-                              color: SUMMARY_FIELD_TEXT_COLOR,
-                              fontSize: "0.88rem",
-                              fontWeight: 700,
-                              letterSpacing: 0.3,
-                              textTransform: "none",
-                              display: "block",
-                            }}
-                          >
-                            Services
-                          </Typography>
-                          <Typography
-                            variant="caption"
-                            sx={{ color: MAGIC_UI.textMuted, letterSpacing: 0.16, display: "block", mt: 0.25 }}
-                          >
-                            {agentServiceHealthMeta}
-                          </Typography>
-                        </Box>
-                        {summaryDataReady ? (
-                          <SummarySectionGrid
-                            sectionKey="agent-health-services"
-                            rowData={agentServiceHealthRows}
-                            columnDefs={agentServiceHealthColumnDefs}
-                            defaultColDef={defaultGridColDef}
-                            height={agentHealthGridHeight}
-                          />
-                        ) : (
-                          <SummaryGridPlaceholder height={agentHealthGridHeight} />
-                        )}
-                      </Box>
-                    </Stack>
-                  </Island>
-                </Box>
-
                 <Box id="device-summary-storage" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
                   <Island
                     title="Storage"
@@ -3060,110 +2656,25 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     ]
   );
 
-  const agentHealthRows = useMemo(() => {
-    const payload =
+  const agentRoleHealthPayload = useMemo(
+    () =>
       meta.agentRoleHealth && typeof meta.agentRoleHealth === "object"
         ? meta.agentRoleHealth
         : summary.agent_role_health && typeof summary.agent_role_health === "object"
           ? summary.agent_role_health
-          : {};
-    const items = Array.isArray(payload?.roles) ? payload.roles : [];
-    const normalizedItems = items.map((item, index) => {
-      const rawRoleName = String(item?.role_name || item?.role || "").trim();
-      const rawRoleLabel = String(item?.role_label || item?.label || "").trim();
-      const presentation = resolveAgentHealthPresentation(item, index);
-      return {
-        id: item?.role_id || `${presentation.kind}-${presentation.label}-${index}`,
-        baseLabel: presentation.label,
-        presentationKey: compactAgentHealthKey(rawRoleName || rawRoleLabel || presentation.label),
-        healthKind: presentation.kind,
-        sourceRoleName: rawRoleName,
-        sourceRoleLabel: rawRoleLabel,
-        contextLabel: formatRoleHealthContext(item?.context),
-        status: normalizeRoleHealthStatusText(item?.status || item?.status_code || "Unknown"),
-        statusCode: String(item?.status_code || item?.status || "unknown").trim().toLowerCase(),
-        lastCheckedAt: item?.last_checked_at ?? null,
-        lastCheckedText: formatTimestamp(item?.last_checked_at),
-        detail: String(item?.detail || "").trim(),
-        detailsMap: item?.details && typeof item.details === "object" ? item.details : {},
-      };
-    });
-    const visibleItems = normalizedItems.filter(
-      (item) => !LEGACY_AGENT_HEALTH_KEYS.has(String(item.presentationKey || "").trim().toLowerCase())
-    );
-    const labelCounts = visibleItems.reduce((acc, item) => {
-      const key = `${item.healthKind}:${String(item.baseLabel || "").trim().toLowerCase()}`;
-      if (key !== `${item.healthKind}:`) {
-        acc[key] = (acc[key] || 0) + 1;
-      }
-      return acc;
-    }, {});
-    return visibleItems
-      .map((item) => {
-        const labelKey = `${item.healthKind}:${String(item.baseLabel || "").trim().toLowerCase()}`;
-        const name =
-          item.contextLabel && labelCounts[labelKey] > 1 ? `${item.baseLabel} (${item.contextLabel})` : item.baseLabel;
-        return {
-          ...item,
-          name,
-        };
-      })
-      .sort((left, right) => String(left.name || "").localeCompare(String(right.name || "")));
-  }, [meta.agentRoleHealth, summary.agent_role_health, formatTimestamp]);
-
-  const agentRoleHealthRows = useMemo(
-    () => agentHealthRows.filter((row) => row.healthKind === AGENT_HEALTH_KIND.role),
-    [agentHealthRows]
+          : {},
+    [meta.agentRoleHealth, summary.agent_role_health]
   );
 
-  const agentServiceHealthRows = useMemo(
-    () => agentHealthRows.filter((row) => row.healthKind === AGENT_HEALTH_KIND.service),
-    [agentHealthRows]
-  );
-
-  const agentHealthMeta = useMemo(() => {
-    if (!agentHealthRows.length) {
-      return "Awaiting agent health telemetry";
-    }
-    const parts = [];
-    if (agentRoleHealthRows.length) {
-      parts.push(`${agentRoleHealthRows.length} ${agentRoleHealthRows.length === 1 ? "role" : "roles"}`);
-    }
-    if (agentServiceHealthRows.length) {
-      parts.push(`${agentServiceHealthRows.length} ${agentServiceHealthRows.length === 1 ? "service" : "services"}`);
-    }
-    const statusMeta = buildAgentHealthMeta(agentHealthRows, "", `${agentHealthRows.length} items reporting`);
-    if (statusMeta) parts.push(statusMeta);
-    return parts.filter(Boolean).join(" • ");
-  }, [agentHealthRows, agentRoleHealthRows.length, agentServiceHealthRows.length]);
-
-  const agentRoleHealthMeta = useMemo(
-    () =>
-      buildAgentHealthMeta(
-        agentRoleHealthRows,
-        "No role telemetry reported yet",
-        `${agentRoleHealthRows.length} roles reporting`
-      ),
-    [agentRoleHealthRows]
-  );
-
-  const agentServiceHealthMeta = useMemo(
-    () =>
-      buildAgentHealthMeta(
-        agentServiceHealthRows,
-        "No service telemetry reported yet",
-        `${agentServiceHealthRows.length} services reporting`
-      ),
-    [agentServiceHealthRows]
-  );
-
-  const agentRoleHealthColumnDefs = useMemo(
-    () => createAgentHealthColumnDefs("Role", openAgentHealthDialog),
-    [openAgentHealthDialog]
-  );
-  const agentServiceHealthColumnDefs = useMemo(
-    () => createAgentHealthColumnDefs("Service", openAgentHealthDialog),
-    [openAgentHealthDialog]
+  const renderAgentHealthTab = () => (
+    <AgentHealthTab
+      agentRoleHealth={agentRoleHealthPayload}
+      summaryDataReady={summaryDataReady}
+      formatTimestamp={formatTimestamp}
+      tunnelInfo={tunnelInfo}
+      hostname={activityHostname}
+      onRequestRefresh={reloadDeviceSummarySnapshot}
+    />
   );
 
   const renderTopLevelFieldCell = useCallback((params) => {
@@ -3343,15 +2854,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     });
     return Math.round(baseHeight * 1.2);
   }, [overviewInfoRows.length, borealisAgentRows.length, resolveGridHeight]);
-  const agentHealthGridHeight = useMemo(
-    () =>
-      Math.round(
-        resolveGridHeight(Math.max(agentRoleHealthRows.length, agentServiceHealthRows.length, 1), {
-          minHeight: BASE_GRID_HEIGHTS.agentRolesHealth,
-        }) * 1.2
-      ),
-    [agentRoleHealthRows.length, agentServiceHealthRows.length, resolveGridHeight]
-  );
   const storageGridHeight = useMemo(
     () =>
       resolveGridHeight(storageRows.length, {
@@ -3379,7 +2881,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   useEffect(() => {
     if (!isSummaryGridDebugEnabled()) return;
-    const topTabKey = TOP_TABS[tab]?.key || "";
+    const topTabKey = activeTabKey || "";
     if (topTabKey !== "summary") return;
     summaryGridDebugLog("deviceSummaryRender", {
       renderCount: pageRenderCountRef.current,
@@ -3393,7 +2895,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       networkRows: networkRows.length,
     });
   }, [
-    tab,
+    activeTabKey,
     summaryScrollOffset,
     summaryBottomSpacer,
     overviewInfoRows.length,
@@ -3458,17 +2960,18 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     actions: pageHeaderActions,
   });
 
-  const topTabRenderers = [
-    renderDeviceSummaryTab,
-    renderFileManagementTab,
-    renderSoftware,
-    renderServicesTab,
-    renderProcessManagementTab,
-    renderWatchdogsTab,
-    renderHistory,
-    renderRemoteShellTab,
-  ];
-  const tabContent = (topTabRenderers[tab] || renderDeviceSummaryTab)();
+  const topTabRenderers = {
+    summary: renderDeviceSummaryTab,
+    file_management: renderFileManagementTab,
+    software: renderSoftware,
+    services: renderServicesTab,
+    process_management: renderProcessManagementTab,
+    watchdogs: renderWatchdogsTab,
+    activity: renderHistory,
+    shell: renderRemoteShellTab,
+    agent_health: renderAgentHealthTab,
+  };
+  const tabContent = (topTabRenderers[activeTabKey] || renderDeviceSummaryTab)();
 
   return (
     <Box
@@ -3601,8 +3104,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         </Alert>
       ) : null}
       <Tabs
-        value={tab}
-        onChange={(e, v) => setActiveTabKey(TOP_TABS[v]?.key || TOP_TABS[0]?.key || "summary")}
+        value={activeTabKey}
+        onChange={(e, v) => setActiveTabKey(v || TOP_TABS[0]?.key || "summary")}
         variant="scrollable"
         scrollButtons="auto"
         TabIndicatorProps={{
@@ -3623,6 +3126,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
             minHeight: NAV_TAB_HEIGHT,
             height: NAV_TAB_HEIGHT,
             alignItems: "stretch",
+            width: "100%",
           },
           "& .MuiTab-root": {
             color: NAV_TAB_COLORS.text,
@@ -3663,9 +3167,11 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         {TOP_TABS.map((tabDef) => (
           <Tab
             key={tabDef.key || tabDef.label}
+            value={tabDef.key}
             label={tabDef.label}
             icon={<tabDef.icon sx={{ fontSize: 18 }} />}
             iconPosition="start"
+            sx={tabDef.align === "right" ? { ml: "auto" } : undefined}
           />
         ))}
       </Tabs>
@@ -3683,47 +3189,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       >
         {tabContent}
       </Box>
-
-      <Dialog
-        open={Boolean(agentHealthDialogEntry)}
-        onClose={closeAgentHealthDialog}
-        fullWidth
-        maxWidth="sm"
-        PaperProps={{ sx: DIALOG_PAPER_SX }}
-      >
-        <DialogTitle sx={DIALOG_TITLE_SX}>
-          <DialogHeaderBlock title={agentHealthDialogTitle} subtitle="Current health telemetry and runtime details." />
-        </DialogTitle>
-        <DialogContent sx={DIALOG_CONTENT_SX}>
-          <TextField
-            fullWidth
-            multiline
-            minRows={12}
-            value={agentHealthDialogContent}
-            InputProps={{ readOnly: true }}
-            sx={{
-              "& .MuiOutlinedInput-root": {
-                alignItems: "flex-start",
-                bgcolor: "rgba(4,7,17,0.72)",
-                borderRadius: 2,
-                fontFamily:
-                  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-                fontSize: 12.5,
-                color: "#e6edf3",
-                "& textarea": {
-                  lineHeight: 1.55,
-                  whiteSpace: "pre-wrap",
-                },
-              },
-            }}
-          />
-        </DialogContent>
-        <DialogActions sx={DIALOG_ACTIONS_SX}>
-          <Button onClick={closeAgentHealthDialog} sx={DIALOG_BUTTON_SX}>
-            Close
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       <ClearDeviceActivityDialog
         open={clearDialogOpen}

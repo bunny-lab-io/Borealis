@@ -8,6 +8,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Agents send heartbeats and inventory payloads to the Engine.
 - The Engine stores device summaries and detailed hardware, software, and cached service data in PostgreSQL.
 - Online status is derived from `last_seen` (online if the heartbeat is within ~5 minutes).
+- Startup health is reported separately through `POST /api/agent/status`, which updates `last_seen`, preserves existing role-health rows, and upserts only `system:system_heartbeat` with boot timeline milestones.
 - Session inventory now also carries helper-specific readiness data such as `eligible_for_interactive`, `helper_ready`, `helper_pid`, and `helper_last_seen_at` so Borealis can validate current-user execution targets.
 
 ## Sites and Enrollment Codes
@@ -37,6 +38,12 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
   - active per-device suppressions and overrides
 - Operators can create a new prefilled watchdog for the current device without leaving the device page.
 - Per-device suppressions mute one watchdog/device relationship without cloning the shared watchdog policy.
+
+## Device Agent Health
+- Device Summary includes a right-anchored `Agent Health` tab separate from the normal left-side tab sequence.
+- The Agent Health tab shows a visual startup flow with complete, active, failed, pending, and skipped states plus clickable role/service runtime-health nodes inside the flow graph.
+- Startup flow data comes from the agent SYSTEM heartbeat role and appears as `system:system_heartbeat`; normal role/service health rows remain separate.
+- The tab listens for `agent_status_changed` on `window.BorealisSocket` and silently refreshes current-device telemetry when the Engine commits a new status update.
 
 ## Device File Management
 - Device Summary now also exposes a `File Management` tab for remote browse, upload, download, lightweight text editing, copy, cut, paste, create-folder, rename, move, and delete actions against the device file system.
@@ -82,6 +89,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ## API Endpoints
 - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
+- `POST /api/agent/status` (Device Authenticated) - startup phase, boot ID, milestone timeline, and last-error telemetry for the Agent Health tab.
 - `POST /api/agent/details` (Device Authenticated) - inventory and cached service payloads.
 - `GET /api/agent/software-management/overrides` (Device Authenticated) - file-backed icon override rules used by the agent software-management inventory path.
 - `GET /api/agents` (Token Authenticated) - online collectors keyed by agent identity, with upgraded hosts advertising helper-backed current-user capability on their SYSTEM record instead of registering a second Borealis socket.
@@ -173,6 +181,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ### Inventory ingestion behavior
 - `/api/agent/heartbeat` updates `last_seen` and key metrics (last_user, OS, uptime).
+- `/api/agent/status` updates `last_seen`, upserts only the `system:system_heartbeat` role-health row, and emits `agent_status_changed` after commit.
 - `/api/agent/details` stores full inventory payloads for memory, network, storage, software, cpu, and services.
 - JSON blobs are serialized into PostgreSQL text columns and rehydrated for UI.
 - Installed software is also normalized into `device_software_inventory` so filters can match name, source, and version reliably.
@@ -192,6 +201,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 ### Status computation
 - Online/offline is computed from `last_seen` (online if within ~300 seconds).
 - UI tables use the derived `status` field from the API payload.
+- Agent Health startup flow status is not a replacement for online/offline. It explains startup progression, especially auth, Socket.IO, role loading, WireGuard, inventory, and steady-state milestones.
 
 ### Device identity and keys
 - Device identity is tied to GUID + SSL fingerprint + token version.

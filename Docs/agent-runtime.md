@@ -21,6 +21,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `role_system_service_management.py` (ROLE_NAME: `service_management`) - system service inventory and start/stop/restart control.
 - `role_system_process_management.py` (ROLE_NAME: `process_management`) - live process snapshots, per-process CPU/memory/command-line metadata, parent-child process relationships, and operator-triggered process termination.
 - `role_system_software_management.py` (ROLE_NAME: `software_management`) - installed software inventory, Windows icon payload publication, and software refresh boosts after software-management work.
+- `role_system_heartbeat.py` (ROLE_NAME: `system_heartbeat`) - earliest SYSTEM startup timeline reporter. It is imported before normal role loading, buffers milestones until device auth is available, then publishes `system:system_heartbeat` status to the Engine.
 - `role_system_remote_shell.py` (ROLE_NAME: `remote_shell`) - remote shell server over WireGuard (PowerShell on Windows, Bash on Linux).
 - `role_system_vnc.py` (ROLE_NAME: `vnc`) - always-on UltraVNC server lifecycle.
 - `role_system_wireguard.py` (ROLE_NAME: `wireguard`) - WireGuard client lifecycle.
@@ -36,6 +37,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `POST /api/agent/enroll/poll` (No Authentication) - finalize enrollment after approval.
 - `POST /api/agent/token/refresh` (Refresh Token) - mint a new access token.
 - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
+- `POST /api/agent/status` (Device Authenticated) - startup phase, boot ID, milestone timeline, and last-error telemetry for `system:system_heartbeat`.
 - `POST /api/agent/details` (Device Authenticated) - hardware, inventory, and cached service payloads.
 - `POST /api/agent/script/request` (Device Authenticated) - request work or receive idle signal.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
@@ -89,7 +91,8 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - SYSTEM-to-helper communication uses per-session local IPC keyed by Windows `session_id`; the helper trusts `broker_verified` payloads from the local broker and still validates signed payloads if used outside that path.
 - WireGuard tunnels are ensured via `POST /api/agent/vpn/ensure` on boot and refreshed periodically.
 - The ensure loop re-establishes the tunnel automatically after network hiccups.
-- Heartbeats/details also carry per-role health snapshots so the Device Details `Agent Roles Health` section can show current role/service status with last-checked timestamps.
+- `role_system_heartbeat.py` starts before `AgentHttpClient.ensure_authenticated()`, normal `RoleManager.load()`, and the Socket.IO connect loop. It records process start, server config, identity, auth, status channel, socket, role load, helper broker, WireGuard, inventory, steady-state, and failure milestones.
+- Heartbeats/details also carry per-role health snapshots so the Device Details `Agent Health` tab can show current role/service status with last-checked timestamps. Startup status uses `POST /api/agent/status` so the timeline can update before the full role-health heartbeat cycle.
 - The VNC role generates one shared UltraVNC password when the role starts, rotates it again every 24 hours by default (`BOREALIS_VNC_CREDENTIAL_ROTATION_SECONDS`), keeps it in memory only, re-advertises it to the Engine through `POST /api/agent/vnc/ensure`, keeps UltraVNC continuously running once it has the Engine /32 firewall scope, and reports `ready`, `service_state`, `listener_state`, and `last_ready_at` through agent role health even when no operator is currently connected.
 
 ### Token storage

@@ -4,6 +4,7 @@
 #
 # API Endpoints (if applicable):
 # - POST /api/agent/heartbeat (Device Authenticated) - Updates device last-seen metadata and inventory snapshots.
+# - POST /api/agent/status (Device Authenticated) - Updates startup status timeline telemetry.
 # - POST /api/agent/script/request (Device Authenticated) - Provides script execution payloads or idle signals to agents.
 # - GET /api/agent/software-management/overrides (Device Authenticated) - Returns file-backed software-management override hints for agent-side inventory/icon collection.
 # - POST /api/agent/vpn/ensure (Device Authenticated) - Ensures persistent WireGuard tunnel material.
@@ -73,6 +74,41 @@ def _json_dict(value: Any) -> Dict[str, Any]:
     except Exception:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _normalize_status_code(value: Any) -> str:
+    text = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    aliases = {
+        "ok": "healthy",
+        "online": "healthy",
+        "complete": "healthy",
+        "completed": "healthy",
+        "ready": "healthy",
+        "starting": "recovering",
+        "active": "recovering",
+        "pending": "recovering",
+        "failed": "unhealthy",
+        "error": "unhealthy",
+    }
+    normalized = aliases.get(text, text)
+    return normalized if normalized in {"healthy", "recovering", "unhealthy", "pending", "unknown"} else "recovering"
+
+
+def _upsert_single_role_health(existing_raw: Any, role: Dict[str, Any]) -> str:
+    normalized = normalize_agent_role_health(existing_raw)
+    role_id = str(role.get("role_id") or "").strip()
+    roles = [
+        item
+        for item in (normalized.get("roles") or [])
+        if str(item.get("role_id") or "").strip() != role_id
+    ]
+    roles.append(role)
+    reported_at = max(
+        int(normalized.get("reported_at") or 0),
+        int(role.get("last_checked_at") or 0),
+        int(time.time()),
+    )
+    return serialize_agent_role_health({"roles": roles, "reported_at": reported_at})
 
 
 def _infer_endpoint_host(adapters: "EngineServiceAdapters", req) -> str:
@@ -440,6 +476,131 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             conn.commit()
         finally:
             conn.close()
+
+        return jsonify(
+            {
+                "status": "ok",
+                "poll_after_ms": 15000,
+                "site_id": site_id,
+                "site_name": site_name,
+            }
+        )
+
+    @blueprint.route("/api/agent/status", methods=["POST"])
+    @require_device_auth(auth_manager)
+    def agent_status():
+        ctx = _auth_context()
+        if ctx is None:
+            return jsonify({"error": "auth_context_missing"}), 500
+
+        payload = request.get_json(force=True, silent=True) or {}
+        context_label = _context_hint(ctx)
+        now_ts = int(time.time())
+        normalized_guid = normalize_guid(ctx.guid)
+        guid_lookup = normalized_guid or str(ctx.guid or "").strip()
+        hostname = str(payload.get("hostname") or "").strip()
+        service_mode = str(payload.get("service_mode") or getattr(ctx, "service_mode", None) or "system").strip().lower() or "system"
+        phase = str(payload.get("phase") or "").strip()
+        message = str(payload.get("message") or "").strip()
+        status_code = _normalize_status_code(payload.get("status"))
+        milestones = payload.get("milestones") if isinstance(payload.get("milestones"), list) else []
+        last_error = payload.get("last_error") if isinstance(payload.get("last_error"), (dict, list, str)) else None
+        boot_id = str(payload.get("boot_id") or "").strip()
+        details = {
+            "boot_id": boot_id,
+            "phase": phase,
+            "message": message,
+            "milestones_json": json.dumps(milestones, ensure_ascii=True, sort_keys=True),
+            "last_error_json": json.dumps(last_error, ensure_ascii=True, sort_keys=True) if last_error else "",
+        }
+        role = {
+            "role_id": f"{service_mode}:system_heartbeat",
+            "role_name": "system_heartbeat",
+            "role_label": "Startup Timeline",
+            "context": service_mode,
+            "status_code": status_code,
+            "status": status_code,
+            "detail": message or phase or "Startup status updated.",
+            "details": details,
+            "last_checked_at": now_ts,
+        }
+
+        site_id = None
+        site_name = ""
+        emitted_hostname = hostname
+        conn = db_conn_factory()
+        try:
+            cur = conn.cursor()
+            selected_guid: Optional[str] = None
+            existing_role_health = None
+            existing_hostname = ""
+            if normalized_guid:
+                cur.execute(
+                    "SELECT guid, hostname, agent_role_health FROM devices WHERE UPPER(guid) = ?",
+                    (normalized_guid,),
+                )
+                rows = cur.fetchall()
+                for row in rows or []:
+                    if row[0] == ctx.guid:
+                        selected_guid = row[0]
+                        existing_hostname = str(row[1] or "").strip()
+                        existing_role_health = row[2]
+                        break
+                if not selected_guid and rows:
+                    selected_guid = rows[0][0]
+                    existing_hostname = str(rows[0][1] or "").strip()
+                    existing_role_health = rows[0][2]
+            target_guid = selected_guid or ctx.guid
+            if not selected_guid:
+                log("agents", f"status missing device record guid={ctx.guid}", context_label, level="ERROR")
+                return jsonify({"error": "device_not_registered"}), 404
+            merged_role_health = _upsert_single_role_health(existing_role_health, role)
+            cur.execute(
+                "UPDATE devices SET last_seen = ?, agent_role_health = ? WHERE guid = ?",
+                (now_ts, merged_role_health, target_guid),
+            )
+            if cur.rowcount == 0:
+                log("agents", f"status update missed device record guid={ctx.guid}", context_label, level="ERROR")
+                return jsonify({"error": "device_not_registered"}), 404
+            if guid_lookup:
+                cur.execute(
+                    """
+                    SELECT ds.site_id, s.name, d.hostname
+                      FROM devices AS d
+                 LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
+                 LEFT JOIN sites AS s ON s.id = ds.site_id
+                     WHERE UPPER(d.guid) = UPPER(?)
+                     LIMIT 1
+                    """,
+                    (guid_lookup,),
+                )
+                row = cur.fetchone()
+                if row:
+                    try:
+                        site_id = int(row[0]) if row[0] is not None else None
+                    except Exception:
+                        site_id = None
+                    site_name = str(row[1] or "").strip()
+                    emitted_hostname = str(row[2] or existing_hostname or hostname).strip()
+            conn.commit()
+        finally:
+            conn.close()
+
+        socketio = getattr(adapters.context, "socketio", None)
+        if socketio is not None:
+            try:
+                socketio.emit(
+                    "agent_status_changed",
+                    {
+                        "hostname": emitted_hostname,
+                        "guid": guid_lookup,
+                        "phase": phase,
+                        "status": status_code,
+                        "changed_at": now_ts,
+                    },
+                )
+            except Exception:
+                log("agents", f"agent_status_changed emit failed guid={guid_lookup}", context_label, level="DEBUG")
 
         return jsonify(
             {
