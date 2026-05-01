@@ -440,6 +440,7 @@ configure_agent_settings() {
   local legacy_settings_dir="${SCRIPT_DIR}/Agent/Settings"
   local server_url_path="${settings_dir}/server_url.txt"
   local config_path="${settings_dir}/agent_settings.json"
+  local system_config_path="${settings_dir}/agent_settings_SYSTEM.json"
   mkdir -p "${settings_dir}"
   if [[ ! -f "${server_url_path}" && -f "${legacy_settings_dir}/server_url.txt" ]]; then
     cp -f "${legacy_settings_dir}/server_url.txt" "${server_url_path}" 2>/dev/null || true
@@ -461,32 +462,33 @@ configure_agent_settings() {
 
   local python_bin
   python_bin="$(resolve_python_bin)" || die "Python interpreter missing."
-  CONFIG_PATH="${config_path}" ENROLLMENT_CODE_VALUE="${provided_code}" "${python_bin}" - <<'PY'
+  CONFIG_PATHS="${config_path}:${system_config_path}" ENROLLMENT_CODE_VALUE="${provided_code}" "${python_bin}" - <<'PY'
 import json
 import os
-path = os.environ["CONFIG_PATH"]
+paths = [path for path in os.environ["CONFIG_PATHS"].split(":") if path]
 code = os.environ.get("ENROLLMENT_CODE_VALUE", "")
-data = {
-    "config_file_watcher_interval": 2,
-    "agent_id": "",
-    "regions": {},
-    "enrollment_code": "",
-    "installer_code": "",
-}
-if os.path.exists(path):
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            existing = json.load(handle)
-        if isinstance(existing, dict):
-            data.update(existing)
-    except Exception:
-        pass
-if code:
-    data["enrollment_code"] = code
-    data["installer_code"] = code
-os.makedirs(os.path.dirname(path), exist_ok=True)
-with open(path, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
+for path in paths:
+    data = {
+        "config_file_watcher_interval": 2,
+        "agent_id": "",
+        "regions": {},
+        "enrollment_code": "",
+        "installer_code": "",
+    }
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                existing = json.load(handle)
+            if isinstance(existing, dict):
+                data.update(existing)
+        except Exception:
+            pass
+    if code:
+        data["enrollment_code"] = code
+        data["installer_code"] = code
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(data, handle)
 PY
 }
 
