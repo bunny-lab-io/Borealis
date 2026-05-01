@@ -79,7 +79,7 @@ None on this page. See [API Reference](api-reference.md).
 
 ### Runtime boundaries
 - Do not edit `Engine/` or `Agent/` directly. They are recreated on each launch.
-- Always edit `Data/Engine/` and `Data/Agent/` then re-run the bootstrap script.
+- Always edit `Data/Engine/` and `Data/Agent/` then re-run the appropriate launcher: `Engine.sh` or `Agent.sh`.
 
 ### What to read first when debugging
 - Start with logs: `Engine/Logs/engine.log` and `Agent/Logs/agent.log`.

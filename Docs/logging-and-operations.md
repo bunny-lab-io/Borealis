@@ -14,7 +14,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - Service logs: `Engine/Services/<role>/logs/` plus API per-domain logs under `Engine/Services/api-backend/logs/`.
 - Watchdog service log: `Engine/Logs/watchdogs.log`.
 - VPN logs: `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`, `Engine/Services/api-backend/logs/VPN_Tunnel/remote_shell.log`, and WireGuard control logs under `Engine/Services/wireguard-tunnel/logs/control.log`.
-- Agent bootstrap/install log: `Agent/Logs/install.log` (launcher dependency/install output captured by `Agent.sh`).
+- Agent install log: `Agent/Logs/install.log` records Agent launcher actions such as enrollment state cleanup; package-manager output remains on the console.
 - Agent logs: `Agent/Logs/agent.log` and `Agent/Logs/agent.error.log` (daily rotation).
 - Updater diagnostics: `<ProjectRoot>/Updater.log` (shared log recreated by `Update.ps1` and `Update.sh` at the start of each update run so it only contains the latest session).
 

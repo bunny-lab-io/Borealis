@@ -56,7 +56,7 @@ const iconFontFamily = '"Quartz Regular"';
 
 const AUTO_SIZE_COLUMNS = ["device_count", "enrollment_code"];
 const BOOTSTRAP_POWERSHELL_URL = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1";
-const BOOTSTRAP_SHELL_URL = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh";
+const AGENT_SHELL_URL = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Agent.sh";
 const INSTALL_OS_OPTIONS = [
   { id: "windows", label: "Windows" },
   { id: "linux", label: "Linux" },
@@ -411,7 +411,7 @@ function buildInstallCommand(osId, serverUrl, enrollmentCode) {
   }
 
   const shellPrefix = osId === "macos" ? "bash" : "sudo bash";
-  return `curl -fsSL ${BOOTSTRAP_SHELL_URL} | ${shellPrefix} -s -- --agent --serverurl ` +
+  return `curl -fsSL ${AGENT_SHELL_URL} | ${shellPrefix} -s -- deploy --serverurl ` +
     `"${escapeShellDoubleQuoted(normalizedServerUrl)}" --enrollmentcode ` +
     `"${escapeShellDoubleQuoted(normalizedEnrollmentCode)}"`;
 }

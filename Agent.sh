@@ -13,10 +13,27 @@ fi
 cd "${SCRIPT_DIR}"
 
 DEFAULT_AGENT_RUNTIME_ROOT="/opt/Borealis/Agent"
+DEFAULT_INSTALL_DIR="/opt/Borealis"
+DEFAULT_REPO_URL="https://github.com/bunny-lab-io/Borealis.git"
+DEFAULT_REPO_REF="main"
+DEFAULT_RELEASE_CHANNEL="${BOREALIS_AGENT_RELEASE_CHANNEL:-unstable}"
+DEFAULT_STABLE_REF="${BOREALIS_AGENT_STABLE_REF:-}"
+DEFAULT_UNSTABLE_REF="${BOREALIS_AGENT_UNSTABLE_REF:-${DEFAULT_REPO_REF}}"
+INSTALL_DIR="${BOREALIS_INSTALL_DIR:-${DEFAULT_INSTALL_DIR}}"
+REPO_URL="${BOREALIS_AGENT_REPO_URL:-${DEFAULT_REPO_URL}}"
+REPO_REF="${BOREALIS_AGENT_REF:-}"
+REPO_REF_EXPLICIT=0
+RELEASE_CHANNEL="${DEFAULT_RELEASE_CHANNEL}"
+SYNC_REQUESTED=0
+DISTRO_ID="unknown"
+LAUNCH_ARGS=()
 SERVER_URL=""
 ENROLLMENT_CODE=""
 NEW_ENGINE_FLAG=0
 REFRESH_AGENT_RUNTIME_FLAG=0
+if [[ -n "${REPO_REF}" ]]; then
+  REPO_REF_EXPLICIT=1
+fi
 
 log() {
   printf '[%s] %s\n' "$(date +%FT%T)" "$*"
@@ -43,13 +60,6 @@ run_privileged() {
   return 1
 }
 
-env_flag_enabled() {
-  case "${1:-}" in
-    1|true|TRUE|yes|YES|on|ON) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
 detect_distro() {
   DISTRO_ID="unknown"
   if [[ -f /etc/os-release ]]; then
@@ -59,8 +69,205 @@ detect_distro() {
   fi
 }
 
-allow_system_package_install() {
-  env_flag_enabled "${BOREALIS_ALLOW_SYSTEM_PACKAGE_INSTALL:-0}"
+selinux_enforcing() {
+  if command_exists selinuxenabled; then
+    selinuxenabled
+    return $?
+  fi
+  if [[ -r /sys/fs/selinux/enforce ]]; then
+    [[ "$(cat /sys/fs/selinux/enforce 2>/dev/null || echo 0)" == "1" ]]
+    return $?
+  fi
+  return 1
+}
+
+restore_selinux_context_if_needed() {
+  local target="$1"
+  [[ -e "${target}" ]] || return 0
+  selinux_enforcing || return 0
+  command_exists restorecon || return 0
+  run_privileged restorecon -RF "${target}" >/dev/null 2>&1 || true
+}
+
+normalize_release_channel() {
+  local raw="${1:-}"
+  raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
+  case "${raw}" in
+    ""|unstable) printf '%s\n' "unstable" ;;
+    stable) printf '%s\n' "stable" ;;
+    *) die "Unsupported release channel '${1}'. Use stable or unstable." ;;
+  esac
+}
+
+resolve_latest_stable_tag() {
+  local repo_url="$1"
+  git ls-remote --tags --refs "${repo_url}" \
+    | awk '{print $2}' \
+    | sed 's#refs/tags/##' \
+    | grep -E '^[0-9]+(\.[0-9]+)*$' \
+    | sort -V \
+    | tail -n 1
+}
+
+resolve_repo_ref() {
+  RELEASE_CHANNEL="$(normalize_release_channel "${RELEASE_CHANNEL}")"
+  if [[ "${REPO_REF_EXPLICIT}" -eq 1 ]]; then
+    [[ -n "${REPO_REF}" ]] || die "Repository ref cannot be empty."
+    return 0
+  fi
+
+  case "${RELEASE_CHANNEL}" in
+    stable)
+      if [[ -n "${DEFAULT_STABLE_REF}" ]]; then
+        REPO_REF="${DEFAULT_STABLE_REF}"
+        log "Resolved stable release channel to configured ref '${REPO_REF}'."
+        return 0
+      fi
+      local stable_tag=""
+      stable_tag="$(resolve_latest_stable_tag "${REPO_URL}" || true)"
+      if [[ -n "${stable_tag}" ]]; then
+        REPO_REF="${stable_tag}"
+        log "Resolved stable release channel to latest tag '${REPO_REF}'."
+        return 0
+      fi
+      REPO_REF="${DEFAULT_UNSTABLE_REF}"
+      log "Stable release channel could not resolve a remote release tag; falling back to '${REPO_REF}'."
+      ;;
+    unstable)
+      REPO_REF="${DEFAULT_UNSTABLE_REF}"
+      log "Resolved unstable release channel to ref '${REPO_REF}'."
+      ;;
+  esac
+}
+
+ensure_git_dependency() {
+  command_exists git && return 0
+  detect_distro
+  case "${DISTRO_ID}" in
+    ubuntu|debian|linuxmint|pop)
+      run_privileged apt update -qq
+      run_privileged apt install -y git ca-certificates
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      if command_exists dnf; then
+        run_privileged dnf install -y git ca-certificates
+      else
+        run_privileged yum install -y git ca-certificates
+      fi
+      ;;
+    arch)
+      run_privileged pacman -Sy --noconfirm git ca-certificates
+      ;;
+    opensuse*|sles)
+      run_privileged zypper --non-interactive install git ca-certificates
+      ;;
+    *)
+      ;;
+  esac
+  command_exists git || die "Git is required. Install git and rerun Agent.sh."
+}
+
+sync_repo() {
+  [[ -n "${INSTALL_DIR}" && "${INSTALL_DIR}" != "/" ]] || die "Refusing to install into empty path or '/'."
+  [[ -n "${REPO_URL}" ]] || die "Repository URL cannot be empty."
+  ensure_git_dependency
+  resolve_repo_ref
+
+  log "Syncing Borealis ref '${REPO_REF}' from ${REPO_URL} into ${INSTALL_DIR}."
+  run_privileged mkdir -p "${INSTALL_DIR}"
+
+  if [[ ! -d "${INSTALL_DIR}/.git" ]]; then
+    run_privileged find "${INSTALL_DIR}" -mindepth 1 -maxdepth 1 \
+      ! -name "Engine" \
+      ! -name "Engine.old" \
+      ! -name "Agent" \
+      -exec rm -rf {} +
+    run_privileged git -C "${INSTALL_DIR}" init
+    run_privileged git -C "${INSTALL_DIR}" remote add origin "${REPO_URL}"
+  else
+    local origin_url=""
+    origin_url="$(run_privileged git -C "${INSTALL_DIR}" remote get-url origin 2>/dev/null || true)"
+    if [[ -z "${origin_url}" ]]; then
+      run_privileged git -C "${INSTALL_DIR}" remote add origin "${REPO_URL}"
+    elif [[ "${origin_url}" != "${REPO_URL}" ]]; then
+      run_privileged git -C "${INSTALL_DIR}" remote set-url origin "${REPO_URL}"
+    fi
+  fi
+
+  run_privileged git -C "${INSTALL_DIR}" fetch --depth 1 --force origin "${REPO_REF}"
+  run_privileged git -C "${INSTALL_DIR}" checkout --force -B main FETCH_HEAD
+  run_privileged git -C "${INSTALL_DIR}" reset --hard FETCH_HEAD
+  run_privileged git -C "${INSTALL_DIR}" clean -fdx -e Engine -e Engine.old -e Agent
+  run_privileged chmod +x "${INSTALL_DIR}/Engine.sh" "${INSTALL_DIR}/Agent.sh" "${INSTALL_DIR}/Borealis.sh" "${INSTALL_DIR}/Update.sh" >/dev/null 2>&1 || true
+  restore_selinux_context_if_needed "${INSTALL_DIR}"
+}
+
+source_available() {
+  [[ -d "${SCRIPT_DIR}/Data/Agent" && -f "${SCRIPT_DIR}/Data/Agent/agent.py" ]]
+}
+
+parse_launch_options() {
+  LAUNCH_ARGS=()
+  while (($#)); do
+    case "$1" in
+      --install-dir|--repo-url|--ref|--branch|--repo-branch|--repo_branch|--release-channel|--release_channel)
+        [[ $# -ge 2 ]] || die "Missing value for ${1}."
+        case "$1" in
+          --install-dir) INSTALL_DIR="$2" ;;
+          --repo-url) REPO_URL="$2" ;;
+          --release-channel|--release_channel) RELEASE_CHANNEL="$2" ;;
+          --ref|--branch|--repo-branch|--repo_branch)
+            REPO_REF="$2"
+            REPO_REF_EXPLICIT=1
+            ;;
+        esac
+        SYNC_REQUESTED=1
+        shift 2
+        ;;
+      --install-dir=*|--repo-url=*|--ref=*|--branch=*|--repo-branch=*|--repo_branch=*|--release-channel=*|--release_channel=*)
+        local key="${1%%=*}"
+        local value="${1#*=}"
+        case "${key}" in
+          --install-dir) INSTALL_DIR="${value}" ;;
+          --repo-url) REPO_URL="${value}" ;;
+          --release-channel|--release_channel) RELEASE_CHANNEL="${value}" ;;
+          --ref|--branch|--repo-branch|--repo_branch)
+            REPO_REF="${value}"
+            REPO_REF_EXPLICIT=1
+            ;;
+        esac
+        SYNC_REQUESTED=1
+        shift
+        ;;
+      -Agent|--agent|--Agent)
+        if [[ "${#LAUNCH_ARGS[@]}" -eq 0 ]]; then
+          LAUNCH_ARGS=(deploy)
+        fi
+        shift
+        ;;
+      --zip-url|--zip-path|--zip-url=*|--zip-path=*)
+        die "ZIP-based bootstrap is no longer supported. Use --repo-url and --ref."
+        ;;
+      *)
+        LAUNCH_ARGS+=("$1")
+        shift
+        ;;
+    esac
+  done
+}
+
+sync_and_reexec_if_needed() {
+  if source_available && [[ "${SYNC_REQUESTED}" -eq 0 ]]; then
+    return 0
+  fi
+
+  sync_repo
+  log "Launching ${INSTALL_DIR}/Agent.sh ${LAUNCH_ARGS[*]:-deploy}."
+  export BOREALIS_BOOTSTRAP_NEW_ENGINE="${BOREALIS_BOOTSTRAP_NEW_ENGINE:-1}"
+  if [[ ! -t 0 && -r /dev/tty ]]; then
+    exec "${INSTALL_DIR}/Agent.sh" "${LAUNCH_ARGS[@]}" < /dev/tty
+  fi
+  exec "${INSTALL_DIR}/Agent.sh" "${LAUNCH_ARGS[@]}"
 }
 
 resolve_python_bin() {
@@ -105,10 +312,9 @@ write_agent_log() {
 }
 
 install_agent_dependencies() {
-  if command_exists python3 && command_exists pip3; then
+  if command_exists python3 && python3 -m venv --help >/dev/null 2>&1 && { command_exists pip3 || python3 -m pip --version >/dev/null 2>&1; }; then
     return 0
   fi
-  allow_system_package_install || die "Missing python3/pip3. Run bootstrap.sh -Agent first."
   detect_distro
   case "${DISTRO_ID}" in
     ubuntu|debian|linuxmint|pop)
@@ -129,6 +335,9 @@ install_agent_dependencies() {
       die "Unsupported distro '${DISTRO_ID}'. Install python3, python3-venv, python3-pip manually."
       ;;
   esac
+
+  command_exists python3 || die "python3 missing after package installation."
+  python3 -m venv --help >/dev/null 2>&1 || die "python3 venv support missing after package installation."
 }
 
 capture_existing_server_url() {
@@ -385,10 +594,17 @@ usage() {
   cat <<'EOF'
 Usage:
   Agent.sh deploy [--serverurl URL] [--enrollmentcode CODE] [--newEngine]
+  Agent.sh [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [--serverurl URL] [--enrollmentcode CODE] [--newEngine]
 EOF
 }
 
 parse_and_run() {
+  parse_launch_options "$@"
+  sync_and_reexec_if_needed
+  set -- "${LAUNCH_ARGS[@]}"
+  if [[ $# -gt 0 && "${1}" == -* && "${1}" != "-h" && "${1}" != "--help" ]]; then
+    set -- deploy "$@"
+  fi
   local command="${1:-deploy}"
   shift || true
   while (($#)); do

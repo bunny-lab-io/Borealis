@@ -77,7 +77,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 ### One-shot legacy migration helpers
 - `Data/Engine/Containers/sterilize-systemd-runtime.sh`: migration-only helper that stops/removes legacy Borealis systemd units, disables host PostgreSQL units, best-effort removes old `borealis-wg` state, dumps the legacy `borealis` database when reachable, and renames `Engine/` to `Engine.old/`.
 - `Data/Engine/Containers/import-legacy-postgres-dump.sh <dump.sql>`: migration-only helper that imports a preserved logical dump into container PostgreSQL after deployment.
-- These helpers are not called by `bootstrap.sh`, `Engine.sh`, `Update.sh`, or `Borealis.sh`.
+- These helpers are not called by `Engine.sh`, `Update.sh`, or `Borealis.sh`.
 
 ### EngineContext and lifecycle
 - `Data/Engine/server.py` builds an `EngineContext` that includes:
@@ -150,17 +150,17 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
   - emitting `watchdog_incidents_changed` and `device_watchdogs_changed`
 
 ### Platform parity
-- Engine deployment is Linux-only via `Borealis.sh`.
+- Engine deployment is Linux-only via `Engine.sh`.
 - Linux agent remains incomplete.
 
 ### Borealis Engine Codex (Full)
 Use this section for Engine work (successor to the legacy server). Shared guidance is consolidated in `ui-and-notifications.md` and other knowledgebase pages.
 
 #### Scope and runtime paths
-- Staging / launch: `Engine.sh` handles Engine container build and Compose deployment on Linux once invoked directly or via `bootstrap.sh`. (`Borealis.ps1` is agent-only.)
+- Staging / launch: `Engine.sh` handles Linux first install, dependency checks, Engine container build, and Compose deployment. (`Borealis.ps1` is agent-only.)
 - Edit in `Data/Engine` and `Data/Engine/Containers`; use `Engine.sh deploy dev|prod` when source changes need to reach the running service.
 - During `Borealis.sh` Engine restaging, Borealis now merges the runtime copies of `software_icons_overrides.json`, `software_uninstall_overrides.json`, and `software_uninstall_blocklist.json` back onto the freshly staged source payloads so operator hotloaded rules survive redeploys. Merge deduplication is name-based, and runtime/operator entries win when the same software name exists in both places.
-- `bootstrap.sh` is the supported Linux first-run path for syncing the repo and installing missing OS packages. Direct `Borealis.sh` redeploys intentionally avoid repeated apt/yum/dnf package checks unless bootstrap has opted the run into system package installation.
+- Raw one-line or repo-option `Engine.sh` runs sync first, then re-execs the installed `Engine.sh`; local `Engine.sh deploy` uses existing on-disk source and does not update git.
 
 #### Architecture
 - Runtime: `Data/Engine/server.py` with NodeJS + Vite for live dev and Flask for production serving/API endpoints.

@@ -63,5 +63,5 @@ Status means productized support in the current Borealis codebase and docs, not 
 Deploy the Borealis Engine to a Linux host:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s --
+curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- deploy prod
 ```
