@@ -5,16 +5,16 @@
 Describe Borealis operational logging, retention, and core runtime checks.
 
 ## Log Locations
-- Engine bootstrap/install log: `Engine/Logs/install.log` (launcher dependency/install output captured by `Borealis.sh`).
-- Engine primary log: `Engine/Logs/engine.log` (daily rotation).
-- Engine error log: `Engine/Logs/error.log`.
-- Engine API access log: `Engine/Logs/api.log`.
-- Engine Traefik log: `Engine/Logs/traefik.log`.
-- Engine Traefik access log: `Engine/Logs/traefik-access.log`.
-- Service logs: `Engine/Logs/<service>.log` (per-domain).
+- Engine container build log: `Engine/Deploy/build.log`.
+- Engine primary log: `Engine/Services/api-backend/logs/engine.log` (daily rotation).
+- Engine error log: `Engine/Services/api-backend/logs/error.log`.
+- Engine API access log: `Engine/Services/api-backend/logs/api.log`.
+- Engine Traefik log: `Engine/Services/traefik-edge/logs/traefik.log`.
+- Engine Traefik access log: `Engine/Services/traefik-edge/logs/traefik-access.log`.
+- Service logs: `Engine/Services/<role>/logs/` plus API per-domain logs under `Engine/Services/api-backend/logs/`.
 - Watchdog service log: `Engine/Logs/watchdogs.log`.
-- VPN logs: `Engine/Logs/VPN_Tunnel/tunnel.log` and `Engine/Logs/VPN_Tunnel/remote_shell.log`.
-- Agent bootstrap/install log: `Agent/Logs/install.log` (launcher dependency/install output captured by `Borealis.sh`).
+- VPN logs: `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`, `Engine/Services/api-backend/logs/VPN_Tunnel/remote_shell.log`, and WireGuard control logs under `Engine/Services/wireguard-tunnel/logs/control.log`.
+- Agent bootstrap/install log: `Agent/Logs/install.log` (launcher dependency/install output captured by `Agent.sh`).
 - Agent logs: `Agent/Logs/agent.log` and `Agent/Logs/agent.error.log` (daily rotation).
 - Updater diagnostics: `<ProjectRoot>/Updater.log` (shared log recreated by `Update.ps1` and `Update.sh` at the start of each update run so it only contains the latest session).
 
@@ -25,8 +25,8 @@ Describe Borealis operational logging, retention, and core runtime checks.
 ## Operational Health
 - `GET /health` returns liveness status.
 - `GET /api/server/time` returns server clock information after login.
-- `GET /api/server/overview` returns the Borealis Server Info dashboard snapshot used by administrators for Engine host health, systemd service state, public certificate expiry, live operator presence, WireGuard runtime health, and Aegis lock state.
-- `POST /api/server/services/<service_key>/restart` queues safe detached service restarts through `systemd-run` so the request can return before an Engine self-restart interrupts the caller.
+- `GET /api/server/overview` returns the Borealis Server Info dashboard snapshot used by administrators for Engine host health, Compose service state, public certificate expiry, live operator presence, WireGuard runtime health, and Aegis lock state.
+- `POST /api/server/services/<service_key>/restart` remains available for non-container/systemd compatibility paths. Container service operations are handled through `Engine.sh --service ...`.
 - `POST /api/server/wireguard/recover` triggers a Borealis-managed WireGuard listener recovery attempt when live tunnels exist.
 - Watchdog evaluator activity and remediation dispatch are logged through the `watchdogs` service log domain.
 
@@ -53,7 +53,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - Service logs are written via `service_log` in `Data/Engine/services/API/__init__.py`.
 - Format: `[YYYY-MM-DD HH:MM:SS] [LEVEL][CONTEXT-<SCOPE>] message`.
 - Context values are derived from agent context headers or message patterns.
-- `Borealis.sh` keeps the terminal launch view intentionally compact by default and redirects package-manager, pip, ansible-galaxy, and similar bootstrap command output into the runtime `install.log` files unless `--verbose` or `BOREALIS_VERBOSE=1` is used.
+- `Engine.sh` records Docker build output in `Engine/Deploy/build.log`; container runtime logs are written to each service role's `logs/` directory or Docker stdout/stderr.
 
 ### Log retention implementation
 - `Data/Engine/services/API/server/log_management.py` manages retention.
@@ -63,11 +63,11 @@ Describe Borealis operational logging, retention, and core runtime checks.
 ### Operational checks
 - Startup warnings appear in `Engine/Logs/engine.log`.
 - API access metrics appear in `Engine/Logs/api.log` (method, path, duration, status).
-- Embedded edge request outcomes appear in `Engine/Logs/traefik-access.log` (frontend path, upstream target, status, latency).
-- VPN-specific logs are under `Engine/Logs/VPN_Tunnel/`.
+- Embedded edge request outcomes appear in `Engine/Services/traefik-edge/logs/traefik-access.log` (frontend path, upstream target, status, latency).
+- VPN-specific logs are under `Engine/Services/api-backend/logs/VPN_Tunnel/` and `Engine/Services/wireguard-tunnel/logs/`.
 - Watchdog evaluator ticks, incident transitions, and remediation dispatch failures are written through the `watchdogs` service log domain.
 - The Server Info admin page is informational first: it surfaces service health, public cert expiry, live operator sessions, and WireGuard listener state. It intentionally does not embed journal tails or recent log snippets.
-- Service restarts initiated from Server Info are queued through transient `systemd-run` units with a short delay instead of direct in-process `systemctl restart`, reducing the risk of cutting off the initiating request during Engine self-restarts.
+- Service restarts initiated from Server Info are systemd-only. In container mode use `Engine.sh --service <role> restart|rebuild|reload|reconcile`.
 
 ### Agent logging notes
 - Logs are scoped by context (SYSTEM vs CURRENTUSER) in prefixes.
@@ -85,5 +85,5 @@ Describe Borealis operational logging, retention, and core runtime checks.
 
 ### Operational safety
 - Do not delete logs by hand while debugging; use the log API or archive first.
-- Keep runtime artifacts inside `Engine/` and `Agent/` to preserve boundaries, except for the intentionally shared updater trace at `<ProjectRoot>/Updater.log`.
+- Keep runtime artifacts inside `Engine/Services/<role>/`, `Engine/Deploy/`, `Engine/Shared/`, and `Agent/` to preserve boundaries, except for the intentionally shared updater trace at `<ProjectRoot>/Updater.log`.
 - If you change log formats, update this document and `engine-runtime.md`.

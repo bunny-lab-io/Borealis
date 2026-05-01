@@ -1,0 +1,58 @@
+{
+  "services": {
+    "api-backend": {
+      "dockerfile": "Data/Engine/Containers/api-backend/Dockerfile",
+      "context": ".",
+      "inputs": [
+        "Data/Engine/**/*.py",
+        "Data/Engine/**/*.txt",
+        "Data/Engine/**/*.ini",
+        "Data/Engine/alembic/**",
+        "Data/Engine/Ansible/**",
+        "Data/Engine/Official_Assemblies/**",
+        "Data/Agent/**/*.py",
+        "Data/Agent/agent-requirements.txt",
+        "Data/Engine/Containers/api-backend/**",
+        "Borealis.ps1"
+      ]
+    },
+    "webui-frontend": {
+      "dockerfile": "Data/Engine/Containers/webui-frontend/Dockerfile",
+      "context": ".",
+      "inputs": [
+        "Data/Engine/web-interface/**",
+        "Data/Engine/Containers/webui-frontend/**"
+      ]
+    },
+    "traefik-edge": {
+      "dockerfile": "Data/Engine/Containers/traefik-edge/Dockerfile",
+      "context": ".",
+      "inputs": [
+        "Data/Engine/Containers/compose.yaml",
+        "Data/Engine/Containers/compose.env.example",
+        "Data/Engine/Containers/traefik-edge/**"
+      ]
+    },
+    "postgres-db": {
+      "dockerfile": "Data/Engine/Containers/postgres-db/Dockerfile",
+      "context": ".",
+      "inputs": [
+        "Data/Engine/Containers/postgres-db/**"
+      ]
+    },
+    "remote-desktop-guacd": {
+      "dockerfile": "Data/Engine/Containers/remote-desktop-guacd/Dockerfile",
+      "context": ".",
+      "inputs": [
+        "Data/Engine/Containers/remote-desktop-guacd/**"
+      ]
+    },
+    "wireguard-tunnel": {
+      "dockerfile": "Data/Engine/Containers/wireguard-tunnel/Dockerfile",
+      "context": ".",
+      "inputs": [
+        "Data/Engine/Containers/wireguard-tunnel/**"
+      ]
+    }
+  }
+}

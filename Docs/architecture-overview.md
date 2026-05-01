@@ -5,10 +5,11 @@
 Explain how Borealis is structured and how the core components interact end to end.
 
 ## Core Components
-- Engine: Flask + Socket.IO runtime that hosts APIs, scheduled jobs, VPN orchestration, and WebUI assets.
-- WebUI: React single page app served by the Engine (Vite in dev, static build in prod).
+- Engine API backend: Flask + Socket.IO runtime that hosts APIs, scheduled jobs, VPN orchestration, VNC WebSocket proxy, and Engine-side Ansible execution.
+- WebUI frontend: React single page app served by the WebUI container (Vite in dev, static build in prod).
+- Traefik edge: public HTTP/HTTPS edge, ACME, and same-origin routing for UI, `/api`, `/socket.io`, and `/remote-desktop/vnc`.
 - Agent: Python runtime that enrolls, reports inventory, executes scripts, and opens VPN tunnels.
-- PostgreSQL database: stores devices, approvals, schedules, activity history, tokens, configuration records, and assemblies.
+- PostgreSQL database: container-owned PostgreSQL state under `Engine/Services/postgres-db/state`; stores devices, approvals, schedules, activity history, tokens, configuration records, and assemblies.
 - Assemblies: script definitions stored in PostgreSQL `assemblies.*` tables, with Aurora as the official authoring repo and a bundled seed snapshot kept in the Borealis repo.
 - Remote access: WireGuard reverse VPN, remote PowerShell, and VNC via Apache Guacamole.
 
@@ -24,8 +25,11 @@ Explain how Borealis is structured and how the core components interact end to e
 
 ## Directory Map (High Level)
 - `Data/Engine/` - Engine source (authoritative).
+- `Data/Engine/Containers/` - Engine container and Compose source (authoritative).
 - `Data/Agent/` - Agent source (authoritative).
-- `Engine/` - Engine runtime copy (regenerated each launch).
+- `Engine/` - Engine generated runtime state (regenerated/deployed by `Engine.sh`).
+- `Engine/Deploy/` - Compose env, image manifest, deploy manifest, and build log.
+- `Engine/Services/<role>/` - container role config/env/logs/state/secrets/cache/run directories.
 - `Agent/` - Agent runtime copy (regenerated each launch).
 - `Data/Engine/web-interface/src/` - WebUI source.
 - `Data/Engine/web-interface/src/Flow_Editor/` - Flow Editor domain folder. Owns the workflow editor controller/compositor, canvas, sidebars, edge/node configuration panels, runtime wiring helpers, and the shared workflow node registry.
@@ -87,3 +91,11 @@ None on this page. See [API Reference](api-reference.md).
 - Socket.IO for realtime job results, VPN shell, and notifications, with the supported Windows agent model exposing one SYSTEM socket per host.
 - Local IPC inside the agent for SYSTEM-to-helper current-user dispatch; helpers do not open their own Engine socket.
 - WireGuard for remote protocol transport (shell, VNC, future protocols).
+
+### Container service map
+- `api-backend`: `127.0.0.1:5000`, Python Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, Ansible execution.
+- `webui-frontend`: `127.0.0.1:8080` in production or `127.0.0.1:5173` in dev.
+- `traefik-edge`: host `80/443`, same-origin routing, ACME, public edge logs.
+- `postgres-db`: `127.0.0.1:5432`, persistent database state.
+- `remote-desktop-guacd`: `127.0.0.1:4822`, VNC-only Guacamole daemon.
+- `wireguard-tunnel`: UDP `30000`, `borealis-wg`, WireGuard command control socket.

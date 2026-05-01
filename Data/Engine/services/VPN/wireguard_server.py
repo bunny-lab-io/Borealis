@@ -17,10 +17,12 @@ from __future__ import annotations
 
 import base64
 import ipaddress
+import json
 import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -237,6 +239,29 @@ class WireGuardServerManager:
         return private_key, public_key
 
     def _run_command(self, args: Sequence[str]) -> Tuple[int, str, str]:
+        control_socket = str(os.environ.get("BOREALIS_WIREGUARD_CONTROL_SOCKET") or "").strip()
+        if control_socket and not self._is_windows and args:
+            command_name = Path(str(args[0] or "")).name
+            if command_name in {"wg", "wg-quick", "ip", "iptables", "firewall-cmd"}:
+                try:
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                        client.settimeout(float(os.environ.get("BOREALIS_WIREGUARD_CONTROL_TIMEOUT") or "30"))
+                        client.connect(control_socket)
+                        payload = {
+                            "command": "run",
+                            "args": [str(item) for item in args],
+                            "timeout": int(float(os.environ.get("BOREALIS_WIREGUARD_CONTROL_TIMEOUT") or "30")),
+                        }
+                        client.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+                        raw = client.recv(1024 * 1024)
+                    response = json.loads(raw.decode("utf-8", errors="replace"))
+                    return (
+                        int(response.get("returncode") or 0),
+                        str(response.get("stdout") or "").strip(),
+                        str(response.get("stderr") or "").strip(),
+                    )
+                except Exception as exc:
+                    return 1, "", f"wireguard control socket failed: {exc}"
         try:
             proc = subprocess.run(args, capture_output=True, text=True, check=False)
             return proc.returncode, proc.stdout.strip(), proc.stderr.strip()

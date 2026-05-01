@@ -6,8 +6,8 @@
 # - GET /api/server/time (Operator Session) - Returns the server clock in multiple formats.
 # - GET /api/server/timezones (Operator Admin Session) - Returns the current server timezone and the selectable timezone inventory.
 # - POST /api/server/timezone (Operator Admin Session) - Changes the engine host timezone.
-# - GET /api/server/overview (Operator Admin Session) - Returns a Borealis Engine server/admin dashboard snapshot.
-# - POST /api/server/services/<service_key>/restart (Operator Admin Session) - Queues a safe detached service restart via systemd-run.
+# - GET /api/server/overview (Operator Admin Session) - Returns a Borealis Engine server/admin dashboard snapshot, including Compose-backed service rows in container mode.
+# - POST /api/server/services/<service_key>/restart (Operator Admin Session) - Queues a safe detached service restart via systemd-run for non-container installs.
 # - POST /api/server/wireguard/recover (Operator Admin Session) - Forces a WireGuard listener recovery attempt when active tunnels exist.
 # ======================================================
 
@@ -474,7 +474,138 @@ def _service_row(
     }
 
 
+def _containerized_engine_enabled() -> bool:
+    raw = str(os.environ.get("BOREALIS_ENGINE_CONTAINERIZED") or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    project_root = Path(os.environ.get("BOREALIS_PROJECT_ROOT") or PROJECT_ROOT)
+    return (project_root / "Engine" / "Deploy" / "deploy-manifest.json").is_file()
+
+
+def _compose_runtime_paths() -> Tuple[Path, Path, str]:
+    project_root = Path(os.environ.get("BOREALIS_PROJECT_ROOT") or PROJECT_ROOT)
+    compose_file = project_root / "Data" / "Engine" / "Containers" / "compose.yaml"
+    env_file = project_root / "Engine" / "Deploy" / "compose.env"
+    project_name = str(os.environ.get("BOREALIS_COMPOSE_PROJECT_NAME") or "borealis-engine")
+    return compose_file, env_file, project_name
+
+
+def _parse_compose_ps_json(raw: str) -> Dict[str, Mapping[str, Any]]:
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    records: List[Mapping[str, Any]] = []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            records = [item for item in parsed if isinstance(item, Mapping)]
+        elif isinstance(parsed, Mapping):
+            records = [parsed]
+    except Exception:
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed_line = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(parsed_line, Mapping):
+                records.append(parsed_line)
+    by_service: Dict[str, Mapping[str, Any]] = {}
+    for record in records:
+        service = str(record.get("Service") or record.get("service") or "").strip()
+        if service:
+            by_service[service] = record
+    return by_service
+
+
+def _compose_ps_rows() -> Dict[str, Mapping[str, Any]]:
+    docker_bin = shutil.which("docker") or ""
+    compose_file, env_file, project_name = _compose_runtime_paths()
+    if not docker_bin or not compose_file.is_file() or not env_file.is_file():
+        return {}
+    args = [
+        docker_bin,
+        "compose",
+        "--project-name",
+        project_name,
+        "--env-file",
+        str(env_file),
+        "-f",
+        str(compose_file),
+        "ps",
+        "--format",
+        "json",
+    ]
+    code, out, _err = _run_command(args, timeout=8)
+    if code != 0:
+        return {}
+    return _parse_compose_ps_json(out)
+
+
+def _compose_status(state: str, health: str) -> str:
+    normalized_state = str(state or "").strip().lower()
+    normalized_health = str(health or "").strip().lower()
+    if normalized_health in {"unhealthy"}:
+        return "critical"
+    if normalized_state in {"running"} and normalized_health not in {"starting"}:
+        return "healthy"
+    if normalized_state in {"restarting", "created"} or normalized_health in {"starting"}:
+        return "warning"
+    if normalized_state in {"exited", "dead", "removing", "paused"}:
+        return "critical"
+    return "unknown"
+
+
+def _compose_service_rows(context: Any) -> List[Dict[str, Any]]:
+    tracker = _get_action_tracker(context)
+    ps_rows = _compose_ps_rows()
+    service_specs = [
+        ("api-backend", "API Backend"),
+        ("webui-frontend", "WebUI Frontend"),
+        ("traefik-edge", "Traefik Edge"),
+        ("postgres-db", "PostgreSQL"),
+        ("remote-desktop-guacd", "Remote Desktop guacd"),
+        ("wireguard-tunnel", "WireGuard Tunnel"),
+    ]
+    rows: List[Dict[str, Any]] = []
+    for service_key, label in service_specs:
+        record = ps_rows.get(service_key) or {}
+        state = str(record.get("State") or record.get("state") or "").strip().lower() or "unknown"
+        health = str(record.get("Health") or record.get("health") or "").strip().lower()
+        container_name = str(
+            record.get("Name")
+            or record.get("Names")
+            or record.get("ContainerName")
+            or f"borealis-engine-{service_key}"
+        ).strip()
+        rows.append(
+            {
+                "key": service_key,
+                "label": label,
+                "instance": None,
+                "unit_name": container_name,
+                "compose_service": service_key,
+                "runtime": "compose",
+                "active_state": state,
+                "sub_state": health or state,
+                "enabled_state": "compose",
+                "main_pid": 0,
+                "started_at": None,
+                "fragment_path": None,
+                "restart_supported": False,
+                "pending_action": tracker.get_pending(service_key=service_key),
+                "status": _compose_status(state, health),
+            }
+        )
+    return rows
+
+
 def _collect_service_rows(context: Any) -> List[Dict[str, Any]]:
+    if _containerized_engine_enabled():
+        return _compose_service_rows(context)
+
     systemctl_bin = shutil.which("systemctl") or ""
     systemd_run_bin = shutil.which("systemd-run") or ""
     tracker = _get_action_tracker(context)

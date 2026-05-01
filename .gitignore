@@ -1,6 +1,7 @@
 # Production Deployment Folders
 /Agent/
 /Engine/
+/Engine.old/
 /Temp/
 /Update_Staging/
 

@@ -5,10 +5,10 @@
 Describe the Borealis Engine runtime, its services, configuration, and operational responsibilities.
 
 ## Runtime Summary
-- Application factory: `Data/Engine/server.py` (Flask + Socket.IO, Eventlet).
+- Application factory: `Data/Engine/server.py` (Flask + Socket.IO, Eventlet) inside the `api-backend` container.
 - Configuration loader: `Data/Engine/config.py` (environment-first, defaults, TLS discovery).
 - API registration: `Data/Engine/services/API/__init__.py` (groups + adapters).
-- WebUI serving: `Data/Engine/services/WebUI/` (SPA static assets and 404 fallback).
+- WebUI serving: `webui-frontend` container owns production static serving and dev Vite HMR; the Engine WebUI fallback remains for non-container and test paths.
 - Realtime events: `Data/Engine/services/WebSocket/` (quick job results, VPN shell bridge).
 - VPN orchestration: `Data/Engine/services/VPN/` (WireGuard server manager + tunnel service).
 - Remote desktop proxy: `Data/Engine/services/RemoteDesktop/` (Apache Guacamole VNC bridge through local `guacd`).
@@ -17,10 +17,14 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 
 ## Runtime Paths
 - Source code: `Data/Engine/` (edit here).
-- Runtime copy: `Engine/` (regenerated each launch).
+- Container source: `Data/Engine/Containers/` (Compose, Dockerfiles, build manifest, service entrypoints).
+- Runtime state: `Engine/` (generated each deployment and ignored by git).
+- Deploy state: `Engine/Deploy/compose.env`, `Engine/Deploy/image-manifest.json`, `Engine/Deploy/deploy-manifest.json`, and `Engine/Deploy/build.log`.
+- Service state: `Engine/Services/<role>/{config,env,logs,state,secrets,cache,run}`.
+- Shared state: `Engine/Shared/`.
 - Database: PostgreSQL via `BOREALIS_DATABASE_URL`.
-- Launcher-generated DB/profile env: `Engine/database.env` (database URL, Engine profile metadata, SQLAlchemy pool settings, PostgreSQL tuning values).
-- Logs: `Engine/Logs/` (engine.log, error.log, api.log, service logs).
+- Compose-generated env: `Engine/Deploy/compose.env` (database URL, container mode, public edge settings, image tags).
+- Logs: `Engine/Services/<role>/logs/`; `Engine/Logs` is retained as a compatibility link to API logs on fresh container deployments.
 - Ansible runtime: `Engine/Ansible/` (staged manifest, installed collections, generated execution workspaces).
 - Certificates: `Engine/Certificates/` (TLS bundle + code signing keys).
 - WebUI build output: `Engine/web-interface/` (served as static assets).
@@ -46,8 +50,31 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 
 ## Codex Agent (Detailed)
 ### Source vs runtime
-- Edit only in `Data/Engine/`.
-- `Engine/` is a runtime mirror and is staged by `Borealis.sh` on Linux.
+- Edit only in `Data/Engine/` and `Data/Engine/Containers/`.
+- `Engine/` is generated runtime state. Do not edit it directly.
+- The Compose project name is `borealis-engine`.
+- `Engine.sh` computes input hashes from Dockerfiles, container entrypoints, source files, dependency manifests, and mode inputs, then builds images as `borealis-engine/<service>:sha-<hash>`.
+- No-op redeploys reuse existing image tags and let Compose skip unchanged containers.
+
+### Container service boundaries
+- `api-backend` runs the Python Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, and Engine-side Ansible execution. It binds `127.0.0.1:5000`.
+- `webui-frontend` serves the production WebUI on `127.0.0.1:8080` or Vite HMR on `127.0.0.1:5173` in dev mode.
+- `traefik-edge` owns public HTTP/HTTPS on `80/443`, ACME storage, Traefik config, UI/API/Socket.IO/VNC routing, and edge logs.
+- `postgres-db` owns PostgreSQL state under `Engine/Services/postgres-db/state` and binds `127.0.0.1:5432`.
+- `remote-desktop-guacd` runs VNC-only `guacd` on `127.0.0.1:4822`.
+- `wireguard-tunnel` owns privileged WireGuard command execution, `/dev/net/tun`, `NET_ADMIN`, the `borealis-wg` interface, and the Unix control socket under `Engine/Services/wireguard-tunnel/run/control.sock`.
+
+### Launcher commands
+- `Engine.sh deploy` or `Engine.sh deploy prod`: production WebUI.
+- `Engine.sh deploy dev`: Vite HMR WebUI behind Traefik.
+- `Engine.sh --service api-backend restart`: restart API container only.
+- `Engine.sh --service webui-frontend rebuild dev|prod`: rebuild and recreate WebUI container only.
+- `Engine.sh --service traefik-edge reload`: restart Traefik edge after config/env changes.
+- `Engine.sh --service postgres-db restart`: restart PostgreSQL container.
+- `Engine.sh --service remote-desktop-guacd restart`: restart guacd container.
+- `Engine.sh --service wireguard-tunnel reconcile`: query the WireGuard control socket from the tunnel container.
+- `Engine.sh sterilize-systemd-runtime`: one-shot migration helper that stops/removes legacy Borealis systemd units, disables host PostgreSQL units, best-effort removes old `borealis-wg` state, dumps the legacy `borealis` database when reachable, and renames `Engine/` to `Engine.old/`.
+- `Engine.sh import-legacy-dump <dump.sql>`: imports a preserved logical dump into container PostgreSQL after deployment.
 
 ### EngineContext and lifecycle
 - `Data/Engine/server.py` builds an `EngineContext` that includes:
@@ -80,20 +107,14 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Update `Docs/api-reference.md` and the relevant domain doc.
 
 ### WebUI hosting and dev mode
-- Production UI is served from `Engine/web-interface/`.
-- Dev UI uses Vite and still relies on Engine APIs for data.
-- The SPA fallback in `Data/Engine/services/WebUI/__init__.py` prevents 404s on client routes.
+- Production UI is served by the `webui-frontend` container from its built static output.
+- Dev UI runs Vite HMR behind `traefik-edge`.
+- The API backend sets `BOREALIS_WEBUI_EXTERNAL=1` in container mode so `Data.Engine.bootstrapper` skips Engine-side WebUI staging/build.
+- The SPA fallback in `Data/Engine/services/WebUI/__init__.py` remains for tests and non-container execution.
 
-### Launcher auto-profiling
-- `Borealis.sh` profiles the Engine host during deployment and re-deployment.
-- Profile selection is based on detected CPU and RAM only. Storage is surfaced in the CLI as guidance, but it does not affect the selected profile.
-- The launcher currently auto-selects one of the single-node profiles:
-  - `Homelab`
-  - `Small Business`
-  - `MSP / Production`
-  - `Enterprise`
-- The launcher writes the selected profile metadata and the resulting PostgreSQL/Engine DB tuning into `Engine/database.env`.
-- PostgreSQL tuning is applied through launcher-managed `ALTER SYSTEM` statements during the PostgreSQL configuration step so a re-deploy can raise the profile if the host later gains CPU or RAM.
+### PostgreSQL profile notes
+- Container deployment starts PostgreSQL with conservative defaults from `compose.env`; profile auto-tuning from legacy `Borealis.sh` is not maintained in the container launcher.
+- Adjust DB pool values in `Engine/Deploy/compose.env` before redeploy when larger installations need explicit tuning.
 
 ### WireGuard and VNC wiring
 - WireGuard server manager: `Data/Engine/services/VPN/wireguard_server.py`.
@@ -105,7 +126,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Persistent tunnels are established by agents via `POST /api/agent/vpn/ensure`, then marked dispatch-ready by `POST /api/agent/vpn/ready` after the active service/config/firewall path is applied.
 - The Engine caches each agent's currently advertised VNC password in memory, reuses that credential across collaboration sessions until the agent restarts or the agent-side daily VNC credential rotation publishes a new revision, fast-probes the advertised UltraVNC listener before re-emitting bootstrap events, waits for agent listener readiness before returning browser bootstrap data when that fast probe misses, and exposes active remote desktop session inventory in `GET /api/server/overview`.
 - Apache Guacamole is the sole browser remote desktop path. Guacamole VNC uses local `guacd` on `127.0.0.1:4822` by default, is served through `/remote-desktop/vnc/guacamole`, and never returns the UltraVNC password to the browser.
-- `Borealis.sh` builds Apache Guacamole Server 1.6.0 from official source under `Dependencies/ApacheGuacamole/1.6.0`, with VNC enabled and RDP/SSH/Telnet disabled. `borealis-guacd.service` runs the daemon on loopback when systemd is available.
+- `remote-desktop-guacd` uses Apache Guacamole Server 1.6.0 in VNC-only mode and binds loopback port `4822`.
 
 ### Assembly runtime
 - Assembly cache is initialized in `Data/Engine/assembly_management` and attached to `context.assembly_cache`.
@@ -133,8 +154,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 Use this section for Engine work (successor to the legacy server). Shared guidance is consolidated in `ui-and-notifications.md` and other knowledgebase pages.
 
 #### Scope and runtime paths
-- Staging / launch: `Borealis.sh` handles Engine staging and launch on Linux once it is invoked directly or via `bootstrap.sh`. (`Borealis.ps1` is agent-only.)
-- Edit in `Data/Engine`; the runtime copy used by `borealis-engine.service` still lives under `/Engine`, and direct `systemctl restart borealis-engine` restarts do not currently restage `Data/Engine` automatically. Use `Borealis.sh --EngineDev` or `Borealis.sh --EngineProduction` when source changes need to reach the running service.
+- Staging / launch: `Engine.sh` handles Engine container build and Compose deployment on Linux once invoked directly or via `bootstrap.sh`. (`Borealis.ps1` is agent-only.)
+- Edit in `Data/Engine` and `Data/Engine/Containers`; use `Engine.sh deploy dev|prod` when source changes need to reach the running service.
 - During `Borealis.sh` Engine restaging, Borealis now merges the runtime copies of `software_icons_overrides.json`, `software_uninstall_overrides.json`, and `software_uninstall_blocklist.json` back onto the freshly staged source payloads so operator hotloaded rules survive redeploys. Merge deduplication is name-based, and runtime/operator entries win when the same software name exists in both places.
 - `bootstrap.sh` is the supported Linux first-run path for syncing the repo and installing missing OS packages. Direct `Borealis.sh` redeploys intentionally avoid repeated apt/yum/dnf package checks unless bootstrap has opted the run into system package installation.
 
@@ -145,9 +166,9 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 - Every Python module under `Data/Engine` or `Engine/Data/Engine` starts with the standard commentary header (purpose + API endpoints). Add the header to any existing module before further edits.
 
 #### Logging
-- Primary log: `Engine/Logs/engine.log` with daily rotation (`engine.log.YYYY-MM-DD`); do not auto-delete rotated files.
-- Subsystems: `Engine/Logs/<service>.log`; install output to `Engine/Logs/install.log`.
-- Keep Engine-specific artifacts within `Engine/Logs/` to preserve the runtime boundary.
+- Primary API log: `Engine/Services/api-backend/logs/engine.log` with daily rotation (`engine.log.YYYY-MM-DD`); do not auto-delete rotated files.
+- Subsystems: `Engine/Services/api-backend/logs/<service>.log`; container build output: `Engine/Deploy/build.log`; Traefik logs: `Engine/Services/traefik-edge/logs/`.
+- Keep Engine-specific artifacts within `Engine/Services/<role>/logs/` or `Engine/Deploy/` to preserve the runtime boundary.
 
 #### Security and API parity
 - Uses Ed25519 device identities, EdDSA-signed access tokens, and a Borealis-managed Traefik edge with Let's Encrypt for the public browser/agent trust chain while the Python Engine stays on loopback HTTP.
@@ -180,7 +201,7 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 - Stage 7 (queued): `register_realtime` hooks, Engine-side Socket.IO handlers, integration checks, legacy delegation updates.
 
 #### Platform parity
-- Linux is the Engine target platform. Keep Engine tooling aligned with Linux packaging and runtime behavior.
+- Linux is the Engine target platform. Keep Engine tooling aligned with Docker Engine plus Docker Compose, not Docker Desktop.
 
 #### Ansible support (shared state)
 - The Linux Engine now packages an Ansible control-node runtime inside the Engine venv and installs Borealis-managed collections into `Engine/Ansible/collections`.

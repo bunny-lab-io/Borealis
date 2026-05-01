@@ -7,6 +7,7 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 ## WireGuard Reverse VPN (High Level)
 - Outbound-only: agents initiate tunnels to the Engine; no inbound listeners on devices.
 - Transport: WireGuard UDP 30000.
+- Engine container deployment keeps UDP `30000` on the host network through the `wireguard-tunnel` container.
 - One persistent tunnel per agent, established at agent boot and shared across operators.
 - Host-only routing: each agent gets a /32; no client-to-client routes.
 - Keepalive: `PersistentKeepalive = 30` seconds on the agent.
@@ -14,7 +15,7 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - No idle teardown while the agent service is running.
 - Agent recovery: if the Windows agent receives the same `tunnel_id` again and its WireGuard service is stopped or unhealthy, it rerenders the config and attempts an in-place service recovery instead of assuming the tunnel is still healthy.
 - Agent reuse path: when the agent receives the same active tunnel config, it sends a short outbound UDP probe toward the Engine /32 before returning, so WireGuard can refresh the peer path without restarting the client service.
-- Engine recovery: in persistent mode the Engine keeps one Linux WireGuard interface online, updates peers live one at a time during normal connect/disconnect activity, and only falls back to full peer reconciliation when the listener is unhealthy. A watchdog validates listener health every 15 seconds, uses an effective probe grace aligned with WireGuard keepalive timing before declaring `stale_handshake`, and rate-limits full recovery attempts to one every 30 seconds while active sessions exist.
+- Engine recovery: in persistent mode Borealis keeps one Linux WireGuard interface online, updates peers live one at a time during normal connect/disconnect activity, and only falls back to full peer reconciliation when the listener is unhealthy. In container mode, privileged WireGuard commands are executed through the `wireguard-tunnel` Unix control socket so the interface can survive `api-backend` restarts.
 - Linux listener routing: the Engine explicitly restores the configured WireGuard peer-subnet route on `borealis-wg` during listener bring-up and runtime reapply, which keeps `/32` Engine listener addressing able to reach agent `/32` peers after interface repairs.
 - Session-scoped transport confirmations: shell output and shell idle-keepalive pongs can refresh tunnel health without requiring visible operator traffic, which keeps quiet RemoteShell sessions from being mistaken for a dead tunnel.
 - Port access: the tunnel is trusted end-to-end, and Engine/Agent firewall rules allow a default port allowlist between the Engine /32 and Agent /32 (defaults to 47002, 5900, and 22, configurable via `BOREALIS_WIREGUARD_PORT_ALLOWLIST`). Standard SSH is therefore always available over the managed WireGuard path, while Engine-side remote Ansible can still widen an active session just-in-time for non-default SSH or WinRM transport ports without replacing the default shell/VNC/SSH ports.
@@ -94,12 +95,15 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - VNC role: `Data/Agent/Roles/role_system_vnc.py`.
 
 ### Config paths
-- Engine WireGuard config: `Engine/WireGuard/borealis-wg.conf`.
+- Engine WireGuard config: `Engine/Services/wireguard-tunnel/config/borealis-wg.conf` (`Engine/WireGuard` is a compatibility link on fresh container deployments).
 - Agent WireGuard config: `Agent/Borealis/Settings/WireGuard/Borealis.conf`.
-- Engine WireGuard keys: `Engine/Certificates/VPN_Server/`.
+- Engine WireGuard keys: `Engine/Services/wireguard-tunnel/secrets/`.
 - Agent WireGuard keys: `Agent/Borealis/Certificates/VPN_Client/`.
 
-### Service names (Windows agent)
+### Service names
+- Engine container service: `wireguard-tunnel`.
+- Engine interface name (Linux): `borealis-wg`.
+- Engine control socket: `Engine/Services/wireguard-tunnel/run/control.sock`.
 - Agent tunnel service: `WireGuardTunnel$Borealis`.
 - Adapter name in Control Panel: `Borealis`.
 - Display names:

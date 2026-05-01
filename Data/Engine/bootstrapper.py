@@ -306,13 +306,18 @@ def main() -> None:
     config = _build_runtime_config()
     bootstrap_logger = _bootstrap_logger()
     mode = os.environ.get("BOREALIS_ENGINE_MODE", "production").strip().lower() or "production"
-    try:
-        staging_root = _stage_web_interface_assets(logger=bootstrap_logger)
-    except Exception as exc:
-        bootstrap_logger.error(
-            "Failed to stage Engine web interface: %s", exc
-        )
-        raise
+    external_webui = str(os.environ.get("BOREALIS_WEBUI_EXTERNAL") or "").strip().lower() in {"1", "true", "yes", "on"}
+    staging_root: Optional[Path] = None
+    if external_webui:
+        bootstrap_logger.info("External WebUI service enabled; skipping Engine-side WebUI staging/build.")
+    else:
+        try:
+            staging_root = _stage_web_interface_assets(logger=bootstrap_logger)
+        except Exception as exc:
+            bootstrap_logger.error(
+                "Failed to stage Engine web interface: %s", exc
+            )
+            raise
 
     if staging_root:
         static_folder = _ensure_web_ui_build(staging_root, bootstrap_logger, mode=mode)

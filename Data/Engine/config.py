@@ -628,13 +628,15 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         disable_tls=disable_engine_tls,
     )
 
-    log_file = str(runtime_config.get("LOG_FILE") or LOG_FILE_PATH)
+    log_file = str(runtime_config.get("LOG_FILE") or os.environ.get("BOREALIS_LOG_FILE") or LOG_FILE_PATH)
     _ensure_parent(Path(log_file))
 
-    error_log_file = str(runtime_config.get("ERROR_LOG_FILE") or ERROR_LOG_FILE_PATH)
+    error_log_file = str(
+        runtime_config.get("ERROR_LOG_FILE") or os.environ.get("BOREALIS_ERROR_LOG_FILE") or ERROR_LOG_FILE_PATH
+    )
     _ensure_parent(Path(error_log_file))
 
-    api_log_file = str(runtime_config.get("API_LOG_FILE") or API_LOG_FILE_PATH)
+    api_log_file = str(runtime_config.get("API_LOG_FILE") or os.environ.get("BOREALIS_API_LOG_FILE") or API_LOG_FILE_PATH)
     _ensure_parent(Path(api_log_file))
 
     vpn_tunnel_log_file = str(

@@ -5,7 +5,7 @@
 Describe the Borealis PostgreSQL schema, table ownership, runtime interactions, and legacy migration structures so operators and Codex agents can troubleshoot and change schema safely.
 
 ## Scope
-- Primary runtime database: PostgreSQL (set via `BOREALIS_DATABASE_URL`).
+- Primary runtime database: PostgreSQL (set via `BOREALIS_DATABASE_URL`). Linux Engine container deployments use the `postgres-db` service on `127.0.0.1:5432`.
 - Source-of-truth schema code:
 - `Data/Engine/database.py`
 - `Data/Engine/database_migrations.py`
@@ -93,7 +93,8 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
 - If Borealis feels slow, this command is the fastest way to distinguish normal pooled connections from sessions that are holding transactions open too long.
 
 ## Engine Tuning Profiles
-- `Borealis.sh` now auto-detects the Engine host profile during deployment and re-deployment.
+- Legacy `Borealis.sh` systemd deployments auto-detected the Engine host profile during deployment and re-deployment.
+- Container deployments render conservative DB pool values into `Engine/Deploy/compose.env`; tune those values explicitly for larger installations until profile-aware container tuning is added.
 - Profile selection is based on detected CPU and RAM only.
 - Storage is displayed in the CLI as deployment guidance, but it does not change the selected profile or the applied DB tuning.
 - The launcher writes the selected profile metadata and tuning values into `Engine/database.env` and then applies the PostgreSQL settings with launcher-managed `ALTER SYSTEM` statements.
@@ -240,7 +241,16 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
   - `effective_io_concurrency = 64`
 
 ### Maintenance rule
-- If you change the profile thresholds or any of the profile-tuned values in `Borealis.sh`, update this section in `Docs/db-reference.md` in the same change so the operator and Codex guidance stays accurate.
+- If you change the profile thresholds or any profile-tuned values in `Engine.sh` or container PostgreSQL configuration, update this section in `Docs/db-reference.md` in the same change so the operator and Codex guidance stays accurate.
+
+## Container PostgreSQL Operations
+- Runtime state: `Engine/Services/postgres-db/state`.
+- Compose environment: `Engine/Deploy/compose.env`.
+- Default database URL shape: `postgresql://borealis:<generated-password>@127.0.0.1:5432/borealis`.
+- `Engine.sh sterilize-systemd-runtime` attempts a logical dump of the legacy `borealis` database before disabling host PostgreSQL and renaming `Engine/` to `Engine.old/`.
+- Preserved dumps land under the legacy runtime after rename, usually `Engine.old/Deploy/legacy-postgres-borealis-<timestamp>.sql`.
+- Import after first container deployment with `./Engine.sh import-legacy-dump Engine.old/Deploy/<dump>.sql`.
+- Do not run host PostgreSQL on `127.0.0.1:5432` after migration; it conflicts with `postgres-db`.
 
 ### Preferred remediation pattern
 ```python

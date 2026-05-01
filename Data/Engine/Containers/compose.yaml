@@ -1,0 +1,86 @@
+name: ${BOREALIS_COMPOSE_PROJECT_NAME:-borealis-engine}
+
+services:
+  api-backend:
+    image: ${BOREALIS_API_BACKEND_IMAGE:-borealis-engine/api-backend:local}
+    container_name: borealis-engine-api-backend
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
+    volumes:
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine:/opt/Borealis/Engine
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      wireguard-tunnel:
+        condition: service_started
+      remote-desktop-guacd:
+        condition: service_started
+
+  webui-frontend:
+    image: ${BOREALIS_WEBUI_FRONTEND_IMAGE:-borealis-engine/webui-frontend:local}
+    container_name: borealis-engine-webui-frontend
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
+
+  traefik-edge:
+    image: ${BOREALIS_TRAEFIK_EDGE_IMAGE:-borealis-engine/traefik-edge:local}
+    container_name: borealis-engine-traefik-edge
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
+    volumes:
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine:/opt/Borealis/Engine
+    depends_on:
+      api-backend:
+        condition: service_started
+      webui-frontend:
+        condition: service_started
+
+  postgres-db:
+    image: ${BOREALIS_POSTGRES_DB_IMAGE:-borealis-engine/postgres-db:local}
+    container_name: borealis-engine-postgres-db
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
+    volumes:
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/postgres-db/state:/var/lib/postgresql/data
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/postgres-db/logs:/var/log/postgresql
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/postgres-db/run:/var/run/borealis
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U \"$${POSTGRES_USER:-borealis}\" -d \"$${POSTGRES_DB:-borealis}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  remote-desktop-guacd:
+    image: ${BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE:-borealis-engine/remote-desktop-guacd:local}
+    container_name: borealis-engine-remote-desktop-guacd
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
+    volumes:
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/remote-desktop-guacd/logs:/opt/borealis/logs
+
+  wireguard-tunnel:
+    image: ${BOREALIS_WIREGUARD_TUNNEL_IMAGE:-borealis-engine/wireguard-tunnel:local}
+    container_name: borealis-engine-wireguard-tunnel
+    network_mode: host
+    restart: unless-stopped
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
+    volumes:
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine:/opt/Borealis/Engine

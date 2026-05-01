@@ -5,15 +5,17 @@
 Help operators install, launch, and verify the Borealis Engine and (optionally) the Agent.
 
 ## Quick Start (Engine)
-- Linux production, first install: `./bootstrap.sh --EngineProduction` (public UI at `https://<your-public-fqdn>` through the embedded Traefik + Let's Encrypt edge).
-- Linux dev, first install: `./bootstrap.sh --EngineDev` (public UI on `https://<your-public-fqdn>` through the embedded Traefik edge, with Vite HMR running on loopback `127.0.0.1:5173` behind Traefik).
+- Linux production, first install: `./bootstrap.sh -Engine` or `./bootstrap.sh --EngineProduction` (installs Docker Engine + Docker Compose, then deploys the Compose-backed Engine at `https://<your-public-fqdn>` through the Traefik edge container).
+- Linux dev, first install: `./bootstrap.sh --EngineDev` (same Compose stack, with Vite HMR on loopback `127.0.0.1:5173` behind Traefik).
 - Linux stable-channel install: `./bootstrap.sh --release-channel stable --EngineProduction`.
 - Linux branch testing install: `./bootstrap.sh --repo-branch optimization/agent-context-socket-consolidation --EngineProduction`.
-- Linux production, local redeploy after bootstrap: `./Borealis.sh --EngineProduction`.
-- Linux dev, local redeploy after bootstrap: `./Borealis.sh --EngineDev`.
+- Linux production, local redeploy after bootstrap: `./Engine.sh deploy prod` or `./Borealis.sh --EngineProduction`.
+- Linux dev, local redeploy after bootstrap: `./Engine.sh deploy dev` or `./Borealis.sh --EngineDev`.
+- Engine service action examples: `./Engine.sh --service api-backend restart`, `./Engine.sh --service webui-frontend rebuild dev`, `./Engine.sh --service traefik-edge reload`, and `./Engine.sh --service wireguard-tunnel reconcile`.
+- Updates: `./Update.sh -Engine` fast-forwards the current branch then runs `Engine.sh deploy`; `./Update.sh -Agent` preserves the Agent updater flow then runs `Agent.sh deploy`.
 - Add `--verbose` (or `BOREALIS_VERBOSE=1`) to stream the underlying package-manager, installer, and service output instead of the default quieter step view.
 - Production TLS is managed by the embedded Traefik edge; the Python Engine stays on loopback HTTP.
-- During Engine deployment, `Borealis.sh` profiles the host CPU and RAM, prints the detected Engine profile in the CLI, and auto-configures PostgreSQL plus Engine DB pool settings from that profile.
+- During Engine deployment, `Engine.sh` renders `Engine/Deploy/compose.env`, builds changed local images as `borealis-engine/<service>:sha-<hash>`, and starts the Compose project `borealis-engine`.
 - Storage is displayed during profile detection as an advisory guideline only. It does not change which Engine profile gets selected.
 
 ## Optional: Install the Agent (Windows)
@@ -37,12 +39,12 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 
 ## First Run Checklist
 - Open the Engine URL and confirm the login page loads.
-- Check `Engine/Logs/engine.log` for startup messages.
+- Check `Engine/Services/api-backend/logs/engine.log` for startup messages. `Engine/Logs` is kept as a compatibility link when the container runtime creates a fresh `Engine/` tree.
 - Verify liveness: `GET /health` returns `{"status":"ok"}`.
 
 ## Reverse Proxy Notes
 - Borealis expects HTTPS for production use.
-- Borealis owns its public TLS edge with the embedded Traefik runtime and Let's Encrypt.
+- Borealis owns its public TLS edge with the `traefik-edge` container and Let's Encrypt when a public FQDN plus ACME email are configured.
 - Keep WireGuard separate from the HTTPS edge; it remains direct UDP on port `30000`.
 
 ## API Endpoints
@@ -60,18 +62,21 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 ### Bootstrap and runtime separation
 - The authoritative source code lives in `Data/Engine/` and `Data/Agent/`.
 - Runtime copies are staged to `Engine/` and `Agent/` every launch; these are disposable.
-- Always edit source under `Data/` and re-run the appropriate launcher to apply changes: `bootstrap.sh` for first-run Linux provisioning, `Borealis.sh` for normal Linux redeploys, and `Borealis.ps1` / `bootstrap.ps1` for the Windows agent.
+- Engine container source lives in `Data/Engine/Containers/`; generated runtime state lives under `Engine/Deploy/`, `Engine/Services/<role>/`, and `Engine/Shared/`.
+- Always edit source under `Data/` and re-run the appropriate launcher to apply changes: `bootstrap.sh` for first-run Linux provisioning, `Engine.sh` for normal Engine redeploys, `Agent.sh` for Linux Agent redeploys, and `Borealis.ps1` / `bootstrap.ps1` for the Windows agent.
 
 ### Launch mechanics
-- `bootstrap.sh` is the Linux first-run path that syncs the repo and opts into missing OS package installation before handing off to `Borealis.sh`; it now accepts `--release-channel stable|unstable` plus `--repo-branch` / `--ref` for targeted deploys.
-- `Borealis.sh` now focuses on runtime verification, venv activation, and staging for the Linux Engine runtime during normal redeploys; it no longer performs package-manager checks on every run unless bootstrap explicitly opts in.
+- `bootstrap.sh` is the Linux first-run path that syncs the repo and opts into missing OS package installation before handing off to `Engine.sh` or `Agent.sh`; it accepts `--release-channel stable|unstable` plus `--repo-branch` / `--ref` for targeted deploys.
+- `Engine.sh deploy` defaults to production and runs Docker Compose with project name `borealis-engine`.
+- `Engine.sh deploy dev` runs the same service set but sets the WebUI frontend to Vite HMR behind Traefik.
+- `Agent.sh deploy` stages the Linux Agent from existing local source and never updates git.
+- `Borealis.sh` is now a compatibility router for legacy commands and service shortcuts.
 - `bootstrap.ps1` and `Borealis.ps1` handle dependency setup and staging for the Windows agent runtime, and `bootstrap.ps1` now accepts the same release-channel and branch-selection bootstrap options as the Linux bootstrapper.
 - When validating new bootstrap-only behavior before it merges to `main`, download `bootstrap.ps1` from the same branch or commit you intend to test; using the `main` bootstrapper with branch-only flags can fail before the repo sync step has a chance to pull the newer code.
-- Dev mode (`--EngineDev`) uses Vite for the WebUI behind the embedded Traefik edge, while the Engine API stays on loopback.
-- Production (`--EngineProduction`) runs the Engine on loopback HTTP and publishes the app through the embedded Traefik edge.
+- Dev mode (`--EngineDev`) uses Vite for the WebUI behind the Traefik edge container, while the Engine API stays on loopback.
+- Production (`--EngineProduction`) runs the Engine API on loopback HTTP, serves the static WebUI from the WebUI frontend container, and publishes the app through Traefik.
 - `Borealis.sh` now defaults to a compact step-oriented console view. Detailed bootstrap subprocess output is captured in `Engine/Logs/install.log` or `Agent/Logs/install.log` and is surfaced inline only on failures unless `--verbose` is enabled.
-- Engine deployment auto-detects a CPU/RAM-based profile (`Homelab`, `Small Business`, `MSP / Production`, or `Enterprise`) and persists the resulting PostgreSQL and Engine DB tuning into `Engine/database.env`.
-- Re-running `Borealis.sh` on a resized host re-evaluates the profile and prints the previous/new profile state in the CLI so operators can see when the deployment has scaled up.
+- `Engine/Deploy/image-manifest.json` records image hashes and tags. `Engine/Deploy/deploy-manifest.json` records mode, Compose file, env file, and service set.
 
 ### Configuration precedence
 - Engine config is assembled by `Data/Engine/config.py` in this order:

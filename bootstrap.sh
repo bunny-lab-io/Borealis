@@ -31,11 +31,13 @@ fi
 
 FORWARD_ARGS=()
 FORWARD_AGENT=0
+FORWARD_ENGINE=0
+FORWARD_ENGINE_MODE="prod"
 FORWARDED_NEW_ENGINE=0
 
 usage() {
   cat <<'EOF'
-Usage: bootstrap.sh [bootstrap options] [Borealis.sh options]
+Usage: bootstrap.sh [bootstrap options] [deployment selector] [launcher options]
 
 Bootstrap options:
   --install-dir <path>                 Install location (default: /opt/Borealis)
@@ -45,20 +47,25 @@ Bootstrap options:
   --ref <name>                         Git ref/branch/tag/commit to deploy; overrides release-channel
   -h, --help             Show this help
 
-Any other arguments are forwarded to Borealis.sh, for example:
-  bootstrap.sh --agent --serverurl https://10.0.0.54:5000 --enrollmentcode XXXX-XXXX
+Deployment selectors:
+  -Engine, --engine                   Install Docker Engine/Compose and deploy Engine containers (production)
+  -Agent, --agent                     Install Agent dependencies and deploy Agent from local source
+  --EngineProduction                  Compatibility alias for -Engine production
+  --EngineDev                         Compatibility alias for -Engine dev
+
+Any other arguments are forwarded to the selected launcher, for example:
+  bootstrap.sh --agent --serverurl https://borealis.example.com --enrollmentcode XXXX-XXXX
 
 Channel resolution:
   unstable -> main (or BOREALIS_BOOTSTRAP_UNSTABLE_REF)
   stable   -> latest numeric Git tag from the repository (or BOREALIS_BOOTSTRAP_STABLE_REF)
 
 Agent bootstrap always forwards --newEngine so rerunning bootstrap clears
-persisted Engine trust and enrollment tokens before Borealis.sh starts.
+persisted Engine trust and enrollment tokens before Agent.sh starts.
 
 bootstrap.sh is the supported Linux first-run path for installing missing
-system packages. Direct Borealis.sh redeploys assume core OS dependencies
-already exist and focus on staging / verification instead of apt/yum/dnf
-checks on every run.
+system packages. Direct Engine.sh and Agent.sh redeploys use existing local
+source and never update git.
 EOF
 }
 
@@ -207,9 +214,20 @@ parse_args() {
         usage
         exit 0
         ;;
+      -Engine|--engine|--Engine)
+        FORWARD_ENGINE=1
+        FORWARD_ENGINE_MODE="prod"
+        ;;
+      -EngineProduction|--EngineProduction|--engine-production)
+        FORWARD_ENGINE=1
+        FORWARD_ENGINE_MODE="prod"
+        ;;
+      -EngineDev|--EngineDev|--engine-dev)
+        FORWARD_ENGINE=1
+        FORWARD_ENGINE_MODE="dev"
+        ;;
       -Agent|--agent|--Agent)
         FORWARD_AGENT=1
-        FORWARD_ARGS+=("$1")
         ;;
       -NewEngine|--newEngine|--newengine|-DeleteServerTrust|--delete-servertrust|--deleteservertrust|-ForceReEnroll|--force-reenroll|--forcereenroll)
         FORWARDED_NEW_ENGINE=1
@@ -278,6 +296,50 @@ ensure_bootstrap_dependencies() {
   fi
 }
 
+ensure_engine_dependencies() {
+  detect_distro
+  if command_exists docker && docker compose version >/dev/null 2>&1; then
+    return 0
+  fi
+
+  case "${DISTRO_ID}" in
+    ubuntu|debian|linuxmint|pop)
+      run_privileged apt update -qq
+      run_privileged apt install -y ca-certificates curl gnupg docker.io docker-compose-plugin
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      if command_exists dnf; then
+        run_privileged dnf install -y docker docker-compose-plugin
+      else
+        run_privileged yum install -y docker docker-compose-plugin
+      fi
+      ;;
+    arch)
+      run_privileged pacman -Sy --noconfirm docker docker-compose
+      ;;
+    opensuse*|sles)
+      run_privileged zypper --non-interactive install docker docker-compose
+      ;;
+    *)
+      echo -e "${RED}Unsupported distro '${DISTRO_ID}'. Install Docker Engine and Docker Compose plugin manually.${RESET}" >&2
+      return 1
+      ;;
+  esac
+
+  if command_exists systemctl; then
+    run_privileged systemctl enable --now docker || true
+  fi
+
+  if ! command_exists docker; then
+    echo -e "${RED}Docker Engine install did not provide docker CLI.${RESET}" >&2
+    return 1
+  fi
+  if ! docker compose version >/dev/null 2>&1; then
+    echo -e "${RED}Docker Compose plugin is still missing after package install.${RESET}" >&2
+    return 1
+  fi
+}
+
 sync_repo() {
   echo -e "${INFO} Syncing Borealis ref '${REPO_REF}' from ${REPO_URL}"
   run_privileged mkdir -p "${INSTALL_DIR}"
@@ -285,6 +347,7 @@ sync_repo() {
   if [[ ! -d "${INSTALL_DIR}/.git" ]]; then
     run_privileged find "${INSTALL_DIR}" -mindepth 1 -maxdepth 1 \
       ! -name "Engine" \
+      ! -name "Engine.old" \
       ! -name "Agent" \
       -exec rm -rf {} +
     run_privileged git -C "${INSTALL_DIR}" init
@@ -302,10 +365,13 @@ sync_repo() {
   run_privileged git -C "${INSTALL_DIR}" fetch --depth 1 --force origin "${REPO_REF}"
   run_privileged git -C "${INSTALL_DIR}" checkout --force -B main FETCH_HEAD
   run_privileged git -C "${INSTALL_DIR}" reset --hard FETCH_HEAD
-  run_privileged git -C "${INSTALL_DIR}" clean -fdx -e Engine -e Agent
+  run_privileged git -C "${INSTALL_DIR}" clean -fdx -e Engine -e Engine.old -e Agent
 
   run_privileged chmod +x "${INSTALL_DIR}/Borealis.sh" || true
   run_privileged chmod +x "${INSTALL_DIR}/bootstrap.sh" || true
+  run_privileged chmod +x "${INSTALL_DIR}/Engine.sh" || true
+  run_privileged chmod +x "${INSTALL_DIR}/Agent.sh" || true
+  run_privileged chmod +x "${INSTALL_DIR}/Update.sh" || true
   restore_selinux_context_if_needed "${INSTALL_DIR}"
 }
 
@@ -317,15 +383,32 @@ main() {
   validate_resolved_ref
   sync_repo
 
-  if [[ "${FORWARD_AGENT}" -eq 1 && "${FORWARDED_NEW_ENGINE}" -eq 0 ]]; then
-    echo -e "${GREEN}Agent bootstrap always runs with --newEngine to clear persisted Engine trust and enrollment state.${RESET}"
-    FORWARD_ARGS+=("--newEngine")
-  fi
-
   export BOREALIS_BOOTSTRAP_NEW_ENGINE=1
   export BOREALIS_BOOTSTRAP_RELEASE_CHANNEL="${RELEASE_CHANNEL}"
   export BOREALIS_BOOTSTRAP_RESOLVED_REF="${REPO_REF}"
   export BOREALIS_ALLOW_SYSTEM_PACKAGE_INSTALL=1
+
+  if [[ "${FORWARD_ENGINE}" -eq 1 ]]; then
+    ensure_engine_dependencies
+    echo -e "${GREEN}Launching ${INSTALL_DIR}/Engine.sh deploy ${FORWARD_ENGINE_MODE}${RESET}"
+    if [[ ! -t 0 && -r /dev/tty ]]; then
+      exec "${INSTALL_DIR}/Engine.sh" deploy "${FORWARD_ENGINE_MODE}" < /dev/tty
+    fi
+    exec "${INSTALL_DIR}/Engine.sh" deploy "${FORWARD_ENGINE_MODE}"
+  fi
+
+  if [[ "${FORWARD_AGENT}" -eq 1 ]]; then
+    if [[ "${FORWARDED_NEW_ENGINE}" -eq 0 ]]; then
+      echo -e "${GREEN}Agent bootstrap always runs with --newEngine to clear persisted Engine trust and enrollment state.${RESET}"
+      FORWARD_ARGS+=("--newEngine")
+    fi
+    echo -e "${GREEN}Launching ${INSTALL_DIR}/Agent.sh deploy${RESET}"
+    if [[ ! -t 0 && -r /dev/tty ]]; then
+      exec "${INSTALL_DIR}/Agent.sh" deploy "${FORWARD_ARGS[@]}" < /dev/tty
+    fi
+    exec "${INSTALL_DIR}/Agent.sh" deploy "${FORWARD_ARGS[@]}"
+  fi
+
   echo -e "${GREEN}Launching ${INSTALL_DIR}/Borealis.sh${RESET}"
   if [[ ! -t 0 && -r /dev/tty ]]; then
     # When bootstrap is piped to bash, stdin is consumed by the script stream.
