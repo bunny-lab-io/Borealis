@@ -37,10 +37,10 @@ def initialise_engine_database(database_url: str, *, logger: Optional[logging.Lo
     manager.ensure_schemas()
     conn = sqlite3.connect(database_url)
     try:
-        _apply_engine_migrations(conn, logger=logger)
         _ensure_activity_history(conn, logger=logger)
         _ensure_device_list_views(conn, logger=logger)
         _ensure_sites(conn, logger=logger)
+        _apply_engine_migrations(conn, logger=logger)
         _ensure_site_enrollment_codes(conn, logger=logger)
         _ensure_users_table(conn, logger=logger)
         _ensure_directory_services(conn, logger=logger)
@@ -71,10 +71,13 @@ def _apply_engine_migrations(conn: sqlite3.Connection, *, logger: Optional[loggi
     try:
         database_migrations.apply_all(conn)
     except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         if logger:
             logger.error("Engine schema migration failed: %s", exc, exc_info=True)
-        else:  # pragma: no cover - escalated in tests if logger absent
-            raise
+        raise
 
 
 def _ensure_activity_history(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
