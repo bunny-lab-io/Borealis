@@ -312,7 +312,8 @@ compose_base() {
   docker compose \
     --project-name "${PROJECT_NAME}" \
     --env-file "${COMPOSE_ENV}" \
-    -f "${COMPOSE_FILE}"
+    -f "${COMPOSE_FILE}" \
+    "$@"
 }
 
 require_docker() {
