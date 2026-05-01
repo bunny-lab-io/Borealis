@@ -98,9 +98,24 @@ const AUTO_SIZE_COLUMNS = [
   "target",
   "occurrence",
   "lastRun",
+  "result",
   "nextRun",
   "resultsCounts",
 ];
+
+const STATUS_STYLES = {
+  running: { label: "Running", color: "#58a6ff", background: "rgba(88,166,255,0.14)", border: "rgba(88,166,255,0.35)" },
+  failed: { label: "Failed", color: "#ff7b72", background: "rgba(255,79,79,0.14)", border: "rgba(255,79,79,0.35)" },
+  "timed out": { label: "Timed Out", color: "#d8b4fe", background: "rgba(179,106,226,0.16)", border: "rgba(179,106,226,0.35)" },
+  warning: { label: "Warning", color: "#fbbf24", background: "rgba(251,191,36,0.15)", border: "rgba(251,191,36,0.34)" },
+  expired: { label: "Expired", color: "#cbd5e1", background: "rgba(119,119,119,0.16)", border: "rgba(148,163,184,0.28)" },
+  pending: { label: "Pending", color: "#cbd5e1", background: "rgba(148,163,184,0.12)", border: "rgba(148,163,184,0.24)" },
+  scheduled: { label: "Scheduled", color: "#cbd5e1", background: "rgba(148,163,184,0.12)", border: "rgba(148,163,184,0.24)" },
+  success: { label: "Success", color: "#00d18c", background: "rgba(0,209,140,0.14)", border: "rgba(0,209,140,0.34)" },
+  skipped: { label: "Skipped", color: "#f0c36d", background: "rgba(240,195,109,0.14)", border: "rgba(240,195,109,0.34)" },
+  "no eligible targets": { label: "No Eligible Targets", color: "#f0c36d", background: "rgba(240,195,109,0.14)", border: "rgba(240,195,109,0.34)" },
+  "no devices targeted": { label: "No Devices Targeted", color: "#f0c36d", background: "rgba(240,195,109,0.14)", border: "rgba(240,195,109,0.34)" },
+};
 
 function ResultsBar({ counts }) {
   const total = Math.max(1, Number(counts?.total_targets || 0));
@@ -111,6 +126,7 @@ function ResultsBar({ counts }) {
     { key: "failed", color: "#ff4f4f" },
     { key: "timed_out", color: "#b36ae2" },
     { key: "expired", color: "#777777" },
+    { key: "skipped", color: "#f0c36d" },
     { key: "pending", color: "#999999" }
   ];
   const labelFor = (key) =>
@@ -392,7 +408,8 @@ export default function ScheduledJobsList({ refreshToken }) {
           const failedCount = normalizeCount(resultsCounts.failed);
           const expiredCount = normalizeCount(resultsCounts.expired);
           const timedOutCount = normalizeCount(resultsCounts.timed_out || resultsCounts.timedOut);
-          const totalFinished = successCount + warningCount + failedCount + expiredCount + timedOutCount;
+          const skippedCount = normalizeCount(resultsCounts.skipped);
+          const totalFinished = successCount + warningCount + failedCount + expiredCount + timedOutCount + skippedCount;
           const allTargetsEvaluated =
             totalTargets > 0
               ? totalFinished >= totalTargets && pendingCount === 0 && runningCount === 0
@@ -577,6 +594,7 @@ export default function ScheduledJobsList({ refreshToken }) {
       ["failed", "Failed"],
       ["timed_out", "Timed Out"],
       ["expired", "Expired"],
+      ["skipped", "Skipped"],
       ["pending", "Scheduled"],
     ];
     const parts = labels
@@ -657,6 +675,44 @@ export default function ScheduledJobsList({ refreshToken }) {
 
   const resultsCellRenderer = useCallback((params) => {
     return <ResultsBar counts={params?.data?.resultsCounts} />;
+  }, []);
+
+  const statusCellRenderer = useCallback((params) => {
+    const rawValue = String(params?.value || "").trim();
+    const normalized = rawValue.toLowerCase();
+    const style = STATUS_STYLES[normalized] || {
+      label: rawValue || "-",
+      color: "#cbd5e1",
+      background: "rgba(148,163,184,0.12)",
+      border: "rgba(148,163,184,0.24)",
+    };
+    return (
+      <Tooltip title={style.label} arrow>
+        <Box
+          component="span"
+          sx={{
+            display: "inline-flex",
+            alignItems: "center",
+            maxWidth: "100%",
+            minHeight: 24,
+            px: 1,
+            borderRadius: 1,
+            border: `1px solid ${style.border}`,
+            backgroundColor: style.background,
+            color: style.color,
+            fontSize: 12,
+            fontWeight: 700,
+            lineHeight: 1.2,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            fontFamily: gridFontFamily,
+          }}
+        >
+          {style.label}
+        </Box>
+      </Tooltip>
+    );
   }, []);
 
   const enabledCellRenderer = useCallback(
@@ -750,6 +806,13 @@ export default function ScheduledJobsList({ refreshToken }) {
       { headerName: "Target", field: "target", minWidth: 140, cellClass: "auto-col-tight" },
       { headerName: "Recurrence", field: "occurrence", minWidth: 150, cellClass: "auto-col-tight" },
       { headerName: "Last Run", field: "lastRun", minWidth: 150, cellClass: "auto-col-tight" },
+      {
+        headerName: "Status",
+        field: "result",
+        minWidth: 150,
+        cellRenderer: statusCellRenderer,
+        cellClass: "auto-col-tight",
+      },
       { headerName: "Next Run", field: "nextRun", minWidth: 150, cellClass: "auto-col-tight" },
       {
         headerName: "Results",
@@ -782,6 +845,7 @@ export default function ScheduledJobsList({ refreshToken }) {
       formatResultsCountsValue,
       nameCellRenderer,
       resultsCellRenderer,
+      statusCellRenderer,
     ]
   );
 
