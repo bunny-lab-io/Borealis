@@ -551,7 +551,7 @@ def test_workflow_ansible_target_build_requests_ssh_port_in_vpn_prepare(tmp_path
         credential={
             "username": "ubuntu",
             "password": "secret",
-            "private_key": "",
+            "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----",
             "private_key_passphrase": "",
             "become_method": "",
             "become_username": "",
@@ -562,6 +562,13 @@ def test_workflow_ansible_target_build_requests_ssh_port_in_vpn_prepare(tmp_path
 
     assert captured["agent_ids"] == ["agent-1"]
     assert captured["required_ports"] == [22]
-    assert runtime_files == []
+    assert len(runtime_files) == 1
+    assert runtime_files[0]["relative_path"] == "auth/id_borealis_ssh"
     assert len(target_specifications) == 1
-    assert target_specifications[0]["host_vars"]["ansible_host"] == "10.77.0.25"
+    host_vars = target_specifications[0]["host_vars"]
+    assert host_vars["ansible_host"] == "10.77.0.25"
+    assert host_vars["ansible_user"] == "ubuntu"
+    assert host_vars["ansible_password"] == "secret"
+    assert host_vars["ansible_ssh_password_mechanism"] == "sshpass"
+    assert host_vars["ansible_ssh_private_key_file"] == "{{BOREALIS_RUNTIME_DIR}}/auth/id_borealis_ssh"
+    assert "IdentitiesOnly=yes" in host_vars["ansible_ssh_extra_args"]

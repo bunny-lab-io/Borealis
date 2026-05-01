@@ -27,6 +27,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ...ansible.runtime_settings import load_ansible_runner_settings
+from ...ansible.ssh_auth import apply_ssh_credential_host_vars
 from ...assemblies.service import AssemblyRuntimeService
 from ...aegis_cipher import (
     AegisDataCorruptionError,
@@ -1482,25 +1483,25 @@ class JobScheduler:
                             host_vars["ansible_scp_extra_args"] = scp_extra_args
                     if requested_port != 22:
                         host_vars["ansible_port"] = requested_port
-                    if credential:
+                    ssh_auth_mode = "combined"
+                    if credential and private_key_path:
                         username = str(credential.get("username") or "").strip()
                         password = str(credential.get("password") or "").strip()
-                        become_method = str(credential.get("become_method") or "").strip()
-                        become_username = str(credential.get("become_username") or "").strip()
-                        become_password = str(credential.get("become_password") or "").strip()
-                        if username:
-                            host_vars["ansible_user"] = username
                         if password:
-                            host_vars["ansible_password"] = password
-                        if private_key_path:
-                            host_vars["ansible_ssh_private_key_file"] = private_key_path
-                        if become_method:
-                            host_vars["ansible_become"] = True
-                            host_vars["ansible_become_method"] = become_method
-                            if become_username:
-                                host_vars["ansible_become_user"] = become_username
-                            if become_password:
-                                host_vars["ansible_become_password"] = become_password
+                            ssh_auth_mode = self._resolve_mixed_ssh_auth_mode(
+                                host=wireguard_peer_ip,
+                                port=requested_port,
+                                username=username,
+                                password=password,
+                                private_key_text=normalized_private_key,
+                            )
+                    apply_ssh_credential_host_vars(
+                        host_vars,
+                        credential,
+                        private_key_path=private_key_path,
+                        include_password=ssh_auth_mode != "key",
+                        include_private_key=ssh_auth_mode != "password",
+                    )
                 else:
                     username = ""
                     password = ""
@@ -2575,7 +2576,20 @@ class JobScheduler:
                     os.chmod(key_path, 0o600)
                 except Exception:
                     pass
-                args.extend(["-o", f"IdentityFile={key_path}"])
+                args.extend(["-o", f"IdentityFile={key_path}", "-o", "IdentitiesOnly=yes"])
+                if not password:
+                    args.extend(
+                        [
+                            "-o",
+                            "BatchMode=yes",
+                            "-o",
+                            "PreferredAuthentications=publickey",
+                            "-o",
+                            "PasswordAuthentication=no",
+                            "-o",
+                            "KbdInteractiveAuthentication=no",
+                        ]
+                    )
             args.append(f"{normalized_username}@{normalized_host}")
             args.append(remote_command)
 
@@ -2658,6 +2672,45 @@ class JobScheduler:
             return "ssh_session_failed"
         finally:
             shutil.rmtree(str(probe_root), ignore_errors=True)
+
+    def _resolve_mixed_ssh_auth_mode(
+        self,
+        *,
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        private_key_text: str,
+    ) -> str:
+        if not host or not username or not password or not private_key_text:
+            return "combined"
+        result = self._preflight_ssh_session(
+            host=host,
+            port=port,
+            username=username,
+            password="",
+            private_key_text=private_key_text,
+            timeout_seconds=_env_non_negative_float(
+                _SSH_SESSION_TIMEOUT_ENV,
+                _DEFAULT_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS,
+            ),
+        )
+        if not result:
+            mode = "key"
+        elif result in {"permission_denied", "ssh_password_required"}:
+            mode = "password"
+        else:
+            mode = "combined"
+        self._log_event(
+            "mixed ssh credential auth probe selected mode",
+            host=host,
+            extra={
+                "port": int(port),
+                "auth_mode": mode,
+                "probe_result": result or "key_accepted",
+            },
+        )
+        return mode
 
     def _resolved_targets_from_meta(self, resolution_meta: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
         entries = []
@@ -4215,25 +4268,25 @@ class JobScheduler:
                             host_vars["ansible_scp_extra_args"] = scp_extra_args
                     if ssh_port != 22:
                         host_vars["ansible_port"] = ssh_port
-                    if credential:
+                    ssh_auth_mode = "combined"
+                    if credential and private_key_path:
                         username = str(credential.get("username") or "").strip()
                         password = str(credential.get("password") or "").strip()
-                        become_method = str(credential.get("become_method") or "").strip()
-                        become_username = str(credential.get("become_username") or "").strip()
-                        become_password = str(credential.get("become_password") or "").strip()
-                        if username:
-                            host_vars["ansible_user"] = username
                         if password:
-                            host_vars["ansible_password"] = password
-                        if private_key_path:
-                            host_vars["ansible_ssh_private_key_file"] = private_key_path
-                        if become_method:
-                            host_vars["ansible_become"] = True
-                            host_vars["ansible_become_method"] = become_method
-                            if become_username:
-                                host_vars["ansible_become_user"] = become_username
-                            if become_password:
-                                host_vars["ansible_become_password"] = become_password
+                            ssh_auth_mode = self._resolve_mixed_ssh_auth_mode(
+                                host=wireguard_peer_ip,
+                                port=ssh_port,
+                                username=username,
+                                password=password,
+                                private_key_text=normalized_private_key,
+                            )
+                    apply_ssh_credential_host_vars(
+                        host_vars,
+                        credential,
+                        private_key_path=private_key_path,
+                        include_password=ssh_auth_mode != "key",
+                        include_private_key=ssh_auth_mode != "password",
+                    )
             elif run_mode_norm == "winrm":
                 session = vpn_sessions.get(agent_id) or {}
                 wireguard_peer_ip = str(session.get("virtual_ip") or "").split("/", 1)[0]

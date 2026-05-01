@@ -505,6 +505,7 @@ class EngineAnsibleRunner:
                     "",
                     "[ssh_connection]",
                     f"control_path_dir = {control_path_dir}",
+                    "password_mechanism = sshpass",
                     "ssh_common_args = " + " ".join(ssh_common_args_parts),
                     "",
                 ]

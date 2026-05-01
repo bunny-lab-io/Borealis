@@ -28,6 +28,7 @@ from ..API.assemblies.execution import (
 )
 from ..API.devices.session_dispatch import build_currentuser_dispatch_fields
 from ..ansible import EngineAnsibleRunner
+from ..ansible.ssh_auth import apply_ssh_credential_host_vars
 from ..assemblies.service import AssemblyRuntimeService
 from ..filters.matcher import DeviceFilterMatcher
 
@@ -3172,20 +3173,7 @@ class WorkflowRuntimeService:
             if execution_mode == "ssh":
                 if endpoint_port and endpoint_port != 22:
                     host_vars["ansible_port"] = endpoint_port
-                if credential:
-                    if str(credential.get("username") or "").strip():
-                        host_vars["ansible_user"] = str(credential.get("username") or "").strip()
-                    if str(credential.get("password") or "").strip():
-                        host_vars["ansible_password"] = str(credential.get("password") or "").strip()
-                    if private_key_path:
-                        host_vars["ansible_ssh_private_key_file"] = private_key_path
-                    if str(credential.get("become_method") or "").strip():
-                        host_vars["ansible_become"] = True
-                        host_vars["ansible_become_method"] = str(credential.get("become_method") or "").strip()
-                        if str(credential.get("become_username") or "").strip():
-                            host_vars["ansible_become_user"] = str(credential.get("become_username") or "").strip()
-                        if str(credential.get("become_password") or "").strip():
-                            host_vars["ansible_become_password"] = str(credential.get("become_password") or "").strip()
+                apply_ssh_credential_host_vars(host_vars, credential, private_key_path=private_key_path)
             elif execution_mode == "winrm":
                 username = ""
                 password = ""

@@ -242,7 +242,7 @@ def test_preflight_ssh_session_uses_full_timeout_for_connecttimeout(
     assert "ConnectTimeout=20" in args
 
 
-def test_shared_ansible_dispatch_defers_ssh_connectivity_to_ansible(
+def test_shared_ansible_dispatch_selects_key_auth_for_mixed_ssh_credential(
     engine_harness: EngineTestHarness,
     monkeypatch,
 ) -> None:
@@ -343,10 +343,11 @@ def test_shared_ansible_dispatch_defers_ssh_connectivity_to_ansible(
         "_preflight_remote_port",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("SSH preflight should not run")),
     )
+    captured_probe: dict[str, object] = {}
     monkeypatch.setattr(
         scheduler,
         "_preflight_ssh_session",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("SSH session probe should not run")),
+        lambda **kwargs: captured_probe.setdefault("kwargs", kwargs) and "",
     )
     monkeypatch.setattr(
         scheduler,
@@ -399,8 +400,19 @@ def test_shared_ansible_dispatch_defers_ssh_connectivity_to_ansible(
     assert "kwargs" in captured
     target_specifications = captured["kwargs"]["target_specifications"]
     assert len(target_specifications) == 1
-    assert target_specifications[0]["host_vars"]["ansible_connection"] == "ssh"
-    assert target_specifications[0]["host_vars"]["ansible_host"] == "10.77.0.15"
+    host_vars = target_specifications[0]["host_vars"]
+    assert host_vars["ansible_connection"] == "ssh"
+    assert host_vars["ansible_host"] == "10.77.0.15"
+    assert host_vars["ansible_user"] == "ubuntu"
+    assert "ansible_password" not in host_vars
+    assert "ansible_ssh_password_mechanism" not in host_vars
+    assert host_vars["ansible_ssh_private_key_file"] == "{{BOREALIS_RUNTIME_DIR}}/auth/id_borealis_ssh"
+    assert "IdentitiesOnly=yes" in host_vars["ansible_ssh_extra_args"]
+    assert "BatchMode=yes" in host_vars["ansible_ssh_extra_args"]
+    assert "PreferredAuthentications=publickey" in host_vars["ansible_ssh_extra_args"]
+    assert "PasswordAuthentication=no" in host_vars["ansible_ssh_extra_args"]
+    assert captured_probe["kwargs"]["password"] == ""
+    assert captured_probe["kwargs"]["private_key_text"]
 
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:
@@ -419,6 +431,32 @@ def test_shared_ansible_dispatch_defers_ssh_connectivity_to_ansible(
 
     assert row[0] == "eligible"
     assert row[1] == ""
+
+
+def test_mixed_ssh_auth_mode_falls_back_to_password_when_key_probe_needs_password(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    captured: dict[str, object] = {}
+
+    def _capture_probe(**kwargs):
+        captured["kwargs"] = kwargs
+        return "ssh_password_required"
+
+    monkeypatch.setattr(scheduler, "_preflight_ssh_session", _capture_probe)
+
+    mode = scheduler._resolve_mixed_ssh_auth_mode(
+        host="10.77.0.15",
+        port=22,
+        username="ubuntu",
+        password="secret",
+        private_key_text="-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n",
+    )
+
+    assert mode == "password"
+    assert captured["kwargs"]["password"] == ""
+    assert captured["kwargs"]["private_key_text"].startswith("-----BEGIN")
 
 
 def test_scheduled_job_create_recovers_when_lastrowid_is_missing(
@@ -2217,6 +2255,10 @@ def test_shared_ansible_dispatch_normalizes_private_key_runtime_file(
     assert runtime_files[0]["relative_path"] == "auth/id_borealis_ssh"
     assert "\r" not in runtime_files[0]["content"]
     assert runtime_files[0]["content"].endswith("\n")
+    target_specifications = captured["kwargs"]["target_specifications"]
+    host_vars = target_specifications[0]["host_vars"]
+    assert host_vars["ansible_ssh_private_key_file"] == "{{BOREALIS_RUNTIME_DIR}}/auth/id_borealis_ssh"
+    assert "IdentitiesOnly=yes" in host_vars["ansible_ssh_extra_args"]
 
 
 def test_shared_ansible_dispatch_fails_for_passphrase_only_ssh_key(
@@ -3891,7 +3933,18 @@ def test_scheduled_job_dispatch_uses_fresh_finished_ts_for_no_activity_failure(
         conn.close()
 
     now_values = iter([1_773_782_900, 1_773_782_945])
-    monkeypatch.setattr(scheduled_job_module, "_now_ts", lambda: next(now_values))
+
+    def _stable_now() -> int:
+        import inspect
+
+        if any(frame.function == "_loop" for frame in inspect.stack()):
+            return 1_773_782_900
+        try:
+            return next(now_values)
+        except StopIteration:
+            return 1_773_782_945
+
+    monkeypatch.setattr(scheduled_job_module, "_now_ts", _stable_now)
 
     dispatched = scheduler._dispatch_run_activities(
         job_id=6,

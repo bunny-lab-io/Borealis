@@ -44,12 +44,13 @@ Supported schedule types (from the scheduler core):
 9) For `execution_context = ssh` and `ssh_individual`, Borealis defers host reachability, authentication, and task connectivity to Ansible itself instead of running scheduler-side SSH banner/session probes first. The Engine passes through the WireGuard peer IP plus the selected credential, and Ansible records unreachable/auth/task failures in the normal recap and per-device status surfaces.
 10) Engine-side Ansible SSH runs isolate their SSH control sockets to a short per-run directory under `/tmp/ansible_controlplane` so one stuck or timed-out run cannot contaminate later runs and Linux Unix socket path limits stay well below the kernel cap.
 11) Engine-side scheduled SSH runs also default `ansible_ssh_transfer_method` to `scp` so Borealis avoids both the earlier SFTP hangs and the later `piped`/`dd` upload stalls seen on some WireGuard-backed peers. Borealis also defaults `ansible_scp_extra_args` to `-O` for OpenSSH 9 compatibility. Override with `BOREALIS_SHARED_ANSIBLE_SSH_TRANSFER_METHOD` if an environment needs `smart`, `sftp`, `scp`, or `piped`, and use `BOREALIS_SHARED_ANSIBLE_SCP_EXTRA_ARGS` for SCP arg overrides.
-12) For `execution_context = winrm` and `winrm_individual`, Borealis still does a lightweight Engine-side TCP preflight and excludes targets that fail it with `resolution_reason = remote_preflight_failed`. If no targets remain eligible, the affected run is recorded as `Skipped` with `skip_reason = no_eligible_targets`.
-13) Individual scheduled Ansible dispatch is bounded by persisted runner settings exposed in Server Info:
+12) SSH credentials may carry both an account password and an SSH private key. When both are present, Borealis probes key-only login per target and writes inventory as key-only or password-only for that host. This avoids sending the shared password to key-only hosts after a key miss and prevents `sshpass` from stopping the whole retry path as an account-lockout guard.
+13) For `execution_context = winrm` and `winrm_individual`, Borealis still does a lightweight Engine-side TCP preflight and excludes targets that fail it with `resolution_reason = remote_preflight_failed`. If no targets remain eligible, the affected run is recorded as `Skipped` with `skip_reason = no_eligible_targets`.
+14) Individual scheduled Ansible dispatch is bounded by persisted runner settings exposed in Server Info:
   - per-job limit: `job_concurrency_limit` (default `20`)
   - global limit: `global_concurrency_limit` (default `50`)
-14) The Engine updates run status, activity links, and Ansible recap rows as results arrive.
-15) If zero devices are resolved, the occurrence is recorded as `Skipped` with `skip_reason = no_devices_targeted`.
+15) The Engine updates run status, activity links, and Ansible recap rows as results arrive.
+16) If zero devices are resolved, the occurrence is recorded as `Skipped` with `skip_reason = no_devices_targeted`.
 
 ## Execution Contexts
 - `system` - runs on the agent as SYSTEM.
