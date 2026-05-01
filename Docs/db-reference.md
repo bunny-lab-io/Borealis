@@ -247,9 +247,9 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
 - Runtime state: `Engine/Services/postgres-db/state`.
 - Compose environment: `Engine/Deploy/compose.env`.
 - Default database URL shape: `postgresql://borealis:<generated-password>@127.0.0.1:5432/borealis`.
-- `Engine.sh sterilize-systemd-runtime` attempts a logical dump of the legacy `borealis` database before disabling host PostgreSQL and renaming `Engine/` to `Engine.old/`.
+- `Data/Engine/Containers/sterilize-systemd-runtime.sh` attempts a logical dump of the legacy `borealis` database before disabling host PostgreSQL and renaming `Engine/` to `Engine.old/`.
 - Preserved dumps land under the legacy runtime after rename, usually `Engine.old/Deploy/legacy-postgres-borealis-<timestamp>.sql`.
-- Import after first container deployment with `./Engine.sh import-legacy-dump Engine.old/Deploy/<dump>.sql`.
+- Import after first container deployment with `./Data/Engine/Containers/import-legacy-postgres-dump.sh Engine.old/Deploy/<dump>.sql`.
 - Do not run host PostgreSQL on `127.0.0.1:5432` after migration; it conflicts with `postgres-db`.
 
 ### Preferred remediation pattern

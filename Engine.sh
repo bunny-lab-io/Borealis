@@ -594,94 +594,11 @@ service_action() {
   esac
 }
 
-append_engine_old_gitignore() {
-  if [[ -f "${SCRIPT_DIR}/.gitignore" ]] && ! grep -qxF "/Engine.old/" "${SCRIPT_DIR}/.gitignore"; then
-    printf '\n/Engine.old/\n' >> "${SCRIPT_DIR}/.gitignore"
-  fi
-}
-
-postgres_units() {
-  if ! command_exists systemctl; then
-    return 0
-  fi
-  {
-    systemctl list-unit-files 'postgresql*.service' --no-legend --no-pager 2>/dev/null || true
-    systemctl list-units 'postgresql*.service' --all --no-legend --no-pager 2>/dev/null || true
-  } | awk '{print $1}' | grep -E '^postgresql(@.*|-.*)?\.service$|^postgresql\.service$' | sort -u
-}
-
-sterilize_systemd_runtime() {
-  [[ ! -e "${SCRIPT_DIR}/Engine.old" ]] || die "Engine.old already exists; refusing to overwrite legacy backup."
-
-  mkdir -p "${DEPLOY_DIR}"
-  if command_exists pg_dump; then
-    local dump_path="${DEPLOY_DIR}/legacy-postgres-borealis-$(date +%Y%m%d%H%M%S).sql"
-    if pg_dump -h 127.0.0.1 -U borealis -d borealis -f "${dump_path}" >/dev/null 2>&1; then
-      log "Legacy PostgreSQL dump written to ${dump_path}."
-    elif command_exists sudo && sudo -u postgres pg_dump -d borealis -f "${dump_path}" >/dev/null 2>&1; then
-      log "Legacy PostgreSQL dump written to ${dump_path}."
-    elif command_exists runuser && run_privileged runuser -u postgres -- pg_dump -d borealis -f "${dump_path}" >/dev/null 2>&1; then
-      log "Legacy PostgreSQL dump written to ${dump_path}."
-    else
-      rm -f "${dump_path}" 2>/dev/null || true
-      log "Host PostgreSQL dump skipped; borealis database was not reachable."
-    fi
-  else
-    log "pg_dump missing; legacy PostgreSQL dump skipped."
-  fi
-
-  if command_exists systemctl; then
-    local unit=""
-    for unit in borealis-engine.service borealis-traefik.service borealis-guacd.service; do
-      run_privileged systemctl stop "${unit}" >/dev/null 2>&1 || true
-      run_privileged systemctl disable "${unit}" >/dev/null 2>&1 || true
-      run_privileged rm -f "/etc/systemd/system/${unit}" >/dev/null 2>&1 || true
-    done
-    while IFS= read -r unit; do
-      [[ -n "${unit}" ]] || continue
-      run_privileged systemctl stop "${unit}" >/dev/null 2>&1 || true
-      run_privileged systemctl disable "${unit}" >/dev/null 2>&1 || true
-    done < <(postgres_units)
-    run_privileged systemctl daemon-reload >/dev/null 2>&1 || true
-  fi
-
-  if command_exists ip; then
-    run_privileged ip link delete dev borealis-wg >/dev/null 2>&1 || true
-  fi
-  if command_exists iptables; then
-    while run_privileged iptables -S 2>/dev/null | grep -q 'Borealis-WG'; do
-      run_privileged iptables -S 2>/dev/null \
-        | grep 'Borealis-WG' \
-        | sed 's/^-A /-D /' \
-        | while IFS= read -r rule; do run_privileged iptables ${rule} >/dev/null 2>&1 || true; done
-      break
-    done
-  fi
-
-  if [[ -e "${RUNTIME_ROOT}" ]]; then
-    mv "${RUNTIME_ROOT}" "${SCRIPT_DIR}/Engine.old"
-    log "Legacy Engine runtime moved to ${SCRIPT_DIR}/Engine.old."
-  else
-    log "Legacy Engine runtime not present; no rename needed."
-  fi
-  append_engine_old_gitignore
-}
-
-import_legacy_dump() {
-  local dump_path="${1:-}"
-  [[ -n "${dump_path}" && -f "${dump_path}" ]] || die "Usage: Engine.sh import-legacy-dump <dump.sql>"
-  require_docker
-  [[ -f "${COMPOSE_ENV}" ]] || die "Compose env missing. Run Engine.sh deploy first."
-  compose_base exec -T postgres-db psql -U "$(read_env_value POSTGRES_USER)" -d "$(read_env_value POSTGRES_DB)" < "${dump_path}"
-}
-
 usage() {
   cat <<'EOF'
 Usage:
   Engine.sh deploy [prod|dev]
   Engine.sh --service <api-backend|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
-  Engine.sh sterilize-systemd-runtime
-  Engine.sh import-legacy-dump <dump.sql>
 EOF
 }
 
@@ -693,12 +610,6 @@ main() {
       ;;
     --service)
       service_action "${2:-}" "${3:-}" "${4:-prod}"
-      ;;
-    sterilize-systemd-runtime)
-      sterilize_systemd_runtime
-      ;;
-    import-legacy-dump)
-      import_legacy_dump "${2:-}"
       ;;
     -h|--help|help)
       usage
