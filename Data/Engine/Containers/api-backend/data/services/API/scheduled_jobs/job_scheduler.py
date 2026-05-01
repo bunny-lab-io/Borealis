@@ -2701,7 +2701,16 @@ class JobScheduler:
             mode = "key"
         else:
             mode = "key"
-            if key_probe_result in {"permission_denied", "ssh_password_required"}:
+            key_probe_compact = str(key_probe_result or "").strip().lower()
+            key_denied = key_probe_result in {"permission_denied", "ssh_password_required"} or any(
+                marker in key_probe_compact
+                for marker in (
+                    "permission denied",
+                    "authentication failed",
+                    "too many authentication failures",
+                )
+            )
+            if key_denied:
                 password_probe_result = self._preflight_ssh_session(
                     host=host,
                     port=port,

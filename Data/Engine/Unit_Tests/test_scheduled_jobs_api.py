@@ -443,7 +443,7 @@ def test_mixed_ssh_auth_mode_falls_back_to_password_when_key_probe_needs_passwor
     def _capture_probe(**kwargs):
         captured.append(kwargs)
         if len(captured) == 1:
-            return "permission_denied"
+            return "ssh_session_failed: Permission denied (publickey)"
         return ""
 
     monkeypatch.setattr(scheduler, "_preflight_ssh_session", _capture_probe)
@@ -520,6 +520,37 @@ def test_mixed_ssh_auth_mode_keeps_key_when_key_probe_is_inconclusive(
     assert len(captured) == 1
     assert captured[0]["password"] == ""
     assert captured[0]["private_key_text"].startswith("-----BEGIN")
+
+
+def test_mixed_ssh_auth_mode_password_probe_handles_denial_transcript(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    captured: list[dict[str, object]] = []
+
+    def _capture_probe(**kwargs):
+        captured.append(kwargs)
+        if len(captured) == 1:
+            return "ssh_session_failed:Permission denied (publickey,password)."
+        return ""
+
+    monkeypatch.setattr(scheduler, "_preflight_ssh_session", _capture_probe)
+
+    mode = scheduler._resolve_mixed_ssh_auth_mode(
+        host="10.77.0.15",
+        port=22,
+        username="ubuntu",
+        password="secret",
+        private_key_text="-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n",
+    )
+
+    assert mode == "password"
+    assert len(captured) == 2
+    assert captured[0]["password"] == ""
+    assert captured[0]["private_key_text"].startswith("-----BEGIN")
+    assert captured[1]["password"] == "secret"
+    assert captured[1]["private_key_text"] == ""
 
 
 def test_scheduled_job_create_recovers_when_lastrowid_is_missing(
