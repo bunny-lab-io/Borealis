@@ -38,12 +38,12 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 
 ## Related Documentation
 - [Architecture Overview](architecture-overview.md)
+- [Docker Stack Breakdown](Docker/Stack_Breakdown.md)
 - [Database Reference](db-reference.md)
 - [Security and Trust](security-and-trust.md)
 - [API Reference](api-reference.md)
 - [Logging and Operations](logging-and-operations.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
-- [Technical Debt issues](https://github.com/bunny-lab-io/Borealis/issues?q=is%3Aissue%20label%3A%22Technical%20Debt%22)
 - [Watchdogs](watchdogs.md)
 - [Device Alerts](device-alerts.md)
 - [Aegis Cipher](features_to_implement/aegis_cipher.md)

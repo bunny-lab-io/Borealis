@@ -56,6 +56,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 ## Related Documentation
 - [Architecture Overview](architecture-overview.md)
 - [Engine Runtime](engine-runtime.md)
+- [Docker Stack Breakdown](Docker/Stack_Breakdown.md)
 - [Agent Runtime](agent-runtime.md)
 - [Security and Trust](security-and-trust.md)
 - [Logging and Operations](logging-and-operations.md)
