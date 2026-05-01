@@ -438,11 +438,13 @@ def test_mixed_ssh_auth_mode_falls_back_to_password_when_key_probe_needs_passwor
     monkeypatch,
 ) -> None:
     _client, scheduler = _scheduled_jobs_client(engine_harness)
-    captured: dict[str, object] = {}
+    captured: list[dict[str, object]] = []
 
     def _capture_probe(**kwargs):
-        captured["kwargs"] = kwargs
-        return "ssh_password_required"
+        captured.append(kwargs)
+        if len(captured) == 1:
+            return "permission_denied"
+        return ""
 
     monkeypatch.setattr(scheduler, "_preflight_ssh_session", _capture_probe)
 
@@ -455,8 +457,69 @@ def test_mixed_ssh_auth_mode_falls_back_to_password_when_key_probe_needs_passwor
     )
 
     assert mode == "password"
-    assert captured["kwargs"]["password"] == ""
-    assert captured["kwargs"]["private_key_text"].startswith("-----BEGIN")
+    assert len(captured) == 2
+    assert captured[0]["password"] == ""
+    assert captured[0]["private_key_text"].startswith("-----BEGIN")
+    assert captured[1]["password"] == "secret"
+    assert captured[1]["private_key_text"] == ""
+
+
+def test_mixed_ssh_auth_mode_keeps_key_when_password_probe_fails(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    captured: list[dict[str, object]] = []
+
+    def _capture_probe(**kwargs):
+        captured.append(kwargs)
+        if len(captured) == 1:
+            return "permission_denied"
+        return "permission_denied"
+
+    monkeypatch.setattr(scheduler, "_preflight_ssh_session", _capture_probe)
+
+    mode = scheduler._resolve_mixed_ssh_auth_mode(
+        host="10.77.0.15",
+        port=22,
+        username="ubuntu",
+        password="secret",
+        private_key_text="-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n",
+    )
+
+    assert mode == "key"
+    assert len(captured) == 2
+    assert captured[0]["password"] == ""
+    assert captured[0]["private_key_text"].startswith("-----BEGIN")
+    assert captured[1]["password"] == "secret"
+    assert captured[1]["private_key_text"] == ""
+
+
+def test_mixed_ssh_auth_mode_keeps_key_when_key_probe_is_inconclusive(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    captured: list[dict[str, object]] = []
+
+    def _capture_probe(**kwargs):
+        captured.append(kwargs)
+        return "ssh_session_timeout"
+
+    monkeypatch.setattr(scheduler, "_preflight_ssh_session", _capture_probe)
+
+    mode = scheduler._resolve_mixed_ssh_auth_mode(
+        host="10.77.0.15",
+        port=22,
+        username="ubuntu",
+        password="secret",
+        private_key_text="-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n",
+    )
+
+    assert mode == "key"
+    assert len(captured) == 1
+    assert captured[0]["password"] == ""
+    assert captured[0]["private_key_text"].startswith("-----BEGIN")
 
 
 def test_scheduled_job_create_recovers_when_lastrowid_is_missing(

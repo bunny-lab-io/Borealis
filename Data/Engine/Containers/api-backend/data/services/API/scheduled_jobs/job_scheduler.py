@@ -2684,30 +2684,43 @@ class JobScheduler:
     ) -> str:
         if not host or not username or not password or not private_key_text:
             return "combined"
-        result = self._preflight_ssh_session(
+        probe_timeout = _env_non_negative_float(
+            _SSH_SESSION_TIMEOUT_ENV,
+            _DEFAULT_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS,
+        )
+        key_probe_result = self._preflight_ssh_session(
             host=host,
             port=port,
             username=username,
             password="",
             private_key_text=private_key_text,
-            timeout_seconds=_env_non_negative_float(
-                _SSH_SESSION_TIMEOUT_ENV,
-                _DEFAULT_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS,
-            ),
+            timeout_seconds=probe_timeout,
         )
-        if not result:
+        password_probe_result = ""
+        if not key_probe_result:
             mode = "key"
-        elif result in {"permission_denied", "ssh_password_required"}:
-            mode = "password"
         else:
-            mode = "combined"
+            mode = "key"
+            if key_probe_result in {"permission_denied", "ssh_password_required"}:
+                password_probe_result = self._preflight_ssh_session(
+                    host=host,
+                    port=port,
+                    username=username,
+                    password=password,
+                    private_key_text="",
+                    timeout_seconds=probe_timeout,
+                )
+                if not password_probe_result:
+                    mode = "password"
         self._log_event(
             "mixed ssh credential auth probe selected mode",
             host=host,
             extra={
                 "port": int(port),
                 "auth_mode": mode,
-                "probe_result": result or "key_accepted",
+                "probe_result": key_probe_result or "key_accepted",
+                "key_probe_result": key_probe_result or "key_accepted",
+                "password_probe_result": password_probe_result or ("not_run" if mode == "key" else "password_accepted"),
             },
         )
         return mode
