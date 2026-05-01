@@ -32,6 +32,7 @@ DEFAULT_UNSTABLE_REF="${BOREALIS_ENGINE_UNSTABLE_REF:-${DEFAULT_REPO_REF}}"
 INSTALL_DIR="${BOREALIS_INSTALL_DIR:-${DEFAULT_INSTALL_DIR}}"
 REPO_URL="${BOREALIS_ENGINE_REPO_URL:-${DEFAULT_REPO_URL}}"
 REPO_REF="${BOREALIS_ENGINE_REF:-}"
+REPO_CHECKOUT_BRANCH="${BOREALIS_ENGINE_CHECKOUT_BRANCH:-}"
 REPO_REF_EXPLICIT=0
 RELEASE_CHANNEL="${DEFAULT_RELEASE_CHANNEL}"
 SYNC_REQUESTED=0
@@ -159,6 +160,15 @@ resolve_repo_ref() {
   esac
 }
 
+checkout_branch_name() {
+  local raw="${REPO_CHECKOUT_BRANCH:-${REPO_REF}}"
+  raw="${raw#refs/heads/}"
+  if [[ -z "${raw}" || "${raw}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    raw="borealis-deploy"
+  fi
+  printf '%s\n' "${raw}"
+}
+
 ensure_git_dependency() {
   command_exists git && return 0
   detect_distro
@@ -213,8 +223,10 @@ sync_repo() {
     fi
   fi
 
+  local checkout_branch
+  checkout_branch="$(checkout_branch_name)"
   run_privileged git -C "${INSTALL_DIR}" fetch --depth 1 --force origin "${REPO_REF}"
-  run_privileged git -C "${INSTALL_DIR}" checkout --force -B main FETCH_HEAD
+  run_privileged git -C "${INSTALL_DIR}" checkout --force -B "${checkout_branch}" FETCH_HEAD
   run_privileged git -C "${INSTALL_DIR}" reset --hard FETCH_HEAD
   run_privileged git -C "${INSTALL_DIR}" clean -fdx -e Engine -e Engine.old -e Agent
   run_privileged chmod +x "${INSTALL_DIR}/Engine.sh" "${INSTALL_DIR}/Agent.sh" "${INSTALL_DIR}/Borealis.sh" "${INSTALL_DIR}/Update.sh" >/dev/null 2>&1 || true
@@ -238,6 +250,9 @@ parse_launch_options() {
           --ref|--branch|--repo-branch|--repo_branch)
             REPO_REF="$2"
             REPO_REF_EXPLICIT=1
+            case "$1" in
+              --branch|--repo-branch|--repo_branch) REPO_CHECKOUT_BRANCH="$2" ;;
+            esac
             ;;
         esac
         SYNC_REQUESTED=1
@@ -253,6 +268,9 @@ parse_launch_options() {
           --ref|--branch|--repo-branch|--repo_branch)
             REPO_REF="${value}"
             REPO_REF_EXPLICIT=1
+            case "${key}" in
+              --branch|--repo-branch|--repo_branch) REPO_CHECKOUT_BRANCH="${value}" ;;
+            esac
             ;;
         esac
         SYNC_REQUESTED=1
