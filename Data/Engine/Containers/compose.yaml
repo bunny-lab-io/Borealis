@@ -9,7 +9,7 @@ services:
     env_file:
       - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
     volumes:
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine:/opt/Borealis/Engine
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services:/opt/Borealis/Engine/Services
     depends_on:
       postgres-db:
         condition: service_healthy
@@ -34,7 +34,7 @@ services:
     env_file:
       - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
     volumes:
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine:/opt/Borealis/Engine
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge:/opt/Borealis/Engine/Services/traefik-edge
     depends_on:
       api-backend:
         condition: service_started
@@ -83,4 +83,4 @@ services:
     env_file:
       - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
     volumes:
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine:/opt/Borealis/Engine
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel:/opt/Borealis/Engine/Services/wireguard-tunnel

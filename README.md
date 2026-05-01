@@ -1,4 +1,4 @@
-![Borealis Logo](Data/Engine/web-interface/public/Borealis_Logo_Full.png)
+![Borealis Logo](Data/Engine/Containers/webui-frontend/data/web-interface/public/Borealis_Logo_Full.png)
 
 # Why Borealis Exists
 Borealis was created to replace a pile of separate homelab and real-world operations tools with one cohesive platform.  Borealis is a remote management, monitoring, and automation platform built around a Linux-hosted management Engine and a cross-platform Agent runtime

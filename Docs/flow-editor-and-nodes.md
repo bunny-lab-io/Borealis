@@ -5,16 +5,16 @@
 Document the Borealis visual flow editor (React Flow) and how nodes are defined, grouped, and rendered.
 
 ## Core UI Components
-- `Data/Engine/web-interface/src/Flow_Editor/Flow_Editor.jsx` - workflow editor page controller/compositor. Owns route-driven workflow load/save/run behavior, access checks, run snapshot hydration, and the access-warning dialog.
-- `Data/Engine/web-interface/src/Flow_Editor/Flow_Editor_Canvas.jsx` - React Flow canvas, drag/drop, node/edge selection, snap guides, and canvas interaction wiring.
-- `Data/Engine/web-interface/src/Flow_Editor/Flow_Editor_Sidebar.jsx` - workflow actions, node catalog, import/export actions, webhook entry point, and drag sources.
-- `Data/Engine/web-interface/src/Flow_Editor/Node_Configuration_Sidebar.jsx` - per-node configuration UI for the selected workflow node.
-- `Data/Engine/web-interface/src/Flow_Editor/Flow_Editor_Node_Config.jsx` - edge and route configuration sidebar for the selected workflow edge.
-- `Data/Engine/web-interface/src/Flow_Editor/Flow_Editor_Status_Bar.jsx` - footer status bar for authoring mode and immutable run snapshots.
-- `Data/Engine/web-interface/src/Flow_Editor/nodeRegistry.js` - shared node registry that auto-loads workflow node descriptors and exports the stable `workflowNodeTypes` and `workflowCategorizedNodes` objects used by the editor and sidebar.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/Flow_Editor.jsx` - workflow editor page controller/compositor. Owns route-driven workflow load/save/run behavior, access checks, run snapshot hydration, and the access-warning dialog.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/Flow_Editor_Canvas.jsx` - React Flow canvas, drag/drop, node/edge selection, snap guides, and canvas interaction wiring.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/Flow_Editor_Sidebar.jsx` - workflow actions, node catalog, import/export actions, webhook entry point, and drag sources.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/Node_Configuration_Sidebar.jsx` - per-node configuration UI for the selected workflow node.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/Flow_Editor_Node_Config.jsx` - edge and route configuration sidebar for the selected workflow edge.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/Flow_Editor_Status_Bar.jsx` - footer status bar for authoring mode and immutable run snapshots.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/nodeRegistry.js` - shared node registry that auto-loads workflow node descriptors and exports the stable `workflowNodeTypes` and `workflowCategorizedNodes` objects used by the editor and sidebar.
 
 ## Node Registration Pipeline
-- Node modules are auto-loaded in `Data/Engine/web-interface/src/Flow_Editor/nodeRegistry.js` via:
+- Node modules are auto-loaded in `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/nodeRegistry.js` via:
   `import.meta.glob('../nodes/**/*.jsx', { eager: true })`.
 - Each module default-exports a descriptor object that includes:
   - `type` (unique node type string)
@@ -24,7 +24,7 @@ Document the Borealis visual flow editor (React Flow) and how nodes are defined,
   - `workflowNodeTypes` (type -> component)
   - `workflowCategorizedNodes` (category -> list of descriptors)
 - `Flow_Editor.jsx` and `Flow_Editor_Sidebar.jsx` import the shared registry directly so the Flow Editor domain owns node discovery and the React Flow `nodeTypes` object keeps a stable identity across renders.
-- `Data/Engine/web-interface/src/App.jsx` no longer builds or owns the workflow node registry. It only bootstraps the React Router app layer in `Data/Engine/web-interface/src/app/`, and `Data/Engine/web-interface/src/app/route-modules/assemblyRoutes.jsx` routes workflow pages into `Flow_Editor.jsx`.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/App.jsx` no longer builds or owns the workflow node registry. It only bootstraps the React Router app layer in `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/`, and `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/route-modules/assemblyRoutes.jsx` routes workflow pages into `Flow_Editor.jsx`.
 
 ## Node Categories (Current Folder Layout)
 - `Agent`
@@ -39,7 +39,7 @@ Document the Borealis visual flow editor (React Flow) and how nodes are defined,
 - `Templates`
 
 ## Scheduling Flow Usage
-- `Data/Engine/web-interface/src/Scheduling/Create_Job.jsx` uses React Flow for job status and dependency visualization.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/Create_Job.jsx` uses React Flow for job status and dependency visualization.
 
 ## API Endpoints
 - `GET /api/assemblies/<assembly_guid>/export` - load a saved workflow assembly into the editor.
@@ -69,7 +69,7 @@ Document the Borealis visual flow editor (React Flow) and how nodes are defined,
 - The descriptor is used by the sidebar for display and configuration forms.
 
 ### Adding a new node (step-by-step)
-1) Create a new file under `Data/Engine/web-interface/src/nodes/<Category>/Node_<Name>.jsx`.
+1) Create a new file under `Data/Engine/Containers/webui-frontend/data/web-interface/src/nodes/<Category>/Node_<Name>.jsx`.
 2) Export a descriptor object as the default export with `type` and `component` fields.
 3) Include `config` entries if you want the configuration sidebar to render fields.
 4) Rebuild the WebUI (or run Vite dev mode) so `import.meta.glob` picks it up.
@@ -93,7 +93,7 @@ Document the Borealis visual flow editor (React Flow) and how nodes are defined,
 
 ### Controller boundaries
 - `Flow_Editor.jsx` is the workflow editor controller and compositor.
-- `Data/Engine/web-interface/src/app/route-modules/assemblyRoutes.jsx` should only pass route state and navigation into the editor, not workflow save/load/run logic.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/route-modules/assemblyRoutes.jsx` should only pass route state and navigation into the editor, not workflow save/load/run logic.
 - Keep workflow-specific persistence, access warnings, run snapshot hydration, and webhook affordances inside the `Flow_Editor/` folder.
 
 ### Job flow editor

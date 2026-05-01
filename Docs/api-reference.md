@@ -231,8 +231,8 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 ## Codex Agent (Detailed)
 ### Where endpoints are defined
 - Each API module begins with a header listing endpoints.
-- Search under `Data/Engine/services/API/` to find the authoritative source.
-- The registry lives in `Data/Engine/services/API/__init__.py`.
+- Search under `Data/Engine/Containers/api-backend/data/services/API/` to find the authoritative source.
+- The registry lives in `Data/Engine/Containers/api-backend/data/services/API/__init__.py`.
 
 ### How to keep this doc accurate
 - When you add or remove a route, update:
@@ -241,7 +241,7 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
   3) The domain page (example: `device-management.md`).
 
 ### Quick discovery workflow
-- Use `rg "# - (GET|POST|PUT|DELETE)" Data/Engine/services/API` to list endpoints.
+- Use `rg "# - (GET|POST|PUT|DELETE)" Data/Engine/Containers/api-backend/data/services/API` to list endpoints.
 - Cross-check auth requirements in each module (RequestAuthContext, session checks, or device auth decorators).
 - If a route is Socket.IO only, document it in the relevant domain page instead of this REST list.
 
@@ -253,6 +253,6 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 
 ### Example update scenario
 - You add `POST /api/devices/retire`:
-  - Update `Data/Engine/services/API/devices/management.py` header.
+  - Update `Data/Engine/Containers/api-backend/data/services/API/devices/management.py` header.
   - Add the endpoint under the Devices and Inventory section here.
   - Update `device-management.md` with behavior and UI impact.

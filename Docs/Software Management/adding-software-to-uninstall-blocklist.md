@@ -5,8 +5,8 @@
 Explain how to block installed software whose registry-provided `QuietUninstallString` still prompts, hangs, or otherwise cannot be trusted for unattended Borealis uninstall.
 
 ## Blocklist File
-- Path: `Data/Engine/services/API/devices/software_uninstall_blocklist.json`
-- Runtime consumer: `Data/Engine/services/API/devices/software_uninstall.py`
+- Path: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall_blocklist.json`
+- Runtime consumer: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall.py`
 
 ## JSON Shape
 ```json
@@ -99,5 +99,5 @@ Explain how to block installed software whose registry-provided `QuietUninstallS
 - Keep the reason explicit so other operators understand whether the problem is a prompt, a hang, a misleading silent flag, or another unsafe behavior.
 
 ### Implementation reference
-- Engine resolver: `Data/Engine/services/API/devices/software_uninstall.py`
-- Blocklist data file: `Data/Engine/services/API/devices/software_uninstall_blocklist.json`
+- Engine resolver: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall.py`
+- Blocklist data file: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall_blocklist.json`

@@ -4,12 +4,12 @@
       "dockerfile": "Data/Engine/Containers/api-backend/Dockerfile",
       "context": ".",
       "inputs": [
-        "Data/Engine/**/*.py",
-        "Data/Engine/**/*.txt",
-        "Data/Engine/**/*.ini",
-        "Data/Engine/alembic/**",
-        "Data/Engine/Ansible/**",
-        "Data/Engine/Official_Assemblies/**",
+        "Data/Engine/Containers/api-backend/data/**/*.py",
+        "Data/Engine/Containers/api-backend/data/**/*.txt",
+        "Data/Engine/Containers/api-backend/data/**/*.ini",
+        "Data/Engine/Containers/api-backend/data/alembic/**",
+        "Data/Engine/Containers/api-backend/data/Ansible/**",
+        "Data/Engine/Containers/api-backend/data/Official_Assemblies/**",
         "Data/Agent/**/*.py",
         "Data/Agent/agent-requirements.txt",
         "Data/Engine/Containers/api-backend/**",
@@ -20,7 +20,7 @@
       "dockerfile": "Data/Engine/Containers/webui-frontend/Dockerfile",
       "context": ".",
       "inputs": [
-        "Data/Engine/web-interface/**",
+        "Data/Engine/Containers/webui-frontend/data/web-interface/**",
         "Data/Engine/Containers/webui-frontend/**"
       ]
     },

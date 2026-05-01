@@ -5,7 +5,7 @@
 Explain how Borealis schedules recurring jobs, targets devices, and records run history.
 
 ## Scheduler Overview
-- Scheduler implementation lives in `Data/Engine/services/API/scheduled_jobs/job_scheduler.py`.
+- Scheduler implementation lives in `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`.
 - It reads job definitions from PostgreSQL and emits quick job payloads over the host's SYSTEM socket.
 - Run history is stored in `scheduled_job_runs`, `scheduled_job_run_targets`, and `scheduled_job_run_activity` tables.
 
@@ -94,9 +94,9 @@ Supported schedule types (from the scheduler core):
 
 ## Codex Agent (Detailed)
 ### Scheduler entry points
-- API registration: `Data/Engine/services/API/scheduled_jobs/management.py`.
-- Scheduler core: `Data/Engine/services/API/scheduled_jobs/job_scheduler.py`.
-- Scheduler runner: `Data/Engine/services/API/scheduled_jobs/runner.py`.
+- API registration: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/management.py`.
+- Scheduler core: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`.
+- Scheduler runner: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/runner.py`.
 
 ### Core tables (Engine DB)
 - `scheduled_jobs` - job definition, schedule, targets, execution context.
@@ -138,7 +138,7 @@ Supported schedule types (from the scheduler core):
 - Engine-side scheduled SSH runs also write `ansible_ssh_transfer_method = scp` by default because some peers first hung forever in the SFTP subsystem and then also stalled in the `piped`/`dd` module upload path. `BOREALIS_SHARED_ANSIBLE_SSH_TRANSFER_METHOD` can override that default, and `BOREALIS_SHARED_ANSIBLE_SCP_EXTRA_ARGS` defaults to `-O` when SCP is selected.
 - Remote SSH/WinRM targets that do not report agent-side WireGuard readiness are marked `resolution_status = skipped` with `resolution_reason = wireguard_not_ready`.
 - Remote WinRM targets that report WireGuard readiness but fail Engine-side TCP preflight are marked `resolution_status = skipped` with `resolution_reason = remote_preflight_failed` and are not forwarded into Ansible.
-- Individual scheduled Ansible runner fan-out is bounded by persisted settings from `Data/Engine/services/ansible/runtime_settings.py`, surfaced through Server Info, and enforced inside `_tick_once()` before dispatch.
+- Individual scheduled Ansible runner fan-out is bounded by persisted settings from `Data/Engine/Containers/api-backend/data/services/ansible/runtime_settings.py`, surfaced through Server Info, and enforced inside `_tick_once()` before dispatch.
 
 ### Retention and cleanup
 - Retention defaults to 30 days and is configured by `BOREALIS_JOB_HISTORY_DAYS`.
@@ -151,16 +151,16 @@ Supported schedule types (from the scheduler core):
 - Zero-target occurrences are stored as skipped instead of success or failure.
 
 ### UI touch points
-- Scheduled job UI lives under `Data/Engine/web-interface/src/Scheduling/`.
+- Scheduled job UI lives under `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/`.
 - The list page expects pagination and run history endpoints to respond quickly.
 - Session-target selection is currently an ad hoc quick-run concept; scheduled current-user jobs intentionally default to all active sessions until a dedicated scheduler UI is introduced.
 - WebUI deep links:
 - Create route: `/jobs/new`
 - Edit route: `/jobs/<job_id>`
 - Tab query keys: `job_name`, `assemblies`, `targets`, `schedule`, `execution_context`, `job_history` (edit mode only).
-- Route registration and URL preservation are implemented in `Data/Engine/web-interface/src/app/routes/router.jsx` plus `Data/Engine/web-interface/src/app/routes/paths.js`; component-level tab URL sync is implemented in `Data/Engine/web-interface/src/Scheduling/Create_Job.jsx`.
+- Route registration and URL preservation are implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/paths.js`; component-level tab URL sync is implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/Create_Job.jsx`.
 
 ### Debug checklist
-- Jobs not running: check `Engine/Logs/engine.log` and `Engine/Logs/scheduled_jobs.log`.
+- Jobs not running: check `Engine/Services/api-backend/logs/engine.log` and `Engine/Services/api-backend/logs/scheduled_jobs.log`.
 - Run history empty: verify `scheduled_job_runs` table and quick job events.
 - Filter target mismatch: inspect the saved filter payload, `scheduled_job_run_targets`, and matcher logic.

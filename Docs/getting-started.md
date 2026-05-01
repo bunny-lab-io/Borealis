@@ -41,7 +41,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 
 ## First Run Checklist
 - Open the Engine URL and confirm the login page loads.
-- Check `Engine/Services/api-backend/logs/engine.log` for startup messages. `Engine/Logs` is kept as a compatibility link when the container runtime creates a fresh `Engine/` tree.
+- Check `Engine/Services/api-backend/logs/engine.log` for startup messages.
 - Verify liveness: `GET /health` returns `{"status":"ok"}`.
 
 ## Reverse Proxy Notes
@@ -62,9 +62,11 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 
 ## Codex Agent (Detailed)
 ### Bootstrap and runtime separation
-- The authoritative source code lives in `Data/Engine/` and `Data/Agent/`.
+- Engine API/backend source lives in `Data/Engine/Containers/api-backend/data/`.
+- Engine WebUI source lives in `Data/Engine/Containers/webui-frontend/data/web-interface/`.
+- Agent source code lives in `Data/Agent/`.
 - Runtime copies are staged to `Engine/` and `Agent/` every launch; these are disposable.
-- Engine container source lives in `Data/Engine/Containers/`; generated runtime state lives under `Engine/Deploy/`, `Engine/Services/<role>/`, and `Engine/Shared/`.
+- Engine container source lives in `Data/Engine/Containers/`; generated runtime state lives under `Engine/Deploy/` and `Engine/Services/<role>/`.
 - Always edit source under `Data/` and re-run the appropriate launcher to apply changes: `Engine.sh` for Linux Engine first install and redeploys, `Agent.sh` for Linux Agent first install and redeploys, and `Borealis.ps1` / `bootstrap.ps1` for the Windows agent.
 
 ### Launch mechanics
@@ -82,26 +84,26 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - `Engine/Deploy/image-manifest.json` records image hashes and tags. `Engine/Deploy/deploy-manifest.json` records mode, Compose file, env file, and service set.
 
 ### Configuration precedence
-- Engine config is assembled by `Data/Engine/config.py` in this order:
+- Engine config is assembled by `Data/Engine/Containers/api-backend/data/config.py` in this order:
   1) Explicit overrides passed to the app factory.
   2) Environment variables prefixed with `BOREALIS_`.
   3) Defaults baked into `config.py`.
 - Key defaults to remember:
   - Database: `BOREALIS_DATABASE_URL` (required PostgreSQL connection URL)
-  - Bundled official assemblies: `Data/Engine/Official_Assemblies/` (generated seed snapshot)
-  - Aurora checkout: `Engine/Aurora/`
-  - Logs: `Engine/Logs/engine.log`, `Engine/Logs/error.log`, `Engine/Logs/api.log`
+  - Bundled official assemblies: `Data/Engine/Containers/api-backend/data/Official_Assemblies/` (generated seed snapshot)
+  - Aurora checkout: `Engine/Services/api-backend/cache/Aurora/`
+  - Logs: `Engine/Services/api-backend/logs/engine.log`, `Engine/Services/api-backend/logs/error.log`, `Engine/Services/api-backend/logs/api.log`
   - WireGuard: UDP 30000, engine virtual IP `10.255.0.1/32`, shell port 47002
 
 ### Public edge and trust
-- Borealis embedded Traefik manages the public HTTPS identity and ACME state under `Engine/LetsEncrypt/` and `Engine/Traefik/`.
+- Borealis embedded Traefik manages the public HTTPS identity and ACME state under `Engine/Services/traefik-edge/state/` and `Engine/Services/traefik-edge/config/`.
 - Agents must use the public HTTPS FQDN and rely on normal CA + hostname validation.
 - The Python Engine is not a direct public TLS endpoint in production.
 
 ### Agent install and enrollment notes
 - The Windows agent must run elevated to create services and scheduled tasks.
 - Enrollment requires an install code and operator approval (see `device-management.md`).
-- If enrollment fails, inspect `Agent/Logs/agent.log` and `Engine/Logs/engine.log`.
+- If enrollment fails, inspect `Agent/Logs/agent.log` and `Engine/Services/api-backend/logs/engine.log`.
 
 ### Health verification
 - Use `GET /health` to confirm the API is alive.

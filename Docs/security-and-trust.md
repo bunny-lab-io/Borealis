@@ -9,7 +9,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Public CA trust: Borealis exposes the Engine through a Borealis-managed Traefik edge that uses Let's Encrypt certificates for browser and agent HTTPS traffic.
 - Short-lived access tokens: JWTs signed with Ed25519, default lifetime about 15 minutes.
 - Long-lived refresh tokens: 90-day sliding window, hashed in the Engine database.
-- Operator session signing secret: generated once and persisted at `Engine/engine_secret.txt`.
+- Operator session signing secret: generated once and persisted at `Engine/Services/api-backend/secrets/engine_secret.txt`.
 - Front-door operator bootstrap: Borealis now requires the Aegis Cipher before it will render any login UI after first setup or restart.
 - Operator sign-in methods: Borealis supports password plus TOTP MFA, and WebAuthn passkeys for direct browser sign-in once the Engine reaches the `login_required` bootstrap phase.
 - Operator auth secrets at rest: Aegis now protects stored password hashes, TOTP secrets, passkey cryptographic material, directory bind passwords/keytabs, reusable credentials, and the GitHub API token.
@@ -24,7 +24,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Device enrollment is gated by enrollment and installer codes (configurable expiration and usage limits) and an operator approval queue; replay-resistant nonces plus rate limits (40 req/min/IP, 12 req/min/fingerprint) prevent brute force or code reuse.
 - Supported Windows agent traffic is owned by the SYSTEM runtime; per-session helpers never call device APIs or open their own Engine socket. Missing, expired, mismatched, or revoked credentials are rejected before any business logic runs. Operator-driven revoking and device quarantining are not yet implemented.
 - Replay and credential theft defenses layer in DPoP proof validation (thumbprint binding) on the server side and short-lived access tokens (about 15 minutes) with 90-day refresh tokens hashed via SHA-256.
-- Centralized logging under `Engine/Logs` and `Agent/Logs` captures enrollment approvals, rate-limit hits, signature failures, and auth anomalies for post-incident review.
+- Centralized logging under `Engine/Services/api-backend/logs` and `Agent/Logs` captures enrollment approvals, rate-limit hits, signature failures, and auth anomalies for post-incident review.
 - Operator-facing API endpoints (device inventory, assemblies, job history, credentials, user management, etc.) require the Engine to be Aegis-unlocked and in the `login_required` bootstrap phase before an authenticated operator session or bearer token is honored.
 - Directory authentication supports LDAP/LDAPS user-bind providers and Active Directory Kerberos password verification. LDAPS providers can use system trust, uploaded CA PEM, or an operator-reviewed pinned peer certificate downloaded from the LDAP server. Provider-scoped host overrides let Borealis connect to a configured IP while keeping FQDN SNI and certificate validation intact. Directory users are cached just-in-time in `users`, keep Borealis TOTP MFA, and cannot register Borealis passkeys.
 - Active sessions are revalidated against the operator row on authenticated requests. Deleted users, disabled directory cache entries, and deprovisioned directory users stop passing authorization checks without waiting for token expiry.
@@ -38,8 +38,8 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Usernames, display names, roles, site assignments, passkey labels, and other non-secret operator metadata stay plaintext so Borealis can still identify recovery targets and render admin-facing status once the Engine is recovered.
 
 ### Server Security
-- Manages the public HTTPS edge: Borealis renders Traefik and Let's Encrypt runtime state under `Engine/LetsEncrypt/` and `Engine/Traefik/`, while internal engine-only material such as WireGuard and code-signing keys stays under `Engine/Certificates/`.
-- Script delivery is code-signed with an Ed25519 key stored under `Engine/Certificates/Code-Signing`; agents refuse any payload whose signature does not match the pinned public key.
+- Manages the public HTTPS edge: Borealis renders Traefik and Let's Encrypt runtime state under `Engine/Services/traefik-edge/state/` and `Engine/Services/traefik-edge/config/`, while internal engine-only material such as WireGuard and code-signing keys stays under `Engine/Services/api-backend/secrets/Certificates/`.
+- Script delivery is code-signed with an Ed25519 key stored under `Engine/Services/api-backend/secrets/Certificates/Code-Signing`; agents refuse any payload whose signature does not match the pinned public key.
 - Device authentication checks GUID normalization, SSL fingerprint matches, token version counters, and quarantine flags before admitting requests; missing rows with valid tokens auto-recover into placeholder records to avoid accidental lockouts.
 - Refresh tokens are never stored in cleartext; only SHA-256 hashes plus DPoP bindings are stored in PostgreSQL, and reuse after revocation/expiry returns explicit error codes.
 - Enrollment workflow queues approvals, detects hostname and fingerprint conflicts, offers merge/overwrite options, and records auditor identities so trust decisions are traceable.
@@ -79,7 +79,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - DPoP proof headers bind refresh tokens to a key thumbprint and prevent replay.
 
 ## Code Signing
-- Engine signs script payloads using `Engine/Certificates/Code-Signing` keys.
+- Engine signs script payloads using `Engine/Services/api-backend/secrets/Certificates/Code-Signing` keys.
 - Agent verifies signatures before execution; failures are logged and rejected.
 
 ## Automated Agent Enrollment
@@ -226,10 +226,10 @@ sequenceDiagram
 
 ## Codex Agent (Detailed)
 ### Key material locations (Engine)
-- Embedded edge ACME state: `Engine/LetsEncrypt/acme.json`.
-- Embedded Traefik runtime config: `Engine/Traefik/traefik.yml` and `Engine/Traefik/dynamic.yml`.
-- Operator session secret: `Engine/engine_secret.txt`.
-- Script signing keys: `Engine/Certificates/Code-Signing/borealis-script-ed25519.key` and `.pub`.
+- Embedded edge ACME state: `Engine/Services/traefik-edge/state/acme.json`.
+- Embedded Traefik runtime config: `Engine/Services/traefik-edge/config/traefik.yml` and `Engine/Services/traefik-edge/config/dynamic.yml`.
+- Operator session secret: `Engine/Services/api-backend/secrets/engine_secret.txt`.
+- Script signing keys: `Engine/Services/api-backend/secrets/Certificates/Code-Signing/borealis-script-ed25519.key` and `.pub`.
 
 ### Key material locations (Agent)
 - Identity keys: `Agent/Borealis/Certificates/Identity/agent_identity_private.ed25519` and `agent_identity_public.ed25519`.
@@ -255,7 +255,7 @@ sequenceDiagram
 - Replay attempts return `dpop_replayed` and force re-enrollment behavior.
 
 ### Rate limiting and abuse controls
-- Enrollment uses IP and fingerprint rate limiters (see `Data/Engine/services/API/enrollment/routes.py`).
+- Enrollment uses IP and fingerprint rate limiters (see `Data/Engine/Containers/api-backend/data/services/API/enrollment/routes.py`).
 - README documents IP and fingerprint rate limits (40 req/min/IP, 12 req/min/fingerprint).
 
 ### Code signing behavior
@@ -314,10 +314,10 @@ sequenceDiagram
 #### Relevant files
 - Agent token lifecycle: `Data/Agent/agent.py` (`AgentHttpClient`).
 - Token storage: `Data/Agent/security.py` (`AgentKeyStore`).
-- Refresh API: `Data/Engine/services/API/tokens/routes.py`.
-- Enrollment API: `Data/Engine/services/API/enrollment/routes.py`.
-- JWT issuance: `Data/Engine/auth/jwt_service.py`.
-- Database schema: `Data/Engine/database_migrations.py` (`refresh_tokens` table).
+- Refresh API: `Data/Engine/Containers/api-backend/data/services/API/tokens/routes.py`.
+- Enrollment API: `Data/Engine/Containers/api-backend/data/services/API/enrollment/routes.py`.
+- JWT issuance: `Data/Engine/Containers/api-backend/data/auth/jwt_service.py`.
+- Database schema: `Data/Engine/Containers/api-backend/data/database_migrations.py` (`refresh_tokens` table).
 
 ### Where to update docs when security changes
 - Update this page and any impacted runtime docs (engine or agent).

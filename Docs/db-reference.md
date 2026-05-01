@@ -7,12 +7,12 @@ Describe the Borealis PostgreSQL schema, table ownership, runtime interactions, 
 ## Scope
 - Primary runtime database: PostgreSQL (set via `BOREALIS_DATABASE_URL`). Linux Engine container deployments use the `postgres-db` service on `127.0.0.1:5432`.
 - Source-of-truth schema code:
-- `Data/Engine/database.py`
-- `Data/Engine/database_migrations.py`
-- `Data/Engine/services/API/scheduled_jobs/job_scheduler.py`
+- `Data/Engine/Containers/api-backend/data/database.py`
+- `Data/Engine/Containers/api-backend/data/database_migrations.py`
+- `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`
 - Assembly catalog tables live in PostgreSQL `assemblies.*`.
-- Bundled official assembly snapshot lives in `Data/Engine/Official_Assemblies/`.
-- Assembly schema source: `Data/Engine/assembly_management/databases.py`.
+- Bundled official assembly snapshot lives in `Data/Engine/Containers/api-backend/data/Official_Assemblies/`.
+- Assembly schema source: `Data/Engine/Containers/api-backend/data/assembly_management/databases.py`.
 
 ## API Endpoints
 None. This page documents persistence structures used by many endpoints.
@@ -76,7 +76,7 @@ sites (id) -------------------< user_site_assignments (site_id)
 - Reusing a write transaction for post-commit readback when the response can be assembled in a fresh short-lived read.
 
 ### Practical symptoms
-- `QueuePool` timeout errors in `Engine/Logs/error.log`.
+- `QueuePool` timeout errors in `Engine/Services/api-backend/logs/error.log`.
 - Operators seeing random `500` responses on otherwise unrelated routes such as `/api/auth/me`.
 - Socket reconnect churn or delayed page refreshes when the Engine is under load.
 - `pg_stat_activity` showing many `idle in transaction` rows older than a few seconds.
@@ -603,7 +603,7 @@ finally:
 - Notes:
 - Before Aegis setup, legacy plaintext values may still exist in the `*_encrypted` columns as migration input.
 - After Aegis setup, secret columns store ASCII `aegis:v1:` envelopes even though the schema type remains `BLOB`.
-- The runtime decrypts credential secrets on demand through `Data/Engine/services/aegis_cipher.py`.
+- The runtime decrypts credential secrets on demand through `Data/Engine/Containers/api-backend/data/services/aegis_cipher.py`.
 - Operator-facing credential APIs now wait for bootstrap phase `login_required`; stale operator sessions no longer bypass the lock state after restart.
 - If `metadata_json` contains `aegis_secret_state = "reset_required"`, the record survived an Aegis force reset but one or more stored secret fields were intentionally destroyed and must be re-entered.
 
@@ -614,7 +614,7 @@ finally:
 - Constraints and indexes:
 - `id` primary key, with Borealis using `id = 1`.
 - Used by:
-- `Data/Engine/services/aegis_cipher.py` setup, unlock, rotation, migration, and force-reset flows.
+- `Data/Engine/Containers/api-backend/data/services/aegis_cipher.py` setup, unlock, rotation, migration, and force-reset flows.
 - `/api/bootstrap/state`, `/api/bootstrap/aegis/setup`, `/api/bootstrap/aegis/unlock`, `/api/bootstrap/admin/*`, `/api/aegis/status`, `/api/aegis/rotate`, and `/api/aegis/force_reset`.
 - Notes:
 - `kdf_params_json` stores the per-install `scrypt` parameters and Base64 salt.
@@ -765,7 +765,7 @@ Each table has the same schema:
 - Engine startup validates this schema strictly and fails fast if legacy columns are still present.
 - `source_repo`, `source_path`, and `source_version` track Aurora provenance for official assemblies.
 - `content_hash` stores the Engine-computed canonical SHA-256 used for update detection.
-- The bundled official snapshot is versioned under `Data/Engine/Official_Assemblies/` as a seed snapshot and synced into `assemblies.official_assemblies` on startup.
+- The bundled official snapshot is versioned under `Data/Engine/Containers/api-backend/data/Official_Assemblies/` as a seed snapshot and synced into `assemblies.official_assemblies` on startup.
 
 ### `assemblies.official_catalog_state`
 - Status: Active.
@@ -863,7 +863,7 @@ ORDER BY xact_start NULLS LAST;
 - Update creation/migration code first (`database.py`, `database_migrations.py`, scheduler table init, or assembly DB manager).
 - Update this document and any affected domain docs (`device-management.md`, `scheduled-jobs.md`, `security-and-trust.md`).
 - Update unit tests that rely on local schema fixtures (`Data/Engine/Unit_Tests/conftest.py`).
-- Verify runtime startup applies schema without errors by checking `Engine/Logs/engine.log`.
+- Verify runtime startup applies schema without errors by checking `Engine/Services/api-backend/logs/engine.log`.
 
 ### Data-model guidance for the current enrollment design
 - Keep site/code association in `sites.enrollment_code` unless the enrollment model changes fundamentally.

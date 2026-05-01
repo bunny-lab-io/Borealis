@@ -100,8 +100,8 @@ BOREALIS_AGENT_UNIT_TEST_DOMAIN=tokens ./Agent_Unit_Tests.sh
 - Engine Python unit tests: `Data/Engine/Unit_Tests/`.
 - Engine assembly unit tests: `Data/Engine/Unit_Tests/assemblies/`.
 - Agent Python unit tests: `Data/Agent/Unit_Tests/`.
-- WebUI unit tests: `Data/Engine/web-interface/Unit_Tests/`.
-- Runtime WebUI unit tests after Engine redeploy: `Engine/web-interface/Unit_Tests/`.
+- WebUI unit tests: `Data/Engine/Containers/webui-frontend/data/web-interface/Unit_Tests/`.
+- Runtime WebUI unit tests after Engine redeploy: `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests/`.
 
 ## Results
 - Results write to `Unit_Test_Results/<runtime>-<timestamp>/`.
@@ -115,8 +115,8 @@ BOREALIS_AGENT_UNIT_TEST_DOMAIN=tokens ./Agent_Unit_Tests.sh
 - Run scripts from repo root.
 - Engine tests prefer `Engine/bin/python` when available because Engine venv includes pytest.
 - Agent tests use first Python interpreter with pytest available, checking Agent runtime, Engine runtime, and system Python in that order.
-- WebUI tests require `Engine/web-interface/node_modules` and staged `Engine/web-interface/Unit_Tests`.
-- If WebUI runtime is stale, run normal Engine redeploy path first so `Data/Engine/web-interface/Unit_Tests` copies into runtime tree.
+- WebUI tests require `Engine/Services/webui-frontend/cache/web-interface/node_modules` and staged `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests`.
+- Do not run npm or Vite from `Data/Engine/Containers/webui-frontend/data/web-interface`; use a prepared runtime cache or defer UI runtime validation to the operator redeploying the WebUI container.
 - Container launcher/static validation should start with shell and Compose checks before broader unit lanes:
 ```bash
 bash -n Engine.sh
@@ -147,8 +147,8 @@ Prefer small helpers with clear names: fake Engine, fake devices, fake Role hook
 - Use root scripts as testing entrypoint. Do not start with raw `pytest`, `npm`, or `vitest` unless diagnosing runner failure.
 - For container deployment changes, run shell syntax checks for `Engine.sh`, `Agent.sh`, `Borealis.sh`, and `Update.sh`, then validate `Data/Engine/Containers/compose.yaml` through `docker compose -f Data/Engine/Containers/compose.yaml config`.
 - Pick narrow domain runs while iterating, then run full affected lane when practical: Engine change gets `./Engine_Unit_Tests.sh`; Agent change gets `./Agent_Unit_Tests.sh` or `.\Agent_Unit_Tests.ps1`; cross-runtime change gets both.
-- For WebUI unit tests, use `./Engine_Unit_Tests.sh --domain webui`. Do not run npm or vite from `Data/Engine/web-interface`; staging source is not the runtime test location.
-- Keep reports under `Unit_Test_Results/`. Do not write `.pytest_cache`, `__pycache__`, JUnit XML, or Vitest output under `Data/Engine`, `Data/Agent`, or `Data/Engine/web-interface`.
+- For WebUI unit tests, use `./Engine_Unit_Tests.sh --domain webui`. Do not run npm or vite from `Data/Engine/Containers/webui-frontend/data/web-interface`; staging source is not the runtime test location.
+- Keep reports under `Unit_Test_Results/`. Do not write `.pytest_cache`, `__pycache__`, JUnit XML, or Vitest output under `Data/Engine`, `Data/Agent`, or `Data/Engine/Containers/webui-frontend/data/web-interface`.
 - When adding tests, place them under the nearest `Unit_Tests` folder and reuse helpers before inventing new setup code.
 - When a test needs fake Engine, fake device, fake config, or fake Role state, add helper capability under nearest `support/` package first, then call it from individual tests.
 - Keep helper defaults realistic for Borealis code paths, and expose test-specific changes through keyword overrides.

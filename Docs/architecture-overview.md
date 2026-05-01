@@ -24,17 +24,18 @@ Explain how Borealis is structured and how the core components interact end to e
 - Notifications: operator or services call `/api/notifications/notify`, WebUI receives `borealis_notification` events.
 
 ## Directory Map (High Level)
-- `Data/Engine/` - Engine source (authoritative).
+- `Data/Engine/` - Engine package shim, unit tests, and container source roots.
+- `Data/Engine/Containers/api-backend/data/` - Engine API/backend source (authoritative).
 - `Data/Engine/Containers/` - Engine container and Compose source (authoritative).
 - `Data/Agent/` - Agent source (authoritative).
 - `Engine/` - Engine generated runtime state (regenerated/deployed by `Engine.sh`).
 - `Engine/Deploy/` - Compose env, image manifest, deploy manifest, and build log.
 - `Engine/Services/<role>/` - container role config/env/logs/state/secrets/cache/run directories.
 - `Agent/` - Agent runtime copy (regenerated each launch).
-- `Data/Engine/web-interface/src/` - WebUI source.
-- `Data/Engine/web-interface/src/Flow_Editor/` - Flow Editor domain folder. Owns the workflow editor controller/compositor, canvas, sidebars, edge/node configuration panels, runtime wiring helpers, and the shared workflow node registry.
-- `Engine/Logs/` and `Agent/Logs/` - runtime logs.
-- `Data/Engine/Official_Assemblies/` - bundled official assembly seed snapshot.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/` - WebUI source.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/` - Flow Editor domain folder. Owns the workflow editor controller/compositor, canvas, sidebars, edge/node configuration panels, runtime wiring helpers, and the shared workflow node registry.
+- `Engine/Services/api-backend/logs/` and `Agent/Logs/` - runtime logs.
+- `Data/Engine/Containers/api-backend/data/Official_Assemblies/` - bundled official assembly seed snapshot.
 
 ## API Endpoints
 None on this page. See [API Reference](api-reference.md).
@@ -52,15 +53,15 @@ None on this page. See [API Reference](api-reference.md).
 
 ## Codex Agent (Detailed)
 ### Service map by folder
-- Engine APIs: `Data/Engine/services/API/` (grouped by domain, registered in `Data/Engine/services/API/__init__.py`).
-- Engine realtime: `Data/Engine/services/WebSocket/` (Socket.IO events: quick jobs, VPN shell, agent socket registry).
-- WebUI hosting: `Data/Engine/services/WebUI/` (SPA static assets and 404 fallback).
-- WebUI app shell and router: `Data/Engine/web-interface/src/app/` (providers, route tree, guarded layouts, route adapters, runtime bootstrap).
-- Workflow authoring UI: `Data/Engine/web-interface/src/Flow_Editor/` plus `Data/Engine/web-interface/src/nodes/`.
+- Engine APIs: `Data/Engine/Containers/api-backend/data/services/API/` (grouped by domain, registered in `Data/Engine/Containers/api-backend/data/services/API/__init__.py`).
+- Engine realtime: `Data/Engine/Containers/api-backend/data/services/WebSocket/` (Socket.IO events: quick jobs, VPN shell, agent socket registry).
+- WebUI hosting: `Data/Engine/Containers/api-backend/data/services/WebUI/` (SPA static assets and 404 fallback).
+- WebUI app shell and router: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/` (providers, route tree, guarded layouts, route adapters, runtime bootstrap).
+- Workflow authoring UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/nodes/`.
   The React Router app layer routes into `Flow_Editor/Flow_Editor.jsx`, and the Flow Editor folder owns workflow load/save/run lifecycle, access checks, run snapshot hydration, shared node registration, and the React Flow canvas/sidebar surfaces.
-- VPN orchestration: `Data/Engine/services/VPN/` (WireGuard server and tunnel lifecycle).
-- Remote desktop proxy: `Data/Engine/services/RemoteDesktop/` (VNC WebSocket proxy).
-- Filters and targeting: `Data/Engine/services/filters/matcher.py` (used by scheduled jobs and filter counts).
+- VPN orchestration: `Data/Engine/Containers/api-backend/data/services/VPN/` (WireGuard server and tunnel lifecycle).
+- Remote desktop proxy: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/` (VNC WebSocket proxy).
+- Filters and targeting: `Data/Engine/Containers/api-backend/data/services/filters/matcher.py` (used by scheduled jobs and filter counts).
 - Agent broker/runtime split: `Data/Agent/agent.py` (SYSTEM socket owner) plus `Data/Agent/session_runtime.py` (per-session helper broker and local IPC).
 - Agent roles: `Data/Agent/Roles/` (script exec, device audit, WireGuard tunnel, remote shell, VNC, and legacy interactive-only roles).
 
@@ -79,11 +80,11 @@ None on this page. See [API Reference](api-reference.md).
 
 ### Runtime boundaries
 - Do not edit `Engine/` or `Agent/` directly. They are recreated on each launch.
-- Always edit `Data/Engine/` and `Data/Agent/` then re-run the appropriate launcher: `Engine.sh` or `Agent.sh`.
+- Edit Engine API source under `Data/Engine/Containers/api-backend/data/`, WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`, and Agent source under `Data/Agent/`; then re-run the appropriate launcher: `Engine.sh` or `Agent.sh`.
 
 ### What to read first when debugging
-- Start with logs: `Engine/Logs/engine.log` and `Agent/Logs/agent.log`.
-- Check domain-specific logs (example: `Engine/Logs/VPN_Tunnel/tunnel.log`).
+- Start with logs: `Engine/Services/api-backend/logs/engine.log` and `Agent/Logs/agent.log`.
+- Check domain-specific logs (example: `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`).
 - Inspect active DB state in PostgreSQL (`engine.*` and `assemblies.*`) for device/job metadata.
 
 ### Interaction points to remember

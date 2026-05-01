@@ -175,9 +175,9 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ## Codex Agent (Detailed)
 ### Key files and services
-- Device APIs: `Data/Engine/services/API/devices/` (management, approval, services, tunnel, vnc, routes).
-- Filters: `Data/Engine/services/filters/matcher.py` and `Data/Engine/services/API/filters/management.py`.
-- Enrollment approvals: `Data/Engine/services/API/devices/approval.py`.
+- Device APIs: `Data/Engine/Containers/api-backend/data/services/API/devices/` (management, approval, services, tunnel, vnc, routes).
+- Filters: `Data/Engine/Containers/api-backend/data/services/filters/matcher.py` and `Data/Engine/Containers/api-backend/data/services/API/filters/management.py`.
+- Enrollment approvals: `Data/Engine/Containers/api-backend/data/services/API/devices/approval.py`.
 
 ### Inventory ingestion behavior
 - `/api/agent/heartbeat` updates `last_seen` and key metrics (last_user, OS, uptime).
@@ -186,9 +186,9 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - JSON blobs are serialized into PostgreSQL text columns and rehydrated for UI.
 - Installed software is also normalized into `device_software_inventory` so filters can match name, source, and version reliably.
 - The Installed Software tab now also exposes a row-level `Uninstall` action for supported Windows software entries. Borealis queues that work through the signed quick-job path in SYSTEM context, so uninstall output lands in `activity_history` and the row disappears after the next successful device software inventory refresh.
-- Operators can right-click a software name in the Installed Software tab to create global icon overrides, global uninstall overrides, uninstall blocks, or uninstall unblocks directly from the WebUI. Borealis writes those operator-approved changes into the file-backed JSON override/blocklist stores under `Data/Engine/services/API/devices/`, hotloads them without an Engine restart, and lets the developer commit those files to Git later when the pilot rules should become official.
+- Operators can right-click a software name in the Installed Software tab to create global icon overrides, global uninstall overrides, uninstall blocks, or uninstall unblocks directly from the WebUI. Borealis writes those operator-approved changes into the file-backed JSON override/blocklist stores under `Data/Engine/Containers/api-backend/data/services/API/devices/`, hotloads them without an Engine restart, and lets the developer commit those files to Git later when the pilot rules should become official.
 - The Installed Software tab also exposes a `Query Software Changes` button that emits `software_inventory_refresh_request` over the device SYSTEM socket so operators can observe override and inventory changes faster than the normal software-management poll cadence.
-- Session inventory enrichment from the agent broker flows through `Data/Agent/Roles/role_system_device_auditor.py` and `Data/Engine/services/API/devices/session_inventory.py`, so Device Details can distinguish a merely logged-in session from a helper-ready interactive session.
+- Session inventory enrichment from the agent broker flows through `Data/Agent/Roles/role_system_device_auditor.py` and `Data/Engine/Containers/api-backend/data/services/API/devices/session_inventory.py`, so Device Details can distinguish a merely logged-in session from a helper-ready interactive session.
 - Service inventory is cached in the `devices.services` JSON blob and merged with pending operator actions until a fresh agent snapshot confirms the desired state.
 - Process Management uses the device SYSTEM Socket.IO channel with ACK responses under `process_management_request` for live process snapshots and process termination. It does not replace the slower cached `devices.processes` watchdog inventory, which remains name/count oriented.
 - Manual agent update requests from the Device Summary action menu call `POST /api/device/update-agent/<hostname>` and are delivered over the device's SYSTEM Socket.IO channel as `agent_update_request`.
@@ -210,14 +210,14 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Re-enrollment clears the barrier only after the recreated device row has been seeded with a token version at or above the purge barrier.
 
 ### Sites and enrollment codes
-- Sites live in `sites` and `device_sites` tables (see `Data/Engine/database.py`).
+- Sites live in `sites` and `device_sites` tables (see `Data/Engine/Containers/api-backend/data/database.py`).
 - Operator RBAC scope lives in `user_site_assignments`.
 - Enrollment codes are stored directly on `sites.enrollment_code`.
 - Rotating a site code updates the `sites` record only.
 - `GET /api/sites` also returns `public_base_url` and `public_hostname` so the Sites WebUI can generate per-site agent install commands without a second server-info fetch.
 
 ### Device filters (matching)
-- Filters are stored in typed basic/advanced payloads and normalized by `Data/Engine/services/filters/matcher.py`.
+- Filters are stored in typed basic/advanced payloads and normalized by `Data/Engine/Containers/api-backend/data/services/filters/matcher.py`.
 - `DeviceFilterMatcher.fetch_devices()` loads a snapshot from `devices` and joins `sites`.
 - It also joins normalized software rows from `device_software_inventory`.
 - `count_filter_devices` computes match counts for UI summaries and scheduler previews.
@@ -233,8 +233,8 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Tab query keys: `device_summary`, `installed_software`, `services`, `process_management`, `activity_history`, `remote_shell`, `remote_desktop`.
 - Device Details also exposes the `file_management` tab query key for the File Management view.
 - File Management also exposes a `working_directory` query param for shareable folder deep links, for example `?tab=file_management&working_directory=C%3A%5CUsers%5Cnicole.rappe%5CDesktop`.
-- Route registration and URL preservation are implemented in `Data/Engine/web-interface/src/app/routes/router.jsx` plus `Data/Engine/web-interface/src/app/routes/paths.js`; component-level tab URL sync is implemented in `Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx`.
-- Shared header hostname search is implemented in `Data/Engine/web-interface/src/GlobalDeviceSearch.jsx` and queries `GET /api/devices/search`.
+- Route registration and URL preservation are implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/paths.js`; component-level tab URL sync is implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Summary.jsx`.
+- Shared header hostname search is implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/GlobalDeviceSearch.jsx` and queries `GET /api/devices/search`.
 
 ### Debug checklist
 - Device missing from list: check PostgreSQL `engine.devices` and `engine.device_keys`.

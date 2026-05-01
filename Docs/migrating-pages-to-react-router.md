@@ -10,16 +10,16 @@ Document the Borealis WebUI router architecture and provide a repeatable migrati
 - Use this guide when converting a legacy page from adapter-backed props to route-native hooks.
 
 ## Router Architecture Summary
-- `Data/Engine/web-interface/src/App.jsx` is now a thin bootstrap only.
-- `Data/Engine/web-interface/src/app/routes/router.jsx` owns the canonical route tree.
-- `Data/Engine/web-interface/src/app/shell/AppShell.jsx` owns the authenticated shell, top app bar, breadcrumbs, sidebar, dialogs, and notifications.
-- `Data/Engine/web-interface/src/app/providers/AuthContext.jsx` owns session bootstrap, login/logout, MFA reset, password reset, Aegis status, and admin Aegis prompt behavior.
-- `Data/Engine/web-interface/src/app/providers/PageChromeContext.jsx` owns page title, subtitle, icon, header actions, header controls, and breadcrumb-tail overrides.
-- `Data/Engine/web-interface/src/app/route-modules/` contains thin lazy-route entrypoints that render the routed page directly.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/App.jsx` is now a thin bootstrap only.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx` owns the canonical route tree.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/shell/AppShell.jsx` owns the authenticated shell, top app bar, breadcrumbs, sidebar, dialogs, and notifications.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/providers/AuthContext.jsx` owns session bootstrap, login/logout, MFA reset, password reset, Aegis status, and admin Aegis prompt behavior.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/providers/PageChromeContext.jsx` owns page title, subtitle, icon, header actions, header controls, and breadcrumb-tail overrides.
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/route-modules/` contains thin lazy-route entrypoints that render the routed page directly.
 - Shared page migration helpers now live in:
-  - `Data/Engine/web-interface/src/app/hooks/useRoutePageChrome.js`
-  - `Data/Engine/web-interface/src/app/hooks/useUrlTabState.js`
-  - `Data/Engine/web-interface/src/app/hooks/useAppNotifications.js`
+  - `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/hooks/useRoutePageChrome.js`
+  - `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/hooks/useUrlTabState.js`
+  - `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/hooks/useAppNotifications.js`
 
 ## Canonical Routing Rules
 - Use URL paths for durable resource identity.

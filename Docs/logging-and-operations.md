@@ -12,7 +12,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - Engine Traefik log: `Engine/Services/traefik-edge/logs/traefik.log`.
 - Engine Traefik access log: `Engine/Services/traefik-edge/logs/traefik-access.log`.
 - Service logs: `Engine/Services/<role>/logs/` plus API per-domain logs under `Engine/Services/api-backend/logs/`.
-- Watchdog service log: `Engine/Logs/watchdogs.log`.
+- Watchdog service log: `Engine/Services/api-backend/logs/watchdogs.log`.
 - VPN logs: `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`, `Engine/Services/api-backend/logs/VPN_Tunnel/remote_shell.log`, and WireGuard control logs under `Engine/Services/wireguard-tunnel/logs/control.log`.
 - Agent install log: `Agent/Logs/install.log` records Agent launcher actions such as enrollment state cleanup; package-manager output remains on the console.
 - Agent logs: `Agent/Logs/agent.log` and `Agent/Logs/agent.error.log` (daily rotation).
@@ -20,7 +20,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 
 ## Log Retention
 - Retention is managed via `/api/server/logs` endpoints.
-- Retention overrides are stored in `Engine/Logs/retention_policy.json`.
+- Retention overrides are stored in `Engine/Services/api-backend/logs/retention_policy.json`.
 
 ## Operational Health
 - `GET /health` returns liveness status.
@@ -50,19 +50,19 @@ Describe Borealis operational logging, retention, and core runtime checks.
 
 ## Codex Agent (Detailed)
 ### Engine log formatting
-- Service logs are written via `service_log` in `Data/Engine/services/API/__init__.py`.
+- Service logs are written via `service_log` in `Data/Engine/Containers/api-backend/data/services/API/__init__.py`.
 - Format: `[YYYY-MM-DD HH:MM:SS] [LEVEL][CONTEXT-<SCOPE>] message`.
 - Context values are derived from agent context headers or message patterns.
 - `Engine.sh` records Docker build output in `Engine/Deploy/build.log`; container runtime logs are written to each service role's `logs/` directory or Docker stdout/stderr.
 
 ### Log retention implementation
-- `Data/Engine/services/API/server/log_management.py` manages retention.
-- Retention overrides are stored in `Engine/Logs/retention_policy.json`.
+- `Data/Engine/Containers/api-backend/data/services/API/server/log_management.py` manages retention.
+- Retention overrides are stored in `Engine/Services/api-backend/logs/retention_policy.json`.
 - The API never deletes the active log file automatically.
 
 ### Operational checks
-- Startup warnings appear in `Engine/Logs/engine.log`.
-- API access metrics appear in `Engine/Logs/api.log` (method, path, duration, status).
+- Startup warnings appear in `Engine/Services/api-backend/logs/engine.log`.
+- API access metrics appear in `Engine/Services/api-backend/logs/api.log` (method, path, duration, status).
 - Embedded edge request outcomes appear in `Engine/Services/traefik-edge/logs/traefik-access.log` (frontend path, upstream target, status, latency).
 - VPN-specific logs are under `Engine/Services/api-backend/logs/VPN_Tunnel/` and `Engine/Services/wireguard-tunnel/logs/`.
 - Watchdog evaluator ticks, incident transitions, and remediation dispatch failures are written through the `watchdogs` service log domain.
@@ -85,5 +85,5 @@ Describe Borealis operational logging, retention, and core runtime checks.
 
 ### Operational safety
 - Do not delete logs by hand while debugging; use the log API or archive first.
-- Keep runtime artifacts inside `Engine/Services/<role>/`, `Engine/Deploy/`, `Engine/Shared/`, and `Agent/` to preserve boundaries, except for the intentionally shared updater trace at `<ProjectRoot>/Updater.log`.
+- Keep runtime artifacts inside `Engine/Services/<role>/`, `Engine/Deploy/`, and `Agent/` to preserve boundaries, except for the intentionally shared updater trace at `<ProjectRoot>/Updater.log`.
 - If you change log formats, update this document and `engine-runtime.md`.

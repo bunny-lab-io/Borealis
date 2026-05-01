@@ -5,31 +5,32 @@
 Describe the Borealis Engine runtime, its services, configuration, and operational responsibilities.
 
 ## Runtime Summary
-- Application factory: `Data/Engine/server.py` (Flask + Socket.IO, Eventlet) inside the `api-backend` container.
-- Configuration loader: `Data/Engine/config.py` (environment-first, defaults, TLS discovery).
-- API registration: `Data/Engine/services/API/__init__.py` (groups + adapters).
+- Application factory: `Data/Engine/Containers/api-backend/data/server.py` (Flask + Socket.IO, Eventlet) inside the `api-backend` container.
+- Configuration loader: `Data/Engine/Containers/api-backend/data/config.py` (environment-first, defaults, TLS discovery).
+- API registration: `Data/Engine/Containers/api-backend/data/services/API/__init__.py` (groups + adapters).
 - WebUI serving: `webui-frontend` container owns production static serving and dev Vite HMR; the Engine WebUI fallback remains for non-container and test paths.
-- Realtime events: `Data/Engine/services/WebSocket/` (quick job results, VPN shell bridge).
-- VPN orchestration: `Data/Engine/services/VPN/` (WireGuard server manager + tunnel service).
-- Remote desktop proxy: `Data/Engine/services/RemoteDesktop/` (Apache Guacamole VNC bridge through local `guacd`).
-- Assemblies: `Data/Engine/assembly_management/` and `Data/Engine/services/assemblies/`.
-- Watchdog runtime: `Data/Engine/services/API/watchdogs/`.
+- Realtime events: `Data/Engine/Containers/api-backend/data/services/WebSocket/` (quick job results, VPN shell bridge).
+- VPN orchestration: `Data/Engine/Containers/api-backend/data/services/VPN/` (WireGuard server manager + tunnel service).
+- Remote desktop proxy: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/` (Apache Guacamole VNC bridge through local `guacd`).
+- Assemblies: `Data/Engine/Containers/api-backend/data/assembly_management/` and `Data/Engine/Containers/api-backend/data/services/assemblies/`.
+- Watchdog runtime: `Data/Engine/Containers/api-backend/data/services/API/watchdogs/`.
 
 ## Runtime Paths
-- Source code: `Data/Engine/` (edit here).
-- Container source: `Data/Engine/Containers/` (Compose, Dockerfiles, build manifest, service entrypoints).
+- Engine package shim and tests: `Data/Engine/`.
+- API backend source: `Data/Engine/Containers/api-backend/data/` (edit here).
+- WebUI frontend source: `Data/Engine/Containers/webui-frontend/data/web-interface/` (edit here).
+- Container source: `Data/Engine/Containers/` (Compose, Dockerfiles, build manifest, service entrypoints, and service-owned source trees).
 - Runtime state: `Engine/` (generated each deployment and ignored by git).
 - Deploy state: `Engine/Deploy/compose.env`, `Engine/Deploy/image-manifest.json`, `Engine/Deploy/deploy-manifest.json`, and `Engine/Deploy/build.log`.
 - Service state: `Engine/Services/<role>/{config,env,logs,state,secrets,cache,run}`.
-- Shared state: `Engine/Shared/`.
 - Database: PostgreSQL via `BOREALIS_DATABASE_URL`.
 - Compose-generated env: `Engine/Deploy/compose.env` (database URL, container mode, public edge settings, image tags).
-- Logs: `Engine/Services/<role>/logs/`; `Engine/Logs` is retained as a compatibility link to API logs on fresh container deployments.
-- Ansible runtime: `Engine/Ansible/` (staged manifest, installed collections, generated execution workspaces).
-- Certificates: `Engine/Certificates/` (TLS bundle + code signing keys).
-- WebUI build output: `Engine/web-interface/` (served as static assets).
-- Bundled official assemblies: `Data/Engine/Official_Assemblies/` (generated seed snapshot).
-- Aurora checkout: `Engine/Aurora/`.
+- Logs: `Engine/Services/<role>/logs/`; api-backend writes API and domain logs under `Engine/Services/api-backend/logs/`.
+- Ansible runtime: `Engine/Services/api-backend/cache/Ansible/` (staged manifest, installed collections, generated execution workspaces).
+- Certificates: `Engine/Services/api-backend/secrets/Certificates/` (TLS bundle + code signing keys).
+- WebUI build output: `Engine/Services/webui-frontend/cache/web-interface/` (served as static assets).
+- Bundled official assemblies: `Data/Engine/Containers/api-backend/data/Official_Assemblies/` (generated seed snapshot).
+- Aurora checkout: `Engine/Services/api-backend/cache/Aurora/`.
 
 ## API Endpoints
 - `GET /health` (No Authentication) - Engine liveness probe.
@@ -50,7 +51,9 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 
 ## Codex Agent (Detailed)
 ### Source vs runtime
-- Edit only in `Data/Engine/` and `Data/Engine/Containers/`.
+- Edit API/backend code in `Data/Engine/Containers/api-backend/data/`.
+- Edit WebUI code in `Data/Engine/Containers/webui-frontend/data/web-interface/`.
+- Keep `Data/Engine/` for package shims, unit tests, and container roots.
 - `Engine/` is generated runtime state. Do not edit it directly.
 - The Compose project name is `borealis-engine`.
 - `Engine.sh` computes input hashes from Dockerfiles, container entrypoints, source files, dependency manifests, and mode inputs, then builds images as `borealis-engine/<service>:sha-<hash>`.
@@ -80,17 +83,17 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - These helpers are not called by `Engine.sh`, `Update.sh`, or `Borealis.sh`.
 
 ### EngineContext and lifecycle
-- `Data/Engine/server.py` builds an `EngineContext` that includes:
+- `Data/Engine/Containers/api-backend/data/server.py` builds an `EngineContext` that includes:
   - TLS paths, WireGuard settings, scheduler, Socket.IO instance.
 - VNC proxy settings (VNC port, ws host/port, session TTL, Guacamole path, and `guacd` host/port).
 - The app factory wires in:
   - API registration: `API.register_api(app, context)`
   - WebUI static hosting: `WebUI.register_web_ui(app, context)`
   - Realtime events: `WebSocket.register_realtime(socketio, context)`
-  - Watchdog API/runtime registration from `Data/Engine/services/API/watchdogs/management.py`
+  - Watchdog API/runtime registration from `Data/Engine/Containers/api-backend/data/services/API/watchdogs/management.py`
 
 ### API groups and adapters
-- Default groups live in `Data/Engine/services/API/__init__.py` (`DEFAULT_API_GROUPS`).
+- Default groups live in `Data/Engine/Containers/api-backend/data/services/API/__init__.py` (`DEFAULT_API_GROUPS`).
 - Each group has a registrar in `_GROUP_REGISTRARS`.
 - `EngineServiceAdapters` exposes:
   - `db_conn_factory` (PostgreSQL-backed DB adapter exposed through the shared compatibility layer).
@@ -98,33 +101,33 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
   - `jwt_service`, `dpop_validator`, rate limiters, signing keys, GitHub integration.
 
 ### Logging expectations
-- Main logs: `Engine/Logs/engine.log` and `Engine/Logs/error.log`.
-- API access log: `Engine/Logs/api.log` (per-request stats).
-- Service logs: `Engine/Logs/<service>.log` (created via `service_log`).
-- VPN logs: `Engine/Logs/VPN_Tunnel/tunnel.log` and `Engine/Logs/VPN_Tunnel/remote_shell.log`.
+- Main logs: `Engine/Services/api-backend/logs/engine.log` and `Engine/Services/api-backend/logs/error.log`.
+- API access log: `Engine/Services/api-backend/logs/api.log` (per-request stats).
+- Service logs: `Engine/Services/api-backend/logs/<service>.log` (created via `service_log`).
+- VPN logs: `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log` and `Engine/Services/api-backend/logs/VPN_Tunnel/remote_shell.log`.
 
 ### Adding or updating an API
-- Add new routes under `Data/Engine/services/API/<domain>/`.
+- Add new routes under `Data/Engine/Containers/api-backend/data/services/API/<domain>/`.
 - Ensure each module starts with the standard header block (purpose + API endpoints).
-- Update `Data/Engine/services/API/__init__.py` if you add a new API group.
+- Update `Data/Engine/Containers/api-backend/data/services/API/__init__.py` if you add a new API group.
 - Update `Docs/api-reference.md` and the relevant domain doc.
 
 ### WebUI hosting and dev mode
 - Production UI is served by the `webui-frontend` container from its built static output.
 - Dev UI runs Vite HMR behind `traefik-edge`.
 - The API backend sets `BOREALIS_WEBUI_EXTERNAL=1` in container mode so `Data.Engine.bootstrapper` skips Engine-side WebUI staging/build.
-- The SPA fallback in `Data/Engine/services/WebUI/__init__.py` remains for tests and non-container execution.
+- The SPA fallback in `Data/Engine/Containers/api-backend/data/services/WebUI/__init__.py` remains for tests and non-container execution.
 
 ### PostgreSQL profile notes
 - Container deployment starts PostgreSQL with conservative defaults from `compose.env`; profile auto-tuning from legacy `Borealis.sh` is not maintained in the container launcher.
 - Adjust DB pool values in `Engine/Deploy/compose.env` before redeploy when larger installations need explicit tuning.
 
 ### WireGuard and VNC wiring
-- WireGuard server manager: `Data/Engine/services/VPN/wireguard_server.py`.
-- Tunnel orchestration: `Data/Engine/services/VPN/vpn_tunnel_service.py`.
-- VNC collaboration state: `Data/Engine/services/RemoteDesktop/vnc_sessions.py`.
-- VNC proxy: `Data/Engine/services/RemoteDesktop/vnc_proxy.py`.
-- Guacamole VNC bridge: `Data/Engine/services/RemoteDesktop/guacamole_proxy.py`.
+- WireGuard server manager: `Data/Engine/Containers/api-backend/data/services/VPN/wireguard_server.py`.
+- Tunnel orchestration: `Data/Engine/Containers/api-backend/data/services/VPN/vpn_tunnel_service.py`.
+- VNC collaboration state: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/vnc_sessions.py`.
+- VNC proxy: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/vnc_proxy.py`.
+- Guacamole VNC bridge: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/guacamole_proxy.py`.
 - API entrypoints: `/api/vnc/viewers`, `/api/vnc/establish`, `/api/vnc/disconnect`, `/api/vnc/handoff`, `/api/vnc/sessions`, `/api/shell/establish`, `/api/shell/disconnect`.
 - Persistent tunnels are established by agents via `POST /api/agent/vpn/ensure`, then marked dispatch-ready by `POST /api/agent/vpn/ready` after the active service/config/firewall path is applied.
 - The Engine caches each agent's currently advertised VNC password in memory, reuses that credential across collaboration sessions until the agent restarts or the agent-side daily VNC credential rotation publishes a new revision, fast-probes the advertised UltraVNC listener before re-emitting bootstrap events, waits for agent listener readiness before returning browser bootstrap data when that fast probe misses, and exposes active remote desktop session inventory in `GET /api/server/overview`.
@@ -132,12 +135,12 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - `remote-desktop-guacd` uses Apache Guacamole Server 1.6.0 in VNC-only mode and binds loopback port `4822`.
 
 ### Assembly runtime
-- Assembly cache is initialized in `Data/Engine/assembly_management` and attached to `context.assembly_cache`.
+- Assembly cache is initialized in `Data/Engine/Containers/api-backend/data/assembly_management` and attached to `context.assembly_cache`.
 - Quick jobs and scheduled jobs share this runtime to resolve scripts and variables.
 
 ### Watchdog evaluator runtime
 - `EngineContext.watchdog_runtime` owns the Borealis-native watchdog evaluator.
-- Registration and bootstrap happen in `Data/Engine/server.py` after the primary API, WebUI, and Socket.IO registrars.
+- Registration and bootstrap happen in `Data/Engine/Containers/api-backend/data/server.py` after the primary API, WebUI, and Socket.IO registrars.
 - The evaluator loop periodically checks enabled watchdogs whose `evaluation_interval_seconds` has elapsed.
 - Immediate evaluation still happens on watchdog save and device-override updates so operator changes become visible without waiting for the scheduler tick.
 - On startup, the runtime purges any lingering resolved incidents that belong to offline-only watchdogs before the evaluator loop begins.
@@ -163,7 +166,7 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 - Raw one-line or repo-option `Engine.sh` runs sync first, then re-execs the installed `Engine.sh`; local `Engine.sh deploy` uses existing on-disk source and does not update git.
 
 #### Architecture
-- Runtime: `Data/Engine/server.py` with NodeJS + Vite for live dev and Flask for production serving/API endpoints.
+- Runtime: `Data/Engine/Containers/api-backend/data/server.py` with NodeJS + Vite for live dev and Flask for production serving/API endpoints.
 
 #### Development guidelines
 - Every Python module under `Data/Engine` or `Engine/Data/Engine` starts with the standard commentary header (purpose + API endpoints). Add the header to any existing module before further edits.
@@ -180,8 +183,8 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 - Background jobs and service adapters maintain compatibility with legacy DB schemas while enabling gradual API takeover.
 
 #### Protected secret storage
-- The Engine now exposes an Engine-global Aegis Cipher lifecycle through `Data/Engine/services/aegis_cipher.py` and `Data/Engine/services/API/access_management/aegis.py`.
-- The bootstrap gate for operator auth lives in `Data/Engine/services/API/access_management/login.py` and `Data/Engine/services/auth/bootstrap_state.py`.
+- The Engine now exposes an Engine-global Aegis Cipher lifecycle through `Data/Engine/Containers/api-backend/data/services/aegis_cipher.py` and `Data/Engine/Containers/api-backend/data/services/API/access_management/aegis.py`.
+- The bootstrap gate for operator auth lives in `Data/Engine/Containers/api-backend/data/services/API/access_management/login.py` and `Data/Engine/Containers/api-backend/data/services/auth/bootstrap_state.py`.
 - Aegis v1 now protects stored credentials, the GitHub API token, operator password hashes, operator TOTP secrets, and passkey cryptographic material at rest using `scrypt` plus `AES-256-GCM`.
 - Directory Services adds LDAP/LDAPS and Active Directory credential providers under the auth API group. Generic LDAP uses service-account search plus user-DN bind; Active Directory uses Kerberos password verification with provider-managed realm/KDC settings. Operators can define provider-scoped host overrides so FQDN server URLs connect to explicit IP addresses without editing Engine host records; TLS still uses the FQDN for SNI and certificate name validation. Operators can download an LDAPS peer certificate from the provider editor, review subject/issuer/SAN/fingerprint metadata, and pin that certificate for future strict TLS checks. The optional `gssapi` Python package installs only when Kerberos build packages such as `krb5-config` are available, so core Engine and Ansible deployment are not blocked on hosts missing AD prerequisites.
 - Directory provider bind passwords and uploaded keytabs are Aegis-protected. Directory users are JIT cached in `users`, keep Borealis TOTP MFA, and cannot register passkeys.
@@ -195,11 +198,11 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 #### Reverse VPN tunnels
 - WireGuard reverse VPN design and lifecycle are documented in `vpn-and-remote-access.md`.
 - The original references were `REVERSE_TUNNELS.md` and `Reverse_VPN_Tunnel_Deployment.md` (now consolidated into this knowledgebase).
-- Engine orchestrator: `Data/Engine/services/VPN/vpn_tunnel_service.py` with WireGuard manager `Data/Engine/services/VPN/wireguard_server.py`.
-- UI shell bridge: `Data/Engine/services/WebSocket/vpn_shell.py`.
+- Engine orchestrator: `Data/Engine/Containers/api-backend/data/services/VPN/vpn_tunnel_service.py` with WireGuard manager `Data/Engine/Containers/api-backend/data/services/VPN/wireguard_server.py`.
+- UI shell bridge: `Data/Engine/Containers/api-backend/data/services/WebSocket/vpn_shell.py`.
 
 #### WebUI and WebSocket migration
-- Static/template handling: `Data/Engine/services/WebUI`; deployment copy paths are wired through `Borealis.sh` with TLS-aware URL generation.
+- Static/template handling: `Data/Engine/Containers/api-backend/data/services/WebUI`; deployment copy paths are wired through `Borealis.sh` with TLS-aware URL generation.
 - Stage 6 tasks: migration switch in the legacy server for WebUI delegation and porting device/admin API endpoints into Engine services.
 - Stage 7 (queued): `register_realtime` hooks, Engine-side Socket.IO handlers, integration checks, legacy delegation updates.
 
@@ -207,7 +210,7 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 - Linux is the Engine target platform. Keep Engine tooling aligned with Docker Engine plus Docker Compose, not Docker Desktop.
 
 #### Ansible support (shared state)
-- The Linux Engine now packages an Ansible control-node runtime inside the Engine venv and installs Borealis-managed collections into `Engine/Ansible/collections`.
+- The Linux Engine now packages an Ansible control-node runtime inside the Engine venv and installs Borealis-managed collections into `Engine/Services/api-backend/cache/Ansible/collections`.
 - Scheduled jobs support Engine-side shared Ansible execution for `local`, `ssh`, and `winrm` contexts.
 - Remote SSH/WinRM runs synthesize ephemeral inventories from Borealis device/filter state and active WireGuard sessions, using site-qualified inventory aliases for duplicate-hostname safety.
 - Shared remote Ansible transport follows the scheduled job execution context; device `connection_type` metadata does not override the operator-selected `ssh` or `winrm` mode.

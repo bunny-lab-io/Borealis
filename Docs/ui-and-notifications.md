@@ -6,18 +6,18 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 Treat this document as the single source of truth for Borealis WebUI design rules. Product pages may be referenced as example implementations, but when a page and this document disagree, this document wins and the page should be updated.
 
 ## WebUI Architecture (High Level)
-- Entry point: `Data/Engine/web-interface/src/App.jsx` bootstraps the app shell and router in `Data/Engine/web-interface/src/app/`.
-- Router: `Data/Engine/web-interface/src/app/routes/router.jsx`.
-- Shared shell: `Data/Engine/web-interface/src/app/shell/AppShell.jsx`.
-- Login/bootstrap gate: `Data/Engine/web-interface/src/app/routes/LoginRoute.jsx` and `Data/Engine/web-interface/src/app/routes/BootstrapEntry.jsx`.
-- Providers: `Data/Engine/web-interface/src/app/providers/` for bootstrap/auth session state and page chrome metadata.
+- Entry point: `Data/Engine/Containers/webui-frontend/data/web-interface/src/App.jsx` bootstraps the app shell and router in `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/`.
+- Router: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx`.
+- Shared shell: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/shell/AppShell.jsx`.
+- Login/bootstrap gate: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/LoginRoute.jsx` and `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/BootstrapEntry.jsx`.
+- Providers: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/providers/` for bootstrap/auth session state and page chrome metadata.
 - Global socket: `window.BorealisSocket` (Socket.IO client).
-- Remote Desktop: `Data/Engine/web-interface/src/Devices/Tabs/Remote_Desktop.jsx` uses Apache Guacamole VNC as the sole browser viewer and reports Guacamole service health before launch.
+- Remote Desktop: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Remote_Desktop.jsx` uses Apache Guacamole VNC as the sole browser viewer and reports Guacamole service health before launch.
 - Shared operator presence: authenticated browsers emit `operator_presence_sync` and `operator_presence_clear` on the shared socket; the Engine emits `server_operator_presence_changed` so informational admin pages can refresh live operator session data without waiting for their poll interval.
-- Navigation: `Data/Engine/web-interface/src/Navigation_Sidebar.jsx`.
-- Watchdog authoring: `Data/Engine/web-interface/src/Automation/Watchdogs/`.
-- Alerts queue: `Data/Engine/web-interface/src/Alerting/Active_Alerts.jsx`.
-- Page style template reference: `Data/Engine/web-interface/src/DevTools/Page_Style_Template.jsx` (layout only).
+- Navigation: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Navigation_Sidebar.jsx`.
+- Watchdog authoring: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Automation/Watchdogs/`.
+- Alerts queue: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Alerting/Active_Alerts.jsx`.
+- Page style template reference: `Data/Engine/Containers/webui-frontend/data/web-interface/src/DevTools/Page_Style_Template.jsx` (layout only).
 
 ## Operator Bootstrap Gate
 - Borealis now resolves `/api/bootstrap/state` before it attempts `/api/auth/me` or renders the normal login form.
@@ -32,7 +32,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - restart: unlock Aegis, then proceed to the normal login or passkey view
 - post-force-reset: set a new Aegis cipher, recover an existing administrator, complete MFA, then resume normal operation
 - `AuthContext.jsx` now hydrates `bootstrapState` first. If bootstrap is not yet `login_required`, it clears any cached operator session and suppresses Aegis status polling until the Engine is ready for normal auth.
-- The normal login surface in `Data/Engine/web-interface/src/Login.jsx` now stays hidden until bootstrap reaches `login_required`.
+- The normal login surface in `Data/Engine/Containers/webui-frontend/data/web-interface/src/Login.jsx` now stays hidden until bootstrap reaches `login_required`.
 
 ## Access Management UX
 - Credentials:
@@ -55,7 +55,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 ## Toast Notifications
 - Backend: `POST /api/notifications/notify`.
 - Transport: Socket.IO event `borealis_notification`.
-- Frontend: `Data/Engine/web-interface/src/Notifications.jsx`.
+- Frontend: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Notifications.jsx`.
 - Scope: include `username` in the payload to target a specific signed-in operator; the frontend filters user-scoped notifications to that operator while unscoped notifications still broadcast to all connected operators.
 - Installed Software now uses that same toast path for operator-managed software actions. Right-click actions such as `Create Global Icon Override`, `Create Global Uninstall Override`, `Block Uninstallation`, `Unblock Uninstallation`, and the page-level `Query Software Changes` button all post success or failure notifications through the shared notification system.
 
@@ -71,7 +71,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - Alerts starts in an unfiltered all-alerts view; clicking a status pill applies that queue filter, and clicking the same pill again clears it back to all alerts.
 - Alerts relies on AG Grid's built-in column filters rather than a page-level custom filter bar.
 - Device Summary includes a `Watchdogs` tab so operators can acknowledge incidents, suppress a watchdog for one device, or launch a prefilled device-scoped watchdog draft.
-- Device Summary includes a right-anchored `Agent Health` tab. Keep agent-health tab composition in `Data/Engine/web-interface/src/Devices/Tabs/Agent_Health.jsx`, with focused helper components beside it under `Data/Engine/web-interface/src/Devices/Tabs/`; the Summary tab should not contain an agent-health island or summary-section nav item.
+- Device Summary includes a right-anchored `Agent Health` tab. Keep agent-health tab composition in `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Agent_Health.jsx`, with focused helper components beside it under `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/`; the Summary tab should not contain an agent-health island or summary-section nav item.
 - The Agent Health tab should show a visual startup flow like Remote Desktop readiness flows, plus clickable role/service runtime-health nodes inside the flow graph. Flow states are `complete`, `active`, `failed`, `pending`, and `skipped`; active nodes use the same spinner language as the linear readiness view.
 - Agent Health refreshes silently from `agent_status_changed` on `window.BorealisSocket`; avoid toasts for routine startup progression.
 - Filesystem browser surfaces should follow the explorer pattern now established in the Device Summary `File Management` tab:
@@ -135,20 +135,20 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - Add further shared topics here (for example, triage process, security posture deltas) instead of growing `AGENTS.md`.
 
 ### Shared UI (MagicUI + AG Grid) (Full)
-Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/DevTools/Page_Style_Template.jsx` as the canonical visual reference (no API/business logic). Keep this doc as the single source of truth for styling rules and AG Grid behavior.
+Applies to all Borealis frontends. Use `Data/Engine/Containers/webui-frontend/data/web-interface/src/DevTools/Page_Style_Template.jsx` as the canonical visual reference (no API/business logic). Keep this doc as the single source of truth for styling rules and AG Grid behavior.
 
 - Toast notifications: see the Toast Notifications section below for endpoint, payload, severity variants, and quick test commands.
 
 #### Page Style Template Reference
 - Purpose: visual-only baseline for new pages; copy structure but wire your data in real pages.
 - Header: small Material icon left of the title, subtitle beneath, utility buttons on the top-right.
-- Body: primary pages should render their main content through `Data/Engine/web-interface/src/PageBodyFrame.jsx` so the shared body shell, outer inset, subtitle-to-body spacing, and edge-bleed behavior stay consistent.
+- Body: primary pages should render their main content through `Data/Engine/Containers/webui-frontend/data/web-interface/src/PageBodyFrame.jsx` so the shared body shell, outer inset, subtitle-to-body spacing, and edge-bleed behavior stay consistent.
 - Shell: avoid gutters on the Paper.
 - Selection column (for bulk actions): pinned left, header checkbox enabled, about 52px fixed width, no menu/sort/resize; rely on AG Grid and Quartz built-ins for checkbox visuals.
 - Typography/buttons: IBM Plex Sans, gradient primary buttons, rounded corners (about 8px), themed Quartz grid wrapper.
 
 #### Standardized Page Bodies
-- Primary pages rendered beneath the shared App header use `Data/Engine/web-interface/src/PageBodyFrame.jsx`.
+- Primary pages rendered beneath the shared App header use `Data/Engine/Containers/webui-frontend/data/web-interface/src/PageBodyFrame.jsx`.
 - `AppShell.jsx` plus `PageChromeProvider` own the title, subtitle, icon, and header action rail. `PageBodyFrame` owns the body inset, rounded outer shell, shell chrome, and variant-specific structure.
 - Supported variants: `grid`, `grid_with_stack`, `split_tool`, `content_panel`.
 - Informational admin dashboards such as Server Info should prefer `content_panel`, start with a hero strip of high-signal stat cards, and then stack glass sections beneath it rather than recreating toolbar chrome inside the body.
@@ -160,9 +160,9 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/DevTools/P
 - Implementation guide: `Docs/features_to_implement/standardized_page_bodies.md`.
 
 #### Navigation Sidebar Active Page Mapping
-- File: `Data/Engine/web-interface/src/Navigation_Sidebar.jsx`.
+- File: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Navigation_Sidebar.jsx`.
 - Goal: keep the parent nav item highlighted when operators navigate to nested detail or editor pages.
-- Source of truth: route `handle.navKey` values in `Data/Engine/web-interface/src/app/routes/router.jsx`.
+- Source of truth: route `handle.navKey` values in `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx`.
 - The sidebar now owns static nav targets from `APP_PATHS`; it does not maintain a page-key alias table.
 - Examples:
 - device details use `pageKey: "device"` and `navKey: "devices"`
@@ -171,7 +171,7 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/DevTools/P
 - assemblies use `pageKey: "script-assembly"`, `pageKey: "ansible-playbook"`, or `pageKey: "workflow"` with `navKey: "assemblies"`
 
 #### Global Device Search
-- Shared header ownership: `Data/Engine/web-interface/src/app/shell/AppShell.jsx` places the global device search in the top app bar; the search UI itself lives in `Data/Engine/web-interface/src/GlobalDeviceSearch.jsx`.
+- Shared header ownership: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/shell/AppShell.jsx` places the global device search in the top app bar; the search UI itself lives in `Data/Engine/Containers/webui-frontend/data/web-interface/src/GlobalDeviceSearch.jsx`.
 - Scope: search is hostname-only and should use `GET /api/devices/search?hostname=<query>` so operators only see devices inside their assigned sites while admins can see any device, including unassigned inventory.
 - Minimum activation: do not open the search overlay or call the API until the operator has entered at least 3 characters.
 - Presentation: style the field as a compact dark glass control with cyan hover/focus treatment so it feels like part of the shared header band rather than a legacy toolbar widget.
@@ -191,7 +191,7 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/DevTools/P
 - Buttons and chips: page-header primary CTAs use a consistent cyan-to-violet gradient (`#7dd3fc -> #c084fc`); neutral actions use rounded outlines with `rgba(148,163,184,0.4)` borders and mixed-case labels.
 - Do not use rainbow-border CTAs in the shared page header rail.
 - AG Grid treatment: Quartz theme with matte navy headers, subtle alternating row opacity, cyan/magenta interaction glows, rounded wrappers, soft borders, inset selection glows.
-- Explorer-style file browsers and similar nested navigation surfaces that need broad hierarchy visibility should use community AG Grid plus a React-managed flattened tree. Do not switch those surfaces to AG Grid Tree Data or grouping APIs for this workflow. Reference implementation: `Data/Engine/web-interface/src/Devices/Tabs/Remote_File_Management.jsx`.
+- Explorer-style file browsers and similar nested navigation surfaces that need broad hierarchy visibility should use community AG Grid plus a React-managed flattened tree. Do not switch those surfaces to AG Grid Tree Data or grouping APIs for this workflow. Reference implementation: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Remote_File_Management.jsx`.
 - Default grid cell padding: keep roughly 18px on the left edge and 12px on the right for standard cells (12px/9px for `auto-col-tight`) so text never hugs a column edge. Target the center + pinned containers so both regions stay aligned.
 - Overlays/menus: `rgba(8,12,24,0.96)` canvas, blurred backdrops, thin steel borders; bright typography; deep blue glass inputs; cyan confirm, mauve destructive accents.
 
@@ -199,8 +199,8 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/DevTools/P
 - Use a right-click context menu for row-targeted grid actions when operators benefit from working directly in-table rather than moving back to a page-level toolbar.
 - Match the shared Borealis context-menu model.
 - Reference implementations currently live in:
-  - `Data/Engine/web-interface/src/Devices/Tabs/Installed_Software.jsx`
-  - `Data/Engine/web-interface/src/Devices/Tabs/Remote_File_Management.jsx`
+  - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Installed_Software.jsx`
+  - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Remote_File_Management.jsx`
 - Core interaction model:
   - open the menu at the pointer using MUI `Menu` with `anchorReference="anchorPosition"`
   - use a dark glass paper surface with `rgba(8,12,24,0.96)` background, shared panel border, backdrop blur, about `8px` radius, and a little inner padding so grouped sections have room to breathe
@@ -268,7 +268,7 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/DevTools/P
   - multi-selection should automatically collapse to bulk-safe actions
   - empty-space context menus may expose location-scoped or view-scoped actions and should use the current location in the header row
 - Reference implementation:
-  - `Data/Engine/web-interface/src/Devices/Tabs/Remote_File_Management.jsx` demonstrates the preferred Borealis anatomy:
+  - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Remote_File_Management.jsx` demonstrates the preferred Borealis anatomy:
     - context header
     - ellipsis-safe header tooltips
     - grouped sections
@@ -315,7 +315,7 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/DevTools/P
 - Confirmation dialogs should be simplified to the minimum information needed to make a safe decision. Prefer a short subtitle plus the selected-object preview instead of repeating multiple warning paragraphs.
 
 #### Page-Level Tabs
-- Header ownership: `Data/Engine/web-interface/src/app/shell/AppShell.jsx` owns the page title, subtitle, icon, and the page action rail. Routed pages should publish header metadata through `useRoutePageChrome()` or `usePageChrome()`.
+- Header ownership: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/shell/AppShell.jsx` owns the page title, subtitle, icon, and the page action rail. Routed pages should publish header metadata through `useRoutePageChrome()` or `usePageChrome()`.
 - Header action contract:
 ```jsx
 useRoutePageChrome({
@@ -329,7 +329,7 @@ useRoutePageChrome({
   ],
 });
 ```
-- Shared implementation: use `Data/Engine/web-interface/src/Page_Header_Actions.jsx` for the action-rail renderer and the shared button/control tokens. Standalone pages that render without App should use the same `PageHeaderActionRail` component locally instead of re-creating header buttons.
+- Shared implementation: use `Data/Engine/Containers/webui-frontend/data/web-interface/src/Page_Header_Actions.jsx` for the action-rail renderer and the shared button/control tokens. Standalone pages that render without App should use the same `PageHeaderActionRail` component locally instead of re-creating header buttons.
 - Action rail placement: the rail lives inside the shared header band in normal document flow, aligned to the top-right of the page title block. Do not use `position: "fixed"` for page-level actions.
 - Rail ordering: pages declare actions in their final left-to-right display order. Supporting actions should be listed first and primary actions should be listed last so the main CTA stays on the far right.
 - Button tones:
@@ -347,7 +347,7 @@ useRoutePageChrome({
 - Label treatment: the floating label text should blend directly into the page/header background. Do not add a chip, pill, or opaque backdrop behind the label text.
 - Badges/metadata: do not standardize badges as part of the shared header rail. Page-specific metadata belongs in the page body, usually directly under the subtitle or near the first relevant control group.
 - Secondary action overflow: on narrow widths, if the full rail no longer fits on a single row, the shared rail automatically collapses all secondary actions into a single `Actions` secondary button while keeping primary/warning/danger actions visible. Overflow menu ordering should place the secondary action closest to the primary buttons at the top of the menu.
-- Some tabbed surfaces may still expose page-local action menus when the actions are truly tab-scoped rather than row-scoped. Use `Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx` as an example implementation, but keep the shared action-rail rules in this document as the authority.
+- Some tabbed surfaces may still expose page-local action menus when the actions are truly tab-scoped rather than row-scoped. Use `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Summary.jsx` as an example implementation, but keep the shared action-rail rules in this document as the authority.
 - `Update Agent` is an operator-triggered AutoUpdater start. It tells the device to run its existing local updater task immediately rather than using a separate direct-launch updater path.
 - Workflow and targeting UIs that consume `/api/agents` should treat helper-backed current-user capability as metadata on the host's SYSTEM record (`helper_contexts`), not as a second live Borealis socket.
 - Responsive behavior: tabs remain in normal flow beneath the header band. On narrow widths, the title block and action rail stack vertically. The rail should prefer collapsing secondary actions before wrapping and must never cover the tabs or the first content section.
@@ -443,13 +443,13 @@ const NAV_TAB_COLORS = {
 - `GitHub Project | About Borealis`
 - `Cancel | Save Filter`
 - Canonical examples:
-- Visual reference page: `Data/Engine/web-interface/src/DevTools/Page_Style_Template.jsx`
-- Shared header owner: `Data/Engine/web-interface/src/app/shell/AppShell.jsx`
-- Shared button rail/tokens: `Data/Engine/web-interface/src/Page_Header_Actions.jsx`
+- Visual reference page: `Data/Engine/Containers/webui-frontend/data/web-interface/src/DevTools/Page_Style_Template.jsx`
+- Shared header owner: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/shell/AppShell.jsx`
+- Shared button rail/tokens: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Page_Header_Actions.jsx`
 
 #### URL-Synced Tabs and Deep Links
 - Use URL paths for resource identity and `?tab=` for active tab state.
-- Route ownership lives in `Data/Engine/web-interface/src/app/routes/router.jsx` and `Data/Engine/web-interface/src/app/routes/paths.js`.
+- Route ownership lives in `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx` and `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/paths.js`.
 - Use canonical ID-backed routes without `/edit` suffixes. If a route contains the resource identifier, that route is the edit/view surface for that resource.
 - Create route examples: `/jobs/new`, `/filters/new`, `/assemblies/new/script`
 - Existing-resource route examples: `/jobs/<job_id>`, `/filters/<filter_id>`, `/assemblies/workflows/<workflow_guid>`
@@ -513,15 +513,15 @@ const NAV_TAB_COLORS = {
 - Row hover baseline: use a darker Borealis blue hover state (`--ag-row-hover-color: "rgba(73,156,196,0.2)"`) so hover stays in the same color family as selected rows without matching the selected intensity.
 - Selected row highlight baseline: use `backgroundColor: "rgba(125,211,252,0.2) !important"` with `boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)"` so checkbox selection state reads in Borealis blue.
 - Inline grid text inputs: when a page embeds a MUI `TextField` inside AG Grid (for example, Device Description), use `MAGIC_UI.accentA` (`#7dd3fc`) for hover/focus border color.
-- Example: follow the scaffolding in `Engine/web-interface/src/Scheduling/Scheduled_Jobs_List.jsx` and the structure in `Data/Engine/web-interface/src/DevTools/Page_Style_Template.jsx`.
+- Example: follow the scaffolding in `Engine/Services/webui-frontend/cache/web-interface/src/Scheduling/Scheduled_Jobs_List.jsx` and the structure in `Data/Engine/Containers/webui-frontend/data/web-interface/src/DevTools/Page_Style_Template.jsx`.
 - Server Info layout pattern: use Quartz AG Grid sections for service state, public-edge certificates, and live operator sessions, with concise glass summary cards above the grids for the most important runtime signals.
 
 ### Toast Notifications (Full)
 Use this guide to add, configure, and test transient toast notifications across Borealis. It documents the backend endpoint, frontend listener, payload contract, and quick Firefox console commands you can hand to operators for validation.
 
 #### Components and paths
-- Backend endpoint: `Data/Engine/services/API/notifications/management.py` (registered as `/api/notifications/notify`).
-- Frontend listener and renderer: `Data/Engine/web-interface/src/Notifications.jsx` (mounted in `src/app/shell/AppShell.jsx`).
+- Backend endpoint: `Data/Engine/Containers/api-backend/data/services/API/notifications/management.py` (registered as `/api/notifications/notify`).
+- Frontend listener and renderer: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Notifications.jsx` (mounted in `src/app/shell/AppShell.jsx`).
 - Transport: Socket.IO event `borealis_notification` broadcast to connected WebUI clients.
 
 #### Backend behavior
@@ -530,7 +530,7 @@ Use this guide to add, configure, and test transient toast notifications across 
   - Emits `borealis_notification` over Socket.IO (no persistence).
   - Logs via `service_log("notifications", ...)`.
 - Validation: Requires `message` in payload. `title` defaults to `"Notification"` if omitted.
-- Registration: API group `notifications` is enabled by default via `DEFAULT_API_GROUPS` and `_GROUP_REGISTRARS` in `Data/Engine/services/API/__init__.py`.
+- Registration: API group `notifications` is enabled by default via `DEFAULT_API_GROUPS` and `_GROUP_REGISTRARS` in `Data/Engine/Containers/api-backend/data/services/API/__init__.py`.
 
 #### Payload schema
 Send JSON body (session-authenticated):
@@ -630,7 +630,7 @@ This section captures the UI behavior requirements and troubleshooting context f
 
 #### Important references
 - Toast API and payload rules are documented above.
-- UI file: `Data/Engine/web-interface/src/Devices/ReverseTunnel/Powershell.jsx`.
+- UI file: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/ReverseTunnel/Powershell.jsx`.
 - API establish endpoint: `/api/shell/establish` returns `agent_socket` when available.
 - Socket error path: `agent_socket_missing`.
 

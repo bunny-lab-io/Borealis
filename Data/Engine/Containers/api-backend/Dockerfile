@@ -21,12 +21,12 @@ RUN apt-get update \
 
 WORKDIR /opt/Borealis
 
-COPY Data/Engine/engine-requirements.txt /tmp/borealis-engine-requirements.txt
+COPY Data/Engine/Containers/api-backend/data/engine-requirements.txt /tmp/borealis-engine-requirements.txt
 RUN python -m pip install --upgrade pip \
     && python -m pip install -r /tmp/borealis-engine-requirements.txt
 
 COPY Borealis.ps1 /opt/Borealis/Borealis.ps1
-COPY Data/Engine /opt/Borealis/Data/Engine
+COPY Data/Engine/Containers/api-backend/data /opt/Borealis/Data/Engine
 COPY Data/Agent /opt/Borealis/Data/Agent
 COPY Data/Engine/Containers/api-backend/entrypoint.sh /usr/local/bin/borealis-api-backend
 

@@ -25,7 +25,7 @@ Use this file as the entrypoint for Codex instructions. The full knowledgebase n
 Precedence: follow domain docs first; where overlap exists, the domain page wins. The Codex Agent sections inside each page are the authoritative agent guidance.
 
 ## Interacting with the Codebase
-- When making changes to the codebase, do not attempt to build code via npm or vite from the staging folder located under either `Data/Agent` or `Data/Engine`, changes of that nature need to take place in the runtime folders, and it is best to defer to the operator / developer to re-deploy the agent or engine to detect errors with page formatting, etc.
+- When making changes to the codebase, do not attempt to build code via npm or vite from staging source under `Data/Agent`, `Data/Engine`, or `Data/Engine/Containers/*/data`; changes of that nature need to take place in runtime folders, and it is best to defer to the operator / developer to re-deploy the agent or engine to detect errors with page formatting, etc.
 
 ## Unit Testing
 - For codebase changes, read `Docs/Unit_Testing.md` before choosing validation.
@@ -38,7 +38,7 @@ Precedence: follow domain docs first; where overlap exists, the domain page wins
 
 ## UI / AG Grid
 - MagicUI styling language and AG Grid rules are consolidated in `Docs/ui-and-notifications.md`.
-- Visual example: `Data/Engine/web-interface/src/DevTools/Page_Style_Template.jsx` (reference only - no business logic). Use it to mirror layout, spacing, and selection column behavior.
+- Visual example: `Data/Engine/Containers/webui-frontend/data/web-interface/src/DevTools/Page_Style_Template.jsx` (reference only - no business logic). Use it to mirror layout, spacing, and selection column behavior.
 
 ## Technical Debt Logging
 - If you add a patchy workaround, non-standard build step, or dev/prod behavior divergence, create or update a GitHub issue with the `Technical Debt` label.

@@ -476,7 +476,7 @@ generate_secret() {
 
 ensure_service_tree() {
   local role=""
-  mkdir -p "${DEPLOY_DIR}" "${RUNTIME_ROOT}/Shared/tmp" "${RUNTIME_ROOT}/Shared/downloads"
+  mkdir -p "${DEPLOY_DIR}"
   for role in "${SERVICE_ROLES[@]}"; do
     mkdir -p \
       "${RUNTIME_ROOT}/Services/${role}/config" \
@@ -492,31 +492,47 @@ ensure_service_tree() {
     "${RUNTIME_ROOT}/Services/api-backend/secrets/Auth_Tokens" \
     "${RUNTIME_ROOT}/Services/api-backend/secrets/Certificates" \
     "${RUNTIME_ROOT}/Services/api-backend/cache/Ansible/collections" \
+    "${RUNTIME_ROOT}/Services/api-backend/cache/Ansible/Generated/Runtime" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/run"
 }
 
-link_runtime_compat_path() {
-  local link_path="$1"
-  local target_path="$2"
-  if [[ -L "${link_path}" ]]; then
-    return 0
-  fi
-  if [[ -e "${link_path}" ]]; then
-    return 0
-  fi
-  ln -s "${target_path}" "${link_path}"
-}
-
-ensure_legacy_compat_paths() {
-  mkdir -p "${RUNTIME_ROOT}"
-  link_runtime_compat_path "${RUNTIME_ROOT}/Logs" "Services/api-backend/logs"
-  link_runtime_compat_path "${RUNTIME_ROOT}/Auth_Tokens" "Services/api-backend/secrets/Auth_Tokens"
-  link_runtime_compat_path "${RUNTIME_ROOT}/Certificates" "Services/api-backend/secrets/Certificates"
-  link_runtime_compat_path "${RUNTIME_ROOT}/Ansible" "Services/api-backend/cache/Ansible"
-  link_runtime_compat_path "${RUNTIME_ROOT}/WireGuard" "Services/wireguard-tunnel/config"
-  link_runtime_compat_path "${RUNTIME_ROOT}/LetsEncrypt" "Services/traefik-edge/state"
-  link_runtime_compat_path "${RUNTIME_ROOT}/Traefik" "Services/traefik-edge/config"
+prune_empty_legacy_runtime_paths() {
+  local name=""
+  local path=""
+  local legacy_paths=(
+    "Logs"
+    "Auth_Tokens"
+    "Certificates"
+    "Ansible"
+    "Ansible/Generated/Runtime"
+    "Ansible/Generated"
+    "Ansible/collections"
+    "Ansible"
+    "WireGuard"
+    "LetsEncrypt"
+    "Traefik"
+    "Shared"
+    "Shared/tmp"
+    "Shared/downloads"
+    "Shared"
+    "Cache/AgentUpdates"
+    "Cache"
+    "Config"
+    "Aurora"
+    "web-interface"
+    "engine_secret.txt"
+  )
+  for name in "${legacy_paths[@]}"; do
+    path="${RUNTIME_ROOT}/${name}"
+    if [[ -L "${path}" ]]; then
+      rm -f "${path}"
+    elif [[ -d "${path}" ]]; then
+      rmdir "${path}" 2>/dev/null || true
+    elif [[ -f "${path}" && ! -s "${path}" ]]; then
+      rm -f "${path}"
+    fi
+  done
 }
 
 resolve_public_hostname() {
@@ -590,8 +606,11 @@ BOREALIS_PUBLIC_VNC_PATH=/remote-desktop/vnc
 BOREALIS_PUBLIC_WIREGUARD_HOST=${public_host}
 BOREALIS_PUBLIC_WIREGUARD_PORT=30000
 BOREALIS_ACME_EMAIL=${acme_email}
-BOREALIS_LETSENCRYPT_SETTINGS_PATH=${RUNTIME_ROOT}/LetsEncrypt/Settings.json
-BOREALIS_TRAEFIK_ACME_STORAGE_PATH=${RUNTIME_ROOT}/LetsEncrypt/acme.json
+BOREALIS_LETSENCRYPT_SETTINGS_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/Settings.json
+BOREALIS_TRAEFIK_ACME_STORAGE_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json
+BOREALIS_TRAEFIK_RUNTIME_ENV_PATH=${RUNTIME_ROOT}/Services/traefik-edge/env/runtime.env
+BOREALIS_TRAEFIK_STATIC_CONFIG_PATH=${RUNTIME_ROOT}/Services/traefik-edge/config/traefik.yml
+BOREALIS_TRAEFIK_DYNAMIC_CONFIG_PATH=${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic.yml
 
 POSTGRES_DB=${db_name}
 POSTGRES_USER=${db_user}
@@ -616,9 +635,15 @@ BOREALIS_WIREGUARD_PORT=30000
 BOREALIS_WIREGUARD_ENGINE_VIRTUAL_IP=10.255.0.1/32
 BOREALIS_WIREGUARD_PEER_NETWORK=10.255.0.0/16
 BOREALIS_WIREGUARD_PORT_ALLOWLIST=47002,5900,22
+BOREALIS_WIREGUARD_CONFIG_ROOT=${RUNTIME_ROOT}/Services/wireguard-tunnel/config
 BOREALIS_WIREGUARD_KEY_ROOT=${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets
 BOREALIS_WIREGUARD_CONTROL_SOCKET=${RUNTIME_ROOT}/Services/wireguard-tunnel/run/control.sock
 BOREALIS_ENGINE_SECRET_PATH=${RUNTIME_ROOT}/Services/api-backend/secrets/engine_secret.txt
+BOREALIS_ENGINE_CERT_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Certificates
+BOREALIS_ENGINE_AUTH_TOKEN_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Auth_Tokens
+BOREALIS_ANSIBLE_RUNTIME_ROOT=${RUNTIME_ROOT}/Services/api-backend/cache/Ansible
+BOREALIS_ANSIBLE_RUNNER_SETTINGS_PATH=${RUNTIME_ROOT}/Services/api-backend/config/ansible_runner_settings.json
+BOREALIS_OFFICIAL_ASSEMBLIES_CHECKOUT_ROOT=${RUNTIME_ROOT}/Services/api-backend/cache
 BOREALIS_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/engine.log
 BOREALIS_ERROR_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/error.log
 BOREALIS_API_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/api.log
@@ -887,7 +912,7 @@ validate_service() {
 prepare_runtime() {
   local mode="$1"
   ensure_service_tree
-  ensure_legacy_compat_paths
+  prune_empty_legacy_runtime_paths
   load_existing_image_tags
   local public_host
   local acme_email

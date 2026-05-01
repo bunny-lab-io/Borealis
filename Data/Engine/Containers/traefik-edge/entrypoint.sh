@@ -29,9 +29,9 @@ cat > "${STATE_DIR}/Settings.json" <<EOF
   "engine_upstream_port": 5000,
   "vnc_upstream_host": "127.0.0.1",
   "vnc_upstream_port": ${BOREALIS_VNC_WS_PORT:-4823},
-  "settings_path": "${PROJECT_ROOT}/Engine/LetsEncrypt/Settings.json",
-  "runtime_env_path": "${PROJECT_ROOT}/Engine/LetsEncrypt/runtime.env",
-  "acme_storage_path": "${PROJECT_ROOT}/Engine/LetsEncrypt/acme.json",
+  "settings_path": "${STATE_DIR}/Settings.json",
+  "runtime_env_path": "${SERVICE_ROOT}/env/runtime.env",
+  "acme_storage_path": "${STATE_DIR}/acme.json",
   "traefik_static_config_path": "${CONFIG_DIR}/traefik.yml",
   "traefik_dynamic_config_path": "${CONFIG_DIR}/dynamic.yml",
   "logs_directory": "${LOG_DIR}"

@@ -1,0 +1,27 @@
+#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/Containers/api-backend/data/engine-requirements.txt
+Flask
+flask-cors
+flask_socketio
+eventlet
+cryptography
+PyJWT[crypto]
+pyotp
+qrcode
+webauthn
+Pillow
+requests
+aiohttp
+python-socketio
+websockets
+packaging
+regex
+SQLAlchemy
+alembic
+psycopg[binary]
+ldap3
+ansible-core
+ansible-runner
+jmespath
+pywinrm[credssp]>=0.4.0
+pypsrp[credssp]>=0.4.0,<1.0.0
+pytest

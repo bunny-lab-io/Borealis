@@ -380,7 +380,7 @@ else
   fi
 fi
 
-WEBUI_RUNTIME="${PROJECT_ROOT}/Engine/web-interface"
+WEBUI_RUNTIME="${PROJECT_ROOT}/Engine/Services/webui-frontend/cache/web-interface"
 WEBUI_UNIT_TESTS="${WEBUI_RUNTIME}/Unit_Tests"
 NODE_PATH_PREFIX=""
 NPM_BIN="$(command -v npm 2>/dev/null || true)"
@@ -396,7 +396,7 @@ if [[ "$REQUESTED_DOMAIN" != "all" && "$REQUESTED_DOMAIN" != "webui" ]]; then
 elif [[ ! -d "$WEBUI_UNIT_TESTS" ]]; then
   {
     echo "Engine WebUI runtime unit tests missing at ${WEBUI_UNIT_TESTS}."
-    echo "Redeploy the Engine so Data/Engine/web-interface/Unit_Tests is staged into Engine/web-interface/Unit_Tests, then rerun this script."
+    echo "Redeploy the Engine so container-owned WebUI source is staged into Engine/Services/webui-frontend/cache/web-interface, then rerun this script."
   } >"$WEBUI_LOG"
   echo "Engine WebUI unit tests failed with status 2. Log: ${WEBUI_LOG}" >&2
   cat "$WEBUI_LOG" >&2

@@ -93,9 +93,9 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
   - `/automation/watchdogs/new`
   - `/automation/watchdogs/:watchdogId`
 - Main files:
-  - `Data/Engine/web-interface/src/Automation/Watchdogs/Watchdog_List.jsx`
-  - `Data/Engine/web-interface/src/Automation/Watchdogs/Watchdog_Editor.jsx`
-  - `Data/Engine/web-interface/src/app/route-modules/watchdogRoutes.jsx`
+  - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Automation/Watchdogs/Watchdog_List.jsx`
+  - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Automation/Watchdogs/Watchdog_Editor.jsx`
+  - `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/route-modules/watchdogRoutes.jsx`
 - Device pages can launch a prefilled watchdog draft through the Device Summary `Actions` menu and the device-level `Watchdogs` tab.
 
 ## API Endpoints
@@ -116,11 +116,11 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
 
 ## Codex Agent (Detailed)
 ### Main implementation files
-- API registration: `Data/Engine/services/API/watchdogs/management.py`
-- Runtime service: `Data/Engine/services/API/watchdogs/runtime.py`
-- Schema migration: `Data/Engine/database_migrations.py`
-- Navigation: `Data/Engine/web-interface/src/Navigation_Sidebar.jsx`
-- Routes: `Data/Engine/web-interface/src/app/routes/router.jsx` and `Data/Engine/web-interface/src/app/routes/paths.js`
+- API registration: `Data/Engine/Containers/api-backend/data/services/API/watchdogs/management.py`
+- Runtime service: `Data/Engine/Containers/api-backend/data/services/API/watchdogs/runtime.py`
+- Schema migration: `Data/Engine/Containers/api-backend/data/database_migrations.py`
+- Navigation: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Navigation_Sidebar.jsx`
+- Routes: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx` and `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/paths.js`
 
 ### Runtime ownership
 - `WatchdogRuntimeService` is attached to `EngineContext.watchdog_runtime`.

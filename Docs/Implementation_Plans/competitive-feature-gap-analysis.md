@@ -45,7 +45,7 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | PowerShell / script execution | Shipped | `Docs/assemblies.md`, `Docs/agent-runtime.md`, `README.md` | Borealis supports quick jobs, scheduled jobs, and signed PowerShell/Batch/Bash execution. |
 | Service inventory and service control | Shipped | `Docs/device-management.md`, `Docs/api-reference.md` | Device APIs expose cached services plus start/stop/restart actions. |
 | Installed software inventory, uninstall, and software override governance | Shipped | `Docs/device-management.md`, `Docs/api-reference.md`, `Docs/Software Management/adding-software-to-icon-overrides.md`, `Docs/Software Management/adding-software-to-uninstall-overrides.md`, `Docs/Software Management/adding-software-to-uninstall-blocklist.md` | Borealis now has a first-class Installed Software surface with row-level uninstall, global icon overrides, global uninstall overrides, uninstall block/unblock, on-demand `Query Software Changes`, and uninstall progress/history in Activity History. |
-| Processes | Shipped | `Docs/device-management.md`, `Docs/agent-runtime.md`, `Docs/api-reference.md`, `Data/Engine/services/API/devices/processes.py`, `Data/Agent/Roles/role_system_process_management.py`, `Data/Engine/web-interface/src/Devices/Tabs/Process_Management.jsx` | Borealis now has a Device Summary `Processes` tab with live process snapshots, CPU/memory/disk/network metadata, owner and command-line columns, parent/child grouping, system-process filtering, terminated-process visibility, copy actions, and operator-triggered `End Task`. |
+| Processes | Shipped | `Docs/device-management.md`, `Docs/agent-runtime.md`, `Docs/api-reference.md`, `Data/Engine/Containers/api-backend/data/services/API/devices/processes.py`, `Data/Agent/Roles/role_system_process_management.py`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Process_Management.jsx` | Borealis now has a Device Summary `Processes` tab with live process snapshots, CPU/memory/disk/network metadata, owner and command-line columns, parent/child grouping, system-process filtering, terminated-process visibility, copy actions, and operator-triggered `End Task`. |
 | Screenshot / quick visual capture | Partial but still a gap | `Docs/agent-runtime.md` | `role_currentuser_node_screenshot.py` still exists, but the docs explicitly mark screenshot and macro roles as legacy interactive-only roles outside the supported helper-backed runtime. |
 | Macro / UI automation | Partial but still a gap | `Docs/agent-runtime.md` | Same issue as screenshot: `role_currentuser_macros.py` exists, but it is not part of the supported helper-backed path. |
 | Event Viewer | Absent | `Docs/device-management.md`, `Docs/api-reference.md` | No event-log/Event Viewer APIs or documented UI surface were found. |
@@ -131,7 +131,7 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | Alerts and operational status surfaces | Shipped | `Docs/device-alerts.md`, `Docs/logging-and-operations.md` | Good operational visibility, but not formal reporting. |
 | Monitoring reports (daily/weekly/monthly) | Absent | `Docs/api-reference.md`, `README.md` | No scheduled reporting/report-export feature was found. |
 | Executive summary reports | Absent | `Docs/api-reference.md`, `README.md` | No executive summary/reporting feature was found. |
-| Script-output reporting | Partial but still a gap | `Docs/assemblies.md`, `README.md`, `Data/Engine/web-interface/src/nodes/Reporting/Node_Export_to_CSV.jsx` | Borealis stores outputs and has workflow export primitives, but not a report product around script-returned values. |
+| Script-output reporting | Partial but still a gap | `Docs/assemblies.md`, `README.md`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/nodes/Reporting/Node_Export_to_CSV.jsx` | Borealis stores outputs and has workflow export primitives, but not a report product around script-returned values. |
 | Branded reports / header / domain | Absent | `Docs/ui-and-notifications.md`, `Docs/api-reference.md` | Branding assets exist for Borealis itself, but no operator-facing white-label or custom-domain feature was documented. |
 | White-label helpdesk / client-facing portal | Absent | `Docs/integrations.md`, `Docs/api-reference.md` | No helpdesk/portal product surface was found. |
 
@@ -140,10 +140,10 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | --- | --- | --- | --- |
 | MFA | Shipped | `Docs/security-and-trust.md`, `Docs/api-reference.md` | Borealis requires MFA by default. |
 | Passkeys / modern auth | Shipped | `Docs/security-and-trust.md`, `Docs/api-reference.md` | Strong modern operator auth story. |
-| LDAP/LDAPS directory authentication | Shipped | `Data/Engine/services/API/access_management/directory_services.py`, `Data/Engine/web-interface/src/Access_Management/Directory_Services.jsx`, `Data/Engine/database.py` | Borealis now supports directory credential providers with LDAPS certificate trust, provider testing, AD group role mapping, and site-scoped operator assignment by directory group. |
+| LDAP/LDAPS directory authentication | Shipped | `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Directory_Services.jsx`, `Data/Engine/Containers/api-backend/data/database.py` | Borealis now supports directory credential providers with LDAPS certificate trust, provider testing, AD group role mapping, and site-scoped operator assignment by directory group. |
 | Script/code signing | Shipped | `Docs/security-and-trust.md`, `Docs/assemblies.md` | Strong differentiator versus much of the field. |
 | Aegis secret protection | Shipped | `Docs/security-and-trust.md`, `Docs/engine-runtime.md`, `README.md` | Strong differentiator. |
-| Site-scoped RBAC | Shipped | `Docs/device-management.md`, `README.md`, `Data/Engine/services/API/access_management/directory_services.py` | Strong multi-operator control model now extends to directory-backed user groups. |
+| Site-scoped RBAC | Shipped | `Docs/device-management.md`, `README.md`, `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py` | Strong multi-operator control model now extends to directory-backed user groups. |
 | Customer lockbox | Absent | `Docs/security-and-trust.md`, `Docs/logging-and-operations.md` | No tenancy-support lockbox pattern is documented. |
 | SAML / SSO | Absent | `Docs/security-and-trust.md`, `Docs/api-reference.md` | LDAPS closes directory-backed authentication, but no SAML/OIDC web SSO flow or endpoints are documented. |
 | Management IP allowlisting | Absent | `Docs/security-and-trust.md`, `Docs/vpn-and-remote-access.md` | Borealis documents WireGuard transport port allowlists, not browser/API management IP allowlists. |
@@ -256,16 +256,16 @@ Borealis is not starting from zero. Several areas already compare well, and thes
 - Live process inspection and termination:
   - `Docs/device-management.md`
   - `Docs/agent-runtime.md`
-  - `Data/Engine/services/API/devices/processes.py`
+  - `Data/Engine/Containers/api-backend/data/services/API/devices/processes.py`
   - `Data/Agent/Roles/role_system_process_management.py`
-  - `Data/Engine/web-interface/src/Devices/Tabs/Process_Management.jsx`
+  - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Process_Management.jsx`
 - Aegis, MFA, passkeys, short-lived tokens, and code signing:
   - `Docs/security-and-trust.md`
   - `Docs/engine-runtime.md`
 - LDAP/LDAPS directory authentication with AD group role and site assignment:
-  - `Data/Engine/services/API/access_management/directory_services.py`
-  - `Data/Engine/web-interface/src/Access_Management/Directory_Services.jsx`
-  - `Data/Engine/database.py`
+  - `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py`
+  - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Directory_Services.jsx`
+  - `Data/Engine/Containers/api-backend/data/database.py`
 - Site-scoped RBAC and scoped targeting:
   - `Docs/device-management.md`
   - `README.md`

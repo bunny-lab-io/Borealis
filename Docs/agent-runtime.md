@@ -113,7 +113,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 ### Troubleshooting flow
 - If enrollment fails, check:
   - `Agent/Logs/agent.log` for enrollment errors.
-  - `Engine/Logs/engine.log` for approval or auth failures.
+  - `Engine/Services/api-backend/logs/engine.log` for approval or auth failures.
 - If current-user execution fails, confirm the SYSTEM broker is advertising helper capability, inspect session inventory for `helper_ready`, and expect `no_interactive_user_session` when no eligible user session exists.
 - If a helper never appears after logon/unlock, inspect the broker reconcile loop in `Data/Agent/session_runtime.py` and confirm the legacy `Borealis Agent (UserHelper)` task has been removed rather than still competing with the broker-launched helper.
 - The updater helper (`Data/Agent/update_helper.py`) requires a configured public HTTPS FQDN and uses normal CA + hostname validation only.

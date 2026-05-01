@@ -64,10 +64,10 @@ Describe the runtime incident side of Watchdogs: the Alerts queue, incident life
 
 ## Codex Agent (Detailed)
 ### Main implementation files
-- Alerts page: `Data/Engine/web-interface/src/Alerting/Active_Alerts.jsx`
-- Device tab: `Data/Engine/web-interface/src/Devices/Tabs/Device_Watchdogs.jsx`
-- Device Summary integration: `Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx`
-- Incident runtime: `Data/Engine/services/API/watchdogs/runtime.py`
+- Alerts page: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Alerting/Active_Alerts.jsx`
+- Device tab: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Watchdogs.jsx`
+- Device Summary integration: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Summary.jsx`
+- Incident runtime: `Data/Engine/Containers/api-backend/data/services/API/watchdogs/runtime.py`
 
 ### Incident payload shape
 - Incident rows include:

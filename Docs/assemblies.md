@@ -73,7 +73,7 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - `execution_context = local` still exists for internal Engine-side Ansible flows such as watchdog remediations, but it is no longer exposed in the scheduled-job editor.
 - Remote SSH/WinRM runs synthesize Engine-side inventories from Borealis device state, credentials, and active WireGuard sessions. Grouped contexts build one shared inventory per playbook component, while individual contexts build one-host inventories so each target gets its own stdout/stderr, timeout window, and terminal status.
 - Remote SSH/WinRM runs ensure the active WireGuard session allows the requested transport port before inventory execution. Standard SSH `22` is already part of the default shell/VNC/SSH allowlist, while non-default SSH or WinRM ports are widened in addition to that baseline. For scheduled jobs in `execution_context = ssh` and `ssh_individual`, Borealis now lets Ansible itself own SSH reachability and authentication outcomes instead of running scheduler-side SSH banner/session probes first. Engine-side SSH runs also isolate their SSH control sockets to a short per-run directory under `/tmp/ansible_controlplane`, and now default the file transfer method to `scp` with `-O` because some peers first hung in the SFTP subsystem and then also stalled in the `piped`/`dd` upload path. Override those transfer behaviors with `BOREALIS_SHARED_ANSIBLE_SSH_TRANSFER_METHOD` and `BOREALIS_SHARED_ANSIBLE_SCP_EXTRA_ARGS` if an environment needs a different transport mix. WinRM still keeps a lightweight Engine-side TCP preflight and excludes targets that fail it before launch. If none remain eligible, Borealis skips the affected run instead of waiting on Ansible transport retries.
-- Individual scheduled Ansible fan-out is bounded by persisted runner settings stored under `Engine/Config/ansible_runner_settings.json` by default and surfaced through Server Info. Borealis enforces both a per-job limit and a shared global limit whenever scheduled jobs dispatch Engine-side Ansible runners.
+- Individual scheduled Ansible fan-out is bounded by persisted runner settings stored under `Engine/Services/api-backend/config/ansible_runner_settings.json` by default and surfaced through Server Info. Borealis enforces both a per-job limit and a shared global limit whenever scheduled jobs dispatch Engine-side Ansible runners.
 
 ## API Endpoints
 - `GET /api/assemblies` (Token Authenticated) - list assemblies.
@@ -105,11 +105,11 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 ## Codex Agent (Detailed)
 ### Storage layout and caching
 - Aurora (`https://github.com/bunny-lab-io/Aurora`) is the official assembly authoring source of truth.
-- Engine keeps a managed Aurora checkout under `Engine/Aurora/` for update checks and imports.
-- Bundled official assemblies live under `Data/Engine/Official_Assemblies/` as a generated seed snapshot for fresh installs and release packaging.
+- Engine keeps a managed Aurora checkout under `Engine/Services/api-backend/cache/Aurora/` for update checks and imports.
+- Bundled official assemblies live under `Data/Engine/Containers/api-backend/data/Official_Assemblies/` as a generated seed snapshot for fresh installs and release packaging.
 - Startup seeds from the bundled snapshot and then attempts an Aurora git sync so official assemblies can be refreshed without relying on the bundled files alone.
 - Runtime assembly data lives in PostgreSQL `assemblies.official_assemblies`, `assemblies.community_assemblies`, and `assemblies.user_created_assemblies`.
-- The Engine loads and caches assemblies via `Data/Engine/assembly_management` and `AssemblyRuntimeService`.
+- The Engine loads and caches assemblies via `Data/Engine/Containers/api-backend/data/assembly_management` and `AssemblyRuntimeService`.
 - Official rows persist `source_repo`, `source_path`, `source_version`, and `content_hash` so GUID-based Aurora updates can be tracked without mirroring repo folders into PostgreSQL.
 
 ### Payload sizing guidance
@@ -139,7 +139,7 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - Variables are included in the payload so agents can log context.
 
 ### Code signing
-- Script bytes are signed in `Data/Engine/services/API/assemblies/execution.py`.
+- Script bytes are signed in `Data/Engine/Containers/api-backend/data/services/API/assemblies/execution.py`.
 - Agents verify signatures using `signature_utils` before execution.
 
 ### Activity history
@@ -148,7 +148,7 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 
 ### Backup guidance
 - Back up PostgreSQL `assemblies.*` tables.
-- Back up `Data/Engine/Official_Assemblies/` if you want the bundled official seed snapshot tracked with releases.
+- Back up `Data/Engine/Containers/api-backend/data/Official_Assemblies/` if you want the bundled official seed snapshot tracked with releases.
 
 ### PostgreSQL dump commands
 - Use these commands when you want a raw database export of all assemblies before reorganizing them into Aurora-friendly folders.
@@ -212,6 +212,6 @@ psql "$BOREALIS_DATABASE_URL" -c "\copy (
 - Linux agent support is incomplete; PowerShell scripts are Windows-first.
 
 ### Touch points to remember
-- API routes: `Data/Engine/services/API/assemblies/`.
-- Assembly runtime: `Data/Engine/services/assemblies/service.py` and `Data/Engine/assembly_management/`.
-- UI editors: `Data/Engine/web-interface/src/Assemblies/`.
+- API routes: `Data/Engine/Containers/api-backend/data/services/API/assemblies/`.
+- Assembly runtime: `Data/Engine/Containers/api-backend/data/services/assemblies/service.py` and `Data/Engine/Containers/api-backend/data/assembly_management/`.
+- UI editors: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Assemblies/`.

@@ -74,12 +74,13 @@ None. This index only links to other pages.
 - Use GitHub issues labeled `Technical Debt` when documenting workarounds, non-standard build steps, or dev/prod drift.
 
 ### Where the truth lives in code
-- Engine source code: `Data/Engine/` (edit here).
+- Engine package shim and tests: `Data/Engine/`.
+- Engine API source code: `Data/Engine/Containers/api-backend/data/` (edit here).
 - Agent source code: `Data/Agent/` (edit here).
-- Web UI source: `Data/Engine/web-interface/src/`.
+- Web UI source: `Data/Engine/Containers/webui-frontend/data/web-interface/src/`.
 - Runtime copies: `Engine/` and `Agent/` (do not edit directly; they are regenerated).
-- Logs: `Engine/Logs/` and `Agent/Logs/` (runtime artifacts).
-- Official assembly snapshot: `Data/Engine/Official_Assemblies/` (generated bundled seed snapshot).
+- Logs: `Engine/Services/api-backend/logs/` and `Agent/Logs/` (runtime artifacts).
+- Official assembly snapshot: `Data/Engine/Containers/api-backend/data/Official_Assemblies/` (generated bundled seed snapshot).
 - Runtime assembly data: PostgreSQL `assemblies.*` tables.
 
 ### Documentation authoring rules
@@ -97,7 +98,7 @@ None. This index only links to other pages.
 - Keep Codex Agent sections detailed so a new agent can act without extra discovery.
 
 ### Update workflow example
-- Change: add a new endpoint in `Data/Engine/services/API/devices/management.py`.
+- Change: add a new endpoint in `Data/Engine/Containers/api-backend/data/services/API/devices/management.py`.
 - Update steps:
   1) Add the endpoint to the file header in that module.
   2) Update `api-reference.md` under the Devices and Inventory section.
