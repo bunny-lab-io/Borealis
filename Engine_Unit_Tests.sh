@@ -12,7 +12,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${BOREALIS_PROJECT_ROOT:-${SCRIPT_DIR}}"
 TIMESTAMP="$(date -u +"%Y%m%dT%H%M%SZ")"
 RESULT_DIR="${BOREALIS_UNIT_TEST_RESULTS_DIR:-${PROJECT_ROOT}/Unit_Test_Results/engine-${TIMESTAMP}}"
-PYTHON_TIMEOUT_SECONDS="${BOREALIS_ENGINE_UNIT_TEST_TIMEOUT_SECONDS:-900}"
+PYTHON_TIMEOUT_SECONDS="${BOREALIS_ENGINE_UNIT_TEST_TIMEOUT_SECONDS:-3600}"
+PYTHON_FILE_TIMEOUT_SECONDS="${BOREALIS_ENGINE_UNIT_TEST_FILE_TIMEOUT_SECONDS:-900}"
 WEBUI_TIMEOUT_SECONDS="${BOREALIS_WEBUI_UNIT_TEST_TIMEOUT_SECONDS:-240}"
 
 usage() {
@@ -27,6 +28,7 @@ Environment overrides:
   BOREALIS_ENGINE_TEST_PYTHON
   BOREALIS_UNIT_TEST_RESULTS_DIR
   BOREALIS_ENGINE_UNIT_TEST_TIMEOUT_SECONDS
+  BOREALIS_ENGINE_UNIT_TEST_FILE_TIMEOUT_SECONDS
   BOREALIS_WEBUI_UNIT_TEST_TIMEOUT_SECONDS
 USAGE
 }
@@ -89,6 +91,74 @@ PYTHON_BIN="$(resolve_python)" || {
   exit 2
 }
 
+run_engine_python_tests() {
+  local test_root="Data/Engine/Unit_Tests"
+  local junit_dir="${RESULT_DIR}/engine-pytest-junit"
+  local lane_status=0
+  local total_count=0
+  local failed_count=0
+  local passed_count=0
+
+  mkdir -p "$junit_dir"
+  : >"$ENGINE_PYTEST_LOG"
+
+  if [[ ! -d "${PROJECT_ROOT}/${test_root}" ]]; then
+    echo "Engine Python unit test root missing: ${PROJECT_ROOT}/${test_root}" >"$ENGINE_PYTEST_LOG"
+    return 2
+  fi
+
+  while IFS= read -r test_file; do
+    [[ -n "$test_file" ]] || continue
+    total_count=$((total_count + 1))
+    local safe_name="${test_file//\//__}"
+    safe_name="${safe_name// /_}"
+    local junit_path="${junit_dir}/${safe_name}.xml"
+
+    {
+      echo "==> ${test_file}"
+    } >>"$ENGINE_PYTEST_LOG"
+
+    if command -v timeout >/dev/null 2>&1; then
+      timeout "$PYTHON_FILE_TIMEOUT_SECONDS" \
+        env PYTHONDONTWRITEBYTECODE=1 BOREALIS_PROJECT_ROOT="$PROJECT_ROOT" \
+          "$PYTHON_BIN" -m pytest -q "$test_file" --junitxml "$junit_path" \
+          >>"$ENGINE_PYTEST_LOG" 2>&1
+    else
+      env PYTHONDONTWRITEBYTECODE=1 BOREALIS_PROJECT_ROOT="$PROJECT_ROOT" \
+        "$PYTHON_BIN" -m pytest -q "$test_file" --junitxml "$junit_path" \
+        >>"$ENGINE_PYTEST_LOG" 2>&1
+    fi
+    local file_status=$?
+
+    if [[ "$file_status" -ne 0 ]]; then
+      failed_count=$((failed_count + 1))
+      lane_status="$file_status"
+      echo "FAILED ${test_file} status=${file_status}" >>"$ENGINE_PYTEST_LOG"
+    else
+      passed_count=$((passed_count + 1))
+      echo "PASSED ${test_file}" >>"$ENGINE_PYTEST_LOG"
+    fi
+    echo >>"$ENGINE_PYTEST_LOG"
+  done < <(cd "$PROJECT_ROOT" && find "$test_root" -type f \( -name 'test_*.py' -o -name '*_test.py' \) | sort)
+
+  if [[ "$total_count" -eq 0 ]]; then
+    echo "No Engine Python unit tests found under ${test_root}." >>"$ENGINE_PYTEST_LOG"
+    lane_status=2
+  fi
+
+  {
+    echo '<?xml version="1.0" encoding="UTF-8"?>'
+    echo "<testsuite name=\"engine-python-files\" tests=\"${total_count}\" failures=\"${failed_count}\" errors=\"0\" skipped=\"0\">"
+    echo "  <properties>"
+    echo "    <property name=\"passed_files\" value=\"${passed_count}\" />"
+    echo "    <property name=\"failed_files\" value=\"${failed_count}\" />"
+    echo "  </properties>"
+    echo "</testsuite>"
+  } >"$ENGINE_PYTEST_XML"
+
+  return "$lane_status"
+}
+
 ENGINE_PYTEST_LOG="${RESULT_DIR}/engine-pytest.log"
 ENGINE_PYTEST_XML="${RESULT_DIR}/engine-pytest.xml"
 WEBUI_LOG="${RESULT_DIR}/engine-webui-vitest.log"
@@ -97,15 +167,22 @@ SUMMARY_PATH="${RESULT_DIR}/summary.txt"
 
 overall_status=0
 
-run_with_timeout \
-  "Engine Python unit tests" \
-  "$PYTHON_TIMEOUT_SECONDS" \
-  "$ENGINE_PYTEST_LOG" \
-  env PYTHONDONTWRITEBYTECODE=1 BOREALIS_PROJECT_ROOT="$PROJECT_ROOT" \
-    "$PYTHON_BIN" -m pytest -q Data/Engine/Unit_Tests --junitxml "$ENGINE_PYTEST_XML"
+echo "==> Engine Python unit tests"
+export PROJECT_ROOT RESULT_DIR ENGINE_PYTEST_LOG ENGINE_PYTEST_XML PYTHON_FILE_TIMEOUT_SECONDS PYTHON_BIN
+export -f run_engine_python_tests
+if command -v timeout >/dev/null 2>&1; then
+  timeout "$PYTHON_TIMEOUT_SECONDS" bash -c 'run_engine_python_tests' \
+    >"${RESULT_DIR}/engine-pytest-runner.log" 2>&1
+else
+  run_engine_python_tests >"${RESULT_DIR}/engine-pytest-runner.log" 2>&1
+fi
 python_status=$?
 if [[ "$python_status" -ne 0 ]]; then
+  echo "Engine Python unit tests failed with status ${python_status}. Log: ${ENGINE_PYTEST_LOG}" >&2
+  tail -n 80 "$ENGINE_PYTEST_LOG" >&2 || true
   overall_status="$python_status"
+else
+  echo "Engine Python unit tests passed. Log: ${ENGINE_PYTEST_LOG}"
 fi
 
 WEBUI_RUNTIME="${PROJECT_ROOT}/Engine/web-interface"

@@ -39,9 +39,10 @@ Runs all Agent Python unit tests from Windows PowerShell.
 
 ## Results
 - Results write to `Unit_Test_Results/<runtime>-<timestamp>/`.
-- Python lanes write `*-pytest.log` and `*-pytest.xml`.
+- Python lanes write `*-pytest.log` and `*-pytest.xml`; Engine also writes per-file JUnit XML under `engine-pytest-junit/`.
 - WebUI lanes write `engine-webui-vitest.log` and, when Vitest reaches report generation, `engine-webui-vitest.xml`.
 - `summary.txt` records each lane exit status.
+- Engine Python tests have a 3600 second lane timeout and a 900 second per-file timeout because the full API suite includes slow scheduler, device, and access-management coverage.
 
 ## Expected Setup
 - Run scripts from the repo root.

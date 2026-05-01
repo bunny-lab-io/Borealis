@@ -189,7 +189,7 @@ class UserSiteAccessManager:
             return False
         if scope.is_admin:
             return True
-        site_id, _site_name = self._lookup_device_site(hostname=hostname_value)
+        site_id, _site_name, _resolved_hostname = self._lookup_device_site(hostname=hostname_value)
         return site_id is not None and site_id in scope.site_ids
 
     def user_can_access_guid(self, user: Optional[Mapping[str, Any]], guid: Any) -> bool:
@@ -199,7 +199,7 @@ class UserSiteAccessManager:
             return False
         if scope.is_admin:
             return True
-        site_id, _site_name = self._lookup_device_site(guid=guid_value)
+        site_id, _site_name, _resolved_hostname = self._lookup_device_site(guid=guid_value)
         return site_id is not None and site_id in scope.site_ids
 
     def user_can_access_agent_id(self, user: Optional[Mapping[str, Any]], agent_id: Any) -> bool:
@@ -209,7 +209,7 @@ class UserSiteAccessManager:
             return False
         if scope.is_admin:
             return True
-        site_id, _site_name = self._lookup_device_site(agent_id=agent_id_value)
+        site_id, _site_name, _resolved_hostname = self._lookup_device_site(agent_id=agent_id_value)
         return site_id is not None and site_id in scope.site_ids
 
     def user_can_access_activity_id(self, user: Optional[Mapping[str, Any]], activity_id: Any) -> bool:

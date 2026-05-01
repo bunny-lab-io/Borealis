@@ -333,7 +333,12 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
             suffix += 1
         return candidate
 
-    def _write_filter(record: Dict[str, Any], *, existing_filter_id: Optional[int] = None) -> Dict[str, Any]:
+    def _write_filter(
+        record: Dict[str, Any],
+        *,
+        existing_filter_id: Optional[int] = None,
+        user: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         conn = _conn()
         try:
             cur = conn.cursor()
@@ -394,13 +399,17 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
             conn.commit()
         finally:
             conn.close()
-        saved = _select_filter(filter_id)
+        saved = _select_filter(filter_id, user=user)
         if not saved:
             raise RuntimeError("Saved filter could not be reloaded.")
         return saved
 
-    def _usage_conflict(filter_id: int) -> Optional[Dict[str, Any]]:
-        usage = _usage_for_filters([filter_id]).get(int(filter_id)) or {"job_count": 0, "jobs": []}
+    def _usage_conflict(
+        filter_id: int,
+        *,
+        user: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        usage = _usage_for_filters([filter_id], user=user).get(int(filter_id)) or {"job_count": 0, "jobs": []}
         if usage["job_count"] <= 0:
             return None
         return {
@@ -614,7 +623,7 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if name_error:
             return jsonify({"error": "duplicate_name", "message": name_error}), 409
         try:
-            saved = _write_filter(record)
+            saved = _write_filter(record, user=user)
         except sqlite3.IntegrityError:
             return jsonify({"error": "duplicate_name", "message": "A filter with this name already exists."}), 409
         adapters.service_log("device_filters", f"Created device filter '{saved['name']}'.")
@@ -641,7 +650,7 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         name_error = _ensure_name_available(record["name"], existing_filter_id=filter_id)
         if name_error:
             return jsonify({"error": "duplicate_name", "message": name_error}), 409
-        saved = _write_filter(record, existing_filter_id=filter_id)
+        saved = _write_filter(record, existing_filter_id=filter_id, user=user)
         adapters.service_log("device_filters", f"Updated device filter '{saved['name']}' (id={filter_id}).")
         return jsonify({"filter": saved})
 
@@ -661,7 +670,7 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         clone_record["last_edited_by"] = (user or {}).get("username") or existing.get("last_edited_by") or "Unknown"
         clone_record["created_at"] = int(time.time())
         clone_record["updated_at"] = clone_record["created_at"]
-        saved = _write_filter(clone_record)
+        saved = _write_filter(clone_record, user=user)
         adapters.service_log("device_filters", f"Cloned device filter '{existing['name']}' into '{saved['name']}'.")
         return jsonify({"filter": saved}), 201
 
@@ -674,13 +683,13 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         existing = _select_filter(filter_id, user=user)
         if not existing:
             return jsonify({"error": "Filter not found"}), 404
-        conflict = _usage_conflict(filter_id)
+        conflict = _usage_conflict(filter_id, user=user)
         if conflict:
             return jsonify(conflict), 409
         existing["archived"] = True
         existing["updated_at"] = int(time.time())
         existing["last_edited_by"] = (user or {}).get("username") or existing.get("last_edited_by") or "Unknown"
-        saved = _write_filter(existing, existing_filter_id=filter_id)
+        saved = _write_filter(existing, existing_filter_id=filter_id, user=user)
         adapters.service_log("device_filters", f"Archived device filter '{saved['name']}' (id={filter_id}).")
         return jsonify({"filter": saved})
 
@@ -696,7 +705,7 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         existing["archived"] = False
         existing["updated_at"] = int(time.time())
         existing["last_edited_by"] = (user or {}).get("username") or existing.get("last_edited_by") or "Unknown"
-        saved = _write_filter(existing, existing_filter_id=filter_id)
+        saved = _write_filter(existing, existing_filter_id=filter_id, user=user)
         adapters.service_log("device_filters", f"Unarchived device filter '{saved['name']}' (id={filter_id}).")
         return jsonify({"filter": saved})
 
@@ -709,7 +718,7 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         existing = _select_filter(filter_id, user=user)
         if not existing:
             return jsonify({"error": "Filter not found"}), 404
-        conflict = _usage_conflict(filter_id)
+        conflict = _usage_conflict(filter_id, user=user)
         if conflict:
             return jsonify(conflict), 409
         conn = _conn()

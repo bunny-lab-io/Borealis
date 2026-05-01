@@ -39,7 +39,8 @@ def _filter_client_with_admin_session(harness: EngineTestHarness):
         "STATIC_FOLDER": harness.app.config["STATIC_FOLDER"],
         "API_GROUPS": ("core", "auth", "tokens", "enrollment", "devices", "assemblies", "filters", "scheduled_jobs"),
     }
-    app, _socketio, _context = create_app(config)
+    app, _socketio, context = create_app(config)
+    context.aegis_cipher_service.unlock(harness.aegis_cipher)
     app.config.update(TESTING=True)
     client = app.test_client()
     with client.session_transaction() as sess:

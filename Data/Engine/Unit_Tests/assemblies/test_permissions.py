@@ -11,6 +11,7 @@ import base64
 
 from flask.testing import FlaskClient
 
+from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.assembly_management.models import AssemblyDomain
 
 from Data.Engine.Unit_Tests.conftest import EngineTestHarness
@@ -35,6 +36,21 @@ def _script_document(name: str = "Permission Script") -> dict:
 
 
 def _user_client(harness: EngineTestHarness) -> FlaskClient:
+    conn = sqlite3.connect(str(harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO users
+                (id, username, display_name, password_sha512, role, last_login, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator", "test", "User", 0, 0, 0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
     client = harness.app.test_client()
     with client.session_transaction() as sess:
         sess["username"] = "operator"

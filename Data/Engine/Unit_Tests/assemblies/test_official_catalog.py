@@ -358,8 +358,17 @@ def test_official_catalog_cleanup_deletes_revoked_aurora_assemblies_on_refresh(t
     _run_git(aurora_repo, "checkout", "-b", "main")
 
     aurora_doc = _official_document(summary="Aurora repository version", script_body='Write-Host "aurora"')
+    keeper_doc = _official_document(
+        summary="Aurora keeper version",
+        script_body='Write-Host "keeper"',
+        assembly_guid="aurora-keeper-guid",
+        display_name="Aurora Keeper Script",
+        source_path="scripts/windows/keeper-script.json",
+    )
     aurora_file = aurora_repo / "scripts" / "windows" / "aurora-script.json"
+    keeper_file = aurora_repo / "scripts" / "windows" / "keeper-script.json"
     _write_json(aurora_file, aurora_doc)
+    _write_json(keeper_file, keeper_doc)
     _run_git(aurora_repo, "add", ".")
     _run_git(aurora_repo, "commit", "-m", "Seed Aurora official assembly")
 
@@ -386,8 +395,9 @@ def test_official_catalog_cleanup_deletes_revoked_aurora_assemblies_on_refresh(t
 
     try:
         initial_sync = service.update_all_official_assemblies()
-        assert initial_sync["installed"] == ["aurora-official-guid"]
+        assert set(initial_sync["installed"]) == {"aurora-official-guid", "aurora-keeper-guid"}
         assert runtime.get_assembly("aurora-official-guid") is not None
+        assert runtime.get_assembly("aurora-keeper-guid") is not None
         assert "aurora-official-guid" in db_manager.load_official_catalog_state()
 
         aurora_file.unlink()
@@ -400,6 +410,7 @@ def test_official_catalog_cleanup_deletes_revoked_aurora_assemblies_on_refresh(t
         assert cleanup["deleted_count"] == 1
         assert cleanup["failed"] == []
         assert runtime.get_assembly("aurora-official-guid") is None
+        assert runtime.get_assembly("aurora-keeper-guid") is not None
         assert "aurora-official-guid" not in db_manager.load_official_catalog_state()
     finally:
         cache.shutdown(flush=True)
@@ -414,8 +425,17 @@ def test_official_catalog_update_all_deletes_revoked_aurora_assemblies(tmp_path:
     _run_git(aurora_repo, "checkout", "-b", "main")
 
     aurora_doc = _official_document(summary="Aurora repository version", script_body='Write-Host "aurora"')
+    keeper_doc = _official_document(
+        summary="Aurora keeper version",
+        script_body='Write-Host "keeper"',
+        assembly_guid="aurora-keeper-guid",
+        display_name="Aurora Keeper Script",
+        source_path="scripts/windows/keeper-script.json",
+    )
     aurora_file = aurora_repo / "scripts" / "windows" / "aurora-script.json"
+    keeper_file = aurora_repo / "scripts" / "windows" / "keeper-script.json"
     _write_json(aurora_file, aurora_doc)
+    _write_json(keeper_file, keeper_doc)
     _run_git(aurora_repo, "add", ".")
     _run_git(aurora_repo, "commit", "-m", "Seed Aurora official assembly")
 
@@ -442,8 +462,9 @@ def test_official_catalog_update_all_deletes_revoked_aurora_assemblies(tmp_path:
 
     try:
         initial_sync = service.update_all_official_assemblies()
-        assert initial_sync["installed"] == ["aurora-official-guid"]
+        assert set(initial_sync["installed"]) == {"aurora-official-guid", "aurora-keeper-guid"}
         assert runtime.get_assembly("aurora-official-guid") is not None
+        assert runtime.get_assembly("aurora-keeper-guid") is not None
 
         aurora_file.unlink()
         _run_git(aurora_repo, "add", "-A")
@@ -455,6 +476,7 @@ def test_official_catalog_update_all_deletes_revoked_aurora_assemblies(tmp_path:
         assert result["deleted_count"] == 1
         assert result["failed"] == []
         assert runtime.get_assembly("aurora-official-guid") is None
+        assert runtime.get_assembly("aurora-keeper-guid") is not None
     finally:
         cache.shutdown(flush=True)
 

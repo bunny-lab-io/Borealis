@@ -73,6 +73,7 @@ def _fresh_client(
         "API_GROUPS": tuple(api_groups),
     }
     app, _socketio, context = create_app(config)
+    context.aegis_cipher_service.unlock(harness.aegis_cipher)
     app.config.update(TESTING=True)
     return _client_with_session(app, username, role), context
 

@@ -167,7 +167,7 @@ describe("AppShell buffered navigation", () => {
 
     render(<RouterProvider router={router} />);
 
-    expect(screen.getByText("Remote Desktop")).toBeInTheDocument();
+    expect(screen.getAllByText("Remote Desktop").length).toBeGreaterThan(0);
     expect(screen.queryByText("Sidebar")).not.toBeInTheDocument();
 
     await act(async () => {

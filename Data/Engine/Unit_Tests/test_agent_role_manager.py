@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import sys
 
 
 def _load_role_manager():
@@ -142,7 +143,9 @@ def test_role_manager_registers_import_failure_for_matching_context(tmp_path) ->
     assert payload["details"]["stage"] == "import"
 
 
-def test_role_manager_adds_project_data_agent_to_import_path(tmp_path) -> None:
+def test_role_manager_adds_project_data_agent_to_import_path(tmp_path, monkeypatch) -> None:
+    monkeypatch.delitem(sys.modules, "runtime_paths", raising=False)
+    monkeypatch.setattr(sys, "path", list(sys.path))
     RoleManager = _load_role_manager()
     repo_root = tmp_path / "Borealis"
     repo_root.mkdir(parents=True, exist_ok=True)

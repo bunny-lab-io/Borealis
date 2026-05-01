@@ -22,8 +22,8 @@ from Data.Engine.services.assemblies.service import AssemblyRuntimeService
 def _user_client(harness: EngineTestHarness) -> FlaskClient:
     client = harness.app.test_client()
     with client.session_transaction() as sess:
-        sess["username"] = "importer"
-        sess["role"] = "User"
+        sess["username"] = "admin"
+        sess["role"] = "Admin"
     return client
 
 

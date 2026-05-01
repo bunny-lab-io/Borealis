@@ -17,15 +17,18 @@ import pytest
 
 
 def _install_agent_role_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
+    class DummyWidget:
+        pass
+
     pyside6_module = types.ModuleType("PySide6")
     pyside6_module.QtCore = types.SimpleNamespace()
-    pyside6_module.QtWidgets = types.SimpleNamespace()
+    pyside6_module.QtWidgets = types.SimpleNamespace(QWidget=DummyWidget)
     pyside6_module.QtGui = types.SimpleNamespace()
     monkeypatch.setitem(sys.modules, "PySide6", pyside6_module)
 
     pyqt5_module = types.ModuleType("PyQt5")
     pyqt5_module.QtCore = types.SimpleNamespace()
-    pyqt5_module.QtWidgets = types.SimpleNamespace()
+    pyqt5_module.QtWidgets = types.SimpleNamespace(QWidget=DummyWidget)
     pyqt5_module.QtGui = types.SimpleNamespace()
     monkeypatch.setitem(sys.modules, "PyQt5", pyqt5_module)
 

@@ -284,6 +284,7 @@ def test_runner_writes_isolated_ssh_control_path_dir(
     collections_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(runner, "_generated_runtime_root", lambda: generated_root)
     monkeypatch.setattr(runner, "_collections_root", lambda: collections_root)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(engine_harness.db_path.parent / "tmp"))
 
     workspace = runner._prepare_workspace(
         run_id="run-kex-1",
@@ -310,7 +311,7 @@ def test_runner_writes_isolated_ssh_control_path_dir(
 
     cfg_text = workspace["cfg_path"].read_text(encoding="utf-8")
     assert "-o KexAlgorithms=" not in cfg_text
-    expected_control_dir = Path(tempfile.gettempdir()) / "ansible_controlplane" / "run-kex-1"
+    expected_control_dir = engine_harness.db_path.parent / "tmp" / "ansible_controlplane" / "run-kex-1"
     assert f"control_path_dir = {expected_control_dir}" in cfg_text
 
 

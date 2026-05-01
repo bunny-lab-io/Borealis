@@ -1,34 +1,9 @@
 import React from "react";
 import fs from "node:fs";
+import path from "node:path";
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import AgentHealthTab from "@/Devices/Tabs/Agent_Health.jsx";
-
-vi.mock("reactflow", () => ({
-  default: ({ nodes = [], edges = [], children }) => (
-    <div data-testid="startup-flow">
-      {nodes.map((node) =>
-        node.type === "runtimeHealth" ? (
-          <button key={node.id} type="button">
-            {node.data?.label}
-          </button>
-        ) : (
-          <div key={node.id}>{node.data?.label}</div>
-        )
-      )}
-      {edges.map((edge) => (
-        <div key={edge.id} data-testid="startup-flow-edge">
-          {edge.source}-{edge.target}
-        </div>
-      ))}
-      {children}
-    </div>
-  ),
-  Background: () => <div data-testid="startup-flow-background" />,
-  Handle: () => null,
-  Position: { Top: "top", Bottom: "bottom", Left: "left", Right: "right" },
-  applyNodeChanges: (_changes, nodes) => nodes,
-}));
 
 afterEach(() => {
   vi.useRealTimers();
@@ -76,11 +51,11 @@ describe("AgentHealthTab", () => {
     );
 
     expect(screen.getByText("Startup Timeline")).toBeInTheDocument();
-    expect(screen.getByTestId("startup-flow")).toBeInTheDocument();
     expect(screen.getByText("Agent process started")).toBeInTheDocument();
     expect(screen.getByText("Engine authentication")).toBeInTheDocument();
     expect(screen.getByText("Agent role loading")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /WireGuard VPN/i })).toBeInTheDocument();
+    expect(screen.getByText("Runtime role health")).toBeInTheDocument();
+    expect(screen.getByText("WireGuard VPN")).toBeInTheDocument();
     expect(screen.queryByText("Current Phase")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Startup Timeline" })).not.toBeInTheDocument();
   });
@@ -121,7 +96,7 @@ describe("AgentHealthTab", () => {
 
   it("keeps Agent Health as a right-anchored Device Summary tab", () => {
     const source = fs.readFileSync(
-      new URL("../../../src/Devices/Tabs/Device_Summary.jsx", import.meta.url),
+      path.resolve(process.cwd(), "src/Devices/Tabs/Device_Summary.jsx"),
       "utf8"
     );
 

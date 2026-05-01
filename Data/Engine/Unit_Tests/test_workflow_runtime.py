@@ -456,16 +456,41 @@ def test_runtime_startup_recovers_pending_orphaned_run_as_failed(tmp_path: Path)
     assert node_run["skip_reason"] == "workflow_run_recovered"
 
 
-def test_admin_can_resolve_stuck_workflow_run_via_api(monkeypatch) -> None:
+def test_admin_can_resolve_stuck_workflow_run_via_api(monkeypatch, tmp_path: Path) -> None:
     app = Flask(__name__)
     app.config["SECRET_KEY"] = "workflow-api-test"
 
     fake_runtime = _FakeWorkflowRuntime()
     monkeypatch.setattr(workflow_management, "ensure_workflow_runtime", lambda _app, _adapters: fake_runtime)
 
+    auth_db_path = tmp_path / "workflow_auth.sqlite3"
+    conn = sqlite3.connect(str(auth_db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE users (
+                username TEXT PRIMARY KEY,
+                role TEXT,
+                auth_source TEXT,
+                directory_disabled INTEGER
+            )
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO users (username, role, auth_source, directory_disabled)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("admin", "Admin", "local", 0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
     adapters = SimpleNamespace(
         context=SimpleNamespace(logger=logging.getLogger("workflow-management-test"), workflow_runtime=None),
-        db_conn_factory=lambda: sqlite3.connect(":memory:"),
+        db_conn_factory=lambda: sqlite3.connect(str(auth_db_path)),
         dev_mode_manager=DevModeManager(logger=logging.getLogger("workflow-management-test")),
         config={},
         service_log=lambda *args, **kwargs: None,

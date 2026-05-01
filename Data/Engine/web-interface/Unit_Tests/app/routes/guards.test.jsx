@@ -6,18 +6,18 @@ import { AuthContext } from "@/app/providers/AuthContext.jsx";
 import { RequireAdmin, RequireAuth } from "@/app/routes/guards.jsx";
 
 function renderGuardedRouter({ authValue, guardElement, initialEntries, protectedPath }) {
+  const guardedPath = String(protectedPath || "").replace(/^\/+/, "");
+  const guardedLabel = guardedPath === "admin" ? "Admin" : "Protected";
   const router = createMemoryRouter(
     [
       {
-        path: "/",
         element: <AuthContext.Provider value={authValue}>{guardElement}</AuthContext.Provider>,
         children: [
-          { path: "protected", element: <div>Protected</div> },
-          { path: "admin", element: <div>Admin</div> },
-          { path: "login", element: <div>Login Page</div> },
-          { path: "sites", element: <div>Sites Page</div> },
+          { path: guardedPath, element: <div>{guardedLabel}</div> },
         ],
       },
+      { path: "/login", element: <div>Login Page</div> },
+      { path: "/sites", element: <div>Sites Page</div> },
     ],
     {
       initialEntries,
