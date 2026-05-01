@@ -25,6 +25,7 @@ This page is the navigation hub for the Borealis documentation set. The knowledg
 - [Assemblies and Quick Jobs](assemblies.md)
 - [Flow Editor and Nodes](flow-editor-and-nodes.md)
 - [Scheduled Jobs](scheduled-jobs.md)
+- [Ansible SSH Connection Logic](Ansible/SSH_Connection_Logic.md)
 - [Watchdogs](watchdogs.md)
 
 ### Operations and Remote Access

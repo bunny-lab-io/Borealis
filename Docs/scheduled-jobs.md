@@ -89,6 +89,7 @@ Supported schedule types (from the scheduler core):
 
 ## Related Documentation
 - [Assemblies and Quick Jobs](assemblies.md)
+- [Ansible SSH Connection Logic](Ansible/SSH_Connection_Logic.md)
 - [Device Management](device-management.md)
 - [API Reference](api-reference.md)
 - [Ansible Playbooks](features_to_implement/ansible_playbooks.md)
