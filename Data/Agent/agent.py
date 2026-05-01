@@ -1335,9 +1335,12 @@ def _load_installer_code_from_file(path: str) -> str:
             data = json.load(fh)
     except Exception:
         return ""
-    value = data.get("installer_code") if isinstance(data, dict) else ""
-    if isinstance(value, str):
-        return value.strip()
+    if not isinstance(data, dict):
+        return ""
+    for key in ("enrollment_code", "installer_code"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
     return ""
 
 
@@ -1350,17 +1353,17 @@ def _fallback_installer_code(current_path: str) -> str:
         "CURRENTUSER": "agent_settings_SYSTEM.json",
     }
     sibling_name = sibling_map.get(suffix or "")
+    # Prefer the shared config written by installers before sibling runtime configs.
+    candidates.append(os.path.join(settings_dir, "agent_settings.json"))
     if sibling_name:
         candidates.append(os.path.join(settings_dir, sibling_name))
-    # Prefer the shared/base config next
-    candidates.append(os.path.join(settings_dir, "agent_settings.json"))
     # Legacy location fallback
     try:
         project_root = _find_project_root()
         legacy_dir = os.path.join(project_root, "Agent", "Settings")
+        candidates.append(os.path.join(legacy_dir, "agent_settings.json"))
         if sibling_name:
             candidates.append(os.path.join(legacy_dir, sibling_name))
-        candidates.append(os.path.join(legacy_dir, "agent_settings.json"))
     except Exception:
         pass
 
@@ -2159,10 +2162,11 @@ class AgentHttpClient:
         fallback = _fallback_installer_code(CONFIG.path)
         if fallback:
             try:
+                CONFIG.data["enrollment_code"] = fallback
                 CONFIG.data["installer_code"] = fallback
                 CONFIG._write()
                 _log_agent(
-                    "Adopted installer code from sibling configuration", fname="agent.log"
+                    "Adopted enrollment code from fallback configuration", fname="agent.log"
                 )
             except Exception:
                 pass

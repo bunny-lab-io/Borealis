@@ -2438,6 +2438,39 @@ function InstallOrUpdate-BorealisAgent {
             Write-AgentLog -FileName 'Install.log' -Message ("[CONFIG] Failed to persist agent_settings.json: {0}" -f $_.Exception.Message)
             Write-Host "Failed to update agent_settings.json. Check Agent/Logs/install.log for details." -ForegroundColor Red
         }
+
+        $systemConfigPath = Join-Path $settingsDir 'agent_settings_SYSTEM.json'
+        $systemConfig = [ordered]@{}
+        foreach ($entry in $configDefaults.GetEnumerator()) {
+            $systemConfig[$entry.Key] = $entry.Value
+        }
+        if (Test-Path $systemConfigPath) {
+            try {
+                $existingSystemRaw = Get-Content -Path $systemConfigPath -Raw -ErrorAction Stop
+                if ($existingSystemRaw -and $existingSystemRaw.Trim()) {
+                    $existingSystemJson = $existingSystemRaw | ConvertFrom-Json -ErrorAction Stop
+                    foreach ($prop in $existingSystemJson.PSObject.Properties) {
+                        $systemConfig[$prop.Name] = $prop.Value
+                    }
+                }
+            } catch {
+                Write-AgentLog -FileName 'Install.log' -Message ("[CONFIG] Failed to parse agent_settings_SYSTEM.json: {0}" -f $_.Exception.Message)
+            }
+        }
+        if ('regions' -notin $systemConfig.Keys -or $null -eq $systemConfig['regions']) {
+            $systemConfig['regions'] = @{}
+        }
+        $systemConfig['enrollment_code'] = $providedEnrollmentCode
+        # Retain legacy key to avoid breaking existing agent readers
+        $systemConfig['installer_code'] = $providedEnrollmentCode
+        try {
+            $systemConfigJson = $systemConfig | ConvertTo-Json -Depth 10
+            [System.IO.File]::WriteAllText($systemConfigPath, $systemConfigJson, $utf8NoBom)
+            Write-AgentLog -FileName 'Install.log' -Message '[CONFIG] Enrollment code mirrored to agent_settings_SYSTEM.json.'
+        } catch {
+            Write-AgentLog -FileName 'Install.log' -Message ("[CONFIG] Failed to persist agent_settings_SYSTEM.json: {0}" -f $_.Exception.Message)
+            Write-Host "Failed to update agent_settings_SYSTEM.json. Check Agent/Logs/install.log for details." -ForegroundColor Red
+        }
     }
 
     Write-Host "`nConfiguring Borealis Agent (tasks)..." -ForegroundColor Blue

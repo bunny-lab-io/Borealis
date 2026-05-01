@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import contextlib
 import threading
@@ -266,3 +267,26 @@ def test_resolve_installer_code_prefers_current_enrollment_code_over_legacy_key(
 
     assert client._resolve_installer_code() == "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62"
     assert client.key_store.cached_installer_codes[-1] == "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62"
+
+
+def test_fallback_installer_code_prefers_shared_enrollment_code_over_sibling_legacy_key(monkeypatch, tmp_path) -> None:
+    settings_dir = tmp_path / "Settings"
+    settings_dir.mkdir()
+    current_config = settings_dir / "agent_settings_SYSTEM.json"
+    current_config.write_text("{}", encoding="utf-8")
+    (settings_dir / "agent_settings.json").write_text(
+        json.dumps(
+            {
+                "enrollment_code": "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62",
+                "installer_code": "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (settings_dir / "agent_settings_CURRENTUSER.json").write_text(
+        json.dumps({"installer_code": "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agent_module, "CONFIG_SUFFIX_CANONICAL", "SYSTEM")
+
+    assert agent_module._fallback_installer_code(str(current_config)) == "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62"
