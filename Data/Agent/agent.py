@@ -317,7 +317,14 @@ def _canonical_config_suffix(raw_suffix: str) -> str:
 CONFIG_SUFFIX_CANONICAL = _canonical_config_suffix(CONFIG_NAME_SUFFIX)
 
 INSTALLER_CODE_OVERRIDE = (
-    (_argv_get('--installer-code') or os.environ.get('BOREALIS_INSTALLER_CODE') or '')
+    (
+        _argv_get('--installer-code')
+        or _argv_get('--enrollment-code')
+        or _argv_get('--enrollmentcode')
+        or os.environ.get('BOREALIS_INSTALLER_CODE')
+        or os.environ.get('BOREALIS_ENROLLMENT_CODE')
+        or ''
+    )
     .strip()
 )
 
@@ -2126,7 +2133,11 @@ class AgentHttpClient:
             return code
         code = ""
         try:
-            code = (CONFIG.data.get("installer_code") or "").strip()
+            code = (
+                CONFIG.data.get("enrollment_code")
+                or CONFIG.data.get("installer_code")
+                or ""
+            ).strip()
         except Exception:
             code = ""
         if code:
@@ -2168,8 +2179,14 @@ class AgentHttpClient:
         if INSTALLER_CODE_OVERRIDE:
             return
         try:
+            changed = False
+            if CONFIG.data.get("enrollment_code"):
+                CONFIG.data["enrollment_code"] = ""
+                changed = True
             if CONFIG.data.get("installer_code"):
                 CONFIG.data["installer_code"] = ""
+                changed = True
+            if changed:
                 CONFIG._write()
                 _log_agent("Cleared persisted installer code after successful enrollment", fname="agent.log")
         except Exception as exc:

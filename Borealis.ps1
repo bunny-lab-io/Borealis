@@ -380,7 +380,8 @@ function Clear-AgentEnrollmentState {
         'access.jwt',
         'access.meta.json',
         'refresh.token',
-        'server_signing_key.pub'
+        'server_signing_key.pub',
+        'installer_code.shared.json'
     )
 
     Write-AgentLog -FileName $LogName -Message '[REENROLL] Force reenroll requested; clearing persisted enrollment state while preserving the device identity keypair.'
@@ -2420,6 +2421,10 @@ function InstallOrUpdate-BorealisAgent {
         $config['enrollment_code'] = $providedEnrollmentCode
         # Retain legacy key to avoid breaking existing agent readers
         $config['installer_code'] = $providedEnrollmentCode
+        if ($providedEnrollmentCode) {
+            $env:BOREALIS_ENROLLMENT_CODE = $providedEnrollmentCode
+            $env:BOREALIS_INSTALLER_CODE = $providedEnrollmentCode
+        }
 
         try {
             $configJson = $config | ConvertTo-Json -Depth 10

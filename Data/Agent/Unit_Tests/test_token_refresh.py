@@ -58,12 +58,28 @@ class _FakeKeyStore:
     def __init__(self) -> None:
         self.saved_access_tokens: list[tuple[str, int]] = []
         self.bindings: list[str] = []
+        self.cached_installer_codes: list[str] = []
 
     def save_access_token(self, access_token: str, *, expires_at: int) -> None:
         self.saved_access_tokens.append((access_token, expires_at))
 
     def set_access_binding(self, binding: str) -> None:
         self.bindings.append(binding)
+
+    def cache_installer_code(self, code: str, consumer: str | None = None) -> None:
+        self.cached_installer_codes.append(str(code))
+
+    def load_cached_installer_code(self) -> str | None:
+        return None
+
+
+class _FakeConfig:
+    def __init__(self, data: dict[str, Any]) -> None:
+        self.data = dict(data)
+        self.path = "agent_settings.json"
+
+    def _write(self) -> None:
+        return None
 
 
 def _make_client(session: _FakeSession, store: _FakeKeyStore) -> agent_module.AgentHttpClient:
@@ -83,7 +99,11 @@ def _make_client(session: _FakeSession, store: _FakeKeyStore) -> agent_module.Ag
     return client
 
 
-def _make_enrollment_client(session: _FakeSession) -> agent_module.AgentHttpClient:
+def _make_enrollment_client(
+    session: _FakeSession,
+    *,
+    stub_resolver: bool = True,
+) -> agent_module.AgentHttpClient:
     store = _FakeKeyStore()
     client = agent_module.AgentHttpClient.__new__(agent_module.AgentHttpClient)
     client.session = session
@@ -97,7 +117,8 @@ def _make_enrollment_client(session: _FakeSession) -> agent_module.AgentHttpClie
     client._active_installer_code = None
     client._reload_tokens_from_disk = lambda: None
     client.refresh_base_url = lambda: None
-    client._resolve_installer_code = lambda: "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"
+    if stub_resolver:
+        client._resolve_installer_code = lambda: "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"
     return client
 
 
@@ -209,3 +230,39 @@ def test_enrollment_honors_retry_after_before_retrying_request(monkeypatch) -> N
     assert session.calls == 2
     assert sleep_calls == [17.0]
     assert any("honoring Retry-After" in message for message in log_messages)
+
+
+def test_resolve_installer_code_prefers_runtime_enrollment_override(monkeypatch) -> None:
+    client = _make_enrollment_client(_FakeSession([]), stub_resolver=False)
+    monkeypatch.setattr(agent_module, "INSTALLER_CODE_OVERRIDE", "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62")
+    monkeypatch.setattr(
+        agent_module,
+        "CONFIG",
+        _FakeConfig(
+            {
+                "enrollment_code": "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4",
+                "installer_code": "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4",
+            }
+        ),
+    )
+
+    assert client._resolve_installer_code() == "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62"
+    assert client.key_store.cached_installer_codes[-1] == "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62"
+
+
+def test_resolve_installer_code_prefers_current_enrollment_code_over_legacy_key(monkeypatch) -> None:
+    client = _make_enrollment_client(_FakeSession([]), stub_resolver=False)
+    monkeypatch.setattr(agent_module, "INSTALLER_CODE_OVERRIDE", "")
+    monkeypatch.setattr(
+        agent_module,
+        "CONFIG",
+        _FakeConfig(
+            {
+                "enrollment_code": "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62",
+                "installer_code": "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4",
+            }
+        ),
+    )
+
+    assert client._resolve_installer_code() == "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62"
+    assert client.key_store.cached_installer_codes[-1] == "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62"
