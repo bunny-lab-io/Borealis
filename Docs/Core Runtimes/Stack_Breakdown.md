@@ -154,6 +154,8 @@ borealis-engine/<service>:sha-<inputhash12>
 Build cache:
 - Docker Buildx uses `Engine/Deploy/cache/buildkit/<service>/` when available.
 - Hosts without usable Buildx fall back to `DOCKER_BUILDKIT=1 docker build`.
+- Build output streams to the terminal and `Engine/Deploy/build.log` with Docker progress mode `plain` by default, which shows BuildKit step/layer sections as images assemble.
+- Override progress rendering with `BOREALIS_BUILD_PROGRESS=auto|plain|tty|rawjson` before running `Engine.sh`.
 - `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Borealis.ps1`.
 - `webui-frontend`, `traefik-edge`, `postgres-db`, `remote-desktop-guacd`, and `wireguard-tunnel` use service-local build contexts.
 - Service-local build contexts carry their own `.dockerignore` files so `node_modules`, WebUI build output, Python bytecode, pytest caches, logs, and local test output stay out of image contexts.

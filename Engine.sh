@@ -23,6 +23,7 @@ COMPOSE_ENV="${DEPLOY_DIR}/compose.env"
 IMAGE_MANIFEST="${DEPLOY_DIR}/image-manifest.json"
 DEPLOY_MANIFEST="${DEPLOY_DIR}/deploy-manifest.json"
 BUILD_LOG="${DEPLOY_DIR}/build.log"
+BUILD_PROGRESS="${BOREALIS_BUILD_PROGRESS:-plain}"
 DEFAULT_INSTALL_DIR="/opt/Borealis"
 DEFAULT_REPO_URL="https://github.com/bunny-lab-io/Borealis.git"
 DEFAULT_REPO_REF="main"
@@ -818,7 +819,12 @@ build_service_image() {
 
   log "Building ${service} image ${tag}."
   {
-    printf '[%s] Building %s as %s\n' "$(date +%FT%T)" "${service}" "${tag}"
+    printf '\n[%s] === Building %s as %s ===\n' "$(date +%FT%T)" "${service}" "${tag}"
+    printf '[%s] Dockerfile: %s\n' "$(date +%FT%T)" "${dockerfile}"
+    printf '[%s] Context: %s\n' "$(date +%FT%T)" "${context}"
+    if [[ -n "${target}" ]]; then
+      printf '[%s] Target: %s\n' "$(date +%FT%T)" "${target}"
+    fi
     local build_args=(
       --label "org.opencontainers.image.title=Borealis ${service}" \
       --label "io.borealis.service=${service}" \
@@ -835,7 +841,7 @@ build_service_image() {
       local cache_next="${cache_root}/next"
       mkdir -p "${cache_root}"
       rm -rf "${cache_next}"
-      local buildx_args=(buildx build --load --progress=plain)
+      local buildx_args=(buildx build --load --progress="${BUILD_PROGRESS}")
       if [[ -d "${cache_current}" ]]; then
         buildx_args+=(--cache-from "type=local,src=${cache_current}")
       fi
@@ -848,12 +854,12 @@ build_service_image() {
       else
         rm -rf "${cache_next}"
         printf '[%s] Buildx cache build failed for %s; falling back to docker build\n' "$(date +%FT%T)" "${service}"
-        DOCKER_BUILDKIT=1 docker build "${build_args[@]}" "${SCRIPT_DIR}/${context}"
+        DOCKER_BUILDKIT=1 docker build --progress="${BUILD_PROGRESS}" "${build_args[@]}" "${SCRIPT_DIR}/${context}"
       fi
     else
-      DOCKER_BUILDKIT=1 docker build "${build_args[@]}" "${SCRIPT_DIR}/${context}"
+      DOCKER_BUILDKIT=1 docker build --progress="${BUILD_PROGRESS}" "${build_args[@]}" "${SCRIPT_DIR}/${context}"
     fi
-  } >> "${BUILD_LOG}" 2>&1
+  } 2>&1 | tee -a "${BUILD_LOG}"
   BUILD_STATUSES["${service}"]="built"
 }
 
