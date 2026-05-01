@@ -13,17 +13,17 @@ Status means productized support in the current Borealis codebase and docs, not 
 
 | Scope | Feature | What it Does | Windows | Linux | macOS |
 | --- | --- | --- | --- | --- | --- |
-| Agent | Agent Runtime | Script-staged Python Agent with role loading, enrollment, telemetry, and remote-operation roles. | Full | Partial | - |
-| Agent | Inventory Collection | Collect hardware, OS, software, services, sessions, status, and health payloads from the endpoint. | Full | Partial | - |
+| Agent | Agent Runtime | Script-staged Python Agent with role loading, enrollment, telemetry, and remote-operation roles. | Full | Full | - |
+| Agent | Inventory Collection | Collect hardware, OS, software, services, sessions, status, and health payloads from the endpoint. | Full | Full | - |
 | Agent | WireGuard Tunnel | Maintain outbound WireGuard transport for remote operations and Engine-side automation reachability. | Full | Full | - |
 | Agent | Remote Shell Host | Expose an interactive shell over the managed WireGuard tunnel. | Full | Full | - |
 | Agent | Remote Desktop Host | Run the endpoint-side remote desktop service used by Apache Guacamole browser sessions. | Full | - | - |
 | Agent | File Operations | Browse, upload, folder-upload, download, cancel transfers, copy, cut, paste, rename, move, delete, create folders, and edit text files remotely. | Full | Full | - |
-| Agent | Process Operations | Report live process data and accept process-control actions such as End Task. | Full | Partial | - |
-| Agent | Service Operations | Report service inventory and accept start, stop, and restart actions. | Full | Partial | - |
-| Agent | Software Operations | Report installed software, refresh inventory, and support software-management actions. | Full | Partial | - |
+| Agent | Process Operations | Report live process data and accept process-control actions such as End Task. | Full | Full | - |
+| Agent | Service Operations | Report service inventory and accept start, stop, and restart actions. | Full | Full | - |
+| Agent | Software Operations | Report installed software, refresh inventory, and support software-management actions. | Full | Full | - |
 | Agent | Signed Script Execution | Validate signed payloads and run scripts in supported contexts. | Full | Full | - |
-| Agent | Watchdog Inputs and Remediation | Provide endpoint telemetry used by watchdogs and execute remediation assemblies when dispatched. | Full | Partial | - |
+| Agent | Watchdog Inputs and Remediation | Provide endpoint telemetry used by watchdogs and execute remediation assemblies when dispatched. | Full | Full | - |
 | Agent | Device Identity and Tunnel Trust | Use Ed25519 device identity, short-lived tunnel tokens, and public CA/hostname validation. | Full | Full | - |
 | Engine | Device Inventory Store | Store device inventory, status, health, software, services, sessions, and activity history in PostgreSQL. | - | - | - |
 | Engine | Sites, Agent Approvals, and RBAC | Scope devices by site, approve agent enrollments, and restrict operators by site. | - | - | - |
