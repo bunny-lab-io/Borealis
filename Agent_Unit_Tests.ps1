@@ -1,6 +1,6 @@
 # ======================================================
 # Agent_Unit_Tests.ps1
-# Description: Runs the full Borealis Agent unit test lane on Windows PowerShell.
+# Description: Runs Borealis Agent unit tests on Windows PowerShell.
 #
 # API Endpoints (if applicable): None
 # ======================================================
@@ -9,7 +9,9 @@
 param(
     [int]$TimeoutSeconds = 900,
     [string]$PythonPath = "",
-    [string]$ResultsDir = ""
+    [string]$ResultsDir = "",
+    [string]$Domain = "",
+    [switch]$ListDomains
 )
 
 Set-StrictMode -Version 2.0
@@ -25,6 +27,39 @@ if (-not $ResultsDir) {
         $ResultsDir = Join-Path $ProjectRoot "Unit_Test_Results\agent-$Timestamp"
     }
 }
+$RequestedDomain = if ($Domain) { $Domain } elseif ($env:BOREALIS_AGENT_UNIT_TEST_DOMAIN) { $env:BOREALIS_AGENT_UNIT_TEST_DOMAIN } else { "all" }
+
+function Get-AgentDomains {
+    return @(
+        "all",
+        "device-audit",
+        "file-management",
+        "heartbeat",
+        "remote-shell",
+        "roles",
+        "runtime",
+        "scripts",
+        "software",
+        "tokens",
+        "tray",
+        "updates",
+        "vnc",
+        "wireguard"
+    )
+}
+
+if ($ListDomains) {
+    Get-AgentDomains | ForEach-Object { Write-Output $_ }
+    exit 0
+}
+
+if (-not ((Get-AgentDomains) -contains $RequestedDomain)) {
+    Write-Host "Unknown Agent test domain: $RequestedDomain" -ForegroundColor Red
+    Write-Host "Available domains:"
+    Get-AgentDomains | ForEach-Object { Write-Host $_ }
+    exit 2
+}
+
 New-Item -ItemType Directory -Path $ResultsDir -Force | Out-Null
 
 function Test-PythonHasPytest {
@@ -57,13 +92,100 @@ function Resolve-TestPython {
     throw "Python executable with pytest not found. Install pytest or set BOREALIS_AGENT_TEST_PYTHON."
 }
 
+function Add-ExistingPath {
+    param(
+        [System.Collections.Generic.List[string]]$Targets,
+        [string]$Path
+    )
+    $fullPath = Join-Path $ProjectRoot $Path
+    if (Test-Path $fullPath) {
+        [void]$Targets.Add($Path)
+    }
+}
+
+function Get-AgentPytestTargets {
+    param([string]$DomainName)
+    $testRoot = "Data/Agent/Unit_Tests"
+    $targets = New-Object System.Collections.Generic.List[string]
+
+    switch ($DomainName) {
+        "all" {
+            Add-ExistingPath -Targets $targets -Path $testRoot
+        }
+        "device-audit" {
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_device_audit.py"
+        }
+        "file-management" {
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_system_file_management.py"
+        }
+        "heartbeat" {
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_system_heartbeat.py"
+        }
+        "remote-shell" {
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_remote_shell.py"
+        }
+        "roles" {
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_device_audit.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_remote_shell.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_script_exec_currentuser.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_script_exec_system.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_system_file_management.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_system_heartbeat.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_system_software_management.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_vnc.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_wireguard_tunnel.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_system_script_execution.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_system_software_management.py"
+        }
+        "runtime" {
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_agent_runtime_copy.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_agent_socket_supervisor.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_runtime_paths.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_session_runtime.py"
+        }
+        "scripts" {
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_script_exec_currentuser.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_script_exec_system.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_system_script_execution.py"
+        }
+        "software" {
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_system_software_management.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_system_software_management.py"
+        }
+        "tokens" {
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_refresh_token_storage.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_token_refresh.py"
+        }
+        "tray" {
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_agent_tray_restart.py"
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_tray_state.py"
+        }
+        "updates" {
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_update_helper.py"
+        }
+        "vnc" {
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_vnc.py"
+        }
+        "wireguard" {
+            Add-ExistingPath -Targets $targets -Path "$testRoot/test_role_wireguard_tunnel.py"
+        }
+    }
+
+    return $targets.ToArray()
+}
+
 $Python = Resolve-TestPython
 $LogPath = Join-Path $ResultsDir "agent-pytest.log"
 $XmlPath = Join-Path $ResultsDir "agent-pytest.xml"
 $SummaryPath = Join-Path $ResultsDir "summary.txt"
-$PytestArgs = @("-m", "pytest", "-q", "Data/Agent/Unit_Tests", "--junitxml", $XmlPath)
+$PytestTargets = Get-AgentPytestTargets -DomainName $RequestedDomain
+if ($PytestTargets.Count -eq 0) {
+    Write-Host "No Agent Python unit tests found for domain $RequestedDomain." -ForegroundColor Red
+    exit 2
+}
+$PytestArgs = @("-m", "pytest", "-q") + $PytestTargets + @("--junitxml", $XmlPath)
 
-Write-Host "==> Agent Python unit tests"
+Write-Host "==> Agent Python unit tests ($RequestedDomain)"
 $job = Start-Job -ArgumentList $Python, $PytestArgs, $ProjectRoot, $LogPath -ScriptBlock {
     param(
         [string]$PythonExecutable,
@@ -97,6 +219,7 @@ if ($status -ne 0) {
 
 @(
     "Borealis Agent unit test run",
+    "Domain: $RequestedDomain",
     "Results: $ResultsDir",
     "Python status: $status",
     "Overall status: $status"

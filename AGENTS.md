@@ -19,12 +19,18 @@ Use this file as the entrypoint for Codex instructions. The full knowledgebase n
 - UI and notifications: `Docs/ui-and-notifications.md` (MagicUI styling, AG Grid rules, toast notifications, UI handoffs) and `Docs/migrating-pages-to-react-router.md` (route migration runbook).
 - API and integrations: `Docs/api-reference.md` and `Docs/integrations.md`.
 - Security and trust: `Docs/security-and-trust.md` (enrollment, tokens, code signing, sequence diagrams).
+- Unit testing: `Docs/Unit_Testing.md` (runner commands, domain selection, helpers, result locations, and Codex validation rules).
 - Technical debt: GitHub issues labeled `Technical Debt` (patches, workarounds, dev/prod mismatches).
 
 Precedence: follow domain docs first; where overlap exists, the domain page wins. The Codex Agent sections inside each page are the authoritative agent guidance.
 
 ## Interacting with the Codebase
 - When making changes to the codebase, do not attempt to build code via npm or vite from the staging folder located under either `Data/Agent` or `Data/Engine`, changes of that nature need to take place in the runtime folders, and it is best to defer to the operator / developer to re-deploy the agent or engine to detect errors with page formatting, etc.
+
+## Unit Testing
+- For codebase changes, read `Docs/Unit_Testing.md` before choosing validation.
+- Use `Engine_Unit_Tests.sh`, `Agent_Unit_Tests.sh`, and `Agent_Unit_Tests.ps1` as the unit test entrypoints.
+- Use domain flags from `Docs/Unit_Testing.md` while iterating, then run the full affected Engine or Agent lane before handoff when practical.
 
 ## Database Work
 - For any code change, migration, troubleshooting step, or implementation that reads from, writes to, or otherwise interacts with PostgreSQL, read `Docs/db-reference.md` first.

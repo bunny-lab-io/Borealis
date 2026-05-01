@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ======================================================
 # Engine_Unit_Tests.sh
-# Description: Runs the full Borealis Engine unit test lane.
+# Description: Runs Borealis Engine unit tests.
 #
 # API Endpoints (if applicable): None
 # ======================================================
@@ -15,17 +15,28 @@ RESULT_DIR="${BOREALIS_UNIT_TEST_RESULTS_DIR:-${PROJECT_ROOT}/Unit_Test_Results/
 PYTHON_TIMEOUT_SECONDS="${BOREALIS_ENGINE_UNIT_TEST_TIMEOUT_SECONDS:-3600}"
 PYTHON_FILE_TIMEOUT_SECONDS="${BOREALIS_ENGINE_UNIT_TEST_FILE_TIMEOUT_SECONDS:-900}"
 WEBUI_TIMEOUT_SECONDS="${BOREALIS_WEBUI_UNIT_TEST_TIMEOUT_SECONDS:-240}"
+REQUESTED_DOMAIN="${BOREALIS_ENGINE_UNIT_TEST_DOMAIN:-all}"
+LIST_DOMAINS=0
 
 usage() {
   cat <<'USAGE'
-Usage: ./Engine_Unit_Tests.sh
+Usage: ./Engine_Unit_Tests.sh [--domain DOMAIN] [--list-domains]
 
 Runs all Engine Python unit tests and the staged Engine WebUI unit tests.
-No domain-level selection is supported.
+
+Default domain:
+  all
+
+Examples:
+  ./Engine_Unit_Tests.sh
+  ./Engine_Unit_Tests.sh --domain devices
+  ./Engine_Unit_Tests.sh --domain webui
+  ./Engine_Unit_Tests.sh --list-domains
 
 Environment overrides:
   BOREALIS_PROJECT_ROOT
   BOREALIS_ENGINE_TEST_PYTHON
+  BOREALIS_ENGINE_UNIT_TEST_DOMAIN
   BOREALIS_UNIT_TEST_RESULTS_DIR
   BOREALIS_ENGINE_UNIT_TEST_TIMEOUT_SECONDS
   BOREALIS_ENGINE_UNIT_TEST_FILE_TIMEOUT_SECONDS
@@ -33,14 +44,80 @@ Environment overrides:
 USAGE
 }
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
+print_domains() {
+  cat <<'DOMAINS'
+all
+access
+agent-role
+ansible
+assemblies
+core
+devices
+enrollment
+files
+rbac
+remote-access
+runtime-overrides
+scheduler
+server
+watchdogs
+webui
+workflows
+DOMAINS
+}
+
+valid_domain() {
+  local domain="$1"
+  case "$domain" in
+    all|access|agent-role|ansible|assemblies|core|devices|enrollment|files|rbac|remote-access|runtime-overrides|scheduler|server|watchdogs|webui|workflows)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --list-domains)
+      LIST_DOMAINS=1
+      shift
+      ;;
+    -d|--domain)
+      if [[ "$#" -lt 2 ]]; then
+        echo "--domain requires a value." >&2
+        usage >&2
+        exit 2
+      fi
+      REQUESTED_DOMAIN="$2"
+      shift 2
+      ;;
+    --domain=*)
+      REQUESTED_DOMAIN="${1#*=}"
+      shift
+      ;;
+    *)
+      echo "Unsupported arguments: $*" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ "$LIST_DOMAINS" -eq 1 ]]; then
+  print_domains
   exit 0
 fi
 
-if [[ "$#" -gt 0 ]]; then
-  echo "Unsupported arguments: $*" >&2
-  usage >&2
+if ! valid_domain "$REQUESTED_DOMAIN"; then
+  echo "Unknown Engine test domain: ${REQUESTED_DOMAIN}" >&2
+  echo "Available domains:" >&2
+  print_domains >&2
   exit 2
 fi
 
@@ -86,9 +163,114 @@ run_with_timeout() {
   return "$status"
 }
 
-PYTHON_BIN="$(resolve_python)" || {
-  echo "Python executable not found." >&2
-  exit 2
+PYTHON_BIN=""
+if [[ "$REQUESTED_DOMAIN" != "webui" ]]; then
+  PYTHON_BIN="$(resolve_python)" || {
+    echo "Python executable not found." >&2
+    exit 2
+  }
+fi
+
+emit_existing_paths() {
+  local path
+  for path in "$@"; do
+    if [[ -e "${PROJECT_ROOT}/${path}" ]]; then
+      echo "$path"
+    fi
+  done
+}
+
+engine_python_files_for_domain() {
+  local domain="$1"
+  local test_root="Data/Engine/Unit_Tests"
+
+  case "$domain" in
+    all)
+      if [[ -d "${PROJECT_ROOT}/${test_root}" ]]; then
+        cd "$PROJECT_ROOT" && find "$test_root" -type f \( -name 'test_*.py' -o -name '*_test.py' \) | sort
+      fi
+      ;;
+    access)
+      emit_existing_paths \
+        "${test_root}/test_access_management_api.py"
+      ;;
+    agent-role)
+      emit_existing_paths \
+        "${test_root}/test_agent_role_health.py" \
+        "${test_root}/test_agent_role_manager.py"
+      ;;
+    ansible)
+      emit_existing_paths \
+        "${test_root}/test_ansible_runner.py"
+      ;;
+    assemblies)
+      if [[ -d "${PROJECT_ROOT}/${test_root}/assemblies" ]]; then
+        cd "$PROJECT_ROOT" && find "${test_root}/assemblies" -type f \( -name 'test_*.py' -o -name '*_test.py' \) | sort
+      fi
+      ;;
+    core)
+      emit_existing_paths \
+        "${test_root}/test_core_api.py" \
+        "${test_root}/test_edge_runtime.py" \
+        "${test_root}/test_engine_secret_config.py" \
+        "${test_root}/test_web_ui.py"
+      ;;
+    devices)
+      emit_existing_paths \
+        "${test_root}/test_device_filters_api.py" \
+        "${test_root}/test_device_purge_api.py" \
+        "${test_root}/test_devices_api.py" \
+        "${test_root}/test_session_inventory.py"
+      ;;
+    enrollment)
+      emit_existing_paths \
+        "${test_root}/test_enrollment_api.py" \
+        "${test_root}/test_tokens_api.py"
+      ;;
+    files)
+      emit_existing_paths \
+        "${test_root}/test_file_management_api.py"
+      ;;
+    rbac)
+      emit_existing_paths \
+        "${test_root}/test_rbac_api.py"
+      ;;
+    remote-access)
+      emit_existing_paths \
+        "${test_root}/test_guacamole_proxy.py" \
+        "${test_root}/test_vnc_api.py" \
+        "${test_root}/test_vnc_proxy.py" \
+        "${test_root}/test_vnc_sessions.py" \
+        "${test_root}/test_vpn_shell.py" \
+        "${test_root}/test_vpn_tunnel_service.py" \
+        "${test_root}/test_websocket_registry.py" \
+        "${test_root}/test_wireguard_server.py"
+      ;;
+    runtime-overrides)
+      emit_existing_paths \
+        "${test_root}/test_runtime_override_merge.py"
+      ;;
+    scheduler)
+      emit_existing_paths \
+        "${test_root}/test_scheduled_jobs_api.py" \
+        "${test_root}/test_scheduler_timing.py"
+      ;;
+    server)
+      emit_existing_paths \
+        "${test_root}/test_server_info_api.py"
+      ;;
+    watchdogs)
+      emit_existing_paths \
+        "${test_root}/test_watchdogs_api.py"
+      ;;
+    webui)
+      return 0
+      ;;
+    workflows)
+      emit_existing_paths \
+        "${test_root}/test_workflow_runtime.py"
+      ;;
+  esac
 }
 
 run_engine_python_tests() {
@@ -139,11 +321,16 @@ run_engine_python_tests() {
       echo "PASSED ${test_file}" >>"$ENGINE_PYTEST_LOG"
     fi
     echo >>"$ENGINE_PYTEST_LOG"
-  done < <(cd "$PROJECT_ROOT" && find "$test_root" -type f \( -name 'test_*.py' -o -name '*_test.py' \) | sort)
+  done < <(engine_python_files_for_domain "$REQUESTED_DOMAIN")
 
   if [[ "$total_count" -eq 0 ]]; then
-    echo "No Engine Python unit tests found under ${test_root}." >>"$ENGINE_PYTEST_LOG"
-    lane_status=2
+    if [[ "$REQUESTED_DOMAIN" == "webui" ]]; then
+      echo "Engine Python unit tests skipped for webui domain." >>"$ENGINE_PYTEST_LOG"
+      lane_status=0
+    else
+      echo "No Engine Python unit tests found for domain ${REQUESTED_DOMAIN} under ${test_root}." >>"$ENGINE_PYTEST_LOG"
+      lane_status=2
+    fi
   fi
 
   {
@@ -166,23 +353,31 @@ WEBUI_XML="${RESULT_DIR}/engine-webui-vitest.xml"
 SUMMARY_PATH="${RESULT_DIR}/summary.txt"
 
 overall_status=0
+python_status="skipped"
+webui_status="skipped"
 
-echo "==> Engine Python unit tests"
-export PROJECT_ROOT RESULT_DIR ENGINE_PYTEST_LOG ENGINE_PYTEST_XML PYTHON_FILE_TIMEOUT_SECONDS PYTHON_BIN
-export -f run_engine_python_tests
-if command -v timeout >/dev/null 2>&1; then
-  timeout "$PYTHON_TIMEOUT_SECONDS" bash -c 'run_engine_python_tests' \
-    >"${RESULT_DIR}/engine-pytest-runner.log" 2>&1
+if [[ "$REQUESTED_DOMAIN" == "webui" ]]; then
+  echo "==> Engine Python unit tests skipped for webui domain"
+  echo "Engine Python unit tests skipped for webui domain." >"$ENGINE_PYTEST_LOG"
+  echo "Engine Python unit tests skipped for webui domain." >"${RESULT_DIR}/engine-pytest-runner.log"
 else
-  run_engine_python_tests >"${RESULT_DIR}/engine-pytest-runner.log" 2>&1
-fi
-python_status=$?
-if [[ "$python_status" -ne 0 ]]; then
-  echo "Engine Python unit tests failed with status ${python_status}. Log: ${ENGINE_PYTEST_LOG}" >&2
-  tail -n 80 "$ENGINE_PYTEST_LOG" >&2 || true
-  overall_status="$python_status"
-else
-  echo "Engine Python unit tests passed. Log: ${ENGINE_PYTEST_LOG}"
+  echo "==> Engine Python unit tests"
+  export PROJECT_ROOT RESULT_DIR ENGINE_PYTEST_LOG ENGINE_PYTEST_XML PYTHON_FILE_TIMEOUT_SECONDS PYTHON_BIN REQUESTED_DOMAIN
+  export -f run_engine_python_tests engine_python_files_for_domain emit_existing_paths
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$PYTHON_TIMEOUT_SECONDS" bash -c 'run_engine_python_tests' \
+      >"${RESULT_DIR}/engine-pytest-runner.log" 2>&1
+  else
+    run_engine_python_tests >"${RESULT_DIR}/engine-pytest-runner.log" 2>&1
+  fi
+  python_status=$?
+  if [[ "$python_status" -ne 0 ]]; then
+    echo "Engine Python unit tests failed with status ${python_status}. Log: ${ENGINE_PYTEST_LOG}" >&2
+    tail -n 80 "$ENGINE_PYTEST_LOG" >&2 || true
+    overall_status="$python_status"
+  else
+    echo "Engine Python unit tests passed. Log: ${ENGINE_PYTEST_LOG}"
+  fi
 fi
 
 WEBUI_RUNTIME="${PROJECT_ROOT}/Engine/web-interface"
@@ -194,13 +389,18 @@ if [[ -z "$NPM_BIN" && -x "${PROJECT_ROOT}/Dependencies/NodeJS/bin/npm" ]]; then
   NPM_BIN="${PROJECT_ROOT}/Dependencies/NodeJS/bin/npm"
 fi
 
-if [[ ! -d "$WEBUI_UNIT_TESTS" ]]; then
+if [[ "$REQUESTED_DOMAIN" != "all" && "$REQUESTED_DOMAIN" != "webui" ]]; then
+  {
+    echo "Engine WebUI unit tests skipped for domain ${REQUESTED_DOMAIN}."
+  } >"$WEBUI_LOG"
+elif [[ ! -d "$WEBUI_UNIT_TESTS" ]]; then
   {
     echo "Engine WebUI runtime unit tests missing at ${WEBUI_UNIT_TESTS}."
     echo "Redeploy the Engine so Data/Engine/web-interface/Unit_Tests is staged into Engine/web-interface/Unit_Tests, then rerun this script."
   } >"$WEBUI_LOG"
   echo "Engine WebUI unit tests failed with status 2. Log: ${WEBUI_LOG}" >&2
   cat "$WEBUI_LOG" >&2
+  webui_status=2
   overall_status=2
 elif [[ ! -d "${WEBUI_RUNTIME}/node_modules" ]]; then
   {
@@ -209,6 +409,7 @@ elif [[ ! -d "${WEBUI_RUNTIME}/node_modules" ]]; then
   } >"$WEBUI_LOG"
   echo "Engine WebUI unit tests failed with status 2. Log: ${WEBUI_LOG}" >&2
   cat "$WEBUI_LOG" >&2
+  webui_status=2
   overall_status=2
 elif [[ -z "$NPM_BIN" ]]; then
   {
@@ -216,6 +417,7 @@ elif [[ -z "$NPM_BIN" ]]; then
   } >"$WEBUI_LOG"
   echo "Engine WebUI unit tests failed with status 2. Log: ${WEBUI_LOG}" >&2
   cat "$WEBUI_LOG" >&2
+  webui_status=2
   overall_status=2
 else
   run_with_timeout \
@@ -232,11 +434,14 @@ fi
 
 {
   echo "Borealis Engine unit test run"
+  echo "Domain: ${REQUESTED_DOMAIN}"
   echo "Results: ${RESULT_DIR}"
   echo "Python status: ${python_status}"
-  if [[ -f "$WEBUI_XML" ]]; then
+  if [[ "$webui_status" == "skipped" ]]; then
+    echo "WebUI status: skipped"
+  elif [[ "$webui_status" -eq 0 ]]; then
     echo "WebUI status: 0"
-  elif [[ "$overall_status" -ne 0 ]]; then
+  else
     echo "WebUI status: see ${WEBUI_LOG}"
   fi
   echo "Overall status: ${overall_status}"
