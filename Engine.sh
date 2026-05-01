@@ -326,6 +326,25 @@ require_python() {
   command_exists python3 || die "python3 missing. Install python3 and rerun Engine.sh."
 }
 
+host_postgres_units_active() {
+  command_exists systemctl || return 1
+  if systemctl is-active --quiet postgresql.service 2>/dev/null; then
+    return 0
+  fi
+  systemctl list-units 'postgresql@*.service' --state=active --no-legend --no-pager 2>/dev/null | grep -q .
+}
+
+container_running() {
+  local container_name="$1"
+  docker inspect -f '{{.State.Running}}' "${container_name}" 2>/dev/null | grep -qx true
+}
+
+ensure_no_host_postgres_conflict() {
+  if host_postgres_units_active && ! container_running borealis-engine-postgres-db; then
+    die "Host PostgreSQL is active on this machine and conflicts with container postgres-db on 127.0.0.1:5432. Stop and disable host PostgreSQL before deploying."
+  fi
+}
+
 docker_apt_repo_os() {
   case "${DISTRO_ID}" in
     debian) printf '%s\n' "debian" ;;
@@ -881,6 +900,7 @@ deploy_engine() {
   local mode
   mode="$(normalize_mode "${1:-prod}")"
   ensure_engine_dependencies
+  ensure_no_host_postgres_conflict
   prepare_runtime "${mode}"
   build_images "${mode}"
   export_image_manifest_env
@@ -906,6 +926,7 @@ service_action() {
   validate_service "${service}"
   mode="$(normalize_mode "${mode}")"
   ensure_engine_dependencies
+  ensure_no_host_postgres_conflict
   prepare_runtime "${mode}"
   case "${action}" in
     restart)
