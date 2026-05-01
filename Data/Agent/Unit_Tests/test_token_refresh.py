@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import contextlib
 import threading
 from typing import Any
 
@@ -13,10 +14,18 @@ import Data.Agent.agent as agent_module
 
 
 class _FakeResponse:
-    def __init__(self, status_code: int, *, json_payload: dict[str, Any] | None = None, text: str = "") -> None:
+    def __init__(
+        self,
+        status_code: int,
+        *,
+        json_payload: dict[str, Any] | None = None,
+        text: str = "",
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.status_code = status_code
         self._json_payload = json_payload
         self.text = text
+        self.headers = dict(headers or {})
 
     def json(self) -> dict[str, Any]:
         if self._json_payload is None:
@@ -71,6 +80,24 @@ def _make_client(session: _FakeSession, store: _FakeKeyStore) -> agent_module.Ag
     client._reload_tokens_from_disk = lambda: None
     client._clear_tokens_locked = lambda: (_ for _ in ()).throw(AssertionError("unexpected clear"))
     client._perform_enrollment_locked = lambda: (_ for _ in ()).throw(AssertionError("unexpected enrollment"))
+    return client
+
+
+def _make_enrollment_client(session: _FakeSession) -> agent_module.AgentHttpClient:
+    store = _FakeKeyStore()
+    client = agent_module.AgentHttpClient.__new__(agent_module.AgentHttpClient)
+    client.session = session
+    client.key_store = store
+    client.guid = None
+    client.refresh_token = None
+    client.access_token = None
+    client.access_expires_at = None
+    client.base_url = "https://borealis.example.invalid"
+    client._auth_lock = threading.RLock()
+    client._active_installer_code = None
+    client._reload_tokens_from_disk = lambda: None
+    client.refresh_base_url = lambda: None
+    client._resolve_installer_code = lambda: "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"
     return client
 
 
@@ -150,3 +177,35 @@ def test_refresh_access_token_raises_after_transient_outage_when_token_expired(m
 
     with pytest.raises(requests.HTTPError):
         client._refresh_access_token_locked()
+
+
+def test_enrollment_honors_retry_after_before_retrying_request(monkeypatch) -> None:
+    session = _FakeSession(
+        [
+            _FakeResponse(
+                429,
+                json_payload={"error": "rate_limited", "retry_after": 17.5},
+                text='{"error":"rate_limited","retry_after":17.5}',
+                headers={"Retry-After": "17"},
+            ),
+            _FakeResponse(
+                400,
+                json_payload={"error": "invalid_enrollment_code"},
+                text='{"error":"invalid_enrollment_code"}',
+            ),
+        ]
+    )
+    client = _make_enrollment_client(session)
+    sleep_calls: list[float] = []
+    log_messages: list[str] = []
+
+    monkeypatch.setattr(agent_module, "_acquire_enrollment_lock", lambda **_kwargs: contextlib.nullcontext())
+    monkeypatch.setattr(agent_module.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+    monkeypatch.setattr(agent_module, "_log_agent", lambda message, **kwargs: log_messages.append(str(message)))
+
+    with pytest.raises(requests.HTTPError):
+        client._perform_enrollment_locked()
+
+    assert session.calls == 2
+    assert sleep_calls == [17.0]
+    assert any("honoring Retry-After" in message for message in log_messages)

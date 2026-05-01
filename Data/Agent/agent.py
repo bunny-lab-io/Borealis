@@ -99,6 +99,30 @@ def _iter_exception_chain(exc: BaseException):
 _TRANSIENT_REFRESH_STATUS_CODES = frozenset({500, 502, 503, 504})
 _REFRESH_RETRY_DELAYS_SECONDS = (1.0, 2.0, 5.0)
 _REFRESH_FALLBACK_MINIMUM_TTL_SECONDS = 15
+_ENROLLMENT_RATE_LIMIT_MAX_ATTEMPTS = 5
+_ENROLLMENT_RETRY_AFTER_MAX_SECONDS = 300.0
+
+
+def _response_retry_after_seconds(response: Any, *, default: float = 30.0) -> float:
+    raw_value: Any = None
+    try:
+        raw_value = getattr(response, "headers", {}).get("Retry-After")
+    except Exception:
+        raw_value = None
+    if raw_value in (None, ""):
+        try:
+            payload = response.json()
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict):
+            raw_value = payload.get("retry_after")
+    try:
+        delay = float(raw_value)
+    except Exception:
+        delay = float(default)
+    if delay <= 0:
+        delay = 1.0
+    return min(delay, _ENROLLMENT_RETRY_AFTER_MAX_SECONDS)
 
 # Centralized logging helpers (Agent)
 def _agent_logs_root() -> str:
@@ -1714,39 +1738,61 @@ class AgentHttpClient:
                     "client_nonce": base64.b64encode(client_nonce).decode("ascii"),
                 }
                 request_url = f"{self.base_url}/api/agent/enroll/request"
-                _log_agent(
-                    "Starting enrollment request... "
-                    f"url={request_url} hostname={payload['hostname']} pubkey_prefix={PUBLIC_KEY_B64[:24]}",
-                    fname="agent.log",
-                )
-                resp = self.session.post(request_url, json=payload, timeout=30)
-                _log_agent(
-                    f"Enrollment request HTTP status={resp.status_code} retry_after={resp.headers.get('Retry-After')}"
-                    f" body_len={len(resp.content)}",
-                    fname="agent.log",
-                )
-                try:
-                    resp.raise_for_status()
-                except requests.HTTPError:
-                    snippet = resp.text[:512] if hasattr(resp, "text") else ""
+                request_attempt = 1
+                while True:
                     _log_agent(
-                        f"Enrollment request failed status={resp.status_code} body_snippet={snippet}",
-                        fname="agent.error.log",
+                        "Starting enrollment request... "
+                        f"url={request_url} hostname={payload['hostname']} pubkey_prefix={PUBLIC_KEY_B64[:24]}"
+                        f" attempt={request_attempt}",
+                        fname="agent.log",
                     )
-                    if resp.status_code == 400:
-                        try:
-                            err_payload = resp.json()
-                        except Exception:
-                            err_payload = {}
-                        if (err_payload or {}).get("error") in {"invalid_enrollment_code", "code_consumed"}:
+                    resp = self.session.post(request_url, json=payload, timeout=30)
+                    _log_agent(
+                        f"Enrollment request HTTP status={resp.status_code} retry_after={resp.headers.get('Retry-After')}"
+                        f" body_len={len(resp.content)} attempt={request_attempt}",
+                        fname="agent.log",
+                    )
+                    try:
+                        resp.raise_for_status()
+                        break
+                    except requests.HTTPError:
+                        snippet = resp.text[:512] if hasattr(resp, "text") else ""
+                        _log_agent(
+                            f"Enrollment request failed status={resp.status_code} body_snippet={snippet}"
+                            f" attempt={request_attempt}",
+                            fname="agent.error.log",
+                        )
+                        if resp.status_code == 429 and request_attempt < _ENROLLMENT_RATE_LIMIT_MAX_ATTEMPTS:
+                            delay = _response_retry_after_seconds(resp)
+                            _log_agent(
+                                "Enrollment request rate limited; honoring Retry-After "
+                                f"delay={delay:.1f}s attempt={request_attempt}",
+                                fname="agent.log",
+                            )
+                            time.sleep(delay)
                             self._reload_tokens_from_disk()
                             if self.guid and self.refresh_token:
                                 _log_agent(
-                                    "Enrollment code rejected but existing credentials are present; skipping re-enrollment",
+                                    "Enrollment credentials detected after rate-limit wait; skipping re-enrollment",
                                     fname="agent.log",
                                 )
                                 return
-                    raise
+                            request_attempt += 1
+                            continue
+                        if resp.status_code == 400:
+                            try:
+                                err_payload = resp.json()
+                            except Exception:
+                                err_payload = {}
+                            if (err_payload or {}).get("error") in {"invalid_enrollment_code", "code_consumed"}:
+                                self._reload_tokens_from_disk()
+                                if self.guid and self.refresh_token:
+                                    _log_agent(
+                                        "Enrollment code rejected but existing credentials are present; skipping re-enrollment",
+                                        fname="agent.log",
+                                    )
+                                    return
+                        raise
                 data = resp.json()
                 _log_agent(
                     "Enrollment request accepted "
