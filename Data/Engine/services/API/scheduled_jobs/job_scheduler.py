@@ -89,6 +89,11 @@ RESOLUTION_STATUS_SKIPPED = "skipped"
 RESOLUTION_STATUS_UNRESOLVED = "unresolved"
 RESOLUTION_REASON_REMOTE_PREFLIGHT_FAILED = "remote_preflight_failed"
 RESOLUTION_REASON_WIREGUARD_NOT_READY = "wireguard_not_ready"
+_SOFT_WIREGUARD_DISPATCH_REASONS = {
+    "no_recent_handshake",
+    "stale_handshake",
+    "transport_probe_pending",
+}
 ENGINE_LOCAL_ALIAS = "borealis-engine-01"
 CREDENTIAL_RESET_REQUIRED_MESSAGE = (
     "The credential associated with this scheduled job can no longer be decrypted due to the "
@@ -723,6 +728,21 @@ def _all_skipped_for_reason(
             return False
         if normalized_reason and str(row.get("resolution_reason") or "").strip().lower() != normalized_reason:
             return False
+    return True
+
+
+def _wireguard_session_allows_remote_attempt(session: Mapping[str, Any], wireguard_peer_ip: str) -> bool:
+    if not str(wireguard_peer_ip or "").strip():
+        return False
+    if session.get("dispatch_ready") is not False:
+        return True
+    reason = str(session.get("dispatch_ready_reason") or "").strip().lower()
+    if reason not in _SOFT_WIREGUARD_DISPATCH_REASONS:
+        return False
+    if session.get("agent_ready") is False:
+        return False
+    if session.get("peer_present") is False:
+        return False
     return True
 
 
@@ -1412,7 +1432,8 @@ class JobScheduler:
                     required_ports=[requested_port],
                 )
                 session = vpn_sessions.get(agent_id) or {}
-                if session and session.get("dispatch_ready") is False:
+                wireguard_peer_ip = str(session.get("virtual_ip") or "").split("/", 1)[0]
+                if session and not _wireguard_session_allows_remote_attempt(session, wireguard_peer_ip):
                     ready_reason = str(session.get("dispatch_ready_reason") or "not_ready")
                     _update_target_rows(
                         inventory_hostname=host_alias,
@@ -1426,7 +1447,6 @@ class JobScheduler:
                         error=f"Managed WireGuard session is not ready for this target ({ready_reason}).",
                     )
                     return None
-                wireguard_peer_ip = str(session.get("virtual_ip") or "").split("/", 1)[0]
                 if not wireguard_peer_ip:
                     _update_target_rows(
                         inventory_hostname=host_alias,
@@ -4166,7 +4186,7 @@ class JobScheduler:
             elif run_mode_norm == "ssh":
                 session = vpn_sessions.get(agent_id) or {}
                 wireguard_peer_ip = str(session.get("virtual_ip") or "").split("/", 1)[0]
-                if session and session.get("dispatch_ready") is False:
+                if session and not _wireguard_session_allows_remote_attempt(session, wireguard_peer_ip):
                     resolution_status = RESOLUTION_STATUS_SKIPPED
                     resolution_reason = RESOLUTION_REASON_WIREGUARD_NOT_READY
                     preflight_error = str(session.get("dispatch_ready_reason") or "not_ready")
@@ -4217,7 +4237,7 @@ class JobScheduler:
             elif run_mode_norm == "winrm":
                 session = vpn_sessions.get(agent_id) or {}
                 wireguard_peer_ip = str(session.get("virtual_ip") or "").split("/", 1)[0]
-                if session and session.get("dispatch_ready") is False:
+                if session and not _wireguard_session_allows_remote_attempt(session, wireguard_peer_ip):
                     resolution_status = RESOLUTION_STATUS_SKIPPED
                     resolution_reason = RESOLUTION_REASON_WIREGUARD_NOT_READY
                     preflight_error = str(session.get("dispatch_ready_reason") or "not_ready")
@@ -4646,7 +4666,35 @@ class JobScheduler:
                 self._persist_run_activity_links(activity_links, created_at=ts_now)
                 return True
 
+            cur.execute(
+                """
+                SELECT status, finished_ts
+                  FROM scheduled_job_runs
+                 WHERE id=?
+                """,
+                (int(run_row_id),),
+            )
+            current_run = cur.fetchone()
+            current_status = ""
+            current_finished_ts = None
+            if current_run:
+                try:
+                    current_status = str(current_run["status"] or "").strip()
+                    current_finished_ts = current_run["finished_ts"]
+                except Exception:
+                    current_status = str(current_run[0] or "").strip()
+                    current_finished_ts = current_run[1]
+            if current_finished_ts is not None and current_status in {
+                RUN_STATUS_SKIPPED,
+                RUN_STATUS_FAILED,
+                RUN_STATUS_EXPIRED,
+                RUN_STATUS_TIMED_OUT,
+            }:
+                conn.commit()
+                return False
+
             error_text = dispatch_errors[0] if dispatch_errors else "No runnable activities were dispatched"
+            finished_ts = _now_ts()
             cur.execute(
                 """
                 UPDATE scheduled_job_runs
@@ -4656,7 +4704,7 @@ class JobScheduler:
                        error=?
                  WHERE id=?
                 """,
-                (RUN_STATUS_FAILED, ts_now, ts_now, str(error_text)[:512], int(run_row_id)),
+                (RUN_STATUS_FAILED, finished_ts, finished_ts, str(error_text)[:512], int(run_row_id)),
             )
             conn.commit()
             return False

@@ -3606,6 +3606,32 @@ class _FakeSigner:
         return "public-key"
 
 
+@pytest.mark.parametrize("reason", ["stale_handshake", "no_recent_handshake", "transport_probe_pending"])
+def test_wireguard_soft_dispatch_reasons_allow_remote_attempt(reason: str) -> None:
+    assert scheduled_job_module._wireguard_session_allows_remote_attempt(
+        {
+            "dispatch_ready": False,
+            "dispatch_ready_reason": reason,
+            "agent_ready": True,
+            "peer_present": True,
+        },
+        "10.255.0.4",
+    )
+
+
+@pytest.mark.parametrize("reason", ["agent_ready_missing", "agent_ready_missing_required_ports", "peer_missing"])
+def test_wireguard_hard_dispatch_reasons_still_skip_remote_attempt(reason: str) -> None:
+    assert not scheduled_job_module._wireguard_session_allows_remote_attempt(
+        {
+            "dispatch_ready": False,
+            "dispatch_ready_reason": reason,
+            "agent_ready": reason != "agent_ready_missing",
+            "peer_present": reason != "peer_missing",
+        },
+        "10.255.0.4",
+    )
+
+
 def test_scheduled_job_dispatch_fails_cleanly_when_system_socket_is_missing(
     engine_harness: EngineTestHarness,
     monkeypatch,
@@ -3734,6 +3760,161 @@ def test_scheduled_job_dispatch_fails_cleanly_when_system_socket_is_missing(
         assert activity_row[0] == "Failed"
         assert activity_row[1] == ""
         assert "No system agent socket is registered" in (activity_row[2] or "")
+    finally:
+        conn.close()
+
+
+def test_scheduled_job_dispatch_preserves_ansible_preflight_skip(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_runs(
+                id,
+                job_id,
+                target_hostname,
+                scheduled_ts,
+                status,
+                created_at,
+                updated_at
+            ) VALUES (?,?,?,?,?,?,?)
+            """,
+            (
+                33,
+                5,
+                "LAB-DOCS-01",
+                1_773_782_800,
+                "Pending",
+                1_773_782_800,
+                1_773_782_800,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    def _finalize_ansible_skip(*_args, **_kwargs):
+        conn_update = sqlite3.connect(str(engine_harness.db_path))
+        try:
+            cur_update = conn_update.cursor()
+            cur_update.execute(
+                """
+                UPDATE scheduled_job_runs
+                   SET status=?,
+                       finished_ts=?,
+                       updated_at=?,
+                       skip_reason=?,
+                       error=?
+                 WHERE id=?
+                """,
+                (
+                    "Skipped",
+                    1_773_782_845,
+                    1_773_782_845,
+                    "no_eligible_targets",
+                    "Managed WireGuard session is not ready for this target (stale_handshake).",
+                    33,
+                ),
+            )
+            conn_update.commit()
+        finally:
+            conn_update.close()
+        return None
+
+    monkeypatch.setattr(scheduler, "_dispatch_ansible", _finalize_ansible_skip)
+
+    dispatched = scheduler._dispatch_run_activities(
+        job_id=5,
+        run_row_id=33,
+        scheduled_ts=1_773_782_800,
+        hostname="LAB-DOCS-01",
+        run_mode="ssh",
+        script_components=[],
+        ansible_components=[{"path": "Ansible_Playbooks/playbooks/linux/ping-pong.json"}],
+        credential_id=1,
+        use_service_account=False,
+    )
+
+    assert dispatched is False
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT status, finished_ts, skip_reason, error FROM scheduled_job_runs WHERE id=?", (33,))
+        row = cur.fetchone()
+        assert row[0] == "Skipped"
+        assert row[1] == 1_773_782_845
+        assert row[2] == "no_eligible_targets"
+        assert "stale_handshake" in row[3]
+    finally:
+        conn.close()
+
+
+def test_scheduled_job_dispatch_uses_fresh_finished_ts_for_no_activity_failure(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_runs(
+                id,
+                job_id,
+                target_hostname,
+                scheduled_ts,
+                status,
+                created_at,
+                updated_at
+            ) VALUES (?,?,?,?,?,?,?)
+            """,
+            (
+                34,
+                6,
+                "LAB-AIO-01",
+                1_773_782_900,
+                "Pending",
+                1_773_782_900,
+                1_773_782_900,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    now_values = iter([1_773_782_900, 1_773_782_945])
+    monkeypatch.setattr(scheduled_job_module, "_now_ts", lambda: next(now_values))
+
+    dispatched = scheduler._dispatch_run_activities(
+        job_id=6,
+        run_row_id=34,
+        scheduled_ts=1_773_782_900,
+        hostname="LAB-AIO-01",
+        run_mode="system",
+        script_components=[],
+        ansible_components=[],
+        credential_id=None,
+        use_service_account=True,
+    )
+
+    assert dispatched is False
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT started_ts, finished_ts, status, error FROM scheduled_job_runs WHERE id=?", (34,))
+        row = cur.fetchone()
+        assert row[0] == 1_773_782_900
+        assert row[1] == 1_773_782_945
+        assert row[2] == "Failed"
+        assert row[3] == "No runnable activities were dispatched"
     finally:
         conn.close()
 
