@@ -1,0 +1,583 @@
+from __future__ import annotations
+
+import threading
+from pathlib import Path
+
+import Data.Agent.Roles.role_system_wireguard as wireguard_role
+from Data.Agent.Roles.role_system_wireguard import (
+    LinuxWireGuardClient,
+    Role,
+    SessionConfig,
+    WireGuardClient,
+    _session_config_equivalent,
+    _session_transport_equivalent,
+)
+
+from Data.Agent.Unit_Tests.support.roles import install_role_status_hooks
+
+
+def _build_session(*, endpoint: str = "borealis.bunny-lab.io:30000") -> SessionConfig:
+    return SessionConfig(
+        token={"agent_id": "agent-1", "tunnel_id": "tunnel-1", "expires_at": 9999999999, "port": 30000},
+        tunnel_id="tunnel-1",
+        virtual_ip="10.255.0.15/32",
+        allowed_ips="10.255.0.1/32",
+        endpoint=endpoint,
+        server_public_key="server-public-key",
+        allowed_ports="47002,5900,22",
+    )
+
+
+class _FakeUdpSocket:
+    def __init__(self, sent: list[tuple[bytes, tuple[str, int]]]) -> None:
+        self._sent = sent
+
+    def __enter__(self) -> "_FakeUdpSocket":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    def settimeout(self, value: float) -> None:
+        self.timeout = value
+
+    def sendto(self, data: bytes, address: tuple[str, int]) -> int:
+        self._sent.append((data, address))
+        return len(data)
+
+
+def _capture_udp_probe(monkeypatch) -> list[tuple[bytes, tuple[str, int]]]:
+    sent: list[tuple[bytes, tuple[str, int]]] = []
+    monkeypatch.setattr(
+        wireguard_role.socket,
+        "socket",
+        lambda *_args, **_kwargs: _FakeUdpSocket(sent),
+    )
+    return sent
+
+
+def test_engine_virtual_ip_from_allowed_ips_parses_host_route() -> None:
+    assert wireguard_role._engine_virtual_ip_from_allowed_ips("10.255.0.1/32") == "10.255.0.1"
+
+
+def test_session_config_equivalent_detects_endpoint_drift() -> None:
+    current = _build_session(endpoint="borealis.bunny-lab.io:30000")
+    desired = _build_session(endpoint="192.168.3.252:30000")
+    assert _session_config_equivalent(current, current) is True
+    assert _session_config_equivalent(current, desired) is False
+
+
+def test_session_transport_equivalent_ignores_tunnel_rotation() -> None:
+    current = _build_session()
+    desired = _build_session()
+    desired.tunnel_id = "tunnel-2"
+    desired.token = dict(desired.token)
+    desired.token["tunnel_id"] = "tunnel-2"
+
+    assert _session_transport_equivalent(current, desired) is True
+
+
+def test_role_resolve_endpoint_preserves_engine_token_endpoint() -> None:
+    role = Role.__new__(Role)
+    resolved = role._resolve_endpoint(
+        "borealis.bunny-lab.io:30000",
+        {"port": 30000},
+    )
+
+    assert resolved == "borealis.bunny-lab.io:30000"
+
+
+def test_role_agent_status_hooks_report_wireguard_milestones() -> None:
+    role = Role.__new__(Role)
+    events = install_role_status_hooks(role)
+
+    role._record_agent_status("wireguard_starting", "active", "starting")
+    role._complete_agent_status("wireguard_online", "online")
+    role._fail_agent_status("wireguard_starting", "failed")
+
+    assert ("record", "wireguard_starting", "active", "starting") in events
+    assert ("complete", "wireguard_online", "online") in events
+    assert ("failed", "wireguard_starting", "failed") in events
+    assert ("flush", "wireguard_online") in events
+    assert ("flush", "wireguard_starting") in events
+
+
+def test_role_session_config_matches_live_snapshot() -> None:
+    role = Role.__new__(Role)
+    role._read_live_config_snapshot = lambda: {
+        "virtual_ip": "10.255.0.15/32",
+        "endpoint": "192.168.3.252:30000",
+        "active_config": True,
+    }
+
+    assert role._session_config_matches_live(_build_session(endpoint="192.168.3.252:30000")) is True
+    assert role._session_config_matches_live(_build_session(endpoint="borealis.bunny-lab.io:30000")) is False
+
+
+def test_role_session_config_match_rejects_stale_allowed_ports() -> None:
+    role = Role.__new__(Role)
+    current = _build_session(endpoint="192.168.3.252:30000")
+    desired = _build_session(endpoint="192.168.3.252:30000")
+    desired.allowed_ports = "47002,5900,22,5986"
+    role.client = type("Client", (), {"session": current})()
+    role._read_live_config_snapshot = lambda: {
+        "virtual_ip": "10.255.0.15/32",
+        "endpoint": "192.168.3.252:30000",
+        "active_config": True,
+    }
+
+    assert role._session_config_matches_live(desired) is False
+
+
+def test_role_build_session_honors_force_restart_flag() -> None:
+    role = Role.__new__(Role)
+    role.ctx = type("Ctx", (), {"agent_id": "agent-1"})()
+    role._remember_tunnel_snapshot = lambda payload: None
+    role._resolve_endpoint = lambda endpoint, token: endpoint
+    role._log = lambda message, *, error=False: None
+
+    session = role._build_session(
+        {
+            "agent_id": "agent-1",
+            "token": {"agent_id": "agent-1", "tunnel_id": "tunnel-1", "expires_at": 9999999999, "port": 30000},
+            "tunnel_id": "tunnel-1",
+            "virtual_ip": "10.255.0.15/32",
+            "allowed_ips": "10.255.0.1/32",
+            "endpoint": "borealis.bunny-lab.io:30000",
+            "server_public_key": "server-public-key",
+            "allowed_ports": [47002, 5900, 22],
+            "force_restart": True,
+            "restart_reason": "shell_connect_retry",
+        }
+    )
+
+    assert session is not None
+    assert session.force_restart is True
+    assert session.restart_reason == "shell_connect_retry"
+
+
+def test_linux_client_force_restart_skips_same_session_reuse() -> None:
+    client = LinuxWireGuardClient.__new__(LinuxWireGuardClient)
+    client._session_lock = threading.Lock()
+    client.session = _build_session()
+    client.conf_path = None
+    client._client_keys = {"private": "client-private"}
+    calls: list[str] = []
+
+    client._service_state = lambda: "RUNNING"
+    client._validate_token = lambda token, signing_client=None: None
+    client._write_config = lambda text: calls.append("write_config") or True
+    client._bring_down = lambda: calls.append("bring_down")
+    client._bring_up = lambda: calls.append("bring_up") or True
+
+    forced = _build_session()
+    forced.force_restart = True
+    forced.restart_reason = "shell_connect_retry"
+
+    client.start_session(forced, signing_client=None)
+
+    assert calls == ["write_config", "bring_down", "bring_up"]
+
+
+def test_linux_client_reuses_same_session_and_reapplies_mtu(monkeypatch) -> None:
+    client = LinuxWireGuardClient.__new__(LinuxWireGuardClient)
+    client._session_lock = threading.Lock()
+    client.session = _build_session()
+    client.conf_path = None
+    client._client_keys = {"private": "client-private"}
+    calls: list[str] = []
+    sent = _capture_udp_probe(monkeypatch)
+
+    client._service_state = lambda: "RUNNING"
+    client._validate_token = lambda token, signing_client=None: None
+    client._write_config = lambda text: calls.append("write_config") or True
+    client._bring_down = lambda: calls.append("bring_down")
+    client._bring_up = lambda: calls.append("bring_up") or True
+    client._ensure_interface_mtu = lambda: calls.append("ensure_mtu")
+
+    client.start_session(_build_session(), signing_client=None)
+
+    assert calls == ["ensure_mtu"]
+    assert sent == [(b"borealis-wg-probe", ("10.255.0.1", 9))]
+
+
+def test_linux_client_restarts_session_for_tunnel_rotation() -> None:
+    client = LinuxWireGuardClient.__new__(LinuxWireGuardClient)
+    client._session_lock = threading.Lock()
+    client.session = _build_session()
+    client.conf_path = None
+    client._client_keys = {"private": "client-private"}
+    calls: list[str] = []
+
+    client._service_state = lambda: "RUNNING"
+    client._validate_token = lambda token, signing_client=None: calls.append("validate")
+    client._write_config = lambda text: calls.append("write_config") or True
+    client._bring_down = lambda: calls.append("bring_down")
+    client._bring_up = lambda: calls.append("bring_up") or True
+    client._ensure_interface_mtu = lambda: calls.append("ensure_mtu")
+
+    refreshed = _build_session()
+    refreshed.tunnel_id = "tunnel-2"
+    refreshed.token = dict(refreshed.token)
+    refreshed.token["tunnel_id"] = "tunnel-2"
+
+    client.start_session(refreshed, signing_client=None)
+
+    assert calls == ["validate", "bring_down", "write_config", "bring_down", "bring_up", "ensure_mtu"]
+    assert client.session is refreshed
+
+
+def test_windows_client_render_config_includes_explicit_mtu() -> None:
+    client = _build_windows_client()
+
+    rendered = client._render_config(_build_session())
+
+    assert "MTU = 1420" in rendered
+
+
+def test_windows_client_idle_config_includes_explicit_mtu() -> None:
+    client = _build_windows_client()
+
+    rendered = client._render_idle_config()
+
+    assert "MTU = 1420" in rendered
+
+
+def test_linux_client_render_config_includes_explicit_mtu() -> None:
+    client = LinuxWireGuardClient.__new__(LinuxWireGuardClient)
+    client._client_keys = {"private": "client-private"}
+
+    rendered = client._render_config(_build_session())
+
+    assert "MTU = 1420" in rendered
+
+
+def _build_windows_client() -> WireGuardClient:
+    client = WireGuardClient.__new__(WireGuardClient)
+    client._session_lock = threading.Lock()
+    client._stop_event = threading.Event()
+    client._client_keys = {"private": "client-private"}
+    client._wg_exe = "wireguard.exe"
+    client._last_install_already_present = False
+    client.service_name = "Borealis"
+    client.display_name = "Borealis"
+    client.service_display_name = "Borealis - WireGuard - Agent"
+    client.conf_path = Path("/tmp/Borealis.conf")
+    client.session = None
+    client.idle_deadline = None
+    return client
+
+
+def test_windows_client_reuses_same_session_and_primes_engine_path(monkeypatch) -> None:
+    client = _build_windows_client()
+    client.session = _build_session()
+    calls: list[str] = []
+    sent = _capture_udp_probe(monkeypatch)
+
+    client._service_state = lambda: "RUNNING"
+    client.bump_activity = lambda: calls.append("bump")
+
+    client.start_session(_build_session(), signing_client=None)
+
+    assert calls == ["bump"]
+    assert sent == [(b"borealis-wg-probe", ("10.255.0.1", 9))]
+
+
+def test_windows_client_repairs_stale_service_binding() -> None:
+    client = _build_windows_client()
+    calls: list[str] = []
+
+    client._validate_token = lambda token, signing_client=None: None
+    client._write_config = lambda text: calls.append("write_config") or True
+    client._write_config_to = lambda path, text: True
+    client._service_exists = lambda: True
+    client._service_config_path = lambda: Path("D:/Github/Borealis/Agent/Borealis/Settings/WireGuard/Borealis.conf")
+    client._reinstall_service = lambda: calls.append("reinstall") or True
+    client._restart_service = lambda: calls.append("restart") or True
+    client._wait_for_service_state = lambda **kwargs: "RUNNING"
+    client._ensure_adapter_name = lambda: calls.append("adapter")
+    client._ensure_service_display_name = lambda: calls.append("display")
+    client._ensure_shell_firewall = lambda allowed_ips, allowed_ports: calls.append("firewall")
+    client._log_recovery_event = lambda *args, **kwargs: None
+
+    session = _build_session()
+    client.start_session(session, signing_client=None)
+
+    assert calls == ["write_config", "reinstall", "restart", "adapter", "display", "firewall"]
+    assert client.session is session
+
+
+def test_windows_client_does_not_mirror_config_to_stale_service_path() -> None:
+    client = _build_windows_client()
+    paths = iter(
+        [
+            Path("D:/Github/Borealis/Agent/Borealis/Settings/WireGuard/Borealis.conf"),
+        ]
+    )
+
+    client._validate_token = lambda token, signing_client=None: None
+    client._write_config = lambda text: True
+    client._write_config_to = lambda path, text: (_ for _ in ()).throw(AssertionError("stale path mirror should not run"))
+    client._service_exists = lambda: True
+    client._service_config_path = lambda: next(paths)
+    client._reinstall_service = lambda: True
+    client._restart_service = lambda: True
+    client._wait_for_service_state = lambda **kwargs: "RUNNING"
+    client._ensure_adapter_name = lambda: None
+    client._ensure_service_display_name = lambda: None
+    client._ensure_shell_firewall = lambda allowed_ips, allowed_ports: None
+    client._log_recovery_event = lambda *args, **kwargs: None
+
+    client.start_session(_build_session(), signing_client=None)
+
+
+def test_windows_client_runtime_config_path_is_deterministic(tmp_path) -> None:
+    client = WireGuardClient.__new__(WireGuardClient)
+    client.service_name = "Borealis"
+    client.temp_root = tmp_path / "Agent" / "Borealis" / "Temp"
+    client.temp_root.mkdir(parents=True, exist_ok=True)
+
+    config_path = client._wireguard_config_path()
+
+    assert config_path == tmp_path / "Agent" / "Borealis" / "Settings" / "WireGuard" / "Borealis.conf"
+
+
+def test_windows_client_requires_healthy_service_before_marking_session_started() -> None:
+    client = _build_windows_client()
+    calls: list[str] = []
+
+    client._validate_token = lambda token, signing_client=None: None
+    client._write_config = lambda text: calls.append("write_config") or True
+    client._service_exists = lambda: True
+    client._service_config_path = lambda: client.conf_path
+    client._restart_service = lambda: calls.append("restart") or True
+    client._reinstall_service = lambda: calls.append("reinstall") or True
+    client._wait_for_service_state = lambda **kwargs: "STOPPED"
+    client._ensure_adapter_name = lambda: calls.append("adapter")
+    client._ensure_service_display_name = lambda: calls.append("display")
+    client._ensure_shell_firewall = lambda allowed_ips, allowed_ports: calls.append("firewall")
+    client._log_recovery_event = lambda *args, **kwargs: None
+
+    client.start_session(_build_session(), signing_client=None)
+
+    assert calls == ["write_config", "restart", "reinstall", "restart"]
+    assert client.session is None
+
+
+def test_windows_client_replacement_uses_single_restart_before_marking_session_started() -> None:
+    client = _build_windows_client()
+    client.session = _build_session()
+    calls: list[str] = []
+
+    client._validate_token = lambda token, signing_client=None: calls.append("validate")
+    client._write_config = lambda text: calls.append("write_config") or True
+    client._service_exists = lambda: True
+    client._service_config_path = lambda: client.conf_path
+    client._restart_service = lambda: calls.append("restart") or True
+    client._reinstall_service = lambda: calls.append("reinstall") or True
+    client._wait_for_service_state = lambda **kwargs: calls.append("wait") or "RUNNING"
+    client._ensure_adapter_name = lambda: calls.append("adapter")
+    client._ensure_service_display_name = lambda: calls.append("display")
+    client._ensure_shell_firewall = lambda allowed_ips, allowed_ports: calls.append("firewall")
+    client._log_recovery_event = lambda *args, **kwargs: None
+
+    replacement = _build_session()
+    replacement.tunnel_id = "tunnel-2"
+    replacement.token = dict(replacement.token)
+    replacement.token["tunnel_id"] = "tunnel-2"
+    replacement.server_public_key = "server-public-key-2"
+
+    client.start_session(replacement, signing_client=None)
+
+    assert calls == ["validate", "write_config", "restart", "wait", "adapter", "display", "firewall"]
+    assert client.session is replacement
+
+
+def test_windows_client_restarts_session_for_tunnel_rotation() -> None:
+    client = _build_windows_client()
+    client.session = _build_session()
+    calls: list[str] = []
+
+    client._validate_token = lambda token, signing_client=None: calls.append("validate")
+    client._service_state = lambda: "RUNNING"
+    client._write_config = lambda text: calls.append("write_config") or True
+    client._service_exists = lambda: True
+    client._service_config_path = lambda: client.conf_path
+    client._restart_service = lambda: calls.append("restart") or True
+    client._reinstall_service = lambda: calls.append("reinstall") or True
+    client._wait_for_service_state = lambda **kwargs: calls.append("wait") or "RUNNING"
+    client._ensure_adapter_name = lambda: calls.append("adapter")
+    client._ensure_service_display_name = lambda: calls.append("display")
+    client._ensure_shell_firewall = lambda allowed_ips, allowed_ports: calls.append("firewall")
+    client._log_recovery_event = lambda *args, **kwargs: None
+
+    refreshed = _build_session()
+    refreshed.tunnel_id = "tunnel-2"
+    refreshed.token = dict(refreshed.token)
+    refreshed.token["tunnel_id"] = "tunnel-2"
+
+    client.start_session(refreshed, signing_client=None)
+
+    assert calls == ["validate", "write_config", "restart", "wait", "adapter", "display", "firewall"]
+    assert client.session is refreshed
+
+
+def test_windows_client_wait_for_service_state_accepts_delayed_start_pending(monkeypatch) -> None:
+    client = _build_windows_client()
+    states = iter(["STOPPED", "STOPPED", "START_PENDING"])
+
+    client._service_state = lambda: next(states, "START_PENDING")
+    monkeypatch.setattr(wireguard_role.time, "sleep", lambda _: None)
+
+    assert client._wait_for_service_state(timeout_seconds=1.0, poll_interval=0.01) == "START_PENDING"
+
+
+def test_role_run_ensure_cycle_uses_requested_reason() -> None:
+    role = Role.__new__(Role)
+    role._ensure_cycle_lock = threading.Lock()
+    captured: list[tuple[str, object]] = []
+    session = _build_session()
+
+    class _Client:
+        session = None
+
+        @staticmethod
+        def _service_state() -> None:
+            return None
+
+        @staticmethod
+        def start_session(start_session_obj, signing_client=None) -> None:
+            captured.append(("start_session", start_session_obj))
+            captured.append(("signing_client", signing_client))
+
+    role.client = _Client()
+    role._request_persistent_session = lambda *, reason="agent_boot": captured.append(("reason", reason)) or {"ok": True}
+    role._build_session = lambda payload: session
+    role._session_config_matches_live = lambda current: False
+    role._http_client = lambda: "signing-client"
+    role._notify_engine_ready = lambda _session, *, reason: captured.append(("ready", reason))
+    role._log = lambda message, *, error=False: None
+    install_role_status_hooks(role, captured)
+
+    role._run_ensure_cycle(reason="socket_connect")
+
+    assert ("reason", "socket_connect") in captured
+    assert ("start_session", session) in captured
+    assert ("signing_client", "signing-client") in captured
+    assert ("ready", "socket_connect") in captured
+
+
+def test_role_notify_engine_ready_posts_active_session() -> None:
+    role = Role.__new__(Role)
+    session = _build_session()
+    posted: list[tuple[str, dict, bool]] = []
+
+    class _Client:
+        @staticmethod
+        def _service_state() -> str:
+            return "RUNNING"
+
+    _Client.session = session
+
+    class _HttpClient:
+        @staticmethod
+        def post_json(path, payload, require_auth=False):
+            posted.append((path, payload, require_auth))
+            return {"ok": True}
+
+    role.client = _Client()
+    role.ctx = type("Ctx", (), {"agent_id": "agent-1"})()
+    role._http_client = lambda: _HttpClient()
+    role._log = lambda message, *, error=False: None
+    role._last_ready_notification_key = None
+    role._last_ready_notification_at = 0.0
+
+    role._notify_engine_ready(session, reason="vpn_tunnel_start")
+
+    assert posted == [
+        (
+            "/api/agent/vpn/ready",
+            {
+                "agent_id": "agent-1",
+                "tunnel_id": "tunnel-1",
+                "virtual_ip": "10.255.0.15/32",
+                "allowed_ports": [47002, 5900, 22],
+                "service_state": "RUNNING",
+                "reason": "vpn_tunnel_start",
+            },
+            True,
+        )
+    ]
+
+
+def test_role_notify_engine_ready_requires_running_service() -> None:
+    role = Role.__new__(Role)
+    session = _build_session()
+    posted: list[tuple[str, dict, bool]] = []
+
+    class _Client:
+        @staticmethod
+        def _service_state() -> str:
+            return "START_PENDING"
+
+    _Client.session = session
+
+    class _HttpClient:
+        @staticmethod
+        def post_json(path, payload, require_auth=False):
+            posted.append((path, payload, require_auth))
+            return {"ok": True}
+
+    role.client = _Client()
+    role.ctx = type("Ctx", (), {"agent_id": "agent-1"})()
+    role._http_client = lambda: _HttpClient()
+    role._log = lambda message, *, error=False: None
+    role._last_ready_notification_key = None
+    role._last_ready_notification_at = 0.0
+
+    role._notify_engine_ready(session, reason="vpn_tunnel_start")
+
+    assert posted == []
+
+
+def test_role_run_ensure_cycle_safe_logs_exceptions() -> None:
+    role = Role.__new__(Role)
+    captured: list[tuple[str, bool]] = []
+    role._run_ensure_cycle = lambda *, reason="agent_boot": (_ for _ in ()).throw(RuntimeError("boom"))
+    role._log = lambda message, *, error=False: captured.append((message, error))
+    install_role_status_hooks(role)
+
+    role._run_ensure_cycle_safe(reason="socket_connect", source="immediate")
+
+    assert any("source=immediate" in message and "reason=socket_connect" in message for message, _ in captured)
+    assert any(error for _, error in captured)
+
+
+def test_role_request_immediate_ensure_starts_supervisor_and_runs_cycle() -> None:
+    role = Role.__new__(Role)
+    role._ensure_stop = threading.Event()
+    events: list[tuple[str, str]] = []
+    original_thread = wireguard_role.threading.Thread
+
+    class _ImmediateThread:
+        def __init__(self, target=None, name=None, kwargs=None, daemon=None):
+            self._target = target
+            self._kwargs = kwargs or {}
+
+        def start(self) -> None:
+            if self._target is not None:
+                self._target(**self._kwargs)
+
+    role._start_ensure_thread = lambda *, reason: events.append(("start_supervisor", reason))
+    role._run_ensure_cycle_safe = lambda *, reason, source: events.append((source, reason))
+    role._log = lambda message, *, error=False: events.append(("log", message))
+
+    try:
+        wireguard_role.threading.Thread = _ImmediateThread
+        role.request_immediate_ensure(reason="socket_connect")
+    finally:
+        wireguard_role.threading.Thread = original_thread
+
+    assert ("start_supervisor", "socket_connect") in events
+    assert ("immediate", "socket_connect") in events
+    assert any(kind == "log" and "WireGuard immediate ensure requested" in message for kind, message in events)

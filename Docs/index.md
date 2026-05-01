@@ -8,6 +8,8 @@ This page is the navigation hub for the Borealis documentation set. The knowledg
 ### Start Here
 - [Getting Started](getting-started.md)
 - [Architecture Overview](architecture-overview.md)
+- [Unit Testing](Unit_Testing.md)
+- [Testing Regressions](testing-regressions.md)
 
 ### Core Runtimes
 - [Engine Runtime](engine-runtime.md)
@@ -48,6 +50,7 @@ This page is the navigation hub for the Borealis documentation set. The knowledg
 ### Key Repo References
 - [README](../README.md)
 - [AGENTS.md](../AGENTS.md)
+- [Unit test scripts](../Engine_Unit_Tests.sh)
 
 ## API Endpoints
 None. This index only links to other pages.
@@ -67,6 +70,7 @@ None. This index only links to other pages.
 - Use `migrating-pages-to-react-router.md` when moving legacy WebUI pages onto the shared router and app shell.
 - Use `api-reference.md` and `integrations.md` for public API surfaces and external service behavior.
 - Use `security-and-trust.md` for enrollment, tokens, and code-signing behavior.
+- Use `Unit_Testing.md` and `testing-regressions.md` for unit test commands, domain selection, helper rules, result locations, and known regression status.
 - Use GitHub issues labeled `Technical Debt` when documenting workarounds, non-standard build steps, or dev/prod drift.
 
 ### Where the truth lives in code
@@ -79,7 +83,7 @@ None. This index only links to other pages.
 - Runtime assembly data: PostgreSQL `assemblies.*` tables.
 
 ### Documentation authoring rules
-- Keep filenames lowercase with hyphens (example: `device-management.md`).
+- Keep filenames lowercase with hyphens (example: `device-management.md`) except established operator entrypoints such as `Unit_Testing.md`.
 - Add a top-of-page link back to the index: `[Back to Docs Index](index.md) | [Index (HTML)](index.html)`.
 - For docs in subfolders, use relative paths (example: `../index.md`).
 - Use ASCII characters only unless the file already uses Unicode.

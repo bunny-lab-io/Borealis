@@ -15,14 +15,15 @@ from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.services.API.watchdogs import runtime as watchdog_runtime_module
 
 from .conftest import EngineTestHarness
-
-
-def _client_with_admin_session(harness: EngineTestHarness):
-    client = harness.app.test_client()
-    with client.session_transaction() as sess:
-        sess["username"] = "admin"
-        sess["role"] = "Admin"
-    return client
+from .support.devices import (
+    set_device_last_seen as _set_device_last_seen,
+    set_device_metrics as _set_device_metrics,
+    set_device_processes as _seed_processes,
+    set_device_sessions as _seed_sessions,
+    set_device_storage as _seed_storage_usage,
+    set_device_uptime as _set_device_uptime,
+)
+from .support.engine import admin_client
 
 
 def _seed_watchdog_filter(harness: EngineTestHarness, *, filter_id: int = 1) -> None:
@@ -54,154 +55,6 @@ def _seed_watchdog_filter(harness: EngineTestHarness, *, filter_id: int = 1) -> 
                 "admin",
                 int(time.time()),
                 int(time.time()),
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _seed_storage_usage(harness: EngineTestHarness, *, entries: list[dict] | None = None) -> None:
-    storage_entries = entries or [
-        {
-            "drive": "C",
-            "total": 1000,
-            "used": 930,
-            "free": 70,
-            "usage": 93,
-            "disk_type": "Fixed Disk",
-        }
-    ]
-    conn = sqlite3.connect(str(harness.db_path))
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE devices
-               SET storage = ?
-            WHERE hostname = ?
-            """,
-            (
-                json.dumps(storage_entries),
-                "test-device",
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _set_device_last_seen(harness: EngineTestHarness, *, hostname: str, last_seen: int) -> None:
-    conn = sqlite3.connect(str(harness.db_path))
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE devices
-               SET last_seen = ?
-             WHERE hostname = ?
-            """,
-            (int(last_seen), hostname),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _set_device_uptime(harness: EngineTestHarness, *, hostname: str, uptime: int) -> None:
-    conn = sqlite3.connect(str(harness.db_path))
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE devices
-               SET uptime = ?
-             WHERE hostname = ?
-            """,
-            (int(uptime), hostname),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _set_device_metrics(
-    harness: EngineTestHarness,
-    *,
-    hostname: str,
-    cpu_percent: float | None = None,
-    memory_percent: float | None = None,
-) -> None:
-    assignments: list[str] = []
-    params: list[object] = []
-    if cpu_percent is not None:
-        assignments.append("cpu_percent = ?")
-        params.append(float(cpu_percent))
-    if memory_percent is not None:
-        assignments.append("memory_percent = ?")
-        params.append(float(memory_percent))
-    if not assignments:
-        return
-    params.append(hostname)
-    conn = sqlite3.connect(str(harness.db_path))
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            f"""
-            UPDATE devices
-               SET {", ".join(assignments)}
-             WHERE hostname = ?
-            """,
-            tuple(params),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _seed_sessions(harness: EngineTestHarness, *, hostname: str, sessions: list[dict], reported_at: int | None = None) -> None:
-    conn = sqlite3.connect(str(harness.db_path))
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE devices
-               SET sessions = ?
-             WHERE hostname = ?
-            """,
-            (
-                json.dumps(
-                    {
-                        "reported_at": int(reported_at or time.time()),
-                        "sessions": sessions,
-                    }
-                ),
-                hostname,
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _seed_processes(harness: EngineTestHarness, *, hostname: str, processes: list[dict], reported_at: int | None = None) -> None:
-    conn = sqlite3.connect(str(harness.db_path))
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE devices
-               SET processes = ?
-             WHERE hostname = ?
-            """,
-            (
-                json.dumps(
-                    {
-                        "reported_at": int(reported_at or time.time()),
-                        "processes": processes,
-                    }
-                ),
-                hostname,
             ),
         )
         conn.commit()
@@ -251,7 +104,7 @@ def _offline_watchdog_payload(*, targets) -> dict:
 
 def test_watchdog_preview_and_create_supports_filter_targets(engine_harness: EngineTestHarness) -> None:
     _seed_watchdog_filter(engine_harness, filter_id=17)
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
 
     payload = _offline_watchdog_payload(
         targets=[
@@ -295,7 +148,7 @@ def test_watchdog_preview_and_create_supports_filter_targets(engine_harness: Eng
 
 def test_watchdog_storage_preview_returns_threshold_sample(engine_harness: EngineTestHarness) -> None:
     _seed_storage_usage(engine_harness)
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
 
     payload = {
         "name": "Disk Watchdog",
@@ -362,7 +215,7 @@ def test_watchdog_storage_specific_drive_does_not_fallback_to_other_disks(
             },
         ],
     )
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
 
     specific_drive_response = client.post(
         "/api/watchdogs/preview",
@@ -446,7 +299,7 @@ def test_watchdog_storage_specific_drive_does_not_fallback_to_other_disks(
 
 
 def test_watchdog_all_devices_target_resolves_scope(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
 
     payload = _offline_watchdog_payload(
         targets=[
@@ -471,7 +324,7 @@ def test_watchdog_all_devices_target_resolves_scope(engine_harness: EngineTestHa
 
 
 def test_watchdog_do_nothing_action_persists_as_incident_only(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
 
     payload = _offline_watchdog_payload(
         targets=[
@@ -502,7 +355,7 @@ def test_watchdog_do_nothing_action_persists_as_incident_only(engine_harness: En
 
 
 def test_watchdog_run_assembly_action_preserves_variable_values(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
 
     payload = _offline_watchdog_payload(
         targets=[
@@ -547,7 +400,7 @@ def test_watchdog_run_assembly_action_preserves_variable_values(engine_harness: 
 def test_watchdog_incident_suppressed_queue_counts_and_reopen_round_trip(
     engine_harness: EngineTestHarness,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
 
     create_response = client.post(
         "/api/watchdogs",
@@ -610,7 +463,7 @@ def test_watchdog_incident_suppressed_queue_counts_and_reopen_round_trip(
 def test_watchdog_incident_acknowledge_and_device_override_round_trip(
     engine_harness: EngineTestHarness,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
 
     create_response = client.post(
         "/api/watchdogs",
@@ -680,7 +533,7 @@ def test_watchdog_incident_acknowledge_and_device_override_round_trip(
 def test_offline_watchdog_incident_is_deleted_when_device_recovers(
     engine_harness: EngineTestHarness,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
 
     create_response = client.post(
         "/api/watchdogs",
@@ -732,7 +585,7 @@ def test_offline_watchdog_incident_is_deleted_when_device_recovers(
 def test_startup_cleanup_purges_resolved_offline_watchdog_incidents(
     engine_harness: EngineTestHarness,
 ) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
 
     create_response = client.post(
         "/api/watchdogs",
@@ -797,7 +650,7 @@ def test_watchdog_user_session_match_normalized_blocklist_preview(engine_harness
             }
         ],
     )
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
 
     response = client.post(
         "/api/watchdogs/preview",
@@ -851,7 +704,7 @@ def test_watchdog_process_presence_preview_matches_normalized_executable_name(en
             }
         ],
     )
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
 
     response = client.post(
         "/api/watchdogs/preview",
@@ -894,7 +747,7 @@ def test_watchdog_process_presence_preview_matches_normalized_executable_name(en
 
 
 def test_watchdog_reboot_detected_uses_saved_baseline(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
 
     create_response = client.post(
         "/api/watchdogs",
@@ -944,7 +797,7 @@ def test_watchdog_cpu_usage_duration_requires_elapsed_time(
     _set_device_last_seen(engine_harness, hostname="test-device", last_seen=fixed_now)
     _set_device_metrics(engine_harness, hostname="test-device", cpu_percent=95.0)
     monkeypatch.setattr(watchdog_runtime_module, "_now_ts", lambda: fixed_now)
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
 
     create_response = client.post(
         "/api/watchdogs",
@@ -1017,7 +870,7 @@ def test_watchdog_drive_presence_specific_detects_missing_and_unexpected_drives_
             },
         ],
     )
-    client = _client_with_admin_session(engine_harness)
+    client = admin_client(engine_harness)
 
     response = client.post(
         "/api/watchdogs/preview",

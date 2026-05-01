@@ -20,24 +20,26 @@ from Data.Engine.crypto.aegis import ENVELOPE_PREFIX
 from Data.Engine.integrations import github as github_integration
 from Data.Engine.services.API.access_management import directory_services
 from Data.Engine.services.API.access_management import login as access_login
+from Data.Engine.services.API.access_management.passkeys import build_passkey_lookup_hmac
 
 from .conftest import EngineTestHarness
 
 
+def _client_with_session(client, *, username: str, role: str):
+    with client.session_transaction() as sess:
+        sess["username"] = username
+        sess["role"] = role
+    return client
+
+
 def _admin_client(harness: EngineTestHarness):
     client = harness.app.test_client()
-    with client.session_transaction() as sess:
-        sess["username"] = "admin"
-        sess["role"] = "Admin"
-    return client
+    return _client_with_session(client, username="admin", role="Admin")
 
 
 def _user_client(harness: EngineTestHarness):
     client = harness.app.test_client()
-    with client.session_transaction() as sess:
-        sess["username"] = "operator"
-        sess["role"] = "User"
-    return client
+    return _client_with_session(client, username="operator", role="User")
 
 
 def _fresh_admin_client(harness: EngineTestHarness):
@@ -86,6 +88,7 @@ def _bootstrap_state(client):
 def _setup_aegis(client, cipher: str = "correct horse battery staple"):
     response = client.post("/api/bootstrap/aegis/setup", json={"cipher": cipher})
     assert response.status_code == 200
+    _client_with_session(client, username="admin", role="Admin")
     return response.get_json()
 
 
@@ -117,6 +120,14 @@ def _decrypt_auth_secret(harness: EngineTestHarness, value: Any) -> str:
     if not harness.aegis_cipher:
         return text
     return harness.context.aegis_cipher_service.decrypt_secret_text(text)
+
+
+def _passkey_lookup_hmac(harness: EngineTestHarness, credential_id: Any) -> str:
+    return build_passkey_lookup_hmac(str(harness.app.secret_key or ""), credential_id)
+
+
+def _decrypt_passkey_secret_bundle(harness: EngineTestHarness, value: Any) -> dict[str, Any]:
+    return access_login.deserialize_passkey_secret_bundle(_decrypt_auth_secret(harness, value))
 
 
 def _enable_fake_passkeys(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1409,7 +1420,8 @@ def test_mfa_setup_verification_marks_user_as_configured(
     assert row is not None
     assert int(row[0] or 0) == 1
     assert int(row[1] or 0) == 0
-    assert (row[2] or "") == expected_secret
+    assert _decode_db_text(row[2]).startswith(ENVELOPE_PREFIX)
+    assert _decrypt_auth_secret(engine_harness, row[2]) == expected_secret
 
 
 def test_password_login_with_existing_passkey_still_requires_totp(engine_harness: EngineTestHarness) -> None:
@@ -1624,19 +1636,35 @@ def test_authenticated_user_can_register_passkey(
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT credential_id, public_key, sign_count, label FROM user_passkeys WHERE user_id=?",
+            """
+            SELECT
+                credential_id,
+                public_key,
+                sign_count,
+                label,
+                credential_lookup_hmac,
+                secret_encrypted
+              FROM user_passkeys
+             WHERE user_id=?
+            """,
             (2,),
         )
         row = cur.fetchone()
     finally:
         conn.close()
 
-    assert row == (
-        access_login._bytes_to_base64url(DummyRegistrationVerification.credential_id),
-        access_login._bytes_to_base64url(DummyRegistrationVerification.credential_public_key),
-        4,
-        "Laptop Passkey",
-    )
+    credential_id = access_login._bytes_to_base64url(DummyRegistrationVerification.credential_id)
+    public_key = access_login._bytes_to_base64url(DummyRegistrationVerification.credential_public_key)
+    assert row is not None
+    assert row[:4] == ("", "", 0, "Laptop Passkey")
+    assert row[4] == _passkey_lookup_hmac(engine_harness, credential_id)
+    assert _decode_db_text(row[5]).startswith(ENVELOPE_PREFIX)
+    assert _decrypt_passkey_secret_bundle(engine_harness, row[5]) == {
+        "credential_id": credential_id,
+        "public_key": public_key,
+        "sign_count": 4,
+        "aaguid": "aaguid-setup",
+    }
 
 
 def test_passkey_authentication_completes_primary_login(
@@ -1735,12 +1763,33 @@ def test_passkey_authentication_completes_primary_login(
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:
         cur = conn.cursor()
-        cur.execute("SELECT sign_count FROM user_passkeys WHERE credential_id=?", ("cred-login",))
+        cur.execute(
+            """
+            SELECT
+                credential_id,
+                public_key,
+                sign_count,
+                credential_lookup_hmac,
+                secret_encrypted
+              FROM user_passkeys
+             WHERE user_id=?
+            """,
+            (2,),
+        )
         row = cur.fetchone()
     finally:
         conn.close()
 
-    assert row == (9,)
+    assert row is not None
+    assert row[:3] == ("", "", 0)
+    assert row[3] == _passkey_lookup_hmac(engine_harness, "cred-login")
+    assert _decode_db_text(row[4]).startswith(ENVELOPE_PREFIX)
+    assert _decrypt_passkey_secret_bundle(engine_harness, row[4]) == {
+        "credential_id": "cred-login",
+        "public_key": "public-key-login",
+        "sign_count": 9,
+        "aaguid": "",
+    }
 
 
 def test_passkey_authentication_recovers_legacy_stored_credential_format(
@@ -1852,14 +1901,32 @@ def test_passkey_authentication_recovers_legacy_stored_credential_format(
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT credential_id, public_key, sign_count FROM user_passkeys WHERE user_id=?",
+            """
+            SELECT
+                credential_id,
+                public_key,
+                sign_count,
+                credential_lookup_hmac,
+                secret_encrypted
+              FROM user_passkeys
+             WHERE user_id=?
+            """,
             (2,),
         )
         row = cur.fetchone()
     finally:
         conn.close()
 
-    assert row == (canonical_credential_id, canonical_public_key, 11)
+    assert row is not None
+    assert row[:3] == ("", "", 0)
+    assert row[3] == _passkey_lookup_hmac(engine_harness, canonical_credential_id)
+    assert _decode_db_text(row[4]).startswith(ENVELOPE_PREFIX)
+    assert _decrypt_passkey_secret_bundle(engine_harness, row[4]) == {
+        "credential_id": canonical_credential_id,
+        "public_key": canonical_public_key,
+        "sign_count": 11,
+        "aaguid": "",
+    }
 
 
 def test_current_user_can_list_enrolled_passkeys(engine_harness: EngineTestHarness) -> None:
@@ -2173,7 +2240,8 @@ def test_user_can_reset_own_password_with_current_password(engine_harness: Engin
         conn.close()
 
     assert row is not None
-    assert (row[0] or "").lower() == replacement_hash
+    assert _decode_db_text(row[0]).startswith(ENVELOPE_PREFIX)
+    assert _decrypt_auth_secret(engine_harness, row[0]) == replacement_hash
 
 
 def test_user_password_reset_rejects_invalid_current_password(engine_harness: EngineTestHarness) -> None:
