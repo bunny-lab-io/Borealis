@@ -54,6 +54,7 @@ declare -A IMAGE_TAGS
 declare -A IMAGE_HASHES
 declare -A DOCKERFILES
 declare -A BUILD_CONTEXTS
+declare -A BUILD_STATUSES
 
 log() {
   printf '[%s] %s\n' "$(date +%FT%T)" "$*"
@@ -475,24 +476,28 @@ generate_secret() {
 }
 
 ensure_service_tree() {
-  local role=""
   mkdir -p "${DEPLOY_DIR}"
-  for role in "${SERVICE_ROLES[@]}"; do
-    mkdir -p \
-      "${RUNTIME_ROOT}/Services/${role}/config" \
-      "${RUNTIME_ROOT}/Services/${role}/env" \
-      "${RUNTIME_ROOT}/Services/${role}/logs" \
-      "${RUNTIME_ROOT}/Services/${role}/state" \
-      "${RUNTIME_ROOT}/Services/${role}/secrets" \
-      "${RUNTIME_ROOT}/Services/${role}/cache" \
-      "${RUNTIME_ROOT}/Services/${role}/run"
-  done
   mkdir -p \
+    "${RUNTIME_ROOT}/Services/api-backend/config" \
+    "${RUNTIME_ROOT}/Services/api-backend/logs" \
     "${RUNTIME_ROOT}/Services/api-backend/logs/VPN_Tunnel" \
+    "${RUNTIME_ROOT}/Services/api-backend/secrets" \
     "${RUNTIME_ROOT}/Services/api-backend/secrets/Auth_Tokens" \
     "${RUNTIME_ROOT}/Services/api-backend/secrets/Certificates" \
+    "${RUNTIME_ROOT}/Services/api-backend/cache" \
     "${RUNTIME_ROOT}/Services/api-backend/cache/Ansible/collections" \
     "${RUNTIME_ROOT}/Services/api-backend/cache/Ansible/Generated/Runtime" \
+    "${RUNTIME_ROOT}/Services/api-backend/cache/Aurora" \
+    "${RUNTIME_ROOT}/Services/postgres-db/state" \
+    "${RUNTIME_ROOT}/Services/postgres-db/logs" \
+    "${RUNTIME_ROOT}/Services/postgres-db/run" \
+    "${RUNTIME_ROOT}/Services/traefik-edge/config" \
+    "${RUNTIME_ROOT}/Services/traefik-edge/env" \
+    "${RUNTIME_ROOT}/Services/traefik-edge/logs" \
+    "${RUNTIME_ROOT}/Services/traefik-edge/state" \
+    "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" \
+    "${RUNTIME_ROOT}/Services/wireguard-tunnel/config" \
+    "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/run"
 }
@@ -522,6 +527,33 @@ prune_empty_legacy_runtime_paths() {
     "Aurora"
     "web-interface"
     "engine_secret.txt"
+    "Services/api-backend/env"
+    "Services/api-backend/run"
+    "Services/api-backend/state"
+    "Services/postgres-db/cache"
+    "Services/postgres-db/config"
+    "Services/postgres-db/env"
+    "Services/postgres-db/secrets"
+    "Services/remote-desktop-guacd/cache"
+    "Services/remote-desktop-guacd/config"
+    "Services/remote-desktop-guacd/env"
+    "Services/remote-desktop-guacd/run"
+    "Services/remote-desktop-guacd/secrets"
+    "Services/remote-desktop-guacd/state"
+    "Services/traefik-edge/cache"
+    "Services/traefik-edge/run"
+    "Services/traefik-edge/secrets"
+    "Services/webui-frontend/cache"
+    "Services/webui-frontend/config"
+    "Services/webui-frontend/env"
+    "Services/webui-frontend/logs"
+    "Services/webui-frontend/run"
+    "Services/webui-frontend/secrets"
+    "Services/webui-frontend/state"
+    "Services/webui-frontend"
+    "Services/wireguard-tunnel/cache"
+    "Services/wireguard-tunnel/env"
+    "Services/wireguard-tunnel/state"
   )
   for name in "${legacy_paths[@]}"; do
     path="${RUNTIME_ROOT}/${name}"
@@ -697,7 +729,13 @@ for pattern in entry.get("inputs", []):
 dockerfile = pathlib.Path(entry["dockerfile"])
 files.add(dockerfile)
 digest = hashlib.sha256()
-digest.update(f"service={service}\nmode={mode}\n".encode("utf-8"))
+targets = entry.get("targets") or {}
+digest.update(
+    f"service={service}\nmode={mode}\n"
+    f"dockerfile={entry.get('dockerfile')}\n"
+    f"context={entry.get('context')}\n"
+    f"target={targets.get(mode) or ''}\n".encode("utf-8")
+)
 for rel in sorted(files, key=lambda p: str(p)):
     path = root / rel
     digest.update(str(rel).encode("utf-8") + b"\0")
@@ -719,6 +757,20 @@ import pathlib
 import sys
 manifest = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 print(manifest["services"][sys.argv[2]][sys.argv[3]])
+PY
+}
+
+manifest_target() {
+  local service="$1"
+  local mode="$2"
+  python3 - "${BUILD_MANIFEST}" "${service}" "${mode}" <<'PY'
+import json
+import pathlib
+import sys
+manifest = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+entry = manifest["services"][sys.argv[2]]
+targets = entry.get("targets") or {}
+print(targets.get(sys.argv[3]) or "")
 PY
 }
 
@@ -745,31 +797,63 @@ build_service_image() {
   local tag="borealis-engine/${service}:sha-${image_hash:0:12}"
   local dockerfile
   local context
+  local target
   dockerfile="$(manifest_field "${service}" dockerfile)"
   context="$(manifest_field "${service}" context)"
+  target="$(manifest_target "${service}" "${mode}")"
   IMAGE_HASHES["${service}"]="${image_hash}"
   IMAGE_TAGS["${service}"]="${tag}"
   DOCKERFILES["${service}"]="${dockerfile}"
   BUILD_CONTEXTS["${service}"]="${context}"
+  BUILD_STATUSES["${service}"]="unchanged"
 
   local previous
   previous="$(previous_image_hash "${service}")"
   if [[ "${previous}" == "${image_hash}" ]] && docker image inspect "${tag}" >/dev/null 2>&1; then
     log "${service} image unchanged (${tag}); build skipped."
+    printf '[%s] %s unchanged as %s; build skipped\n' "$(date +%FT%T)" "${service}" "${tag}" >> "${BUILD_LOG}"
     return 0
   fi
 
   log "Building ${service} image ${tag}."
   {
     printf '[%s] Building %s as %s\n' "$(date +%FT%T)" "${service}" "${tag}"
-    docker build \
+    local build_args=(
       --label "org.opencontainers.image.title=Borealis ${service}" \
       --label "io.borealis.service=${service}" \
       --label "io.borealis.input-sha=${image_hash}" \
       -t "${tag}" \
-      -f "${SCRIPT_DIR}/${dockerfile}" \
-      "${SCRIPT_DIR}/${context}"
+      -f "${SCRIPT_DIR}/${dockerfile}"
+    )
+    if [[ -n "${target}" ]]; then
+      build_args+=(--target "${target}")
+    fi
+    if docker buildx version >/dev/null 2>&1; then
+      local cache_root="${DEPLOY_DIR}/cache/buildkit/${service}"
+      local cache_current="${cache_root}/current"
+      local cache_next="${cache_root}/next"
+      mkdir -p "${cache_root}"
+      rm -rf "${cache_next}"
+      local buildx_args=(buildx build --load --progress=plain)
+      if [[ -d "${cache_current}" ]]; then
+        buildx_args+=(--cache-from "type=local,src=${cache_current}")
+      fi
+      buildx_args+=(--cache-to "type=local,dest=${cache_next},mode=max")
+      if DOCKER_BUILDKIT=1 docker "${buildx_args[@]}" "${build_args[@]}" "${SCRIPT_DIR}/${context}"; then
+        if [[ -d "${cache_next}" ]]; then
+          rm -rf "${cache_current}"
+          mv "${cache_next}" "${cache_current}"
+        fi
+      else
+        rm -rf "${cache_next}"
+        printf '[%s] Buildx cache build failed for %s; falling back to docker build\n' "$(date +%FT%T)" "${service}"
+        DOCKER_BUILDKIT=1 docker build "${build_args[@]}" "${SCRIPT_DIR}/${context}"
+      fi
+    else
+      DOCKER_BUILDKIT=1 docker build "${build_args[@]}" "${SCRIPT_DIR}/${context}"
+    fi
   } >> "${BUILD_LOG}" 2>&1
+  BUILD_STATUSES["${service}"]="built"
 }
 
 build_images() {
@@ -837,7 +921,7 @@ PY
 export_image_manifest_env() {
   local service=""
   for service in "${SERVICE_ROLES[@]}"; do
-    if [[ -n "${IMAGE_TAGS[${service}]:-}" ]]; then
+    if [[ -n "${IMAGE_TAGS[${service}]:-}" && -n "${IMAGE_HASHES[${service}]:-}" ]]; then
       local prefix
       prefix="$(service_env_prefix "${service}")"
       export "IMAGE_TAG_${prefix}=${IMAGE_TAGS[${service}]}"
@@ -870,33 +954,233 @@ PY
   done
 }
 
+changed_build_services() {
+  local service=""
+  for service in "${SERVICE_ROLES[@]}"; do
+    if [[ "${BUILD_STATUSES[${service}]:-}" == "built" ]]; then
+      printf '%s\n' "${service}"
+    fi
+  done
+}
+
+all_engine_containers_running() {
+  local service=""
+  for service in "${SERVICE_ROLES[@]}"; do
+    container_running "borealis-engine-${service}" || return 1
+  done
+}
+
+deploy_state_matches() {
+  local mode="$1"
+  python3 - "${DEPLOY_MANIFEST}" "${IMAGE_MANIFEST}" "${COMPOSE_FILE}" "${COMPOSE_ENV}" "${mode}" "${PROJECT_NAME}" "${SERVICE_ROLES[@]}" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+deploy_path = pathlib.Path(sys.argv[1])
+image_path = pathlib.Path(sys.argv[2])
+compose_path = pathlib.Path(sys.argv[3])
+env_path = pathlib.Path(sys.argv[4])
+mode = sys.argv[5]
+project = sys.argv[6]
+services = sys.argv[7:]
+
+def file_hash(path: pathlib.Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def env_settings_hash(path: pathlib.Path) -> str:
+    lines = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if raw.startswith("BOREALIS_") and raw.endswith("_IMAGE="):
+            continue
+        if raw.startswith("BOREALIS_API_BACKEND_IMAGE="):
+            continue
+        if raw.startswith("BOREALIS_WEBUI_FRONTEND_IMAGE="):
+            continue
+        if raw.startswith("BOREALIS_TRAEFIK_EDGE_IMAGE="):
+            continue
+        if raw.startswith("BOREALIS_POSTGRES_DB_IMAGE="):
+            continue
+        if raw.startswith("BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE="):
+            continue
+        if raw.startswith("BOREALIS_WIREGUARD_TUNNEL_IMAGE="):
+            continue
+        lines.append(raw)
+    return hashlib.sha256(("\n".join(lines) + "\n").encode("utf-8")).hexdigest()
+
+def image_records() -> dict[str, dict[str, str]]:
+    data = json.loads(image_path.read_text(encoding="utf-8"))
+    records = {}
+    for service in services:
+        record = (data.get("services") or {}).get(service) or {}
+        records[service] = {
+            "image": record.get("image") or "",
+            "hash": record.get("hash") or "",
+        }
+    return records
+
+if not deploy_path.is_file() or not image_path.is_file() or not compose_path.is_file() or not env_path.is_file():
+    raise SystemExit(1)
+try:
+    existing = json.loads(deploy_path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+
+expected = {
+    "schema_version": 2,
+    "project": project,
+    "mode": mode,
+    "compose_file_hash": file_hash(compose_path),
+    "env_file_hash": file_hash(env_path),
+    "env_settings_hash": env_settings_hash(env_path),
+    "service_images": image_records(),
+}
+for key, value in expected.items():
+    if existing.get(key) != value:
+        raise SystemExit(1)
+PY
+}
+
+deploy_non_image_state_matches() {
+  local mode="$1"
+  python3 - "${DEPLOY_MANIFEST}" "${COMPOSE_FILE}" "${COMPOSE_ENV}" "${mode}" "${PROJECT_NAME}" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+deploy_path = pathlib.Path(sys.argv[1])
+compose_path = pathlib.Path(sys.argv[2])
+env_path = pathlib.Path(sys.argv[3])
+mode = sys.argv[4]
+project = sys.argv[5]
+
+def file_hash(path: pathlib.Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def env_settings_hash(path: pathlib.Path) -> str:
+    lines = []
+    image_keys = {
+        "BOREALIS_API_BACKEND_IMAGE",
+        "BOREALIS_WEBUI_FRONTEND_IMAGE",
+        "BOREALIS_TRAEFIK_EDGE_IMAGE",
+        "BOREALIS_POSTGRES_DB_IMAGE",
+        "BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE",
+        "BOREALIS_WIREGUARD_TUNNEL_IMAGE",
+    }
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        key = raw.split("=", 1)[0]
+        if key in image_keys:
+            continue
+        lines.append(raw)
+    return hashlib.sha256(("\n".join(lines) + "\n").encode("utf-8")).hexdigest()
+
+if not deploy_path.is_file() or not compose_path.is_file() or not env_path.is_file():
+    raise SystemExit(1)
+try:
+    existing = json.loads(deploy_path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+if existing.get("schema_version") != 2:
+    raise SystemExit(1)
+expected = {
+    "project": project,
+    "mode": mode,
+    "compose_file_hash": file_hash(compose_path),
+    "env_settings_hash": env_settings_hash(env_path),
+}
+for key, value in expected.items():
+    if existing.get(key) != value:
+        raise SystemExit(1)
+PY
+}
+
 write_deploy_manifest() {
   local mode="$1"
-  python3 - "${DEPLOY_MANIFEST}" "${mode}" "${COMPOSE_FILE}" "${COMPOSE_ENV}" "${PROJECT_NAME}" <<'PY'
+  local compose_action="${2:-up}"
+  if (($# >= 2)); then
+    shift 2
+  else
+    shift "$#"
+  fi
+  python3 - "${DEPLOY_MANIFEST}" "${IMAGE_MANIFEST}" "${mode}" "${COMPOSE_FILE}" "${COMPOSE_ENV}" "${PROJECT_NAME}" "${compose_action}" "$@" <<'PY'
+import hashlib
 import json
 import pathlib
 import sys
 from datetime import datetime, timezone
 
+deploy_path = pathlib.Path(sys.argv[1])
+image_path = pathlib.Path(sys.argv[2])
+mode = sys.argv[3]
+compose_file = pathlib.Path(sys.argv[4])
+env_file = pathlib.Path(sys.argv[5])
+project = sys.argv[6]
+compose_action = sys.argv[7]
+changed_services = sys.argv[8:]
+
+def file_hash(path: pathlib.Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def env_settings_hash(path: pathlib.Path) -> str:
+    lines = []
+    image_keys = {
+        "BOREALIS_API_BACKEND_IMAGE",
+        "BOREALIS_WEBUI_FRONTEND_IMAGE",
+        "BOREALIS_TRAEFIK_EDGE_IMAGE",
+        "BOREALIS_POSTGRES_DB_IMAGE",
+        "BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE",
+        "BOREALIS_WIREGUARD_TUNNEL_IMAGE",
+    }
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        key = raw.split("=", 1)[0]
+        if key in image_keys:
+            continue
+        lines.append(raw)
+    return hashlib.sha256(("\n".join(lines) + "\n").encode("utf-8")).hexdigest()
+
+services = [
+    "api-backend",
+    "webui-frontend",
+    "traefik-edge",
+    "postgres-db",
+    "remote-desktop-guacd",
+    "wireguard-tunnel",
+]
+allowed_services = set(services)
+service_images = {}
+if image_path.is_file():
+    try:
+        image_data = json.loads(image_path.read_text(encoding="utf-8"))
+    except Exception:
+        image_data = {}
+    for service, record in sorted((image_data.get("services") or {}).items()):
+        if service not in allowed_services:
+            continue
+        service_images[service] = {
+            "image": record.get("image") or "",
+            "hash": record.get("hash") or "",
+        }
+
 payload = {
-    "schema_version": 1,
-    "project": sys.argv[5],
-    "mode": sys.argv[2],
-    "compose_file": sys.argv[3],
-    "env_file": sys.argv[4],
+    "schema_version": 2,
+    "project": project,
+    "mode": mode,
+    "compose_file": str(compose_file),
+    "compose_file_hash": file_hash(compose_file),
+    "env_file": str(env_file),
+    "env_file_hash": file_hash(env_file),
+    "env_settings_hash": env_settings_hash(env_file),
+    "image_manifest": str(image_path),
+    "service_images": service_images,
+    "changed_services": changed_services,
+    "compose_action": compose_action,
     "deployed_at": datetime.now(timezone.utc).isoformat(),
-    "services": [
-        "api-backend",
-        "webui-frontend",
-        "traefik-edge",
-        "postgres-db",
-        "remote-desktop-guacd",
-        "wireguard-tunnel",
-    ],
+    "services": services,
 }
-path = pathlib.Path(sys.argv[1])
-path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+deploy_path.parent.mkdir(parents=True, exist_ok=True)
+deploy_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 }
 
@@ -931,9 +1215,24 @@ deploy_engine() {
   export_image_manifest_env
   write_image_manifest "${mode}"
   write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)"
+  local changed_services=()
+  mapfile -t changed_services < <(changed_build_services)
+  if deploy_state_matches "${mode}" && all_engine_containers_running; then
+    log "Engine deploy unchanged; Compose up skipped."
+    write_deploy_manifest "${mode}" "skipped"
+    log "Engine deployment state current. Env: ${COMPOSE_ENV}"
+    return 0
+  fi
+  if ((${#changed_services[@]} > 0)) && deploy_non_image_state_matches "${mode}" && all_engine_containers_running; then
+    log "Starting scoped Compose update for changed service images: ${changed_services[*]}."
+    compose_base up -d --no-deps "${changed_services[@]}"
+    write_deploy_manifest "${mode}" "up-scoped" "${changed_services[@]}"
+    log "Engine scoped deployment complete. Env: ${COMPOSE_ENV}"
+    return 0
+  fi
   log "Starting Compose project ${PROJECT_NAME} (${mode})."
   compose_base up -d
-  write_deploy_manifest "${mode}"
+  write_deploy_manifest "${mode}" "up" "${changed_services[@]}"
   log "Engine deployed through Docker Compose. Env: ${COMPOSE_ENV}"
 }
 
@@ -963,6 +1262,7 @@ service_action() {
       write_image_manifest "${mode}"
       write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)"
       compose_base up -d --no-deps "$(service_compose_name "${service}")"
+      write_deploy_manifest "${mode}" "up-scoped" "${service}"
       ;;
     reload)
       [[ "${service}" == "traefik-edge" ]] || die "reload supported for traefik-edge only."

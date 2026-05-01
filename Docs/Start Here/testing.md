@@ -1,5 +1,5 @@
 # Borealis Testing
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Compatibility pointer for older links.

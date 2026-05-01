@@ -1,5 +1,5 @@
 # VPN and Remote Access
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Document Borealis remote access features: WireGuard reverse VPN tunnels, remote PowerShell, and VNC via Apache Guacamole.
@@ -73,10 +73,10 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 
 ## Related Documentation
 - [Device Management](device-management.md)
-- [Agent Runtime](agent-runtime.md)
-- [Security and Trust](security-and-trust.md)
-- [API Reference](api-reference.md)
-- [Reverse Proxy Functionality](features_to_implement/reverse_proxy_functionality.md)
+- [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
+- [Security and Trust](../Start%20Here/security-and-trust.md)
+- [API Reference](../Data%20and%20Schema/api-reference.md)
+- [Docker Stack Breakdown](../Core%20Runtimes/Stack_Breakdown.md)
 
 ## Codex Agent (Detailed)
 ### Core Engine files
@@ -338,5 +338,5 @@ Note: Data/Agent changes only apply after Borealis.ps1 re-stages the agent under
 4) If issues persist, confirm `Agent\Borealis\Settings\WireGuard\Borealis.conf` still has a valid [Peer], verify `Test-NetConnection -ComputerName <agent_vpn_ip> -Port 47002`, and re-check WireGuard service state on both ends.
 
 #### Related Documentation
-- [Ansible SSH Connection Logic](Ansible/SSH_Connection_Logic.md)
-- [Scheduled Jobs](scheduled-jobs.md)
+- [Ansible SSH Connection Logic](../Automation%20and%20Execution/SSH_Connection_Logic.md)
+- [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)

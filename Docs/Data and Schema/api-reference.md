@@ -1,5 +1,5 @@
 # API Reference
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Provide a consolidated, human-readable list of Borealis Engine API endpoints grouped by domain.
@@ -216,17 +216,17 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 - `DELETE /api/server/logs/<log_name>` (Admin) - delete log file(s).
 
 ## Related Documentation
-- [Engine Runtime](engine-runtime.md)
+- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
 - [Database Reference](db-reference.md)
-- [Device Management](device-management.md)
-- [Watchdogs](watchdogs.md)
-- [Device Alerts](device-alerts.md)
-- [Assemblies and Quick Jobs](assemblies.md)
-- [Scheduled Jobs](scheduled-jobs.md)
-- [VPN and Remote Access](vpn-and-remote-access.md)
-- [Software Icon Overrides](Software%20Management/adding-software-to-icon-overrides.md)
-- [Software Uninstall Overrides](Software%20Management/adding-software-to-uninstall-overrides.md)
-- [Software Uninstall Blocklist](Software%20Management/adding-software-to-uninstall-blocklist.md)
+- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
+- [Watchdogs](../Automation%20and%20Execution/watchdogs.md)
+- [Device Alerts](../Operations%20and%20Remote%20Access/device-alerts.md)
+- [Assemblies and Quick Jobs](../Automation%20and%20Execution/assemblies.md)
+- [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
+- [VPN and Remote Access](../Operations%20and%20Remote%20Access/vpn-and-remote-access.md)
+- [Software Icon Overrides](../Software%20Management/adding-software-to-icon-overrides.md)
+- [Software Uninstall Overrides](../Software%20Management/adding-software-to-uninstall-overrides.md)
+- [Software Uninstall Blocklist](../Software%20Management/adding-software-to-uninstall-blocklist.md)
 
 ## Codex Agent (Detailed)
 ### Where endpoints are defined

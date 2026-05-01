@@ -1,5 +1,5 @@
 # Flow Editor and Nodes
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Document the Borealis visual flow editor (React Flow) and how nodes are defined, grouped, and rendered.
@@ -57,7 +57,7 @@ Document the Borealis visual flow editor (React Flow) and how nodes are defined,
 ## Related Documentation
 - [Assemblies and Quick Jobs](assemblies.md)
 - [Scheduled Jobs](scheduled-jobs.md)
-- [UI and Notifications](ui-and-notifications.md)
+- [UI and Notifications](../Start%20Here/ui-and-notifications.md)
 
 ## Codex Agent (Detailed)
 ### How node modules are structured

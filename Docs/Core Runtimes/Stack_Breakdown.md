@@ -1,5 +1,5 @@
 # Borealis Docker Stack Breakdown
-[Back to Docs Index](../index.md) | [Index (HTML)](../index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain the Borealis Engine Docker Compose stack, service ownership, startup order, runtime paths, and common operator commands.
@@ -31,15 +31,30 @@ Engine/Deploy/deploy-manifest.json
 Engine/Deploy/build.log
 ```
 
-Service state:
+Service runtime state is intentionally sparse:
 ```text
-Engine/Services/<role>/config
-Engine/Services/<role>/env
-Engine/Services/<role>/logs
-Engine/Services/<role>/state
-Engine/Services/<role>/secrets
-Engine/Services/<role>/cache
-Engine/Services/<role>/run
+Engine/Services/api-backend/config
+Engine/Services/api-backend/logs
+Engine/Services/api-backend/secrets
+Engine/Services/api-backend/cache/Ansible
+Engine/Services/api-backend/cache/Aurora
+Engine/Services/postgres-db/state
+Engine/Services/postgres-db/logs
+Engine/Services/postgres-db/run
+Engine/Services/traefik-edge/config
+Engine/Services/traefik-edge/env
+Engine/Services/traefik-edge/logs
+Engine/Services/traefik-edge/state
+Engine/Services/remote-desktop-guacd/logs
+Engine/Services/wireguard-tunnel/config
+Engine/Services/wireguard-tunnel/logs
+Engine/Services/wireguard-tunnel/secrets
+Engine/Services/wireguard-tunnel/run
+```
+
+Build cache, when Docker Buildx is available, lives under:
+```text
+Engine/Deploy/cache/buildkit/<service>/
 ```
 
 Operators should treat `Engine/` as generated runtime state. Edit source under `Data/Engine/Containers/`, then redeploy through `Engine.sh`.
@@ -59,8 +74,17 @@ All Engine containers use `network_mode: host`. Loopback assumptions are intenti
 ## Volume Bindings
 `api-backend`:
 ```text
-Engine/Services -> /opt/Borealis/Engine/Services
+Engine/Services/api-backend -> /opt/Borealis/Engine/Services/api-backend
+Engine/Services/traefik-edge/config -> /opt/Borealis/Engine/Services/traefik-edge/config
+Engine/Services/traefik-edge/env    -> /opt/Borealis/Engine/Services/traefik-edge/env
+Engine/Services/traefik-edge/logs   -> /opt/Borealis/Engine/Services/traefik-edge/logs
+Engine/Services/traefik-edge/state  -> /opt/Borealis/Engine/Services/traefik-edge/state
+Engine/Services/wireguard-tunnel/config  -> /opt/Borealis/Engine/Services/wireguard-tunnel/config
+Engine/Services/wireguard-tunnel/run     -> /opt/Borealis/Engine/Services/wireguard-tunnel/run
+Engine/Services/wireguard-tunnel/secrets -> /opt/Borealis/Engine/Services/wireguard-tunnel/secrets
 ```
+
+`api-backend` does not mount the whole `Engine/Services` tree. It receives its own runtime plus specific Traefik and WireGuard paths needed for edge settings and tunnel control.
 
 `postgres-db`:
 ```text
@@ -97,12 +121,15 @@ Engine/Services/wireguard-tunnel -> /opt/Borealis/Engine/Services/wireguard-tunn
 6. Prune empty legacy runtime paths.
 7. Resolve public hostname and ACME email.
 8. Render `Engine/Deploy/compose.env`.
-9. Compute service input hashes.
+9. Compute service input hashes from source, Dockerfile, build context, target mode, and dependency inputs.
 10. Build changed local images as `borealis-engine/<service>:sha-<hash>`.
 11. Write `Engine/Deploy/image-manifest.json`.
 12. Re-render `compose.env` with resolved image tags.
-13. Run Compose `up -d`.
-14. Write `Engine/Deploy/deploy-manifest.json`.
+13. Compare compose/env/image hashes against `Engine/Deploy/deploy-manifest.json`.
+14. Skip Compose if nothing changed and all containers are running.
+15. Run scoped Compose `up -d --no-deps <service...>` when only service images changed.
+16. Run full Compose `up -d` when compose config, runtime env, or container state requires it.
+17. Write `Engine/Deploy/deploy-manifest.json`.
 
 Build order follows `Engine.sh` service order:
 ```text
@@ -115,6 +142,25 @@ wireguard-tunnel
 ```
 
 Build order is not the same as runtime dependency order.
+
+## Local Build Behavior
+Engine images are always local in this pass. No registry pull, push, or GHCR workflow is used.
+
+Image naming:
+```text
+borealis-engine/<service>:sha-<inputhash12>
+```
+
+Build cache:
+- Docker Buildx uses `Engine/Deploy/cache/buildkit/<service>/` when available.
+- Hosts without usable Buildx fall back to `DOCKER_BUILDKIT=1 docker build`.
+- `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Borealis.ps1`.
+- `webui-frontend`, `traefik-edge`, `postgres-db`, `remote-desktop-guacd`, and `wireguard-tunnel` use service-local build contexts.
+- Service-local build contexts carry their own `.dockerignore` files so `node_modules`, WebUI build output, Python bytecode, pytest caches, logs, and local test output stay out of image contexts.
+
+WebUI targets:
+- Production builds Docker target `prod`, which runs `npm run build`.
+- Dev builds Docker target `dev`, which keeps Vite HMR available and skips production static build work.
 
 ## Runtime Start Order
 Compose dependency order:
@@ -370,7 +416,13 @@ Engine/Services/remote-desktop-guacd/logs/
 - Compose project name
 - deploy mode
 - Compose file
+- Compose file hash
 - env file
+- env file hash
+- env settings hash excluding image tag lines
+- service image tags and input hashes
+- changed services for the last deploy action
+- Compose action (`up`, `up-scoped`, or `skipped`)
 - service list
 - deploy timestamp
 
@@ -414,9 +466,9 @@ bash Engine.sh deploy prod
 ```
 
 ## Operational Notes
-- `Engine.sh deploy` is idempotent for unchanged inputs.
+- `Engine.sh deploy` is idempotent for unchanged inputs and skips Compose when deploy manifest, env, image hashes, and running containers already match.
 - Unchanged image hashes skip Docker builds.
-- Compose should avoid recreating unchanged containers.
+- Service image changes can use scoped Compose `up -d --no-deps <service...>` when compose config and non-image env settings are unchanged.
 - Service-specific `rebuild` uses `--no-deps`, so dependent services are not intentionally restarted.
 - `restart` does not rebuild images.
 - `reload` is currently a Traefik restart.
@@ -471,7 +523,7 @@ docker compose -f Data/Engine/Containers/compose.yaml config
 - Update this page when adding a service, port, volume, service action, or load-order dependency.
 
 ## Related Documentation
-- [Getting Started](../getting-started.md)
-- [Engine Runtime](../engine-runtime.md)
-- [Logging and Operations](../logging-and-operations.md)
-- [VPN and Remote Access](../vpn-and-remote-access.md)
+- [Getting Started](../Start%20Here/getting-started.md)
+- [Engine Runtime](engine-runtime.md)
+- [Logging and Operations](../Operations%20and%20Remote%20Access/logging-and-operations.md)
+- [VPN and Remote Access](../Operations%20and%20Remote%20Access/vpn-and-remote-access.md)

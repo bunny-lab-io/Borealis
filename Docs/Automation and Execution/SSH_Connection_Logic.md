@@ -1,5 +1,5 @@
 # Borealis SSH Connection Logic
-[Back to Docs Index](../index.md) | [Index (HTML)](../index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Define standard SSH handshake, probing, credential selection, and Ansible inventory behavior for Borealis Engine-side SSH connections. This page documents the strategy proven by scheduled Ansible jobs 8 and 9 on the Bunny Lab mixed SSH fleet, and should be reused for future SSH-based Borealis features instead of reinventing per-feature connection logic.
@@ -376,6 +376,6 @@ Do not let future features:
 - After deployment, validate both shared and individual Ansible modes against mixed key-only/password-capable hosts.
 
 ## Related Documentation
-- [Scheduled Jobs](../scheduled-jobs.md)
-- [VPN and Remote Access](../vpn-and-remote-access.md)
-- [Logging and Operations](../logging-and-operations.md)
+- [Scheduled Jobs](scheduled-jobs.md)
+- [VPN and Remote Access](../Operations%20and%20Remote%20Access/vpn-and-remote-access.md)
+- [Logging and Operations](../Operations%20and%20Remote%20Access/logging-and-operations.md)

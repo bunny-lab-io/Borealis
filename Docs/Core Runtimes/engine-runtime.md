@@ -1,5 +1,5 @@
 # Engine Runtime
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Describe the Borealis Engine runtime, its services, configuration, and operational responsibilities.
@@ -22,32 +22,30 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Container source: `Data/Engine/Containers/` (Compose, Dockerfiles, build manifest, service entrypoints, and service-owned source trees).
 - Runtime state: `Engine/` (generated each deployment and ignored by git).
 - Deploy state: `Engine/Deploy/compose.env`, `Engine/Deploy/image-manifest.json`, `Engine/Deploy/deploy-manifest.json`, and `Engine/Deploy/build.log`.
-- Service state: `Engine/Services/<role>/{config,env,logs,state,secrets,cache,run}`.
+- Service state: `Engine/Services/<role>/` with only directories used by that service.
 - Database: PostgreSQL via `BOREALIS_DATABASE_URL`.
 - Compose-generated env: `Engine/Deploy/compose.env` (database URL, container mode, public edge settings, image tags).
 - Logs: `Engine/Services/<role>/logs/`; api-backend writes API and domain logs under `Engine/Services/api-backend/logs/`.
 - Ansible runtime: `Engine/Services/api-backend/cache/Ansible/` (staged manifest, installed collections, generated execution workspaces).
 - Certificates: `Engine/Services/api-backend/secrets/Certificates/` (TLS bundle + code signing keys).
-- WebUI build output: `Engine/Services/webui-frontend/cache/web-interface/` (served as static assets).
+- WebUI source is packaged into the `webui-frontend` image; the WebUI service does not keep persistent runtime state by default.
 - Bundled official assemblies: `Data/Engine/Containers/api-backend/data/Official_Assemblies/` (generated seed snapshot).
 - Aurora checkout: `Engine/Services/api-backend/cache/Aurora/`.
 
 ## API Endpoints
 - `GET /health` (No Authentication) - Engine liveness probe.
-- The Engine hosts all `/api/*` endpoints listed in [API Reference](api-reference.md).
+- The Engine hosts all `/api/*` endpoints listed in [API Reference](../Data%20and%20Schema/api-reference.md).
 
 ## Related Documentation
-- [Architecture Overview](architecture-overview.md)
-- [Docker Stack Breakdown](Docker/Stack_Breakdown.md)
-- [Database Reference](db-reference.md)
-- [Security and Trust](security-and-trust.md)
-- [API Reference](api-reference.md)
-- [Logging and Operations](logging-and-operations.md)
-- [VPN and Remote Access](vpn-and-remote-access.md)
-- [Watchdogs](watchdogs.md)
-- [Device Alerts](device-alerts.md)
-- [Aegis Cipher](features_to_implement/aegis_cipher.md)
-- [Reverse Proxy Functionality](features_to_implement/reverse_proxy_functionality.md)
+- [Architecture Overview](../Start%20Here/architecture-overview.md)
+- [Docker Stack Breakdown](Stack_Breakdown.md)
+- [Database Reference](../Data%20and%20Schema/db-reference.md)
+- [Security and Trust](../Start%20Here/security-and-trust.md)
+- [API Reference](../Data%20and%20Schema/api-reference.md)
+- [Logging and Operations](../Operations%20and%20Remote%20Access/logging-and-operations.md)
+- [VPN and Remote Access](../Operations%20and%20Remote%20Access/vpn-and-remote-access.md)
+- [Watchdogs](../Automation%20and%20Execution/watchdogs.md)
+- [Device Alerts](../Operations%20and%20Remote%20Access/device-alerts.md)
 
 ## Codex Agent (Detailed)
 ### Source vs runtime
@@ -56,8 +54,9 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Keep `Data/Engine/` for package shims, unit tests, and container roots.
 - `Engine/` is generated runtime state. Do not edit it directly.
 - The Compose project name is `borealis-engine`.
-- `Engine.sh` computes input hashes from Dockerfiles, container entrypoints, source files, dependency manifests, and mode inputs, then builds images as `borealis-engine/<service>:sha-<hash>`.
-- No-op redeploys reuse existing image tags and let Compose skip unchanged containers.
+- `Engine.sh` computes input hashes from Dockerfiles, build context, container entrypoints, source files, dependency manifests, and mode inputs, then builds images as `borealis-engine/<service>:sha-<hash>`.
+- Docker Buildx cache is stored under `Engine/Deploy/cache/buildkit/<service>/` when usable; plain Docker build remains the fallback.
+- No-op redeploys reuse existing image tags and skip Compose when deploy manifest, runtime env, image hashes, and container state already match.
 
 ### Container service boundaries
 - `api-backend` runs the Python Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, and Engine-side Ansible execution. It binds `127.0.0.1:5000`.
@@ -110,7 +109,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Add new routes under `Data/Engine/Containers/api-backend/data/services/API/<domain>/`.
 - Ensure each module starts with the standard header block (purpose + API endpoints).
 - Update `Data/Engine/Containers/api-backend/data/services/API/__init__.py` if you add a new API group.
-- Update `Docs/api-reference.md` and the relevant domain doc.
+- Update `Docs/Data and Schema/api-reference.md` and the relevant domain doc.
 
 ### WebUI hosting and dev mode
 - Production UI is served by the `webui-frontend` container from its built static output.
@@ -157,7 +156,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Linux agent remains incomplete.
 
 ### Borealis Engine Codex (Full)
-Use this section for Engine work (successor to the legacy server). Shared guidance is consolidated in `ui-and-notifications.md` and other knowledgebase pages.
+Use this section for Engine work (successor to the legacy server). Shared guidance is consolidated in `Docs/Start Here/ui-and-notifications.md` and other knowledgebase pages.
 
 #### Scope and runtime paths
 - Staging / launch: `Engine.sh` handles Linux first install, dependency checks, Engine container build, and Compose deployment. (`Borealis.ps1` is agent-only.)
@@ -196,7 +195,7 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 - Force reset is the disaster-recovery path when the old cipher is gone: Borealis destroys unrecoverable operator auth secrets, clears the Aegis state row, marks existing users for recovery, marks affected credentials and the GitHub token for re-entry, and disables scheduled jobs that still point at wiped credentials.
 
 #### Reverse VPN tunnels
-- WireGuard reverse VPN design and lifecycle are documented in `vpn-and-remote-access.md`.
+- WireGuard reverse VPN design and lifecycle are documented in `Docs/Operations and Remote Access/vpn-and-remote-access.md`.
 - The original references were `REVERSE_TUNNELS.md` and `Reverse_VPN_Tunnel_Deployment.md` (now consolidated into this knowledgebase).
 - Engine orchestrator: `Data/Engine/Containers/api-backend/data/services/VPN/vpn_tunnel_service.py` with WireGuard manager `Data/Engine/Containers/api-backend/data/services/VPN/wireguard_server.py`.
 - UI shell bridge: `Data/Engine/Containers/api-backend/data/services/WebSocket/vpn_shell.py`.
@@ -210,7 +209,7 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 - Linux is the Engine target platform. Keep Engine tooling aligned with Docker Engine plus Docker Compose, not Docker Desktop.
 
 #### Ansible support (shared state)
-- The Linux Engine now packages an Ansible control-node runtime inside the Engine venv and installs Borealis-managed collections into `Engine/Services/api-backend/cache/Ansible/collections`.
+- The Linux Engine now packages Ansible control-node tooling inside the `api-backend` image and installs Borealis-managed collections into `Engine/Services/api-backend/cache/Ansible/collections`.
 - Scheduled jobs support Engine-side shared Ansible execution for `local`, `ssh`, and `winrm` contexts.
 - Remote SSH/WinRM runs synthesize ephemeral inventories from Borealis device/filter state and active WireGuard sessions, using site-qualified inventory aliases for duplicate-hostname safety.
 - Shared remote Ansible transport follows the scheduled job execution context; device `connection_type` metadata does not override the operator-selected `ssh` or `winrm` mode.

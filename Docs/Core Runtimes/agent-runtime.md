@@ -1,5 +1,5 @@
 # Agent Runtime
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Describe the Borealis agent runtime, its roles, service modes, and how it communicates with the Engine.
@@ -49,9 +49,9 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `POST /api/agent/files/transfers/<transfer_id>/content` (Device Authenticated) - upload a completed File Management download artifact back to the Engine.
 
 ## Related Documentation
-- [Security and Trust](security-and-trust.md)
-- [Device Management](device-management.md)
-- [VPN and Remote Access](vpn-and-remote-access.md)
+- [Security and Trust](../Start%20Here/security-and-trust.md)
+- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
+- [VPN and Remote Access](../Operations%20and%20Remote%20Access/vpn-and-remote-access.md)
 
 ## Codex Agent (Detailed)
 ### Source vs runtime

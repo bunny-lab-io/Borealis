@@ -9,7 +9,14 @@ services:
     env_file:
       - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
     volumes:
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services:/opt/Borealis/Engine/Services
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend:/opt/Borealis/Engine/Services/api-backend
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/config:/opt/Borealis/Engine/Services/traefik-edge/config
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/env:/opt/Borealis/Engine/Services/traefik-edge/env
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/logs:/opt/Borealis/Engine/Services/traefik-edge/logs
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/state:/opt/Borealis/Engine/Services/traefik-edge/state
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/config:/opt/Borealis/Engine/Services/wireguard-tunnel/config
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/run:/opt/Borealis/Engine/Services/wireguard-tunnel/run
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/secrets:/opt/Borealis/Engine/Services/wireguard-tunnel/secrets
     depends_on:
       postgres-db:
         condition: service_healthy

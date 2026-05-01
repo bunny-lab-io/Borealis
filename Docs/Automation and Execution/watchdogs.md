@@ -1,5 +1,5 @@
 # Watchdogs
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing device data, explain why they matched, and optionally launch native remediation.
@@ -108,11 +108,11 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
 - `DELETE /api/watchdogs/<int:watchdog_id>` (Token Authenticated) - delete one watchdog and its runtime state.
 
 ## Related Documentation
-- [Device Alerts](device-alerts.md)
-- [Device Management](device-management.md)
+- [Device Alerts](../Operations%20and%20Remote%20Access/device-alerts.md)
+- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
 - [Assemblies and Quick Jobs](assemblies.md)
-- [UI and Notifications](ui-and-notifications.md)
-- [API Reference](api-reference.md)
+- [UI and Notifications](../Start%20Here/ui-and-notifications.md)
+- [API Reference](../Data%20and%20Schema/api-reference.md)
 
 ## Codex Agent (Detailed)
 ### Main implementation files

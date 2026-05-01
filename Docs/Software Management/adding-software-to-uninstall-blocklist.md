@@ -1,5 +1,5 @@
 # Software Uninstall Blocklist
-[Back to Docs Index](../index.md) | [Index (HTML)](../index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain how to block installed software whose registry-provided `QuietUninstallString` still prompts, hangs, or otherwise cannot be trusted for unattended Borealis uninstall.
@@ -82,8 +82,8 @@ Explain how to block installed software whose registry-provided `QuietUninstallS
 ```
 
 ## Related Documentation
-- [Device Management](../device-management.md)
-- [API Reference](../api-reference.md)
+- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
+- [API Reference](../Data%20and%20Schema/api-reference.md)
 - [Adding Software to Uninstall Overrides](adding-software-to-uninstall-overrides.md)
 - [Adding Software to Icon Overrides](adding-software-to-icon-overrides.md)
 

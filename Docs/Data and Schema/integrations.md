@@ -1,5 +1,5 @@
 # Integrations
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Document external integrations used by Borealis, primarily the GitHub repository hash service.
@@ -15,9 +15,9 @@ Document external integrations used by Borealis, primarily the GitHub repository
 - `GET /api/repo/current_hash` (Device or Token Authenticated) - current repo hash.
 
 ## Related Documentation
-- [Engine Runtime](engine-runtime.md)
+- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
 - [API Reference](api-reference.md)
-- [Logging and Operations](logging-and-operations.md)
+- [Logging and Operations](../Operations%20and%20Remote%20Access/logging-and-operations.md)
 
 ## Codex Agent (Detailed)
 ### Integration implementation

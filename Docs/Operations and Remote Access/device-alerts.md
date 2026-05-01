@@ -1,5 +1,5 @@
 # Device Alerts
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Describe the runtime incident side of Watchdogs: the Alerts queue, incident lifecycle, and per-device alert handling workflow.
@@ -56,11 +56,11 @@ Describe the runtime incident side of Watchdogs: the Alerts queue, incident life
 - `POST /api/devices/<device_id>/watchdogs/overrides` (Token Authenticated) - create, update, or clear a per-device watchdog override.
 
 ## Related Documentation
-- [Watchdogs](watchdogs.md)
+- [Watchdogs](../Automation%20and%20Execution/watchdogs.md)
 - [Device Management](device-management.md)
-- [UI and Notifications](ui-and-notifications.md)
+- [UI and Notifications](../Start%20Here/ui-and-notifications.md)
 - [Logging and Operations](logging-and-operations.md)
-- [API Reference](api-reference.md)
+- [API Reference](../Data%20and%20Schema/api-reference.md)
 
 ## Codex Agent (Detailed)
 ### Main implementation files

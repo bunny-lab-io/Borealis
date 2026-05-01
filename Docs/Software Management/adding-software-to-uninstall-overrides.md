@@ -1,5 +1,5 @@
 # Software Uninstall Overrides
-[Back to Docs Index](../index.md) | [Index (HTML)](../index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain how to provide file-backed custom uninstall plans when Windows registry uninstall metadata cannot be trusted or is incomplete.
@@ -103,8 +103,8 @@ Explain how to provide file-backed custom uninstall plans when Windows registry 
 ```
 
 ## Related Documentation
-- [Device Management](../device-management.md)
-- [API Reference](../api-reference.md)
+- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
+- [API Reference](../Data%20and%20Schema/api-reference.md)
 - [Adding Software to Uninstall Blocklist](adding-software-to-uninstall-blocklist.md)
 - [Adding Software to Icon Overrides](adding-software-to-icon-overrides.md)
 

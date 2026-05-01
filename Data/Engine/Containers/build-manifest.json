@@ -4,6 +4,7 @@
       "dockerfile": "Data/Engine/Containers/api-backend/Dockerfile",
       "context": ".",
       "inputs": [
+        ".dockerignore",
         "Data/Engine/Containers/api-backend/data/**/*.py",
         "Data/Engine/Containers/api-backend/data/**/*.txt",
         "Data/Engine/Containers/api-backend/data/**/*.ini",
@@ -18,39 +19,48 @@
     },
     "webui-frontend": {
       "dockerfile": "Data/Engine/Containers/webui-frontend/Dockerfile",
-      "context": ".",
+      "context": "Data/Engine/Containers/webui-frontend",
+      "targets": {
+        "dev": "dev",
+        "prod": "prod"
+      },
       "inputs": [
+        "Data/Engine/Containers/webui-frontend/.dockerignore",
         "Data/Engine/Containers/webui-frontend/data/web-interface/**",
         "Data/Engine/Containers/webui-frontend/**"
       ]
     },
     "traefik-edge": {
       "dockerfile": "Data/Engine/Containers/traefik-edge/Dockerfile",
-      "context": ".",
+      "context": "Data/Engine/Containers/traefik-edge",
       "inputs": [
         "Data/Engine/Containers/compose.yaml",
         "Data/Engine/Containers/compose.env.example",
+        "Data/Engine/Containers/traefik-edge/.dockerignore",
         "Data/Engine/Containers/traefik-edge/**"
       ]
     },
     "postgres-db": {
       "dockerfile": "Data/Engine/Containers/postgres-db/Dockerfile",
-      "context": ".",
+      "context": "Data/Engine/Containers/postgres-db",
       "inputs": [
+        "Data/Engine/Containers/postgres-db/.dockerignore",
         "Data/Engine/Containers/postgres-db/**"
       ]
     },
     "remote-desktop-guacd": {
       "dockerfile": "Data/Engine/Containers/remote-desktop-guacd/Dockerfile",
-      "context": ".",
+      "context": "Data/Engine/Containers/remote-desktop-guacd",
       "inputs": [
+        "Data/Engine/Containers/remote-desktop-guacd/.dockerignore",
         "Data/Engine/Containers/remote-desktop-guacd/**"
       ]
     },
     "wireguard-tunnel": {
       "dockerfile": "Data/Engine/Containers/wireguard-tunnel/Dockerfile",
-      "context": ".",
+      "context": "Data/Engine/Containers/wireguard-tunnel",
       "inputs": [
+        "Data/Engine/Containers/wireguard-tunnel/.dockerignore",
         "Data/Engine/Containers/wireguard-tunnel/**"
       ]
     }

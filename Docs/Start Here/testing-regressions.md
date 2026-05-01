@@ -1,5 +1,5 @@
 # Borealis Testing Regressions
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Track unit tests that protect prior regressions or currently fail during test formalization.
@@ -32,6 +32,6 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 ## Related Documentation
 - [Unit Testing](Unit_Testing.md)
-- [Engine Runtime](engine-runtime.md)
-- [Agent Runtime](agent-runtime.md)
+- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
+- [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
 - [Security and Trust](security-and-trust.md)

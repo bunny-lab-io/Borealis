@@ -1,11 +1,12 @@
 # Logging and Operations
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Describe Borealis operational logging, retention, and core runtime checks.
 
 ## Log Locations
 - Engine container build log: `Engine/Deploy/build.log`.
+- Engine BuildKit cache: `Engine/Deploy/cache/buildkit/<service>/` when Docker Buildx is usable.
 - Engine primary log: `Engine/Services/api-backend/logs/engine.log` (daily rotation).
 - Engine error log: `Engine/Services/api-backend/logs/error.log`.
 - Engine API access log: `Engine/Services/api-backend/logs/api.log`.
@@ -42,10 +43,10 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - `DELETE /api/server/logs/<log_name>` (Admin) - delete log file(s).
 
 ## Related Documentation
-- [Engine Runtime](engine-runtime.md)
-- [Security and Trust](security-and-trust.md)
-- [API Reference](api-reference.md)
-- [Watchdogs](watchdogs.md)
+- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
+- [Security and Trust](../Start%20Here/security-and-trust.md)
+- [API Reference](../Data%20and%20Schema/api-reference.md)
+- [Watchdogs](../Automation%20and%20Execution/watchdogs.md)
 - [Device Alerts](device-alerts.md)
 
 ## Codex Agent (Detailed)

@@ -1,5 +1,5 @@
 # Migrating Pages to React Router
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Document the Borealis WebUI router architecture and provide a repeatable migration runbook for moving legacy pages onto the shared React Router app shell.
@@ -155,10 +155,10 @@ function openQuickJob(hostnames) {
 - Do not create legacy redirects unless product intent explicitly requires them.
 
 ## Related Documentation
-- [UI and Notifications](ui-and-notifications.md)
-- [Architecture Overview](architecture-overview.md)
-- [Scheduled Jobs](scheduled-jobs.md)
-- [Assemblies and Quick Jobs](assemblies.md)
+- [UI and Notifications](../Start%20Here/ui-and-notifications.md)
+- [Architecture Overview](../Start%20Here/architecture-overview.md)
+- [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
+- [Assemblies and Quick Jobs](../Automation%20and%20Execution/assemblies.md)
 
 ## Codex Agent (Detailed)
 ### Default migration sequence for future agents

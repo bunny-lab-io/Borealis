@@ -1,5 +1,5 @@
 # Getting Started with Borealis
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Help operators install, launch, and verify the Borealis Engine and (optionally) the Agent.
@@ -15,7 +15,8 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Engine service action examples: `./Engine.sh --service api-backend restart`, `./Engine.sh --service webui-frontend rebuild dev`, `./Engine.sh --service traefik-edge reload`, and `./Engine.sh --service wireguard-tunnel reconcile`.
 - Updates: `./Update.sh -Engine` fast-forwards the current branch then runs `Engine.sh deploy`; `./Update.sh -Agent` preserves the Agent updater flow then runs `Agent.sh deploy`.
 - Production TLS is managed by the embedded Traefik edge; the Python Engine stays on loopback HTTP.
-- During Engine deployment, `Engine.sh` renders `Engine/Deploy/compose.env`, builds changed local images as `borealis-engine/<service>:sha-<hash>`, and starts the Compose project `borealis-engine`.
+- During Engine deployment, `Engine.sh` renders `Engine/Deploy/compose.env`, builds changed local images as `borealis-engine/<service>:sha-<hash>`, and starts or updates the Compose project `borealis-engine`.
+- No-op Engine deploys skip unchanged image builds and skip Compose when the deploy manifest, env, image hashes, and running containers already match.
 - Storage is displayed during profile detection as an advisory guideline only. It does not change which Engine profile gets selected.
 
 ## Optional: Install the Agent (Windows)
@@ -35,7 +36,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
   `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Branch bootstrap + server URL + enrollment example:
   `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/optimization/agent-context-socket-consolidation/bootstrap.ps1"))) --agent --repo-branch optimization/agent-context-socket-consolidation --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
-- Linux agents run from the same script-staged Python runtime model as the rest of Borealis, not shipped binaries. The Linux Agent path can be installed with `./Agent.sh deploy`; current parity notes live in `agent-runtime.md`.
+- Linux agents run from the same script-staged Python runtime model as the rest of Borealis, not shipped binaries. The Linux Agent path can be installed with `./Agent.sh deploy`; current parity notes live in `Docs/Core Runtimes/agent-runtime.md`.
 - Linux Agent branch bootstrap example:
   `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/feature/containerize-all-borealis-services/Agent.sh | sudo bash -s -- --repo-branch feature/containerize-all-borealis-services deploy --serverurl "https://borealis.bunny-lab.io" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --newEngine`
 
@@ -55,11 +56,11 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 
 ## Related Documentation
 - [Architecture Overview](architecture-overview.md)
-- [Engine Runtime](engine-runtime.md)
-- [Docker Stack Breakdown](Docker/Stack_Breakdown.md)
-- [Agent Runtime](agent-runtime.md)
+- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
+- [Docker Stack Breakdown](../Core%20Runtimes/Stack_Breakdown.md)
+- [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
 - [Security and Trust](security-and-trust.md)
-- [Logging and Operations](logging-and-operations.md)
+- [Logging and Operations](../Operations%20and%20Remote%20Access/logging-and-operations.md)
 
 ## Codex Agent (Detailed)
 ### Bootstrap and runtime separation
@@ -67,7 +68,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Engine WebUI source lives in `Data/Engine/Containers/webui-frontend/data/web-interface/`.
 - Agent source code lives in `Data/Agent/`.
 - Runtime copies are staged to `Engine/` and `Agent/` every launch; these are disposable.
-- Engine container source lives in `Data/Engine/Containers/`; generated runtime state lives under `Engine/Deploy/` and `Engine/Services/<role>/`.
+- Engine container source lives in `Data/Engine/Containers/`; generated runtime state lives under `Engine/Deploy/` and sparse service-owned folders under `Engine/Services/<role>/`.
 - Always edit source under `Data/` and re-run the appropriate launcher to apply changes: `Engine.sh` for Linux Engine first install and redeploys, `Agent.sh` for Linux Agent first install and redeploys, and `Borealis.ps1` / `bootstrap.ps1` for the Windows agent.
 
 ### Launch mechanics
@@ -82,7 +83,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Dev mode (`--EngineDev`) uses Vite for the WebUI behind the Traefik edge container, while the Engine API stays on loopback.
 - Production (`--EngineProduction`) runs the Engine API on loopback HTTP, serves the static WebUI from the WebUI frontend container, and publishes the app through Traefik.
 - `Borealis.sh` remains a compatibility router only; Engine and Agent dependency checks now live in their domain launchers.
-- `Engine/Deploy/image-manifest.json` records image hashes and tags. `Engine/Deploy/deploy-manifest.json` records mode, Compose file, env file, and service set.
+- `Engine/Deploy/image-manifest.json` records image hashes and tags. `Engine/Deploy/deploy-manifest.json` records mode, Compose/env hashes, service image hashes, changed services, and whether Compose ran or was skipped.
 
 ### Configuration precedence
 - Engine config is assembled by `Data/Engine/Containers/api-backend/data/config.py` in this order:
@@ -103,7 +104,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 
 ### Agent install and enrollment notes
 - The Windows agent must run elevated to create services and scheduled tasks.
-- Enrollment requires an install code and operator approval (see `device-management.md`).
+- Enrollment requires an install code and operator approval (see `Docs/Operations and Remote Access/device-management.md`).
 - If enrollment fails, inspect `Agent/Logs/agent.log` and `Engine/Services/api-backend/logs/engine.log`.
 
 ### Health verification

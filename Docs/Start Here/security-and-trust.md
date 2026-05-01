@@ -1,5 +1,5 @@
 # Security and Trust
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain the Borealis trust model, enrollment security, token handling, and code signing behavior.
@@ -218,11 +218,11 @@ sequenceDiagram
 - `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).
 
 ## Related Documentation
-- [Agent Runtime](agent-runtime.md)
-- [Engine Runtime](engine-runtime.md)
-- [Device Management](device-management.md)
-- [API Reference](api-reference.md)
-- [Reverse Proxy Functionality](features_to_implement/reverse_proxy_functionality.md)
+- [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
+- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
+- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
+- [API Reference](../Data%20and%20Schema/api-reference.md)
+- [Docker Stack Breakdown](../Core%20Runtimes/Stack_Breakdown.md)
 
 ## Codex Agent (Detailed)
 ### Key material locations (Engine)

@@ -34,6 +34,7 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 
 - Docker Engine (Linux Engine deployment runtime; Docker Desktop not used) - Apache-2.0 - https://github.com/moby/moby/blob/master/LICENSE
 - Docker Compose plugin (Linux Engine deployment orchestration) - Apache-2.0 - https://github.com/docker/compose/blob/main/LICENSE
+- Docker Buildx plugin / BuildKit (optional local Engine image build cache acceleration) - Apache-2.0 - https://github.com/docker/buildx/blob/master/LICENSE
 - Debian Bookworm base image (`debian:bookworm-slim`) - Debian Free Software Guidelines / package-specific licenses - https://www.debian.org/legal/licenses/
 - Python container base image (`python:3.12-slim-bookworm`) - PSF License plus Debian package licenses - https://github.com/docker-library/python/blob/master/LICENSE
 - Node.js container base image (`node:22-bookworm-slim`) - MIT plus Debian package licenses - https://github.com/nodejs/node/blob/main/LICENSE

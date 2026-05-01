@@ -1,5 +1,5 @@
 # Scheduled Jobs
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain how Borealis schedules recurring jobs, targets devices, and records run history.
@@ -89,10 +89,10 @@ Supported schedule types (from the scheduler core):
 
 ## Related Documentation
 - [Assemblies and Quick Jobs](assemblies.md)
-- [Ansible SSH Connection Logic](Ansible/SSH_Connection_Logic.md)
-- [Device Management](device-management.md)
-- [API Reference](api-reference.md)
-- [Ansible Playbooks](features_to_implement/ansible_playbooks.md)
+- [Ansible SSH Connection Logic](SSH_Connection_Logic.md)
+- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
+- [API Reference](../Data%20and%20Schema/api-reference.md)
+- [SSH Connection Logic](SSH_Connection_Logic.md)
 
 ## Codex Agent (Detailed)
 ### Scheduler entry points

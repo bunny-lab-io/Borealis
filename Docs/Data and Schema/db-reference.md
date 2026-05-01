@@ -1,5 +1,5 @@
 # Database Reference
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Describe the Borealis PostgreSQL schema, table ownership, runtime interactions, and legacy migration structures so operators and Codex agents can troubleshoot and change schema safely.
@@ -896,9 +896,9 @@ ORDER BY xact_start NULLS LAST;
 8. If the route is still heavy, then consider query-count reduction, bulk loading, or schema/index tuning. Do not jump to pool-size changes before the connection lifecycle is clean.
 
 ## Related Documentation
-- [Engine Runtime](engine-runtime.md)
-- [Security and Trust](security-and-trust.md)
-- [Device Management](device-management.md)
-- [Scheduled Jobs](scheduled-jobs.md)
-- [Assemblies and Quick Jobs](assemblies.md)
-- [Aegis Cipher](features_to_implement/aegis_cipher.md)
+- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
+- [Security and Trust](../Start%20Here/security-and-trust.md)
+- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
+- [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
+- [Assemblies and Quick Jobs](../Automation%20and%20Execution/assemblies.md)
+- [Security and Trust](../Start%20Here/security-and-trust.md)

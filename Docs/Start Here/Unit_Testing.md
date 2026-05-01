@@ -1,5 +1,5 @@
 # Borealis Unit Testing
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 This page is the testing entrypoint for humans and Codex agents. Use the root scripts first. They set the expected environment, write reports to one location, and keep Borealis-authored tests inside `Unit_Tests` folders.
@@ -101,7 +101,7 @@ BOREALIS_AGENT_UNIT_TEST_DOMAIN=tokens ./Agent_Unit_Tests.sh
 - Engine assembly unit tests: `Data/Engine/Unit_Tests/assemblies/`.
 - Agent Python unit tests: `Data/Agent/Unit_Tests/`.
 - WebUI unit tests: `Data/Engine/Containers/webui-frontend/data/web-interface/Unit_Tests/`.
-- Runtime WebUI unit tests after Engine redeploy: `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests/`.
+- Runtime WebUI unit test cache, when prepared for tests: `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests/`.
 
 ## Results
 - Results write to `Unit_Test_Results/<runtime>-<timestamp>/`.
@@ -115,7 +115,7 @@ BOREALIS_AGENT_UNIT_TEST_DOMAIN=tokens ./Agent_Unit_Tests.sh
 - Run scripts from repo root.
 - Engine tests prefer `Engine/bin/python` when available because Engine venv includes pytest.
 - Agent tests use first Python interpreter with pytest available, checking Agent runtime, Engine runtime, and system Python in that order.
-- WebUI tests require `Engine/Services/webui-frontend/cache/web-interface/node_modules` and staged `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests`.
+- WebUI tests require a prepared runtime cache at `Engine/Services/webui-frontend/cache/web-interface` with `node_modules` and `Unit_Tests`. Normal container deploys package WebUI source into the image and do not create persistent `webui-frontend` runtime folders by default.
 - Do not run npm or Vite from `Data/Engine/Containers/webui-frontend/data/web-interface`; use a prepared runtime cache or defer UI runtime validation to the operator redeploying the WebUI container.
 - Container launcher/static validation should start with shell and Compose checks before broader unit lanes:
 ```bash
@@ -157,5 +157,5 @@ Prefer small helpers with clear names: fake Engine, fake devices, fake Role hook
 ## Related Documentation
 - [Testing Regressions](testing-regressions.md)
 - [Architecture Overview](architecture-overview.md)
-- [Engine Runtime](engine-runtime.md)
-- [Agent Runtime](agent-runtime.md)
+- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
+- [Agent Runtime](../Core%20Runtimes/agent-runtime.md)

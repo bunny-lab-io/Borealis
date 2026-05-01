@@ -1,18 +1,25 @@
-FROM node:22-bookworm-slim
+FROM node:22-bookworm-slim AS base
 
 ENV NODE_ENV=development
 
 WORKDIR /opt/Borealis/Data/Engine/web-interface
 
-COPY Data/Engine/Containers/webui-frontend/data/web-interface/package.json /opt/Borealis/Data/Engine/web-interface/package.json
+COPY data/web-interface/package.json /opt/Borealis/Data/Engine/web-interface/package.json
 RUN npm install --include=dev --no-fund --audit=false
 
-COPY Data/Engine/Containers/webui-frontend/data/web-interface /opt/Borealis/Data/Engine/web-interface
-COPY Data/Engine/Containers/webui-frontend/entrypoint.sh /usr/local/bin/borealis-webui-frontend
+COPY data/web-interface /opt/Borealis/Data/Engine/web-interface
+COPY entrypoint.sh /usr/local/bin/borealis-webui-frontend
 
-RUN chmod +x /usr/local/bin/borealis-webui-frontend \
-    && NODE_ENV=production npm run build
+RUN chmod +x /usr/local/bin/borealis-webui-frontend
 
 EXPOSE 8080 5173
+
+FROM base AS dev
+
+ENTRYPOINT ["/usr/local/bin/borealis-webui-frontend"]
+
+FROM base AS prod
+
+RUN NODE_ENV=production npm run build
 
 ENTRYPOINT ["/usr/local/bin/borealis-webui-frontend"]

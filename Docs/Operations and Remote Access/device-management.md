@@ -1,5 +1,5 @@
 # Device Management
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain how Borealis tracks devices, ingests inventory, manages sites and filters, and handles enrollment approvals.
@@ -161,17 +161,17 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `POST /api/admin/device-approvals/<approval_id>/deny` (Token Authenticated) - deny an in-scope device.
 
 ## Related Documentation
-- [Agent Runtime](agent-runtime.md)
-- [Database Reference](db-reference.md)
-- [Security and Trust](security-and-trust.md)
-- [Scheduled Jobs](scheduled-jobs.md)
-- [Watchdogs](watchdogs.md)
+- [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
+- [Database Reference](../Data%20and%20Schema/db-reference.md)
+- [Security and Trust](../Start%20Here/security-and-trust.md)
+- [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
+- [Watchdogs](../Automation%20and%20Execution/watchdogs.md)
 - [Device Alerts](device-alerts.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
-- [API Reference](api-reference.md)
-- [Software Icon Overrides](Software%20Management/adding-software-to-icon-overrides.md)
-- [Software Uninstall Overrides](Software%20Management/adding-software-to-uninstall-overrides.md)
-- [Software Uninstall Blocklist](Software%20Management/adding-software-to-uninstall-blocklist.md)
+- [API Reference](../Data%20and%20Schema/api-reference.md)
+- [Software Icon Overrides](../Software%20Management/adding-software-to-icon-overrides.md)
+- [Software Uninstall Overrides](../Software%20Management/adding-software-to-uninstall-overrides.md)
+- [Software Uninstall Blocklist](../Software%20Management/adding-software-to-uninstall-blocklist.md)
 
 ## Codex Agent (Detailed)
 ### Key files and services

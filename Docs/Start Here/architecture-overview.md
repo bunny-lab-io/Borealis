@@ -1,5 +1,5 @@
 # Architecture Overview
-[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain how Borealis is structured and how the core components interact end to end.
@@ -38,18 +38,18 @@ Explain how Borealis is structured and how the core components interact end to e
 - `Data/Engine/Containers/api-backend/data/Official_Assemblies/` - bundled official assembly seed snapshot.
 
 ## API Endpoints
-None on this page. See [API Reference](api-reference.md).
+None on this page. See [API Reference](../Data%20and%20Schema/api-reference.md).
 
 ## Related Documentation
-- [Engine Runtime](engine-runtime.md)
-- [Agent Runtime](agent-runtime.md)
+- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
+- [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
 - [Security and Trust](security-and-trust.md)
-- [Device Management](device-management.md)
-- [Assemblies and Quick Jobs](assemblies.md)
-- [Scheduled Jobs](scheduled-jobs.md)
-- [VPN and Remote Access](vpn-and-remote-access.md)
+- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
+- [Assemblies and Quick Jobs](../Automation%20and%20Execution/assemblies.md)
+- [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
+- [VPN and Remote Access](../Operations%20and%20Remote%20Access/vpn-and-remote-access.md)
 - [UI and Notifications](ui-and-notifications.md)
-- [Migrating Pages to React Router](migrating-pages-to-react-router.md)
+- [Migrating Pages to React Router](../Migration%20Paths/migrating-pages-to-react-router.md)
 
 ## Codex Agent (Detailed)
 ### Service map by folder
