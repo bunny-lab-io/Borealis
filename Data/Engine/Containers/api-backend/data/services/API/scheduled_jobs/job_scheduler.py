@@ -2701,26 +2701,16 @@ class JobScheduler:
             mode = "key"
         else:
             mode = "key"
-            key_probe_compact = str(key_probe_result or "").strip().lower()
-            key_denied = key_probe_result in {"permission_denied", "ssh_password_required"} or any(
-                marker in key_probe_compact
-                for marker in (
-                    "permission denied",
-                    "authentication failed",
-                    "too many authentication failures",
-                )
+            password_probe_result = self._preflight_ssh_session(
+                host=host,
+                port=port,
+                username=username,
+                password=password,
+                private_key_text="",
+                timeout_seconds=probe_timeout,
             )
-            if key_denied:
-                password_probe_result = self._preflight_ssh_session(
-                    host=host,
-                    port=port,
-                    username=username,
-                    password=password,
-                    private_key_text="",
-                    timeout_seconds=probe_timeout,
-                )
-                if not password_probe_result:
-                    mode = "password"
+            if not password_probe_result:
+                mode = "password"
         self._log_event(
             "mixed ssh credential auth probe selected mode",
             host=host,
