@@ -307,18 +307,71 @@ require_python() {
   command_exists python3 || die "python3 missing. Install python3 and rerun Engine.sh."
 }
 
+docker_apt_repo_os() {
+  case "${DISTRO_ID}" in
+    debian) printf '%s\n' "debian" ;;
+    ubuntu|linuxmint|pop) printf '%s\n' "ubuntu" ;;
+    *) printf '%s\n' "${DISTRO_ID}" ;;
+  esac
+}
+
+docker_apt_codename() {
+  local codename=""
+  if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    codename="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
+  fi
+  [[ -n "${codename}" ]] || die "Unable to determine Debian/Ubuntu codename for Docker apt repository."
+  printf '%s\n' "${codename}"
+}
+
+install_engine_apt_dependencies() {
+  local repo_os
+  local codename
+  local arch
+  repo_os="$(docker_apt_repo_os)"
+  codename="$(docker_apt_codename)"
+  arch="$(dpkg --print-architecture)"
+
+  run_privileged apt-get update -qq
+  run_privileged apt-get install -y python3 ca-certificates curl gnupg
+  run_privileged install -m 0755 -d /etc/apt/keyrings
+  run_privileged curl -fsSL "https://download.docker.com/linux/${repo_os}/gpg" -o /etc/apt/keyrings/docker.asc
+  run_privileged chmod a+r /etc/apt/keyrings/docker.asc
+
+  local source_file="/etc/apt/sources.list.d/docker.sources"
+  local temp_file
+  temp_file="$(mktemp)"
+  cat > "${temp_file}" <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/${repo_os}
+Suites: ${codename}
+Components: stable
+Architectures: ${arch}
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+  run_privileged install -m 0644 "${temp_file}" "${source_file}"
+  rm -f "${temp_file}"
+
+  run_privileged apt-get update -qq
+  run_privileged apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+}
+
 ensure_engine_dependencies() {
   local needs_install=0
   command_exists python3 || needs_install=1
-  command_exists docker || needs_install=1
-  docker compose version >/dev/null 2>&1 || needs_install=1
+  if command_exists docker; then
+    docker compose version >/dev/null 2>&1 || needs_install=1
+  else
+    needs_install=1
+  fi
 
   if [[ "${needs_install}" -eq 1 ]]; then
     detect_distro
     case "${DISTRO_ID}" in
       ubuntu|debian|linuxmint|pop)
-        run_privileged apt update -qq
-        run_privileged apt install -y python3 ca-certificates curl gnupg docker.io docker-compose-plugin
+        install_engine_apt_dependencies
         ;;
       rhel|centos|fedora|rocky|almalinux)
         if command_exists dnf; then
