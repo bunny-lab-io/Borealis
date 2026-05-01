@@ -8,14 +8,13 @@ API_ROOT="${PROJECT_ROOT}/Engine/Services/api-backend"
 
 mkdir -p \
   "${API_ROOT}/config" \
-  "${API_ROOT}/env" \
   "${API_ROOT}/logs/VPN_Tunnel" \
-  "${API_ROOT}/state" \
   "${API_ROOT}/secrets" \
-  "${API_ROOT}/cache" \
-  "${API_ROOT}/run" \
+  "${API_ROOT}/secrets/Auth_Tokens" \
+  "${API_ROOT}/secrets/Certificates" \
   "${API_ROOT}/cache/Ansible/collections" \
-  "${API_ROOT}/cache/Ansible/Generated/Runtime"
+  "${API_ROOT}/cache/Ansible/Generated/Runtime" \
+  "${API_ROOT}/cache/Aurora"
 
 export BOREALIS_PROJECT_ROOT="${PROJECT_ROOT}"
 export BOREALIS_ENGINE_MODE="${BOREALIS_ENGINE_MODE:-production}"

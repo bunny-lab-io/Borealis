@@ -90,6 +90,8 @@ def _handle_request(raw: bytes) -> bytes:
     command = str(payload.get("command") or "run")
     if command == "run":
         response = _run_command(list(payload.get("args") or []), int(payload.get("timeout") or 30))
+    elif command == "ping":
+        response = {"returncode": 0, "stdout": "pong", "stderr": ""}
     elif command in {"status", "reconcile"}:
         response = _status()
     else:

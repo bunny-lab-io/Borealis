@@ -57,6 +57,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - `Engine.sh` computes input hashes from Dockerfiles, build context, container entrypoints, source files, dependency manifests, and mode inputs, then builds images as `borealis-engine/<service>:sha-<hash>`.
 - Docker Buildx cache is stored under `Engine/Deploy/cache/buildkit/<service>/` when usable; plain Docker build remains the fallback.
 - No-op redeploys reuse existing image tags and skip Compose when deploy manifest, runtime env, image hashes, and container state already match.
+- Compose health checks gate startup: PostgreSQL `pg_isready`, WireGuard control socket presence, guacd TCP `4822`, WebUI loopback HTTP, API `/health`, and Traefik ping on `127.0.0.1:8082`.
 
 ### Container service boundaries
 - `api-backend` runs the Python Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, and Engine-side Ansible execution. It binds `127.0.0.1:5000`.

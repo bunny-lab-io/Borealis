@@ -67,7 +67,7 @@ Operators should treat `Engine/` as generated runtime state. Edit source under `
 | `remote-desktop-guacd` | `borealis-engine-remote-desktop-guacd` | VNC-only Apache Guacamole guacd runtime | `127.0.0.1:4822` |
 | `webui-frontend` | `borealis-engine-webui-frontend` | Production static WebUI or dev Vite HMR | prod `127.0.0.1:8080`, dev `127.0.0.1:5173` |
 | `api-backend` | `borealis-engine-api-backend` | Flask API, Socket.IO, scheduler, workflows, VNC WebSocket proxy, Ansible control-node logic | `127.0.0.1:5000`, VNC WS `127.0.0.1:4823` |
-| `traefik-edge` | `borealis-engine-traefik-edge` | Public HTTP/HTTPS edge, ACME, UI/API/Socket.IO/VNC routing | `80`, `443` |
+| `traefik-edge` | `borealis-engine-traefik-edge` | Public HTTP/HTTPS edge, ACME, UI/API/Socket.IO/VNC routing | `80`, `443`, health `127.0.0.1:8082` |
 
 All Engine containers use `network_mode: host`. Loopback assumptions are intentional.
 
@@ -170,17 +170,22 @@ Compose dependency order:
 ```text
 pg_isready -h 127.0.0.1 -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 ```
-3. `api-backend` waits for:
+3. `wireguard-tunnel` must create the Unix control socket.
+4. `remote-desktop-guacd` must accept loopback TCP connections on `127.0.0.1:4822`.
+5. `webui-frontend` must serve `/` on `127.0.0.1:8080` in prod or `127.0.0.1:5173` in dev.
+6. `api-backend` waits for:
 ```text
 postgres-db: service_healthy
-wireguard-tunnel: service_started
-remote-desktop-guacd: service_started
+wireguard-tunnel: service_healthy
+remote-desktop-guacd: service_healthy
 ```
-4. `traefik-edge` waits for:
+7. `api-backend` must return HTTP `200` from `http://127.0.0.1:5000/health`.
+8. `traefik-edge` waits for:
 ```text
-api-backend: service_started
-webui-frontend: service_started
+api-backend: service_healthy
+webui-frontend: service_healthy
 ```
+9. `traefik-edge` must pass Traefik ping healthcheck on the loopback `borealis-health` entrypoint.
 
 Traefik is the public edge. API and WebUI stay on loopback behind Traefik.
 
@@ -352,9 +357,25 @@ API liveness:
 curl -fsS http://127.0.0.1:5000/health
 ```
 
+WebUI liveness:
+```sh
+curl -fsS http://127.0.0.1:8080/      # prod
+curl -fsS http://127.0.0.1:5173/      # dev
+```
+
 PostgreSQL readiness:
 ```sh
 pg_isready -h 127.0.0.1 -p 5432 -U borealis -d borealis
+```
+
+guacd readiness:
+```sh
+docker exec borealis-engine-remote-desktop-guacd borealis-guacd-healthcheck
+```
+
+Traefik ping:
+```sh
+docker exec borealis-engine-traefik-edge traefik healthcheck --ping=true --ping.entryPoint=borealis-health --entryPoints.borealis-health.address=127.0.0.1:8082
 ```
 
 Public edge reachability:
@@ -362,8 +383,10 @@ Public edge reachability:
 curl -Ik https://<engine-fqdn>/
 ```
 
-WireGuard listener:
+WireGuard control socket and listener:
 ```sh
+docker exec borealis-engine-wireguard-tunnel borealis-wireguard-healthcheck
+docker exec borealis-engine-wireguard-tunnel borealis-wireguard-control-client ping
 sudo ss -lunp | grep ':30000'
 sudo wg show borealis-wg
 ```

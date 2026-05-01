@@ -9,8 +9,9 @@ RUN npm install --include=dev --no-fund --audit=false
 
 COPY data/web-interface /opt/Borealis/Data/Engine/web-interface
 COPY entrypoint.sh /usr/local/bin/borealis-webui-frontend
+COPY healthcheck.js /usr/local/bin/borealis-webui-healthcheck
 
-RUN chmod +x /usr/local/bin/borealis-webui-frontend
+RUN chmod +x /usr/local/bin/borealis-webui-frontend /usr/local/bin/borealis-webui-healthcheck
 
 EXPOSE 8080 5173
 

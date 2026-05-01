@@ -9,6 +9,7 @@ STATE_DIR="${SERVICE_ROOT}/state"
 HOSTNAME="${BOREALIS_PUBLIC_HOSTNAME:-localhost}"
 ACME_EMAIL="${BOREALIS_ACME_EMAIL:-}"
 WEBUI_MODE="${BOREALIS_WEBUI_MODE:-prod}"
+HEALTH_PORT="${BOREALIS_TRAEFIK_HEALTH_PORT:-8082}"
 
 mkdir -p "${CONFIG_DIR}" "${LOG_DIR}" "${STATE_DIR}"
 touch "${STATE_DIR}/acme.json"
@@ -23,6 +24,7 @@ cat > "${STATE_DIR}/Settings.json" <<EOF
   "public_vnc_path": "${BOREALIS_PUBLIC_VNC_PATH:-/remote-desktop/vnc}",
   "public_wireguard_host": "${BOREALIS_PUBLIC_WIREGUARD_HOST:-${HOSTNAME}}",
   "public_wireguard_port": ${BOREALIS_PUBLIC_WIREGUARD_PORT:-30000},
+  "health_port": ${HEALTH_PORT},
   "http_port": ${BOREALIS_PUBLIC_HTTP_PORT:-80},
   "https_port": ${BOREALIS_PUBLIC_HTTPS_PORT:-443},
   "engine_upstream_host": "127.0.0.1",
@@ -40,10 +42,14 @@ EOF
 
 cat > "${CONFIG_DIR}/traefik.yml" <<EOF
 entryPoints:
+  borealis-health:
+    address: "127.0.0.1:${HEALTH_PORT}"
   web:
     address: ":${BOREALIS_PUBLIC_HTTP_PORT:-80}"
   websecure:
     address: ":${BOREALIS_PUBLIC_HTTPS_PORT:-443}"
+ping:
+  entryPoint: borealis-health
 providers:
   file:
     filename: "${CONFIG_DIR}/dynamic.yml"
