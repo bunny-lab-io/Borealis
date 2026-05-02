@@ -8,6 +8,7 @@ Document external integrations used by Borealis, primarily the GitHub repository
 - The Engine can query GitHub for the latest commit hash of a repository/branch.
 - Results are cached locally to reduce API usage.
 - Admins can store a GitHub API token via the WebUI.
+- The Sites install menu uses that stored token to list Borealis GitHub branches for branch-specific Agent bootstrap commands.
 
 ## API Endpoints
 - `GET /api/github/token` (Admin) - GitHub token status.
@@ -38,6 +39,8 @@ Document external integrations used by Borealis, primarily the GitHub repository
 - Admins manage tokens via `/api/github/token`.
 - The token is stored in the Engine database (`github_token` table).
 - `GitHubIntegration.verify_token()` reports validity and rate-limit status.
+- The Sites page branch picker reads the token through `/api/github/token`, calls GitHub's branch list API from the operator browser, and never stores the token in component state.
+- `main` keeps install commands on the default raw URL without `--repo-branch`; any selected non-main branch changes the raw URL and adds `--repo-branch <branch>` to Linux/macOS/Windows agent commands.
 
 ### `GET /api/repo/current_hash`
 - This endpoint uses the cached GitHub integration to return a hash.

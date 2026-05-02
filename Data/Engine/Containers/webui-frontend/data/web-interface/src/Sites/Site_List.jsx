@@ -4,6 +4,7 @@ import {
   Alert,
   Box,
   Button,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -24,6 +25,7 @@ import DriveFileRenameOutlineRoundedIcon from "@mui/icons-material/DriveFileRena
 import LocationCityIcon from "@mui/icons-material/LocationCity";
 import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import AltRouteRoundedIcon from "@mui/icons-material/AltRouteRounded";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { CreateSiteDialog, RenameSiteDialog } from "../Dialogs.jsx";
@@ -55,8 +57,10 @@ const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 
 const AUTO_SIZE_COLUMNS = ["device_count", "enrollment_code"];
-const BOOTSTRAP_POWERSHELL_URL = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1";
-const AGENT_SHELL_URL = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Agent.sh";
+const DEFAULT_INSTALL_BRANCH = "main";
+const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
+const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
+const RAW_BOREALIS_BASE_URL = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads";
 const INSTALL_OS_OPTIONS = [
   { id: "windows", label: "Windows" },
   { id: "linux", label: "Linux" },
@@ -397,21 +401,50 @@ function escapeShellDoubleQuoted(value) {
   return String(value || "").replace(/(["\\$`])/g, "\\$1");
 }
 
-function buildInstallCommand(osId, serverUrl, enrollmentCode) {
+function normalizeInstallBranch(value) {
+  return String(value || DEFAULT_INSTALL_BRANCH).trim() || DEFAULT_INSTALL_BRANCH;
+}
+
+function rawBorealisFileUrl(branch, fileName) {
+  const encodedBranch = normalizeInstallBranch(branch)
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+  return `${RAW_BOREALIS_BASE_URL}/${encodedBranch}/${fileName}`;
+}
+
+function quoteShellValue(value) {
+  return `"${escapeShellDoubleQuoted(value)}"`;
+}
+
+function quotePowerShellValue(value) {
+  return `"${escapePowerShellDoubleQuoted(value)}"`;
+}
+
+function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DEFAULT_INSTALL_BRANCH) {
   const normalizedServerUrl = normalizeInstallServerUrl(serverUrl);
   const normalizedEnrollmentCode = String(enrollmentCode || "").trim();
+  const normalizedBranch = normalizeInstallBranch(branch);
+  const usesDefaultBranch = normalizedBranch === DEFAULT_INSTALL_BRANCH;
   if (!normalizedServerUrl || !normalizedEnrollmentCode) {
     return "";
   }
 
   if (osId === "windows") {
+    const bootstrapUrl = rawBorealisFileUrl(normalizedBranch, "bootstrap.ps1");
+    const bootstrapCommand = usesDefaultBranch
+      ? `irm ${bootstrapUrl} | iex`
+      : `& ([ScriptBlock]::Create((irm ${quotePowerShellValue(bootstrapUrl)}))) --agent --repo-branch ${quotePowerShellValue(normalizedBranch)}`;
     return `$env:BOREALIS_SERVER_URL="${escapePowerShellDoubleQuoted(normalizedServerUrl)}"; ` +
       `$env:BOREALIS_ENROLLMENT_CODE="${escapePowerShellDoubleQuoted(normalizedEnrollmentCode)}"; ` +
-      `irm ${BOOTSTRAP_POWERSHELL_URL} | iex`;
+      bootstrapCommand;
   }
 
   const shellPrefix = osId === "macos" ? "bash" : "sudo bash";
-  return `curl -fsSL ${AGENT_SHELL_URL} | ${shellPrefix} -s -- deploy --serverurl ` +
+  const agentUrl = rawBorealisFileUrl(normalizedBranch, "Agent.sh");
+  const repoBranchArgs = usesDefaultBranch ? "" : `--repo-branch ${quoteShellValue(normalizedBranch)} `;
+  const urlArg = usesDefaultBranch ? agentUrl : quoteShellValue(agentUrl);
+  return `curl -fsSL ${urlArg} | ${shellPrefix} -s -- ${repoBranchArgs}deploy --serverurl ` +
     `"${escapeShellDoubleQuoted(normalizedServerUrl)}" --enrollmentcode ` +
     `"${escapeShellDoubleQuoted(normalizedEnrollmentCode)}"`;
 }
@@ -495,6 +528,188 @@ function SiteDeleteDialog({ open, onCancel, onConfirm, sites }) {
   );
 }
 
+function InstallBranchDialog({
+  open,
+  rows,
+  loading,
+  error,
+  draftBranch,
+  onDraftBranchChange,
+  onRefresh,
+  onCancel,
+  onApply,
+}) {
+  const branchGridRef = useRef(null);
+  const branchGridApiRef = useRef(null);
+  const normalizedDraftBranch = normalizeInstallBranch(draftBranch);
+
+  const selectDraftBranch = useCallback(() => {
+    const api = branchGridApiRef.current || branchGridRef.current?.api;
+    if (!api || typeof api.forEachNode !== "function") return;
+    api.forEachNode((node) => {
+      const name = String(node?.data?.name || "");
+      node.setSelected?.(name === normalizedDraftBranch);
+    });
+  }, [normalizedDraftBranch]);
+
+  useEffect(() => {
+    if (!open) {
+      branchGridApiRef.current = null;
+      return undefined;
+    }
+    const handle = setTimeout(selectDraftBranch, 0);
+    return () => clearTimeout(handle);
+  }, [open, rows, selectDraftBranch]);
+
+  const branchColumnDefs = useMemo(() => [
+    {
+      headerName: "Branch",
+      field: "name",
+      minWidth: 260,
+      flex: 1,
+      cellRenderer: (params) => (
+        <Typography sx={{ color: "#58a6ff", fontSize: "0.88rem", fontWeight: 600 }}>
+          {params.value}
+        </Typography>
+      ),
+    },
+    {
+      headerName: "Commit",
+      field: "sha",
+      minWidth: 130,
+      maxWidth: 150,
+      valueFormatter: (params) => String(params.value || "").slice(0, 12),
+    },
+    {
+      headerName: "Protected",
+      field: "protected",
+      minWidth: 120,
+      maxWidth: 130,
+      valueFormatter: (params) => (params.value ? "Yes" : "No"),
+    },
+  ], []);
+
+  const branchDefaultColDef = useMemo(() => ({
+    sortable: true,
+    filter: "agTextColumnFilter",
+    resizable: true,
+  }), []);
+
+  const branchRowSelection = useMemo(
+    () => ({
+      mode: "singleRow",
+      checkboxes: true,
+      headerCheckbox: false,
+      enableClickSelection: true,
+    }),
+    []
+  );
+
+  const branchSelectionColumnDef = useMemo(
+    () => ({
+      headerName: "",
+      minWidth: 52,
+      width: 52,
+      maxWidth: 52,
+      pinned: "left",
+      sortable: false,
+      resizable: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      suppressMovable: true,
+      lockPinned: true,
+      lockPosition: true,
+    }),
+    []
+  );
+
+  return (
+    <Dialog open={open} onClose={onCancel} maxWidth="md" fullWidth PaperProps={{ sx: SITE_DIALOG_PAPER_SX }}>
+      <DialogTitle sx={SITE_DIALOG_TITLE_SX}>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography sx={{ fontWeight: 700, fontSize: "1rem", lineHeight: 1.2, color: MAGIC_UI.textBright }}>
+            Switch Branch
+          </Typography>
+          <Typography sx={{ mt: 0.55, fontSize: "0.84rem", lineHeight: 1.45, color: MAGIC_UI.textMuted }}>
+            Selected branch: {normalizedDraftBranch}
+          </Typography>
+        </Box>
+      </DialogTitle>
+      <DialogContent sx={SITE_DIALOG_CONTENT_SX}>
+        {error ? (
+          <Alert severity="error" sx={{ mb: 1.5 }}>
+            {error}
+          </Alert>
+        ) : null}
+        {loading ? (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5, color: MAGIC_UI.textMuted }}>
+            <CircularProgress size={16} color="inherit" />
+            <Typography sx={{ fontSize: "0.84rem", color: "inherit" }}>Loading branches</Typography>
+          </Box>
+        ) : null}
+        <Box
+          className={themeClassName}
+          sx={{
+            height: 440,
+            minHeight: 320,
+            "--ag-font-family": gridFontFamily,
+            "--ag-icon-font-family": iconFontFamily,
+            "& .ag-root-wrapper": {
+              border: `1px solid ${MAGIC_UI.panelBorder}`,
+              borderRadius: 2,
+              background: "rgba(7,12,24,0.82)",
+            },
+            "& .ag-header": {
+              backgroundColor: "rgba(15,23,42,0.9)",
+              borderBottom: "1px solid rgba(148,163,184,0.25)",
+            },
+            "& .ag-row-selected": {
+              backgroundColor: "rgba(125,211,252,0.2) !important",
+              boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+            },
+          }}
+        >
+          <AgGridReact
+            ref={branchGridRef}
+            rowData={rows}
+            columnDefs={branchColumnDefs}
+            defaultColDef={branchDefaultColDef}
+            rowSelection={branchRowSelection}
+            selectionColumnDef={branchSelectionColumnDef}
+            suppressCellFocus
+            pagination
+            paginationPageSize={20}
+            paginationPageSizeSelector={[20, 50, 100]}
+            animateRows
+            getRowId={(params) => String(params.data?.name || "")}
+            onGridReady={(params) => {
+              branchGridApiRef.current = params.api;
+              selectDraftBranch();
+            }}
+            onFirstDataRendered={selectDraftBranch}
+            onRowDataUpdated={selectDraftBranch}
+            onSelectionChanged={() => {
+              const api = branchGridApiRef.current || branchGridRef.current?.api;
+              const selected = api?.getSelectedRows?.()?.[0]?.name;
+              if (selected) {
+                onDraftBranchChange(selected);
+              }
+            }}
+            theme={myTheme}
+          />
+        </Box>
+      </DialogContent>
+      <DialogActions sx={SITE_DIALOG_ACTIONS_SX}>
+        <Button onClick={onRefresh} disabled={loading} sx={SITE_DIALOG_BUTTON_SX}>Refresh</Button>
+        <Button onClick={onCancel} sx={SITE_DIALOG_BUTTON_SX}>Cancel</Button>
+        <Button onClick={onApply} disabled={!normalizedDraftBranch || loading} sx={SITE_DIALOG_BUTTON_SX}>
+          Apply
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 const PAGE_TITLE = "Sites";
 const PAGE_SUBTITLE = "Manage site enrollment codes and open device inventories by site.";
 const PAGE_ICON = LocationCityIcon;
@@ -516,6 +731,12 @@ export default function SiteList() {
   const [siteContextMenu, setSiteContextMenu] = useState({ open: false, top: 0, left: 0, row: null });
   const [installMenuAnchorEl, setInstallMenuAnchorEl] = useState(null);
   const [installMenuSite, setInstallMenuSite] = useState(null);
+  const [selectedInstallBranch, setSelectedInstallBranch] = useState(DEFAULT_INSTALL_BRANCH);
+  const [draftInstallBranch, setDraftInstallBranch] = useState(DEFAULT_INSTALL_BRANCH);
+  const [branchDialogOpen, setBranchDialogOpen] = useState(false);
+  const [branchRows, setBranchRows] = useState([]);
+  const [branchesLoading, setBranchesLoading] = useState(false);
+  const [branchLoadError, setBranchLoadError] = useState("");
   const gridRef = useRef(null);
   const gridApiRef = useRef(null);
   const autoSizeHandleRef = useRef(null);
@@ -582,6 +803,72 @@ export default function SiteList() {
       setLoadError("Unable to load sites.");
     }
   }, [fetchInstallServerUrlFromOverview]);
+
+  const fetchInstallBranches = useCallback(async () => {
+    setBranchesLoading(true);
+    setBranchLoadError("");
+    try {
+      const tokenRes = await fetch("/api/github/token", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const tokenData = await tokenRes.json().catch(() => ({}));
+      if (!tokenRes.ok) {
+        const message = tokenData?.message || tokenData?.error || `GitHub token lookup failed (HTTP ${tokenRes.status}).`;
+        throw new Error(message);
+      }
+      const githubToken = String(tokenData?.token || "").trim();
+      if (!githubToken) {
+        throw new Error(tokenData?.message || "GitHub API token is unavailable.");
+      }
+
+      const nextRows = [];
+      for (let page = 1; page <= 10; page += 1) {
+        const branchRes = await fetch(`${GITHUB_BRANCHES_API_URL}?per_page=100&page=${page}`, {
+          cache: "no-store",
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${githubToken}`,
+          },
+        });
+        if (!branchRes.ok) {
+          const body = await branchRes.text().catch(() => "");
+          throw new Error(`GitHub branch lookup failed (HTTP ${branchRes.status})${body ? `: ${body.slice(0, 180)}` : ""}`);
+        }
+        const pageRows = await branchRes.json().catch(() => []);
+        if (!Array.isArray(pageRows)) {
+          throw new Error("GitHub branch lookup returned an unexpected payload.");
+        }
+        pageRows.forEach((branch) => {
+          const name = String(branch?.name || "").trim();
+          if (!name) return;
+          nextRows.push({
+            name,
+            sha: String(branch?.commit?.sha || "").trim(),
+            protected: Boolean(branch?.protected),
+            default: name === DEFAULT_INSTALL_BRANCH,
+          });
+        });
+        if (pageRows.length < 100) {
+          break;
+        }
+      }
+      nextRows.sort((a, b) => {
+        if (a.name === DEFAULT_INSTALL_BRANCH) return -1;
+        if (b.name === DEFAULT_INSTALL_BRANCH) return 1;
+        return a.name.localeCompare(b.name);
+      });
+      setBranchRows(nextRows);
+      if (!nextRows.length) {
+        setBranchLoadError("No GitHub branches returned.");
+      }
+    } catch (error) {
+      setBranchRows([]);
+      setBranchLoadError(error instanceof Error ? error.message : "GitHub branch lookup failed.");
+    } finally {
+      setBranchesLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     setRows(initialRows);
@@ -676,11 +963,36 @@ export default function SiteList() {
     setInstallMenuSite(null);
   }, []);
 
+  const handleOpenBranchDialog = useCallback(() => {
+    setDraftInstallBranch(selectedInstallBranch);
+    setBranchDialogOpen(true);
+    handleCloseInstallMenu();
+    void fetchInstallBranches();
+  }, [fetchInstallBranches, handleCloseInstallMenu, selectedInstallBranch]);
+
+  const handleCloseBranchDialog = useCallback(() => {
+    setBranchDialogOpen(false);
+    setDraftInstallBranch(selectedInstallBranch);
+  }, [selectedInstallBranch]);
+
+  const handleApplyInstallBranch = useCallback(async () => {
+    const nextBranch = normalizeInstallBranch(draftInstallBranch);
+    setSelectedInstallBranch(nextBranch);
+    setDraftInstallBranch(nextBranch);
+    setBranchDialogOpen(false);
+    await sendNotification({
+      title: "Install Branch Updated",
+      message: `Agent install commands now target <b>${nextBranch}</b>.`,
+      icon: "done",
+      variant: "info",
+    });
+  }, [draftInstallBranch, sendNotification]);
+
   const handleCopyInstallCommand = useCallback(async (osId, site) => {
     const siteName = String(site?.name || "Unknown Site").trim() || "Unknown Site";
     const enrollmentCode = String(site?.enrollment_code || "").trim();
     const osLabel = INSTALL_OS_OPTIONS.find((option) => option.id === osId)?.label || "Agent";
-    const command = buildInstallCommand(osId, installServerUrl, enrollmentCode);
+    const command = buildInstallCommand(osId, installServerUrl, enrollmentCode, selectedInstallBranch);
 
     if (!command) {
       await sendNotification({
@@ -709,7 +1021,7 @@ export default function SiteList() {
       icon: "warning",
       variant: "warning",
     });
-  }, [copyTextToClipboard, installServerUrl, sendNotification]);
+  }, [copyTextToClipboard, installServerUrl, selectedInstallBranch, sendNotification]);
 
   const handleSelectInstallOs = useCallback(async (osId) => {
     const activeSite = installMenuSite;
@@ -1089,6 +1401,18 @@ export default function SiteList() {
             {option.label}
           </MenuItem>
         ))}
+        <Divider sx={{ my: 0.55, borderColor: "rgba(148,163,184,0.16)" }} />
+        <MenuItem onClick={handleOpenBranchDialog} sx={{ ...INSTALL_MENU_ITEM_SX, alignItems: "flex-start", gap: 1 }}>
+          <AltRouteRoundedIcon sx={{ mt: 0.15, fontSize: 18, color: "rgba(226,232,240,0.92)" }} />
+          <Box sx={{ minWidth: 0 }}>
+            <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.92rem", fontWeight: 700, lineHeight: 1.2 }}>
+              Switch Branch
+            </Typography>
+            <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.72rem", lineHeight: 1.25, mt: 0.25 }}>
+              Current: {selectedInstallBranch}
+            </Typography>
+          </Box>
+        </MenuItem>
       </Menu>
       <Menu
         open={Boolean(siteContextMenu.open)}
@@ -1330,6 +1654,18 @@ export default function SiteList() {
             }
           } catch {}
         }}
+      />
+
+      <InstallBranchDialog
+        open={branchDialogOpen}
+        rows={branchRows}
+        loading={branchesLoading}
+        error={branchLoadError}
+        draftBranch={draftInstallBranch}
+        onDraftBranchChange={setDraftInstallBranch}
+        onRefresh={() => void fetchInstallBranches()}
+        onCancel={handleCloseBranchDialog}
+        onApply={() => void handleApplyInstallBranch()}
       />
     </Paper>
   );

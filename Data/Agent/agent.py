@@ -2743,7 +2743,37 @@ _SOCKETIO_RECONNECT_PAUSE_SECONDS = 1
 
 # We supervise reconnects ourselves so every reconnect attempt re-authenticates,
 # refreshes TLS/socket transport settings, and re-emits `connect_agent`.
-sio = socketio.AsyncClient(reconnection=False)
+#
+# Create the real Socket.IO client only after the runtime event loop exists.
+# Python 3.9 binds asyncio Queue/Future internals to the loop that first touches
+# them, so constructing the Engine.IO client during module import can strand
+# wait queues on the wrong loop under Linux service startup.
+class _SocketIORegistrationProxy:
+    def __init__(self) -> None:
+        self._registrations: List[Tuple[str, Optional[str], Callable[..., Any]]] = []
+        self.connected = False
+
+    def event(self, handler: Callable[..., Any]) -> Callable[..., Any]:
+        self._registrations.append(("event", None, handler))
+        return handler
+
+    def on(self, event_name: str):
+        def _decorator(handler: Callable[..., Any]) -> Callable[..., Any]:
+            self._registrations.append(("on", str(event_name), handler))
+            return handler
+
+        return _decorator
+
+    def apply_to(self, client: "socketio.AsyncClient") -> None:
+        for kind, event_name, handler in list(self._registrations):
+            if kind == "event":
+                client.event(handler)
+            else:
+                client.on(str(event_name), handler=handler)
+
+
+_SOCKETIO_REGISTRATIONS = _SocketIORegistrationProxy()
+sio = _SOCKETIO_REGISTRATIONS
 role_tasks = {}
 background_tasks = []
 AGENT_LOOP = None
@@ -2752,6 +2782,23 @@ ROLE_MANAGER_SYS = None
 ROLE_HEALTH_REGISTRY = RoleHealthRegistry()
 SESSION_HELPER_BROKER = None
 HELPER_CLIENT = None
+
+
+def _create_socketio_client(loop_ref=None) -> "socketio.AsyncClient":
+    client = socketio.AsyncClient(reconnection=False)
+    _SOCKETIO_REGISTRATIONS.apply_to(client)
+    try:
+        setattr(client, "_borealis_loop_id", id(loop_ref) if loop_ref is not None else None)
+    except Exception:
+        pass
+    return client
+
+
+def _ensure_socketio_client(loop_ref=None):
+    global sio
+    if sio is None or isinstance(sio, _SocketIORegistrationProxy):
+        sio = _create_socketio_client(loop_ref)
+    return sio
 
 # ---------------- Local IPC Bridge (Service -> Agent) ----------------
 def start_agent_bridge_pipe(loop_ref):
@@ -2977,7 +3024,8 @@ def _collect_agent_role_health() -> Dict[str, Any]:
 def _emit_quick_job_result_local(payload: Dict[str, Any]) -> None:
     async def _emit():
         try:
-            await sio.emit('quick_job_result', payload)
+            active_sio = _ensure_socketio_client(AGENT_LOOP)
+            await active_sio.emit('quick_job_result', payload)
         except Exception as exc:
             _log_agent(f'Failed to emit local quick_job_result: {exc}', fname='agent.error.log')
 
@@ -3828,7 +3876,8 @@ async def connect_loop():
     client = http_client()
     attempt = 0
     while True:
-        if getattr(sio, "connected", False):
+        active_sio = _ensure_socketio_client(AGENT_LOOP)
+        if getattr(active_sio, "connected", False):
             await asyncio.sleep(_SOCKETIO_RECONNECT_PAUSE_SECONDS)
             continue
         attempt += 1
@@ -3868,9 +3917,9 @@ async def connect_loop():
                     _heartbeat_flush(reason="socket_connecting")
                 except Exception:
                     pass
-            client.configure_socketio(sio)
+            client.configure_socketio(active_sio)
             try:
-                setattr(sio, "connection_error", None)
+                setattr(active_sio, "connection_error", None)
             except Exception:
                 pass
             url = client.websocket_base_url()
@@ -3890,7 +3939,7 @@ async def connect_loop():
                 fname='agent.log',
             )
             print(f"[INFO] Connecting Agent to {url}...")
-            await sio.connect(
+            await active_sio.connect(
                 url,
                 transports=['websocket'],
                 headers=headers,
@@ -3902,7 +3951,7 @@ async def connect_loop():
             )
             attempt = 0
             try:
-                await sio.wait()
+                await active_sio.wait()
             finally:
                 _log_agent(
                     'connect_loop observed websocket session end; re-authenticating before reconnect.',
@@ -3912,7 +3961,7 @@ async def connect_loop():
         except Exception as e:
             detail = _describe_exception(e)
             try:
-                conn_err = getattr(sio, "connection_error", None)
+                conn_err = getattr(active_sio, "connection_error", None)
             except Exception:
                 conn_err = None
             if conn_err:
@@ -3994,6 +4043,7 @@ if __name__=='__main__':
         app=QtWidgets.QApplication(sys.argv)
         loop=QEventLoop(app); asyncio.set_event_loop(loop)
     AGENT_LOOP = loop
+    sio = _create_socketio_client(loop)
     try:
         if not SYSTEM_SERVICE_MODE and not SESSION_HELPER_MODE:
             start_agent_bridge_pipe(loop)

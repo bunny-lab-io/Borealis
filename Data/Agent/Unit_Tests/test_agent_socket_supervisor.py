@@ -9,6 +9,27 @@ os.environ.setdefault("BOREALIS_AGENT_MODE", "system")
 import Data.Agent.agent as agent_module
 
 
+class _RegistrationCaptureClient:
+    def __init__(self, reconnection=False) -> None:
+        self.reconnection = reconnection
+        self.registrations = []
+
+    def event(self, handler):
+        self.registrations.append(("event", handler.__name__))
+        return handler
+
+    def on(self, event_name, handler=None, namespace=None):
+        if handler is not None:
+            self.registrations.append(("on", event_name, handler.__name__))
+            return handler
+
+        def _decorator(decorated):
+            self.registrations.append(("on", event_name, decorated.__name__))
+            return decorated
+
+        return _decorator
+
+
 class _FakeClient:
     def __init__(self) -> None:
         self.guid = "guid-1"
@@ -57,6 +78,39 @@ class _FakeSio:
         self.wait_calls += 1
         self.connected = False
         raise asyncio.CancelledError()
+
+
+def test_deferred_socketio_client_replays_import_time_handlers() -> None:
+    proxy = agent_module._SocketIORegistrationProxy()
+
+    @proxy.event
+    async def connect():
+        return None
+
+    @proxy.on("agent_config")
+    async def on_agent_config(payload):
+        return payload
+
+    created_clients = []
+    original_sio = agent_module.sio
+    original_registrations = agent_module._SOCKETIO_REGISTRATIONS
+    original_async_client = agent_module.socketio.AsyncClient
+    agent_module.sio = proxy
+    agent_module._SOCKETIO_REGISTRATIONS = proxy
+    agent_module.socketio.AsyncClient = lambda reconnection=False: created_clients.append(
+        _RegistrationCaptureClient(reconnection=reconnection)
+    ) or created_clients[-1]
+
+    try:
+        client = agent_module._create_socketio_client(loop_ref=object())
+    finally:
+        agent_module.sio = original_sio
+        agent_module._SOCKETIO_REGISTRATIONS = original_registrations
+        agent_module.socketio.AsyncClient = original_async_client
+
+    assert client.reconnection is False
+    assert ("event", "connect") in client.registrations
+    assert ("on", "agent_config", "on_agent_config") in client.registrations
 
 
 def test_connect_loop_waits_for_socket_end_after_successful_connect() -> None:
