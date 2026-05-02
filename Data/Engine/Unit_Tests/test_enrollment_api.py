@@ -19,6 +19,7 @@ from flask.testing import FlaskClient
 from Data.Engine.crypto import keys as crypto_keys
 
 from .conftest import EngineTestHarness
+from .support.engine import admin_client
 
 
 def _now() -> datetime:
@@ -111,6 +112,75 @@ def test_enrollment_request_creates_pending_approval(engine_harness: EngineTestH
     assert stored_site_id == 1
     expected_fingerprint = crypto_keys.fingerprint_from_spki_der(public_der)
     assert fingerprint == expected_fingerprint
+
+
+def test_invalid_enrollment_code_surfaces_wrong_code_status(engine_harness: EngineTestHarness) -> None:
+    harness = engine_harness
+    client: FlaskClient = harness.app.test_client()
+
+    _private_key, public_der, public_b64 = _generate_agent_material()
+    client_nonce_b64 = base64.b64encode(os.urandom(32)).decode("ascii")
+
+    response = client.post(
+        "/api/agent/enroll/request",
+        json={
+            "hostname": "agent-wrong-code-01",
+            "enrollment_code": "WRONG-CODE-1234",
+            "agent_pubkey": public_b64,
+            "client_nonce": client_nonce_b64,
+        },
+        headers={"X-Borealis-Agent-Context": "system"},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "invalid_enrollment_code"
+    expected_fingerprint = crypto_keys.fingerprint_from_spki_der(public_der)
+
+    with sqlite3.connect(str(harness.db_path)) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT hostname_claimed, ssl_key_fingerprint_claimed, enrollment_code_mask, attempt_count, last_error
+              FROM enrollment_code_failures
+             WHERE ssl_key_fingerprint_claimed = ?
+            """,
+            (expected_fingerprint,),
+        )
+        row = cur.fetchone()
+
+    assert row is not None
+    assert row[0] == "agent-wrong-code-01"
+    assert row[1] == expected_fingerprint
+    assert row[2] == "WRO***234"
+    assert row[3] == 1
+    assert row[4] == "invalid_enrollment_code"
+
+    admin = admin_client(harness)
+    list_resp = admin.get("/api/admin/device-approvals?status=wrong_code")
+    assert list_resp.status_code == 200
+    wrong_code_records = list_resp.get_json()["approvals"]
+    assert len(wrong_code_records) == 1
+    assert wrong_code_records[0]["status"] == "wrong_code"
+    assert wrong_code_records[0]["hostname_claimed"] == "agent-wrong-code-01"
+    assert wrong_code_records[0]["wrong_code_attempt_count"] == 1
+
+    install_code = "VALID-CODE-001"
+    _seed_install_code(harness.db_path, install_code)
+    valid_response = client.post(
+        "/api/agent/enroll/request",
+        json={
+            "hostname": "agent-wrong-code-01",
+            "enrollment_code": install_code,
+            "agent_pubkey": public_b64,
+            "client_nonce": base64.b64encode(os.urandom(32)).decode("ascii"),
+        },
+        headers={"X-Borealis-Agent-Context": "system"},
+    )
+
+    assert valid_response.status_code == 200
+    list_resp = admin.get("/api/admin/device-approvals?status=wrong_code")
+    assert list_resp.status_code == 200
+    assert list_resp.get_json()["approvals"] == []
 
 
 def test_enrollment_poll_finalizes_when_approved(engine_harness: EngineTestHarness) -> None:

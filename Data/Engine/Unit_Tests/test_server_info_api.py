@@ -9,6 +9,7 @@ import base64
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
@@ -361,6 +362,44 @@ def test_discover_postgresql_cluster_units_ignores_template(monkeypatch) -> None
     units = server_info_api._discover_postgresql_cluster_units("/usr/bin/systemctl")
 
     assert units == ["postgresql@17-main.service"]
+
+
+def test_collect_service_rows_uses_compose_manifest(tmp_path: Path, engine_harness: EngineTestHarness, monkeypatch) -> None:
+    compose_file = tmp_path / "Data" / "Engine" / "Containers" / "compose.yaml"
+    env_file = tmp_path / "Engine" / "Deploy" / "compose.env"
+    deploy_manifest = tmp_path / "Engine" / "Deploy" / "deploy-manifest.json"
+    compose_file.parent.mkdir(parents=True)
+    env_file.parent.mkdir(parents=True)
+    compose_file.write_text("services: {}\n", encoding="utf-8")
+    env_file.write_text("BOREALIS_COMPOSE_PROJECT_NAME=borealis-engine\n", encoding="utf-8")
+    deploy_manifest.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setenv("BOREALIS_ENGINE_CONTAINERIZED", "1")
+    monkeypatch.setenv("BOREALIS_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setattr(server_info_api.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else "")
+
+    def _fake_run_command(args, **_kwargs):
+        assert args[:2] == ["/usr/bin/docker", "compose"]
+        return (
+            0,
+            json.dumps(
+                [
+                    {"Service": "api-backend", "Name": "borealis-engine-api-backend", "State": "running", "Health": "healthy"},
+                    {"Service": "webui-frontend", "Name": "borealis-engine-webui-frontend", "State": "running"},
+                ]
+            ),
+            "",
+        )
+
+    monkeypatch.setattr(server_info_api, "_run_command", _fake_run_command)
+
+    rows = server_info_api._collect_service_rows(engine_harness.context)
+    by_key = {row["key"]: row for row in rows}
+
+    assert by_key["api-backend"]["runtime"] == "compose"
+    assert by_key["api-backend"]["status"] == "healthy"
+    assert by_key["webui-frontend"]["unit_name"] == "borealis-engine-webui-frontend"
+    assert by_key["postgres-db"]["status"] == "unknown"
 
 
 def test_service_row_falls_back_to_human_systemd_timestamp() -> None:

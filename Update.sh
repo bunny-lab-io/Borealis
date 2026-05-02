@@ -191,6 +191,26 @@ resolve_repository_url() {
   printf '%s\n' "${DEFAULT_REPO_URL}"
 }
 
+update_engine_codebase() {
+  log_line "STEP" "Starting Borealis Engine code update."
+  if [[ ! -d "${SCRIPT_DIR}/.git" ]]; then
+    log_line "ERROR" "Project root is not a git checkout; Engine update cannot continue."
+    return 1
+  fi
+  local current_branch=""
+  current_branch="$(git -C "${SCRIPT_DIR}" branch --show-current 2>/dev/null || true)"
+  if [[ -z "${current_branch}" ]]; then
+    log_line "ERROR" "Current checkout is detached; use git directly, then run Engine.sh deploy."
+    return 1
+  fi
+  git -C "${SCRIPT_DIR}" fetch --prune origin "${current_branch}"
+  git -C "${SCRIPT_DIR}" pull --ff-only origin "${current_branch}"
+  chmod +x "${SCRIPT_DIR}/Engine.sh" "${SCRIPT_DIR}/Agent.sh" "${SCRIPT_DIR}/Borealis.sh" >/dev/null 2>&1 || true
+  log_line "STEP" "Redeploying Borealis Engine containers from updated source."
+  "${SCRIPT_DIR}/Engine.sh" deploy
+  log_line "SUCCESS" "Borealis Engine update completed successfully."
+}
+
 sync_repository() {
   local repo_url="$1"
   local target_hash="$2"
@@ -247,6 +267,17 @@ ensure_lock() {
 }
 
 main() {
+  local requested_target="${1:-agent}"
+  case "${requested_target}" in
+    -Engine|--Engine|--engine|-engine)
+      update_engine_codebase
+      return $?
+      ;;
+    -Agent|--Agent|--agent|-agent)
+      shift || true
+      ;;
+  esac
+
   log_line "STEP" "Starting Borealis agent auto-update check."
 
   local python_bin=""
@@ -307,10 +338,10 @@ main() {
     return 1
   fi
 
-  chmod +x "${SCRIPT_DIR}/Borealis.sh" "${SCRIPT_DIR}/bootstrap.sh" >/dev/null 2>&1 || true
+  chmod +x "${SCRIPT_DIR}/Borealis.sh" "${SCRIPT_DIR}/Agent.sh" >/dev/null 2>&1 || true
 
   log_line "STEP" "Refreshing Borealis agent runtime in place."
-  "${SCRIPT_DIR}/Borealis.sh" --agent --refresh-agent-runtime
+  "${SCRIPT_DIR}/Agent.sh" deploy --refresh-agent-runtime
 
   run_helper "${python_bin}" finalize-update --build-id "${target_hash}" --channel "${target_channel}" --source "${download_source}" >/dev/null
 

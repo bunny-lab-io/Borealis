@@ -1,11 +1,11 @@
 # Software Icon Overrides
-[Back to Docs Index](../index.md) | [Index (HTML)](../index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain how to add file-backed icon-location overrides for installed software when registry `DisplayIcon` metadata is missing or points at the wrong asset.
 
 ## Override File
-- Path: `Data/Engine/services/API/devices/software_icons_overrides.json`
+- Path: `Data/Engine/Containers/api-backend/data/services/API/devices/software_icons_overrides.json`
 - Runtime consumer:
   - Engine serves the override payload from `GET /api/agent/software-management/overrides`
 - Agent applies matching icon overrides during `software_management` inventory refresh before it extracts icon payloads
@@ -96,8 +96,8 @@ Clear-icon rules are also supported:
 ```
 
 ## Related Documentation
-- [Device Management](../device-management.md)
-- [API Reference](../api-reference.md)
+- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
+- [API Reference](../Data%20and%20Schema/api-reference.md)
 - [Adding Software to Uninstall Overrides](adding-software-to-uninstall-overrides.md)
 - [Adding Software to Uninstall Blocklist](adding-software-to-uninstall-blocklist.md)
 
@@ -116,7 +116,7 @@ Clear-icon rules are also supported:
 - Reuse the existing rule ID shape `icon_override_<software_name_slug>`.
 
 ### Implementation references
-- Engine override loader: `Data/Engine/services/API/devices/software_icons.py`
+- Engine override loader: `Data/Engine/Containers/api-backend/data/services/API/devices/software_icons.py`
 - Agent application path: `Data/Agent/Roles/system_software_management.py`
 - Agent publishing role: `Data/Agent/Roles/role_system_software_management.py`
-- Installed Software UI operator action: `Data/Engine/web-interface/src/Devices/Tabs/Installed_Software.jsx`
+- Installed Software UI operator action: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Installed_Software.jsx`

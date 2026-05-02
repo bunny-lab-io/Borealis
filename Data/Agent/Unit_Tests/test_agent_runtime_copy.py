@@ -9,6 +9,7 @@ def test_borealis_ps1_stages_runtime_paths_into_agent_runtime() -> None:
 
     assert "launch_service.ps1" in content
     assert "restart_agent_tasks.ps1" in content
+    assert "desktop_environment.py" in content
     assert "runtime_paths.py" in content
     assert "qt_compat.py" in content
     assert "session_runtime.py" in content
@@ -19,6 +20,7 @@ def test_borealis_sh_stages_runtime_paths_into_agent_runtime() -> None:
     script_path = Path(__file__).resolve().parents[3] / "Borealis.sh"
     content = script_path.read_text(encoding="utf-8")
 
+    assert "desktop_environment.py" in content
     assert "runtime_paths.py" in content
     assert "qt_compat.py" in content
     assert "session_runtime.py" in content

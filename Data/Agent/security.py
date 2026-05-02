@@ -716,6 +716,26 @@ class AgentKeyStore:
                 return stripped
         return None
 
+    def discard_installer_code(self, code: str) -> None:
+        rejected = (code or "").strip()
+        if not rejected:
+            return
+        payload = self._load_installer_cache()
+        cached = payload.get("code")
+        if not isinstance(cached, str) or cached.strip() != rejected:
+            return
+        payload.pop("code", None)
+        payload["consumed"] = []
+        payload["updated_at"] = int(time.time())
+        if payload.get("code") or payload.get("consumed"):
+            self._store_installer_cache(payload)
+        else:
+            try:
+                if os.path.isfile(self._installer_cache_path):
+                    os.remove(self._installer_cache_path)
+            except Exception:
+                pass
+
     def mark_installer_code_consumed(self, consumer: Optional[str] = None) -> None:
         payload = self._load_installer_cache()
         if not payload:

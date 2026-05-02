@@ -242,7 +242,7 @@ def test_preflight_ssh_session_uses_full_timeout_for_connecttimeout(
     assert "ConnectTimeout=20" in args
 
 
-def test_shared_ansible_dispatch_defers_ssh_connectivity_to_ansible(
+def test_shared_ansible_dispatch_selects_key_auth_for_mixed_ssh_credential(
     engine_harness: EngineTestHarness,
     monkeypatch,
 ) -> None:
@@ -343,10 +343,11 @@ def test_shared_ansible_dispatch_defers_ssh_connectivity_to_ansible(
         "_preflight_remote_port",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("SSH preflight should not run")),
     )
+    captured_probe: dict[str, object] = {}
     monkeypatch.setattr(
         scheduler,
         "_preflight_ssh_session",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("SSH session probe should not run")),
+        lambda **kwargs: captured_probe.setdefault("kwargs", kwargs) and "",
     )
     monkeypatch.setattr(
         scheduler,
@@ -399,8 +400,19 @@ def test_shared_ansible_dispatch_defers_ssh_connectivity_to_ansible(
     assert "kwargs" in captured
     target_specifications = captured["kwargs"]["target_specifications"]
     assert len(target_specifications) == 1
-    assert target_specifications[0]["host_vars"]["ansible_connection"] == "ssh"
-    assert target_specifications[0]["host_vars"]["ansible_host"] == "10.77.0.15"
+    host_vars = target_specifications[0]["host_vars"]
+    assert host_vars["ansible_connection"] == "ssh"
+    assert host_vars["ansible_host"] == "10.77.0.15"
+    assert host_vars["ansible_user"] == "ubuntu"
+    assert "ansible_password" not in host_vars
+    assert "ansible_ssh_password_mechanism" not in host_vars
+    assert host_vars["ansible_ssh_private_key_file"] == "{{BOREALIS_RUNTIME_DIR}}/auth/id_borealis_ssh"
+    assert "IdentitiesOnly=yes" in host_vars["ansible_ssh_extra_args"]
+    assert "BatchMode=yes" in host_vars["ansible_ssh_extra_args"]
+    assert "PreferredAuthentications=publickey" in host_vars["ansible_ssh_extra_args"]
+    assert "PasswordAuthentication=no" in host_vars["ansible_ssh_extra_args"]
+    assert captured_probe["kwargs"]["password"] == ""
+    assert captured_probe["kwargs"]["private_key_text"]
 
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:
@@ -419,6 +431,161 @@ def test_shared_ansible_dispatch_defers_ssh_connectivity_to_ansible(
 
     assert row[0] == "eligible"
     assert row[1] == ""
+
+
+def test_mixed_ssh_auth_mode_falls_back_to_password_when_key_probe_needs_password(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    captured: list[dict[str, object]] = []
+
+    def _capture_probe(**kwargs):
+        captured.append(kwargs)
+        if len(captured) == 1:
+            return "ssh_session_failed: Permission denied (publickey)"
+        return ""
+
+    monkeypatch.setattr(scheduler, "_preflight_ssh_session", _capture_probe)
+
+    mode = scheduler._resolve_mixed_ssh_auth_mode(
+        host="10.77.0.15",
+        port=22,
+        username="ubuntu",
+        password="secret",
+        private_key_text="-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n",
+    )
+
+    assert mode == "password"
+    assert len(captured) == 2
+    assert captured[0]["password"] == ""
+    assert captured[0]["private_key_text"].startswith("-----BEGIN")
+    assert captured[1]["password"] == "secret"
+    assert captured[1]["private_key_text"] == ""
+
+
+def test_mixed_ssh_auth_mode_keeps_key_when_password_probe_fails(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    captured: list[dict[str, object]] = []
+
+    def _capture_probe(**kwargs):
+        captured.append(kwargs)
+        if len(captured) == 1:
+            return "permission_denied"
+        return "permission_denied"
+
+    monkeypatch.setattr(scheduler, "_preflight_ssh_session", _capture_probe)
+
+    mode = scheduler._resolve_mixed_ssh_auth_mode(
+        host="10.77.0.15",
+        port=22,
+        username="ubuntu",
+        password="secret",
+        private_key_text="-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n",
+    )
+
+    assert mode == "key"
+    assert len(captured) == 2
+    assert captured[0]["password"] == ""
+    assert captured[0]["private_key_text"].startswith("-----BEGIN")
+    assert captured[1]["password"] == "secret"
+    assert captured[1]["private_key_text"] == ""
+
+
+def test_mixed_ssh_auth_mode_keeps_key_when_key_probe_is_inconclusive(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    captured: list[dict[str, object]] = []
+
+    def _capture_probe(**kwargs):
+        captured.append(kwargs)
+        if len(captured) == 1:
+            return "ssh_session_timeout"
+        return "permission_denied"
+
+    monkeypatch.setattr(scheduler, "_preflight_ssh_session", _capture_probe)
+
+    mode = scheduler._resolve_mixed_ssh_auth_mode(
+        host="10.77.0.15",
+        port=22,
+        username="ubuntu",
+        password="secret",
+        private_key_text="-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n",
+    )
+
+    assert mode == "key"
+    assert len(captured) == 2
+    assert captured[0]["password"] == ""
+    assert captured[0]["private_key_text"].startswith("-----BEGIN")
+    assert captured[1]["password"] == "secret"
+    assert captured[1]["private_key_text"] == ""
+
+
+def test_mixed_ssh_auth_mode_uses_password_when_key_probe_times_out_and_password_works(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    captured: list[dict[str, object]] = []
+
+    def _capture_probe(**kwargs):
+        captured.append(kwargs)
+        if len(captured) == 1:
+            return "ssh_session_timeout"
+        return ""
+
+    monkeypatch.setattr(scheduler, "_preflight_ssh_session", _capture_probe)
+
+    mode = scheduler._resolve_mixed_ssh_auth_mode(
+        host="10.77.0.15",
+        port=22,
+        username="ubuntu",
+        password="secret",
+        private_key_text="-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n",
+    )
+
+    assert mode == "password"
+    assert len(captured) == 2
+    assert captured[0]["password"] == ""
+    assert captured[0]["private_key_text"].startswith("-----BEGIN")
+    assert captured[1]["password"] == "secret"
+    assert captured[1]["private_key_text"] == ""
+
+
+def test_mixed_ssh_auth_mode_password_probe_handles_denial_transcript(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    captured: list[dict[str, object]] = []
+
+    def _capture_probe(**kwargs):
+        captured.append(kwargs)
+        if len(captured) == 1:
+            return "ssh_session_failed:Permission denied (publickey,password)."
+        return ""
+
+    monkeypatch.setattr(scheduler, "_preflight_ssh_session", _capture_probe)
+
+    mode = scheduler._resolve_mixed_ssh_auth_mode(
+        host="10.77.0.15",
+        port=22,
+        username="ubuntu",
+        password="secret",
+        private_key_text="-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n",
+    )
+
+    assert mode == "password"
+    assert len(captured) == 2
+    assert captured[0]["password"] == ""
+    assert captured[0]["private_key_text"].startswith("-----BEGIN")
+    assert captured[1]["password"] == "secret"
+    assert captured[1]["private_key_text"] == ""
 
 
 def test_scheduled_job_create_recovers_when_lastrowid_is_missing(
@@ -2217,6 +2384,10 @@ def test_shared_ansible_dispatch_normalizes_private_key_runtime_file(
     assert runtime_files[0]["relative_path"] == "auth/id_borealis_ssh"
     assert "\r" not in runtime_files[0]["content"]
     assert runtime_files[0]["content"].endswith("\n")
+    target_specifications = captured["kwargs"]["target_specifications"]
+    host_vars = target_specifications[0]["host_vars"]
+    assert host_vars["ansible_ssh_private_key_file"] == "{{BOREALIS_RUNTIME_DIR}}/auth/id_borealis_ssh"
+    assert "IdentitiesOnly=yes" in host_vars["ansible_ssh_extra_args"]
 
 
 def test_shared_ansible_dispatch_fails_for_passphrase_only_ssh_key(
@@ -3606,6 +3777,32 @@ class _FakeSigner:
         return "public-key"
 
 
+@pytest.mark.parametrize("reason", ["stale_handshake", "no_recent_handshake", "transport_probe_pending"])
+def test_wireguard_soft_dispatch_reasons_allow_remote_attempt(reason: str) -> None:
+    assert scheduled_job_module._wireguard_session_allows_remote_attempt(
+        {
+            "dispatch_ready": False,
+            "dispatch_ready_reason": reason,
+            "agent_ready": True,
+            "peer_present": True,
+        },
+        "10.255.0.4",
+    )
+
+
+@pytest.mark.parametrize("reason", ["agent_ready_missing", "agent_ready_missing_required_ports", "peer_missing"])
+def test_wireguard_hard_dispatch_reasons_still_skip_remote_attempt(reason: str) -> None:
+    assert not scheduled_job_module._wireguard_session_allows_remote_attempt(
+        {
+            "dispatch_ready": False,
+            "dispatch_ready_reason": reason,
+            "agent_ready": reason != "agent_ready_missing",
+            "peer_present": reason != "peer_missing",
+        },
+        "10.255.0.4",
+    )
+
+
 def test_scheduled_job_dispatch_fails_cleanly_when_system_socket_is_missing(
     engine_harness: EngineTestHarness,
     monkeypatch,
@@ -3734,6 +3931,172 @@ def test_scheduled_job_dispatch_fails_cleanly_when_system_socket_is_missing(
         assert activity_row[0] == "Failed"
         assert activity_row[1] == ""
         assert "No system agent socket is registered" in (activity_row[2] or "")
+    finally:
+        conn.close()
+
+
+def test_scheduled_job_dispatch_preserves_ansible_preflight_skip(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_runs(
+                id,
+                job_id,
+                target_hostname,
+                scheduled_ts,
+                status,
+                created_at,
+                updated_at
+            ) VALUES (?,?,?,?,?,?,?)
+            """,
+            (
+                33,
+                5,
+                "LAB-DOCS-01",
+                1_773_782_800,
+                "Pending",
+                1_773_782_800,
+                1_773_782_800,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    def _finalize_ansible_skip(*_args, **_kwargs):
+        conn_update = sqlite3.connect(str(engine_harness.db_path))
+        try:
+            cur_update = conn_update.cursor()
+            cur_update.execute(
+                """
+                UPDATE scheduled_job_runs
+                   SET status=?,
+                       finished_ts=?,
+                       updated_at=?,
+                       skip_reason=?,
+                       error=?
+                 WHERE id=?
+                """,
+                (
+                    "Skipped",
+                    1_773_782_845,
+                    1_773_782_845,
+                    "no_eligible_targets",
+                    "Managed WireGuard session is not ready for this target (stale_handshake).",
+                    33,
+                ),
+            )
+            conn_update.commit()
+        finally:
+            conn_update.close()
+        return None
+
+    monkeypatch.setattr(scheduler, "_dispatch_ansible", _finalize_ansible_skip)
+
+    dispatched = scheduler._dispatch_run_activities(
+        job_id=5,
+        run_row_id=33,
+        scheduled_ts=1_773_782_800,
+        hostname="LAB-DOCS-01",
+        run_mode="ssh",
+        script_components=[],
+        ansible_components=[{"path": "Ansible_Playbooks/playbooks/linux/ping-pong.json"}],
+        credential_id=1,
+        use_service_account=False,
+    )
+
+    assert dispatched is False
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT status, finished_ts, skip_reason, error FROM scheduled_job_runs WHERE id=?", (33,))
+        row = cur.fetchone()
+        assert row[0] == "Skipped"
+        assert row[1] == 1_773_782_845
+        assert row[2] == "no_eligible_targets"
+        assert "stale_handshake" in row[3]
+    finally:
+        conn.close()
+
+
+def test_scheduled_job_dispatch_uses_fresh_finished_ts_for_no_activity_failure(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_runs(
+                id,
+                job_id,
+                target_hostname,
+                scheduled_ts,
+                status,
+                created_at,
+                updated_at
+            ) VALUES (?,?,?,?,?,?,?)
+            """,
+            (
+                34,
+                6,
+                "LAB-AIO-01",
+                1_773_782_900,
+                "Pending",
+                1_773_782_900,
+                1_773_782_900,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    now_values = iter([1_773_782_900, 1_773_782_945])
+
+    def _stable_now() -> int:
+        import inspect
+
+        if any(frame.function == "_loop" for frame in inspect.stack()):
+            return 1_773_782_900
+        try:
+            return next(now_values)
+        except StopIteration:
+            return 1_773_782_945
+
+    monkeypatch.setattr(scheduled_job_module, "_now_ts", _stable_now)
+
+    dispatched = scheduler._dispatch_run_activities(
+        job_id=6,
+        run_row_id=34,
+        scheduled_ts=1_773_782_900,
+        hostname="LAB-AIO-01",
+        run_mode="system",
+        script_components=[],
+        ansible_components=[],
+        credential_id=None,
+        use_service_account=True,
+    )
+
+    assert dispatched is False
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT started_ts, finished_ts, status, error FROM scheduled_job_runs WHERE id=?", (34,))
+        row = cur.fetchone()
+        assert row[0] == 1_773_782_900
+        assert row[1] == 1_773_782_945
+        assert row[2] == "Failed"
+        assert row[3] == "No runnable activities were dispatched"
     finally:
         conn.close()
 

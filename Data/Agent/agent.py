@@ -99,6 +99,32 @@ def _iter_exception_chain(exc: BaseException):
 _TRANSIENT_REFRESH_STATUS_CODES = frozenset({500, 502, 503, 504})
 _REFRESH_RETRY_DELAYS_SECONDS = (1.0, 2.0, 5.0)
 _REFRESH_FALLBACK_MINIMUM_TTL_SECONDS = 15
+_ENROLLMENT_RATE_LIMIT_MAX_ATTEMPTS = 5
+_ENROLLMENT_RETRY_AFTER_MAX_SECONDS = 300.0
+_AGENT_HEALTH_REFRESH_SECONDS = 300.0
+_AGENT_HEALTH_REFRESH_INITIAL_DELAY_SECONDS = 60.0
+
+
+def _response_retry_after_seconds(response: Any, *, default: float = 30.0) -> float:
+    raw_value: Any = None
+    try:
+        raw_value = getattr(response, "headers", {}).get("Retry-After")
+    except Exception:
+        raw_value = None
+    if raw_value in (None, ""):
+        try:
+            payload = response.json()
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict):
+            raw_value = payload.get("retry_after")
+    try:
+        delay = float(raw_value)
+    except Exception:
+        delay = float(default)
+    if delay <= 0:
+        delay = 1.0
+    return min(delay, _ENROLLMENT_RETRY_AFTER_MAX_SECONDS)
 
 # Centralized logging helpers (Agent)
 def _agent_logs_root() -> str:
@@ -293,7 +319,14 @@ def _canonical_config_suffix(raw_suffix: str) -> str:
 CONFIG_SUFFIX_CANONICAL = _canonical_config_suffix(CONFIG_NAME_SUFFIX)
 
 INSTALLER_CODE_OVERRIDE = (
-    (_argv_get('--installer-code') or os.environ.get('BOREALIS_INSTALLER_CODE') or '')
+    (
+        _argv_get('--installer-code')
+        or _argv_get('--enrollment-code')
+        or _argv_get('--enrollmentcode')
+        or os.environ.get('BOREALIS_INSTALLER_CODE')
+        or os.environ.get('BOREALIS_ENROLLMENT_CODE')
+        or ''
+    )
     .strip()
 )
 
@@ -1304,10 +1337,40 @@ def _load_installer_code_from_file(path: str) -> str:
             data = json.load(fh)
     except Exception:
         return ""
-    value = data.get("installer_code") if isinstance(data, dict) else ""
-    if isinstance(value, str):
-        return value.strip()
+    if not isinstance(data, dict):
+        return ""
+    for key in ("enrollment_code", "installer_code"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
     return ""
+
+
+def _clear_installer_code_from_file(path: str, rejected_code: str) -> bool:
+    rejected = (rejected_code or "").strip()
+    if not rejected or not path:
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    changed = False
+    for key in ("enrollment_code", "installer_code"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip() == rejected:
+            data[key] = ""
+            changed = True
+    if not changed:
+        return False
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        return True
+    except Exception:
+        return False
 
 
 def _fallback_installer_code(current_path: str) -> str:
@@ -1319,17 +1382,17 @@ def _fallback_installer_code(current_path: str) -> str:
         "CURRENTUSER": "agent_settings_SYSTEM.json",
     }
     sibling_name = sibling_map.get(suffix or "")
+    # Prefer the shared config written by installers before sibling runtime configs.
+    candidates.append(os.path.join(settings_dir, "agent_settings.json"))
     if sibling_name:
         candidates.append(os.path.join(settings_dir, sibling_name))
-    # Prefer the shared/base config next
-    candidates.append(os.path.join(settings_dir, "agent_settings.json"))
     # Legacy location fallback
     try:
         project_root = _find_project_root()
         legacy_dir = os.path.join(project_root, "Agent", "Settings")
+        candidates.append(os.path.join(legacy_dir, "agent_settings.json"))
         if sibling_name:
             candidates.append(os.path.join(legacy_dir, sibling_name))
-        candidates.append(os.path.join(legacy_dir, "agent_settings.json"))
     except Exception:
         pass
 
@@ -1714,39 +1777,67 @@ class AgentHttpClient:
                     "client_nonce": base64.b64encode(client_nonce).decode("ascii"),
                 }
                 request_url = f"{self.base_url}/api/agent/enroll/request"
-                _log_agent(
-                    "Starting enrollment request... "
-                    f"url={request_url} hostname={payload['hostname']} pubkey_prefix={PUBLIC_KEY_B64[:24]}",
-                    fname="agent.log",
-                )
-                resp = self.session.post(request_url, json=payload, timeout=30)
-                _log_agent(
-                    f"Enrollment request HTTP status={resp.status_code} retry_after={resp.headers.get('Retry-After')}"
-                    f" body_len={len(resp.content)}",
-                    fname="agent.log",
-                )
-                try:
-                    resp.raise_for_status()
-                except requests.HTTPError:
-                    snippet = resp.text[:512] if hasattr(resp, "text") else ""
+                request_attempt = 1
+                while True:
                     _log_agent(
-                        f"Enrollment request failed status={resp.status_code} body_snippet={snippet}",
-                        fname="agent.error.log",
+                        "Starting enrollment request... "
+                        f"url={request_url} hostname={payload['hostname']} pubkey_prefix={PUBLIC_KEY_B64[:24]}"
+                        f" attempt={request_attempt}",
+                        fname="agent.log",
                     )
-                    if resp.status_code == 400:
-                        try:
-                            err_payload = resp.json()
-                        except Exception:
-                            err_payload = {}
-                        if (err_payload or {}).get("error") in {"invalid_enrollment_code", "code_consumed"}:
+                    resp = self.session.post(request_url, json=payload, timeout=30)
+                    _log_agent(
+                        f"Enrollment request HTTP status={resp.status_code} retry_after={resp.headers.get('Retry-After')}"
+                        f" body_len={len(resp.content)} attempt={request_attempt}",
+                        fname="agent.log",
+                    )
+                    try:
+                        resp.raise_for_status()
+                        break
+                    except requests.HTTPError:
+                        snippet = resp.text[:512] if hasattr(resp, "text") else ""
+                        _log_agent(
+                            f"Enrollment request failed status={resp.status_code} body_snippet={snippet}"
+                            f" attempt={request_attempt}",
+                            fname="agent.error.log",
+                        )
+                        if resp.status_code == 429 and request_attempt < _ENROLLMENT_RATE_LIMIT_MAX_ATTEMPTS:
+                            delay = _response_retry_after_seconds(resp)
+                            _log_agent(
+                                "Enrollment request rate limited; honoring Retry-After "
+                                f"delay={delay:.1f}s attempt={request_attempt}",
+                                fname="agent.log",
+                            )
+                            time.sleep(delay)
                             self._reload_tokens_from_disk()
                             if self.guid and self.refresh_token:
                                 _log_agent(
-                                    "Enrollment code rejected but existing credentials are present; skipping re-enrollment",
+                                    "Enrollment credentials detected after rate-limit wait; skipping re-enrollment",
                                     fname="agent.log",
                                 )
                                 return
-                    raise
+                            request_attempt += 1
+                            continue
+                        if resp.status_code == 400:
+                            try:
+                                err_payload = resp.json()
+                            except Exception:
+                                err_payload = {}
+                            if (err_payload or {}).get("error") in {"invalid_enrollment_code", "code_consumed"}:
+                                self._reload_tokens_from_disk()
+                                if self.guid and self.refresh_token:
+                                    _log_agent(
+                                        "Enrollment code rejected but existing credentials are present; skipping re-enrollment",
+                                        fname="agent.log",
+                                    )
+                                    return
+                                error_code = (err_payload or {}).get("error") or "invalid_enrollment_code"
+                                self._discard_rejected_installer_code(code, reason=str(error_code))
+                                raise RuntimeError(
+                                    f"Enrollment code rejected by Engine ({error_code}); cleared persisted code. "
+                                    "Provide a fresh enrollment code to retry."
+                                )
+                        raise
                 data = resp.json()
                 _log_agent(
                     "Enrollment request accepted "
@@ -2080,7 +2171,11 @@ class AgentHttpClient:
             return code
         code = ""
         try:
-            code = (CONFIG.data.get("installer_code") or "").strip()
+            code = (
+                CONFIG.data.get("enrollment_code")
+                or CONFIG.data.get("installer_code")
+                or ""
+            ).strip()
         except Exception:
             code = ""
         if code:
@@ -2102,10 +2197,11 @@ class AgentHttpClient:
         fallback = _fallback_installer_code(CONFIG.path)
         if fallback:
             try:
+                CONFIG.data["enrollment_code"] = fallback
                 CONFIG.data["installer_code"] = fallback
                 CONFIG._write()
                 _log_agent(
-                    "Adopted installer code from sibling configuration", fname="agent.log"
+                    "Adopted enrollment code from fallback configuration", fname="agent.log"
                 )
             except Exception:
                 pass
@@ -2122,8 +2218,14 @@ class AgentHttpClient:
         if INSTALLER_CODE_OVERRIDE:
             return
         try:
+            changed = False
+            if CONFIG.data.get("enrollment_code"):
+                CONFIG.data["enrollment_code"] = ""
+                changed = True
             if CONFIG.data.get("installer_code"):
                 CONFIG.data["installer_code"] = ""
+                changed = True
+            if changed:
                 CONFIG._write()
                 _log_agent("Cleared persisted installer code after successful enrollment", fname="agent.log")
         except Exception as exc:
@@ -2135,6 +2237,103 @@ class AgentHttpClient:
                 f"Failed to update shared installer code cache: {exc}",
                 fname="agent.error.log",
             )
+
+    def _discard_rejected_installer_code(self, code: str, *, reason: str) -> None:
+        rejected = (code or "").strip()
+        if not rejected:
+            return
+        self._active_installer_code = None
+        if INSTALLER_CODE_OVERRIDE and INSTALLER_CODE_OVERRIDE.strip() == rejected:
+            _log_agent(
+                "Rejected enrollment code came from explicit override; persisted configs not cleared "
+                f"reason={reason}",
+                fname="agent.error.log",
+            )
+            return
+        cleared_paths: List[str] = []
+        candidate_paths: List[str] = []
+
+        def _add(path: str) -> None:
+            if not path:
+                return
+            try:
+                normalized = os.path.abspath(path)
+            except Exception:
+                return
+            if normalized not in candidate_paths:
+                candidate_paths.append(normalized)
+
+        try:
+            _add(CONFIG.path)
+            settings_dir = os.path.dirname(CONFIG.path)
+            for name in (
+                "agent_settings.json",
+                "agent_settings_SYSTEM.json",
+                "agent_settings_CURRENTUSER.json",
+                "agent_settings_svc.json",
+                "agent_settings_user.json",
+            ):
+                _add(os.path.join(settings_dir, name))
+        except Exception:
+            pass
+        try:
+            project_root = _find_project_root()
+            for base in (
+                os.path.join(project_root, "Agent", "Borealis", "Settings"),
+                os.path.join(project_root, "Agent", "Settings"),
+                project_root,
+            ):
+                for name in (
+                    "agent_settings.json",
+                    "agent_settings_SYSTEM.json",
+                    "agent_settings_CURRENTUSER.json",
+                    "agent_settings_svc.json",
+                    "agent_settings_user.json",
+                ):
+                    _add(os.path.join(base, name))
+        except Exception:
+            pass
+
+        try:
+            changed = False
+            for key in ("enrollment_code", "installer_code"):
+                value = CONFIG.data.get(key)
+                if isinstance(value, str) and value.strip() == rejected:
+                    CONFIG.data[key] = ""
+                    changed = True
+            if changed:
+                CONFIG._write()
+                cleared_paths.append(os.path.abspath(CONFIG.path))
+        except Exception as exc:
+            _log_agent(
+                f"Failed to clear rejected enrollment code from active config: {exc}",
+                fname="agent.error.log",
+            )
+
+        for path in candidate_paths:
+            try:
+                if _clear_installer_code_from_file(path, rejected):
+                    cleared_paths.append(path)
+            except Exception:
+                pass
+        try:
+            discard = getattr(self.key_store, "discard_installer_code", None)
+            if callable(discard):
+                discard(rejected)
+        except Exception as exc:
+            _log_agent(
+                f"Failed to discard rejected shared installer code: {exc}",
+                fname="agent.error.log",
+            )
+        try:
+            unique_paths = sorted({path for path in cleared_paths if path})
+            _log_agent(
+                "Cleared rejected enrollment code "
+                f"reason={reason} files={len(unique_paths)}",
+                fname="agent.log",
+            )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # HTTP helpers
@@ -2676,7 +2875,37 @@ _SOCKETIO_RECONNECT_PAUSE_SECONDS = 1
 
 # We supervise reconnects ourselves so every reconnect attempt re-authenticates,
 # refreshes TLS/socket transport settings, and re-emits `connect_agent`.
-sio = socketio.AsyncClient(reconnection=False)
+#
+# Create the real Socket.IO client only after the runtime event loop exists.
+# Python 3.9 binds asyncio Queue/Future internals to the loop that first touches
+# them, so constructing the Engine.IO client during module import can strand
+# wait queues on the wrong loop under Linux service startup.
+class _SocketIORegistrationProxy:
+    def __init__(self) -> None:
+        self._registrations: List[Tuple[str, Optional[str], Callable[..., Any]]] = []
+        self.connected = False
+
+    def event(self, handler: Callable[..., Any]) -> Callable[..., Any]:
+        self._registrations.append(("event", None, handler))
+        return handler
+
+    def on(self, event_name: str):
+        def _decorator(handler: Callable[..., Any]) -> Callable[..., Any]:
+            self._registrations.append(("on", str(event_name), handler))
+            return handler
+
+        return _decorator
+
+    def apply_to(self, client: "socketio.AsyncClient") -> None:
+        for kind, event_name, handler in list(self._registrations):
+            if kind == "event":
+                client.event(handler)
+            else:
+                client.on(str(event_name), handler=handler)
+
+
+_SOCKETIO_REGISTRATIONS = _SocketIORegistrationProxy()
+sio = _SOCKETIO_REGISTRATIONS
 role_tasks = {}
 background_tasks = []
 AGENT_LOOP = None
@@ -2685,6 +2914,23 @@ ROLE_MANAGER_SYS = None
 ROLE_HEALTH_REGISTRY = RoleHealthRegistry()
 SESSION_HELPER_BROKER = None
 HELPER_CLIENT = None
+
+
+def _create_socketio_client(loop_ref=None) -> "socketio.AsyncClient":
+    client = socketio.AsyncClient(reconnection=False)
+    _SOCKETIO_REGISTRATIONS.apply_to(client)
+    try:
+        setattr(client, "_borealis_loop_id", id(loop_ref) if loop_ref is not None else None)
+    except Exception:
+        pass
+    return client
+
+
+def _ensure_socketio_client(loop_ref=None):
+    global sio
+    if sio is None or isinstance(sio, _SocketIORegistrationProxy):
+        sio = _create_socketio_client(loop_ref)
+    return sio
 
 # ---------------- Local IPC Bridge (Service -> Agent) ----------------
 def start_agent_bridge_pipe(loop_ref):
@@ -2910,7 +3156,8 @@ def _collect_agent_role_health() -> Dict[str, Any]:
 def _emit_quick_job_result_local(payload: Dict[str, Any]) -> None:
     async def _emit():
         try:
-            await sio.emit('quick_job_result', payload)
+            active_sio = _ensure_socketio_client(AGENT_LOOP)
+            await active_sio.emit('quick_job_result', payload)
         except Exception as exc:
             _log_agent(f'Failed to emit local quick_job_result: {exc}', fname='agent.error.log')
 
@@ -2982,6 +3229,24 @@ async def send_heartbeat():
                 except Exception:
                     pass
         await asyncio.sleep(60)
+
+
+def _refresh_startup_telemetry_once(reason: str = "periodic_agent_health") -> bool:
+    if not SYSTEM_SERVICE_MODE:
+        return False
+    try:
+        _heartbeat_complete("steady_state_online", "Periodic agent health refresh accepted.")
+        return bool(_heartbeat_flush(reason=reason))
+    except Exception as exc:
+        _log_agent(f'Periodic agent startup status refresh failed: {exc}', fname='agent.error.log')
+        return False
+
+
+async def refresh_startup_telemetry():
+    await asyncio.sleep(_AGENT_HEALTH_REFRESH_INITIAL_DELAY_SECONDS)
+    while True:
+        _refresh_startup_telemetry_once(reason="periodic_agent_health")
+        await asyncio.sleep(_AGENT_HEALTH_REFRESH_SECONDS)
 
 
 async def poll_script_requests():
@@ -3761,7 +4026,8 @@ async def connect_loop():
     client = http_client()
     attempt = 0
     while True:
-        if getattr(sio, "connected", False):
+        active_sio = _ensure_socketio_client(AGENT_LOOP)
+        if getattr(active_sio, "connected", False):
             await asyncio.sleep(_SOCKETIO_RECONNECT_PAUSE_SECONDS)
             continue
         attempt += 1
@@ -3801,9 +4067,9 @@ async def connect_loop():
                     _heartbeat_flush(reason="socket_connecting")
                 except Exception:
                     pass
-            client.configure_socketio(sio)
+            client.configure_socketio(active_sio)
             try:
-                setattr(sio, "connection_error", None)
+                setattr(active_sio, "connection_error", None)
             except Exception:
                 pass
             url = client.websocket_base_url()
@@ -3823,7 +4089,7 @@ async def connect_loop():
                 fname='agent.log',
             )
             print(f"[INFO] Connecting Agent to {url}...")
-            await sio.connect(
+            await active_sio.connect(
                 url,
                 transports=['websocket'],
                 headers=headers,
@@ -3835,7 +4101,7 @@ async def connect_loop():
             )
             attempt = 0
             try:
-                await sio.wait()
+                await active_sio.wait()
             finally:
                 _log_agent(
                     'connect_loop observed websocket session end; re-authenticating before reconnect.',
@@ -3845,7 +4111,7 @@ async def connect_loop():
         except Exception as e:
             detail = _describe_exception(e)
             try:
-                conn_err = getattr(sio, "connection_error", None)
+                conn_err = getattr(active_sio, "connection_error", None)
             except Exception:
                 conn_err = None
             if conn_err:
@@ -3927,6 +4193,7 @@ if __name__=='__main__':
         app=QtWidgets.QApplication(sys.argv)
         loop=QEventLoop(app); asyncio.set_event_loop(loop)
     AGENT_LOOP = loop
+    sio = _create_socketio_client(loop)
     try:
         if not SYSTEM_SERVICE_MODE and not SESSION_HELPER_MODE:
             start_agent_bridge_pipe(loop)
@@ -4128,6 +4395,8 @@ if __name__=='__main__':
             background_tasks.append(loop.create_task(connect_loop()))
             background_tasks.append(loop.create_task(idle_task()))
             background_tasks.append(loop.create_task(send_heartbeat()))
+            if SYSTEM_SERVICE_MODE:
+                background_tasks.append(loop.create_task(refresh_startup_telemetry()))
             background_tasks.append(loop.create_task(watch_tray_restart_requests()))
             background_tasks.append(loop.create_task(poll_script_requests()))
         if SYSTEM_SERVICE_MODE and SESSION_HELPER_BROKER is not None:

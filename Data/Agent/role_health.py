@@ -13,6 +13,7 @@ _STATUS_LABELS = {
     "pending": "Pending",
     "loaded": "Loaded",
     "unsupported": "Unsupported",
+    "not_applicable": "No Desktop Environment Active",
     "unknown": "Unknown",
 }
 
@@ -87,6 +88,10 @@ def normalize_status_code(value: Any) -> str:
         "initializing": "pending",
         "inactive": "pending",
         "idle": "pending",
+        "not_applicable": "not_applicable",
+        "not_applicable_here": "not_applicable",
+        "no_desktop_environment_active": "not_applicable",
+        "no_desktop": "not_applicable",
         "down": "unhealthy",
         "failed": "unhealthy",
         "error": "unhealthy",

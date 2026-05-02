@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import contextlib
 import threading
 from typing import Any
 
@@ -13,10 +15,18 @@ import Data.Agent.agent as agent_module
 
 
 class _FakeResponse:
-    def __init__(self, status_code: int, *, json_payload: dict[str, Any] | None = None, text: str = "") -> None:
+    def __init__(
+        self,
+        status_code: int,
+        *,
+        json_payload: dict[str, Any] | None = None,
+        text: str = "",
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.status_code = status_code
         self._json_payload = json_payload
         self.text = text
+        self.headers = dict(headers or {})
 
     def json(self) -> dict[str, Any]:
         if self._json_payload is None:
@@ -49,12 +59,32 @@ class _FakeKeyStore:
     def __init__(self) -> None:
         self.saved_access_tokens: list[tuple[str, int]] = []
         self.bindings: list[str] = []
+        self.cached_installer_codes: list[str] = []
+        self.discarded_installer_codes: list[str] = []
 
     def save_access_token(self, access_token: str, *, expires_at: int) -> None:
         self.saved_access_tokens.append((access_token, expires_at))
 
     def set_access_binding(self, binding: str) -> None:
         self.bindings.append(binding)
+
+    def cache_installer_code(self, code: str, consumer: str | None = None) -> None:
+        self.cached_installer_codes.append(str(code))
+
+    def load_cached_installer_code(self) -> str | None:
+        return None
+
+    def discard_installer_code(self, code: str) -> None:
+        self.discarded_installer_codes.append(str(code))
+
+
+class _FakeConfig:
+    def __init__(self, data: dict[str, Any]) -> None:
+        self.data = dict(data)
+        self.path = "agent_settings.json"
+
+    def _write(self) -> None:
+        return None
 
 
 def _make_client(session: _FakeSession, store: _FakeKeyStore) -> agent_module.AgentHttpClient:
@@ -71,6 +101,29 @@ def _make_client(session: _FakeSession, store: _FakeKeyStore) -> agent_module.Ag
     client._reload_tokens_from_disk = lambda: None
     client._clear_tokens_locked = lambda: (_ for _ in ()).throw(AssertionError("unexpected clear"))
     client._perform_enrollment_locked = lambda: (_ for _ in ()).throw(AssertionError("unexpected enrollment"))
+    return client
+
+
+def _make_enrollment_client(
+    session: _FakeSession,
+    *,
+    stub_resolver: bool = True,
+) -> agent_module.AgentHttpClient:
+    store = _FakeKeyStore()
+    client = agent_module.AgentHttpClient.__new__(agent_module.AgentHttpClient)
+    client.session = session
+    client.key_store = store
+    client.guid = None
+    client.refresh_token = None
+    client.access_token = None
+    client.access_expires_at = None
+    client.base_url = "https://borealis.example.invalid"
+    client._auth_lock = threading.RLock()
+    client._active_installer_code = None
+    client._reload_tokens_from_disk = lambda: None
+    client.refresh_base_url = lambda: None
+    if stub_resolver:
+        client._resolve_installer_code = lambda: "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"
     return client
 
 
@@ -150,3 +203,131 @@ def test_refresh_access_token_raises_after_transient_outage_when_token_expired(m
 
     with pytest.raises(requests.HTTPError):
         client._refresh_access_token_locked()
+
+
+def test_enrollment_honors_retry_after_before_retrying_request(monkeypatch) -> None:
+    session = _FakeSession(
+        [
+            _FakeResponse(
+                429,
+                json_payload={"error": "rate_limited", "retry_after": 17.5},
+                text='{"error":"rate_limited","retry_after":17.5}',
+                headers={"Retry-After": "17"},
+            ),
+            _FakeResponse(
+                400,
+                json_payload={"error": "invalid_enrollment_code"},
+                text='{"error":"invalid_enrollment_code"}',
+            ),
+        ]
+    )
+    client = _make_enrollment_client(session)
+    sleep_calls: list[float] = []
+    log_messages: list[str] = []
+
+    monkeypatch.setattr(agent_module, "_acquire_enrollment_lock", lambda **_kwargs: contextlib.nullcontext())
+    monkeypatch.setattr(agent_module.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+    monkeypatch.setattr(agent_module, "_log_agent", lambda message, **kwargs: log_messages.append(str(message)))
+    client._discard_rejected_installer_code = lambda code, reason: None
+
+    with pytest.raises(RuntimeError, match="Enrollment code rejected"):
+        client._perform_enrollment_locked()
+
+    assert session.calls == 2
+    assert sleep_calls == [17.0]
+    assert any("honoring Retry-After" in message for message in log_messages)
+
+
+def test_rejected_enrollment_code_clears_matching_persisted_values(monkeypatch, tmp_path) -> None:
+    rejected = "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"
+    settings_dir = tmp_path / "Agent" / "Borealis" / "Settings"
+    settings_dir.mkdir(parents=True)
+    system_path = settings_dir / "agent_settings_SYSTEM.json"
+    base_path = settings_dir / "agent_settings.json"
+    currentuser_path = settings_dir / "agent_settings_CURRENTUSER.json"
+    system_path.write_text(json.dumps({"enrollment_code": rejected, "installer_code": rejected}), encoding="utf-8")
+    base_path.write_text(json.dumps({"enrollment_code": rejected, "installer_code": rejected}), encoding="utf-8")
+    currentuser_path.write_text(
+        json.dumps({"enrollment_code": "KEEP-ME", "installer_code": "KEEP-ME"}),
+        encoding="utf-8",
+    )
+
+    store = _FakeKeyStore()
+    client = agent_module.AgentHttpClient.__new__(agent_module.AgentHttpClient)
+    client.key_store = store
+    client._active_installer_code = rejected
+
+    fake_config = _FakeConfig({"enrollment_code": rejected, "installer_code": rejected})
+    fake_config.path = str(system_path)
+    monkeypatch.setattr(agent_module, "CONFIG", fake_config)
+    monkeypatch.setattr(agent_module, "INSTALLER_CODE_OVERRIDE", "")
+    monkeypatch.setattr(agent_module, "_find_project_root", lambda: str(tmp_path))
+    monkeypatch.setattr(agent_module, "_log_agent", lambda *_args, **_kwargs: None)
+
+    client._discard_rejected_installer_code(rejected, reason="invalid_enrollment_code")
+
+    assert fake_config.data["enrollment_code"] == ""
+    assert fake_config.data["installer_code"] == ""
+    assert store.discarded_installer_codes == [rejected]
+    assert json.loads(system_path.read_text(encoding="utf-8"))["enrollment_code"] == ""
+    assert json.loads(base_path.read_text(encoding="utf-8"))["installer_code"] == ""
+    assert json.loads(currentuser_path.read_text(encoding="utf-8"))["enrollment_code"] == "KEEP-ME"
+
+
+def test_resolve_installer_code_prefers_runtime_enrollment_override(monkeypatch) -> None:
+    client = _make_enrollment_client(_FakeSession([]), stub_resolver=False)
+    monkeypatch.setattr(agent_module, "INSTALLER_CODE_OVERRIDE", "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62")
+    monkeypatch.setattr(
+        agent_module,
+        "CONFIG",
+        _FakeConfig(
+            {
+                "enrollment_code": "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4",
+                "installer_code": "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4",
+            }
+        ),
+    )
+
+    assert client._resolve_installer_code() == "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62"
+    assert client.key_store.cached_installer_codes[-1] == "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62"
+
+
+def test_resolve_installer_code_prefers_current_enrollment_code_over_legacy_key(monkeypatch) -> None:
+    client = _make_enrollment_client(_FakeSession([]), stub_resolver=False)
+    monkeypatch.setattr(agent_module, "INSTALLER_CODE_OVERRIDE", "")
+    monkeypatch.setattr(
+        agent_module,
+        "CONFIG",
+        _FakeConfig(
+            {
+                "enrollment_code": "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62",
+                "installer_code": "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4",
+            }
+        ),
+    )
+
+    assert client._resolve_installer_code() == "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62"
+    assert client.key_store.cached_installer_codes[-1] == "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62"
+
+
+def test_fallback_installer_code_prefers_shared_enrollment_code_over_sibling_legacy_key(monkeypatch, tmp_path) -> None:
+    settings_dir = tmp_path / "Settings"
+    settings_dir.mkdir()
+    current_config = settings_dir / "agent_settings_SYSTEM.json"
+    current_config.write_text("{}", encoding="utf-8")
+    (settings_dir / "agent_settings.json").write_text(
+        json.dumps(
+            {
+                "enrollment_code": "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62",
+                "installer_code": "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (settings_dir / "agent_settings_CURRENTUSER.json").write_text(
+        json.dumps({"installer_code": "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agent_module, "CONFIG_SUFFIX_CANONICAL", "SYSTEM")
+
+    assert agent_module._fallback_installer_code(str(current_config)) == "9EE8-B054-E0F5-C1D2-55AC-76E4-E813-BE62"

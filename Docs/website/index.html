@@ -1560,13 +1560,13 @@
         <h2>Quick Start</h2>
       </div>
       <p class="quickstart-intro">
-        On a Linux host, this is the supported first-run deployment path for the Borealis Engine. It fetches the bootstrap script from the repository, installs what Borealis needs, and hands off to the Engine deployment flow.
+        On a Linux host, this is the supported first-run deployment path for the Borealis Engine. It fetches the Engine launcher from the repository, installs what Borealis needs, and deploys the container stack.
       </p>
       <div class="bootstrap-shell">
-        <strong>Linux Engine Bootstrap</strong>
+        <strong>Linux Engine Install</strong>
         <div class="code-wrap">
-          <button class="copy-btn" type="button" data-copy-target="cmd-linux-engine" aria-label="Copy Linux Engine bootstrap command"><span class="material-symbols-outlined" aria-hidden="true">content_copy</span></button>
-          <code id="cmd-linux-engine">curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s --</code>
+          <button class="copy-btn" type="button" data-copy-target="cmd-linux-engine" aria-label="Copy Linux Engine install command"><span class="material-symbols-outlined" aria-hidden="true">content_copy</span></button>
+          <code id="cmd-linux-engine">curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- deploy prod</code>
         </div>
       </div>
     </section>

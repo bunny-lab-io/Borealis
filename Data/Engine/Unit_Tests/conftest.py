@@ -117,6 +117,17 @@ CREATE TABLE IF NOT EXISTS device_approvals (
     updated_at TEXT,
     approved_by_user_id TEXT
 );
+CREATE TABLE IF NOT EXISTS enrollment_code_failures (
+    id TEXT PRIMARY KEY,
+    hostname_claimed TEXT NOT NULL,
+    ssl_key_fingerprint_claimed TEXT NOT NULL,
+    enrollment_code_mask TEXT NOT NULL,
+    remote_addr TEXT,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 1,
+    last_error TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS device_keys (
     id TEXT PRIMARY KEY,
     guid TEXT,

@@ -3,7 +3,16 @@ import importlib.util
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
+
+try:
+    from desktop_environment import desktop_environment_active, no_desktop_environment_detail
+except Exception:
+    try:
+        from Data.Agent.desktop_environment import desktop_environment_active, no_desktop_environment_detail  # type: ignore
+    except Exception:
+        desktop_environment_active = lambda: True  # type: ignore
+        no_desktop_environment_detail = lambda: "No Desktop Environment Active."  # type: ignore
 
 
 class RoleManager:
@@ -188,8 +197,101 @@ class RoleManager:
                 error=True,
             )
 
+    def _register_static_role_health(
+        self,
+        role_name: str,
+        *,
+        status: str,
+        detail: str,
+        path: str,
+        role_label: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if self._role_health_registry is None or not hasattr(self._role_health_registry, "register_role"):
+            return
+        normalized_name = str(role_name or "").strip() or "unknown"
+        normalized_status = str(status or "unknown").strip() or "unknown"
+        normalized_detail = str(detail or "").strip()
+        static_details = dict(details or {})
+        reporter = lambda: {
+            "role_name": normalized_name,
+            "context": self.context,
+            "status": normalized_status,
+            "role_label": role_label,
+            "detail": normalized_detail,
+            "details": {
+                **static_details,
+                "path": path,
+            },
+        }
+        try:
+            role_id = self._role_health_registry.register_role(
+                normalized_name,
+                context=self.context,
+                reporter=reporter,
+                role_label=role_label,
+            )
+            if role_id and role_id not in self._registered_role_health:
+                self._registered_role_health.append(str(role_id))
+        except Exception as exc:
+            self._log(f"Role health static registration failed name={normalized_name} error={exc}", error=True)
+
+    def _desktop_role_skip_payload(self, metadata: Dict[str, object], path: str) -> Optional[Dict[str, Any]]:
+        role_name = str(metadata.get("role_name") or "").strip()
+        compact_name = re.sub(r"[^a-z0-9]+", "", role_name.lower())
+        role_contexts = metadata.get("role_contexts") or []
+        if role_contexts and self.context not in role_contexts:
+            return None
+        if self.context != "system" or compact_name not in {"vnc", "ultravnc", "ultravncservice"}:
+            return None
+        if os.name == "nt":
+            return None
+        if desktop_environment_active():
+            return {
+                "role_name": role_name or "vnc",
+                "status": "unsupported",
+                "detail": "Always-on UltraVNC is only supported on Windows agents.",
+                "role_label": "UltraVNC Service",
+                "details": {
+                    "running_status": "Unsupported",
+                    "service_state": "Unsupported",
+                    "listener_state": "Unsupported",
+                },
+            }
+        detail = no_desktop_environment_detail()
+        return {
+            "role_name": role_name or "vnc",
+            "status": "not_applicable",
+            "detail": detail,
+            "role_label": "UltraVNC Service",
+            "details": {
+                "running_status": detail,
+                "service_state": "Not Applicable",
+                "listener_state": "Not Applicable",
+            },
+        }
+
     def load(self):
         for path in self._iter_role_files():
+            inferred = self._infer_role_metadata(path)
+            desktop_skip = self._desktop_role_skip_payload(inferred, path)
+            if desktop_skip is not None:
+                self._register_static_role_health(
+                    str(desktop_skip.get("role_name") or inferred.get("role_name") or "unknown"),
+                    status=str(desktop_skip.get("status") or "unknown"),
+                    detail=str(desktop_skip.get("detail") or ""),
+                    path=path,
+                    role_label=str(desktop_skip.get("role_label") or "") or None,
+                    details=desktop_skip.get("details") if isinstance(desktop_skip.get("details"), dict) else None,
+                )
+                self._log(
+                    "Role skipped name={0} context={1} reason={2}".format(
+                        desktop_skip.get("role_name") or inferred.get("role_name") or "unknown",
+                        self.context,
+                        desktop_skip.get("detail") or "not_applicable",
+                    )
+                )
+                continue
             try:
                 spec = importlib.util.spec_from_file_location(os.path.splitext(os.path.basename(path))[0], path)
                 mod = importlib.util.module_from_spec(spec)
@@ -197,7 +299,6 @@ class RoleManager:
                 spec.loader.exec_module(mod)
             except Exception as exc:
                 self._log(f"Role load failed during import path={path} error={exc}", error=True)
-                inferred = self._infer_role_metadata(path)
                 inferred_contexts = inferred.get("role_contexts") or []
                 if not inferred_contexts or self.context in inferred_contexts:
                     self._register_failed_role_health(

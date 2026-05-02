@@ -76,6 +76,30 @@ class _FakeProcess:
         self.returncode = -signal.SIGKILL
 
 
+def test_runner_ansible_cfg_uses_sshpass_password_mechanism(tmp_path: Path) -> None:
+    runner = EngineAnsibleRunner(
+        socketio=_DummySocketIO(),
+        db_conn_factory=lambda: sqlite3.connect(":memory:"),
+    )
+
+    cfg_path = tmp_path / "ansible.cfg"
+    inventory_path = tmp_path / "inventory.yml"
+    control_path_dir = tmp_path / "control"
+    ssh_known_hosts_path = tmp_path / "known_hosts"
+    inventory_path.write_text("{}", encoding="utf-8")
+
+    runner._write_ansible_cfg(
+        cfg_path,
+        inventory_path=inventory_path,
+        tmp_root=tmp_path / "tmp",
+        control_path_dir=control_path_dir,
+        ssh_known_hosts_path=ssh_known_hosts_path,
+    )
+
+    cfg_text = cfg_path.read_text(encoding="utf-8")
+    assert "password_mechanism = sshpass" in cfg_text
+
+
 def _ensure_ansible_runner_tables(engine_harness: EngineTestHarness) -> None:
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:

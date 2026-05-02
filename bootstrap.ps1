@@ -842,6 +842,7 @@ try {
         $invokeArgs.Add('-EnrollmentCode')
         $invokeArgs.Add($forwardedEnrollmentCode)
         $env:BOREALIS_ENROLLMENT_CODE = $forwardedEnrollmentCode
+        $env:BOREALIS_INSTALLER_CODE = $forwardedEnrollmentCode
     }
     if ($forwardedNewEngine) {
         Write-Host "[i] Agent bootstrap always forwards -NewEngine to clear persisted Engine trust and enrollment state."

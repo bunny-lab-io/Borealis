@@ -1,4 +1,4 @@
-![Borealis Logo](Data/Engine/web-interface/public/Borealis_Logo_Full.png)
+![Borealis Logo](Data/Engine/Containers/webui-frontend/data/web-interface/public/Borealis_Logo_Full.png)
 
 # Why Borealis Exists
 Borealis was created to replace a pile of separate homelab and real-world operations tools with one cohesive platform.  Borealis is a remote management, monitoring, and automation platform built around a Linux-hosted management Engine and a cross-platform Agent runtime
@@ -63,5 +63,5 @@ Status means productized support in the current Borealis codebase and docs, not 
 Deploy the Borealis Engine to a Linux host:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s --
+curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- deploy prod
 ```

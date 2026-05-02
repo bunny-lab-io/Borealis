@@ -1,12 +1,12 @@
 # Software Uninstall Overrides
-[Back to Docs Index](../index.md) | [Index (HTML)](../index.html)
+[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain how to provide file-backed custom uninstall plans when Windows registry uninstall metadata cannot be trusted or is incomplete.
 
 ## Override File
-- Path: `Data/Engine/services/API/devices/software_uninstall_overrides.json`
-- Runtime consumer: `Data/Engine/services/API/devices/software_uninstall.py`
+- Path: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall_overrides.json`
+- Runtime consumer: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall.py`
 
 ## Precedence
 - Borealis checks uninstall overrides before it trusts registry `QuietUninstallString` metadata and before it applies the interactive-quiet-string blocklist.
@@ -103,8 +103,8 @@ Explain how to provide file-backed custom uninstall plans when Windows registry 
 ```
 
 ## Related Documentation
-- [Device Management](../device-management.md)
-- [API Reference](../api-reference.md)
+- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
+- [API Reference](../Data%20and%20Schema/api-reference.md)
 - [Adding Software to Uninstall Blocklist](adding-software-to-uninstall-blocklist.md)
 - [Adding Software to Icon Overrides](adding-software-to-icon-overrides.md)
 
@@ -129,5 +129,5 @@ Explain how to provide file-backed custom uninstall plans when Windows registry 
   Best when Borealis needs to remove an AppX/Store package by family name.
 
 ### Implementation reference
-- Engine resolver: `Data/Engine/services/API/devices/software_uninstall.py`
-- Override data file: `Data/Engine/services/API/devices/software_uninstall_overrides.json`
+- Engine resolver: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall.py`
+- Override data file: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall_overrides.json`

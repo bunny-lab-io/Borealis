@@ -6,39 +6,28 @@ Respond like smart caveman. Cut all filler, keep technical substance.
 - Technical terms stay exact. Code blocks unchanged.
 - Pattern: [thing] [action] [reason]. [next step].
 
-Use this file as the entrypoint for Codex instructions. The full knowledgebase now lives under `Docs/` and includes both human-facing guidance and **Codex Agent** sections with deep, agent-ready details.
+Use this file as entrypoint for Codex instructions. Full knowledgebase lives under `Docs/`, with navigation and documentation rules in `Docs/index.md`.
 
 ## Where to Read
-- Start here: `Docs/index.md` (table of contents and documentation rules).
-- Orientation: `Docs/getting-started.md` (bootstrap and launch flow) and `Docs/architecture-overview.md` (system shape and component relationships).
-- Agent runtime: `Docs/agent-runtime.md` (runtime paths, logging, security, roles, platform parity, Ansible status).
-- Engine runtime: `Docs/engine-runtime.md` (architecture, logging, security/API parity, platform parity, migration notes).
-- Database reference: `Docs/db-reference.md` (schema ownership, connection-lifecycle rules, troubleshooting queries, and DB hygiene guardrails for implementation work).
-- Automation and execution: `Docs/assemblies.md`, `Docs/flow-editor-and-nodes.md`, `Docs/scheduled-jobs.md`, and `Docs/watchdogs.md`.
-- Device operations: `Docs/device-management.md`, `Docs/device-alerts.md`, `Docs/logging-and-operations.md`, and `Docs/vpn-and-remote-access.md`.
-- UI and notifications: `Docs/ui-and-notifications.md` (MagicUI styling, AG Grid rules, toast notifications, UI handoffs) and `Docs/migrating-pages-to-react-router.md` (route migration runbook).
-- API and integrations: `Docs/api-reference.md` and `Docs/integrations.md`.
-- Security and trust: `Docs/security-and-trust.md` (enrollment, tokens, code signing, sequence diagrams).
-- Unit testing: `Docs/Unit_Testing.md` (runner commands, domain selection, helpers, result locations, and Codex validation rules).
-- Technical debt: GitHub issues labeled `Technical Debt` (patches, workarounds, dev/prod mismatches).
-
-Precedence: follow domain docs first; where overlap exists, the domain page wins. The Codex Agent sections inside each page are the authoritative agent guidance.
+- Start at `Docs/index.md`.
+- Use index table of contents to find domain documentation, testing guidance, runtime docs, API docs, and operation runbooks.
+- Follow domain docs found through index. Where docs overlap, domain page wins. Codex Agent sections inside each page are authoritative agent guidance.
 
 ## Interacting with the Codebase
-- When making changes to the codebase, do not attempt to build code via npm or vite from the staging folder located under either `Data/Agent` or `Data/Engine`, changes of that nature need to take place in the runtime folders, and it is best to defer to the operator / developer to re-deploy the agent or engine to detect errors with page formatting, etc.
+- When making changes to the codebase, do not attempt to build code via npm or vite from staging source under `Data/Agent`, `Data/Engine`, or `Data/Engine/Containers/*/data`; changes of that nature need to take place in runtime folders, and it is best to defer to the operator / developer to re-deploy the agent or engine to detect errors with page formatting, etc.
 
 ## Unit Testing
-- For codebase changes, read `Docs/Unit_Testing.md` before choosing validation.
+- For codebase changes, use `Docs/index.md` to find unit testing guidance before choosing validation.
 - Use `Engine_Unit_Tests.sh`, `Agent_Unit_Tests.sh`, and `Agent_Unit_Tests.ps1` as the unit test entrypoints.
-- Use domain flags from `Docs/Unit_Testing.md` while iterating, then run the full affected Engine or Agent lane before handoff when practical.
+- Use documented domain flags while iterating, then run full affected Engine or Agent lane before handoff when practical.
 
 ## Database Work
-- For any code change, migration, troubleshooting step, or implementation that reads from, writes to, or otherwise interacts with PostgreSQL, read `Docs/db-reference.md` first.
-- Follow the connection-lifecycle guidance in `Docs/db-reference.md`: do the minimum SQL work needed, release the connection immediately, and perform payload shaping, crypto, target expansion, and integration lookups only after the DB connection has been returned to the pool.
+- For any code change, migration, troubleshooting step, or implementation that reads from, writes to, or otherwise interacts with PostgreSQL, use `Docs/index.md` to find database reference first.
+- Follow database connection-lifecycle guidance: do minimum SQL work needed, release connection immediately, and perform payload shaping, crypto, target expansion, and integration lookups only after DB connection has returned to pool.
 
 ## UI / AG Grid
-- MagicUI styling language and AG Grid rules are consolidated in `Docs/ui-and-notifications.md`.
-- Visual example: `Data/Engine/web-interface/src/DevTools/Page_Style_Template.jsx` (reference only - no business logic). Use it to mirror layout, spacing, and selection column behavior.
+- Use `Docs/index.md` to find UI, MagicUI, AG Grid, toast notification, and route migration guidance.
+- Visual example: `Data/Engine/Containers/webui-frontend/data/web-interface/src/DevTools/Page_Style_Template.jsx` (reference only - no business logic). Use it to mirror layout, spacing, and selection column behavior.
 
 ## Technical Debt Logging
 - If you add a patchy workaround, non-standard build step, or dev/prod behavior divergence, create or update a GitHub issue with the `Technical Debt` label.

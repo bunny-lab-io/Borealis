@@ -1,0 +1,132 @@
+name: ${BOREALIS_COMPOSE_PROJECT_NAME:-borealis-engine}
+
+services:
+  api-backend:
+    image: ${BOREALIS_API_BACKEND_IMAGE:-borealis-engine/api-backend:local}
+    container_name: borealis-engine-api-backend
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
+    volumes:
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend:/opt/Borealis/Engine/Services/api-backend
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/config:/opt/Borealis/Engine/Services/traefik-edge/config
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/env:/opt/Borealis/Engine/Services/traefik-edge/env
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/logs:/opt/Borealis/Engine/Services/traefik-edge/logs
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/state:/opt/Borealis/Engine/Services/traefik-edge/state
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/config:/opt/Borealis/Engine/Services/wireguard-tunnel/config
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/run:/opt/Borealis/Engine/Services/wireguard-tunnel/run
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/secrets:/opt/Borealis/Engine/Services/wireguard-tunnel/secrets
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      wireguard-tunnel:
+        condition: service_healthy
+      remote-desktop-guacd:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "borealis-api-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+  webui-frontend:
+    image: ${BOREALIS_WEBUI_FRONTEND_IMAGE:-borealis-engine/webui-frontend:local}
+    container_name: borealis-engine-webui-frontend
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ${BOREALIS_WEBUI_ENV_FILE:-compose.env.example}
+    volumes:
+      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/src:/opt/Borealis/Data/Engine/web-interface/src
+      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/public:/opt/Borealis/Data/Engine/web-interface/public
+      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/Unit_Tests:/opt/Borealis/Data/Engine/web-interface/Unit_Tests
+      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/index.html:/opt/Borealis/Data/Engine/web-interface/index.html
+      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/package.json:/opt/Borealis/Data/Engine/web-interface/package.json
+      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/tsconfig.json:/opt/Borealis/Data/Engine/web-interface/tsconfig.json
+      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/vite.config.mts:/opt/Borealis/Data/Engine/web-interface/vite.config.mts
+    healthcheck:
+      test: ["CMD", "borealis-webui-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  traefik-edge:
+    image: ${BOREALIS_TRAEFIK_EDGE_IMAGE:-borealis-engine/traefik-edge:local}
+    container_name: borealis-engine-traefik-edge
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
+    volumes:
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge:/opt/Borealis/Engine/Services/traefik-edge
+    depends_on:
+      api-backend:
+        condition: service_healthy
+      webui-frontend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "traefik healthcheck --ping=true --ping.entryPoint=borealis-health --entryPoints.borealis-health.address=127.0.0.1:$${BOREALIS_TRAEFIK_HEALTH_PORT:-8082}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  postgres-db:
+    image: ${BOREALIS_POSTGRES_DB_IMAGE:-borealis-engine/postgres-db:local}
+    container_name: borealis-engine-postgres-db
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
+    volumes:
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/postgres-db/state:/var/lib/postgresql/data
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/postgres-db/logs:/var/log/postgresql
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/postgres-db/run:/var/run/borealis
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U \"$${POSTGRES_USER:-borealis}\" -d \"$${POSTGRES_DB:-borealis}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  remote-desktop-guacd:
+    image: ${BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE:-borealis-engine/remote-desktop-guacd:local}
+    container_name: borealis-engine-remote-desktop-guacd
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
+    volumes:
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/remote-desktop-guacd/logs:/opt/borealis/logs
+    healthcheck:
+      test: ["CMD", "borealis-guacd-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  wireguard-tunnel:
+    image: ${BOREALIS_WIREGUARD_TUNNEL_IMAGE:-borealis-engine/wireguard-tunnel:local}
+    container_name: borealis-engine-wireguard-tunnel
+    network_mode: host
+    restart: unless-stopped
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
+    volumes:
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel:/opt/Borealis/Engine/Services/wireguard-tunnel
+    healthcheck:
+      test: ["CMD", "borealis-wireguard-healthcheck"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+      start_period: 2s

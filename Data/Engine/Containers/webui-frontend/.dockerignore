@@ -1,0 +1,9 @@
+data/web-interface/node_modules
+data/web-interface/build
+data/web-interface/dist
+data/web-interface/.vite
+data/web-interface/coverage
+data/web-interface/.eslintcache
+**/__pycache__
+**/.pytest_cache
+*.log

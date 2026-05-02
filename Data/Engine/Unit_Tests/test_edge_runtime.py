@@ -45,6 +45,19 @@ def test_dynamic_config_excludes_acme_challenge_from_http_redirect(tmp_path: Pat
     assert 'Host(`borealis.example.com`) && !PathPrefix(`/.well-known/acme-challenge/`)' in dynamic_config
 
 
+def test_static_config_trusts_configured_reverse_proxy_for_client_ip(tmp_path: Path, monkeypatch) -> None:
+    settings = _build_settings(tmp_path)
+    monkeypatch.setenv("BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS", "192.168.5.29/32, 10.42.0.0/16")
+
+    artifacts = write_runtime_artifacts(settings)
+    static_config = Path(artifacts["traefik_static_config_path"]).read_text(encoding="utf-8")
+
+    assert static_config.count("forwardedHeaders:") == 2
+    assert static_config.count("proxyProtocol:") == 1
+    assert '        - "192.168.5.29/32"' in static_config
+    assert '        - "10.42.0.0/16"' in static_config
+
+
 def test_dynamic_config_routes_dev_ui_to_vite_and_keeps_api_on_engine(
     tmp_path: Path, monkeypatch
 ) -> None:
