@@ -500,6 +500,13 @@ read_env_value() {
   awk -F= -v key="${key}" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "${file}"
 }
 
+env_key_exists() {
+  local key="$1"
+  local file="${2:-${COMPOSE_ENV}}"
+  [[ -f "${file}" ]] || return 1
+  awk -F= -v key="${key}" '$1 == key { found = 1 } END { exit found ? 0 : 1 }' "${file}"
+}
+
 generate_secret() {
   if command_exists openssl; then
     openssl rand -hex 24
@@ -670,6 +677,25 @@ resolve_acme_email() {
   fi
 }
 
+resolve_traefik_trusted_proxy_ips() {
+  local existing
+  existing="$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)"
+  if [[ -n "${BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS:-}" ]]; then
+    printf '%s\n' "${BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS}"
+  elif env_key_exists BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS; then
+    printf '%s\n' "${existing}"
+  elif [[ -t 0 ]]; then
+    local input=""
+    printf '%s\n' "External reverse proxy? Set BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS so client IPs survive Traefik." >&2
+    printf '%s\n' "Use outer proxy IP/CIDR only. Leave blank when Borealis is directly internet-facing." >&2
+    printf '%s\n' "HTTPS passthrough also needs PROXY protocol enabled on the outer TCP service." >&2
+    read -r -p "Outer reverse proxy IP/CIDR [blank for none]: " input || true
+    printf '%s\n' "${input}"
+  else
+    printf '%s\n' ""
+  fi
+}
+
 write_webui_mode_env_file() {
   local target="$1"
   local mode="$2"
@@ -693,6 +719,7 @@ write_compose_env() {
   local mode="$1"
   local public_host="$2"
   local acme_email="$3"
+  local trusted_proxy_ips_arg="${4-}"
   local postgres_password
   postgres_password="$(read_env_value POSTGRES_PASSWORD)"
   [[ -n "${postgres_password}" && "${postgres_password}" != "change-me" ]] || postgres_password="$(generate_secret)"
@@ -708,6 +735,16 @@ write_compose_env() {
   if [[ "${public_host}" == *":443" ]]; then
     public_base_url="https://${public_host%:443}"
   fi
+  local traefik_trusted_proxy_ips
+  local traefik_forwarded_headers_trusted_ips
+  local traefik_proxy_protocol_trusted_ips
+  if (($# >= 4)); then
+    traefik_trusted_proxy_ips="${trusted_proxy_ips_arg}"
+  else
+    traefik_trusted_proxy_ips="${BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS:-$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)}"
+  fi
+  traefik_forwarded_headers_trusted_ips="${BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS:-$(read_env_value BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS)}"
+  traefik_proxy_protocol_trusted_ips="${BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS:-$(read_env_value BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS)}"
 
   cat > "${RUNTIME_ENV}" <<EOF
 BOREALIS_PROJECT_ROOT=${SCRIPT_DIR}
@@ -733,6 +770,9 @@ BOREALIS_TRAEFIK_RUNTIME_ENV_PATH=${RUNTIME_ROOT}/Services/traefik-edge/env/runt
 BOREALIS_TRAEFIK_STATIC_CONFIG_PATH=${RUNTIME_ROOT}/Services/traefik-edge/config/traefik.yml
 BOREALIS_TRAEFIK_DYNAMIC_CONFIG_PATH=${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic.yml
 BOREALIS_TRAEFIK_HEALTH_PORT=${BOREALIS_TRAEFIK_HEALTH_PORT:-8082}
+BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS=${traefik_trusted_proxy_ips}
+BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS=${traefik_forwarded_headers_trusted_ips}
+BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS=${traefik_proxy_protocol_trusted_ips}
 
 POSTGRES_DB=${db_name}
 POSTGRES_USER=${db_user}
@@ -1361,9 +1401,11 @@ prepare_runtime() {
   load_existing_image_tags
   local public_host
   local acme_email
+  local traefik_trusted_proxy_ips
   public_host="$(resolve_public_hostname)"
   acme_email="$(resolve_acme_email)"
-  write_compose_env "${mode}" "${public_host}" "${acme_email}"
+  traefik_trusted_proxy_ips="$(resolve_traefik_trusted_proxy_ips)"
+  write_compose_env "${mode}" "${public_host}" "${acme_email}" "${traefik_trusted_proxy_ips}"
 }
 
 deploy_engine() {

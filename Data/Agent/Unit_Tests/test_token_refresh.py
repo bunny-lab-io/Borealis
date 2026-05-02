@@ -60,6 +60,7 @@ class _FakeKeyStore:
         self.saved_access_tokens: list[tuple[str, int]] = []
         self.bindings: list[str] = []
         self.cached_installer_codes: list[str] = []
+        self.discarded_installer_codes: list[str] = []
 
     def save_access_token(self, access_token: str, *, expires_at: int) -> None:
         self.saved_access_tokens.append((access_token, expires_at))
@@ -72,6 +73,9 @@ class _FakeKeyStore:
 
     def load_cached_installer_code(self) -> str | None:
         return None
+
+    def discard_installer_code(self, code: str) -> None:
+        self.discarded_installer_codes.append(str(code))
 
 
 class _FakeConfig:
@@ -224,13 +228,50 @@ def test_enrollment_honors_retry_after_before_retrying_request(monkeypatch) -> N
     monkeypatch.setattr(agent_module, "_acquire_enrollment_lock", lambda **_kwargs: contextlib.nullcontext())
     monkeypatch.setattr(agent_module.time, "sleep", lambda seconds: sleep_calls.append(seconds))
     monkeypatch.setattr(agent_module, "_log_agent", lambda message, **kwargs: log_messages.append(str(message)))
+    client._discard_rejected_installer_code = lambda code, reason: None
 
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(RuntimeError, match="Enrollment code rejected"):
         client._perform_enrollment_locked()
 
     assert session.calls == 2
     assert sleep_calls == [17.0]
     assert any("honoring Retry-After" in message for message in log_messages)
+
+
+def test_rejected_enrollment_code_clears_matching_persisted_values(monkeypatch, tmp_path) -> None:
+    rejected = "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"
+    settings_dir = tmp_path / "Agent" / "Borealis" / "Settings"
+    settings_dir.mkdir(parents=True)
+    system_path = settings_dir / "agent_settings_SYSTEM.json"
+    base_path = settings_dir / "agent_settings.json"
+    currentuser_path = settings_dir / "agent_settings_CURRENTUSER.json"
+    system_path.write_text(json.dumps({"enrollment_code": rejected, "installer_code": rejected}), encoding="utf-8")
+    base_path.write_text(json.dumps({"enrollment_code": rejected, "installer_code": rejected}), encoding="utf-8")
+    currentuser_path.write_text(
+        json.dumps({"enrollment_code": "KEEP-ME", "installer_code": "KEEP-ME"}),
+        encoding="utf-8",
+    )
+
+    store = _FakeKeyStore()
+    client = agent_module.AgentHttpClient.__new__(agent_module.AgentHttpClient)
+    client.key_store = store
+    client._active_installer_code = rejected
+
+    fake_config = _FakeConfig({"enrollment_code": rejected, "installer_code": rejected})
+    fake_config.path = str(system_path)
+    monkeypatch.setattr(agent_module, "CONFIG", fake_config)
+    monkeypatch.setattr(agent_module, "INSTALLER_CODE_OVERRIDE", "")
+    monkeypatch.setattr(agent_module, "_find_project_root", lambda: str(tmp_path))
+    monkeypatch.setattr(agent_module, "_log_agent", lambda *_args, **_kwargs: None)
+
+    client._discard_rejected_installer_code(rejected, reason="invalid_enrollment_code")
+
+    assert fake_config.data["enrollment_code"] == ""
+    assert fake_config.data["installer_code"] == ""
+    assert store.discarded_installer_codes == [rejected]
+    assert json.loads(system_path.read_text(encoding="utf-8"))["enrollment_code"] == ""
+    assert json.loads(base_path.read_text(encoding="utf-8"))["installer_code"] == ""
+    assert json.loads(currentuser_path.read_text(encoding="utf-8"))["enrollment_code"] == "KEEP-ME"
 
 
 def test_resolve_installer_code_prefers_runtime_enrollment_override(monkeypatch) -> None:

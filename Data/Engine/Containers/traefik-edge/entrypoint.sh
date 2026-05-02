@@ -10,6 +10,31 @@ HOSTNAME="${BOREALIS_PUBLIC_HOSTNAME:-localhost}"
 ACME_EMAIL="${BOREALIS_ACME_EMAIL:-}"
 WEBUI_UPSTREAM_PORT="${BOREALIS_WEBUI_UPSTREAM_PORT:-8000}"
 HEALTH_PORT="${BOREALIS_TRAEFIK_HEALTH_PORT:-8082}"
+TRUSTED_PROXY_IPS="${BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS:-}"
+FORWARDED_HEADERS_TRUSTED_IPS="${BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS:-${TRUSTED_PROXY_IPS}}"
+PROXY_PROTOCOL_TRUSTED_IPS="${BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS:-${TRUSTED_PROXY_IPS}}"
+
+append_trusted_ips_section() {
+  section_name="$1"
+  trusted_ips="$2"
+  output_path="$3"
+  wrote_header=0
+  old_ifs="${IFS}"
+  IFS=','
+  for raw_ip in ${trusted_ips}; do
+    ip="$(printf '%s' "${raw_ip}" | tr -d '[:space:]')"
+    [ -n "${ip}" ] || continue
+    if [ "${wrote_header}" -eq 0 ]; then
+      cat >> "${output_path}" <<EOF
+    ${section_name}:
+      trustedIPs:
+EOF
+      wrote_header=1
+    fi
+    printf '        - "%s"\n' "${ip}" >> "${output_path}"
+  done
+  IFS="${old_ifs}"
+}
 
 mkdir -p "${CONFIG_DIR}" "${LOG_DIR}" "${STATE_DIR}"
 touch "${STATE_DIR}/acme.json"
@@ -48,8 +73,15 @@ entryPoints:
     address: "127.0.0.1:${HEALTH_PORT}"
   web:
     address: ":${BOREALIS_PUBLIC_HTTP_PORT:-80}"
+EOF
+append_trusted_ips_section "forwardedHeaders" "${FORWARDED_HEADERS_TRUSTED_IPS}" "${CONFIG_DIR}/traefik.yml"
+cat >> "${CONFIG_DIR}/traefik.yml" <<EOF
   websecure:
     address: ":${BOREALIS_PUBLIC_HTTPS_PORT:-443}"
+EOF
+append_trusted_ips_section "forwardedHeaders" "${FORWARDED_HEADERS_TRUSTED_IPS}" "${CONFIG_DIR}/traefik.yml"
+append_trusted_ips_section "proxyProtocol" "${PROXY_PROTOCOL_TRUSTED_IPS}" "${CONFIG_DIR}/traefik.yml"
+cat >> "${CONFIG_DIR}/traefik.yml" <<EOF
 ping:
   entryPoint: borealis-health
 providers:

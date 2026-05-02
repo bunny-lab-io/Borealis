@@ -74,6 +74,49 @@ Operators should treat `Engine/` as generated runtime state. Edit committed sour
 
 All Engine containers use `network_mode: host`. Loopback assumptions are intentional.
 
+## Reverse Proxy Client IP Preservation
+When another reverse proxy sits in front of `traefik-edge`, Borealis must trust only that proxy IP or CIDR. Otherwise all API requests look like they originate from the proxy, and IP-scoped enrollment rate limits can block every agent behind it.
+
+Set these Engine env values before deploy or `traefik-edge` reload:
+```text
+BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS=192.168.5.29/32
+BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS=
+BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS=
+```
+
+`BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS` is the fallback list for both forwarded headers and PROXY protocol. Use the specific override variables only when HTTP and HTTPS have different upstream proxy paths. Keep the list narrow. Do not use `0.0.0.0/0` or clients can spoof `X-Forwarded-For`.
+
+For HTTP `:80`, an outer HTTP reverse proxy should pass or append `X-Forwarded-For`; embedded Traefik trusts it only when the outer proxy address matches `forwardedHeaders.trustedIPs`.
+
+For HTTPS with TLS passthrough, an outer TCP reverse proxy cannot add HTTP headers. Configure the outer TCP service to send PROXY protocol and configure Borealis embedded Traefik to trust that outer proxy IP:
+```yaml
+tcp:
+  services:
+    borealis-websecure:
+      loadBalancer:
+        proxyProtocol:
+          version: 2
+        servers:
+          - address: "192.168.3.252:443"
+```
+
+If the outer proxy is itself behind another load balancer or proxy, configure that outer proxy to trust its upstream client-IP source first. Borealis can preserve only the client IP that reaches the outer proxy.
+
+Deploy examples:
+```sh
+# Rebuild when the traefik-edge image source changed.
+BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS=192.168.5.29/32 bash Engine.sh --service traefik-edge rebuild prod
+
+# Reload is enough for later env-only trust list changes.
+BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS=192.168.5.29/32 bash Engine.sh --service traefik-edge reload prod
+```
+
+Validate with:
+```sh
+rg "POST /api/agent/enroll/request" Engine/Services/api-backend/logs/api.log
+rg "enrollment rate limited key=ip" Engine/Services/api-backend/logs/device_enrollment.log
+```
+
 ## Volume Bindings
 `api-backend`:
 ```text

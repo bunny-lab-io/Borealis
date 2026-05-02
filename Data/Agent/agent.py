@@ -1346,6 +1346,33 @@ def _load_installer_code_from_file(path: str) -> str:
     return ""
 
 
+def _clear_installer_code_from_file(path: str, rejected_code: str) -> bool:
+    rejected = (rejected_code or "").strip()
+    if not rejected or not path:
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    changed = False
+    for key in ("enrollment_code", "installer_code"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip() == rejected:
+            data[key] = ""
+            changed = True
+    if not changed:
+        return False
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        return True
+    except Exception:
+        return False
+
+
 def _fallback_installer_code(current_path: str) -> str:
     settings_dir = os.path.dirname(current_path)
     candidates: List[str] = []
@@ -1804,6 +1831,12 @@ class AgentHttpClient:
                                         fname="agent.log",
                                     )
                                     return
+                                error_code = (err_payload or {}).get("error") or "invalid_enrollment_code"
+                                self._discard_rejected_installer_code(code, reason=str(error_code))
+                                raise RuntimeError(
+                                    f"Enrollment code rejected by Engine ({error_code}); cleared persisted code. "
+                                    "Provide a fresh enrollment code to retry."
+                                )
                         raise
                 data = resp.json()
                 _log_agent(
@@ -2204,6 +2237,103 @@ class AgentHttpClient:
                 f"Failed to update shared installer code cache: {exc}",
                 fname="agent.error.log",
             )
+
+    def _discard_rejected_installer_code(self, code: str, *, reason: str) -> None:
+        rejected = (code or "").strip()
+        if not rejected:
+            return
+        self._active_installer_code = None
+        if INSTALLER_CODE_OVERRIDE and INSTALLER_CODE_OVERRIDE.strip() == rejected:
+            _log_agent(
+                "Rejected enrollment code came from explicit override; persisted configs not cleared "
+                f"reason={reason}",
+                fname="agent.error.log",
+            )
+            return
+        cleared_paths: List[str] = []
+        candidate_paths: List[str] = []
+
+        def _add(path: str) -> None:
+            if not path:
+                return
+            try:
+                normalized = os.path.abspath(path)
+            except Exception:
+                return
+            if normalized not in candidate_paths:
+                candidate_paths.append(normalized)
+
+        try:
+            _add(CONFIG.path)
+            settings_dir = os.path.dirname(CONFIG.path)
+            for name in (
+                "agent_settings.json",
+                "agent_settings_SYSTEM.json",
+                "agent_settings_CURRENTUSER.json",
+                "agent_settings_svc.json",
+                "agent_settings_user.json",
+            ):
+                _add(os.path.join(settings_dir, name))
+        except Exception:
+            pass
+        try:
+            project_root = _find_project_root()
+            for base in (
+                os.path.join(project_root, "Agent", "Borealis", "Settings"),
+                os.path.join(project_root, "Agent", "Settings"),
+                project_root,
+            ):
+                for name in (
+                    "agent_settings.json",
+                    "agent_settings_SYSTEM.json",
+                    "agent_settings_CURRENTUSER.json",
+                    "agent_settings_svc.json",
+                    "agent_settings_user.json",
+                ):
+                    _add(os.path.join(base, name))
+        except Exception:
+            pass
+
+        try:
+            changed = False
+            for key in ("enrollment_code", "installer_code"):
+                value = CONFIG.data.get(key)
+                if isinstance(value, str) and value.strip() == rejected:
+                    CONFIG.data[key] = ""
+                    changed = True
+            if changed:
+                CONFIG._write()
+                cleared_paths.append(os.path.abspath(CONFIG.path))
+        except Exception as exc:
+            _log_agent(
+                f"Failed to clear rejected enrollment code from active config: {exc}",
+                fname="agent.error.log",
+            )
+
+        for path in candidate_paths:
+            try:
+                if _clear_installer_code_from_file(path, rejected):
+                    cleared_paths.append(path)
+            except Exception:
+                pass
+        try:
+            discard = getattr(self.key_store, "discard_installer_code", None)
+            if callable(discard):
+                discard(rejected)
+        except Exception as exc:
+            _log_agent(
+                f"Failed to discard rejected shared installer code: {exc}",
+                fname="agent.error.log",
+            )
+        try:
+            unique_paths = sorted({path for path in cleared_paths if path})
+            _log_agent(
+                "Cleared rejected enrollment code "
+                f"reason={reason} files={len(unique_paths)}",
+                fname="agent.log",
+            )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # HTTP helpers

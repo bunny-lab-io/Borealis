@@ -100,6 +100,37 @@ def _normalize_text(value: Any) -> str:
         return ""
 
 
+def _split_trusted_ips(value: Any) -> list[str]:
+    ips: list[str] = []
+    seen: set[str] = set()
+    for raw in _normalize_text(value).replace("\n", ",").split(","):
+        text = "".join(str(raw).split())
+        if not text or text in seen:
+            continue
+        ips.append(text)
+        seen.add(text)
+    return ips
+
+
+def _traefik_trusted_ip_lists() -> tuple[list[str], list[str]]:
+    trusted_proxy_ips = _split_trusted_ips(os.environ.get("BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS"))
+    forwarded_headers = _split_trusted_ips(os.environ.get("BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS"))
+    proxy_protocol = _split_trusted_ips(os.environ.get("BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS"))
+    return forwarded_headers or trusted_proxy_ips, proxy_protocol or trusted_proxy_ips
+
+
+def _append_trusted_ips_section(lines: list[str], section_name: str, trusted_ips: list[str]) -> None:
+    if not trusted_ips:
+        return
+    lines.extend(
+        [
+            f"    {section_name}:",
+            "      trustedIPs:",
+            *[f'        - "{trusted_ip}"' for trusted_ip in trusted_ips],
+        ]
+    )
+
+
 def _normalize_path(value: Any, *, default: str, ensure_leading_slash: bool = False) -> str:
     text = _normalize_text(value) or default
     if ensure_leading_slash:
@@ -286,19 +317,38 @@ def _render_runtime_env(settings: LetsEncryptSettings) -> str:
         "BOREALIS_TRAEFIK_STATIC_CONFIG_PATH": settings.traefik_static_config_path,
         "BOREALIS_TRAEFIK_DYNAMIC_CONFIG_PATH": settings.traefik_dynamic_config_path,
         "BOREALIS_TRAEFIK_ACME_STORAGE_PATH": settings.acme_storage_path,
+        "BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS": os.environ.get("BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS", ""),
+        "BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS": os.environ.get(
+            "BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS",
+            "",
+        ),
+        "BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS": os.environ.get(
+            "BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS",
+            "",
+        ),
     }
     lines = [f"export {key}={shlex.quote(value)}" for key, value in pairs.items()]
     return "\n".join(lines) + "\n"
 
 
 def _render_static_config(settings: LetsEncryptSettings) -> str:
-    return "\n".join(
+    forwarded_headers, proxy_protocol = _traefik_trusted_ip_lists()
+    lines = [
+        "entryPoints:",
+        "  web:",
+        f'    address: ":{settings.http_port}"',
+    ]
+    _append_trusted_ips_section(lines, "forwardedHeaders", forwarded_headers)
+    lines.extend(
         [
-            "entryPoints:",
-            "  web:",
-            f'    address: ":{settings.http_port}"',
             "  websecure:",
             f'    address: ":{settings.https_port}"',
+        ]
+    )
+    _append_trusted_ips_section(lines, "forwardedHeaders", forwarded_headers)
+    _append_trusted_ips_section(lines, "proxyProtocol", proxy_protocol)
+    lines.extend(
+        [
             "providers:",
             "  file:",
             f'    filename: "{settings.traefik_dynamic_config_path}"',
@@ -318,6 +368,7 @@ def _render_static_config(settings: LetsEncryptSettings) -> str:
             "",
         ]
     )
+    return "\n".join(lines)
 
 
 def _dev_ui_proxy_enabled() -> bool:
