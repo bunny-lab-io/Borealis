@@ -156,7 +156,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
 - `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).
 - `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).
-- `GET /api/admin/device-approvals` (Token Authenticated) - approval queue scoped to the current operator's assigned sites unless the operator is an admin.
+- `GET /api/admin/device-approvals` (Token Authenticated) - approval queue scoped to the current operator's assigned sites unless the operator is an admin. Admins can use `status=wrong_code` for recent invalid enrollment-code attempts.
 - `POST /api/admin/device-approvals/<approval_id>/approve` (Token Authenticated) - approve an in-scope device.
 - `POST /api/admin/device-approvals/<approval_id>/deny` (Token Authenticated) - deny an in-scope device.
 
@@ -227,6 +227,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Approval access is site-scoped for operators and unrestricted for admins.
 - Approval handles hostname conflicts (merge or rename).
 - Denials are logged and remove pending requests.
+- Invalid-code enrollment attempts do not create approval records. Admins can surface them through the Device Approval Queue `Invalid Code` filter for recent active failures.
 
 ### WebUI deep links
 - Device Details route: `/devices/<agent_guid_or_hostname>`.

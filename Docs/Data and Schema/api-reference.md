@@ -118,7 +118,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
 - `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).
 - `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).
-- `GET /api/admin/device-approvals` (Token Authenticated) - approval queue, scoped to the current operator's assigned sites unless the operator is an admin.
+- `GET /api/admin/device-approvals` (Token Authenticated) - approval queue, scoped to the current operator's assigned sites unless the operator is an admin. Admins can use `status=wrong_code` to list recent agents submitting invalid enrollment codes.
 - `POST /api/admin/device-approvals/<approval_id>/approve` (Token Authenticated) - approve an in-scope device enrollment.
 - `POST /api/admin/device-approvals/<approval_id>/deny` (Token Authenticated) - deny an in-scope device enrollment.
 

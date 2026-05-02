@@ -30,6 +30,7 @@ sites (id) --------------------< device_sites (site_id)
 devices (guid) ----------------< refresh_tokens (guid)
 devices (guid) ----------------< device_keys (guid)
 devices (guid) ----------------< device_approvals (guid, optional)
+agent enrollment fingerprint ---< enrollment_code_failures (logical identity)
 
 scheduled_jobs (id) ----------< scheduled_job_runs (job_id)
 scheduled_job_runs (id) ------< scheduled_job_run_activity (run_id)
@@ -317,6 +318,22 @@ finally:
 - `status` lifecycle typically `pending -> approved|denied|expired -> completed`.
 - `site_id` and `approved_by_user_id` are soft relations (not enforced FK in schema).
 - Rebuild migration removes legacy `enrollment_code_id` if present.
+
+#### `enrollment_code_failures`
+- Status: Active.
+- Purpose: Rolling visibility for agents actively submitting wrong enrollment codes.
+- Columns: `id`, `hostname_claimed`, `ssl_key_fingerprint_claimed`, `enrollment_code_mask`, `remote_addr`, `first_seen_at`, `last_seen_at`, `attempt_count`, `last_error`.
+- Constraints and indexes:
+- `id` primary key.
+- `uq_enrollment_code_failures_fp` unique on `ssl_key_fingerprint_claimed`.
+- `idx_enrollment_code_failures_last_seen` on `last_seen_at`.
+- Used by:
+- Enrollment request endpoint records `invalid_enrollment_code` failures after payload and key validation.
+- `GET /api/admin/device-approvals?status=wrong_code` returns failures seen in the recent active window.
+- Notes:
+- Stores masked codes only. Full submitted enrollment codes stay out of the table.
+- A later valid enrollment request from the same fingerprint clears the failure row.
+- Old rows are opportunistically pruned by the enrollment request path.
 
 #### `devices`
 - Status: Active (core inventory and identity table).
@@ -814,7 +831,12 @@ LEFT JOIN sites s ON s.id = da.site_id
 WHERE LOWER(da.status) = 'pending'
 ORDER BY da.created_at ASC;
 
--- 4) Device-to-site assignments
+-- 4) Recent wrong-code enrollment attempts
+SELECT hostname_claimed, enrollment_code_mask, remote_addr, attempt_count, last_seen_at
+FROM enrollment_code_failures
+ORDER BY last_seen_at DESC;
+
+-- 5) Device-to-site assignments
 SELECT d.guid, d.hostname, s.id AS site_id, s.name AS site_name
 FROM devices d
 LEFT JOIN device_sites ds ON ds.device_hostname = d.hostname
@@ -869,6 +891,7 @@ ORDER BY xact_start NULLS LAST;
 - Keep site/code association in `sites.enrollment_code` unless the enrollment model changes fundamentally.
 - Keep `device_sites` as hostname-to-site map for UI and filter joins.
 - Treat `device_approvals.enrollment_code` as immutable audit snapshot of the code used at request time.
+- Treat `enrollment_code_failures.enrollment_code_mask` as operator visibility only; do not persist full wrong codes.
 
 ### Codex checklist for DB connection hygiene
 - Start with the hottest request or loop, not the easiest file. Prioritize watchdogs, device inventory, scheduled jobs, workflows, and auth-sensitive routes.

@@ -116,6 +116,87 @@ def register(
         record = dict(zip(keys, row))
         return record
 
+    def _record_wrong_code_attempt(
+        cur: sqlite3.Cursor,
+        *,
+        hostname: str,
+        fingerprint: str,
+        enrollment_code: str,
+        remote_addr: str,
+        now: datetime,
+    ) -> None:
+        cutoff = _iso(now - timedelta(days=1))
+        cur.execute(
+            "DELETE FROM enrollment_code_failures WHERE last_seen_at < ?",
+            (cutoff,),
+        )
+        code_mask = _mask_code(enrollment_code)
+        now_iso = _iso(now)
+        cur.execute(
+            """
+            SELECT id, attempt_count
+              FROM enrollment_code_failures
+             WHERE ssl_key_fingerprint_claimed = ?
+            """,
+            (fingerprint,),
+        )
+        existing = cur.fetchone()
+        if existing:
+            try:
+                attempt_count = int(existing[1] or 0) + 1
+            except Exception:
+                attempt_count = 1
+            cur.execute(
+                """
+                UPDATE enrollment_code_failures
+                   SET hostname_claimed = ?,
+                       enrollment_code_mask = ?,
+                       remote_addr = ?,
+                       last_seen_at = ?,
+                       attempt_count = ?,
+                       last_error = ?
+                 WHERE id = ?
+                """,
+                (
+                    hostname,
+                    code_mask,
+                    remote_addr,
+                    now_iso,
+                    attempt_count,
+                    "invalid_enrollment_code",
+                    existing[0],
+                ),
+            )
+            return
+
+        cur.execute(
+            """
+            INSERT INTO enrollment_code_failures (
+                id,
+                hostname_claimed,
+                ssl_key_fingerprint_claimed,
+                enrollment_code_mask,
+                remote_addr,
+                first_seen_at,
+                last_seen_at,
+                attempt_count,
+                last_error
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                hostname,
+                fingerprint,
+                code_mask,
+                remote_addr,
+                now_iso,
+                now_iso,
+                1,
+                "invalid_enrollment_code",
+            ),
+        )
+
     def _normalize_host(hostname: str, guid: str, cur: sqlite3.Cursor) -> str:
         guid_norm = normalize_guid(guid)
         base = (hostname or "").strip() or guid_norm
@@ -393,8 +474,32 @@ def register(
                     f"host={hostname} fingerprint={fingerprint[:12]} code_mask={_mask_code(enrollment_code)}",
                     context_hint,
                 )
+                try:
+                    _record_wrong_code_attempt(
+                        cur,
+                        hostname=hostname,
+                        fingerprint=fingerprint,
+                        enrollment_code=enrollment_code,
+                        remote_addr=remote,
+                        now=_now(),
+                    )
+                    conn.commit()
+                except Exception as exc:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    _enrollment_log(
+                        "enrollment wrong_code_tracking_failed "
+                        f"host={hostname} fingerprint={fingerprint[:12]} error={type(exc).__name__}",
+                        context_hint,
+                    )
                 return jsonify({"error": "invalid_enrollment_code"}), 400
             site_id = int(site_record["id"])
+            cur.execute(
+                "DELETE FROM enrollment_code_failures WHERE ssl_key_fingerprint_claimed = ?",
+                (fingerprint,),
+            )
             reuse_guid = None
 
             approval_reference: str

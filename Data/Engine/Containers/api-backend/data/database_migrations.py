@@ -32,6 +32,7 @@ def apply_all(conn: sqlite3.Connection) -> None:
     _ensure_device_vpn_ip_lease_table(conn)
     _ensure_refresh_token_table(conn)
     _ensure_device_approval_table(conn)
+    _ensure_enrollment_code_failure_table(conn)
     _ensure_watchdog_tables(conn)
     _ensure_software_icon_assets_table(conn)
     device_purge_state.ensure_table(conn)
@@ -256,6 +257,37 @@ def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_da_site
             ON device_approvals(site_id)
+        """
+    )
+
+
+def _ensure_enrollment_code_failure_table(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS enrollment_code_failures (
+            id TEXT PRIMARY KEY,
+            hostname_claimed TEXT NOT NULL,
+            ssl_key_fingerprint_claimed TEXT NOT NULL,
+            enrollment_code_mask TEXT NOT NULL,
+            remote_addr TEXT,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 1,
+            last_error TEXT NOT NULL
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_enrollment_code_failures_fp
+            ON enrollment_code_failures(ssl_key_fingerprint_claimed)
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_enrollment_code_failures_last_seen
+            ON enrollment_code_failures(last_seen_at)
         """
     )
 

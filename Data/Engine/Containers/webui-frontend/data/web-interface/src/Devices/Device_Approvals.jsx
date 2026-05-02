@@ -70,6 +70,7 @@ const themeClassName = gridTheme.themeName || "ag-theme-quartz";
 const STATUS_OPTIONS = [
   { value: "all", label: "All" },
   { value: "pending", label: "Pending" },
+  { value: "wrong_code", label: "Invalid Code" },
   { value: "approved", label: "Approved" },
   { value: "completed", label: "Completed" },
   { value: "denied", label: "Denied" },
@@ -78,6 +79,7 @@ const STATUS_OPTIONS = [
 
 const statusChipColor = {
   pending: "warning",
+  wrong_code: "error",
   approved: "info",
   completed: "success",
   denied: "default",
@@ -99,6 +101,7 @@ const normalizeStatus = (status) => {
 
 const formatStatusLabel = (status) => {
   const normalized = normalizeStatus(status);
+  if (normalized === "wrong_code") return "Invalid Code";
   if (normalized === "completed") return "Approved";
   return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : "Pending";
 };
@@ -139,19 +142,25 @@ export default function DeviceApprovals() {
   useEffect(() => { loadApprovals(); }, [loadApprovals]);
 
   const dedupedApprovals = useMemo(() => {
-    const normalized = approvals
-      .map((record) => ({ ...record, status: normalizeStatus(record.status) }))
-      .sort((a, b) => {
-        const left = new Date(a.created_at || 0).getTime();
-        const right = new Date(b.created_at || 0).getTime();
-        return left - right;
+    const normalized = approvals.map((record) => ({ ...record, status: normalizeStatus(record.status) }));
+    if (statusFilter === "wrong_code") {
+      return normalized.sort((a, b) => {
+        const left = new Date(a.last_seen_at || a.updated_at || 0).getTime();
+        const right = new Date(b.last_seen_at || b.updated_at || 0).getTime();
+        return right - left;
       });
+    }
+    const sorted = normalized.sort((a, b) => {
+      const left = new Date(a.created_at || 0).getTime();
+      const right = new Date(b.created_at || 0).getTime();
+      return left - right;
+    });
     if (statusFilter !== "pending") {
-      return normalized;
+      return sorted;
     }
     const seen = new Set();
     const unique = [];
-    for (const record of normalized) {
+    for (const record of sorted) {
       const key = record.ssl_key_fingerprint_claimed || record.hostname_claimed || record.id;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -320,115 +329,155 @@ export default function DeviceApprovals() {
     controls: pageHeaderControls,
   });
 
-  const columns = useMemo(() => [
-    {
+  const columns = useMemo(() => {
+    const statusColumn = {
       headerName: "Status",
       field: "status",
       valueGetter: (p) => normalizeStatus(p.data?.status),
       cellRenderer: (params) => {
         const status = params.value || "pending";
-        // mimic MUI Chip coloring via text hues
         const color = status === "completed" ? "#34d399"
           : status === "approved" ? "#60a5fa"
+          : status === "wrong_code" ? "#fb7185"
           : status === "denied" || status === "expired" ? "#9aa0a6"
           : "#fbbf24";
         return <span style={{ color, fontWeight: 600 }}>{formatStatusLabel(status)}</span>;
       },
-      minWidth: 120,
-      width: 120,
-    },
-    {
-      headerName: "Site",
-      field: "site_name",
-      valueGetter: (p) => p.data?.site_name || (p.data?.site_id ? `Site ${p.data.site_id}` : "—"),
-      minWidth: 180,
-      width: 180,
-    },
-    { headerName: "Hostname", field: "hostname_claimed", minWidth: 200, width: 200 },
-    {
-      headerName: "Date of Enrollment Request",
-      field: "created_at",
-      valueFormatter: (p) => formatDateTime(p.value),
-      minWidth: 240,
-      width: 240,
-    },
-    {
-      headerName: "Date of Approval",
-      field: "updated_at",
-      valueFormatter: (p) => formatDateTime(p.value),
-      minWidth: 180,
-    },
-    {
-      headerName: "Approved By",
-      valueGetter: (p) => p.data?.approved_by_username || p.data?.approved_by_user_id || "—",
-      minWidth: 150,
-      width: 150,
-    },
-    {
-      headerName: "Actions",
-      cellRenderer: (params) => {
-        const record = params.data || {};
-        const status = normalizeStatus(record.status);
-        const showActions = status === "pending";
-        const guidValue = params.context.guidInputs[record.id] || "";
-        const { startApprove, handleDeny, handleGuidChange, actioningId } = params.context;
-        if (!showActions) {
+      minWidth: 130,
+      width: 130,
+    };
+
+    if (statusFilter === "wrong_code") {
+      return [
+        statusColumn,
+        { headerName: "Hostname", field: "hostname_claimed", minWidth: 220, width: 220 },
+        {
+          headerName: "Last Attempt",
+          valueGetter: (p) => p.data?.last_seen_at || p.data?.updated_at,
+          valueFormatter: (p) => formatDateTime(p.value),
+          minWidth: 210,
+          width: 210,
+        },
+        {
+          headerName: "First Seen",
+          valueGetter: (p) => p.data?.first_seen_at || p.data?.created_at,
+          valueFormatter: (p) => formatDateTime(p.value),
+          minWidth: 210,
+          width: 210,
+        },
+        {
+          headerName: "Attempts",
+          field: "wrong_code_attempt_count",
+          valueGetter: (p) => Number(p.data?.wrong_code_attempt_count || 0),
+          minWidth: 120,
+          width: 120,
+        },
+        { headerName: "Client IP", field: "remote_addr", minWidth: 150, width: 150 },
+        { headerName: "Code Used", field: "enrollment_code", minWidth: 150, width: 150 },
+        {
+          headerName: "Fingerprint",
+          field: "ssl_key_fingerprint_claimed",
+          minWidth: 260,
+          flex: 1,
+        },
+      ];
+    }
+
+    return [
+      statusColumn,
+      {
+        headerName: "Site",
+        field: "site_name",
+        valueGetter: (p) => p.data?.site_name || (p.data?.site_id ? `Site ${p.data.site_id}` : "—"),
+        minWidth: 180,
+        width: 180,
+      },
+      { headerName: "Hostname", field: "hostname_claimed", minWidth: 200, width: 200 },
+      {
+        headerName: "Date of Enrollment Request",
+        field: "created_at",
+        valueFormatter: (p) => formatDateTime(p.value),
+        minWidth: 240,
+        width: 240,
+      },
+      {
+        headerName: "Date of Approval",
+        field: "updated_at",
+        valueFormatter: (p) => formatDateTime(p.value),
+        minWidth: 180,
+      },
+      {
+        headerName: "Approved By",
+        valueGetter: (p) => p.data?.approved_by_username || p.data?.approved_by_user_id || "—",
+        minWidth: 150,
+        width: 150,
+      },
+      {
+        headerName: "Actions",
+        cellRenderer: (params) => {
+          const record = params.data || {};
+          const status = normalizeStatus(record.status);
+          const showActions = status === "pending";
+          const guidValue = params.context.guidInputs[record.id] || "";
+          const { startApprove, handleDeny, handleGuidChange, actioningId } = params.context;
+          if (!showActions) {
+            return (
+              <Box sx={{ display: "flex", alignItems: "center", height: "100%" }}>
+                <Typography variant="body2" sx={{ color: "#9aa0a6" }}>
+                  No actions available
+                </Typography>
+              </Box>
+            );
+          }
+          const isBusy = actioningId === record.id;
           return (
             <Box sx={{ display: "flex", alignItems: "center", height: "100%" }}>
-              <Typography variant="body2" sx={{ color: "#9aa0a6" }}>
-                No actions available
-              </Typography>
+              <Stack direction="row" spacing={8} alignItems="center">
+                <TextField
+                  size="small"
+                  label="Optional GUID"
+                  placeholder="Leave empty to auto-generate"
+                  value={guidValue}
+                  onChange={(e) => handleGuidChange(record.id, e.target.value)}
+                  sx={{ minWidth: 220 }}
+                />
+                <Stack direction="row" spacing={1}>
+                  <Tooltip title="Approve enrollment">
+                    <span>
+                      <Button
+                        color="success"
+                        variant="text"
+                        onClick={() => startApprove(record)}
+                        disabled={isBusy}
+                        startIcon={isBusy ? <CircularProgress size={16} color="success" /> : <ApproveIcon fontSize="small" />}
+                      >
+                        Approve
+                      </Button>
+                    </span>
+                  </Tooltip>
+                  <Tooltip title="Deny enrollment">
+                    <span>
+                      <Button
+                        color="error"
+                        variant="text"
+                        onClick={() => handleDeny(record)}
+                        disabled={isBusy}
+                        startIcon={<DenyIcon fontSize="small" />}
+                      >
+                        Deny
+                      </Button>
+                    </span>
+                  </Tooltip>
+                </Stack>
+              </Stack>
             </Box>
           );
-        }
-        const isBusy = actioningId === record.id;
-        return (
-          <Box sx={{ display: "flex", alignItems: "center", height: "100%" }}>
-            <Stack direction="row" spacing={8} alignItems="center">
-              <TextField
-                size="small"
-                label="Optional GUID"
-                placeholder="Leave empty to auto-generate"
-                value={guidValue}
-                onChange={(e) => handleGuidChange(record.id, e.target.value)}
-                sx={{ minWidth: 220 }}
-              />
-              <Stack direction="row" spacing={1}>
-                <Tooltip title="Approve enrollment">
-                  <span>
-                    <Button
-                      color="success"
-                      variant="text"
-                      onClick={() => startApprove(record)}
-                      disabled={isBusy}
-                      startIcon={isBusy ? <CircularProgress size={16} color="success" /> : <ApproveIcon fontSize="small" />}
-                    >
-                      Approve
-                    </Button>
-                  </span>
-                </Tooltip>
-                <Tooltip title="Deny enrollment">
-                  <span>
-                    <Button
-                      color="error"
-                      variant="text"
-                      onClick={() => handleDeny(record)}
-                      disabled={isBusy}
-                      startIcon={<DenyIcon fontSize="small" />}
-                    >
-                      Deny
-                    </Button>
-                  </span>
-                </Tooltip>
-              </Stack>
-            </Stack>
-          </Box>
-        );
+        },
+        minWidth: 480,
+        flex: 1,
       },
-      minWidth: 480,
-      flex: 1,
-    },
-  ], []);
+    ];
+  }, [statusFilter]);
 
   const defaultColDef = useMemo(() => ({
     sortable: true,

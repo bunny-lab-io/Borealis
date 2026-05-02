@@ -6,7 +6,7 @@
 # - GET /api/admin/enrollment-codes (Token Authenticated (Admin)) - Lists static site enrollment codes.
 # - POST /api/admin/enrollment-codes (Token Authenticated (Admin)) - Deprecated (returns 410; use site APIs).
 # - DELETE /api/admin/enrollment-codes/<code_id> (Token Authenticated (Admin)) - Deprecated (returns 410; use site APIs).
-# - GET /api/admin/device-approvals (Token Authenticated (Admin)) - Enumerates pending and historical device approval records.
+# - GET /api/admin/device-approvals (Token Authenticated) - Enumerates pending/historical approvals and admin wrong-code sightings.
 # - POST /api/admin/device-approvals/<approval_id>/approve (Token Authenticated (Admin)) - Approves a pending device and handles hostname conflicts.
 # - POST /api/admin/device-approvals/<approval_id>/deny (Token Authenticated (Admin)) - Denies a pending device approval request.
 # ======================================================
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 from Data.Engine.db import dbapi as sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from flask import Blueprint, jsonify, request, session
@@ -223,6 +223,12 @@ class AdminDeviceService:
     def list_device_approvals(self, status_filter: Optional[str]) -> Tuple[Dict[str, Any], int]:
         approvals: List[Dict[str, Any]] = []
         current_user = self._current_user() or {}
+        status_norm = (status_filter or "").strip().lower()
+        if status_norm == "wrong_code":
+            if (current_user.get("role") or "").strip().lower() != "admin":
+                return {"approvals": []}, 200
+            return self.list_wrong_code_attempts()
+
         conn = self._db_conn()
         try:
             cur = conn.cursor()
@@ -253,7 +259,6 @@ class AdminDeviceService:
              LEFT JOIN sites AS s
                     ON s.id = da.site_id
             """
-            status_norm = (status_filter or "").strip().lower()
             if status_norm and status_norm != "all":
                 sql += " WHERE LOWER(da.status) = ?"
                 params.append(status_norm)
@@ -310,6 +315,66 @@ class AdminDeviceService:
                 )
         finally:
             conn.close()
+        return {"approvals": approvals}, 200
+
+    def list_wrong_code_attempts(self, window_seconds: int = 300) -> Tuple[Dict[str, Any], int]:
+        cutoff = _iso(_now() - timedelta(seconds=max(60, int(window_seconds or 300))))
+        rows = []
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    hostname_claimed,
+                    ssl_key_fingerprint_claimed,
+                    enrollment_code_mask,
+                    remote_addr,
+                    first_seen_at,
+                    last_seen_at,
+                    attempt_count,
+                    last_error
+                  FROM enrollment_code_failures
+                 WHERE last_seen_at >= ?
+                 ORDER BY last_seen_at DESC
+                """,
+                (cutoff,),
+            )
+            rows = cur.fetchall()
+        finally:
+            conn.close()
+
+        approvals = []
+        for row in rows:
+            approvals.append(
+                {
+                    "id": row[0],
+                    "approval_reference": None,
+                    "guid": None,
+                    "hostname_claimed": row[1],
+                    "ssl_key_fingerprint_claimed": row[2],
+                    "enrollment_code": row[3],
+                    "site_id": None,
+                    "status": "wrong_code",
+                    "client_nonce": None,
+                    "server_nonce": None,
+                    "created_at": row[5],
+                    "updated_at": row[6],
+                    "approved_by_user_id": None,
+                    "hostname_conflict": None,
+                    "alternate_hostname": None,
+                    "conflict_requires_prompt": False,
+                    "fingerprint_match": False,
+                    "approved_by_username": None,
+                    "site_name": None,
+                    "remote_addr": row[4],
+                    "first_seen_at": row[5],
+                    "last_seen_at": row[6],
+                    "wrong_code_attempt_count": row[7],
+                    "last_error": row[8],
+                }
+            )
         return {"approvals": approvals}, 200
 
     def _approval_accessible(
