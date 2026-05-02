@@ -372,7 +372,7 @@ clear_agent_enrollment_state() {
   local settings_dir=""
   local file=""
   for settings_dir in "${SCRIPT_DIR}/Agent/Borealis/Settings" "${SCRIPT_DIR}/Agent/Settings"; do
-    for file in Agent_GUID.txt access.jwt access.meta.json refresh.token server_signing_key.pub; do
+    for file in Agent_GUID.txt access.jwt access.meta.json refresh.token server_signing_key.pub installer_code.shared.json; do
       rm -f "${settings_dir}/${file}" 2>/dev/null || true
     done
   done
@@ -497,6 +497,23 @@ stop_agent_supervision() {
   if command_exists systemctl; then
     run_privileged systemctl stop "${unit_name}" >/dev/null 2>&1 || true
   fi
+
+  local pid_file="${SCRIPT_DIR}/Agent/Logs/agent.pid"
+  [[ -f "${pid_file}" ]] || return 0
+  local pid=""
+  pid="$(head -n 1 "${pid_file}" 2>/dev/null || true)"
+  if [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" >/dev/null 2>&1; then
+    local cmdline=""
+    if [[ -r "/proc/${pid}/cmdline" ]]; then
+      cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+    fi
+    if [[ "${cmdline}" == *"Borealis/agent.py"* || "${cmdline}" == *"Data/Agent/agent.py"* ]]; then
+      kill "${pid}" >/dev/null 2>&1 || true
+      sleep 1
+      kill -0 "${pid}" >/dev/null 2>&1 && kill -9 "${pid}" >/dev/null 2>&1 || true
+    fi
+  fi
+  rm -f "${pid_file}" 2>/dev/null || true
 }
 
 ensure_agent_systemd_service() {
@@ -596,10 +613,15 @@ configure_supervision() {
 }
 
 deploy_agent() {
-  install_agent_dependencies
   stop_agent_supervision
+  install_agent_dependencies
   local preserved_url
   preserved_url="$(capture_existing_server_url)"
+  local explicit_enrollment_code="${ENROLLMENT_CODE:-${BOREALIS_ENROLLMENT_CODE:-}}"
+  if [[ -n "${explicit_enrollment_code}" ]]; then
+    NEW_ENGINE_FLAG=1
+    write_agent_log "Explicit enrollment code supplied; refreshing Agent enrollment state."
+  fi
   if [[ "${NEW_ENGINE_FLAG}" -eq 1 || "${BOREALIS_BOOTSTRAP_NEW_ENGINE:-0}" == "1" ]]; then
     clear_agent_enrollment_state
   fi

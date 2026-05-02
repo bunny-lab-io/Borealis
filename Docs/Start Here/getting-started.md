@@ -39,6 +39,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Linux agents run from the same script-staged Python runtime model as the rest of Borealis, not shipped binaries. The Linux Agent path can be installed with `./Agent.sh deploy`; current parity notes live in `Docs/Core Runtimes/agent-runtime.md`.
 - Linux Agent branch bootstrap example:
   `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/feature/containerize-all-borealis-services/Agent.sh | sudo bash -s -- --repo-branch feature/containerize-all-borealis-services deploy --serverurl "https://borealis.bunny-lab.io" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --newEngine`
+- When `Agent.sh` receives an explicit enrollment code, it treats that as a fresh enrollment request, clears stale GUID/token/server-signing-key/installer-cache state, and starts the Linux service with the supplied code.
 
 ## First Run Checklist
 - Open the Engine URL and confirm the login page loads.

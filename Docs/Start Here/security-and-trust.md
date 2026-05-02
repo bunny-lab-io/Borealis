@@ -89,7 +89,11 @@ If you deploy the agent via Group Policy or another automation platform, you can
 ```powershell
 .\Borealis.ps1 -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
 ```
-**Linux**: Agent enrollment is not yet available on Linux; `Borealis.sh --Agent` only writes settings placeholders.
+**Linux**:
+```bash
+curl -fsSL "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Agent.sh" | sudo bash -s -- deploy --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --newEngine
+```
+Passing an enrollment code to `Agent.sh` refreshes stale Linux Agent enrollment state before the service starts so the supplied code wins over cached installer codes.
 
 ## Agent/Server Enrollment (Sequence Diagram)
 ```mermaid

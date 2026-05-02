@@ -1492,13 +1492,6 @@ export default function ServerInfo() {
         actions: [],
       },
       {
-        id: "engine_mode",
-        name: "Engine Mode",
-        value: formatTitleCase(host?.engine_mode),
-        details: "API backend operational state",
-        actions: [],
-      },
-      {
         id: "webui_mode",
         name: "WebUI Mode",
         value: formatTitleCase(host?.webui_mode),
