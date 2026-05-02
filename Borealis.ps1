@@ -2186,6 +2186,7 @@ function InstallOrUpdate-BorealisAgent {
                 (Join-Path $agentSourceRoot 'agent_deployment.py'),
                 (Join-Path $agentSourceRoot 'agent.py'),
                 (Join-Path $agentSourceRoot 'Borealis.ico'),
+                (Join-Path $agentSourceRoot 'desktop_environment.py'),
                 (Join-Path $agentSourceRoot 'fcntl_stub.py'),
                 (Join-Path $agentSourceRoot 'launch_service.ps1'),
                 (Join-Path $agentSourceRoot 'qt_compat.py'),
