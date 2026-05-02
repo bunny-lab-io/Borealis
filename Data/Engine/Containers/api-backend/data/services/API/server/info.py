@@ -598,6 +598,59 @@ def _docker_inspect_container(container_name: str) -> Mapping[str, Any]:
     return {}
 
 
+def _docker_image_exists(docker_bin: str, image: str) -> bool:
+    normalized_image = str(image or "").strip()
+    if not docker_bin or not normalized_image:
+        return False
+    code, _out, _err = _run_command([docker_bin, "image", "inspect", normalized_image], timeout=8)
+    return code == 0
+
+
+def _read_api_backend_image_from_manifest(path: Path) -> str:
+    if not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    candidates = [
+        ((data.get("service_images") or {}).get("api-backend") or {}).get("image"),
+        ((data.get("services") or {}).get("api-backend") or {}).get("image"),
+    ]
+    for candidate in candidates:
+        image = str(candidate or "").strip()
+        if image:
+            return image
+    return ""
+
+
+def _resolve_api_backend_helper_image(docker_bin: str, project_root: Path) -> str:
+    env_image = str(os.environ.get("BOREALIS_API_BACKEND_IMAGE") or "").strip()
+    if env_image and _docker_image_exists(docker_bin, env_image):
+        return env_image
+
+    inspected = _docker_inspect_container("borealis-engine-api-backend")
+    config_payload = inspected.get("Config") if isinstance(inspected.get("Config"), Mapping) else {}
+    config_image = str(config_payload.get("Image") or "").strip()
+    if config_image and _docker_image_exists(docker_bin, config_image):
+        return config_image
+
+    image_id = str(inspected.get("Image") or "").strip()
+    if image_id and _docker_image_exists(docker_bin, image_id):
+        return image_id
+
+    for manifest_name in ("deploy-manifest.json", "image-manifest.json"):
+        manifest_image = _read_api_backend_image_from_manifest(project_root / "Engine" / "Deploy" / manifest_name)
+        if manifest_image and _docker_image_exists(docker_bin, manifest_image):
+            return manifest_image
+
+    local_image = "borealis-engine/api-backend:local"
+    if _docker_image_exists(docker_bin, local_image):
+        return local_image
+
+    return ""
+
+
 def _compose_status(state: str, health: str) -> str:
     normalized_state = str(state or "").strip().lower()
     normalized_health = str(health or "").strip().lower()
@@ -620,6 +673,37 @@ def _compose_display_status(state: str, health: str) -> str:
     if normalized_state:
         return format_title_case_for_api(normalized_state)
     return "Unknown"
+
+
+def _normalize_webui_mode(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"dev", "developer", "development"}:
+        return "development"
+    if normalized in {"prod", "production"}:
+        return "production"
+    return normalized or "unknown"
+
+
+def _env_value_from_container(container_name: str, key: str) -> str:
+    inspected = _docker_inspect_container(container_name)
+    config_payload = inspected.get("Config") if isinstance(inspected.get("Config"), Mapping) else {}
+    env_values = config_payload.get("Env") if isinstance(config_payload.get("Env"), list) else []
+    prefix = f"{key}="
+    for raw in env_values:
+        text = str(raw or "")
+        if text.startswith(prefix):
+            return text[len(prefix) :].strip()
+    return ""
+
+
+def _current_webui_mode() -> str:
+    mode = _env_value_from_container("borealis-engine-webui-frontend", "BOREALIS_WEBUI_MODE")
+    if mode:
+        return _normalize_webui_mode(mode)
+    mode = str(os.environ.get("BOREALIS_WEBUI_MODE") or "").strip()
+    if mode:
+        return _normalize_webui_mode(mode)
+    return "unknown"
 
 
 def format_title_case_for_api(value: Any) -> str:
@@ -1090,6 +1174,7 @@ def _collect_host_payload(context: Any) -> Dict[str, Any]:
             or "unknown"
         ).strip()
         or "unknown",
+        "webui_mode": _current_webui_mode(),
         "server_time": _serialize_time(now_local, now_utc, timezone_id=timezone_id),
         "timezone": now_local.tzname() or "",
         "timezone_id": timezone_id,
@@ -1349,9 +1434,9 @@ def _queue_compose_service_action(
         return False, "", "docker CLI is unavailable inside the API backend container."
 
     project_root = Path(os.environ.get("BOREALIS_PROJECT_ROOT") or PROJECT_ROOT)
-    image = str(os.environ.get("BOREALIS_API_BACKEND_IMAGE") or "").strip()
+    image = _resolve_api_backend_helper_image(docker_bin, project_root)
     if not image:
-        image = "borealis-engine/api-backend:local"
+        return False, "", "Unable to resolve the running api-backend helper image."
 
     action_name = str(action.get("action") or "").strip().lower()
     action_mode = str(action.get("mode") or "").strip().lower()

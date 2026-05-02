@@ -61,6 +61,8 @@ const PAGE_ICON = ServerIcon;
 const DEFAULT_POLL_INTERVAL_MS = 30 * 1000;
 const BOOSTED_POLL_INTERVAL_MS = 3 * 1000;
 const BOOSTED_POLL_DURATION_MS = 30 * 1000;
+const SERVICE_ACTION_UNLOCK_COPY =
+  "Service controls stay locked while Borealis verifies Docker state. They usually unlock within about one minute.";
 const MASTER_AUTO_SIZE_COLUMNS = ["domain", "name", "health", "state", "enabled", "started"];
 const NAME_COLUMN_PRIMARY_COLOR = "#58a6ff";
 const COMPOSE_SERVICE_ACTIONS = Object.freeze({
@@ -1298,7 +1300,7 @@ export default function ServerInfo() {
         }
         await sendScopedNotification({
           title: "Service Action Queued",
-          message: `${action?.label || "Action"} queued for ${row?.label || "service"}.`,
+          message: `${action?.label || "Action"} queued for ${row?.label || "service"}. ${SERVICE_ACTION_UNLOCK_COPY}`,
           icon: "pendingactions",
           variant: "info",
         });
@@ -1493,7 +1495,14 @@ export default function ServerInfo() {
         id: "engine_mode",
         name: "Engine Mode",
         value: formatTitleCase(host?.engine_mode),
-        details: "Current Engine Operational State",
+        details: "API backend operational state",
+        actions: [],
+      },
+      {
+        id: "webui_mode",
+        name: "WebUI Mode",
+        value: formatTitleCase(host?.webui_mode),
+        details: "Current frontend serving mode",
         actions: [],
       },
       {
@@ -1702,7 +1711,7 @@ export default function ServerInfo() {
             ? [
                 {
                   id: `service_action:${row?.key || row?.unit_name || index}:rebuild_menu`,
-                  label: "Rebuild",
+                  label: queued ? "Updating..." : "Rebuild",
                   disabled: queued || webuiRebuildActions.every((action) => !action?.action),
                   items: webuiRebuildActions.map((action) => {
                     const optionLabel = webuiRebuildOptionLabel(action);
@@ -1711,7 +1720,7 @@ export default function ServerInfo() {
                       ...action,
                       id: action?.id || `${action?.action || "rebuild"}_${action?.mode || optionLabel}`,
                       label: optionLabel,
-                      subtitle: webuiRebuildOptionSubtitle(action),
+                      subtitle: queued ? SERVICE_ACTION_UNLOCK_COPY : webuiRebuildOptionSubtitle(action),
                       confirmLabel: `Rebuild ${optionLabel}`,
                       disabled: queued || busy || !action?.action,
                       onClick: () => requestServiceAction(row, {
