@@ -36,6 +36,7 @@ const RUNTIME_STATUS_COLOR_BY_CODE = Object.freeze({
   pending: MAGIC_UI.accentA,
   unhealthy: "#ff7b89",
   unsupported: "rgba(176, 184, 200, 0.74)",
+  not_applicable: "rgba(176, 184, 200, 0.74)",
   unknown: "rgba(176, 184, 200, 0.74)",
 });
 
@@ -61,7 +62,7 @@ function normalizeRuntimeHealthState(statusCode) {
   if (normalized === "healthy" || normalized === "loaded") return "complete";
   if (normalized === "recovering" || normalized === "pending") return "active";
   if (normalized === "unhealthy") return "failed";
-  if (normalized === "unsupported") return "skipped";
+  if (normalized === "unsupported" || normalized === "not_applicable" || normalized === "no_desktop_environment_active") return "skipped";
   return "pending";
 }
 
@@ -137,15 +138,21 @@ function buildRuntimeGroupSummary(runtimeRows) {
     (acc, entry) => {
       const kind = String(entry?.healthKind || "role").toLowerCase() === "service" ? "service" : "role";
       const state = normalizeRuntimeHealthState(entry?.statusCode);
-      acc[kind].total += 1;
-      if (state === "complete") acc[kind].healthy += 1;
+      if (state === "skipped") {
+        acc[kind].skipped += 1;
+      } else {
+        acc[kind].total += 1;
+        if (state === "complete") acc[kind].healthy += 1;
+      }
       return acc;
     },
-    { role: { total: 0, healthy: 0 }, service: { total: 0, healthy: 0 } }
+    { role: { total: 0, healthy: 0, skipped: 0 }, service: { total: 0, healthy: 0, skipped: 0 } }
   );
   const pieces = [];
   if (counts.role.total) pieces.push(`${counts.role.healthy}/${counts.role.total} roles healthy`);
   if (counts.service.total) pieces.push(`${counts.service.healthy}/${counts.service.total} services healthy`);
+  const skipped = counts.role.skipped + counts.service.skipped;
+  if (skipped) pieces.push(`${skipped} not applicable`);
   return pieces.length ? pieces.join(" · ") : "Awaiting role telemetry";
 }
 
@@ -453,9 +460,10 @@ export default function AgentStartupFlow({
   formatTimestamp = (value) => String(value || ""),
 }) {
   const rows = Array.isArray(milestones) ? milestones : [];
+  const runtimeHealthRows = Array.isArray(runtimeRows) ? runtimeRows : [];
   const timelineSteps = useTimelineSteps(rows, runtimeRows, formatTimestamp);
 
-  if (!rows.length) {
+  if (!rows.length && !runtimeHealthRows.length) {
     return (
       <Box
         sx={{

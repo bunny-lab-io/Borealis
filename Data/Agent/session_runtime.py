@@ -17,6 +17,10 @@ from multiprocessing.connection import Client, Listener
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from signature_utils import decode_script_bytes, verify_and_store_script_signature
+try:
+    from desktop_environment import desktop_environment_active, no_desktop_environment_detail
+except Exception:
+    from Data.Agent.desktop_environment import desktop_environment_active, no_desktop_environment_detail  # type: ignore
 
 
 IS_WINDOWS = os.name == "nt"
@@ -663,9 +667,27 @@ class SessionHelperBroker:
         return _SESSION_RECONCILE_INTERVAL_SECONDS
 
     def supports_currentuser_dispatch(self) -> bool:
-        return True
+        return IS_WINDOWS or desktop_environment_active()
 
     def currentuser_role_health(self) -> Dict[str, Any]:
+        if not self.supports_currentuser_dispatch():
+            detail = no_desktop_environment_detail()
+            return {
+                "role_name": "context_currentuser",
+                "context": "currentuser",
+                "status": "not_applicable",
+                "role_label": "Current User Context",
+                "detail": detail,
+                "details": {
+                    "running_status": detail,
+                    "execution_context": "CURRENTUSER",
+                    "eligible_sessions": "0",
+                    "listener_ready": False,
+                    "listener_state": "Not Applicable",
+                    "loaded_helper_sessions": "",
+                    "ready_helpers": "0",
+                },
+            }
         inventory = self.session_inventory_payload()
         sessions = inventory.get("sessions") or []
         eligible = [entry for entry in sessions if bool(entry.get("eligible_for_interactive"))]
@@ -774,6 +796,12 @@ class SessionHelperBroker:
         return {"reported_at": reported_at, "sessions": sessions}
 
     def reconcile_sessions(self, raw_payload: Any = None) -> Dict[str, Any]:
+        if not self.supports_currentuser_dispatch():
+            with self._lock:
+                existing_ids = list(self._helpers.keys())
+            for session_id in existing_ids:
+                self._stop_helper(session_id, reason="no_desktop_environment")
+            return {"reported_at": int(time.time()), "sessions": []}
         payload = self.enrich_session_inventory(raw_payload if raw_payload is not None else self.session_inventory_payload())
         desired_sessions = {
             int(entry.get("session_id") or 0): dict(entry)
@@ -791,6 +819,8 @@ class SessionHelperBroker:
     def dispatch_currentuser_quick_job(self, payload: Dict[str, Any]) -> Tuple[bool, str]:
         if not isinstance(payload, dict):
             return False, "invalid quick-job payload"
+        if not self.supports_currentuser_dispatch():
+            return False, "no_desktop_environment_active"
         job_id = _coerce_int(payload.get("job_id"), 0)
         if job_id <= 0:
             return False, "missing job_id"

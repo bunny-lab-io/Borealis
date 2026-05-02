@@ -54,6 +54,9 @@ function formatRoleHealthContext(context) {
 function normalizeRoleHealthStatusText(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) return "Unknown";
+  if (normalized === "not_applicable" || normalized === "no_desktop_environment_active") {
+    return "No Desktop Environment Active";
+  }
   return normalized.replace(/[_-]+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
 }
 
@@ -142,6 +145,17 @@ export default function AgentHealthTab({
         detailsMap: item?.details && typeof item.details === "object" ? item.details : {},
       };
     });
+    const noDesktopEnvironmentActive = normalizedItems.some((item) => {
+      const key = compactAgentHealthKey(item.sourceRoleName || item.sourceRoleLabel || item.baseLabel);
+      return (
+        key === "contextcurrentuser" &&
+        (
+          item.statusCode === "not_applicable" ||
+          item.statusCode === "no_desktop_environment_active" ||
+          /no desktop environment active/i.test(item.detail)
+        )
+      );
+    });
     const visibleItems = normalizedItems.filter(
       (item) => !HIDDEN_AGENT_HEALTH_KEYS.has(String(item.presentationKey || "").trim().toLowerCase())
     );
@@ -157,6 +171,26 @@ export default function AgentHealthTab({
         const labelKey = `${item.healthKind}:${String(item.baseLabel || "").trim().toLowerCase()}`;
         const name =
           item.contextLabel && labelCounts[labelKey] > 1 ? `${item.baseLabel} (${item.contextLabel})` : item.baseLabel;
+        const key = compactAgentHealthKey(item.sourceRoleName || item.sourceRoleLabel || item.baseLabel);
+        if (
+          noDesktopEnvironmentActive &&
+          ["vnc", "ultravnc", "ultravncservice"].includes(key) &&
+          (item.statusCode === "unsupported" || item.statusCode === "pending" || item.statusCode === "recovering")
+        ) {
+          return {
+            ...item,
+            name,
+            status: "No Desktop Environment Active",
+            statusCode: "not_applicable",
+            detail: "No Desktop Environment Active.",
+            detailsMap: {
+              ...item.detailsMap,
+              running_status: "No Desktop Environment Active.",
+              service_state: "Not Applicable",
+              listener_state: "Not Applicable",
+            },
+          };
+        }
         return { ...item, name };
       })
       .sort((left, right) => String(left.name || "").localeCompare(String(right.name || "")));
@@ -179,13 +213,15 @@ export default function AgentHealthTab({
 
   const milestones = useMemo(() => parseJsonArray(startupRole?.detailsMap?.milestones_json), [startupRole]);
   const timelineMeta = useMemo(() => {
-    if (!milestones.length) return "Awaiting startup telemetry";
+    if (!milestones.length) {
+      return agentHealthRows.length ? "Startup telemetry pending - role health current" : "Awaiting startup telemetry";
+    }
     const active = milestones.find((item) => normalizeMilestoneState(item?.state) === "active");
     if (active) return `Active: ${active.label || active.key}`;
     const failed = milestones.find((item) => normalizeMilestoneState(item?.state) === "failed");
     if (failed) return `Needs attention: ${failed.label || failed.key}`;
     return `${milestones.filter((item) => normalizeMilestoneState(item?.state) === "complete").length}/${milestones.length} complete`;
-  }, [milestones]);
+  }, [agentHealthRows.length, milestones]);
 
   useEffect(() => {
     const socket = typeof window !== "undefined" ? window.BorealisSocket : null;

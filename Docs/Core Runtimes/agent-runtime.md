@@ -67,6 +67,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Direct Session 0 UI is not supported; Borealis keeps the Engine-facing socket in SYSTEM and bridges into desktop sessions when current-user interaction is required.
 - The helper tray UI now opens a dedicated bottom-right status popup from tray icon clicks instead of using a right-click context menu, and that popup is the supported user-facing control surface for helper restart/status actions.
 - The agent still labels Engine traffic with `X-Borealis-Agent-Context`, but the supported Windows service path no longer relies on a standalone CURRENTUSER Engine identity.
+- Headless Linux agents without an active graphical desktop report desktop-only health surfaces as `No Desktop Environment Active` instead of unhealthy/recovering. This applies to Current User Context helper dispatch and UI-side UltraVNC presentation so server-class Linux hosts do not look broken for missing desktop roles.
 
 ### Role discovery and extension
 - Roles are discovered dynamically from `Data/Agent/Roles/`.
@@ -94,7 +95,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - WireGuard tunnels are ensured via `POST /api/agent/vpn/ensure` on boot and refreshed periodically.
 - The ensure loop re-establishes the tunnel automatically after network hiccups.
 - `role_system_heartbeat.py` starts before `AgentHttpClient.ensure_authenticated()`, normal `RoleManager.load()`, and the Socket.IO connect loop. It records process start, server config, identity, auth, status channel, socket, role load, helper broker, WireGuard, inventory, steady-state, and failure milestones.
-- Heartbeats/details also carry per-role health snapshots so the Device Details `Agent Health` tab can show current role/service status with last-checked timestamps. Startup status uses `POST /api/agent/status` so the timeline can update before the full role-health heartbeat cycle.
+- Heartbeats/details also carry per-role health snapshots so the Device Details `Agent Health` tab can show current role/service status with last-checked timestamps. Startup status uses `POST /api/agent/status` so the timeline can update before the full role-health heartbeat cycle. The SYSTEM runtime also refreshes startup/status telemetry every five minutes after initial boot so graceful restarts or missed startup flushes do not leave Agent Health stuck on empty startup telemetry.
 - The VNC role generates one shared UltraVNC password when the role starts, rotates it again every 24 hours by default (`BOREALIS_VNC_CREDENTIAL_ROTATION_SECONDS`), keeps it in memory only, re-advertises it to the Engine through `POST /api/agent/vnc/ensure`, keeps UltraVNC continuously running once it has the Engine /32 firewall scope, and reports `ready`, `service_state`, `listener_state`, and `last_ready_at` through agent role health even when no operator is currently connected.
 
 ### Token storage
@@ -176,6 +177,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Linux agents run from the script-staged Python runtime through `Borealis.sh --Agent`, not shipped binaries.
 - Linux agents load the standard Agent roles and currently support WireGuard VPN, remote Bash/script execution, file/folder interaction, and Engine-side Ansible reachability to remote Linux devices.
 - Linux does not have a system tray/helper UI yet, and remote desktop remains Windows-only through the UltraVNC/Apache Guacamole path.
+- Linux agents probe for an active desktop environment through environment variables, display-manager state, display sockets, and common desktop processes. If none is active, desktop-only roles return `not_applicable`/`No Desktop Environment Active`.
 - Linux service control, process management, and software management code paths exist but need validation before they should be described as parity features.
 
 #### Ansible support

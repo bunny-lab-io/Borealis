@@ -145,6 +145,28 @@ def test_connect_loop_waits_for_socket_end_after_successful_connect() -> None:
     assert any("sio.connect completed successfully" in message for message in log_messages)
 
 
+def test_periodic_startup_telemetry_refresh_flushes_status(monkeypatch) -> None:
+    calls = []
+
+    monkeypatch.setattr(agent_module, "SYSTEM_SERVICE_MODE", True)
+    monkeypatch.setattr(
+        agent_module,
+        "_heartbeat_complete",
+        lambda key, detail, **kwargs: calls.append(("complete", key, detail)),
+    )
+    monkeypatch.setattr(
+        agent_module,
+        "_heartbeat_flush",
+        lambda reason="": calls.append(("flush", reason)) or True,
+    )
+
+    assert agent_module._refresh_startup_telemetry_once("periodic_agent_health") is True
+    assert calls == [
+        ("complete", "steady_state_online", "Periodic agent health refresh accepted."),
+        ("flush", "periodic_agent_health"),
+    ]
+
+
 def test_get_server_url_requires_public_https_fqdn(monkeypatch, tmp_path: Path) -> None:
     settings_dir = tmp_path / "Agent" / "Borealis" / "Settings"
     settings_dir.mkdir(parents=True, exist_ok=True)

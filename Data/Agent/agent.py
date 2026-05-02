@@ -101,6 +101,8 @@ _REFRESH_RETRY_DELAYS_SECONDS = (1.0, 2.0, 5.0)
 _REFRESH_FALLBACK_MINIMUM_TTL_SECONDS = 15
 _ENROLLMENT_RATE_LIMIT_MAX_ATTEMPTS = 5
 _ENROLLMENT_RETRY_AFTER_MAX_SECONDS = 300.0
+_AGENT_HEALTH_REFRESH_SECONDS = 300.0
+_AGENT_HEALTH_REFRESH_INITIAL_DELAY_SECONDS = 60.0
 
 
 def _response_retry_after_seconds(response: Any, *, default: float = 30.0) -> float:
@@ -3099,6 +3101,24 @@ async def send_heartbeat():
         await asyncio.sleep(60)
 
 
+def _refresh_startup_telemetry_once(reason: str = "periodic_agent_health") -> bool:
+    if not SYSTEM_SERVICE_MODE:
+        return False
+    try:
+        _heartbeat_complete("steady_state_online", "Periodic agent health refresh accepted.")
+        return bool(_heartbeat_flush(reason=reason))
+    except Exception as exc:
+        _log_agent(f'Periodic agent startup status refresh failed: {exc}', fname='agent.error.log')
+        return False
+
+
+async def refresh_startup_telemetry():
+    await asyncio.sleep(_AGENT_HEALTH_REFRESH_INITIAL_DELAY_SECONDS)
+    while True:
+        _refresh_startup_telemetry_once(reason="periodic_agent_health")
+        await asyncio.sleep(_AGENT_HEALTH_REFRESH_SECONDS)
+
+
 async def poll_script_requests():
     await asyncio.sleep(20)
     client = http_client()
@@ -4245,6 +4265,8 @@ if __name__=='__main__':
             background_tasks.append(loop.create_task(connect_loop()))
             background_tasks.append(loop.create_task(idle_task()))
             background_tasks.append(loop.create_task(send_heartbeat()))
+            if SYSTEM_SERVICE_MODE:
+                background_tasks.append(loop.create_task(refresh_startup_telemetry()))
             background_tasks.append(loop.create_task(watch_tray_restart_requests()))
             background_tasks.append(loop.create_task(poll_script_requests()))
         if SYSTEM_SERVICE_MODE and SESSION_HELPER_BROKER is not None:

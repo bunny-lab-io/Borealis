@@ -132,6 +132,26 @@ def test_currentuser_role_health_reports_registering_while_helper_warms_up() -> 
     assert report["details"]["pending_helper_sessions"] == "BUNNY-LAB\\testuser (rdp-tcp#5) - Helper Warming Up"
 
 
+def test_currentuser_role_health_is_not_applicable_without_desktop(monkeypatch) -> None:
+    broker = SessionHelperBroker(
+        loop=None,
+        log=lambda _message: None,
+        emit_quick_job_result=lambda _payload: None,
+        http_client_factory=None,
+    )
+    monkeypatch.setattr(session_runtime, "IS_WINDOWS", False)
+    monkeypatch.setattr(session_runtime, "desktop_environment_active", lambda: False)
+
+    report = broker.currentuser_role_health()
+    accepted, reason = broker.dispatch_currentuser_quick_job({"job_id": 42})
+
+    assert report["status"] == "not_applicable"
+    assert report["detail"] == "No Desktop Environment Active."
+    assert report["details"]["listener_state"] == "Not Applicable"
+    assert accepted is False
+    assert reason == "no_desktop_environment_active"
+
+
 def test_ensure_helper_logs_listener_create_failure_instead_of_raising(monkeypatch) -> None:
     logged = []
     broker = SessionHelperBroker(
