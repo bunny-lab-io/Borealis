@@ -567,8 +567,12 @@ function InstallBranchDialog({
       field: "name",
       minWidth: 260,
       flex: 1,
+      cellStyle: {
+        display: "flex",
+        alignItems: "center",
+      },
       cellRenderer: (params) => (
-        <Typography sx={{ color: "#58a6ff", fontSize: "0.88rem", fontWeight: 600 }}>
+        <Typography sx={{ color: "#58a6ff", fontSize: "0.88rem", fontWeight: 600, lineHeight: 1.2 }}>
           {params.value}
         </Typography>
       ),
@@ -579,13 +583,6 @@ function InstallBranchDialog({
       minWidth: 130,
       maxWidth: 150,
       valueFormatter: (params) => String(params.value || "").slice(0, 12),
-    },
-    {
-      headerName: "Protected",
-      field: "protected",
-      minWidth: 120,
-      maxWidth: 130,
-      valueFormatter: (params) => (params.value ? "Yes" : "No"),
     },
   ], []);
 
