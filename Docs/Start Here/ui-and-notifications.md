@@ -96,6 +96,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - `GET /api/server/overview` (Operator Admin Session) - returns the Server Info dashboard snapshot including service state, host runtime details, WireGuard runtime status, public-edge certificate health, and live operator presence.
 - `GET /api/server/ansible-runner-settings` (Operator Admin Session) - returns the persisted scheduled-Ansible per-job and global runner limits shown in Server Info.
 - `PUT /api/server/ansible-runner-settings` (Operator Admin Session) - updates the persisted scheduled-Ansible per-job and global runner limits from Server Info.
+- `POST /api/server/services/<service_key>/action` (Operator Admin Session) - queues the corresponding container service command shown on Server Info rows: restart, rebuild, reload, or reconcile.
 - `POST /api/server/services/<service_key>/restart` (Operator Admin Session) - queues a safe detached restart for `borealis_engine`, `borealis_traefik`, or a specific `postgresql_cluster` instance.
 - `POST /api/server/wireguard/recover` (Operator Admin Session) - triggers Borealis WireGuard listener recovery when active tunnels exist.
 - `GET /api/watchdogs` (Token Authenticated) - list watchdog policies for the Watchdogs page.

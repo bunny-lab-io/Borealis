@@ -9,6 +9,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Menu,
   MenuItem,
   Stack,
   TextField,
@@ -19,6 +20,7 @@ import {
   DeveloperBoardRounded as ServerIcon,
   GitHub as GitHubIcon,
   InfoOutlined as InfoIcon,
+  KeyboardArrowDownRounded as KeyboardArrowDownIcon,
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { themeQuartz } from "ag-grid-community";
@@ -61,6 +63,17 @@ const BOOSTED_POLL_INTERVAL_MS = 3 * 1000;
 const BOOSTED_POLL_DURATION_MS = 30 * 1000;
 const MASTER_AUTO_SIZE_COLUMNS = ["domain", "name", "health", "state", "enabled", "started"];
 const NAME_COLUMN_PRIMARY_COLOR = "#58a6ff";
+const COMPOSE_SERVICE_ACTIONS = Object.freeze({
+  "api-backend": [{ id: "restart", label: "Restart", action: "restart" }],
+  "webui-frontend": [
+    { id: "rebuild_prod", label: "Rebuild Prod", action: "rebuild", mode: "prod" },
+    { id: "rebuild_dev", label: "Rebuild Dev", action: "rebuild", mode: "dev" },
+  ],
+  "traefik-edge": [{ id: "reload", label: "Reload", action: "reload" }],
+  "postgres-db": [{ id: "restart", label: "Restart", action: "restart" }],
+  "remote-desktop-guacd": [{ id: "restart", label: "Restart", action: "restart" }],
+  "wireguard-tunnel": [{ id: "reconcile", label: "Reconcile", action: "reconcile" }],
+});
 
 const SERVER_GRID_THEME = themeQuartz.withParams({
   accentColor: "#7dd3fc",
@@ -266,6 +279,38 @@ function formatStatusLabel(value) {
   if (raw === "locked") return "Locked";
   if (raw === "unlocked") return "Unlocked";
   return formatTitleCase(raw);
+}
+
+function serviceActionBusyKey(row, action) {
+  const rowKey = String(composeServiceKey(row) || row?.unit_name || "service").trim();
+  const actionKey = String(action?.id || action?.action || action?.label || "action").trim();
+  const mode = String(action?.mode || "").trim();
+  return `service:${rowKey}:${actionKey}${mode ? `:${mode}` : ""}`;
+}
+
+function composeServiceKey(row) {
+  return String(row?.key || row?.compose_service || "").trim().toLowerCase();
+}
+
+function serviceActionsForRow(row) {
+  const payloadActions = Array.isArray(row?.actions) ? row.actions.filter((action) => action?.action) : [];
+  if (payloadActions.length) return payloadActions;
+  if (String(row?.runtime || "").trim().toLowerCase() !== "compose") return [];
+  return (COMPOSE_SERVICE_ACTIONS[composeServiceKey(row)] || []).map((action) => ({ ...action }));
+}
+
+function webuiRebuildOptionLabel(action) {
+  const mode = String(action?.mode || "").trim().toLowerCase();
+  if (mode === "prod" || mode === "production") return "Production";
+  if (mode === "dev" || mode === "development") return "Development";
+  return formatTitleCase(mode || action?.label || "Target");
+}
+
+function webuiRebuildOptionSubtitle(action) {
+  const mode = String(action?.mode || "").trim().toLowerCase();
+  if (mode === "prod" || mode === "production") return "Production Flask Server";
+  if (mode === "dev" || mode === "development") return "Vite Dev HMR Server";
+  return "";
 }
 
 function formatBytes(value) {
@@ -556,6 +601,8 @@ function SummaryValueCell(props) {
 }
 
 function SummaryActionCell(props) {
+  const [menuAnchorEl, setMenuAnchorEl] = useState(null);
+  const [menuActionId, setMenuActionId] = useState("");
   const actions = Array.isArray(props?.data?.actions) ? props.data.actions.filter(Boolean) : [];
   if (!actions.length) {
     return (
@@ -565,33 +612,114 @@ function SummaryActionCell(props) {
     );
   }
 
+  const closeMenu = () => {
+    setMenuAnchorEl(null);
+    setMenuActionId("");
+  };
+
   return (
     <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-      {actions.map((action) => (
-        <Button
-          key={String(action?.id || action?.label || "action")}
-          size="small"
-          disabled={Boolean(action?.disabled)}
-          onClick={() => action?.onClick?.()}
-          sx={{
-            minWidth: 118,
-            minHeight: 34,
-            borderRadius: 999,
-            px: 1.8,
-            textTransform: "none",
-            fontWeight: 600,
-            color: action?.disabled ? "rgba(148,163,184,0.76)" : MAGIC_UI.textBright,
-            border: `1px solid ${action?.disabled ? "rgba(148,163,184,0.22)" : "rgba(148,163,184,0.36)"}`,
-            background: action?.disabled ? "rgba(15,23,42,0.42)" : "rgba(5,10,24,0.82)",
-            "&:hover": {
-              background: action?.disabled ? undefined : "rgba(9, 16, 34, 0.94)",
-              borderColor: action?.disabled ? undefined : "rgba(125,211,252,0.46)",
-            },
-          }}
-        >
-          {action?.label || "Action"}
-        </Button>
-      ))}
+      {actions.map((action) => {
+        const actionId = String(action?.id || action?.label || "action");
+        const menuItems = Array.isArray(action?.items) ? action.items.filter(Boolean) : [];
+        const menuOpen = Boolean(menuAnchorEl) && menuActionId === actionId;
+        return (
+          <React.Fragment key={actionId}>
+            <Button
+              size="small"
+              disabled={Boolean(action?.disabled)}
+              endIcon={menuItems.length ? <KeyboardArrowDownIcon sx={{ fontSize: 17 }} /> : null}
+              onClick={(event) => {
+                if (!menuItems.length) {
+                  action?.onClick?.();
+                  return;
+                }
+                setMenuAnchorEl(event.currentTarget);
+                setMenuActionId(actionId);
+              }}
+              sx={{
+                minWidth: 118,
+                minHeight: 34,
+                borderRadius: 999,
+                px: 1.8,
+                textTransform: "none",
+                fontWeight: 600,
+                color: action?.disabled ? "rgba(148,163,184,0.76)" : MAGIC_UI.textBright,
+                border: `1px solid ${action?.disabled ? "rgba(148,163,184,0.22)" : "rgba(148,163,184,0.36)"}`,
+                background: action?.disabled ? "rgba(15,23,42,0.42)" : "rgba(5,10,24,0.82)",
+                "&:hover": {
+                  background: action?.disabled ? undefined : "rgba(9, 16, 34, 0.94)",
+                  borderColor: action?.disabled ? undefined : "rgba(125,211,252,0.46)",
+                },
+              }}
+            >
+              {action?.label || "Action"}
+            </Button>
+            {menuItems.length ? (
+              <Menu
+                anchorEl={menuAnchorEl}
+                open={menuOpen}
+                onClose={closeMenu}
+                anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+                transformOrigin={{ vertical: "top", horizontal: "right" }}
+                MenuListProps={{
+                  dense: true,
+                  sx: { py: 0.75 },
+                }}
+                PaperProps={{
+                  sx: {
+                    mt: 0.75,
+                    minWidth: 252,
+                    borderRadius: 2,
+                    color: MAGIC_UI.textBright,
+                    background: "rgba(8,12,24,0.96)",
+                    backdropFilter: "blur(16px)",
+                    border: "1px solid rgba(148,163,184,0.26)",
+                    boxShadow: "0 18px 42px rgba(0,0,0,0.48)",
+                    overflow: "hidden",
+                  },
+                }}
+              >
+                {menuItems.map((item) => (
+                  <MenuItem
+                    key={String(item?.id || item?.label || "menu-item")}
+                    disabled={Boolean(item?.disabled)}
+                    onClick={() => {
+                      closeMenu();
+                      item?.onClick?.();
+                    }}
+                    sx={{
+                      alignItems: "flex-start",
+                      minHeight: 54,
+                      px: 1.65,
+                      py: 1,
+                      color: MAGIC_UI.textBright,
+                      "&:hover": {
+                        background: "rgba(125,211,252,0.1)",
+                      },
+                      "&.Mui-disabled": {
+                        color: "rgba(148,163,184,0.62)",
+                        opacity: 1,
+                      },
+                    }}
+                  >
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography sx={{ fontSize: "0.86rem", fontWeight: 700, lineHeight: 1.25 }}>
+                        {item?.label || "Action"}
+                      </Typography>
+                      {item?.subtitle ? (
+                        <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.74rem", lineHeight: 1.35, mt: 0.25 }}>
+                          {item.subtitle}
+                        </Typography>
+                      ) : null}
+                    </Box>
+                  </MenuItem>
+                ))}
+              </Menu>
+            ) : null}
+          </React.Fragment>
+        );
+      })}
     </Stack>
   );
 }
@@ -893,6 +1021,22 @@ export default function ServerInfo() {
     });
   }, []);
 
+  const requestServiceAction = useCallback((row, action) => {
+    const serviceKey = composeServiceKey(row);
+    const actionName = String(action?.action || "").trim();
+    if (!serviceKey || !actionName) return;
+    const label = String(action?.confirmLabel || action?.label || formatTitleCase(actionName)).trim();
+    setActionError("");
+    setConfirmAction({
+      kind: "service_action",
+      title: `${label} Service`,
+      subtitle: `Borealis will queue Engine.sh --service ${serviceKey} ${actionName}${action?.mode ? ` ${action.mode}` : ""}.`,
+      confirmLabel: label,
+      payload: { row, action },
+      message: `${label} ${row?.label || serviceKey}?`,
+    });
+  }, []);
+
   const requestWireGuardRecovery = useCallback(() => {
     setActionError("");
     setConfirmAction({
@@ -1127,13 +1271,38 @@ export default function ServerInfo() {
     if (!confirmAction) return;
     const targetRow = confirmAction?.payload || null;
     const busyKey =
-      confirmAction.kind === "restart"
+      confirmAction.kind === "service_action"
+        ? serviceActionBusyKey(targetRow?.row, targetRow?.action)
+        : confirmAction.kind === "restart"
         ? String(targetRow?.unit_name || "")
         : "wireguard_recover";
     setActionBusyKey(busyKey);
     setActionError("");
     try {
-      if (confirmAction.kind === "restart") {
+      if (confirmAction.kind === "service_action") {
+        const row = targetRow?.row || {};
+        const action = targetRow?.action || {};
+        const response = await fetch(`/api/server/services/${encodeURIComponent(row?.key || "")}/action`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            id: action?.id,
+            action: action?.action,
+            mode: action?.mode,
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
+        }
+        await sendScopedNotification({
+          title: "Service Action Queued",
+          message: `${action?.label || "Action"} queued for ${row?.label || "service"}.`,
+          icon: "pendingactions",
+          variant: "info",
+        });
+      } else if (confirmAction.kind === "restart") {
         const body =
           targetRow?.key === "postgresql_cluster" && targetRow?.instance
             ? { instance: targetRow.instance }
@@ -1298,8 +1467,8 @@ export default function ServerInfo() {
       {
         headerName: "Actions",
         field: "actions_label",
-        minWidth: 150,
-        maxWidth: 180,
+        minWidth: 240,
+        maxWidth: 320,
         sortable: false,
         filter: false,
         floatingFilter: false,
@@ -1511,29 +1680,73 @@ export default function ServerInfo() {
 
     const serviceMasterRows = services.map((row, index) => {
       const busyKey = String(actionBusyKey || "");
-      const rowKey = String(row?.unit_name || "");
       const queued = Boolean(row?.pending_action);
-      const busy = busyKey === rowKey;
-      const unsupported = !row?.restart_supported;
-      const label = unsupported ? "Unavailable" : queued || busy ? "Restarting..." : "Restart";
+      const serviceActions = serviceActionsForRow(row);
+      const mapServiceAction = (action) => {
+        const actionBusyKeyValue = serviceActionBusyKey(row, action);
+        const busy = busyKey === actionBusyKeyValue;
+        return {
+          id: `service_action:${row?.key || row?.unit_name || index}:${action?.id || action?.action || action?.label}`,
+          label: busy ? `${action?.label || formatTitleCase(action?.action)}...` : action?.label || formatTitleCase(action?.action),
+          disabled: queued || busy || !action?.action,
+          onClick: () => requestServiceAction(row, action),
+        };
+      };
+      const webuiRebuildActions =
+        composeServiceKey(row) === "webui-frontend"
+          ? serviceActions.filter((action) => String(action?.action || "").trim().toLowerCase() === "rebuild")
+          : [];
+      const actions =
+        serviceActions.length > 0
+          ? webuiRebuildActions.length > 1
+            ? [
+                {
+                  id: `service_action:${row?.key || row?.unit_name || index}:rebuild_menu`,
+                  label: "Rebuild",
+                  disabled: queued || webuiRebuildActions.every((action) => !action?.action),
+                  items: webuiRebuildActions.map((action) => {
+                    const optionLabel = webuiRebuildOptionLabel(action);
+                    const busy = busyKey === serviceActionBusyKey(row, action);
+                    return {
+                      ...action,
+                      id: action?.id || `${action?.action || "rebuild"}_${action?.mode || optionLabel}`,
+                      label: optionLabel,
+                      subtitle: webuiRebuildOptionSubtitle(action),
+                      confirmLabel: `Rebuild ${optionLabel}`,
+                      disabled: queued || busy || !action?.action,
+                      onClick: () => requestServiceAction(row, {
+                        ...action,
+                        label: optionLabel,
+                        confirmLabel: `Rebuild ${optionLabel}`,
+                      }),
+                    };
+                  }),
+                },
+                ...serviceActions
+                  .filter((action) => String(action?.action || "").trim().toLowerCase() !== "rebuild")
+                  .map(mapServiceAction),
+              ]
+            : serviceActions.map(mapServiceAction)
+          : [
+              {
+                id: `service_action:${row?.unit_name || index}`,
+                label: !row?.restart_supported ? "Unavailable" : queued || busyKey === String(row?.unit_name || "") ? "Restarting..." : "Restart",
+                disabled: queued || busyKey === String(row?.unit_name || "") || !row?.restart_supported,
+                onClick: () => requestRestart(row),
+              },
+            ];
+      const serviceState = String(row?.display_status || row?.docker_status || row?.active_state || "").trim();
       return {
         id: `services:${row?.unit_name || index}`,
         domain: "Services",
         name: row?.label || "Service",
-        details: row?.unit_name || "—",
-        value: row?.main_pid ? `PID ${row.main_pid}` : "Systemd Unit",
-        health: String(row?.status || "").trim().toLowerCase(),
-        state: formatTitleCase(row?.active_state),
-        enabled: formatTitleCase(row?.enabled_state),
+        details: row?.compose_service ? `${row.compose_service} · ${row?.unit_name || "container"}` : row?.unit_name || "—",
+        value: row?.runtime === "compose" ? "Docker Compose" : row?.main_pid ? `PID ${row.main_pid}` : "Systemd Unit",
+        health: String(row?.docker_health || row?.status || "").trim().toLowerCase(),
+        state: serviceState ? formatTitleCase(serviceState) : formatTitleCase(row?.active_state),
+        enabled: row?.runtime === "compose" ? "Compose" : formatTitleCase(row?.enabled_state),
         started: row?.started_at ? formatDateTime(row.started_at) : "Unavailable",
-        actions: [
-          {
-            id: `service_action:${row?.unit_name || index}`,
-            label,
-            disabled: queued || busy || unsupported,
-            onClick: () => requestRestart(row),
-          },
-        ],
+        actions,
         sort_order: index,
       };
     });
@@ -1614,7 +1827,7 @@ export default function ServerInfo() {
       ...accessMasterRows,
       ...securityMasterRows,
     ];
-  }, [accessRows, actionBusyKey, operatorSessionCount, requestRestart, resourceRows, runtimeRows, securityRows, services, wireguard, worstCert]);
+  }, [accessRows, actionBusyKey, operatorSessionCount, requestRestart, requestServiceAction, resourceRows, runtimeRows, securityRows, services, wireguard, worstCert]);
 
   if (!isAdmin) return null;
 

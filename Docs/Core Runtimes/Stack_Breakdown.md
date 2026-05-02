@@ -45,6 +45,7 @@ Engine/Services/traefik-edge/config
 Engine/Services/traefik-edge/env
 Engine/Services/traefik-edge/logs
 Engine/Services/traefik-edge/state
+Engine/Services/webui-frontend/data/web-interface
 Engine/Services/remote-desktop-guacd/logs
 Engine/Services/wireguard-tunnel/config
 Engine/Services/wireguard-tunnel/logs
@@ -57,7 +58,7 @@ Build cache, when Docker Buildx is available, lives under:
 Engine/Deploy/cache/buildkit/<service>/
 ```
 
-Operators should treat `Engine/` as generated runtime state. Edit source under `Data/Engine/Containers/`, then redeploy through `Engine.sh`.
+Operators should treat `Engine/` as generated runtime state. Edit committed source under `Data/Engine/Containers/`, then redeploy through `Engine.sh`. For live WebUI dev/HMR work, edit the seeded runtime WebUI source under `Engine/Services/webui-frontend/data/web-interface/`.
 
 ## Stack Services
 | Service | Container | Main responsibility | Host network endpoint |
@@ -82,9 +83,10 @@ Engine/Services/traefik-edge/state  -> /opt/Borealis/Engine/Services/traefik-edg
 Engine/Services/wireguard-tunnel/config  -> /opt/Borealis/Engine/Services/wireguard-tunnel/config
 Engine/Services/wireguard-tunnel/run     -> /opt/Borealis/Engine/Services/wireguard-tunnel/run
 Engine/Services/wireguard-tunnel/secrets -> /opt/Borealis/Engine/Services/wireguard-tunnel/secrets
+/var/run/docker.sock -> /var/run/docker.sock
 ```
 
-`api-backend` does not mount the whole `Engine/Services` tree. It receives its own runtime plus specific Traefik and WireGuard paths needed for edge settings and tunnel control.
+`api-backend` does not mount the whole `Engine/Services` tree. It receives its own runtime plus specific Traefik and WireGuard paths needed for edge settings and tunnel control. It also receives the Docker socket so the Server Info admin page can read Docker health/state and launch detached helper containers for `Engine.sh --service ...` actions.
 
 `postgres-db`:
 ```text
@@ -108,7 +110,18 @@ Engine/Services/remote-desktop-guacd/logs -> /opt/borealis/logs
 Engine/Services/wireguard-tunnel -> /opt/Borealis/Engine/Services/wireguard-tunnel
 ```
 
-`webui-frontend` does not currently bind persistent state directly. It reads runtime env and serves its packaged/static or dev-mode frontend runtime.
+`webui-frontend`:
+```text
+Engine/Services/webui-frontend/data/web-interface/src        -> /opt/Borealis/Data/Engine/web-interface/src
+Engine/Services/webui-frontend/data/web-interface/public     -> /opt/Borealis/Data/Engine/web-interface/public
+Engine/Services/webui-frontend/data/web-interface/Unit_Tests -> /opt/Borealis/Data/Engine/web-interface/Unit_Tests
+Engine/Services/webui-frontend/data/web-interface/index.html -> /opt/Borealis/Data/Engine/web-interface/index.html
+Engine/Services/webui-frontend/data/web-interface/package.json -> /opt/Borealis/Data/Engine/web-interface/package.json
+Engine/Services/webui-frontend/data/web-interface/tsconfig.json -> /opt/Borealis/Data/Engine/web-interface/tsconfig.json
+Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Borealis/Data/Engine/web-interface/vite.config.mts
+```
+
+`Engine.sh` seeds `Engine/Services/webui-frontend/data/web-interface/` from committed WebUI source when the runtime copy is missing. It does not overwrite an existing runtime copy during normal deploys, so dev-mode Vite HMR edits survive rebuilds. Set `BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE=1` before deploy to discard and reseed the runtime WebUI source from committed source.
 
 ## Deploy Order
 `Engine.sh deploy [prod|dev]` performs these phases:
@@ -118,15 +131,16 @@ Engine/Services/wireguard-tunnel -> /opt/Borealis/Engine/Services/wireguard-tunn
 3. Install or verify Engine dependencies.
 4. Check for host PostgreSQL conflict on `127.0.0.1:5432`.
 5. Create service runtime tree under `Engine/Services/`.
-6. Prune empty legacy runtime paths.
-7. Resolve public hostname and ACME email.
-8. Render `Engine/Deploy/compose.env`.
-9. Compute service input hashes from source, Dockerfile, build context, target mode, and dependency inputs.
-10. Build changed local images as `borealis-engine/<service>:sha-<hash>`.
-11. Write `Engine/Deploy/image-manifest.json`.
-12. Re-render `compose.env` with resolved image tags.
-13. Compare compose/env/image hashes against `Engine/Deploy/deploy-manifest.json`.
-14. Skip Compose if nothing changed and all containers are running.
+6. Seed runtime WebUI source under `Engine/Services/webui-frontend/data/web-interface/` when missing.
+7. Prune empty legacy runtime paths.
+8. Resolve public hostname and ACME email.
+9. Render `Engine/Deploy/compose.env`.
+10. Compute service input hashes from source, Dockerfile, build context, target mode, and dependency inputs.
+11. Build changed local images as `borealis-engine/<service>:sha-<hash>`.
+12. Write `Engine/Deploy/image-manifest.json`.
+13. Re-render `compose.env` with resolved image tags.
+14. Compare compose/env/image hashes against `Engine/Deploy/deploy-manifest.json`.
+15. Skip Compose if nothing changed and all containers are running.
 15. Run scoped Compose `up -d --no-deps <service...>` when only service images changed.
 16. Run full Compose `up -d` when compose config, runtime env, or container state requires it.
 17. Write `Engine/Deploy/deploy-manifest.json`.
@@ -154,15 +168,22 @@ borealis-engine/<service>:sha-<inputhash12>
 Build cache:
 - Docker Buildx uses `Engine/Deploy/cache/buildkit/<service>/` when available.
 - Hosts without usable Buildx fall back to `DOCKER_BUILDKIT=1 docker build`.
-- Build output streams to the terminal and `Engine/Deploy/build.log` with Docker progress mode `plain` by default, which shows BuildKit step/layer sections as images assemble.
-- Override progress rendering with `BOREALIS_BUILD_PROGRESS=auto|plain|tty|rawjson` before running `Engine.sh`.
 - `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Borealis.ps1`.
 - `webui-frontend`, `traefik-edge`, `postgres-db`, `remote-desktop-guacd`, and `wireguard-tunnel` use service-local build contexts.
 - Service-local build contexts carry their own `.dockerignore` files so `node_modules`, WebUI build output, Python bytecode, pytest caches, logs, and local test output stay out of image contexts.
+- Deploy mode is part of the image hash only for services with explicit mode targets, currently `webui-frontend`. Switching between prod and dev should not make PostgreSQL, guacd, WireGuard, Traefik, or the API image appear changed unless their own inputs changed.
+
+Deploy output:
+- Terminal output uses compact service status lines such as `<timestamp> <service>: [Already Up-to-Date]` or `<timestamp> <service>: [(Re)Building]`.
+- Compose uses `Applying Stack` when env/Compose metadata changed without image rebuilds.
+- Color is enabled only for interactive terminals. Set `NO_COLOR=1` to disable it.
+- Successful deploys print `WebUI Accessible @ <public-base-url>`.
+- Full Docker build detail remains in `Engine/Deploy/build.log`.
 
 WebUI targets:
 - Production builds Docker target `prod`, which runs `npm run build`.
 - Dev builds Docker target `dev`, which keeps Vite HMR available and skips production static build work.
+- Dev HMR source edits should happen under `Engine/Services/webui-frontend/data/web-interface/`; Compose bind-mounts that runtime copy into the WebUI container.
 
 ## Runtime Start Order
 Compose dependency order:
@@ -302,6 +323,8 @@ Action support:
 | `rebuild` | any Engine service | Rebuilds selected image, updates image manifest/env, recreates service with `up -d --no-deps`. |
 | `reload` | `traefik-edge` only | Restarts Traefik after config/env changes. |
 | `reconcile` | `wireguard-tunnel` only | Runs `borealis-wireguard-control-client reconcile` inside tunnel container. |
+
+Server Info service actions use the same command surface. The API backend queues those actions by launching a short-lived helper container from the current `api-backend` image with `/opt/Borealis` and the Docker socket mounted, then returns immediately while the helper runs `Engine.sh --service ...`.
 
 ## Direct Compose Commands
 Use `Engine.sh` when possible. Direct Compose commands are useful for read-only inspection or emergency operations.

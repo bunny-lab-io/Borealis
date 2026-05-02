@@ -18,7 +18,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 ## Runtime Paths
 - Engine package shim and tests: `Data/Engine/`.
 - API backend source: `Data/Engine/Containers/api-backend/data/` (edit here).
-- WebUI frontend source: `Data/Engine/Containers/webui-frontend/data/web-interface/` (edit here).
+- WebUI frontend committed source: `Data/Engine/Containers/webui-frontend/data/web-interface/` (edit here for durable repo changes).
+- WebUI dev/HMR runtime source: `Engine/Services/webui-frontend/data/web-interface/` (edit here for live Vite dev-mode testing).
 - Container source: `Data/Engine/Containers/` (Compose, Dockerfiles, build manifest, service entrypoints, and service-owned source trees).
 - Runtime state: `Engine/` (generated each deployment and ignored by git).
 - Deploy state: `Engine/Deploy/compose.env`, `Engine/Deploy/image-manifest.json`, `Engine/Deploy/deploy-manifest.json`, and `Engine/Deploy/build.log`.
@@ -28,7 +29,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Logs: `Engine/Services/<role>/logs/`; api-backend writes API and domain logs under `Engine/Services/api-backend/logs/`.
 - Ansible runtime: `Engine/Services/api-backend/cache/Ansible/` (staged manifest, installed collections, generated execution workspaces).
 - Certificates: `Engine/Services/api-backend/secrets/Certificates/` (TLS bundle + code signing keys).
-- WebUI source is packaged into the `webui-frontend` image; the WebUI service does not keep persistent runtime state by default.
+- WebUI source is packaged into the `webui-frontend` image and seeded into `Engine/Services/webui-frontend/data/web-interface/` for dev-mode host editing. Normal deploys do not overwrite an existing runtime copy; set `BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE=1` to reseed from committed source.
 - Bundled official assemblies: `Data/Engine/Containers/api-backend/data/Official_Assemblies/` (generated seed snapshot).
 - Aurora checkout: `Engine/Services/api-backend/cache/Aurora/`.
 
@@ -50,19 +51,21 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 ## Codex Agent (Detailed)
 ### Source vs runtime
 - Edit API/backend code in `Data/Engine/Containers/api-backend/data/`.
-- Edit WebUI code in `Data/Engine/Containers/webui-frontend/data/web-interface/`.
+- Edit WebUI code in `Data/Engine/Containers/webui-frontend/data/web-interface/` for committed source changes. For rapid dev-mode HMR edits, use `Engine/Services/webui-frontend/data/web-interface/`.
 - Keep `Data/Engine/` for package shims, unit tests, and container roots.
 - `Engine/` is generated runtime state. Do not edit it directly.
 - The Compose project name is `borealis-engine`.
 - `Engine.sh` computes input hashes from Dockerfiles, build context, container entrypoints, source files, dependency manifests, and mode inputs, then builds images as `borealis-engine/<service>:sha-<hash>`.
+- Mode inputs affect image hashes only for services with mode-specific build targets. Today that means `webui-frontend`; DB, guacd, WireGuard, Traefik, and API images do not rebuild merely because the operator switches `prod`/`dev`.
 - Docker Buildx cache is stored under `Engine/Deploy/cache/buildkit/<service>/` when usable; plain Docker build remains the fallback.
-- Image builds stream Docker progress to the terminal and `Engine/Deploy/build.log`; set `BOREALIS_BUILD_PROGRESS` to override the default `plain` progress renderer.
+- Deploy output uses compact colored service status lines in interactive terminals; set `NO_COLOR=1` to force plain text.
 - No-op redeploys reuse existing image tags and skip Compose when deploy manifest, runtime env, image hashes, and container state already match.
 - Compose health checks gate startup: PostgreSQL `pg_isready`, WireGuard control socket presence, guacd TCP `4822`, WebUI loopback HTTP, API `/health`, and Traefik ping on `127.0.0.1:8082`.
 
 ### Container service boundaries
 - `api-backend` runs the Python Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, and Engine-side Ansible execution. It binds `127.0.0.1:5000`.
-- `webui-frontend` serves the production WebUI on `127.0.0.1:8080` or Vite HMR on `127.0.0.1:5173` in dev mode.
+- `api-backend` has Docker CLI/Compose access to the host Docker socket in container mode so Server Info can mirror Docker service health and queue detached `Engine.sh --service ...` actions through helper containers.
+- `webui-frontend` serves the production WebUI on `127.0.0.1:8080` or Vite HMR on `127.0.0.1:5173` in dev mode. Dev mode bind-mounts `Engine/Services/webui-frontend/data/web-interface/` into the container for host-side UI edits.
 - `traefik-edge` owns public HTTP/HTTPS on `80/443`, ACME storage, Traefik config, UI/API/Socket.IO/VNC routing, and edge logs.
 - `postgres-db` owns PostgreSQL state under `Engine/Services/postgres-db/state` and binds `127.0.0.1:5432`.
 - `remote-desktop-guacd` runs VNC-only `guacd` on `127.0.0.1:4822`.

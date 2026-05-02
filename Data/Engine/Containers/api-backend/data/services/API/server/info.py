@@ -7,6 +7,7 @@
 # - GET /api/server/timezones (Operator Admin Session) - Returns the current server timezone and the selectable timezone inventory.
 # - POST /api/server/timezone (Operator Admin Session) - Changes the engine host timezone.
 # - GET /api/server/overview (Operator Admin Session) - Returns a Borealis Engine server/admin dashboard snapshot, including Compose-backed service rows in container mode.
+# - POST /api/server/services/<service_key>/action (Operator Admin Session) - Queues a Compose-backed Engine.sh service action in container mode.
 # - POST /api/server/services/<service_key>/restart (Operator Admin Session) - Queues a safe detached service restart via systemd-run for non-container installs.
 # - POST /api/server/wireguard/recover (Operator Admin Session) - Forces a WireGuard listener recovery attempt when active tunnels exist.
 # ======================================================
@@ -73,9 +74,40 @@ _PEM_CERT_PATTERN = re.compile(
 )
 _SERVICE_ACTION_TTL_SECONDS = 60
 _SERVICE_RESTART_DELAY_SECONDS = 2
+_CONTAINER_ACTION_DELAY_SECONDS = 2
 _CERT_WARNING_DAYS = 30
 _CERT_CRITICAL_DAYS = 14
 _SYSTEMD_COMMAND_TIMEOUT_SECONDS = 8
+
+_COMPOSE_SERVICE_SPECS: Tuple[Tuple[str, str], ...] = (
+    ("api-backend", "API Backend"),
+    ("webui-frontend", "WebUI Frontend"),
+    ("traefik-edge", "Traefik Edge"),
+    ("postgres-db", "PostgreSQL"),
+    ("remote-desktop-guacd", "Remote Desktop guacd"),
+    ("wireguard-tunnel", "WireGuard Tunnel"),
+)
+_COMPOSE_SERVICE_ACTIONS: Mapping[str, Tuple[Mapping[str, str], ...]] = {
+    "api-backend": (
+        {"id": "restart", "label": "Restart", "action": "restart"},
+    ),
+    "webui-frontend": (
+        {"id": "rebuild_prod", "label": "Rebuild Prod", "action": "rebuild", "mode": "prod"},
+        {"id": "rebuild_dev", "label": "Rebuild Dev", "action": "rebuild", "mode": "dev"},
+    ),
+    "traefik-edge": (
+        {"id": "reload", "label": "Reload", "action": "reload"},
+    ),
+    "postgres-db": (
+        {"id": "restart", "label": "Restart", "action": "restart"},
+    ),
+    "remote-desktop-guacd": (
+        {"id": "restart", "label": "Restart", "action": "restart"},
+    ),
+    "wireguard-tunnel": (
+        {"id": "reconcile", "label": "Reconcile", "action": "reconcile"},
+    ),
+}
 
 
 @dataclass
@@ -490,6 +522,11 @@ def _compose_runtime_paths() -> Tuple[Path, Path, str]:
     return compose_file, env_file, project_name
 
 
+def _compose_service_actions(service_key: str) -> List[Dict[str, str]]:
+    normalized = str(service_key or "").strip().lower()
+    return [dict(item) for item in _COMPOSE_SERVICE_ACTIONS.get(normalized, ())]
+
+
 def _parse_compose_ps_json(raw: str) -> Dict[str, Mapping[str, Any]]:
     text = str(raw or "").strip()
     if not text:
@@ -544,6 +581,23 @@ def _compose_ps_rows() -> Dict[str, Mapping[str, Any]]:
     return _parse_compose_ps_json(out)
 
 
+def _docker_inspect_container(container_name: str) -> Mapping[str, Any]:
+    normalized_name = str(container_name or "").strip()
+    docker_bin = shutil.which("docker") or ""
+    if not docker_bin or not normalized_name:
+        return {}
+    code, out, _err = _run_command([docker_bin, "inspect", normalized_name], timeout=8)
+    if code != 0 or not str(out or "").strip():
+        return {}
+    try:
+        parsed = json.loads(out)
+    except Exception:
+        return {}
+    if isinstance(parsed, list) and parsed and isinstance(parsed[0], Mapping):
+        return parsed[0]
+    return {}
+
+
 def _compose_status(state: str, health: str) -> str:
     normalized_state = str(state or "").strip().lower()
     normalized_health = str(health or "").strip().lower()
@@ -558,19 +612,28 @@ def _compose_status(state: str, health: str) -> str:
     return "unknown"
 
 
+def _compose_display_status(state: str, health: str) -> str:
+    normalized_health = str(health or "").strip().lower()
+    normalized_state = str(state or "").strip().lower()
+    if normalized_health:
+        return format_title_case_for_api(normalized_health)
+    if normalized_state:
+        return format_title_case_for_api(normalized_state)
+    return "Unknown"
+
+
+def format_title_case_for_api(value: Any) -> str:
+    raw = str(value or "").strip().replace("_", " ").replace("-", " ")
+    if not raw:
+        return "Unknown"
+    return " ".join(part[:1].upper() + part[1:].lower() for part in raw.split())
+
+
 def _compose_service_rows(context: Any) -> List[Dict[str, Any]]:
     tracker = _get_action_tracker(context)
     ps_rows = _compose_ps_rows()
-    service_specs = [
-        ("api-backend", "API Backend"),
-        ("webui-frontend", "WebUI Frontend"),
-        ("traefik-edge", "Traefik Edge"),
-        ("postgres-db", "PostgreSQL"),
-        ("remote-desktop-guacd", "Remote Desktop guacd"),
-        ("wireguard-tunnel", "WireGuard Tunnel"),
-    ]
     rows: List[Dict[str, Any]] = []
-    for service_key, label in service_specs:
+    for service_key, label in _COMPOSE_SERVICE_SPECS:
         record = ps_rows.get(service_key) or {}
         state = str(record.get("State") or record.get("state") or "").strip().lower() or "unknown"
         health = str(record.get("Health") or record.get("health") or "").strip().lower()
@@ -580,6 +643,17 @@ def _compose_service_rows(context: Any) -> List[Dict[str, Any]]:
             or record.get("ContainerName")
             or f"borealis-engine-{service_key}"
         ).strip()
+        inspected = _docker_inspect_container(container_name)
+        state_payload = inspected.get("State") if isinstance(inspected.get("State"), Mapping) else {}
+        inspected_state = str(state_payload.get("Status") or "").strip().lower()
+        inspected_health_payload = state_payload.get("Health") if isinstance(state_payload.get("Health"), Mapping) else {}
+        inspected_health = str(inspected_health_payload.get("Status") or "").strip().lower()
+        if inspected_state:
+            state = inspected_state
+        if inspected_health:
+            health = inspected_health
+        started_at = str(state_payload.get("StartedAt") or "").strip() if state_payload else ""
+        display_status = _compose_display_status(state, health)
         rows.append(
             {
                 "key": service_key,
@@ -588,13 +662,18 @@ def _compose_service_rows(context: Any) -> List[Dict[str, Any]]:
                 "unit_name": container_name,
                 "compose_service": service_key,
                 "runtime": "compose",
+                "docker_state": state,
+                "docker_health": health or None,
+                "docker_status": display_status,
+                "display_status": display_status,
                 "active_state": state,
                 "sub_state": health or state,
                 "enabled_state": "compose",
-                "main_pid": 0,
-                "started_at": None,
+                "main_pid": _safe_int(state_payload.get("Pid"), 0) if state_payload else 0,
+                "started_at": started_at if started_at and not started_at.startswith("0001-") else None,
                 "fragment_path": None,
-                "restart_supported": False,
+                "restart_supported": any(action.get("action") == "restart" for action in _compose_service_actions(service_key)),
+                "actions": _compose_service_actions(service_key),
                 "pending_action": tracker.get_pending(service_key=service_key),
                 "status": _compose_status(state, health),
             }
@@ -1239,6 +1318,79 @@ def _queue_detached_restart(
     return True, f"{job_unit}.service", ""
 
 
+def _resolve_compose_service_action(service_key: str, body: Mapping[str, Any]) -> Optional[Dict[str, str]]:
+    normalized_service = str(service_key or "").strip().lower()
+    requested_action = str(body.get("action") or "").strip().lower()
+    requested_mode = str(body.get("mode") or "").strip().lower()
+    requested_id = str(body.get("id") or body.get("action_id") or "").strip().lower()
+    for action in _compose_service_actions(normalized_service):
+        action_name = str(action.get("action") or "").strip().lower()
+        action_mode = str(action.get("mode") or "").strip().lower()
+        action_id = str(action.get("id") or "").strip().lower()
+        if requested_id and requested_id == action_id:
+            return action
+        if requested_action != action_name:
+            continue
+        if action_mode and requested_mode and requested_mode != action_mode:
+            continue
+        if action_mode and not requested_mode and requested_action == "rebuild":
+            continue
+        return action
+    return None
+
+
+def _queue_compose_service_action(
+    *,
+    service_key: str,
+    action: Mapping[str, str],
+) -> Tuple[bool, str, str]:
+    docker_bin = shutil.which("docker") or ""
+    if not docker_bin:
+        return False, "", "docker CLI is unavailable inside the API backend container."
+
+    project_root = Path(os.environ.get("BOREALIS_PROJECT_ROOT") or PROJECT_ROOT)
+    image = str(os.environ.get("BOREALIS_API_BACKEND_IMAGE") or "").strip()
+    if not image:
+        image = "borealis-engine/api-backend:local"
+
+    action_name = str(action.get("action") or "").strip().lower()
+    action_mode = str(action.get("mode") or "").strip().lower()
+    if not action_name:
+        return False, "", "A service action is required."
+
+    command_parts = ["bash", "Engine.sh", "--service", service_key, action_name]
+    if action_mode:
+        command_parts.append(action_mode)
+    shell_command = f"sleep {_CONTAINER_ACTION_DELAY_SECONDS}; {shlex.join(command_parts)}"
+    helper_name = f"borealis-engine-action-{service_key}-{uuid.uuid4().hex[:8]}"
+    args = [
+        docker_bin,
+        "run",
+        "--rm",
+        "-d",
+        "--name",
+        helper_name,
+        "--network",
+        "host",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
+        "-v",
+        f"{project_root}:{project_root}",
+        "-w",
+        str(project_root),
+        "--entrypoint",
+        "/bin/bash",
+        image,
+        "-lc",
+        shell_command,
+    ]
+    code, out, err = _run_command(args, timeout=15)
+    if code != 0:
+        return False, "", str(err or out or "docker helper launch failed").strip()
+    helper_id = str(out or "").strip().splitlines()[0] if str(out or "").strip() else helper_name
+    return True, helper_id, ""
+
+
 def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
     """Expose server telemetry endpoints used by the admin interface."""
 
@@ -1396,6 +1548,58 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
         )
         return jsonify({"status": "ok", "ansible_runner": _collect_ansible_runner_payload()})
 
+    @blueprint.route("/api/server/services/<service_key>/action", methods=["POST"])
+    def run_service_action(service_key: str) -> Any:
+        admin_error = auth.require_admin()
+        if admin_error:
+            return jsonify(admin_error[0]), admin_error[1]
+
+        if not _containerized_engine_enabled():
+            return _error_response(
+                "service_action_unsupported",
+                "Generic service actions are available for containerized Engine deployments only.",
+                409,
+            )
+
+        normalized_key = str(service_key or "").strip().lower()
+        if normalized_key not in dict(_COMPOSE_SERVICE_SPECS):
+            return _error_response("invalid_service_key", "Unsupported service key.", 404)
+
+        body = request.get_json(silent=True) or {}
+        action = _resolve_compose_service_action(normalized_key, body)
+        if action is None:
+            return _error_response("invalid_service_action", "Unsupported action for this service.", 400)
+
+        queued, helper_id, error_message = _queue_compose_service_action(
+            service_key=normalized_key,
+            action=action,
+        )
+        if not queued:
+            return _error_response("service_action_failed", error_message or "Unable to queue service action.", 500)
+
+        tracker = _get_action_tracker(adapters.context)
+        action_name = str(action.get("action") or "").strip().lower()
+        mode = str(action.get("mode") or "").strip().lower()
+        tracker.mark_pending(
+            service_key=normalized_key,
+            unit_name=f"Engine.sh --service {normalized_key} {action_name}{f' {mode}' if mode else ''}",
+            action=action_name,
+        )
+        scheduled_for = (datetime.now(timezone.utc) + timedelta(seconds=_CONTAINER_ACTION_DELAY_SECONDS)).isoformat()
+        return (
+            jsonify(
+                {
+                    "queued": True,
+                    "service_key": normalized_key,
+                    "action": action_name,
+                    "mode": mode or None,
+                    "helper_container": helper_id,
+                    "scheduled_for": scheduled_for,
+                }
+            ),
+            202,
+        )
+
     @blueprint.route("/api/server/services/<service_key>/restart", methods=["POST"])
     def restart_service(service_key: str) -> Any:
         admin_error = auth.require_admin()
@@ -1403,6 +1607,36 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
             return jsonify(admin_error[0]), admin_error[1]
 
         normalized_key = str(service_key or "").strip().lower()
+        if _containerized_engine_enabled():
+            action = _resolve_compose_service_action(normalized_key, {"action": "restart"})
+            if action is None:
+                return _error_response("invalid_service_key", "Unsupported service key.", 404)
+            queued, helper_id, error_message = _queue_compose_service_action(
+                service_key=normalized_key,
+                action=action,
+            )
+            if not queued:
+                return _error_response("restart_failed", error_message or "Unable to queue restart.", 500)
+            tracker = _get_action_tracker(adapters.context)
+            tracker.mark_pending(
+                service_key=normalized_key,
+                unit_name=f"Engine.sh --service {normalized_key} restart",
+                action="restart",
+            )
+            scheduled_for = (datetime.now(timezone.utc) + timedelta(seconds=_CONTAINER_ACTION_DELAY_SECONDS)).isoformat()
+            return (
+                jsonify(
+                    {
+                        "queued": True,
+                        "service_key": normalized_key,
+                        "action": "restart",
+                        "helper_container": helper_id,
+                        "scheduled_for": scheduled_for,
+                    }
+                ),
+                202,
+            )
+
         if normalized_key not in {"borealis_engine", "borealis_traefik", "postgresql_cluster"}:
             return _error_response("invalid_service_key", "Unsupported service key.", 404)
 

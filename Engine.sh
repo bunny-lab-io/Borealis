@@ -18,12 +18,13 @@ COMPOSE_FILE="${CONTAINER_SOURCE_DIR}/compose.yaml"
 BUILD_MANIFEST="${CONTAINER_SOURCE_DIR}/build-manifest.json"
 ENV_EXAMPLE="${CONTAINER_SOURCE_DIR}/compose.env.example"
 RUNTIME_ROOT="${SCRIPT_DIR}/Engine"
+WEBUI_STAGED_SOURCE_DIR="${CONTAINER_SOURCE_DIR}/webui-frontend/data/web-interface"
+WEBUI_RUNTIME_SOURCE_DIR="${RUNTIME_ROOT}/Services/webui-frontend/data/web-interface"
 DEPLOY_DIR="${RUNTIME_ROOT}/Deploy"
 COMPOSE_ENV="${DEPLOY_DIR}/compose.env"
 IMAGE_MANIFEST="${DEPLOY_DIR}/image-manifest.json"
 DEPLOY_MANIFEST="${DEPLOY_DIR}/deploy-manifest.json"
 BUILD_LOG="${DEPLOY_DIR}/build.log"
-BUILD_PROGRESS="${BOREALIS_BUILD_PROGRESS:-plain}"
 DEFAULT_INSTALL_DIR="/opt/Borealis"
 DEFAULT_REPO_URL="https://github.com/bunny-lab-io/Borealis.git"
 DEFAULT_REPO_REF="main"
@@ -51,6 +52,24 @@ SERVICE_ROLES=(
   "wireguard-tunnel"
 )
 
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+  C_GREEN=$'\033[32m'
+  C_YELLOW=$'\033[33m'
+  C_BLUE=$'\033[34m'
+  C_RED=$'\033[31m'
+else
+  C_RESET=""
+  C_BOLD=""
+  C_DIM=""
+  C_GREEN=""
+  C_YELLOW=""
+  C_BLUE=""
+  C_RED=""
+fi
+
 declare -A IMAGE_TAGS
 declare -A IMAGE_HASHES
 declare -A DOCKERFILES
@@ -61,8 +80,26 @@ log() {
   printf '[%s] %s\n' "$(date +%FT%T)" "$*"
 }
 
+log_status() {
+  local subject="$1"
+  local status="$2"
+  local color="$3"
+  printf '[%s] %s: %b[%s]%b\n' "$(date +%FT%T)" "${subject}" "${color}${C_BOLD}" "${status}" "${C_RESET}"
+}
+
+log_detail() {
+  printf '[%s] %b%s%b\n' "$(date +%FT%T)" "${C_DIM}" "$*" "${C_RESET}"
+}
+
+log_webui_url() {
+  local public_base_url
+  public_base_url="$(read_env_value BOREALIS_PUBLIC_BASE_URL)"
+  [[ -n "${public_base_url}" ]] || return 0
+  printf '[%s] WebUI Accessible @ %b%s%b\n' "$(date +%FT%T)" "${C_BLUE}${C_BOLD}" "${public_base_url}" "${C_RESET}"
+}
+
 die() {
-  printf '[%s] ERROR: %s\n' "$(date +%FT%T)" "$*" >&2
+  printf '[%s] %bERROR:%b %s\n' "$(date +%FT%T)" "${C_RED}${C_BOLD}" "${C_RESET}" "$*" >&2
   exit 1
 }
 
@@ -496,11 +533,49 @@ ensure_service_tree() {
     "${RUNTIME_ROOT}/Services/traefik-edge/env" \
     "${RUNTIME_ROOT}/Services/traefik-edge/logs" \
     "${RUNTIME_ROOT}/Services/traefik-edge/state" \
+    "${RUNTIME_ROOT}/Services/webui-frontend/data" \
     "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/config" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/run"
+}
+
+seed_webui_runtime_source() {
+  [[ -d "${WEBUI_STAGED_SOURCE_DIR}" ]] || die "WebUI staged source missing: ${WEBUI_STAGED_SOURCE_DIR}"
+  if [[ -f "${WEBUI_RUNTIME_SOURCE_DIR}/package.json" && "${BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE:-0}" != "1" ]]; then
+    return 0
+  fi
+  if [[ "${BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE:-0}" == "1" && -d "${WEBUI_RUNTIME_SOURCE_DIR}" ]]; then
+    rm -rf "${WEBUI_RUNTIME_SOURCE_DIR}"
+  fi
+  mkdir -p "${WEBUI_RUNTIME_SOURCE_DIR}"
+  if command_exists rsync; then
+    rsync -a --delete \
+      --exclude node_modules \
+      --exclude build \
+      --exclude dist \
+      --exclude .vite \
+      --exclude coverage \
+      --exclude .eslintcache \
+      "${WEBUI_STAGED_SOURCE_DIR}/" \
+      "${WEBUI_RUNTIME_SOURCE_DIR}/"
+    return 0
+  fi
+  (
+    cd "${WEBUI_STAGED_SOURCE_DIR}"
+    tar \
+      --exclude='./node_modules' \
+      --exclude='./build' \
+      --exclude='./dist' \
+      --exclude='./.vite' \
+      --exclude='./coverage' \
+      --exclude='./.eslintcache' \
+      -cf - .
+  ) | (
+    cd "${WEBUI_RUNTIME_SOURCE_DIR}"
+    tar -xf -
+  )
 }
 
 prune_empty_legacy_runtime_paths() {
@@ -551,7 +626,6 @@ prune_empty_legacy_runtime_paths() {
     "Services/webui-frontend/run"
     "Services/webui-frontend/secrets"
     "Services/webui-frontend/state"
-    "Services/webui-frontend"
     "Services/wireguard-tunnel/cache"
     "Services/wireguard-tunnel/env"
     "Services/wireguard-tunnel/state"
@@ -630,6 +704,7 @@ BOREALIS_RUNTIME_ENV_FILE=${COMPOSE_ENV}
 
 BOREALIS_ENGINE_MODE=${engine_mode}
 BOREALIS_WEBUI_MODE=${mode}
+BOREALIS_WEBUI_RUNTIME_SOURCE_DIR=${WEBUI_RUNTIME_SOURCE_DIR}
 BOREALIS_PUBLIC_HOSTNAME=${public_host}
 BOREALIS_PUBLIC_EDGE_ENABLED=1
 BOREALIS_PUBLIC_BASE_URL=${public_base_url}
@@ -697,7 +772,8 @@ EOF
 compute_service_hash() {
   local service="$1"
   local mode="$2"
-  python3 - "${SCRIPT_DIR}" "${BUILD_MANIFEST}" "${service}" "${mode}" <<'PY'
+  local legacy_mode_sensitive="${3:-0}"
+  python3 - "${SCRIPT_DIR}" "${BUILD_MANIFEST}" "${service}" "${mode}" "${legacy_mode_sensitive}" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -707,6 +783,7 @@ root = pathlib.Path(sys.argv[1])
 manifest = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
 service = sys.argv[3]
 mode = sys.argv[4]
+legacy_mode_sensitive = sys.argv[5] in {"1", "true", "legacy"}
 entry = manifest["services"][service]
 excluded_parts = {
     "__pycache__",
@@ -718,22 +795,36 @@ excluded_parts = {
 }
 excluded_suffixes = {".pyc", ".pyo", ".log"}
 files = set()
+
+def add_candidate(candidate):
+    rel = candidate.relative_to(root)
+    if any(part in excluded_parts for part in rel.parts):
+        return
+    if candidate.is_dir():
+        for child in candidate.rglob("*"):
+            add_candidate(child)
+        return
+    if not candidate.is_file():
+        return
+    if candidate.suffix in excluded_suffixes:
+        return
+    files.add(rel)
+
 for pattern in entry.get("inputs", []):
+    if pattern.endswith("/**"):
+        base = root / pattern[:-3]
+        if base.exists():
+            add_candidate(base)
+        continue
     for candidate in root.glob(pattern):
-        if not candidate.is_file():
-            continue
-        rel = candidate.relative_to(root)
-        if any(part in excluded_parts for part in rel.parts):
-            continue
-        if candidate.suffix in excluded_suffixes:
-            continue
-        files.add(rel)
+        add_candidate(candidate)
 dockerfile = pathlib.Path(entry["dockerfile"])
 files.add(dockerfile)
 digest = hashlib.sha256()
 targets = entry.get("targets") or {}
+hash_mode = mode if (targets or legacy_mode_sensitive) else ""
 digest.update(
-    f"service={service}\nmode={mode}\n"
+    f"service={service}\nmode={hash_mode}\n"
     f"dockerfile={entry.get('dockerfile')}\n"
     f"context={entry.get('context')}\n"
     f"target={targets.get(mode) or ''}\n".encode("utf-8")
@@ -791,6 +882,21 @@ except Exception:
 PY
 }
 
+previous_image_tag() {
+  local service="$1"
+  [[ -f "${IMAGE_MANIFEST}" ]] || return 0
+  python3 - "${IMAGE_MANIFEST}" "${service}" <<'PY'
+import json
+import pathlib
+import sys
+try:
+    data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+    print(((data.get("services") or {}).get(sys.argv[2]) or {}).get("image") or "")
+except Exception:
+    print("")
+PY
+}
+
 build_service_image() {
   local service="$1"
   local mode="$2"
@@ -810,21 +916,28 @@ build_service_image() {
   BUILD_STATUSES["${service}"]="unchanged"
 
   local previous
+  local previous_tag
   previous="$(previous_image_hash "${service}")"
+  previous_tag="$(previous_image_tag "${service}")"
   if [[ "${previous}" == "${image_hash}" ]] && docker image inspect "${tag}" >/dev/null 2>&1; then
-    log "${service} image unchanged (${tag}); build skipped."
+    log_status "${service}" "Already Up-to-Date" "${C_GREEN}"
     printf '[%s] %s unchanged as %s; build skipped\n' "$(date +%FT%T)" "${service}" "${tag}" >> "${BUILD_LOG}"
     return 0
   fi
-
-  log "Building ${service} image ${tag}."
-  {
-    printf '\n[%s] === Building %s as %s ===\n' "$(date +%FT%T)" "${service}" "${tag}"
-    printf '[%s] Dockerfile: %s\n' "$(date +%FT%T)" "${dockerfile}"
-    printf '[%s] Context: %s\n' "$(date +%FT%T)" "${context}"
-    if [[ -n "${target}" ]]; then
-      printf '[%s] Target: %s\n' "$(date +%FT%T)" "${target}"
+  if [[ -n "${previous}" && -n "${previous_tag}" && "${previous_tag}" != "${tag}" ]]; then
+    local legacy_hash
+    legacy_hash="$(compute_service_hash "${service}" "${mode}" "legacy")"
+    if [[ "${previous}" == "${legacy_hash}" ]] && docker image inspect "${previous_tag}" >/dev/null 2>&1; then
+      docker tag "${previous_tag}" "${tag}"
+      log_status "${service}" "Already Up-to-Date" "${C_GREEN}"
+      printf '[%s] %s unchanged after hash normalization; retagged %s as %s\n' "$(date +%FT%T)" "${service}" "${previous_tag}" "${tag}" >> "${BUILD_LOG}"
+      return 0
     fi
+  fi
+
+  log_status "${service}" "(Re)Building" "${C_YELLOW}"
+  {
+    printf '[%s] Building %s as %s\n' "$(date +%FT%T)" "${service}" "${tag}"
     local build_args=(
       --label "org.opencontainers.image.title=Borealis ${service}" \
       --label "io.borealis.service=${service}" \
@@ -841,7 +954,7 @@ build_service_image() {
       local cache_next="${cache_root}/next"
       mkdir -p "${cache_root}"
       rm -rf "${cache_next}"
-      local buildx_args=(buildx build --load --progress="${BUILD_PROGRESS}")
+      local buildx_args=(buildx build --load --progress=plain)
       if [[ -d "${cache_current}" ]]; then
         buildx_args+=(--cache-from "type=local,src=${cache_current}")
       fi
@@ -854,13 +967,14 @@ build_service_image() {
       else
         rm -rf "${cache_next}"
         printf '[%s] Buildx cache build failed for %s; falling back to docker build\n' "$(date +%FT%T)" "${service}"
-        DOCKER_BUILDKIT=1 docker build --progress="${BUILD_PROGRESS}" "${build_args[@]}" "${SCRIPT_DIR}/${context}"
+        DOCKER_BUILDKIT=1 docker build "${build_args[@]}" "${SCRIPT_DIR}/${context}"
       fi
     else
-      DOCKER_BUILDKIT=1 docker build --progress="${BUILD_PROGRESS}" "${build_args[@]}" "${SCRIPT_DIR}/${context}"
+      DOCKER_BUILDKIT=1 docker build "${build_args[@]}" "${SCRIPT_DIR}/${context}"
     fi
-  } 2>&1 | tee -a "${BUILD_LOG}"
+  } >> "${BUILD_LOG}" 2>&1
   BUILD_STATUSES["${service}"]="built"
+  log_status "${service}" "Rebuilt" "${C_GREEN}"
 }
 
 build_images() {
@@ -1203,6 +1317,7 @@ validate_service() {
 prepare_runtime() {
   local mode="$1"
   ensure_service_tree
+  seed_webui_runtime_source
   prune_empty_legacy_runtime_paths
   load_existing_image_tags
   local public_host
@@ -1215,6 +1330,7 @@ prepare_runtime() {
 deploy_engine() {
   local mode
   mode="$(normalize_mode "${1:-prod}")"
+  log_status "Engine deploy ${mode}" "Starting" "${C_BLUE}"
   ensure_engine_dependencies
   ensure_no_host_postgres_conflict
   prepare_runtime "${mode}"
@@ -1225,22 +1341,26 @@ deploy_engine() {
   local changed_services=()
   mapfile -t changed_services < <(changed_build_services)
   if deploy_state_matches "${mode}" && all_engine_containers_running; then
-    log "Engine deploy unchanged; Compose up skipped."
+    log_status "Compose" "Already Up-to-Date" "${C_GREEN}"
     write_deploy_manifest "${mode}" "skipped"
-    log "Engine deployment state current. Env: ${COMPOSE_ENV}"
+    log_webui_url
     return 0
   fi
   if ((${#changed_services[@]} > 0)) && deploy_non_image_state_matches "${mode}" && all_engine_containers_running; then
-    log "Starting scoped Compose update for changed service images: ${changed_services[*]}."
+    log_status "Compose" "(Re)Building ${changed_services[*]}" "${C_YELLOW}"
     compose_base up -d --no-deps "${changed_services[@]}"
     write_deploy_manifest "${mode}" "up-scoped" "${changed_services[@]}"
-    log "Engine scoped deployment complete. Env: ${COMPOSE_ENV}"
+    log_webui_url
     return 0
   fi
-  log "Starting Compose project ${PROJECT_NAME} (${mode})."
+  if ((${#changed_services[@]} > 0)); then
+    log_status "Compose" "(Re)Building Stack" "${C_YELLOW}"
+  else
+    log_status "Compose" "Applying Stack" "${C_YELLOW}"
+  fi
   compose_base up -d
   write_deploy_manifest "${mode}" "up" "${changed_services[@]}"
-  log "Engine deployed through Docker Compose. Env: ${COMPOSE_ENV}"
+  log_webui_url
 }
 
 service_compose_name() {
@@ -1268,8 +1388,10 @@ service_action() {
       export_image_manifest_env
       write_image_manifest "${mode}"
       write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)"
+      log_status "${service}" "Recreating Container" "${C_YELLOW}"
       compose_base up -d --no-deps "$(service_compose_name "${service}")"
       write_deploy_manifest "${mode}" "up-scoped" "${service}"
+      log_webui_url
       ;;
     reload)
       [[ "${service}" == "traefik-edge" ]] || die "reload supported for traefik-edge only."
@@ -1320,3 +1442,4 @@ main() {
 }
 
 main "$@"
+exit $?

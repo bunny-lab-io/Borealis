@@ -33,7 +33,8 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 ## Borealis Engine Dependencies
 
 - Docker Engine (Linux Engine deployment runtime; Docker Desktop not used) - Apache-2.0 - https://github.com/moby/moby/blob/master/LICENSE
-- Docker Compose plugin (Linux Engine deployment orchestration) - Apache-2.0 - https://github.com/docker/compose/blob/main/LICENSE
+- Docker CLI (`docker-ce-cli`, host and api-backend service-action helper) - Apache-2.0 - https://github.com/docker/cli/blob/master/LICENSE
+- Docker Compose plugin (Linux Engine deployment orchestration and api-backend service-action helper) - Apache-2.0 - https://github.com/docker/compose/blob/main/LICENSE
 - Docker Buildx plugin / BuildKit (optional local Engine image build cache acceleration) - Apache-2.0 - https://github.com/docker/buildx/blob/master/LICENSE
 - Debian Bookworm base image (`debian:bookworm-slim`) - Debian Free Software Guidelines / package-specific licenses - https://www.debian.org/legal/licenses/
 - Python container base image (`python:3.12-slim-bookworm`) - PSF License plus Debian package licenses - https://github.com/docker-library/python/blob/master/LICENSE

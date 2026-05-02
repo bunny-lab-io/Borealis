@@ -66,10 +66,11 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 ### Bootstrap and runtime separation
 - Engine API/backend source lives in `Data/Engine/Containers/api-backend/data/`.
 - Engine WebUI source lives in `Data/Engine/Containers/webui-frontend/data/web-interface/`.
+- Engine WebUI dev/HMR runtime source lives in `Engine/Services/webui-frontend/data/web-interface/` after first Engine deploy.
 - Agent source code lives in `Data/Agent/`.
 - Runtime copies are staged to `Engine/` and `Agent/` every launch; these are disposable.
 - Engine container source lives in `Data/Engine/Containers/`; generated runtime state lives under `Engine/Deploy/` and sparse service-owned folders under `Engine/Services/<role>/`.
-- Always edit source under `Data/` and re-run the appropriate launcher to apply changes: `Engine.sh` for Linux Engine first install and redeploys, `Agent.sh` for Linux Agent first install and redeploys, and `Borealis.ps1` / `bootstrap.ps1` for the Windows agent.
+- Edit durable source under `Data/` and re-run the appropriate launcher to apply changes: `Engine.sh` for Linux Engine first install and redeploys, `Agent.sh` for Linux Agent first install and redeploys, and `Borealis.ps1` / `bootstrap.ps1` for the Windows agent. For rapid WebUI HMR testing, edit `Engine/Services/webui-frontend/data/web-interface/` while running `Engine.sh deploy dev`.
 
 ### Launch mechanics
 - `Engine.sh` is the Linux Engine first-run and redeploy path. When run from a raw one-liner or with repo options, it syncs source first; local `Engine.sh deploy` uses existing on-disk source.
