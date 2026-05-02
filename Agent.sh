@@ -329,6 +329,15 @@ write_agent_log() {
   printf '[%s] %s\n' "$(date +%FT%T)" "$*" >> "${log_dir}/install.log"
 }
 
+mask_enrollment_code() {
+  local code="${1:-}"
+  if [[ "${#code}" -le 8 ]]; then
+    printf '%s\n' "***"
+    return 0
+  fi
+  printf '%s***%s\n' "${code:0:4}" "${code: -4}"
+}
+
 install_agent_dependencies() {
   if command_exists python3 && python3 -m venv --help >/dev/null 2>&1 && { command_exists pip3 || python3 -m pip --version >/dev/null 2>&1; }; then
     return 0
@@ -402,6 +411,7 @@ stage_agent_runtime() {
     agent_deployment.py
     agent.py
     Borealis.ico
+    desktop_environment.py
     fcntl_stub.py
     launch_service.ps1
     qt_compat.py
@@ -496,24 +506,63 @@ stop_agent_supervision() {
   local unit_name="${BOREALIS_AGENT_SYSTEMD_UNIT:-borealis-agent.service}"
   if command_exists systemctl; then
     run_privileged systemctl stop "${unit_name}" >/dev/null 2>&1 || true
+    run_privileged systemctl stop borealis-agent-updater.service >/dev/null 2>&1 || true
+    run_privileged systemctl stop borealis-agent-updater.timer >/dev/null 2>&1 || true
   fi
 
   local pid_file="${SCRIPT_DIR}/Agent/Logs/agent.pid"
-  [[ -f "${pid_file}" ]] || return 0
-  local pid=""
-  pid="$(head -n 1 "${pid_file}" 2>/dev/null || true)"
-  if [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" >/dev/null 2>&1; then
+  if [[ -f "${pid_file}" ]]; then
+    local pid=""
+    pid="$(head -n 1 "${pid_file}" 2>/dev/null || true)"
+    if [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" >/dev/null 2>&1; then
+      local cmdline=""
+      if [[ -r "/proc/${pid}/cmdline" ]]; then
+        cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+      fi
+      if [[ "${cmdline}" == *"Borealis/agent.py"* || "${cmdline}" == *"Data/Agent/agent.py"* ]]; then
+        run_privileged kill "${pid}" >/dev/null 2>&1 || true
+        sleep 1
+        kill -0 "${pid}" >/dev/null 2>&1 && run_privileged kill -9 "${pid}" >/dev/null 2>&1 || true
+      fi
+    fi
+    rm -f "${pid_file}" 2>/dev/null || true
+  fi
+
+  command_exists pgrep || return 0
+  local runtime_dir
+  runtime_dir="$(agent_runtime_dir)"
+  local current_pid="${BASHPID:-$$}"
+  while IFS= read -r pid; do
+    [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+    [[ "${pid}" != "${current_pid}" && "${pid}" != "$$" ]] || continue
+    kill -0 "${pid}" >/dev/null 2>&1 || continue
     local cmdline=""
     if [[ -r "/proc/${pid}/cmdline" ]]; then
       cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
     fi
-    if [[ "${cmdline}" == *"Borealis/agent.py"* || "${cmdline}" == *"Data/Agent/agent.py"* ]]; then
-      kill "${pid}" >/dev/null 2>&1 || true
-      sleep 1
-      kill -0 "${pid}" >/dev/null 2>&1 && kill -9 "${pid}" >/dev/null 2>&1 || true
+    if [[ "${cmdline}" == *"${SCRIPT_DIR}/Agent/Borealis/agent.py"* \
+       || "${cmdline}" == *"${runtime_dir}/Borealis/agent.py"* \
+       || "${cmdline}" == *"${SCRIPT_DIR}/Data/Agent/agent.py"* ]]; then
+      write_agent_log "Stopping orphaned Agent process pid=${pid}."
+      run_privileged kill "${pid}" >/dev/null 2>&1 || true
     fi
-  fi
-  rm -f "${pid_file}" 2>/dev/null || true
+  done < <(pgrep -f 'agent.py' 2>/dev/null || true)
+  sleep 1
+  while IFS= read -r pid; do
+    [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+    [[ "${pid}" != "${current_pid}" && "${pid}" != "$$" ]] || continue
+    kill -0 "${pid}" >/dev/null 2>&1 || continue
+    local cmdline=""
+    if [[ -r "/proc/${pid}/cmdline" ]]; then
+      cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+    fi
+    if [[ "${cmdline}" == *"${SCRIPT_DIR}/Agent/Borealis/agent.py"* \
+       || "${cmdline}" == *"${runtime_dir}/Borealis/agent.py"* \
+       || "${cmdline}" == *"${SCRIPT_DIR}/Data/Agent/agent.py"* ]]; then
+      write_agent_log "Force-stopping orphaned Agent process pid=${pid}."
+      run_privileged kill -9 "${pid}" >/dev/null 2>&1 || true
+    fi
+  done < <(pgrep -f 'agent.py' 2>/dev/null || true)
 }
 
 ensure_agent_systemd_service() {
@@ -620,7 +669,7 @@ deploy_agent() {
   local explicit_enrollment_code="${ENROLLMENT_CODE:-${BOREALIS_ENROLLMENT_CODE:-}}"
   if [[ -n "${explicit_enrollment_code}" ]]; then
     NEW_ENGINE_FLAG=1
-    write_agent_log "Explicit enrollment code supplied; refreshing Agent enrollment state."
+    write_agent_log "Explicit enrollment code supplied; refreshing Agent enrollment state code_mask=$(mask_enrollment_code "${explicit_enrollment_code}")."
   fi
   if [[ "${NEW_ENGINE_FLAG}" -eq 1 || "${BOREALIS_BOOTSTRAP_NEW_ENGINE:-0}" == "1" ]]; then
     clear_agent_enrollment_state
@@ -655,9 +704,15 @@ parse_and_run() {
         shift
         SERVER_URL="${1:-}"
         ;;
+      -ServerUrl=*|--ServerUrl=*|--serverurl=*|--server-url=*)
+        SERVER_URL="${1#*=}"
+        ;;
       -EnrollmentCode|--EnrollmentCode|--enrollmentcode|--enrollment-code)
         shift
         ENROLLMENT_CODE="${1:-}"
+        ;;
+      -EnrollmentCode=*|--EnrollmentCode=*|--enrollmentcode=*|--enrollment-code=*)
+        ENROLLMENT_CODE="${1#*=}"
         ;;
       -NewEngine|--newEngine|--newengine|-DeleteServerTrust|--delete-servertrust|--deleteservertrust|-ForceReEnroll|--force-reenroll|--forcereenroll)
         NEW_ENGINE_FLAG=1
