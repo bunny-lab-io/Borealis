@@ -22,6 +22,8 @@ WEBUI_STAGED_SOURCE_DIR="${CONTAINER_SOURCE_DIR}/webui-frontend/data/web-interfa
 WEBUI_RUNTIME_SOURCE_DIR="${RUNTIME_ROOT}/Services/webui-frontend/data/web-interface"
 DEPLOY_DIR="${RUNTIME_ROOT}/Deploy"
 COMPOSE_ENV="${DEPLOY_DIR}/compose.env"
+RUNTIME_ENV="${DEPLOY_DIR}/runtime.env"
+WEBUI_ENV="${DEPLOY_DIR}/webui-frontend.env"
 IMAGE_MANIFEST="${DEPLOY_DIR}/image-manifest.json"
 DEPLOY_MANIFEST="${DEPLOY_DIR}/deploy-manifest.json"
 BUILD_LOG="${DEPLOY_DIR}/build.log"
@@ -487,13 +489,6 @@ normalize_mode() {
   esac
 }
 
-engine_mode_env() {
-  case "$(normalize_mode "${1:-prod}")" in
-    dev) printf '%s\n' "developer" ;;
-    *) printf '%s\n' "production" ;;
-  esac
-}
-
 service_env_prefix() {
   printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr '-' '_'
 }
@@ -539,6 +534,7 @@ ensure_service_tree() {
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/run"
+  chmod 0777 "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" 2>/dev/null || true
 }
 
 seed_webui_runtime_source() {
@@ -674,6 +670,25 @@ resolve_acme_email() {
   fi
 }
 
+write_webui_mode_env_file() {
+  local target="$1"
+  local mode="$2"
+  awk -v mode="${mode}" '
+    BEGIN { wrote = 0 }
+    /^BOREALIS_WEBUI_MODE=/ {
+      print "BOREALIS_WEBUI_MODE=" mode
+      wrote = 1
+      next
+    }
+    { print }
+    END {
+      if (!wrote) {
+        print "BOREALIS_WEBUI_MODE=" mode
+      }
+    }
+  ' "${RUNTIME_ENV}" > "${target}"
+}
+
 write_compose_env() {
   local mode="$1"
   local public_host="$2"
@@ -694,16 +709,14 @@ write_compose_env() {
     public_base_url="https://${public_host%:443}"
   fi
 
-  local engine_mode
-  engine_mode="$(engine_mode_env "${mode}")"
-
-  cat > "${COMPOSE_ENV}" <<EOF
+  cat > "${RUNTIME_ENV}" <<EOF
 BOREALIS_PROJECT_ROOT=${SCRIPT_DIR}
 BOREALIS_COMPOSE_PROJECT_NAME=${PROJECT_NAME}
-BOREALIS_RUNTIME_ENV_FILE=${COMPOSE_ENV}
-
-BOREALIS_ENGINE_MODE=${engine_mode}
-BOREALIS_WEBUI_MODE=${mode}
+BOREALIS_RUNTIME_ENV_FILE=${RUNTIME_ENV}
+BOREALIS_WEBUI_ENV_FILE=${WEBUI_ENV}
+BOREALIS_ENGINE_MODE=production
+BOREALIS_WEBUI_MODE=prod
+BOREALIS_WEBUI_UPSTREAM_PORT=${BOREALIS_WEBUI_UPSTREAM_PORT:-8000}
 BOREALIS_WEBUI_RUNTIME_SOURCE_DIR=${WEBUI_RUNTIME_SOURCE_DIR}
 BOREALIS_PUBLIC_HOSTNAME=${public_host}
 BOREALIS_PUBLIC_EDGE_ENABLED=1
@@ -758,7 +771,12 @@ BOREALIS_ERROR_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/error.log
 BOREALIS_API_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/api.log
 BOREALIS_VPN_TUNNEL_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/VPN_Tunnel/tunnel.log
 BOREALIS_WIREGUARD_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/VPN_Tunnel/tunnel.log
+EOF
 
+  write_webui_mode_env_file "${WEBUI_ENV}" "${mode}"
+
+  cp "${RUNTIME_ENV}" "${COMPOSE_ENV}"
+  cat >> "${COMPOSE_ENV}" <<EOF
 BOREALIS_API_BACKEND_IMAGE=${IMAGE_TAGS[api-backend]:-borealis-engine/api-backend:local}
 BOREALIS_WEBUI_FRONTEND_IMAGE=${IMAGE_TAGS[webui-frontend]:-borealis-engine/webui-frontend:local}
 BOREALIS_TRAEFIK_EDGE_IMAGE=${IMAGE_TAGS[traefik-edge]:-borealis-engine/traefik-edge:local}
@@ -766,7 +784,7 @@ BOREALIS_POSTGRES_DB_IMAGE=${IMAGE_TAGS[postgres-db]:-borealis-engine/postgres-d
 BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE=${IMAGE_TAGS[remote-desktop-guacd]:-borealis-engine/remote-desktop-guacd:local}
 BOREALIS_WIREGUARD_TUNNEL_IMAGE=${IMAGE_TAGS[wireguard-tunnel]:-borealis-engine/wireguard-tunnel:local}
 EOF
-  chmod 600 "${COMPOSE_ENV}"
+  chmod 600 "${COMPOSE_ENV}" "${RUNTIME_ENV}" "${WEBUI_ENV}"
 }
 
 compute_service_hash() {
@@ -1084,6 +1102,21 @@ changed_build_services() {
   done
 }
 
+previous_deploy_mode() {
+  [[ -f "${DEPLOY_MANIFEST}" ]] || return 0
+  python3 - "${DEPLOY_MANIFEST}" <<'PY'
+import json
+import pathlib
+import sys
+
+try:
+    data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+print(str(data.get("mode") or ""))
+PY
+}
+
 all_engine_containers_running() {
   local service=""
   for service in "${SERVICE_ROLES[@]}"; do
@@ -1126,6 +1159,10 @@ def env_settings_hash(path: pathlib.Path) -> str:
         if raw.startswith("BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE="):
             continue
         if raw.startswith("BOREALIS_WIREGUARD_TUNNEL_IMAGE="):
+            continue
+        if raw.startswith("BOREALIS_ENGINE_MODE="):
+            continue
+        if raw.startswith("BOREALIS_WEBUI_MODE="):
             continue
         lines.append(raw)
     return hashlib.sha256(("\n".join(lines) + "\n").encode("utf-8")).hexdigest()
@@ -1174,7 +1211,6 @@ import sys
 deploy_path = pathlib.Path(sys.argv[1])
 compose_path = pathlib.Path(sys.argv[2])
 env_path = pathlib.Path(sys.argv[3])
-mode = sys.argv[4]
 project = sys.argv[5]
 
 def file_hash(path: pathlib.Path) -> str:
@@ -1189,6 +1225,8 @@ def env_settings_hash(path: pathlib.Path) -> str:
         "BOREALIS_POSTGRES_DB_IMAGE",
         "BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE",
         "BOREALIS_WIREGUARD_TUNNEL_IMAGE",
+        "BOREALIS_ENGINE_MODE",
+        "BOREALIS_WEBUI_MODE",
     }
     for raw in path.read_text(encoding="utf-8").splitlines():
         key = raw.split("=", 1)[0]
@@ -1207,7 +1245,6 @@ if existing.get("schema_version") != 2:
     raise SystemExit(1)
 expected = {
     "project": project,
-    "mode": mode,
     "compose_file_hash": file_hash(compose_path),
     "env_settings_hash": env_settings_hash(env_path),
 }
@@ -1253,6 +1290,8 @@ def env_settings_hash(path: pathlib.Path) -> str:
         "BOREALIS_POSTGRES_DB_IMAGE",
         "BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE",
         "BOREALIS_WIREGUARD_TUNNEL_IMAGE",
+        "BOREALIS_ENGINE_MODE",
+        "BOREALIS_WEBUI_MODE",
     }
     for raw in path.read_text(encoding="utf-8").splitlines():
         key = raw.split("=", 1)[0]
@@ -1340,16 +1379,31 @@ deploy_engine() {
   write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)"
   local changed_services=()
   mapfile -t changed_services < <(changed_build_services)
+  local previous_mode=""
+  previous_mode="$(previous_deploy_mode)"
+  local target_service_lines=""
+  target_service_lines="$(
+    {
+      printf '%s\n' "${changed_services[@]}"
+      if [[ -n "${previous_mode}" && "${previous_mode}" != "${mode}" ]]; then
+        printf '%s\n' webui-frontend
+      fi
+    } | awk 'NF && !seen[$0]++'
+  )"
+  local target_services=()
+  if [[ -n "${target_service_lines}" ]]; then
+    mapfile -t target_services <<< "${target_service_lines}"
+  fi
   if deploy_state_matches "${mode}" && all_engine_containers_running; then
     log_status "Compose" "Already Up-to-Date" "${C_GREEN}"
     write_deploy_manifest "${mode}" "skipped"
     log_webui_url
     return 0
   fi
-  if ((${#changed_services[@]} > 0)) && deploy_non_image_state_matches "${mode}" && all_engine_containers_running; then
-    log_status "Compose" "(Re)Building ${changed_services[*]}" "${C_YELLOW}"
-    compose_base up -d --no-deps "${changed_services[@]}"
-    write_deploy_manifest "${mode}" "up-scoped" "${changed_services[@]}"
+  if ((${#target_services[@]} > 0)) && deploy_non_image_state_matches "${mode}" && all_engine_containers_running; then
+    log_status "Compose" "(Re)Building ${target_services[*]}" "${C_YELLOW}"
+    compose_base up -d --no-deps "${target_services[@]}"
+    write_deploy_manifest "${mode}" "up-scoped" "${target_services[@]}"
     log_webui_url
     return 0
   fi

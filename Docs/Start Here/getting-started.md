@@ -7,7 +7,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 ## Quick Start (Engine)
 - Linux production, first install from a cloned checkout: `./Engine.sh deploy prod` (installs Docker Engine + Docker Compose when missing, then deploys the Compose-backed Engine at `https://<your-public-fqdn>` through the Traefik edge container).
 - Linux production, one-line install: `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- deploy prod`.
-- Linux dev, first install: `./Engine.sh deploy dev` (same Compose stack, with Vite HMR on loopback `127.0.0.1:5173` behind Traefik).
+- Linux dev, first install: `./Engine.sh deploy dev` (same Compose stack, with Vite HMR on loopback `127.0.0.1:8000` behind Traefik).
 - Linux stable-channel install: `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --release-channel stable deploy prod`.
 - Linux branch testing install: `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --repo-branch optimization/agent-context-socket-consolidation deploy prod`.
 - Linux production, local redeploy: `./Engine.sh deploy prod` or `./Borealis.sh --EngineProduction`.
@@ -15,7 +15,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Engine service action examples: `./Engine.sh --service api-backend restart`, `./Engine.sh --service webui-frontend rebuild dev`, `./Engine.sh --service traefik-edge reload`, and `./Engine.sh --service wireguard-tunnel reconcile`.
 - Updates: `./Update.sh -Engine` fast-forwards the current branch then runs `Engine.sh deploy`; `./Update.sh -Agent` preserves the Agent updater flow then runs `Agent.sh deploy`.
 - Production TLS is managed by the embedded Traefik edge; the Python Engine stays on loopback HTTP.
-- During Engine deployment, `Engine.sh` renders `Engine/Deploy/compose.env`, builds changed local images as `borealis-engine/<service>:sha-<hash>`, and starts or updates the Compose project `borealis-engine`.
+- During Engine deployment, `Engine.sh` renders `Engine/Deploy/compose.env` for Compose interpolation, renders shared and WebUI mode-scoped service env files under `Engine/Deploy/`, builds changed local images as `borealis-engine/<service>:sha-<hash>`, and starts or updates the Compose project `borealis-engine`.
 - No-op Engine deploys skip unchanged image builds and skip Compose when the deploy manifest, env, image hashes, and running containers already match.
 - Storage is displayed during profile detection as an advisory guideline only. It does not change which Engine profile gets selected.
 
@@ -75,7 +75,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 ### Launch mechanics
 - `Engine.sh` is the Linux Engine first-run and redeploy path. When run from a raw one-liner or with repo options, it syncs source first; local `Engine.sh deploy` uses existing on-disk source.
 - `Engine.sh deploy` installs missing Engine OS dependencies, defaults to production, and runs Docker Compose with project name `borealis-engine`.
-- `Engine.sh deploy dev` runs the same service set but sets the WebUI frontend to Vite HMR behind Traefik.
+- `Engine.sh deploy dev` runs the same service set but sets the WebUI frontend to Vite HMR behind Traefik. Switching between prod and dev should only recreate WebUI after the stack is already current.
 - `Agent.sh` is the Linux Agent first-run and redeploy path. When run from a raw one-liner or with repo options, it syncs source first; local `Agent.sh deploy` uses existing on-disk source.
 - `Agent.sh deploy` installs missing Agent OS dependencies and stages the Linux Agent runtime.
 - `Borealis.sh` is now a compatibility router for legacy commands and service shortcuts.

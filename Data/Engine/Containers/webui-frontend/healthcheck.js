@@ -2,8 +2,7 @@
 
 const http = require("http");
 
-const mode = String(process.env.BOREALIS_WEBUI_MODE || "prod").toLowerCase();
-const port = mode === "dev" || mode === "developer" ? 5173 : 8080;
+const port = Number.parseInt(process.env.BOREALIS_WEBUI_UPSTREAM_PORT || "8000", 10);
 
 const request = http.get(
   {

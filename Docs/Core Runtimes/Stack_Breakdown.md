@@ -26,6 +26,8 @@ Engine/
 Deploy state:
 ```text
 Engine/Deploy/compose.env
+Engine/Deploy/runtime.env
+Engine/Deploy/webui-frontend.env
 Engine/Deploy/image-manifest.json
 Engine/Deploy/deploy-manifest.json
 Engine/Deploy/build.log
@@ -66,7 +68,7 @@ Operators should treat `Engine/` as generated runtime state. Edit committed sour
 | `postgres-db` | `borealis-engine-postgres-db` | PostgreSQL database and persisted DB state | `127.0.0.1:5432` |
 | `wireguard-tunnel` | `borealis-engine-wireguard-tunnel` | Privileged WireGuard interface, peer config, firewall/routing, control socket | UDP `30000`, interface `borealis-wg` |
 | `remote-desktop-guacd` | `borealis-engine-remote-desktop-guacd` | VNC-only Apache Guacamole guacd runtime | `127.0.0.1:4822` |
-| `webui-frontend` | `borealis-engine-webui-frontend` | Production static WebUI or dev Vite HMR | prod `127.0.0.1:8080`, dev `127.0.0.1:5173` |
+| `webui-frontend` | `borealis-engine-webui-frontend` | Production static WebUI or dev Vite HMR | `127.0.0.1:8000` |
 | `api-backend` | `borealis-engine-api-backend` | Flask API, Socket.IO, scheduler, workflows, VNC WebSocket proxy, Ansible control-node logic | `127.0.0.1:5000`, VNC WS `127.0.0.1:4823` |
 | `traefik-edge` | `borealis-engine-traefik-edge` | Public HTTP/HTTPS edge, ACME, UI/API/Socket.IO/VNC routing | `80`, `443`, health `127.0.0.1:8082` |
 
@@ -134,15 +136,15 @@ Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Boreal
 6. Seed runtime WebUI source under `Engine/Services/webui-frontend/data/web-interface/` when missing.
 7. Prune empty legacy runtime paths.
 8. Resolve public hostname and ACME email.
-9. Render `Engine/Deploy/compose.env`.
+9. Render `Engine/Deploy/runtime.env` for shared container runtime settings, mode-scoped `webui-frontend.env`, and `Engine/Deploy/compose.env` for Compose interpolation.
 10. Compute service input hashes from source, Dockerfile, build context, target mode, and dependency inputs.
 11. Build changed local images as `borealis-engine/<service>:sha-<hash>`.
 12. Write `Engine/Deploy/image-manifest.json`.
-13. Re-render `compose.env` with resolved image tags.
+13. Re-render `compose.env` with resolved image tags while keeping service runtime env files free of image tag variables.
 14. Compare compose/env/image hashes against `Engine/Deploy/deploy-manifest.json`.
 15. Skip Compose if nothing changed and all containers are running.
-15. Run scoped Compose `up -d --no-deps <service...>` when only service images changed.
-16. Run full Compose `up -d` when compose config, runtime env, or container state requires it.
+15. Run scoped Compose `up -d --no-deps <service...>` when only service images changed or when switching prod/dev WebUI mode.
+16. Run full Compose `up -d` when compose config, shared runtime env, or container state requires it.
 17. Write `Engine/Deploy/deploy-manifest.json`.
 
 Build order follows `Engine.sh` service order:
@@ -172,6 +174,10 @@ Build cache:
 - `webui-frontend`, `traefik-edge`, `postgres-db`, `remote-desktop-guacd`, and `wireguard-tunnel` use service-local build contexts.
 - Service-local build contexts carry their own `.dockerignore` files so `node_modules`, WebUI build output, Python bytecode, pytest caches, logs, and local test output stay out of image contexts.
 - Deploy mode is part of the image hash only for services with explicit mode targets, currently `webui-frontend`. Switching between prod and dev should not make PostgreSQL, guacd, WireGuard, Traefik, or the API image appear changed unless their own inputs changed.
+- `compose.env` carries image tags and stable env-file paths for Compose interpolation.
+- `runtime.env` is shared by API, PostgreSQL, guacd, and WireGuard. It intentionally excludes image tag variables and keeps stable production WebUI defaults so one image or mode change does not mutate every container's environment.
+- `webui-frontend.env` overrides shared runtime settings with the requested `BOREALIS_WEBUI_MODE`. Switching `prod`/`dev` should recreate only `webui-frontend` when all containers are already running.
+- Traefik always routes the WebUI service to `127.0.0.1:8000`; production preview and Vite HMR both bind that same loopback port.
 
 Deploy output:
 - Terminal output uses compact service status lines such as `<timestamp> <service>: [Already Up-to-Date]` or `<timestamp> <service>: [(Re)Building]`.
@@ -195,7 +201,7 @@ pg_isready -h 127.0.0.1 -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 ```
 3. `wireguard-tunnel` must create the Unix control socket.
 4. `remote-desktop-guacd` must accept loopback TCP connections on `127.0.0.1:4822`.
-5. `webui-frontend` must serve `/` on `127.0.0.1:8080` in prod or `127.0.0.1:5173` in dev.
+5. `webui-frontend` must serve `/` on `127.0.0.1:8000` in prod and dev.
 6. `api-backend` waits for:
 ```text
 postgres-db: service_healthy
@@ -219,10 +225,9 @@ bash Engine.sh deploy prod
 ```
 
 Production behavior:
-- `BOREALIS_ENGINE_MODE=production`
-- `BOREALIS_WEBUI_MODE=prod`
+- `BOREALIS_WEBUI_MODE=prod` is scoped to WebUI.
 - WebUI frontend serves built static UI.
-- Traefik routes public HTTPS to loopback services.
+- Traefik routes public HTTPS to stable loopback services.
 
 Dev mode:
 ```sh
@@ -230,9 +235,11 @@ bash Engine.sh deploy dev
 ```
 
 Dev behavior:
+- `BOREALIS_WEBUI_MODE=dev` is scoped to WebUI.
 - WebUI frontend runs Vite HMR.
-- Vite listens on loopback `127.0.0.1:5173`.
-- Traefik still owns public HTTP/HTTPS and routes UI/API/WebSocket paths.
+- Vite listens on loopback `127.0.0.1:8000`.
+- Traefik still owns public HTTP/HTTPS and routes UI/API/WebSocket paths without changing its own upstream config.
+- API, PostgreSQL, Traefik, guacd, and WireGuard stay running during a prod/dev mode flip unless their own image or shared runtime inputs changed.
 
 Default deploy mode:
 ```sh
@@ -384,8 +391,7 @@ curl -fsS http://127.0.0.1:5000/health
 
 WebUI liveness:
 ```sh
-curl -fsS http://127.0.0.1:8080/      # prod
-curl -fsS http://127.0.0.1:5173/      # dev
+curl -fsS http://127.0.0.1:8000/
 ```
 
 PostgreSQL readiness:
@@ -448,7 +454,7 @@ Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log
 
 Guacd logs:
 ```text
-Engine/Services/remote-desktop-guacd/logs/
+Engine/Services/remote-desktop-guacd/logs/guacd.log
 ```
 
 ## Manifest Files
@@ -467,7 +473,7 @@ Engine/Services/remote-desktop-guacd/logs/
 - Compose file hash
 - env file
 - env file hash
-- env settings hash excluding image tag lines
+- env settings hash excluding image tag and mode-scoped lines
 - service image tags and input hashes
 - changed services for the last deploy action
 - Compose action (`up`, `up-scoped`, or `skipped`)
@@ -534,7 +540,7 @@ If `api-backend` does not start:
 
 If `traefik-edge` returns `502`:
 1. Check `api-backend` health on `127.0.0.1:5000`.
-2. Check WebUI listener on `127.0.0.1:8080` for prod or `127.0.0.1:5173` for dev.
+2. Check WebUI listener on `127.0.0.1:8000`.
 3. Check `Engine/Services/traefik-edge/logs/`.
 4. Reload Traefik only after confirming backend listeners.
 

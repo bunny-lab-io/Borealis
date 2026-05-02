@@ -95,7 +95,7 @@ None on this page. See [API Reference](../Data%20and%20Schema/api-reference.md).
 
 ### Container service map
 - `api-backend`: `127.0.0.1:5000`, Python Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, Ansible execution.
-- `webui-frontend`: `127.0.0.1:8080` in production or `127.0.0.1:5173` in dev.
+- `webui-frontend`: `127.0.0.1:8000` in production and dev.
 - `traefik-edge`: host `80/443`, same-origin routing, ACME, public edge logs.
 - `postgres-db`: `127.0.0.1:5432`, persistent database state.
 - `remote-desktop-guacd`: `127.0.0.1:4822`, VNC-only Guacamole daemon.

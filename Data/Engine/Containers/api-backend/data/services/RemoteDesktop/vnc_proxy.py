@@ -163,8 +163,15 @@ class VncProxyServer:
                 )
             except websockets.exceptions.ConnectionClosed as exc:
                 close_reason = str(getattr(exc, "reason", "") or "client_closed").strip()[:120]
+                logger.info(
+                    "Guacamole VNC websocket closed agent_id=%s session_id=%s code=%s reason=%s",
+                    agent_id,
+                    session.session_id or "-",
+                    getattr(exc, "code", "-"),
+                    close_reason or "-",
+                )
             except Exception as exc:
-                logger.warning("Guacamole VNC bridge failed: %s", exc)
+                logger.warning("Guacamole VNC bridge failed: %s", exc, exc_info=True)
                 close_reason = "guacamole_unavailable"
                 await websocket.close(code=1011, reason="guacamole_unavailable")
                 return

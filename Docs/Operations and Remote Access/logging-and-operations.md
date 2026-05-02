@@ -12,6 +12,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - Engine API access log: `Engine/Services/api-backend/logs/api.log`.
 - Engine Traefik log: `Engine/Services/traefik-edge/logs/traefik.log`.
 - Engine Traefik access log: `Engine/Services/traefik-edge/logs/traefik-access.log`.
+- Engine guacd log: `Engine/Services/remote-desktop-guacd/logs/guacd.log`.
 - Service logs: `Engine/Services/<role>/logs/` plus API per-domain logs under `Engine/Services/api-backend/logs/`.
 - Watchdog service log: `Engine/Services/api-backend/logs/watchdogs.log`.
 - VPN logs: `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`, `Engine/Services/api-backend/logs/VPN_Tunnel/remote_shell.log`, and WireGuard control logs under `Engine/Services/wireguard-tunnel/logs/control.log`.

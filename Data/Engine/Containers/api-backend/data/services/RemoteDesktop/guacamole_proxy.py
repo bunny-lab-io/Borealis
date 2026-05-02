@@ -285,6 +285,28 @@ def _filter_client_payload_for_guacd(raw_text: str) -> Tuple[str, List[List[str]
     return "".join(forwarded), ping_args, disconnect
 
 
+def _short_guacamole_arg(value: Any, limit: int = 120) -> str:
+    text = str(value or "").replace("\r", "\\r").replace("\n", "\\n")
+    if len(text) <= limit:
+        return text
+    return f"{text[: max(0, limit - 3)]}..."
+
+
+def _guacd_error_detail(args: List[str]) -> Tuple[str, str]:
+    if not args:
+        return "guacd_error", "-"
+    message = _short_guacamole_arg(args[0]) or "guacd_error"
+    status = _short_guacamole_arg(args[1]) if len(args) > 1 else "-"
+    return message, status or "-"
+
+
+def _guacd_instruction_summary(opcode: str, args: List[str]) -> str:
+    safe_args = [_short_guacamole_arg(arg, limit=80) for arg in args[:4]]
+    if len(args) > len(safe_args):
+        safe_args.append(f"...(+{len(args) - len(safe_args)})")
+    return f"opcode={opcode or '-'} args={safe_args}"
+
+
 def guacd_health(context: Any, *, timeout_seconds: float = 0.35) -> Dict[str, Any]:
     enabled = bool(getattr(context, "guacamole_enabled", False))
     host = str(getattr(context, "guacd_host", DEFAULT_GUACD_HOST) or DEFAULT_GUACD_HOST).strip()
@@ -510,7 +532,45 @@ async def proxy_guacamole_vnc_session(
                     continue
                 server_instruction_count += len(instructions)
                 server_message_count += 1
+                for _raw_instruction, opcode, args in instructions:
+                    if opcode == "error":
+                        message, status = _guacd_error_detail(args)
+                        logger.warning(
+                            "Guacamole VNC backend error agent_id=%s session_id=%s guacd_status=%s guacd_message=%s",
+                            session.agent_id,
+                            session.session_id or "-",
+                            status,
+                            message,
+                        )
+                    elif opcode == "status":
+                        logger.warning(
+                            "Guacamole VNC backend status agent_id=%s session_id=%s %s",
+                            session.agent_id,
+                            session.session_id or "-",
+                            _guacd_instruction_summary(opcode, args),
+                        )
+                    elif opcode == "disconnect":
+                        logger.info(
+                            "Guacamole VNC backend requested disconnect agent_id=%s session_id=%s",
+                            session.agent_id,
+                            session.session_id or "-",
+                        )
+                    elif server_instruction_count <= 3:
+                        logger.info(
+                            "Guacamole VNC backend instruction agent_id=%s session_id=%s %s",
+                            session.agent_id,
+                            session.session_id or "-",
+                            _guacd_instruction_summary(opcode, args),
+                        )
                 await websocket.send("".join(raw_instruction for raw_instruction, _opcode, _args in instructions))
+            logger.info(
+                "Guacamole VNC backend stream closed agent_id=%s session_id=%s server_messages=%s server_instructions=%s server_bytes=%s",
+                session.agent_id,
+                session.session_id or "-",
+                server_message_count,
+                server_instruction_count,
+                server_byte_count,
+            )
             trailing = decoder.decode(b"", final=True)
             if trailing:
                 instruction_buffer += trailing

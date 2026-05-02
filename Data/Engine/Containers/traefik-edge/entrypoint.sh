@@ -8,7 +8,7 @@ LOG_DIR="${SERVICE_ROOT}/logs"
 STATE_DIR="${SERVICE_ROOT}/state"
 HOSTNAME="${BOREALIS_PUBLIC_HOSTNAME:-localhost}"
 ACME_EMAIL="${BOREALIS_ACME_EMAIL:-}"
-WEBUI_MODE="${BOREALIS_WEBUI_MODE:-prod}"
+WEBUI_UPSTREAM_PORT="${BOREALIS_WEBUI_UPSTREAM_PORT:-8000}"
 HEALTH_PORT="${BOREALIS_TRAEFIK_HEALTH_PORT:-8082}"
 
 mkdir -p "${CONFIG_DIR}" "${LOG_DIR}" "${STATE_DIR}"
@@ -29,6 +29,8 @@ cat > "${STATE_DIR}/Settings.json" <<EOF
   "https_port": ${BOREALIS_PUBLIC_HTTPS_PORT:-443},
   "engine_upstream_host": "127.0.0.1",
   "engine_upstream_port": 5000,
+  "webui_upstream_host": "127.0.0.1",
+  "webui_upstream_port": ${WEBUI_UPSTREAM_PORT},
   "vnc_upstream_host": "127.0.0.1",
   "vnc_upstream_port": ${BOREALIS_VNC_WS_PORT:-4823},
   "settings_path": "${STATE_DIR}/Settings.json",
@@ -76,11 +78,6 @@ else
   TLS_BLOCK="      tls: {}"
 fi
 
-UI_PORT="8080"
-if [ "${WEBUI_MODE}" = "dev" ] || [ "${WEBUI_MODE}" = "developer" ]; then
-  UI_PORT="5173"
-fi
-
 cat > "${CONFIG_DIR}/dynamic.yml" <<EOF
 http:
   middlewares:
@@ -125,7 +122,7 @@ $(printf "%b" "${TLS_BLOCK}")
     borealis-webui:
       loadBalancer:
         servers:
-          - url: "http://127.0.0.1:${UI_PORT}"
+          - url: "http://127.0.0.1:${WEBUI_UPSTREAM_PORT}"
     borealis-vnc:
       loadBalancer:
         servers:

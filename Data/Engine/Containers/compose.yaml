@@ -38,7 +38,7 @@ services:
     network_mode: host
     restart: unless-stopped
     env_file:
-      - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
+      - ${BOREALIS_WEBUI_ENV_FILE:-compose.env.example}
     volumes:
       - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/src:/opt/Borealis/Data/Engine/web-interface/src
       - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/public:/opt/Borealis/Data/Engine/web-interface/public

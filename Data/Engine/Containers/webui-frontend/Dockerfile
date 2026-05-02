@@ -13,7 +13,7 @@ COPY healthcheck.js /usr/local/bin/borealis-webui-healthcheck
 
 RUN chmod +x /usr/local/bin/borealis-webui-frontend /usr/local/bin/borealis-webui-healthcheck
 
-EXPOSE 8080 5173
+EXPOSE 8000
 
 FROM base AS dev
 
