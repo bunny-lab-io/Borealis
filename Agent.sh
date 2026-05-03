@@ -135,10 +135,10 @@ running_in_agent_updater_service() {
 }
 
 engine_present_in_install_root() {
-  [[ -f "${SCRIPT_DIR}/Data/Engine/Containers/compose.yaml" ]] && return 0
   [[ -d "${SCRIPT_DIR}/Engine/Deploy" ]] && return 0
   [[ -f "${SCRIPT_DIR}/Engine/Deploy/deploy-manifest.json" ]] && return 0
   [[ -f "${SCRIPT_DIR}/Engine/Deploy/compose.env" ]] && return 0
+  [[ -d "${SCRIPT_DIR}/Engine/Services/api-backend" ]] && return 0
   return 1
 }
 

@@ -41,8 +41,16 @@ def test_agent_sh_blocks_engine_host_install() -> None:
     content = script_path.read_text(encoding="utf-8")
 
     assert "ensure_not_engine_host" in content
-    assert "Data/Engine/Containers/compose.yaml" in content
+    assert "Engine/Deploy/deploy-manifest.json" in content
+    assert "Engine/Services/api-backend" in content
     assert "Refusing to install the Linux Agent in an Engine install root" in content
+
+
+def test_agent_sh_does_not_treat_synced_engine_source_as_engine_install() -> None:
+    script_path = Path(__file__).resolve().parents[3] / "Agent.sh"
+    content = script_path.read_text(encoding="utf-8")
+
+    assert "Data/Engine/Containers/compose.yaml" not in content
 
 
 def test_agent_sh_supports_root_shell_bootstrap_without_sudo_pipe() -> None:

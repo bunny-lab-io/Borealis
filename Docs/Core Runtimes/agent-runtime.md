@@ -142,7 +142,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Linux first install: `Agent.sh deploy` installs dependencies and stages the runtime.
 - Raw one-line or repo-option `Agent.sh` runs sync first, then re-execs the installed `Agent.sh`; root shells do not need `sudo` in the pipe, and generated non-root commands still use `sudo bash` before script execution. Local non-root `Agent.sh deploy` self-escalates through `sudo` when available and uses existing on-disk source without updating git.
 - Edit in `Data/Agent`, not `/Agent`; runtime copies are ephemeral and wiped regularly.
-- Linux Agent installation is blocked when the install root also contains Engine source/runtime markers such as `Data/Engine/Containers/compose.yaml` or `Engine/Deploy/`; keep Engine hosts Engine-only so Agent auto-update cannot mutate the Engine checkout.
+- Linux Agent installation is blocked when the install root contains deployed Engine runtime markers such as `Engine/Deploy/` or `Engine/Services/api-backend/`. The synced repository source under `Data/Engine/` is expected during Agent bootstrap and must not block first install.
 
 #### Logging
 - Primary log: `Agent/Logs/agent.log` with daily rotation to `agent.log.YYYY-MM-DD` (never auto-delete rotated files).
