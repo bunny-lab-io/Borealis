@@ -140,7 +140,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Purpose: outbound-only connectivity, device telemetry, scripting, UI helpers.
 - Bootstrap: `Borealis.ps1` preps dependencies, activates the agent venv, keeps only the SYSTEM startup task, and removes the legacy `Borealis Agent (UserHelper)` scheduled task on install/update.
 - Linux first install: `Agent.sh deploy` installs dependencies and stages the runtime.
-- Raw one-line or repo-option `Agent.sh` runs sync first, then re-execs the installed `Agent.sh`; local `Agent.sh deploy` uses existing on-disk source and does not update git.
+- Raw one-line or repo-option `Agent.sh` runs sync first, then re-execs the installed `Agent.sh`; root shells do not need `sudo` in the pipe, and generated non-root commands still use `sudo bash` before script execution. Local non-root `Agent.sh deploy` self-escalates through `sudo` when available and uses existing on-disk source without updating git.
 - Edit in `Data/Agent`, not `/Agent`; runtime copies are ephemeral and wiped regularly.
 - Linux Agent installation is blocked when the install root also contains Engine source/runtime markers such as `Data/Engine/Containers/compose.yaml` or `Engine/Deploy/`; keep Engine hosts Engine-only so Agent auto-update cannot mutate the Engine checkout.
 

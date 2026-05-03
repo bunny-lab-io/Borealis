@@ -91,9 +91,9 @@ If you deploy the agent via Group Policy or another automation platform, you can
 ```
 **Linux**:
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Agent.sh" | sudo bash -s -- deploy --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --newEngine
+curl -fsSL "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Agent.sh" | { if [ "$(id -u)" -eq 0 ]; then bash -s -- deploy --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --newEngine; else sudo bash -s -- deploy --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --newEngine; fi; }
 ```
-Passing an enrollment code to `Agent.sh` refreshes stale Linux Agent enrollment state before the service starts so the supplied code wins over cached installer codes.
+Passing an enrollment code to `Agent.sh` refreshes stale Linux Agent enrollment state before the service starts so the supplied code wins over cached installer codes. Linux one-line installs do not require `sudo` in the pipe when run from a root shell; non-root launches still use `sudo bash` before script execution so password prompts work normally.
 
 ## Agent/Server Enrollment (Sequence Diagram)
 ```mermaid

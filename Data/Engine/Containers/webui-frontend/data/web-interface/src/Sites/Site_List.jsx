@@ -421,7 +421,7 @@ function quotePowerShellValue(value) {
   return `"${escapePowerShellDoubleQuoted(value)}"`;
 }
 
-function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DEFAULT_INSTALL_BRANCH) {
+export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DEFAULT_INSTALL_BRANCH) {
   const normalizedServerUrl = normalizeInstallServerUrl(serverUrl);
   const normalizedEnrollmentCode = String(enrollmentCode || "").trim();
   const normalizedBranch = normalizeInstallBranch(branch);
@@ -440,13 +440,16 @@ function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DEFAULT_I
       bootstrapCommand;
   }
 
-  const shellPrefix = osId === "macos" ? "bash" : "sudo bash";
   const agentUrl = rawBorealisFileUrl(normalizedBranch, "Agent.sh");
   const repoBranchArgs = usesDefaultBranch ? "" : `--repo-branch ${quoteShellValue(normalizedBranch)} `;
   const urlArg = usesDefaultBranch ? agentUrl : quoteShellValue(agentUrl);
-  return `curl -fsSL ${urlArg} | ${shellPrefix} -s -- ${repoBranchArgs}deploy --serverurl ` +
+  const launchArgs = `${repoBranchArgs}deploy --serverurl ` +
     `"${escapeShellDoubleQuoted(normalizedServerUrl)}" --enrollmentcode ` +
     `"${escapeShellDoubleQuoted(normalizedEnrollmentCode)}"`;
+  if (osId === "macos") {
+    return `curl -fsSL ${urlArg} | bash -s -- ${launchArgs}`;
+  }
+  return `curl -fsSL ${urlArg} | { if [ "$(id -u)" -eq 0 ]; then bash -s -- ${launchArgs}; else sudo bash -s -- ${launchArgs}; fi; }`;
 }
 
 function SiteDeleteDialog({ open, onCancel, onConfirm, sites }) {

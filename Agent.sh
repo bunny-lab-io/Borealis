@@ -28,6 +28,7 @@ RELEASE_CHANNEL="${DEFAULT_RELEASE_CHANNEL}"
 SYNC_REQUESTED=0
 DISTRO_ID="unknown"
 LAUNCH_ARGS=()
+ORIGINAL_ARGS=()
 SERVER_URL=""
 ENROLLMENT_CODE=""
 NEW_ENGINE_FLAG=0
@@ -59,6 +60,41 @@ run_privileged() {
     return $?
   fi
   return 1
+}
+
+privilege_available() {
+  [[ "${EUID:-$(id -u)}" -eq 0 ]] && return 0
+  command_exists sudo
+}
+
+ensure_privilege_available() {
+  privilege_available && return 0
+  die "Root privileges are required. Run Agent.sh as root, or install sudo and rerun as a sudo-enabled user."
+}
+
+exec_with_optional_tty() {
+  if [[ ! -t 0 && -r /dev/tty ]]; then
+    exec "$@" < /dev/tty
+  fi
+  exec "$@"
+}
+
+exec_agent_script() {
+  local script_path="$1"
+  shift || true
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    exec_with_optional_tty bash "${script_path}" "$@"
+  fi
+  command_exists sudo || die "Root privileges are required. Run Agent.sh as root, or install sudo and rerun as a sudo-enabled user."
+  exec_with_optional_tty sudo -E bash "${script_path}" "$@"
+}
+
+ensure_root_execution() {
+  [[ "${EUID:-$(id -u)}" -eq 0 ]] && return 0
+  command_exists sudo || die "Root privileges are required. Run Agent.sh as root, or install sudo and rerun as a sudo-enabled user."
+  local script_path="${BASH_SOURCE[0]:-}"
+  [[ -n "${script_path}" && -f "${script_path}" ]] || die "Cannot self-escalate from a non-file Agent.sh invocation. Run the installer as root."
+  exec_with_optional_tty sudo -E bash "${script_path}" "${ORIGINAL_ARGS[@]}"
 }
 
 detect_distro() {
@@ -201,6 +237,7 @@ ensure_git_dependency() {
 sync_repo() {
   [[ -n "${INSTALL_DIR}" && "${INSTALL_DIR}" != "/" ]] || die "Refusing to install into empty path or '/'."
   [[ -n "${REPO_URL}" ]] || die "Repository URL cannot be empty."
+  ensure_privilege_available
   ensure_git_dependency
   resolve_repo_ref
 
@@ -303,10 +340,7 @@ sync_and_reexec_if_needed() {
   sync_repo
   log "Launching ${INSTALL_DIR}/Agent.sh ${LAUNCH_ARGS[*]:-deploy}."
   export BOREALIS_BOOTSTRAP_NEW_ENGINE="${BOREALIS_BOOTSTRAP_NEW_ENGINE:-1}"
-  if [[ ! -t 0 && -r /dev/tty ]]; then
-    exec "${INSTALL_DIR}/Agent.sh" "${LAUNCH_ARGS[@]}" < /dev/tty
-  fi
-  exec "${INSTALL_DIR}/Agent.sh" "${LAUNCH_ARGS[@]}"
+  exec_agent_script "${INSTALL_DIR}/Agent.sh" "${LAUNCH_ARGS[@]}"
 }
 
 resolve_python_bin() {
@@ -690,6 +724,7 @@ configure_supervision() {
 }
 
 deploy_agent() {
+  ensure_root_execution
   ensure_not_engine_host
   stop_agent_supervision
   install_agent_dependencies
@@ -715,6 +750,10 @@ usage() {
 Usage:
   Agent.sh deploy [--serverurl URL] [--enrollmentcode CODE] [--newEngine]
   Agent.sh [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [--serverurl URL] [--enrollmentcode CODE] [--newEngine]
+  # Root shell:
+  curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Agent.sh | bash -s -- deploy [--serverurl URL] [--enrollmentcode CODE]
+  # Sudo-enabled non-root shell:
+  curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Agent.sh | sudo bash -s -- deploy [--serverurl URL] [--enrollmentcode CODE]
 EOF
 }
 
@@ -773,4 +812,5 @@ parse_and_run() {
   esac
 }
 
+ORIGINAL_ARGS=("$@")
 parse_and_run "$@"

@@ -45,6 +45,16 @@ def test_agent_sh_blocks_engine_host_install() -> None:
     assert "Refusing to install the Linux Agent in an Engine install root" in content
 
 
+def test_agent_sh_supports_root_shell_bootstrap_without_sudo_pipe() -> None:
+    script_path = Path(__file__).resolve().parents[3] / "Agent.sh"
+    content = script_path.read_text(encoding="utf-8")
+
+    assert "exec_agent_script" in content
+    assert "ensure_root_execution" in content
+    assert "sudo -E bash" in content
+    assert "curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Agent.sh | bash -s -- deploy" in content
+
+
 def test_borealis_ps1_hardens_tray_folder_permissions() -> None:
     script_path = Path(__file__).resolve().parents[3] / "Borealis.ps1"
     content = script_path.read_text(encoding="utf-8")
