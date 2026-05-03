@@ -10,8 +10,8 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Linux dev, first install: `./Engine.sh deploy dev` (same Compose stack, with Vite HMR on loopback `127.0.0.1:8000` behind Traefik).
 - Linux stable-channel install: `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --release-channel stable deploy prod`.
 - Linux branch testing install: `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --repo-branch optimization/agent-context-socket-consolidation deploy prod`.
-- Linux production, local redeploy: `./Engine.sh deploy prod` or `./Borealis.sh --EngineProduction`.
-- Linux dev, local redeploy: `./Engine.sh deploy dev` or `./Borealis.sh --EngineDev`.
+- Linux production, local redeploy: `./Engine.sh deploy prod`.
+- Linux dev, local redeploy: `./Engine.sh deploy dev`.
 - Engine service action examples: `./Engine.sh --service api-backend restart`, `./Engine.sh --service webui-frontend rebuild dev`, `./Engine.sh --service traefik-edge reload`, and `./Engine.sh --service wireguard-tunnel reconcile`.
 - Updates: `./Update.sh -Engine` fast-forwards the current branch then runs `Engine.sh deploy`; `./Update.sh -Agent` preserves the Agent updater flow then runs `Agent.sh deploy`.
 - Production TLS is managed by the embedded Traefik edge; the Python Engine stays on loopback HTTP.
@@ -79,12 +79,11 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - `Engine.sh deploy dev` runs the same service set but sets the WebUI frontend to Vite HMR behind Traefik. Switching between prod and dev should only recreate WebUI after the stack is already current.
 - `Agent.sh` is the Linux Agent first-run and redeploy path. When run from a raw one-liner or with repo options, it syncs source first; local `Agent.sh deploy` uses existing on-disk source.
 - `Agent.sh deploy` installs missing Agent OS dependencies and stages the Linux Agent runtime.
-- `Borealis.sh` is now a compatibility router for legacy commands and service shortcuts.
 - `bootstrap.ps1` and `Borealis.ps1` handle dependency setup and staging for the Windows agent runtime, and `bootstrap.ps1` accepts release-channel and branch-selection options for Windows Agent installs.
 - When validating new bootstrap-only behavior before it merges to `main`, download `bootstrap.ps1` from the same branch or commit you intend to test; using the `main` bootstrapper with branch-only flags can fail before the repo sync step has a chance to pull the newer code.
-- Dev mode (`--EngineDev`) uses Vite for the WebUI behind the Traefik edge container, while the Engine API stays on loopback.
-- Production (`--EngineProduction`) runs the Engine API on loopback HTTP, serves the static WebUI from the WebUI frontend container, and publishes the app through Traefik.
-- `Borealis.sh` remains a compatibility router only; Engine and Agent dependency checks now live in their domain launchers.
+- Dev mode (`Engine.sh deploy dev`) uses Vite for the WebUI behind the Traefik edge container, while the Engine API stays on loopback.
+- Production (`Engine.sh deploy prod`) runs the Engine API on loopback HTTP, serves the static WebUI from the WebUI frontend container, and publishes the app through Traefik.
+- Engine and Agent dependency checks live in their domain launchers.
 - `Engine/Deploy/image-manifest.json` records image hashes and tags. `Engine/Deploy/deploy-manifest.json` records mode, Compose/env hashes, service image hashes, changed services, and whether Compose ran or was skipped.
 
 ### Configuration precedence

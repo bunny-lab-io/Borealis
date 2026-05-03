@@ -18,8 +18,7 @@ Explain how to add file-backed icon-location overrides for installed software wh
 5. Save the override.
 6. Borealis writes the rule into `software_icons_overrides.json`, hotloads it immediately, and requests a software inventory refresh for that device.
 7. Use `Query Software Changes` when you want to force a fresh software snapshot instead of waiting for the normal poll cadence.
-8. Engine restaging merges the staged file with the current runtime copy by software name, so operator-created icon overrides survive redeploys unless the operator removes them explicitly.
-9. After the override behaves correctly, commit `software_icons_overrides.json` to Git if you want to make the rule official for all Borealis users.
+8. After the override behaves correctly, commit `software_icons_overrides.json` to Git so the rule survives Engine image rebuilds and becomes official for all Borealis users.
 
 ## JSON Shape
 ```json
@@ -80,7 +79,7 @@ Clear-icon rules are also supported:
 2. Add or update a rule under `windows_icon_overrides`.
 3. Save the file.
 4. Wait for the next agent software-management override fetch or trigger `Query Software Changes` from the Installed Software tab.
-5. Future `Borealis.sh` Engine restages merge the staged source file with the runtime copy by software name, with runtime/operator entries taking precedence when the same software name exists in both places.
+5. Commit `software_icons_overrides.json` to Git when the rule must survive Engine image rebuilds.
 
 ## Example
 ```json

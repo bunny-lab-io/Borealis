@@ -38,3 +38,7 @@ def test_update_helper_recovers_legacy_auth_material(tmp_path, monkeypatch) -> N
     store = update_helper._keystore()
     assert store.load_guid() == "ABC-123"
     assert store.load_refresh_token() == "legacy-refresh-token"
+
+
+def test_update_helper_preserves_active_updater_log() -> None:
+    assert update_helper._should_exclude_relative("Updater.log")

@@ -16,8 +16,8 @@ def test_borealis_ps1_stages_runtime_paths_into_agent_runtime() -> None:
     assert "tray_state.py" in content
 
 
-def test_borealis_sh_stages_runtime_paths_into_agent_runtime() -> None:
-    script_path = Path(__file__).resolve().parents[3] / "Borealis.sh"
+def test_agent_sh_stages_runtime_paths_into_agent_runtime() -> None:
+    script_path = Path(__file__).resolve().parents[3] / "Agent.sh"
     content = script_path.read_text(encoding="utf-8")
 
     assert "desktop_environment.py" in content
@@ -25,6 +25,15 @@ def test_borealis_sh_stages_runtime_paths_into_agent_runtime() -> None:
     assert "qt_compat.py" in content
     assert "session_runtime.py" in content
     assert "tray_state.py" in content
+
+
+def test_agent_sh_does_not_stop_running_updater_service() -> None:
+    script_path = Path(__file__).resolve().parents[3] / "Agent.sh"
+    content = script_path.read_text(encoding="utf-8")
+
+    assert "running_in_agent_updater_service" in content
+    assert "BOREALIS_AGENT_UPDATER_SERVICE=1" in content
+    assert "borealis-agent-updater\\.service" in content
 
 
 def test_borealis_ps1_hardens_tray_folder_permissions() -> None:

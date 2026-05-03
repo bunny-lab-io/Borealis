@@ -59,7 +59,7 @@ defaults. Key environment variables are
 ``BOREALIS_PUBLIC_*``       Public edge settings used when Borealis runs behind
                             the local Traefik TLS terminator.
 ``BOREALIS_LETSENCRYPT_SETTINGS_PATH`` path to the Borealis-managed public edge
-                                      settings JSON rendered by ``Borealis.sh``.
+                                      settings JSON rendered by ``Engine.sh``.
 
 Direct public Engine TLS is no longer supported. The Python Engine always runs
 on loopback HTTP behind the embedded Traefik edge, while internal Engine
@@ -88,7 +88,7 @@ ENGINE_DIR = Path(__file__).resolve().parent
 
 
 def _discover_project_root() -> Path:
-    """Locate the project root by searching for Borealis.ps1 or using overrides."""
+    """Locate the project root by searching for launchers or using overrides."""
 
     env_override = os.environ.get("BOREALIS_PROJECT_ROOT")
     if env_override:
@@ -98,7 +98,11 @@ def _discover_project_root() -> Path:
 
     current = ENGINE_DIR
     for candidate in (current, *current.parents):
-        if (candidate / "Borealis.ps1").is_file():
+        if (
+            (candidate / "Borealis.ps1").is_file()
+            or (candidate / "Engine.sh").is_file()
+            or (candidate / "Agent.sh").is_file()
+        ):
             return candidate
 
     return ENGINE_DIR.parent.parent

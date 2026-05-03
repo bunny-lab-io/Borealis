@@ -94,7 +94,7 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
 - If Borealis feels slow, this command is the fastest way to distinguish normal pooled connections from sessions that are holding transactions open too long.
 
 ## Engine Tuning Profiles
-- Legacy `Borealis.sh` systemd deployments auto-detected the Engine host profile during deployment and re-deployment.
+- Legacy systemd deployments auto-detected the Engine host profile during deployment and re-deployment.
 - Container deployments render conservative DB pool values into `Engine/Deploy/compose.env`; tune those values explicitly for larger installations until profile-aware container tuning is added.
 - Profile selection is based on detected CPU and RAM only.
 - Storage is displayed in the CLI as deployment guidance, but it does not change the selected profile or the applied DB tuning.

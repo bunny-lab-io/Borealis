@@ -205,7 +205,7 @@ update_engine_codebase() {
   fi
   git -C "${SCRIPT_DIR}" fetch --prune origin "${current_branch}"
   git -C "${SCRIPT_DIR}" pull --ff-only origin "${current_branch}"
-  chmod +x "${SCRIPT_DIR}/Engine.sh" "${SCRIPT_DIR}/Agent.sh" "${SCRIPT_DIR}/Borealis.sh" >/dev/null 2>&1 || true
+  chmod +x "${SCRIPT_DIR}/Engine.sh" "${SCRIPT_DIR}/Agent.sh" >/dev/null 2>&1 || true
   log_line "STEP" "Redeploying Borealis Engine containers from updated source."
   "${SCRIPT_DIR}/Engine.sh" deploy
   log_line "SUCCESS" "Borealis Engine update completed successfully."
@@ -241,8 +241,8 @@ sync_repository() {
   fi
 
   git -C "${SCRIPT_DIR}" reset --hard "${target_hash}"
-  # Preserve ignored runtime directories such as Agent/, Engine/, and Dependencies/.
-  git -C "${SCRIPT_DIR}" clean -fd
+  # Preserve runtime directories and the active updater log while cleaning stale source files.
+  git -C "${SCRIPT_DIR}" clean -fd -e Agent -e Engine -e Dependencies -e Updater.log
 }
 
 ensure_lock() {
@@ -338,7 +338,7 @@ main() {
     return 1
   fi
 
-  chmod +x "${SCRIPT_DIR}/Borealis.sh" "${SCRIPT_DIR}/Agent.sh" >/dev/null 2>&1 || true
+  chmod +x "${SCRIPT_DIR}/Agent.sh" >/dev/null 2>&1 || true
 
   log_line "STEP" "Refreshing Borealis agent runtime in place."
   "${SCRIPT_DIR}/Agent.sh" deploy --refresh-agent-runtime

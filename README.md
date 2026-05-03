@@ -49,7 +49,7 @@ Status means productized support in the current Borealis codebase and docs, not 
 - **Security Model**: Aegis Cipher system protects secrets, MFA is required by default, passkeys are supported, scripts are signed, and WireGuard tunnel access uses short-lived tokens.
 
 ## Engine Deployment Profiles
-`Borealis.sh` profiles CPU and RAM during Engine deployment, prints the detected profile, and auto-configures PostgreSQL plus Engine DB tuning. Storage guidance is advisory and mostly depends on retention policy, job output, logs, and inventory volume.
+Engine container deployment uses conservative defaults from `Engine/Deploy/compose.env`. The sizing table below is planning guidance; tune database pool and PostgreSQL settings explicitly for larger installations.
 
 | Profile | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |

@@ -73,7 +73,11 @@ def _resolve_project_root(start: Optional[Path] = None) -> Path:
             pass
     current = Path(start or __file__).resolve().parent
     for candidate in (current, *current.parents):
-        if (candidate / "Borealis.ps1").is_file() or (candidate / "Borealis.sh").is_file():
+        if (
+            (candidate / "Borealis.ps1").is_file()
+            or (candidate / "Agent.sh").is_file()
+            or (candidate / "Engine.sh").is_file()
+        ):
             return candidate / "Agent" / "Borealis"
     return current
 

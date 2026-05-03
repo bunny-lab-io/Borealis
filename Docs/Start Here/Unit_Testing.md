@@ -121,7 +121,6 @@ BOREALIS_AGENT_UNIT_TEST_DOMAIN=tokens ./Agent_Unit_Tests.sh
 ```bash
 bash -n Engine.sh
 bash -n Agent.sh
-bash -n Borealis.sh
 bash -n Update.sh
 docker compose -f Data/Engine/Containers/compose.yaml config
 ```
@@ -145,7 +144,7 @@ Prefer small helpers with clear names: fake Engine, fake devices, fake Role hook
 ## Codex Agent
 - Read this page before choosing validation for codebase changes.
 - Use root scripts as testing entrypoint. Do not start with raw `pytest`, `npm`, or `vitest` unless diagnosing runner failure.
-- For container deployment changes, run shell syntax checks for `Engine.sh`, `Agent.sh`, `Borealis.sh`, and `Update.sh`, then validate `Data/Engine/Containers/compose.yaml` through `docker compose -f Data/Engine/Containers/compose.yaml config`.
+- For container deployment changes, run shell syntax checks for `Engine.sh`, `Agent.sh`, and `Update.sh`, then validate `Data/Engine/Containers/compose.yaml` through `docker compose -f Data/Engine/Containers/compose.yaml config`.
 - Pick narrow domain runs while iterating, then run full affected lane when practical: Engine change gets `./Engine_Unit_Tests.sh`; Agent change gets `./Agent_Unit_Tests.sh` or `.\Agent_Unit_Tests.ps1`; cross-runtime change gets both.
 - For WebUI unit tests, use `./Engine_Unit_Tests.sh --domain webui`. Do not run npm or vite from `Data/Engine/Containers/webui-frontend/data/web-interface`; staging source is not the runtime test location.
 - Keep reports under `Unit_Test_Results/`. Do not write `.pytest_cache`, `__pycache__`, JUnit XML, or Vitest output under `Data/Engine`, `Data/Agent`, or `Data/Engine/Containers/webui-frontend/data/web-interface`.

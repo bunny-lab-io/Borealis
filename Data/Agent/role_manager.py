@@ -80,7 +80,8 @@ class RoleManager:
                 try:
                     if (
                         (candidate_root / "Borealis.ps1").is_file()
-                        or (candidate_root / "Borealis.sh").is_file()
+                        or (candidate_root / "Agent.sh").is_file()
+                        or (candidate_root / "Engine.sh").is_file()
                         or (candidate_root / ".git").is_dir()
                     ):
                         discovered_root = candidate_root

@@ -90,6 +90,14 @@ restore_selinux_context_if_needed() {
   run_privileged restorecon -RF "${target}" >/dev/null 2>&1 || true
 }
 
+running_in_agent_updater_service() {
+  [[ "${BOREALIS_AGENT_UPDATER_SERVICE:-0}" == "1" ]] && return 0
+  if [[ -r /proc/self/cgroup ]] && grep -q "borealis-agent-updater\\.service" /proc/self/cgroup 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
 normalize_release_channel() {
   local raw="${1:-}"
   raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
@@ -210,7 +218,7 @@ sync_repo() {
   run_privileged git -C "${INSTALL_DIR}" checkout --force -B "${checkout_branch}" FETCH_HEAD
   run_privileged git -C "${INSTALL_DIR}" reset --hard FETCH_HEAD
   run_privileged git -C "${INSTALL_DIR}" clean -fdx -e Engine -e Engine.old -e Agent
-  run_privileged chmod +x "${INSTALL_DIR}/Engine.sh" "${INSTALL_DIR}/Agent.sh" "${INSTALL_DIR}/Borealis.sh" "${INSTALL_DIR}/Update.sh" >/dev/null 2>&1 || true
+  run_privileged chmod +x "${INSTALL_DIR}/Engine.sh" "${INSTALL_DIR}/Agent.sh" "${INSTALL_DIR}/Update.sh" >/dev/null 2>&1 || true
   restore_selinux_context_if_needed "${INSTALL_DIR}"
 }
 
@@ -504,10 +512,16 @@ PY
 
 stop_agent_supervision() {
   local unit_name="${BOREALIS_AGENT_SYSTEMD_UNIT:-borealis-agent.service}"
+  local in_updater_service=0
+  if running_in_agent_updater_service; then
+    in_updater_service=1
+  fi
   if command_exists systemctl; then
     run_privileged systemctl stop "${unit_name}" >/dev/null 2>&1 || true
-    run_privileged systemctl stop borealis-agent-updater.service >/dev/null 2>&1 || true
-    run_privileged systemctl stop borealis-agent-updater.timer >/dev/null 2>&1 || true
+    if [[ "${in_updater_service}" -eq 0 ]]; then
+      run_privileged systemctl stop borealis-agent-updater.service >/dev/null 2>&1 || true
+      run_privileged systemctl stop borealis-agent-updater.timer >/dev/null 2>&1 || true
+    fi
   fi
 
   local pid_file="${SCRIPT_DIR}/Agent/Logs/agent.pid"
@@ -615,6 +629,7 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=${SCRIPT_DIR}
 Environment=BOREALIS_PROJECT_ROOT=${SCRIPT_DIR}
+Environment=BOREALIS_AGENT_UPDATER_SERVICE=1
 ExecStart=/usr/bin/env bash ${SCRIPT_DIR}/Update.sh -Agent
 EOF
   cat > "${timer_file}" <<'EOF'

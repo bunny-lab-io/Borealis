@@ -136,13 +136,20 @@ def test_merge_uninstall_blocklist_payloads_matches_name_contains_any_overlap() 
     }
 
 
-def test_borealis_sh_merges_runtime_override_files_during_engine_restage() -> None:
-    script_path = Path(__file__).resolve().parents[3] / "Borealis.sh"
-    content = script_path.read_text(encoding="utf-8")
+def test_runtime_override_merge_helper_stays_available() -> None:
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "Containers"
+        / "api-backend"
+        / "data"
+        / "services"
+        / "API"
+        / "devices"
+        / "runtime_override_merge.py"
+    )
+    content = module_path.read_text(encoding="utf-8")
 
-    assert "capture_engine_runtime_override_snapshot" in content
-    assert "merge_engine_runtime_override_snapshot" in content
-    assert "runtime_override_merge.py" in content
-    assert "software_icons_overrides.json|software_icons" in content
-    assert "software_uninstall_overrides.json|software_uninstall_overrides" in content
-    assert "software_uninstall_blocklist.json|software_uninstall_blocklist" in content
+    assert "def merge_override_payloads" in content
+    assert "software_icons" in content
+    assert "software_uninstall_overrides" in content
+    assert "software_uninstall_blocklist" in content

@@ -184,7 +184,7 @@ class EngineAnsibleRunner:
             return Path(root_env).expanduser().resolve()
         current = Path(__file__).resolve().parent
         for candidate in (current, *current.parents):
-            if (candidate / "Borealis.sh").is_file():
+            if (candidate / "Engine.sh").is_file():
                 return candidate
         raise RuntimeError("Unable to locate the Borealis project root for Engine Ansible execution.")
 

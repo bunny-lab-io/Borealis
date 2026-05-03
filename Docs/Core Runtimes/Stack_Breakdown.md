@@ -312,12 +312,6 @@ Branch install or redeploy from raw launcher:
 curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --repo-branch feature/containerize-all-borealis-services deploy prod
 ```
 
-Compatibility router:
-```sh
-bash Borealis.sh --EngineProduction
-bash Borealis.sh --EngineDev
-```
-
 Updater:
 ```sh
 bash Update.sh -Engine
@@ -613,7 +607,6 @@ If remote shell, Ansible, or tunnel-backed operations fail:
 - Validate launcher syntax after changing shell scripts:
 ```sh
 bash -n Engine.sh
-bash -n Borealis.sh
 bash -n Update.sh
 docker compose -f Data/Engine/Containers/compose.yaml config
 ```

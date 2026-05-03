@@ -1,6 +1,6 @@
 # Borealis SBOM
 
-This software bill of materials is an inventory of the direct, repo-declared, bundled, container base image, or script-installed third-party software used by Borealis. It was assembled from `bootstrap.ps1`, `Engine.sh`, `Agent.sh`, `Borealis.sh`, `Borealis.ps1`, `Data/Agent/agent-requirements.txt`, `Data/Engine/Containers/api-backend/data/engine-requirements.txt`, `Data/Engine/Containers/webui-frontend/data/web-interface/package.json`, `Data/Engine/Containers/api-backend/data/Ansible/collections.yml`, and `Data/Engine/Containers/`.
+This software bill of materials is an inventory of the direct, repo-declared, bundled, container base image, or script-installed third-party software used by Borealis. It was assembled from `bootstrap.ps1`, `Engine.sh`, `Agent.sh`, `Borealis.ps1`, `Data/Agent/agent-requirements.txt`, `Data/Engine/Containers/api-backend/data/engine-requirements.txt`, `Data/Engine/Containers/webui-frontend/data/web-interface/package.json`, `Data/Engine/Containers/api-backend/data/Ansible/collections.yml`, and `Data/Engine/Containers/`.
 
 The Python requirement files are currently unpinned, so the exact resolved version can change between installs. Where the install scripts pin a version explicitly, that version is called out below.
 
@@ -74,11 +74,9 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - ansible.windows collection - GPL-3.0-or-later - https://github.com/ansible-collections/ansible.windows/blob/main/LICENSE
 - ansible.posix collection - GPL-3.0-or-later - https://github.com/ansible-collections/ansible.posix/blob/main/LICENSE
 - community.general collection - GPL-3.0-or-later - https://github.com/ansible-collections/community.general/blob/main/COPYING
-- PostgreSQL 17 (default engine database target in `Borealis.sh`) - PostgreSQL License - https://www.postgresql.org/about/licence/
 - Tesseract OCR - Apache-2.0 - https://github.com/tesseract-ocr/tesseract/blob/main/LICENSE
 - WireGuard tools - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
 - Traefik (Borealis-managed local HTTPS edge and ACME client) - MIT - https://github.com/traefik/traefik/blob/master/LICENSE.md
-- Node.js 23.11.0 (portable web build/runtime helper in `Borealis.sh`) - MIT - https://github.com/nodejs/node/blob/main/LICENSE
 - @emotion/react - MIT - https://spdx.org/licenses/MIT.html
 - @emotion/styled - MIT - https://spdx.org/licenses/MIT.html
 - @fortawesome/fontawesome-free - CC-BY-4.0 AND OFL-1.1 AND MIT - https://github.com/FortAwesome/Font-Awesome/blob/7.x/LICENSE.txt

@@ -21,7 +21,7 @@ def _project_root() -> Path:
         return Path(root_env).expanduser().resolve()
     current = Path(__file__).resolve().parent
     for candidate in (current, *current.parents):
-        if (candidate / "Borealis.sh").is_file():
+        if (candidate / "Engine.sh").is_file():
             return candidate
     return Path.cwd().resolve()
 

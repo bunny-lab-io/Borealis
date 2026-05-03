@@ -121,6 +121,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Operator-requested manual updates arrive over the SYSTEM Socket.IO channel as `agent_update_request` and start the local AutoUpdater task/service immediately so the same scheduler-owned update path is used for both manual and hourly runs.
 - Engine-managed release channels still decide what build the agent should adopt, but the agent now discovers and applies those targets during its scheduled updater cadence instead of reacting to live Engine push events.
 - The scheduled AutoUpdater cadence is hourly with up to 15 minutes of random delay on normal timer-driven runs so fleets do not all recheck at once.
+- Linux updater service runs `Update.sh -Agent` through `borealis-agent-updater.service`; `Agent.sh deploy` detects that service context and does not stop the active updater while refreshing the agent runtime.
 - If scripts do not run:
   - Confirm `quick_job_run` events and the correct role context.
   - Verify signatures with `signature_utils` logs.
@@ -174,7 +175,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 
 #### Platform parity
 - Windows is the reference path and has the broadest tested feature surface.
-- Linux agents run from the script-staged Python runtime through `Borealis.sh --Agent`, not shipped binaries.
+- Linux agents run from the script-staged Python runtime through `Agent.sh deploy`, not shipped binaries.
 - Linux agents load the standard Agent roles and currently support WireGuard VPN, remote Bash/script execution, file/folder interaction, and Engine-side Ansible reachability to remote Linux devices.
 - Linux does not have a system tray/helper UI yet, and remote desktop remains Windows-only through the UltraVNC/Apache Guacamole path.
 - Linux agents probe for an active desktop environment through environment variables, display-manager state, display sockets, and common desktop processes. If none is active, desktop-only roles return `not_applicable`/`No Desktop Environment Active`.

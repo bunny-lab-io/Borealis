@@ -85,7 +85,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 ### One-shot legacy migration helpers
 - `Data/Engine/Containers/sterilize-systemd-runtime.sh`: migration-only helper that stops/removes legacy Borealis systemd units, disables host PostgreSQL units, best-effort removes old `borealis-wg` state, dumps the legacy `borealis` database when reachable, and renames `Engine/` to `Engine.old/`.
 - `Data/Engine/Containers/import-legacy-postgres-dump.sh <dump.sql>`: migration-only helper that imports a preserved logical dump into container PostgreSQL after deployment.
-- These helpers are not called by `Engine.sh`, `Update.sh`, or `Borealis.sh`.
+- These helpers are not called by `Engine.sh` or `Update.sh`.
 
 ### EngineContext and lifecycle
 - `Data/Engine/Containers/api-backend/data/server.py` builds an `EngineContext` that includes:
@@ -124,7 +124,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - The SPA fallback in `Data/Engine/Containers/api-backend/data/services/WebUI/__init__.py` remains for tests and non-container execution.
 
 ### PostgreSQL profile notes
-- Container deployment starts PostgreSQL with conservative defaults from `compose.env`; profile auto-tuning from legacy `Borealis.sh` is not maintained in the container launcher.
+- Container deployment starts PostgreSQL with conservative defaults from `compose.env`; legacy profile auto-tuning is not maintained in the container launcher.
 - Adjust DB pool values in `Engine/Deploy/compose.env` before redeploy when larger installations need explicit tuning.
 
 ### WireGuard and VNC wiring
@@ -167,7 +167,7 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 #### Scope and runtime paths
 - Staging / launch: `Engine.sh` handles Linux first install, dependency checks, Engine container build, and Compose deployment. (`Borealis.ps1` is agent-only.)
 - Edit in `Data/Engine` and `Data/Engine/Containers`; use `Engine.sh deploy dev|prod` when source changes need to reach the running service.
-- During `Borealis.sh` Engine restaging, Borealis now merges the runtime copies of `software_icons_overrides.json`, `software_uninstall_overrides.json`, and `software_uninstall_blocklist.json` back onto the freshly staged source payloads so operator hotloaded rules survive redeploys. Merge deduplication is name-based, and runtime/operator entries win when the same software name exists in both places.
+- Container redeploys use committed source JSON for `software_icons_overrides.json`, `software_uninstall_overrides.json`, and `software_uninstall_blocklist.json`; commit operator-tested hotloaded rules that must survive image rebuilds.
 - Raw one-line or repo-option `Engine.sh` runs sync first, then re-execs the installed `Engine.sh`; local `Engine.sh deploy` uses existing on-disk source and does not update git.
 
 #### Architecture
@@ -207,7 +207,7 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 - UI shell bridge: `Data/Engine/Containers/api-backend/data/services/WebSocket/vpn_shell.py`.
 
 #### WebUI and WebSocket migration
-- Static/template handling: `Data/Engine/Containers/api-backend/data/services/WebUI`; deployment copy paths are wired through `Borealis.sh` with TLS-aware URL generation.
+- Static/template handling: `Data/Engine/Containers/api-backend/data/services/WebUI`; deployment copy paths are wired through `Engine.sh` with TLS-aware URL generation.
 - Stage 6 tasks: migration switch in the legacy server for WebUI delegation and porting device/admin API endpoints into Engine services.
 - Stage 7 (queued): `register_realtime` hooks, Engine-side Socket.IO handlers, integration checks, legacy delegation updates.
 

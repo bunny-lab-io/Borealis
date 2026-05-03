@@ -26,8 +26,8 @@ def _discover_project_root(current: Path) -> Optional[Path]:
         try:
             if (
                 (parent / "Borealis.ps1").is_file()
-                or (parent / "Borealis.sh").is_file()
-                or (parent / "users.json").is_file()
+                or (parent / "Agent.sh").is_file()
+                or (parent / "Engine.sh").is_file()
                 or (parent / ".git").is_dir()
             ):
                 return parent
