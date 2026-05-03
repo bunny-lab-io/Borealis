@@ -36,6 +36,15 @@ def test_agent_sh_does_not_stop_running_updater_service() -> None:
     assert "borealis-agent-updater\\.service" in content
 
 
+def test_agent_sh_blocks_engine_host_install() -> None:
+    script_path = Path(__file__).resolve().parents[3] / "Agent.sh"
+    content = script_path.read_text(encoding="utf-8")
+
+    assert "ensure_not_engine_host" in content
+    assert "Data/Engine/Containers/compose.yaml" in content
+    assert "Refusing to install the Linux Agent in an Engine install root" in content
+
+
 def test_borealis_ps1_hardens_tray_folder_permissions() -> None:
     script_path = Path(__file__).resolve().parents[3] / "Borealis.ps1"
     content = script_path.read_text(encoding="utf-8")

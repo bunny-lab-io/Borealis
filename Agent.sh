@@ -98,6 +98,19 @@ running_in_agent_updater_service() {
   return 1
 }
 
+engine_present_in_install_root() {
+  [[ -f "${SCRIPT_DIR}/Data/Engine/Containers/compose.yaml" ]] && return 0
+  [[ -d "${SCRIPT_DIR}/Engine/Deploy" ]] && return 0
+  [[ -f "${SCRIPT_DIR}/Engine/Deploy/deploy-manifest.json" ]] && return 0
+  [[ -f "${SCRIPT_DIR}/Engine/Deploy/compose.env" ]] && return 0
+  return 1
+}
+
+ensure_not_engine_host() {
+  engine_present_in_install_root || return 0
+  die "Refusing to install the Linux Agent in an Engine install root. Use a separate host for the Agent; Agent auto-update mutates the shared checkout and can break Engine source/runtime expectations."
+}
+
 normalize_release_channel() {
   local raw="${1:-}"
   raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
@@ -677,6 +690,7 @@ configure_supervision() {
 }
 
 deploy_agent() {
+  ensure_not_engine_host
   stop_agent_supervision
   install_agent_dependencies
   local preserved_url
