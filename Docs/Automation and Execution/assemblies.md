@@ -67,6 +67,7 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 
 ## Ansible Status (Current)
 - The Linux Engine packages an Ansible control-node runtime inside the Engine venv.
+- Engine startup stages `Data/Engine/Containers/api-backend/data/Ansible/collections.yml` into the runtime Ansible cache and installs any missing collections into `Engine/Services/api-backend/cache/Ansible/collections`, which is the same path used by scheduled playbook runs.
 - Scheduled jobs support agent-side script execution for `execution_context = system` and `current_user`, plus Engine-side playbook execution for `execution_context = ssh`, `ssh_individual`, `winrm`, and `winrm_individual`.
 - The scheduled-job editor now filters execution contexts by assembly domain so script assemblies cannot be mixed with Ansible playbooks in one job. Workflow-backed scheduled jobs continue to ignore scheduler-level execution context.
 - The scheduled-job editor defaults new Ansible jobs to `ssh_individual` so normal fleet automation runs one target at a time with bounded concurrency, while `ssh` / `winrm` remain available for grouped multi-host playbooks that need a shared inventory context.

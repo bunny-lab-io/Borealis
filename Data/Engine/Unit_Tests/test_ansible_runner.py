@@ -6,11 +6,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 import signal
 import subprocess
 import tempfile
+import types
 
+import Data.Engine.bootstrapper as bootstrapper_module
 from Data.Engine.db import dbapi as sqlite3
 import Data.Engine.services.ansible.runner as ansible_runner_module
 from Data.Engine.services.ansible.runner import EngineAnsibleRunner, RUN_STATUS_TIMED_OUT
@@ -74,6 +77,89 @@ class _FakeProcess:
     def kill(self) -> None:
         self.killed = True
         self.returncode = -signal.SIGKILL
+
+
+def _write_ansible_collections_manifest(project_root: Path) -> Path:
+    manifest = project_root / "Data" / "Engine" / "Containers" / "api-backend" / "data" / "Ansible" / "collections.yml"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        "---\n"
+        "collections:\n"
+        "  - name: ansible.windows\n"
+        "  - name: ansible.posix\n"
+        "  - name: community.general\n",
+        encoding="utf-8",
+    )
+    return manifest
+
+
+def _mark_collection_installed(collections_root: Path, name: str) -> None:
+    namespace, collection = name.split(".", 1)
+    (collections_root / "ansible_collections" / namespace / collection).mkdir(parents=True, exist_ok=True)
+
+
+def test_bootstrap_stages_and_installs_missing_ansible_collections(tmp_path: Path, monkeypatch) -> None:
+    source_manifest = _write_ansible_collections_manifest(tmp_path)
+    runtime_root = tmp_path / "runtime" / "Ansible"
+    calls: list[dict[str, object]] = []
+
+    def fake_run(command, *, cwd, env, capture_output, text, check):  # noqa: ANN001
+        calls.append(
+            {
+                "command": command,
+                "cwd": cwd,
+                "env": env,
+                "capture_output": capture_output,
+                "text": text,
+                "check": check,
+            }
+        )
+        for name in ("ansible.windows", "ansible.posix", "community.general"):
+            _mark_collection_installed(runtime_root / "collections", name)
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(bootstrapper_module, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(bootstrapper_module, "_resolve_ansible_galaxy_command", lambda: ["/usr/bin/ansible-galaxy"])
+    monkeypatch.setattr(bootstrapper_module.subprocess, "run", fake_run)
+    monkeypatch.setenv("BOREALIS_ANSIBLE_RUNTIME_ROOT", str(runtime_root))
+
+    staged_manifest = bootstrapper_module._stage_ansible_collections(logger=logging.getLogger("test.bootstrap.ansible"))
+
+    assert staged_manifest == runtime_root / "collections.yml"
+    assert staged_manifest.read_text(encoding="utf-8") == source_manifest.read_text(encoding="utf-8")
+    assert len(calls) == 1
+    assert calls[0]["command"] == [
+        "/usr/bin/ansible-galaxy",
+        "collection",
+        "install",
+        "-r",
+        str(staged_manifest),
+        "-p",
+        str(runtime_root / "collections"),
+    ]
+    assert calls[0]["cwd"] == str(tmp_path)
+    assert calls[0]["env"]["ANSIBLE_COLLECTIONS_PATH"] == str(runtime_root / "collections")
+    assert calls[0]["env"]["ANSIBLE_COLLECTIONS_PATHS"] == str(runtime_root / "collections")
+
+
+def test_bootstrap_skips_ansible_galaxy_when_collections_present(tmp_path: Path, monkeypatch) -> None:
+    source_manifest = _write_ansible_collections_manifest(tmp_path)
+    runtime_root = tmp_path / "runtime" / "Ansible"
+    collections_root = runtime_root / "collections"
+    for name in ("ansible.windows", "ansible.posix", "community.general"):
+        _mark_collection_installed(collections_root, name)
+
+    def fake_run(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("ansible-galaxy should not run when collections are already installed")
+
+    monkeypatch.setattr(bootstrapper_module, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(bootstrapper_module.subprocess, "run", fake_run)
+    monkeypatch.setenv("BOREALIS_ANSIBLE_RUNTIME_ROOT", str(runtime_root))
+
+    staged_manifest = bootstrapper_module._stage_ansible_collections(logger=logging.getLogger("test.bootstrap.ansible"))
+
+    assert staged_manifest == runtime_root / "collections.yml"
+    assert staged_manifest.read_text(encoding="utf-8") == source_manifest.read_text(encoding="utf-8")
 
 
 def test_runner_ansible_cfg_uses_sshpass_password_mechanism(tmp_path: Path) -> None:
