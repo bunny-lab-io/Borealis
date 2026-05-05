@@ -112,6 +112,7 @@ function formatConnectionLabel(connectionType) {
   const value = String(connectionType || "").toLowerCase();
   if (!value) return "-";
   if (value === "ssh") return "SSH";
+  if (value === "windows") return "Windows";
   if (value === "winrm") return "WinRM";
   if (value === "github") return "GitHub";
   return titleCase(value);
@@ -133,6 +134,7 @@ function connectionIcon(connection) {
   if (val === "github_verified") return <GitHubIcon fontSize="small" sx={{ mr: 0.6, color: "#7dffac" }} />;
   if (val === "github_invalid") return <GitHubIcon fontSize="small" sx={{ mr: 0.6, color: "#ff8080" }} />;
   if (val === "ssh") return <TerminalRoundedIcon fontSize="small" sx={{ mr: 0.6, color: "#58a6ff" }} />;
+  if (val === "windows") return <ComputerIcon fontSize="small" sx={{ mr: 0.6, color: "#58a6ff" }} />;
   if (val === "winrm") return <TerminalRoundedIcon fontSize="small" sx={{ mr: 0.6, color: "#58a6ff" }} />;
   return <ComputerIcon fontSize="small" sx={{ mr: 0.6, color: "#58a6ff" }} />;
 }

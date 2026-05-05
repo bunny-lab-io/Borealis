@@ -612,6 +612,31 @@ def test_credentials_admin_crud_round_trip_with_aegis(engine_harness: EngineTest
     assert final_list.get_json()["credentials"] == []
 
 
+def test_credentials_accept_windows_domain_records(engine_harness: EngineTestHarness) -> None:
+    client = _admin_client(engine_harness)
+
+    create_response = client.post(
+        "/api/credentials",
+        json={
+            "name": "Lab Windows Admin",
+            "description": "Domain credential for Windows onboarding",
+            "site_id": 1,
+            "credential_type": "domain",
+            "connection_type": "windows",
+            "username": "LAB\\svc-borealis",
+            "password": "super-secret",
+            "metadata": {"domain": "LAB"},
+        },
+    )
+
+    assert create_response.status_code == 200
+    created = create_response.get_json()["credential"]
+    assert created["credential_type"] == "domain"
+    assert created["connection_type"] == "windows"
+    assert created["username"] == "LAB\\svc-borealis"
+    assert created["has_password"] is True
+
+
 def test_credentials_and_github_mutations_block_while_unconfigured_or_locked(
     unconfigured_engine_harness: EngineTestHarness,
 ) -> None:

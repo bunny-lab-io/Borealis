@@ -111,7 +111,7 @@ class _FakePreflightSocket:
 
 def test_onboarding_scope_parser_expands_supported_targets() -> None:
     targets, errors = parse_onboarding_scope(
-        ["192.168.10.5", "192.168.10.10-12", "10.0.0.0/30", "server01.lab"],
+        ["# primary lab", "192.168.10.5 # database", "192.168.10.10-12", "10.0.0.0/30", "server01.lab"],
         max_targets=16,
     )
 
@@ -205,7 +205,7 @@ def test_scheduled_jobs_api_creates_onboarding_job(engine_harness: EngineTestHar
                 }
             ],
             "credential_id": 77,
-            "execution_context": "onboarding_linux_ssh",
+            "execution_context": "onboarding_local_network",
             "schedule": {"type": "immediately"},
         },
     )
@@ -214,7 +214,7 @@ def test_scheduled_jobs_api_creates_onboarding_job(engine_harness: EngineTestHar
     payload = response.get_json()
     job = payload["job"]
     assert job["job_kind"] == "onboarding"
-    assert job["execution_context"] == "onboarding_linux_ssh"
+    assert job["execution_context"] == "onboarding_local_network"
     assert job["components"][0]["kind"] == "device_onboarding"
     assert job["components"][0]["onboarding_concurrency"] == 5
     assert job["targets"][0]["kind"] == "onboarding_scope"
@@ -244,6 +244,129 @@ def test_onboarding_scope_config_parses_concurrency(engine_harness: EngineTestHa
 
     assert error is None
     assert config["onboarding_concurrency"] == 5
+
+
+def test_onboarding_scope_config_parses_windows_platform(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    config, error = scheduler._onboarding_scope_config(
+        components=[
+            {
+                "kind": "device_onboarding",
+                "install_branch": "main",
+                "agent_platform": "windows",
+                "windows_port": "445",
+                "winrm_port": "5986",
+                "onboarding_methods": ["smb", "task", "winrm"],
+                "onboarding_concurrency": "5",
+            }
+        ],
+        targets=[
+            {
+                "kind": "onboarding_scope",
+                "site_id": 1,
+                "entries": ["192.168.10.5"],
+            }
+        ],
+    )
+
+    assert error is None
+    assert config["agent_platform"] == "windows"
+    assert config["transport_port"] == 445
+    assert config["winrm_port"] == 5986
+    assert config["onboarding_methods"] == ["smb_scm", "scheduled_task", "winrm"]
+
+
+def test_windows_onboarding_falls_back_to_winrm(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    updates = []
+    attempts = []
+
+    monkeypatch.setattr(scheduler, "_update_onboarding_target_row", lambda row_id, **kwargs: updates.append({"row_id": row_id, **kwargs}))
+    monkeypatch.setattr(scheduler, "_onboarding_target_already_known", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(scheduler, "_preflight_remote_port", lambda **_kwargs: "")
+    monkeypatch.setattr(scheduler, "_onboarding_install_timeout_seconds", lambda: 30.0)
+    monkeypatch.setattr(scheduler, "_lookup_onboarding_approval", lambda **_kwargs: "APR-WIN-1")
+
+    def fail_smb(**_kwargs):
+        attempts.append("smb_scm")
+        return {"exit_code": 1, "stdout": "", "stderr": "service blocked"}
+
+    def fail_task(**_kwargs):
+        attempts.append("scheduled_task")
+        return {"exit_code": 1, "stdout": "", "stderr": "task blocked"}
+
+    def pass_winrm(**_kwargs):
+        attempts.append("winrm")
+        return {"exit_code": 0, "stdout": "__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=0", "stderr": ""}
+
+    monkeypatch.setattr(scheduler, "_execute_windows_smb_scm_onboarding", fail_smb)
+    monkeypatch.setattr(scheduler, "_execute_windows_scheduled_task_onboarding", fail_task)
+    monkeypatch.setattr(scheduler, "_execute_windows_winrm_onboarding", pass_winrm)
+
+    status = scheduler._run_single_onboarding_target(
+        row={"id": 1, "target_address": "win01.lab", "target_hostname": "win01.lab", "ssh_port": 445},
+        site={"id": 1, "enrollment_code": "ENROLL"},
+        credential={"connection_type": "windows", "username": "LAB\\svc", "password": "secret"},
+        branch="main",
+        server_url="https://borealis.example",
+        job_id=10,
+        run_id=20,
+        platform="windows",
+        windows_methods=["smb_scm", "scheduled_task", "winrm"],
+        winrm_port=5985,
+    )
+
+    assert attempts == ["smb_scm", "scheduled_task", "winrm"]
+    assert status == scheduled_job_module.ONBOARDING_STATUS_WAITING_APPROVAL
+    assert updates[-1]["status"] == scheduled_job_module.ONBOARDING_STATUS_WAITING_APPROVAL
+    assert "WinRM" in updates[-1]["detail"]
+    assert updates[-1]["approval_reference"] == "APR-WIN-1"
+
+
+def test_windows_onboarding_reports_manual_install_after_all_methods_fail(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    updates = []
+
+    monkeypatch.setattr(scheduler, "_update_onboarding_target_row", lambda row_id, **kwargs: updates.append({"row_id": row_id, **kwargs}))
+    monkeypatch.setattr(scheduler, "_onboarding_target_already_known", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(scheduler, "_preflight_remote_port", lambda **_kwargs: "")
+    monkeypatch.setattr(scheduler, "_onboarding_install_timeout_seconds", lambda: 30.0)
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_smb_scm_onboarding",
+        lambda **_kwargs: {"exit_code": 1, "stdout": "", "stderr": "service blocked"},
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_scheduled_task_onboarding",
+        lambda **_kwargs: {"exit_code": 1, "stdout": "", "stderr": "task blocked"},
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_winrm_onboarding",
+        lambda **_kwargs: {"exit_code": 1, "stdout": "", "stderr": "winrm blocked"},
+    )
+
+    status = scheduler._run_single_onboarding_target(
+        row={"id": 1, "target_address": "win02.lab", "target_hostname": "win02.lab", "ssh_port": 445},
+        site={"id": 1, "enrollment_code": "ENROLL"},
+        credential={"connection_type": "windows", "username": "LAB\\svc", "password": "secret"},
+        branch="main",
+        server_url="https://borealis.example",
+        job_id=10,
+        run_id=20,
+        platform="windows",
+        windows_methods=["smb_scm", "scheduled_task", "winrm"],
+        winrm_port=5985,
+    )
+
+    assert status == scheduled_job_module.ONBOARDING_STATUS_FAILED
+    assert updates[-1]["status"] == scheduled_job_module.ONBOARDING_STATUS_FAILED
+    assert "Manual agent installation required" in updates[-1]["detail"]
 
 
 def test_onboarding_scope_config_rejects_invalid_concurrency(engine_harness: EngineTestHarness) -> None:
@@ -378,7 +501,7 @@ def test_onboarding_redeploy_clears_history_and_dispatches(
             ],
             "components": [{"kind": "device_onboarding", "install_branch": "main", "ssh_port": 22}],
             "credential_id": 77,
-            "execution_context": "onboarding_linux_ssh",
+            "execution_context": "onboarding_local_network",
             "schedule": {"type": "immediately"},
         },
     )

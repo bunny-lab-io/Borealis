@@ -79,15 +79,16 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Enrollment requests are queued for approval within the request's site.
 - Admins can approve any site; operators can approve only requests for sites they are assigned to.
 - Approvals enforce hostname conflict checks and device identity tracking.
-- Approvals created by automatic SSH onboarding can include `onboarding_job_id`, `onboarding_run_id`, and `onboarding_target` so operators can trace a pending approval back to the scheduled onboarding run and target.
+- Approvals created by automatic local-network onboarding can include `onboarding_job_id`, `onboarding_run_id`, and `onboarding_target` so operators can trace a pending approval back to the scheduled onboarding run and target.
 
-## Automatic SSH Onboarding
+## Automatic Local-Network Onboarding
 - Jobs are created from Sites > Onboard Devices and appear in Scheduled Jobs alongside automation jobs.
-- Linux targets can be supplied as IPv4 addresses, IPv4 ranges, CIDR blocks, or FQDNs. Exclusion scope entries use the same formats and remove targets before SSH attempts start.
-- The Engine reaches targets directly over the local network through SSH; no WireGuard tunnel or existing Borealis agent is required.
-- Borealis uses one stored SSH credential per onboarding job and does not copy credentials into the job definition.
-- The remote installer uses the selected agent install branch of `Agent.sh`, the Engine public URL, and the selected site's enrollment code. Device approval remains manual, but pending approvals can be approved directly from the onboarding job target status table when no hostname conflict prompt is required.
-- Re-deploy clears prior onboarding run history for that job and starts a new immediate local-network SSH deployment. Device onboarding concurrency defaults to `5` so subnet scans do not flood the Engine, and operators can tune it per onboarding job.
+- Targets can be supplied as IPv4 addresses, IPv4 ranges, CIDR blocks, or FQDNs. Exclusion scope entries use the same formats and remove targets before onboarding attempts start.
+- Windows targets use the same IP/FQDN scope model. Borealis tries SMB `ADMIN$` plus Remote Service Control Manager, then remote scheduled task, then WinRM. If policy blocks all three methods, Borealis records that manual agent installation is required.
+- The Engine reaches targets directly over the local network; no WireGuard tunnel or existing Borealis agent is required.
+- Borealis uses one stored machine or domain credential per onboarding job and does not copy credentials into the job definition.
+- The remote installer uses the selected agent install branch, the Engine public URL, and the selected site's enrollment code. Device approval remains manual, but pending approvals can be approved directly from the onboarding job target status table when no hostname conflict prompt is required.
+- Re-deploy clears prior onboarding run history for that job and starts a new immediate local-network deployment. Device onboarding concurrency defaults to `5` so subnet scans do not flood the Engine, and operators can tune it per onboarding job.
 
 ## Device Purge
 - The Device List `Delete` action is now an admin-only purge flow backed by `POST /api/devices/<guid>/purge`.

@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import base64
+import html
+import io
 import json
 import logging
 import math
@@ -24,6 +26,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from urllib.parse import quote as url_quote
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
@@ -45,6 +48,8 @@ from ..devices.session_dispatch import build_currentuser_dispatch_fields
 from .onboarding import (
     DEFAULT_ONBOARDING_CONCURRENCY,
     DEFAULT_ONBOARDING_SSH_PORT,
+    DEFAULT_ONBOARDING_WINDOWS_PORT,
+    DEFAULT_ONBOARDING_WINRM_PORT,
     DEFAULT_ONBOARDING_TARGET_CAP,
     parse_onboarding_scope,
     sanitize_output,
@@ -111,13 +116,23 @@ CREDENTIAL_RESET_REQUIRED_MESSAGE = (
 JOB_KIND_AUTOMATION = "automation"
 JOB_KIND_ONBOARDING = "onboarding"
 ONBOARDING_COMPONENT_KIND = "device_onboarding"
-ONBOARDING_COMPONENT_NAME = "Linux SSH Device Onboarding"
+ONBOARDING_COMPONENT_NAME = "Device Onboarding"
 ONBOARDING_STATUS_PENDING = "pending"
 ONBOARDING_STATUS_RUNNING = "running"
 ONBOARDING_STATUS_WAITING_APPROVAL = "waiting_approval"
 ONBOARDING_STATUS_SKIPPED = "skipped"
 ONBOARDING_STATUS_FAILED = "failed"
-ONBOARDING_STATUS_UNREACHABLE = "ssh_unreachable"
+ONBOARDING_STATUS_UNREACHABLE = "unreachable"
+ONBOARDING_PLATFORM_LINUX = "linux"
+ONBOARDING_PLATFORM_WINDOWS = "windows"
+ONBOARDING_WINDOWS_METHOD_SMB_SCM = "smb_scm"
+ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK = "scheduled_task"
+ONBOARDING_WINDOWS_METHOD_WINRM = "winrm"
+ONBOARDING_WINDOWS_METHODS = (
+    ONBOARDING_WINDOWS_METHOD_SMB_SCM,
+    ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK,
+    ONBOARDING_WINDOWS_METHOD_WINRM,
+)
 
 
 def _onboarding_failure_hint(*, stdout: Any = "", stderr: Any = "", redactions: Optional[Sequence[Any]] = None) -> str:
@@ -153,6 +168,45 @@ def _onboarding_failure_hint(*, stdout: Any = "", stderr: Any = "", redactions: 
         or "permission denied" in line.lower()
     ]
     return sanitize_output((important or candidates)[-1], redactions=redactions, limit=240)
+
+
+def _powershell_single_quoted(value: Any) -> str:
+    return "'" + str(value or "").replace("'", "''") + "'"
+
+
+def _windows_method_label(method: Any) -> str:
+    normalized = str(method or "").strip().lower()
+    if normalized == ONBOARDING_WINDOWS_METHOD_SMB_SCM:
+        return "SMB service"
+    if normalized == ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK:
+        return "scheduled task"
+    if normalized == ONBOARDING_WINDOWS_METHOD_WINRM:
+        return "WinRM"
+    return normalized.replace("_", " ") or "Windows remote install"
+
+
+def _parse_windows_credential_parts(credential: Mapping[str, Any]) -> Tuple[str, str, str]:
+    username = str(credential.get("username") or "").strip()
+    metadata = credential.get("metadata") if isinstance(credential.get("metadata"), dict) else {}
+    domain = str(metadata.get("domain") or metadata.get("windows_domain") or "").strip()
+    if "\\" in username:
+        domain_part, user_part = username.split("\\", 1)
+        return domain_part.strip(), user_part.strip(), str(credential.get("password") or "")
+    if "@" in username and not domain:
+        user_part, domain_part = username.split("@", 1)
+        return domain_part.strip(), user_part.strip(), str(credential.get("password") or "")
+    return domain, username, str(credential.get("password") or "")
+
+
+def _windows_exit_code_from_output(output: Any) -> Optional[int]:
+    text = str(output or "")
+    matches = re.findall(r"__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__\s*=\s*(-?\d+)", text)
+    if not matches:
+        return None
+    try:
+        return int(matches[-1])
+    except Exception:
+        return None
 
 
 def _now_ts() -> int:
@@ -2951,16 +3005,80 @@ class JobScheduler:
         ).strip() or "main"
         if not re.match(r"^[A-Za-z0-9._/\-]+$", branch):
             return {}, "Install branch contains unsupported characters."
-        port = DEFAULT_ONBOARDING_SSH_PORT
+        platform = str(
+            component.get("agent_platform")
+            or component.get("target_os")
+            or component.get("platform")
+            or component.get("os")
+            or ONBOARDING_PLATFORM_LINUX
+        ).strip().lower()
+        if platform in {"linux_ssh", "ssh"}:
+            platform = ONBOARDING_PLATFORM_LINUX
+        elif platform in {"windows_remote", "windows_smb", "smb", "winrm"}:
+            platform = ONBOARDING_PLATFORM_WINDOWS
+        if platform not in {ONBOARDING_PLATFORM_LINUX, ONBOARDING_PLATFORM_WINDOWS}:
+            return {}, "Agent platform must be Linux or Windows."
+        ssh_port = DEFAULT_ONBOARDING_SSH_PORT
         for key in ("ssh_port", "port"):
             if component.get(key) not in (None, ""):
                 try:
                     parsed = int(component.get(key))
                     if 1 <= parsed <= 65535:
-                        port = parsed
+                        ssh_port = parsed
                         break
                 except Exception:
                     pass
+        windows_port = DEFAULT_ONBOARDING_WINDOWS_PORT
+        for key in ("windows_port", "smb_port", "port"):
+            if component.get(key) not in (None, ""):
+                try:
+                    parsed = int(component.get(key))
+                    if 1 <= parsed <= 65535:
+                        windows_port = parsed
+                        break
+                except Exception:
+                    pass
+        winrm_port = DEFAULT_ONBOARDING_WINRM_PORT
+        for key in ("winrm_port", "windows_winrm_port"):
+            if component.get(key) not in (None, ""):
+                try:
+                    parsed = int(component.get(key))
+                    if 1 <= parsed <= 65535:
+                        winrm_port = parsed
+                        break
+                except Exception:
+                    pass
+        methods: List[str] = []
+        if platform == ONBOARDING_PLATFORM_WINDOWS:
+            raw_methods = component.get("onboarding_methods") or component.get("windows_methods") or []
+            if isinstance(raw_methods, str):
+                method_candidates = [piece.strip().lower() for piece in re.split(r"[,;\s]+", raw_methods) if piece.strip()]
+            elif isinstance(raw_methods, (list, tuple, set)):
+                method_candidates = [str(piece or "").strip().lower() for piece in raw_methods if str(piece or "").strip()]
+            else:
+                method_candidates = []
+            if not method_candidates:
+                method_candidates = list(ONBOARDING_WINDOWS_METHODS)
+            method_aliases = {
+                "service": ONBOARDING_WINDOWS_METHOD_SMB_SCM,
+                "scm": ONBOARDING_WINDOWS_METHOD_SMB_SCM,
+                "psexec": ONBOARDING_WINDOWS_METHOD_SMB_SCM,
+                "smb": ONBOARDING_WINDOWS_METHOD_SMB_SCM,
+                "task": ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK,
+                "tasks": ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK,
+                "schtask": ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK,
+                "schtasks": ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK,
+                "winrm": ONBOARDING_WINDOWS_METHOD_WINRM,
+            }
+            for method in method_candidates:
+                normalized_method = method_aliases.get(method, method)
+                if normalized_method not in ONBOARDING_WINDOWS_METHODS:
+                    return {}, "Unsupported Windows onboarding method."
+                if normalized_method not in methods:
+                    methods.append(normalized_method)
+        else:
+            methods = ["ssh"]
+        transport_port = ssh_port if platform == ONBOARDING_PLATFORM_LINUX else windows_port
         concurrency = self._onboarding_concurrency()
         for key in ("onboarding_concurrency", "device_onboarding_concurrency", "concurrency", "max_concurrency"):
             if component.get(key) not in (None, ""):
@@ -2979,7 +3097,12 @@ class JobScheduler:
             "entries": scope_entries,
             "exclusions": exclusion_entries,
             "install_branch": branch,
-            "ssh_port": port,
+            "agent_platform": platform,
+            "ssh_port": ssh_port,
+            "windows_port": windows_port,
+            "winrm_port": winrm_port,
+            "transport_port": transport_port,
+            "onboarding_methods": methods,
             "onboarding_concurrency": concurrency,
         }, None
 
@@ -3553,6 +3676,43 @@ class JobScheduler:
         server_url: str,
         job_id: int,
         run_id: int,
+        platform: str = ONBOARDING_PLATFORM_LINUX,
+        windows_methods: Optional[Sequence[str]] = None,
+        winrm_port: int = DEFAULT_ONBOARDING_WINRM_PORT,
+    ) -> str:
+        normalized_platform = str(platform or ONBOARDING_PLATFORM_LINUX).strip().lower()
+        if normalized_platform == ONBOARDING_PLATFORM_WINDOWS:
+            return self._run_windows_onboarding_target(
+                row=row,
+                site=site,
+                credential=credential,
+                branch=branch,
+                server_url=server_url,
+                job_id=job_id,
+                run_id=run_id,
+                windows_methods=windows_methods or ONBOARDING_WINDOWS_METHODS,
+                winrm_port=winrm_port,
+            )
+        return self._run_linux_onboarding_target(
+            row=row,
+            site=site,
+            credential=credential,
+            branch=branch,
+            server_url=server_url,
+            job_id=job_id,
+            run_id=run_id,
+        )
+
+    def _run_linux_onboarding_target(
+        self,
+        *,
+        row: Dict[str, Any],
+        site: Dict[str, Any],
+        credential: Dict[str, Any],
+        branch: str,
+        server_url: str,
+        job_id: int,
+        run_id: int,
     ) -> str:
         row_id = int(row["id"])
         host = str(row.get("target_address") or row.get("target_hostname") or "").strip()
@@ -3574,7 +3734,7 @@ class JobScheduler:
             self._update_onboarding_target_row(
                 row_id,
                 status=ONBOARDING_STATUS_UNREACHABLE,
-                detail=f"SSH port unreachable: {tcp_error}",
+                detail=f"Remote port unreachable: {tcp_error}",
                 finished=True,
                 redactions=redactions,
             )
@@ -3686,6 +3846,469 @@ class JobScheduler:
         )
         return ONBOARDING_STATUS_WAITING_APPROVAL
 
+    def _windows_onboarding_script(
+        self,
+        *,
+        branch: str,
+        server_url: str,
+        enrollment_code: str,
+        job_id: int,
+        run_id: int,
+        target: str,
+    ) -> str:
+        branch_ref = str(branch or "main").strip() or "main"
+        zip_url = f"https://codeload.github.com/bunny-lab-io/Borealis/zip/refs/heads/{url_quote(branch_ref, safe='/._-')}"
+        return "\n".join(
+            [
+                "$ErrorActionPreference = 'Stop'",
+                "$ProgressPreference = 'SilentlyContinue'",
+                "$exitCode = 1",
+                "try {",
+                "  $root = Join-Path $env:ProgramData 'Borealis\\Onboarding'",
+                "  New-Item -ItemType Directory -Force -Path $root | Out-Null",
+                f"  $zipPath = Join-Path $root { _powershell_single_quoted(f'Borealis-{int(run_id)}.zip') }",
+                f"  $extractPath = Join-Path $root { _powershell_single_quoted(f'source-{int(run_id)}') }",
+                "  if (Test-Path $zipPath) { Remove-Item -Force $zipPath }",
+                "  if (Test-Path $extractPath) { Remove-Item -Recurse -Force $extractPath }",
+                "  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12",
+                f"  Write-Output ('Syncing Borealis ref {branch_ref} from {zip_url}.')",
+                f"  Invoke-WebRequest -UseBasicParsing -Uri { _powershell_single_quoted(zip_url) } -OutFile $zipPath",
+                "  Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force",
+                "  $deployScript = Get-ChildItem -Path $extractPath -Filter 'Borealis.ps1' -Recurse | Select-Object -First 1",
+                "  if (-not $deployScript) { throw 'Borealis.ps1 missing from branch archive.' }",
+                f"  $env:BOREALIS_ONBOARDING_JOB_ID = { _powershell_single_quoted(str(int(job_id))) }",
+                f"  $env:BOREALIS_ONBOARDING_RUN_ID = { _powershell_single_quoted(str(int(run_id))) }",
+                f"  $env:BOREALIS_ONBOARDING_TARGET = { _powershell_single_quoted(str(target or '').strip()) }",
+                "  $env:BOREALIS_AGENT_NONINTERACTIVE = '1'",
+                "  $env:BOREALIS_AGENT_NO_TTY = '1'",
+                "  Write-Output ('Launching ' + $deployScript.FullName + ' -Agent -ServerUrl [redacted] -EnrollmentCode [redacted] -NewEngine.')",
+                f"  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $deployScript.FullName -Agent -ServerUrl { _powershell_single_quoted(server_url) } -EnrollmentCode { _powershell_single_quoted(enrollment_code) } -NewEngine",
+                "  if ($null -ne $LASTEXITCODE) { $exitCode = [int]$LASTEXITCODE } else { $exitCode = 0 }",
+                "} catch {",
+                "  Write-Error $_.Exception.Message",
+                "  if ($exitCode -eq 0) { $exitCode = 1 }",
+                "} finally {",
+                "  Write-Output \"__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=$exitCode\"",
+                "}",
+                "exit $exitCode",
+            ]
+        )
+
+    def _windows_task_xml(self, *, task_name: str, command: str, arguments: str) -> str:
+        now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+        return "\n".join(
+            [
+                '<?xml version="1.0" encoding="UTF-16"?>',
+                '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
+                "  <RegistrationInfo>",
+                f"    <Date>{html.escape(now)}</Date>",
+                "    <Author>Borealis</Author>",
+                "  </RegistrationInfo>",
+                "  <Triggers>",
+                "    <TimeTrigger>",
+                f"      <StartBoundary>{html.escape(now)}</StartBoundary>",
+                "      <Enabled>true</Enabled>",
+                "    </TimeTrigger>",
+                "  </Triggers>",
+                "  <Principals>",
+                "    <Principal id=\"Author\">",
+                "      <UserId>SYSTEM</UserId>",
+                "      <RunLevel>HighestAvailable</RunLevel>",
+                "    </Principal>",
+                "  </Principals>",
+                "  <Settings>",
+                "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+                "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>",
+                "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
+                "    <AllowHardTerminate>true</AllowHardTerminate>",
+                "    <StartWhenAvailable>true</StartWhenAvailable>",
+                "    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>",
+                "    <Enabled>true</Enabled>",
+                "    <Hidden>true</Hidden>",
+                "    <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>",
+                "    <Priority>7</Priority>",
+                "  </Settings>",
+                "  <Actions Context=\"Author\">",
+                "    <Exec>",
+                f"      <Command>{html.escape(command)}</Command>",
+                f"      <Arguments>{html.escape(arguments)}</Arguments>",
+                "    </Exec>",
+                "  </Actions>",
+                "</Task>",
+            ]
+        )
+
+    def _open_windows_smb_connection(self, *, host: str, port: int, credential: Mapping[str, Any]):
+        try:
+            from impacket.smbconnection import SMBConnection  # type: ignore
+        except Exception as exc:
+            raise RuntimeError(f"impacket_unavailable:{exc}") from exc
+        domain, username, password = _parse_windows_credential_parts(credential)
+        smb = SMBConnection(host, host, sess_port=int(port), timeout=10)
+        smb.login(username, password, domain)
+        return smb
+
+    def _windows_smb_stage_script(self, smb: Any, script: str) -> Tuple[str, str, str]:
+        stem = f"BorealisOnboard-{uuid.uuid4().hex}"
+        remote_dir = "Temp\\BorealisOnboarding"
+        try:
+            smb.createDirectory("ADMIN$", remote_dir)
+        except Exception:
+            pass
+        script_path = f"{remote_dir}\\{stem}.ps1"
+        output_path = f"{remote_dir}\\{stem}.log"
+        script_bytes = io.BytesIO(str(script or "").encode("utf-8-sig"))
+        smb.putFile("ADMIN$", script_path, script_bytes.read)
+        return (
+            f"C:\\Windows\\{script_path}",
+            f"C:\\Windows\\{output_path}",
+            output_path,
+        )
+
+    def _read_windows_smb_file(self, smb: Any, path: str) -> str:
+        buffer = io.BytesIO()
+        smb.getFile("ADMIN$", path, buffer.write)
+        return buffer.getvalue().decode("utf-8", errors="replace")
+
+    def _poll_windows_smb_onboarding_output(self, *, smb: Any, output_path: str, timeout_seconds: float) -> Dict[str, Any]:
+        deadline = time.monotonic() + max(30.0, float(timeout_seconds or 0.0))
+        last_output = ""
+        last_error = ""
+        while time.monotonic() < deadline:
+            try:
+                output = self._read_windows_smb_file(smb, output_path)
+                if output:
+                    last_output = output
+                    exit_code = _windows_exit_code_from_output(output)
+                    if exit_code is not None:
+                        return {"exit_code": exit_code, "stdout": output, "stderr": ""}
+            except Exception as exc:
+                last_error = str(exc).strip() or exc.__class__.__name__
+            time.sleep(2.0)
+        return {
+            "exit_code": 124,
+            "stdout": last_output,
+            "stderr": f"windows_onboarding_timeout{': ' + last_error if last_error else ''}",
+        }
+
+    def _execute_windows_smb_scm_onboarding(
+        self,
+        *,
+        host: str,
+        port: int,
+        credential: Dict[str, Any],
+        script: str,
+        timeout_seconds: float,
+    ) -> Dict[str, Any]:
+        try:
+            from impacket.dcerpc.v5 import scmr, transport  # type: ignore
+        except Exception as exc:
+            return {"exit_code": 127, "stdout": "", "stderr": f"impacket_scm_unavailable:{exc}"}
+        smb = None
+        dce = None
+        service_handle = None
+        scm_handle = None
+        try:
+            smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
+            script_abs, output_abs, output_path = self._windows_smb_stage_script(smb, script)
+            service_name = f"BorealisOnboarding{uuid.uuid4().hex[:12]}"
+            command = f'cmd.exe /Q /C powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{script_abs}" > "{output_abs}" 2>&1'
+            rpc_transport = transport.SMBTransport(host, int(port), r"\svcctl", smb_connection=smb)
+            dce = rpc_transport.get_dce_rpc()
+            dce.connect()
+            dce.bind(scmr.MSRPC_UUID_SCMR)
+            scm_resp = scmr.hROpenSCManagerW(dce)
+            scm_handle = scm_resp["lpScHandle"]
+            service_resp = scmr.hRCreateServiceW(
+                dce,
+                scm_handle,
+                service_name,
+                service_name,
+                lpBinaryPathName=command,
+                dwStartType=scmr.SERVICE_DEMAND_START,
+            )
+            service_handle = service_resp["lpServiceHandle"]
+            try:
+                scmr.hRStartServiceW(dce, service_handle)
+            except Exception as exc:
+                start_error = str(exc).lower()
+                if "1053" not in start_error and "timely fashion" not in start_error:
+                    raise
+            return self._poll_windows_smb_onboarding_output(
+                smb=smb,
+                output_path=output_path,
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception as exc:
+            return {"exit_code": 1, "stdout": "", "stderr": str(exc)}
+        finally:
+            if dce is not None and service_handle is not None:
+                try:
+                    scmr.hRDeleteService(dce, service_handle)
+                except Exception:
+                    pass
+                try:
+                    scmr.hRCloseServiceHandle(dce, service_handle)
+                except Exception:
+                    pass
+            if dce is not None and scm_handle is not None:
+                try:
+                    scmr.hRCloseServiceHandle(dce, scm_handle)
+                except Exception:
+                    pass
+            if dce is not None:
+                try:
+                    dce.disconnect()
+                except Exception:
+                    pass
+            if smb is not None:
+                try:
+                    smb.logoff()
+                except Exception:
+                    pass
+
+    def _execute_windows_scheduled_task_onboarding(
+        self,
+        *,
+        host: str,
+        port: int,
+        credential: Dict[str, Any],
+        script: str,
+        timeout_seconds: float,
+    ) -> Dict[str, Any]:
+        try:
+            from impacket.dcerpc.v5 import tsch, transport  # type: ignore
+            from impacket.dcerpc.v5.dtypes import NULL  # type: ignore
+        except Exception as exc:
+            return {"exit_code": 127, "stdout": "", "stderr": f"impacket_tsch_unavailable:{exc}"}
+        smb = None
+        dce = None
+        task_path = f"\\BorealisOnboarding{uuid.uuid4().hex[:12]}"
+        try:
+            smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
+            script_abs, output_abs, output_path = self._windows_smb_stage_script(smb, script)
+            command = "cmd.exe"
+            arguments = f'/Q /C powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{script_abs}" > "{output_abs}" 2>&1'
+            xml = self._windows_task_xml(task_name=task_path, command=command, arguments=arguments)
+            rpc_transport = transport.SMBTransport(host, int(port), r"\atsvc", smb_connection=smb)
+            dce = rpc_transport.get_dce_rpc()
+            dce.connect()
+            dce.bind(tsch.MSRPC_UUID_TSCHS)
+            tsch.hSchRpcRegisterTask(dce, task_path, xml, tsch.TASK_CREATE, NULL, tsch.TASK_LOGON_NONE)
+            tsch.hSchRpcRun(dce, task_path)
+            result = self._poll_windows_smb_onboarding_output(
+                smb=smb,
+                output_path=output_path,
+                timeout_seconds=timeout_seconds,
+            )
+            try:
+                tsch.hSchRpcDelete(dce, task_path)
+            except Exception:
+                pass
+            return result
+        except Exception as exc:
+            return {"exit_code": 1, "stdout": "", "stderr": str(exc)}
+        finally:
+            if dce is not None:
+                try:
+                    dce.disconnect()
+                except Exception:
+                    pass
+            if smb is not None:
+                try:
+                    smb.logoff()
+                except Exception:
+                    pass
+
+    def _execute_windows_winrm_onboarding(
+        self,
+        *,
+        host: str,
+        port: int,
+        credential: Dict[str, Any],
+        script: str,
+        timeout_seconds: float,
+    ) -> Dict[str, Any]:
+        try:
+            import winrm  # type: ignore
+        except Exception as exc:
+            return {"exit_code": 127, "stdout": "", "stderr": f"pywinrm_unavailable:{exc}"}
+        metadata = credential.get("metadata") if isinstance(credential.get("metadata"), dict) else {}
+        transport_mode = str(metadata.get("winrm_transport") or "ntlm").strip().lower() or "ntlm"
+        scheme = "https" if int(port) == 5986 or transport_mode in {"ssl", "credssp"} else "http"
+        endpoint = f"{scheme}://{host}:{int(port)}/wsman"
+        try:
+            session = winrm.Session(
+                endpoint,
+                auth=(str(credential.get("username") or ""), str(credential.get("password") or "")),
+                transport=transport_mode,
+                server_cert_validation="ignore",
+                operation_timeout_sec=max(20, min(600, int(timeout_seconds or 900))),
+                read_timeout_sec=max(30, min(660, int(timeout_seconds or 900) + 30)),
+            )
+            result = session.run_ps(script)
+            stdout_raw = getattr(result, "std_out", b"") or b""
+            stderr_raw = getattr(result, "std_err", b"") or b""
+            stdout = stdout_raw.decode("utf-8", errors="replace") if isinstance(stdout_raw, bytes) else str(stdout_raw or "")
+            stderr = stderr_raw.decode("utf-8", errors="replace") if isinstance(stderr_raw, bytes) else str(stderr_raw or "")
+            exit_code = int(getattr(result, "status_code", 1) or 0)
+            marker_code = _windows_exit_code_from_output(stdout)
+            if marker_code is not None:
+                exit_code = marker_code
+            return {"exit_code": exit_code, "stdout": stdout, "stderr": stderr}
+        except Exception as exc:
+            return {"exit_code": 1, "stdout": "", "stderr": str(exc)}
+
+    def _run_windows_onboarding_target(
+        self,
+        *,
+        row: Dict[str, Any],
+        site: Dict[str, Any],
+        credential: Dict[str, Any],
+        branch: str,
+        server_url: str,
+        job_id: int,
+        run_id: int,
+        windows_methods: Sequence[str],
+        winrm_port: int,
+    ) -> str:
+        row_id = int(row["id"])
+        host = str(row.get("target_address") or row.get("target_hostname") or "").strip()
+        smb_port = int(row.get("ssh_port") or DEFAULT_ONBOARDING_WINDOWS_PORT)
+        redactions = [site.get("enrollment_code"), server_url, credential.get("password")]
+        self._update_onboarding_target_row(
+            row_id,
+            status=ONBOARDING_STATUS_RUNNING,
+            detail="Trying Windows remote enrollment.",
+            redactions=redactions,
+        )
+        if self._onboarding_target_already_known(host, site.get("id")):
+            self._update_onboarding_target_row(
+                row_id,
+                status=ONBOARDING_STATUS_SKIPPED,
+                detail="Target already appears enrolled for this site.",
+                finished=True,
+                redactions=redactions,
+            )
+            return ONBOARDING_STATUS_SKIPPED
+
+        script = self._windows_onboarding_script(
+            branch=branch,
+            server_url=server_url,
+            enrollment_code=str(site.get("enrollment_code") or ""),
+            job_id=job_id,
+            run_id=run_id,
+            target=host,
+        )
+        normalized_methods = [
+            method
+            for method in (str(item or "").strip().lower() for item in windows_methods or ONBOARDING_WINDOWS_METHODS)
+            if method in ONBOARDING_WINDOWS_METHODS
+        ] or list(ONBOARDING_WINDOWS_METHODS)
+        stdout_parts: List[str] = []
+        stderr_parts: List[str] = []
+        port_failures = 0
+        attempted_methods = 0
+        timeout_seconds = self._onboarding_install_timeout_seconds()
+
+        for method in normalized_methods:
+            label = _windows_method_label(method)
+            method_port = int(winrm_port) if method == ONBOARDING_WINDOWS_METHOD_WINRM else smb_port
+            tcp_error = self._preflight_remote_port(host=host, port=method_port, attempts=1, timeout_seconds=3.0)
+            if tcp_error:
+                port_failures += 1
+                stderr_parts.append(f"[{label}] port {method_port} unreachable: {tcp_error}")
+                continue
+            attempted_methods += 1
+            self._update_onboarding_target_row(
+                row_id,
+                status=ONBOARDING_STATUS_RUNNING,
+                detail=f"Trying Windows {label} enrollment.",
+                stdout="\n\n".join(stdout_parts),
+                stderr="\n\n".join(stderr_parts),
+                redactions=redactions,
+            )
+            if method == ONBOARDING_WINDOWS_METHOD_SMB_SCM:
+                result = self._execute_windows_smb_scm_onboarding(
+                    host=host,
+                    port=smb_port,
+                    credential=credential,
+                    script=script,
+                    timeout_seconds=timeout_seconds,
+                )
+            elif method == ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK:
+                result = self._execute_windows_scheduled_task_onboarding(
+                    host=host,
+                    port=smb_port,
+                    credential=credential,
+                    script=script,
+                    timeout_seconds=timeout_seconds,
+                )
+            else:
+                result = self._execute_windows_winrm_onboarding(
+                    host=host,
+                    port=int(winrm_port),
+                    credential=credential,
+                    script=script,
+                    timeout_seconds=timeout_seconds,
+                )
+            exit_code = int(result.get("exit_code") or 0)
+            stdout = str(result.get("stdout") or "")
+            stderr = str(result.get("stderr") or "")
+            if stdout:
+                stdout_parts.append(f"[{label}]\n{stdout}")
+            if stderr:
+                stderr_parts.append(f"[{label}]\n{stderr}")
+            if exit_code == 0:
+                approval_reference = ""
+                deadline = time.monotonic() + 10.0
+                while time.monotonic() < deadline:
+                    approval_reference = self._lookup_onboarding_approval(job_id=job_id, run_id=run_id, target=host)
+                    if approval_reference:
+                        break
+                    time.sleep(1.0)
+                self._update_onboarding_target_row(
+                    row_id,
+                    status=ONBOARDING_STATUS_WAITING_APPROVAL,
+                    detail=f"Agent installed through Windows {label}. Device approval pending operator action.",
+                    stdout="\n\n".join(stdout_parts),
+                    stderr="\n\n".join(stderr_parts),
+                    approval_reference=approval_reference,
+                    finished=True,
+                    redactions=redactions,
+                )
+                return ONBOARDING_STATUS_WAITING_APPROVAL
+            failure_hint = _onboarding_failure_hint(stdout=stdout, stderr=stderr, redactions=redactions)
+            stderr_parts.append(f"[{label}] failed with exit code {exit_code}.{(' ' + failure_hint) if failure_hint else ''}")
+
+        combined_stdout = "\n\n".join(stdout_parts)
+        combined_stderr = "\n\n".join(stderr_parts)
+        if port_failures and attempted_methods == 0:
+            self._update_onboarding_target_row(
+                row_id,
+                status=ONBOARDING_STATUS_UNREACHABLE,
+                detail="Windows remote enrollment ports unreachable.",
+                stdout=combined_stdout,
+                stderr=combined_stderr,
+                finished=True,
+                redactions=redactions,
+            )
+            return ONBOARDING_STATUS_UNREACHABLE
+
+        self._update_onboarding_target_row(
+            row_id,
+            status=ONBOARDING_STATUS_FAILED,
+            detail=(
+                "Windows automatic onboarding failed through SMB service, scheduled task, and WinRM. "
+                "Manual agent installation required; target security policy appears too locked down for remote enrollment."
+            ),
+            stdout=combined_stdout,
+            stderr=combined_stderr,
+            finished=True,
+            redactions=redactions,
+        )
+        return ONBOARDING_STATUS_FAILED
+
     def _dispatch_onboarding_run(
         self,
         *,
@@ -3759,34 +4382,40 @@ class JobScheduler:
             if not server_url:
                 raise RuntimeError("Engine public base URL is not configured.")
             if credential_id is None:
-                raise RuntimeError("Onboarding jobs require one SSH credential.")
+                raise RuntimeError("Onboarding jobs require one stored credential.")
             credential = self._load_credential(credential_id)
             if not credential:
-                raise RuntimeError("Selected SSH credential could not be loaded.")
-            if str(credential.get("connection_type") or "").strip().lower() != "ssh":
-                raise RuntimeError("Selected credential must use SSH connection type.")
+                raise RuntimeError("Selected stored credential could not be loaded.")
+            platform = str(config.get("agent_platform") or ONBOARDING_PLATFORM_LINUX).strip().lower()
+            connection_type = str(credential.get("connection_type") or "").strip().lower()
+            if platform == ONBOARDING_PLATFORM_LINUX and connection_type != "ssh":
+                raise RuntimeError("Linux onboarding requires an SSH credential.")
+            if platform == ONBOARDING_PLATFORM_WINDOWS and connection_type not in {"windows", "winrm"}:
+                raise RuntimeError("Windows onboarding requires a Windows or WinRM credential.")
             if not str(credential.get("username") or "").strip():
-                raise RuntimeError("Selected SSH credential has no username.")
+                raise RuntimeError("Selected stored credential has no username.")
+            if platform == ONBOARDING_PLATFORM_WINDOWS and not str(credential.get("password") or "").strip():
+                raise RuntimeError("Windows onboarding requires a credential password.")
 
             expanded_targets, parse_errors = parse_onboarding_scope(
                 config.get("entries") or [],
-                default_port=int(config.get("ssh_port") or DEFAULT_ONBOARDING_SSH_PORT),
+                default_port=int(config.get("transport_port") or DEFAULT_ONBOARDING_SSH_PORT),
                 max_targets=self._onboarding_target_cap(),
             )
             excluded_targets, exclusion_errors = parse_onboarding_scope(
                 config.get("exclusions") or [],
-                default_port=int(config.get("ssh_port") or DEFAULT_ONBOARDING_SSH_PORT),
+                default_port=int(config.get("transport_port") or DEFAULT_ONBOARDING_SSH_PORT),
                 max_targets=max(self._onboarding_target_cap(), len(expanded_targets) or 1),
             )
             if excluded_targets:
                 excluded_keys = {
-                    f"{str(target.get('host') or '').strip().lower()}:{int(target.get('port') or DEFAULT_ONBOARDING_SSH_PORT)}"
+                    f"{str(target.get('host') or '').strip().lower()}:{int(target.get('port') or config.get('transport_port') or DEFAULT_ONBOARDING_SSH_PORT)}"
                     for target in excluded_targets
                 }
                 expanded_targets = [
                     target
                     for target in expanded_targets
-                    if f"{str(target.get('host') or '').strip().lower()}:{int(target.get('port') or DEFAULT_ONBOARDING_SSH_PORT)}" not in excluded_keys
+                    if f"{str(target.get('host') or '').strip().lower()}:{int(target.get('port') or config.get('transport_port') or DEFAULT_ONBOARDING_SSH_PORT)}" not in excluded_keys
                 ]
             if exclusion_errors:
                 parse_errors.extend([f"exclusion_{error}" for error in exclusion_errors])
@@ -3827,7 +4456,7 @@ class JobScheduler:
                                 target.get("input") or target.get("host") or "",
                                 target.get("host") or "",
                                 target.get("host") or "",
-                                int(target.get("port") or DEFAULT_ONBOARDING_SSH_PORT),
+                                int(target.get("port") or config.get("transport_port") or DEFAULT_ONBOARDING_SSH_PORT),
                                 ONBOARDING_STATUS_PENDING,
                                 "",
                                 insert_now,
@@ -3855,6 +4484,9 @@ class JobScheduler:
                         server_url=server_url,
                         job_id=job_id,
                         run_id=run_row_id,
+                        platform=platform,
+                        windows_methods=list(config.get("onboarding_methods") or ONBOARDING_WINDOWS_METHODS),
+                        winrm_port=int(config.get("winrm_port") or DEFAULT_ONBOARDING_WINRM_PORT),
                     )
                     for row in existing_rows
                 ]
@@ -7080,7 +7712,7 @@ class JobScheduler:
             expiration = (data.get("duration") or {}).get("expiration") or data.get("expiration") or "no_expire"
             execution_context = (data.get("execution_context") or "system").strip().lower()
             if job_kind == JOB_KIND_ONBOARDING:
-                execution_context = "onboarding_linux_ssh"
+                execution_context = "onboarding_local_network"
             credential_id = data.get("credential_id")
             try:
                 credential_id = int(credential_id) if credential_id is not None else None
@@ -7112,7 +7744,7 @@ class JobScheduler:
                 if onboarding_error:
                     return json.dumps({"error": onboarding_error}), 400, {"Content-Type": "application/json"}
                 if credential_id is None:
-                    return json.dumps({"error": "Onboarding jobs require one SSH credential."}), 400, {"Content-Type": "application/json"}
+                    return json.dumps({"error": "Onboarding jobs require one stored credential."}), 400, {"Content-Type": "application/json"}
             if workflow_job_error:
                 return json.dumps({"error": workflow_job_error}), 400, {"Content-Type": "application/json"}
             if not is_workflow_job:
@@ -7373,8 +8005,8 @@ class JobScheduler:
                     if onboarding_error:
                         return json.dumps({"error": onboarding_error}), 400, {"Content-Type": "application/json"}
                     if effective_credential_id in (None, "", "null"):
-                        return json.dumps({"error": "Onboarding jobs require one SSH credential."}), 400, {"Content-Type": "application/json"}
-                    fields["execution_context"] = "onboarding_linux_ssh"
+                        return json.dumps({"error": "Onboarding jobs require one stored credential."}), 400, {"Content-Type": "application/json"}
+                    fields["execution_context"] = "onboarding_local_network"
                     fields["use_service_account"] = 0
                 else:
                     component_error = _validate_components_for_context(next_components or [], str(effective_context))
@@ -7616,7 +8248,7 @@ class JobScheduler:
                             "site": "",
                             "inventory_hostname": target_row.get("target_hostname") or "",
                             "wireguard_peer_ip": "",
-                            "resolved_connection": "local_network_ssh",
+                            "resolved_connection": "local_network_onboarding",
                             "resolution_status": target_row.get("status") or "",
                             "resolution_reason": target_row.get("detail") or "",
                             "ran_on": target_row.get("finished_at") or target_row.get("updated_at"),

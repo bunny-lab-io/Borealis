@@ -70,6 +70,7 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - jmespath - MIT - https://spdx.org/licenses/MIT.html
 - pywinrm (`pywinrm[credssp]`) - MIT - https://github.com/diyan/pywinrm/blob/master/LICENSE
 - pypsrp (`pypsrp[credssp]`) - MIT - https://github.com/jborean93/pypsrp/blob/master/LICENSE
+- Impacket - Apache-2.0 - https://github.com/fortra/impacket/blob/master/LICENSE
 - pytest - MIT - https://github.com/pytest-dev/pytest/blob/main/LICENSE
 - ansible.windows collection - GPL-3.0-or-later - https://github.com/ansible-collections/ansible.windows/blob/main/LICENSE
 - ansible.posix collection - GPL-3.0-or-later - https://github.com/ansible-collections/ansible.posix/blob/main/LICENSE

@@ -56,6 +56,8 @@ const PAGE_TITLE = "Automatic Device Onboarding";
 const PAGE_SUBTITLE = "Enroll remote devices automatically as long as they are reachable by the Borealis Engine using stored machine or domain credentials.";
 const DEFAULT_BRANCH = "main";
 const DEFAULT_SSH_PORT = 22;
+const DEFAULT_WINDOWS_PORT = 445;
+const DEFAULT_WINRM_PORT = 5985;
 const DEFAULT_ONBOARDING_CONCURRENCY = 5;
 const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
 const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
@@ -288,6 +290,7 @@ const STATUS_THEME = {
   completed: { label: "Completed", text: "#34d399", background: "rgba(52,211,153,0.18)", border: "1px solid rgba(52,211,153,0.42)", dot: "#34d399" },
   failed: { label: "Failed", text: "#fb7185", background: "rgba(251,113,133,0.18)", border: "1px solid rgba(251,113,133,0.45)", dot: "#fb7185" },
   ssh_unreachable: { label: "Unreachable", text: "#fb7185", background: "rgba(251,113,133,0.18)", border: "1px solid rgba(251,113,133,0.45)", dot: "#fb7185" },
+  unreachable: { label: "Unreachable", text: "#fb7185", background: "rgba(251,113,133,0.18)", border: "1px solid rgba(251,113,133,0.45)", dot: "#fb7185" },
   skipped: { label: "Skipped", text: "#fbbf24", background: "rgba(251,191,36,0.14)", border: "1px solid rgba(251,191,36,0.32)", dot: "#f59e0b" },
   denied: { label: "Denied", text: "#9aa0a6", background: "rgba(148,163,184,0.12)", border: "1px solid rgba(148,163,184,0.25)", dot: "#94a3b8" },
   expired: { label: "Expired", text: "#9aa0a6", background: "rgba(148,163,184,0.12)", border: "1px solid rgba(148,163,184,0.25)", dot: "#94a3b8" },
@@ -495,7 +498,7 @@ function formatStatusLabel(status) {
 
 function targetStatusBucket(status) {
   const key = String(status || "pending").trim().toLowerCase();
-  if (key === "ssh_unreachable") return "unreachable";
+  if (key === "ssh_unreachable" || key === "unreachable") return "unreachable";
   if (["completed", "approved", "success", "installed"].includes(key)) return "completed";
   if (["skipped", "denied", "expired", "already_enrolled", "already_pending", "unsupported_os"].includes(key)) return "skipped";
   if (["failed", "failure", "error"].includes(key)) return "failed";
@@ -656,9 +659,12 @@ export default function CreateOnboardingJob() {
     siteId: "",
     scope: "",
     exclusionScope: "",
+    agentPlatform: "linux",
     credentialId: "",
     branch: DEFAULT_BRANCH,
     sshPort: DEFAULT_SSH_PORT,
+    windowsPort: DEFAULT_WINDOWS_PORT,
+    winrmPort: DEFAULT_WINRM_PORT,
     onboardingConcurrency: DEFAULT_ONBOARDING_CONCURRENCY,
     scheduleType: "immediately",
     start: "",
@@ -670,10 +676,23 @@ export default function CreateOnboardingJob() {
     [form.siteId, sites]
   );
 
-  const sshCredentials = useMemo(
-    () => credentials.filter((credential) => String(credential.connection_type || "").toLowerCase() === "ssh"),
-    [credentials]
+  const storedCredentials = useMemo(
+    () => credentials.filter((credential) => {
+      const connectionType = String(credential.connection_type || "").toLowerCase();
+      if (form.agentPlatform === "windows") {
+        return connectionType === "windows" || connectionType === "winrm";
+      }
+      return connectionType === "ssh";
+    }),
+    [credentials, form.agentPlatform]
   );
+  const credentialOptions = useMemo(() => {
+    if (!form.credentialId || storedCredentials.some((credential) => String(credential.id) === String(form.credentialId))) {
+      return storedCredentials;
+    }
+    const selected = credentials.find((credential) => String(credential.id) === String(form.credentialId));
+    return selected ? [selected, ...storedCredentials] : storedCredentials;
+  }, [credentials, form.credentialId, storedCredentials]);
 
   const branchOptions = useMemo(() => {
     const currentBranch = normalizeBranchName(form.branch);
@@ -830,14 +849,25 @@ export default function CreateOnboardingJob() {
         const job = jobData?.job || {};
         const firstTarget = Array.isArray(job.targets) ? job.targets.find((target) => target?.kind === "onboarding_scope") : null;
         const firstComponent = Array.isArray(job.components) ? job.components[0] || {} : {};
+        const componentPlatform = String(
+          firstComponent.agent_platform ||
+            firstComponent.target_os ||
+            firstComponent.platform ||
+            firstComponent.os ||
+            "linux"
+        ).toLowerCase();
+        const agentPlatform = ["windows", "winrm", "smb", "windows_remote"].includes(componentPlatform) ? "windows" : "linux";
         setForm({
           name: job.name || "",
           siteId: firstTarget?.site_id ? String(firstTarget.site_id) : "",
           scope: toScopeText(firstTarget?.entries || []),
           exclusionScope: toScopeText(firstTarget?.exclusions || firstTarget?.exclude_entries || []),
+          agentPlatform,
           credentialId: job.credential_id ? String(job.credential_id) : "",
           branch: firstComponent.install_branch || firstComponent.repo_branch || firstComponent.branch || DEFAULT_BRANCH,
           sshPort: Number(firstComponent.ssh_port || firstComponent.port || DEFAULT_SSH_PORT),
+          windowsPort: Number(firstComponent.windows_port || firstComponent.smb_port || firstComponent.port || DEFAULT_WINDOWS_PORT),
+          winrmPort: Number(firstComponent.winrm_port || firstComponent.windows_winrm_port || DEFAULT_WINRM_PORT),
           onboardingConcurrency: Number(
             firstComponent.onboarding_concurrency ||
               firstComponent.device_onboarding_concurrency ||
@@ -1153,8 +1183,15 @@ export default function CreateOnboardingJob() {
       if (!form.siteId) throw new Error("Select site.");
       if (!entries.length) throw new Error("Enter at least one IP address, CIDR, range, or FQDN.");
       if (!form.credentialId) throw new Error("Select stored credential.");
-      const port = Number(form.sshPort || DEFAULT_SSH_PORT);
-      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("SSH port must be 1-65535.");
+      const agentPlatform = form.agentPlatform === "windows" ? "windows" : "linux";
+      const sshPort = Number(form.sshPort || DEFAULT_SSH_PORT);
+      const windowsPort = Number(form.windowsPort || DEFAULT_WINDOWS_PORT);
+      const winrmPort = Number(form.winrmPort || DEFAULT_WINRM_PORT);
+      const primaryPort = agentPlatform === "windows" ? windowsPort : sshPort;
+      if (!Number.isInteger(primaryPort) || primaryPort < 1 || primaryPort > 65535) throw new Error("Remote port must be 1-65535.");
+      if (agentPlatform === "windows" && (!Number.isInteger(winrmPort) || winrmPort < 1 || winrmPort > 65535)) {
+        throw new Error("WinRM port must be 1-65535.");
+      }
       const onboardingConcurrency = Number(form.onboardingConcurrency || DEFAULT_ONBOARDING_CONCURRENCY);
       if (!Number.isInteger(onboardingConcurrency) || onboardingConcurrency < 1 || onboardingConcurrency > 100) {
         throw new Error("Device onboarding concurrency must be 1-100.");
@@ -1166,9 +1203,13 @@ export default function CreateOnboardingJob() {
         components: [
           {
             kind: "device_onboarding",
-            name: "Linux SSH Device Onboarding",
+            name: "Device Onboarding",
+            agent_platform: agentPlatform,
             install_branch: form.branch || DEFAULT_BRANCH,
-            ssh_port: port,
+            ssh_port: sshPort,
+            windows_port: windowsPort,
+            winrm_port: winrmPort,
+            onboarding_methods: agentPlatform === "windows" ? ["smb_scm", "scheduled_task", "winrm"] : ["ssh"],
             onboarding_concurrency: onboardingConcurrency,
           },
         ],
@@ -1186,7 +1227,7 @@ export default function CreateOnboardingJob() {
           start: form.scheduleType === "immediately" ? null : isoFromDatetimeLocal(form.start),
         },
         duration: { expiration: "no_expire" },
-        execution_context: "onboarding_linux_ssh",
+        execution_context: "onboarding_local_network",
         credential_id: Number(form.credentialId),
         use_service_account: false,
         enabled: Boolean(form.enabled),
@@ -1341,7 +1382,7 @@ export default function CreateOnboardingJob() {
                 <Box sx={TAB_SECTION_SX}>
                   <SectionHeader
                     title="Scope"
-                    detail="Discovery scope defines eligible targets. Exclusion scope removes blacklisted IPs, FQDNs, CIDRs, and ranges before SSH attempts start."
+                    detail="Discovery scope defines eligible targets. Exclusion scope removes blacklisted IPs, FQDNs, CIDRs, and ranges before onboarding attempts start."
                   />
                   <FormControl fullWidth sx={FIELD_SX}>
                     <InputLabel id="onboarding-site-label">Site</InputLabel>
@@ -1380,6 +1421,25 @@ export default function CreateOnboardingJob() {
                 <Box sx={TAB_SECTION_SX}>
                   <SectionHeader title="Connection Method" detail="Choose a stored machine or domain credential to connect to the devices and trigger automatic enrollment." />
                   <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+                    <FormControl fullWidth sx={{ maxWidth: { md: 260 }, ...FIELD_SX }}>
+                      <InputLabel id="onboarding-platform-label">Device OS</InputLabel>
+                      <Select
+                        labelId="onboarding-platform-label"
+                        label="Device OS"
+                        value={form.agentPlatform}
+                        onChange={(event) => {
+                          setForm((prev) => ({
+                            ...prev,
+                            agentPlatform: event.target.value,
+                            credentialId: "",
+                          }));
+                        }}
+                        MenuProps={SELECT_MENU_PROPS}
+                      >
+                        <MenuItem value="linux">Linux</MenuItem>
+                        <MenuItem value="windows">Windows</MenuItem>
+                      </Select>
+                    </FormControl>
                     <FormControl fullWidth sx={FIELD_SX}>
                       <InputLabel id="onboarding-credential-label">Stored Credential</InputLabel>
                       <Select
@@ -1389,7 +1449,7 @@ export default function CreateOnboardingJob() {
                         onChange={(event) => setField("credentialId", event.target.value)}
                         MenuProps={SELECT_MENU_PROPS}
                       >
-                        {sshCredentials.map((credential) => (
+                        {credentialOptions.map((credential) => (
                           <MenuItem
                             key={credential.id}
                             value={String(credential.id)}
@@ -1401,13 +1461,24 @@ export default function CreateOnboardingJob() {
                         ))}
                       </Select>
                     </FormControl>
+                  </Stack>
+                  <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
                     <TextField
-                      label="SSH Port"
+                      label={form.agentPlatform === "windows" ? "SMB Port" : "SSH Port"}
                       type="number"
-                      value={form.sshPort}
-                      onChange={(event) => setField("sshPort", event.target.value)}
+                      value={form.agentPlatform === "windows" ? form.windowsPort : form.sshPort}
+                      onChange={(event) => setField(form.agentPlatform === "windows" ? "windowsPort" : "sshPort", event.target.value)}
                       sx={{ width: { xs: "100%", md: 180 }, ...FIELD_SX }}
                     />
+                    {form.agentPlatform === "windows" ? (
+                      <TextField
+                        label="WinRM Port"
+                        type="number"
+                        value={form.winrmPort}
+                        onChange={(event) => setField("winrmPort", event.target.value)}
+                        sx={{ width: { xs: "100%", md: 180 }, ...FIELD_SX }}
+                      />
+                    ) : null}
                     <TextField
                       label="Device Onboarding Concurrency"
                       type="number"
@@ -1503,7 +1574,7 @@ export default function CreateOnboardingJob() {
                     ) : null}
                   </Stack>
                   <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
-                    Remote installer creates normal pending device approvals after SSH deploy succeeds.
+                    Remote installer creates normal pending device approvals after deployment succeeds.
                   </Typography>
                 </Box>
               ) : null}

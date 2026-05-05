@@ -55,10 +55,11 @@ Supported schedule types (from the scheduler core):
 16) If zero devices are resolved, the occurrence is recorded as `Skipped` with `skip_reason = no_devices_targeted`.
 
 ## Automatic Device Onboarding
-- Linux SSH onboarding is scheduled through the same job service with `job_kind = onboarding`.
+- Local-network device onboarding is scheduled through the same job service with `job_kind = onboarding`.
 - The WebUI flow lives at `/jobs/onboarding/new`, is launched from the Sites page action rail, and creates jobs named like `Automatic Device Onboarding <SiteName>`.
-- Operators select one site, one stored SSH credential, discovery scope entries, exclusion scope entries, agent install branch, SSH port, per-job device onboarding concurrency, and normal schedule options.
-- At run time the Engine probes TCP/SSH, authenticates with the selected credential, confirms the target is Linux, downloads `Agent.sh` from the selected branch, and runs `Agent.sh --repo-branch <branch> deploy --serverurl <engine_url> --enrollmentcode <site_code> --newEngine`.
+- Operators select one site, target OS, one stored machine or domain credential, discovery scope entries, exclusion scope entries, agent install branch, remote ports, per-job device onboarding concurrency, and normal schedule options.
+- Linux targets use SSH. At run time the Engine probes TCP/SSH, authenticates with the selected credential, confirms the target is Linux, downloads `Agent.sh` from the selected branch, and runs `Agent.sh --repo-branch <branch> deploy --serverurl <engine_url> --enrollmentcode <site_code> --newEngine`.
+- Windows targets use the same discovery/exclusion model. The Engine first tries SMB `ADMIN$` plus a temporary Remote Service Control Manager service, then falls back to a remote scheduled task, then falls back to WinRM. If all three paths fail, the target records a manual-install-required failure because local security policy blocked remote enrollment.
 - Remote machine credentials stay only in existing Aegis-protected credential records. Onboarding target output is stored as sanitized snippets in `scheduled_job_onboarding_targets`.
 - Successful remote installs do not auto-approve devices. Agents submit normal enrollment requests and remain in the existing approval queue. When possible, Borealis records `onboarding_job_id`, `onboarding_run_id`, and `onboarding_target` on the approval. The onboarding target endpoint hydrates pending target rows with current approval status so approved or completed devices stop showing as `waiting_approval`.
 - Re-deploying an onboarding job saves the current job definition, deletes prior run history for that job, creates a fresh immediate onboarding occurrence, and repopulates target status from the new run.
@@ -119,7 +120,7 @@ Supported schedule types (from the scheduler core):
 - `scheduled_job_runs` - per-run status, timestamps, error fields, skip reason.
 - `scheduled_job_run_targets` - frozen occurrence target snapshot and originating filter links.
 - `scheduled_job_run_activity` - links activity_history to scheduled runs.
-- `scheduled_job_onboarding_targets` - per-target SSH onboarding attempt state and sanitized output.
+- `scheduled_job_onboarding_targets` - per-target local-network onboarding attempt state and sanitized output.
 
 ### Schedule computation
 - `_compute_next_run` normalizes timestamps to minutes and applies schedule type logic.

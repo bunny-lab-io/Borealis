@@ -175,6 +175,7 @@ const CREDENTIAL_TYPES = [
 
 const CONNECTION_TYPES = [
   { value: "ssh", label: "SSH" },
+  { value: "windows", label: "Windows" },
   { value: "winrm", label: "WinRM" }
 ];
 

@@ -15,6 +15,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 DEFAULT_ONBOARDING_SSH_PORT = 22
+DEFAULT_ONBOARDING_WINDOWS_PORT = 445
+DEFAULT_ONBOARDING_WINRM_PORT = 5985
 DEFAULT_ONBOARDING_TARGET_CAP = 512
 DEFAULT_ONBOARDING_CONCURRENCY = 5
 ONBOARDING_SNIPPET_LIMIT = 1600
@@ -34,10 +36,12 @@ def _split_scope_text(value: Any) -> List[str]:
     else:
         raw = str(value)
     entries: List[str] = []
-    for piece in re.split(r"[\n\r,;]+", raw):
-        token = piece.strip()
-        if token:
-            entries.append(token)
+    for line in re.split(r"[\n\r]+", raw):
+        line_without_comment = str(line or "").split("#", 1)[0]
+        for piece in re.split(r"[,;]+", line_without_comment):
+            token = piece.strip()
+            if token:
+                entries.append(token)
     return entries
 
 
@@ -216,6 +220,8 @@ def sanitize_output(value: Any, *, redactions: Optional[Iterable[Any]] = None, l
 __all__ = [
     "DEFAULT_ONBOARDING_CONCURRENCY",
     "DEFAULT_ONBOARDING_SSH_PORT",
+    "DEFAULT_ONBOARDING_WINDOWS_PORT",
+    "DEFAULT_ONBOARDING_WINRM_PORT",
     "DEFAULT_ONBOARDING_TARGET_CAP",
     "ONBOARDING_SNIPPET_LIMIT",
     "coerce_scope_entries",

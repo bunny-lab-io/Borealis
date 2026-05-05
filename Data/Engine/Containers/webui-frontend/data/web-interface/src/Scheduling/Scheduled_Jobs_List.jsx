@@ -372,7 +372,7 @@ export default function ScheduledJobsList({ refreshToken }) {
             domain: comp.domain
           }));
           const displayComponentSummaries = isOnboardingJob
-            ? [{ key: `onboarding-${j.id || j.name}`, label: "Linux SSH Device Onboarding", domain: "system" }]
+            ? [{ key: `onboarding-${j.id || j.name}`, label: "Device Onboarding", domain: "system" }]
             : componentSummaries;
           const hasWorkflowComponent = normalizedComponents.some((comp) => {
             const typeRaw = String(comp?.type || comp?.assembly_type || "").trim().toLowerCase();

@@ -318,7 +318,7 @@ finally:
 - Notes:
 - `status` lifecycle typically `pending -> approved|denied|expired -> completed`.
 - `site_id` and `approved_by_user_id` are soft relations (not enforced FK in schema).
-- Automatic SSH onboarding stores source job/run/target context when the agent submits it. Approval trust flow remains unchanged.
+- Automatic local-network onboarding stores source job/run/target context when the agent submits it. Approval trust flow remains unchanged.
 - Rebuild migration removes legacy `enrollment_code_id` if present.
 
 #### `enrollment_code_failures`
@@ -560,8 +560,8 @@ finally:
 - Scheduler background loop.
 - Notes:
 - `credential_id` is logical linkage to `credentials.id`; no FK constraint in schema.
-- `job_kind = automation` is normal scheduled automation. `job_kind = onboarding` is automatic local-network SSH device enrollment.
-- Onboarding jobs store discovery entries and exclusion entries inside the JSON `targets_json` `onboarding_scope` record. Agent branch, SSH port, and per-job onboarding concurrency live in the JSON `components_json` `device_onboarding` record. No remote machine credential material is copied into either JSON payload.
+- `job_kind = automation` is normal scheduled automation. `job_kind = onboarding` is automatic local-network device enrollment.
+- Onboarding jobs store discovery entries and exclusion entries inside the JSON `targets_json` `onboarding_scope` record. Agent branch, target platform, remote ports, Windows fallback methods, and per-job onboarding concurrency live in the JSON `components_json` `device_onboarding` record. No remote machine credential material is copied into either JSON payload.
 
 #### `scheduled_job_runs`
 - Status: Active.
@@ -595,7 +595,7 @@ finally:
 
 #### `scheduled_job_onboarding_targets`
 - Status: Active.
-- Purpose: Per-target status for automatic Linux SSH onboarding jobs.
+- Purpose: Per-target status for automatic local-network onboarding jobs.
 - Columns: `id`, `run_id`, `job_id`, `scheduled_ts`, `site_id`, `target_input`, `target_address`, `target_hostname`, `ssh_port`, `status`, `detail`, `stdout_snippet`, `stderr_snippet`, `approval_reference`, `created_at`, `updated_at`, `finished_at`.
 - Constraints and indexes:
 - `id` autoincrement primary key.
@@ -605,11 +605,11 @@ finally:
 - `idx_onboarding_targets_job` on `(job_id, scheduled_ts)`.
 - `idx_onboarding_targets_status` on `status`.
 - Used by:
-- Automatic SSH onboarding runner.
+- Automatic local-network onboarding runner.
 - Scheduled Jobs result summaries.
 - `/api/onboarding/jobs/<job_id>/targets`.
 - Notes:
-- stdout/stderr are sanitized snippets only. Stored SSH credentials remain in `credentials` and are not copied into onboarding attempts.
+- stdout/stderr are sanitized snippets only. Stored machine and domain credentials remain in `credentials` and are not copied into onboarding attempts.
 - Approval status is not duplicated here. `/api/onboarding/jobs/<job_id>/targets` joins back to `device_approvals` by saved approval reference or onboarding context and hydrates approval id/status for UI display and inline approval actions.
 
 #### `scheduled_job_run_targets`
