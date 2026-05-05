@@ -134,7 +134,8 @@ def test_onboarding_scope_target_normalization_and_site_scope(engine_harness: En
                 "kind": "onboarding_scope",
                 "site_id": 1,
                 "site_name": "Main Lab",
-                "entries": "192.168.1.10\nserver01.lab",
+                "entries": "192.168.1.10;server01.lab",
+                "exclusions": "192.168.1.1;printer01.lab",
             }
         ]
     )
@@ -144,6 +145,7 @@ def test_onboarding_scope_target_normalization_and_site_scope(engine_harness: En
             "site_id": 1,
             "site_name": "Main Lab",
             "entries": ["192.168.1.10", "server01.lab"],
+            "exclusions": ["192.168.1.1", "printer01.lab"],
         }
     ]
 
@@ -191,6 +193,7 @@ def test_scheduled_jobs_api_creates_onboarding_job(engine_harness: EngineTestHar
                     "site_id": 1,
                     "site_name": "Main Lab",
                     "entries": ["192.168.10.5", "server01.lab"],
+                    "exclusions": ["192.168.10.99"],
                 }
             ],
             "components": [
@@ -213,6 +216,94 @@ def test_scheduled_jobs_api_creates_onboarding_job(engine_harness: EngineTestHar
     assert job["execution_context"] == "onboarding_linux_ssh"
     assert job["components"][0]["kind"] == "device_onboarding"
     assert job["targets"][0]["kind"] == "onboarding_scope"
+    assert job["targets"][0]["exclusions"] == ["192.168.10.99"]
+
+
+def test_onboarding_target_status_hydrates_approved_context(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    now = 1_700_000_100
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_onboarding_targets (
+                run_id,
+                job_id,
+                scheduled_ts,
+                site_id,
+                target_input,
+                target_address,
+                target_hostname,
+                ssh_port,
+                status,
+                detail,
+                approval_reference,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                55,
+                44,
+                now,
+                1,
+                "192.168.3.8",
+                "192.168.3.8",
+                "192.168.3.8",
+                22,
+                "waiting_approval",
+                "Agent installed. Device approval pending operator action.",
+                "APP-ONBOARD-1",
+                now,
+                now,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO device_approvals (
+                id,
+                approval_reference,
+                hostname_claimed,
+                ssl_key_fingerprint_claimed,
+                enrollment_code,
+                site_id,
+                status,
+                created_at,
+                updated_at,
+                approved_by_user_id,
+                onboarding_job_id,
+                onboarding_run_id,
+                onboarding_target
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "approval-onboard-1",
+                "APP-ONBOARD-1",
+                "lab-docs-01",
+                "11:22:33:44",
+                "SITE-MAIN-CODE",
+                1,
+                "approved",
+                "2026-05-05T03:00:00Z",
+                "2026-05-05T03:05:00Z",
+                "admin",
+                44,
+                55,
+                "192.168.3.8",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = scheduler._load_onboarding_target_rows(44, now)
+    hydrated = scheduler._backfill_onboarding_target_approval_references(rows)
+
+    assert hydrated[0]["status"] == "approved"
+    assert hydrated[0]["approval_id"] == "approval-onboard-1"
+    assert hydrated[0]["approval_status"] == "approved"
+    assert hydrated[0]["detail"] == "Device approved. Agent finalizing enrollment."
 
 
 def test_onboarding_remote_command_marks_agent_noninteractive(engine_harness: EngineTestHarness) -> None:

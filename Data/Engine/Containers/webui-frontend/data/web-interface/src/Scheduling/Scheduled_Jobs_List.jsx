@@ -24,7 +24,6 @@ import {
   Cached as CachedIcon,
   Add as AddIcon,
   DeleteOutline as DeleteIcon,
-  Devices as DevicesIcon,
   WarningAmberRounded as WarningAmberRoundedIcon,
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
@@ -922,13 +921,6 @@ export default function ScheduledJobsList({ refreshToken }) {
         icon: <AddIcon />,
         tone: "primary",
         onClick: () => navigate(APP_PATHS.jobNew),
-      },
-      {
-        id: "scheduled-jobs-onboarding",
-        label: "Onboard Devices",
-        icon: <DevicesIcon />,
-        tone: "primary",
-        onClick: () => navigate(APP_PATHS.jobOnboardingNew),
       },
     ],
     [anySelected, handleRefreshClick, loading, navigate]

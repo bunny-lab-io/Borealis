@@ -561,6 +561,7 @@ finally:
 - Notes:
 - `credential_id` is logical linkage to `credentials.id`; no FK constraint in schema.
 - `job_kind = automation` is normal scheduled automation. `job_kind = onboarding` is automatic local-network SSH device enrollment.
+- Onboarding jobs store discovery entries and exclusion entries inside the JSON `targets_json` `onboarding_scope` record; no remote machine credential material is copied into that JSON.
 
 #### `scheduled_job_runs`
 - Status: Active.
@@ -609,6 +610,7 @@ finally:
 - `/api/onboarding/jobs/<job_id>/targets`.
 - Notes:
 - stdout/stderr are sanitized snippets only. Stored SSH credentials remain in `credentials` and are not copied into onboarding attempts.
+- Approval status is not duplicated here. `/api/onboarding/jobs/<job_id>/targets` joins back to `device_approvals` by saved approval reference or onboarding context and hydrates approval id/status for UI display and inline approval actions.
 
 #### `scheduled_job_run_targets`
 - Status: Active.

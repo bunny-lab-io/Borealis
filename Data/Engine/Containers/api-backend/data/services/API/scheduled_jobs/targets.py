@@ -21,6 +21,14 @@ def _normalize_site_id(value: Any) -> Optional[int]:
         return None
 
 
+def _normalize_onboarding_scope_values(value: Any) -> List[str]:
+    if isinstance(value, str):
+        return [line.strip() for line in value.replace(",", "\n").replace(";", "\n").splitlines() if line.strip()]
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
 def normalize_targets_for_save(entries: Sequence[Any]) -> List[Any]:
     normalized: List[Any] = []
     seen_filters: set[int] = set()
@@ -50,15 +58,22 @@ def normalize_targets_for_save(entries: Sequence[Any]) -> List[Any]:
             raw_entries = entry.get("entries")
             if raw_entries is None:
                 raw_entries = entry.get("scope") or entry.get("targets") or entry.get("discovery_scope")
-            if isinstance(raw_entries, str):
-                scope_entries = [line.strip() for line in raw_entries.replace(",", "\n").splitlines() if line.strip()]
-            elif isinstance(raw_entries, (list, tuple)):
-                scope_entries = [str(value).strip() for value in raw_entries if str(value).strip()]
-            else:
-                scope_entries = []
+            scope_entries = _normalize_onboarding_scope_values(raw_entries)
             if not scope_entries:
                 continue
-            dedupe_key = f"onboarding:{site_id_value}:{'|'.join(value.lower() for value in scope_entries)}"
+            raw_exclusions = (
+                entry.get("exclusions")
+                or entry.get("exclude_entries")
+                or entry.get("exclusion_scope")
+                or entry.get("exclusionScope")
+                or []
+            )
+            exclusion_entries = _normalize_onboarding_scope_values(raw_exclusions)
+            dedupe_key = (
+                f"onboarding:{site_id_value}:"
+                f"{'|'.join(value.lower() for value in scope_entries)}:"
+                f"{'|'.join(value.lower() for value in exclusion_entries)}"
+            )
             if dedupe_key in seen_onboarding_scopes:
                 continue
             seen_onboarding_scopes.add(dedupe_key)
@@ -68,6 +83,7 @@ def normalize_targets_for_save(entries: Sequence[Any]) -> List[Any]:
                     "site_id": site_id_value,
                     "site_name": entry.get("site_name") or entry.get("site") or "",
                     "entries": scope_entries,
+                    "exclusions": exclusion_entries,
                 }
             )
             continue

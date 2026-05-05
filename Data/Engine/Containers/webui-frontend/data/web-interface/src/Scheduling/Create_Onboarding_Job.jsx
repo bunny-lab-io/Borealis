@@ -1,28 +1,49 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   Alert,
   Box,
   Button,
   CircularProgress,
+  Dialog,
+  DialogContent,
+  DialogTitle,
   FormControl,
+  IconButton,
   InputLabel,
   MenuItem,
   Paper,
   Select,
   Stack,
+  Tab,
+  Tabs,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import {
   ArrowBack as ArrowBackIcon,
+  Check as CheckIcon,
+  ContentCopy as ContentCopyIcon,
   Devices as DevicesIcon,
   PlayArrow as PlayArrowIcon,
+  Refresh as RefreshIcon,
   Save as SaveIcon,
 } from "@mui/icons-material";
+import { AgGridReact } from "ag-grid-react";
+import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
+import {
+  DIALOG_CONTENT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../DialogStyles.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import { useUrlTabState } from "../app/hooks/useUrlTabState.js";
 import { APP_PATHS } from "../app/routes/paths.js";
+
+ModuleRegistry.registerModules([AllCommunityModule]);
 
 const PAGE_TITLE = "Automatic Device Onboarding";
 const PAGE_SUBTITLE = "Enroll Linux devices over local-network SSH with stored machine credentials.";
@@ -30,14 +51,242 @@ const DEFAULT_BRANCH = "main";
 const DEFAULT_SSH_PORT = 22;
 const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
 const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
+const ONBOARDING_TAB_URL_BY_KEY = Object.freeze({
+  name: "job_name",
+  scope: "scope",
+  context: "ssh_context",
+  schedule: "schedule",
+  targets: "target_status",
+});
+const ONBOARDING_TAB_KEY_BY_URL = Object.freeze({
+  job_name: "name",
+  name: "name",
+  scope: "scope",
+  ssh_context: "context",
+  context: "context",
+  schedule: "schedule",
+  target_status: "targets",
+  targets: "targets",
+});
+
+const MAGIC_UI = {
+  panelBg: "linear-gradient(145deg, rgba(7,10,24,0.96), rgba(6,10,28,0.92) 45%, rgba(14,8,30,0.95))",
+  panelBorder: "rgba(148, 163, 184, 0.32)",
+  textMuted: "#94a3b8",
+  textBright: "#e2e8f0",
+  accentA: "#7dd3fc",
+  accentB: "#c084fc",
+  accentC: "#34d399",
+  danger: "#fb7185",
+};
+
+const gridTheme = themeQuartz.withParams({
+  accentColor: "#7dd3fc",
+  backgroundColor: "#070b1a",
+  browserColorScheme: "dark",
+  fontFamily: { googleFont: "IBM Plex Sans" },
+  foregroundColor: "#f4f7ff",
+  headerFontSize: 13,
+});
+const gridThemeClass = gridTheme.themeName || "ag-theme-quartz";
+const gridFontFamily = '"IBM Plex Sans","Helvetica Neue",Arial,sans-serif';
+const iconFontFamily = '"Quartz Regular"';
 
 const PANEL_SX = {
   p: 2.5,
-  borderRadius: 2,
-  border: "1px solid rgba(148,163,184,0.28)",
-  background: "linear-gradient(135deg, rgba(10,16,31,0.96), rgba(6,10,24,0.92))",
-  color: "#e2e8f0",
+  borderRadius: 3,
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  background: MAGIC_UI.panelBg,
+  color: MAGIC_UI.textBright,
+  boxShadow: "0 22px 60px rgba(2,6,23,0.72)",
 };
+
+const GRID_PANEL_SX = {
+  width: "100%",
+  height: "100%",
+  fontFamily: gridFontFamily,
+  "--ag-icon-font-family": iconFontFamily,
+  "--ag-cell-horizontal-padding": "18px",
+  "--ag-background-color": "#070b1a",
+  "--ag-foreground-color": "#f4f7ff",
+  "--ag-header-background-color": "#0f172a",
+  "--ag-header-foreground-color": "#cfe0ff",
+  "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+  "--ag-row-hover-color": "rgba(73,156,196,0.2)",
+  "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
+  "--ag-border-color": "rgba(125,183,255,0.18)",
+  "--ag-row-border-color": "rgba(125,183,255,0.14)",
+  "--ag-border-radius": "8px",
+  borderRadius: 3,
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  background: "linear-gradient(170deg, rgba(5,8,20,0.92), rgba(8,13,32,0.9))",
+  boxShadow: "0 22px 60px rgba(2,6,23,0.75)",
+  overflow: "hidden",
+  "& .ag-root-wrapper": {
+    borderRadius: 3,
+  },
+  "& .ag-root, & .ag-header, & .ag-center-cols-container": {
+    fontFamily: gridFontFamily,
+    background: "transparent",
+  },
+  "& .ag-header": {
+    backgroundColor: "rgba(3,7,18,0.9)",
+    borderBottom: "1px solid rgba(148,163,184,0.25)",
+  },
+  "& .ag-header-cell-label": {
+    color: MAGIC_UI.textBright,
+    fontWeight: 600,
+    letterSpacing: 0.3,
+  },
+  "& .ag-row:nth-of-type(even)": {
+    backgroundColor: "rgba(15,23,42,0.32)",
+  },
+  "& .ag-row-hover": {
+    backgroundColor: "rgba(125,183,255,0.08) !important",
+  },
+  "& .ag-row-selected": {
+    backgroundColor: "rgba(125,211,252,0.2) !important",
+    boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+  },
+  "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    textAlign: "left",
+    paddingTop: "8px",
+    paddingBottom: "8px",
+    paddingLeft: "18px",
+    paddingRight: "12px",
+  },
+  "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
+    width: "100%",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    padding: 0,
+  },
+  "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
+    paddingLeft: "12px",
+    paddingRight: "9px",
+  },
+  "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper": {
+    width: "100%",
+    padding: 0,
+  },
+  "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-value": {
+    width: "100%",
+  },
+};
+
+const TAB_SECTION_SX = {
+  width: "100%",
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+  px: { xs: 1.5, md: 2 },
+  py: { xs: 1.25, md: 1.75 },
+};
+
+const NAV_TAB_COLORS = {
+  text: "#cbd5e1",
+  textActive: "#e6f2ff",
+  icon: "#8fbfff",
+  iconActive: "#7db7ff",
+  hover: "rgba(255,255,255,0.05)",
+  activeBg: "linear-gradient(to top, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
+};
+
+const TABS_SX = {
+  borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
+  minHeight: 32,
+  "& .MuiTabs-flexContainer": {
+    minHeight: 32,
+    alignItems: "stretch",
+  },
+  "& .MuiTab-root": {
+    color: NAV_TAB_COLORS.text,
+    textTransform: "none",
+    fontWeight: 400,
+    fontSize: "0.8rem",
+    minHeight: 32,
+    height: 32,
+    opacity: 1,
+    borderRadius: 1,
+    py: 0.35,
+    "& .MuiTab-iconWrapper": {
+      color: NAV_TAB_COLORS.icon,
+    },
+    "&:hover": {
+      background: NAV_TAB_COLORS.hover,
+    },
+  },
+  "& .MuiTab-root.Mui-selected": {
+    color: NAV_TAB_COLORS.textActive,
+    fontWeight: 600,
+    background: NAV_TAB_COLORS.activeBg,
+    "& .MuiTab-iconWrapper": {
+      color: NAV_TAB_COLORS.iconActive,
+    },
+  },
+};
+
+const FIELD_SX = {
+  "& .MuiOutlinedInput-root": {
+    borderRadius: 2,
+    bgcolor: "rgba(5,9,18,0.85)",
+    color: MAGIC_UI.textBright,
+    "& fieldset": {
+      borderColor: "rgba(148,163,184,0.35)",
+    },
+    "&:hover fieldset": {
+      borderColor: MAGIC_UI.accentA,
+    },
+    "&.Mui-focused fieldset": {
+      borderColor: MAGIC_UI.accentB,
+      boxShadow: "0 0 0 1px rgba(192,132,252,0.3)",
+    },
+  },
+  "& .MuiInputLabel-root": {
+    color: MAGIC_UI.textMuted,
+  },
+};
+
+const PRIMARY_BUTTON_SX = {
+  borderRadius: 999,
+  color: "#06101d",
+  borderColor: "transparent",
+  background: "linear-gradient(135deg, #7dd3fc 0%, #c084fc 100%)",
+  textTransform: "none",
+  fontWeight: 700,
+  "&:hover": {
+    background: "linear-gradient(135deg, #91dcff 0%, #cfa0ff 100%)",
+  },
+};
+
+const STATUS_THEME = {
+  pending: { label: "Pending", text: "#fbbf24", background: "rgba(251,191,36,0.18)", border: "1px solid rgba(251,191,36,0.35)", dot: "#f59e0b" },
+  running: { label: "Running", text: "#7dd3fc", background: "rgba(125,211,252,0.18)", border: "1px solid rgba(125,211,252,0.4)", dot: "#38bdf8" },
+  waiting_approval: { label: "Waiting Approval", text: "#d8b4fe", background: "rgba(192,132,252,0.18)", border: "1px solid rgba(192,132,252,0.4)", dot: "#c084fc" },
+  approved: { label: "Approved", text: "#60a5fa", background: "rgba(96,165,250,0.16)", border: "1px solid rgba(96,165,250,0.4)", dot: "#60a5fa" },
+  completed: { label: "Completed", text: "#34d399", background: "rgba(52,211,153,0.18)", border: "1px solid rgba(52,211,153,0.42)", dot: "#34d399" },
+  failed: { label: "Failed", text: "#fb7185", background: "rgba(251,113,133,0.18)", border: "1px solid rgba(251,113,133,0.45)", dot: "#fb7185" },
+  ssh_unreachable: { label: "SSH Unreachable", text: "#fb7185", background: "rgba(251,113,133,0.18)", border: "1px solid rgba(251,113,133,0.45)", dot: "#fb7185" },
+  skipped: { label: "Skipped", text: "#fbbf24", background: "rgba(251,191,36,0.14)", border: "1px solid rgba(251,191,36,0.32)", dot: "#f59e0b" },
+  denied: { label: "Denied", text: "#9aa0a6", background: "rgba(148,163,184,0.12)", border: "1px solid rgba(148,163,184,0.25)", dot: "#94a3b8" },
+  expired: { label: "Expired", text: "#9aa0a6", background: "rgba(148,163,184,0.12)", border: "1px solid rgba(148,163,184,0.25)", dot: "#94a3b8" },
+};
+
+const SELECT_MENU_PROPS = {
+  PaperProps: {
+    sx: {
+      bgcolor: "rgba(8,12,24,0.96)",
+      color: MAGIC_UI.textBright,
+      border: `1px solid ${MAGIC_UI.panelBorder}`,
+    },
+  },
+};
+
+const TARGET_AUTO_SIZE_COLUMNS = ["targetLabel", "statusLabel", "approvalReference", "output", "actions"];
 
 function toScopeText(entries) {
   if (Array.isArray(entries)) {
@@ -51,6 +300,11 @@ function splitScopeEntries(value) {
     .split(/[\n\r,;]+/)
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function formatStatusLabel(status) {
+  const key = String(status || "").trim().toLowerCase();
+  return STATUS_THEME[key]?.label || key.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()) || "Pending";
 }
 
 function datetimeLocalValue(epochSeconds) {
@@ -68,20 +322,68 @@ function isoFromDatetimeLocal(value) {
   return date.toISOString();
 }
 
-function targetOutputSnippet(target) {
-  const status = String(target?.status || "").trim().toLowerCase();
-  const showOutput = status === "failed" || status === "ssh_unreachable";
-  if (!showOutput) return "";
-  const stderr = String(target?.stderr_snippet || "").trim();
-  const stdout = String(target?.stdout_snippet || "").trim();
-  return [
-    stderr ? `stderr\n${stderr}` : "",
-    stdout ? `stdout\n${stdout}` : "",
-  ].filter(Boolean).join("\n\n");
+function targetOutputContent(target, mode) {
+  return String(mode === "stderr" ? target?.stderr_snippet || "" : target?.stdout_snippet || "").trim();
 }
 
 function normalizeBranchName(value) {
   return String(value || DEFAULT_BRANCH).trim() || DEFAULT_BRANCH;
+}
+
+function SectionHeader({ title, detail, action }) {
+  return (
+    <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 2, flexWrap: "wrap" }}>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700, fontSize: "1rem" }}>
+          {title}
+        </Typography>
+        {detail ? (
+          <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, mt: 0.4 }}>
+            {detail}
+          </Typography>
+        ) : null}
+      </Box>
+      {action || null}
+    </Box>
+  );
+}
+
+function StatusPill({ status }) {
+  const key = String(status || "pending").trim().toLowerCase() || "pending";
+  const theme = STATUS_THEME[key] || STATUS_THEME.pending;
+  const label = STATUS_THEME[key]?.label || formatStatusLabel(key);
+  return (
+    <Box
+      component="span"
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.6,
+        px: 1.2,
+        py: 0.25,
+        borderRadius: 999,
+        background: theme.background,
+        border: theme.border,
+        color: theme.text,
+        fontWeight: 700,
+        fontSize: 12,
+        textTransform: "uppercase",
+        lineHeight: 1,
+      }}
+    >
+      <Box
+        component="span"
+        sx={{
+          width: 8,
+          height: 8,
+          borderRadius: "50%",
+          backgroundColor: theme.dot,
+          boxShadow: "0 0 0 2px rgba(8,12,24,0.65)",
+        }}
+      />
+      {label}
+    </Box>
+  );
 }
 
 export default function CreateOnboardingJob() {
@@ -99,11 +401,18 @@ export default function CreateOnboardingJob() {
   const [branchRows, setBranchRows] = useState([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchLoadError, setBranchLoadError] = useState("");
+  const [actioningApprovalId, setActioningApprovalId] = useState("");
+  const [outputOpen, setOutputOpen] = useState(false);
+  const [outputTitle, setOutputTitle] = useState("");
+  const [outputSections, setOutputSections] = useState([]);
+  const [copiedOutputKey, setCopiedOutputKey] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
+  const targetGridApiRef = useRef(null);
   const [form, setForm] = useState({
     name: "",
     siteId: "",
     scope: "",
+    exclusionScope: "",
     credentialId: "",
     branch: DEFAULT_BRANCH,
     sshPort: DEFAULT_SSH_PORT,
@@ -138,6 +447,37 @@ export default function CreateOnboardingJob() {
       ...rows,
     ];
   }, [branchRows, form.branch]);
+
+  const tabDefs = useMemo(() => {
+    const tabs = [
+      { key: "name", label: "Job Name" },
+      { key: "scope", label: "Scope" },
+      { key: "context", label: "SSH Context" },
+      { key: "schedule", label: "Schedule" },
+    ];
+    if (editing) {
+      tabs.push({ key: "targets", label: "Target Status" });
+    }
+    return tabs;
+  }, [editing]);
+
+  const { activeKey: activeTabUrlKey, setActiveKey: setActiveTabUrlKey } = useUrlTabState({
+    param: "tab",
+    defaultKey: tabDefs[0]?.key || "name",
+    allowedKeys: tabDefs.map((tabDef) => tabDef.key),
+    keyByUrl: ONBOARDING_TAB_KEY_BY_URL,
+    urlByKey: ONBOARDING_TAB_URL_BY_KEY,
+  });
+
+  const activeTabKey = useMemo(() => {
+    const fallbackKey = tabDefs[0]?.key || "name";
+    return tabDefs.some((tabDef) => tabDef.key === activeTabUrlKey) ? activeTabUrlKey : fallbackKey;
+  }, [activeTabUrlKey, tabDefs]);
+
+  const activeTabIndex = useMemo(() => {
+    const index = tabDefs.findIndex((tabDef) => tabDef.key === activeTabKey);
+    return index >= 0 ? index : 0;
+  }, [activeTabKey, tabDefs]);
 
   const setField = useCallback((key, value) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -235,6 +575,7 @@ export default function CreateOnboardingJob() {
           name: job.name || "",
           siteId: firstTarget?.site_id ? String(firstTarget.site_id) : "",
           scope: toScopeText(firstTarget?.entries || []),
+          exclusionScope: toScopeText(firstTarget?.exclusions || firstTarget?.exclude_entries || []),
           credentialId: job.credential_id ? String(job.credential_id) : "",
           branch: firstComponent.install_branch || firstComponent.repo_branch || firstComponent.branch || DEFAULT_BRANCH,
           sshPort: Number(firstComponent.ssh_port || firstComponent.port || DEFAULT_SSH_PORT),
@@ -279,6 +620,248 @@ export default function CreateOnboardingJob() {
     return () => clearInterval(timer);
   }, [editing, loadTargets]);
 
+  const copyTextToClipboard = useCallback(async (value, promptTitle = "Copy text") => {
+    const normalizedValue = String(value ?? "");
+    if (!normalizedValue) return false;
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(normalizedValue);
+        return true;
+      }
+      throw new Error("clipboard_unavailable");
+    } catch {
+      if (typeof window !== "undefined" && typeof window.prompt === "function") {
+        window.prompt(promptTitle, normalizedValue);
+      }
+      return false;
+    }
+  }, []);
+
+  const targetGridRows = useMemo(
+    () => targetRows.map((target) => {
+      const targetLabel = `${target.target_hostname || target.target_address || target.target_input || "Target"}${target.ssh_port ? `:${target.ssh_port}` : ""}`;
+      const status = String(target.status || "pending").trim().toLowerCase() || "pending";
+      const approvalStatus = String(target.approval_status || "").trim().toLowerCase();
+      return {
+        id: target.id || `${targetLabel}-${target.run_id || ""}`,
+        targetLabel,
+        status,
+        statusLabel: formatStatusLabel(status),
+        detail: target.detail || "",
+        approvalReference: target.approval_reference || "",
+        approvalId: target.approval_id || "",
+        approvalStatus,
+        hasStdOut: Boolean(String(target.stdout_snippet || "").trim()),
+        hasStdErr: Boolean(String(target.stderr_snippet || "").trim()),
+        raw: target,
+      };
+    }),
+    [targetRows]
+  );
+
+  const handleCopyOutputSection = useCallback(async (section) => {
+    const content = String(section?.content || "");
+    if (!content) {
+      setError("No output available to copy.");
+      return;
+    }
+    const copied = await copyTextToClipboard(content, `Copy ${section?.title || "Output"}`);
+    if (copied) {
+      setCopiedOutputKey(String(section?.key || ""));
+      setNotice("Output copied.");
+      setTimeout(() => setCopiedOutputKey(""), 1400);
+    } else {
+      setNotice("Manual copy prompt opened.");
+    }
+  }, [copyTextToClipboard]);
+
+  const handleViewTargetOutput = useCallback((target, mode = "stdout") => {
+    const label = mode === "stderr" ? "StdErr" : "StdOut";
+    const targetLabel = `${target?.target_hostname || target?.target_address || target?.target_input || "Target"}${target?.ssh_port ? `:${target.ssh_port}` : ""}`;
+    const content = targetOutputContent(target, mode);
+    setOutputTitle(`${label} - ${targetLabel}`);
+    setOutputSections([
+      {
+        key: `${target?.id || targetLabel}-${mode}`,
+        title: label,
+        path: targetLabel,
+        content,
+      },
+    ]);
+    setCopiedOutputKey("");
+    setOutputOpen(true);
+  }, []);
+
+  const handleCopyTargetOutput = useCallback(async (target, mode = "stdout") => {
+    const label = mode === "stderr" ? "StdErr" : "StdOut";
+    const content = targetOutputContent(target, mode);
+    if (!content) {
+      setError(`No ${label} available for this target.`);
+      return;
+    }
+    const copied = await copyTextToClipboard(content, `Copy ${label}`);
+    setNotice(copied ? `${label} copied.` : "Manual copy prompt opened.");
+  }, [copyTextToClipboard]);
+
+  const handleApproveTarget = useCallback(async (target) => {
+    const approvalId = String(target?.approval_id || "").trim();
+    if (!approvalId) return;
+    setActioningApprovalId(approvalId);
+    setError("");
+    setNotice("");
+    try {
+      const resp = await fetch(`/api/admin/device-approvals/${encodeURIComponent(approvalId)}/approve`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        const conflictMessage = body?.error === "conflict_resolution_required"
+          ? "Approval needs hostname conflict resolution from Device Approvals."
+          : body?.error || `Approval failed (${resp.status})`;
+        throw new Error(conflictMessage);
+      }
+      setNotice("Enrollment approved.");
+      await loadTargets();
+    } catch (err) {
+      setError(err?.message || "Unable to approve enrollment.");
+    } finally {
+      setActioningApprovalId("");
+    }
+  }, [loadTargets]);
+
+  const targetGridColumnDefs = useMemo(
+    () => [
+      { field: "targetLabel", headerName: "Target", minWidth: 220, filter: "agTextColumnFilter", cellClass: "auto-col-tight" },
+      {
+        field: "statusLabel",
+        headerName: "Status",
+        minWidth: 180,
+        filter: "agSetColumnFilter",
+        cellClass: "auto-col-tight",
+        cellRenderer: (params) => <StatusPill status={params.data?.status} />,
+      },
+      { field: "detail", headerName: "Detail", minWidth: 320, flex: 1, filter: "agTextColumnFilter", cellClass: "auto-col-tight" },
+      {
+        field: "approvalReference",
+        headerName: "Approval",
+        minWidth: 230,
+        filter: "agTextColumnFilter",
+        cellClass: "auto-col-tight",
+        valueFormatter: (params) => params.value || "-",
+      },
+      {
+        field: "output",
+        headerName: "StdOut / StdErr",
+        minWidth: 220,
+        cellClass: "auto-col-tight",
+        cellRenderer: (params) => {
+          const row = params.data;
+          const target = row?.raw;
+          if (!row) return null;
+          return (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flexWrap: "wrap" }}>
+              {row.hasStdOut ? (
+                <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.25 }}>
+                  <Button size="small" sx={{ color: MAGIC_UI.accentA, textTransform: "none", minWidth: 0, p: 0 }} onClick={(event) => { event.stopPropagation(); handleViewTargetOutput(target, "stdout"); }}>
+                    StdOut
+                  </Button>
+                  <Tooltip title="Copy StdOut">
+                    <IconButton size="small" sx={{ color: MAGIC_UI.accentA, p: 0.35 }} onClick={(event) => { event.stopPropagation(); void handleCopyTargetOutput(target, "stdout"); }}>
+                      <ContentCopyIcon sx={{ fontSize: 15 }} />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              ) : null}
+              {row.hasStdOut && row.hasStdErr ? <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>/</Typography> : null}
+              {row.hasStdErr ? (
+                <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.25 }}>
+                  <Button size="small" sx={{ color: MAGIC_UI.danger, textTransform: "none", minWidth: 0, p: 0 }} onClick={(event) => { event.stopPropagation(); handleViewTargetOutput(target, "stderr"); }}>
+                    StdErr
+                  </Button>
+                  <Tooltip title="Copy StdErr">
+                    <IconButton size="small" sx={{ color: MAGIC_UI.danger, p: 0.35 }} onClick={(event) => { event.stopPropagation(); void handleCopyTargetOutput(target, "stderr"); }}>
+                      <ContentCopyIcon sx={{ fontSize: 15 }} />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              ) : null}
+            </Box>
+          );
+        },
+      },
+      {
+        field: "actions",
+        headerName: "Actions",
+        minWidth: 170,
+        cellClass: "auto-col-tight",
+        cellRenderer: (params) => {
+          const row = params.data;
+          const target = row?.raw;
+          const canApprove = Boolean(row?.approvalId) && row?.status === "waiting_approval" && (!row?.approvalStatus || row.approvalStatus === "pending");
+          if (!canApprove) {
+            return <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>-</Typography>;
+          }
+          const busy = actioningApprovalId === row.approvalId;
+          return (
+            <Button
+              size="small"
+              startIcon={busy ? <CircularProgress size={14} /> : <CheckIcon fontSize="small" />}
+              disabled={busy}
+              sx={{ color: MAGIC_UI.accentC, textTransform: "none", minWidth: 0, p: 0 }}
+              onClick={(event) => {
+                event.stopPropagation();
+                void handleApproveTarget(target);
+              }}
+            >
+              Approve
+            </Button>
+          );
+        },
+      },
+    ],
+    [actioningApprovalId, handleApproveTarget, handleCopyTargetOutput, handleViewTargetOutput]
+  );
+
+  const targetGridDefaultColDef = useMemo(
+    () => ({
+      sortable: true,
+      resizable: true,
+      filter: true,
+    }),
+    []
+  );
+
+  const autoSizeTargetGrid = useCallback(() => {
+    const api = targetGridApiRef.current;
+    if (!api || !targetGridRows.length) return;
+    const run = () => {
+      try {
+        if (typeof api.autoSizeColumns === "function") {
+          api.autoSizeColumns(TARGET_AUTO_SIZE_COLUMNS, true);
+        }
+      } catch {
+        /* grid may not be ready yet */
+      }
+    };
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(run);
+    } else {
+      setTimeout(run, 0);
+    }
+  }, [targetGridRows.length]);
+
+  const handleTargetGridReady = useCallback((params) => {
+    targetGridApiRef.current = params.api;
+    autoSizeTargetGrid();
+  }, [autoSizeTargetGrid]);
+
+  useEffect(() => {
+    autoSizeTargetGrid();
+  }, [autoSizeTargetGrid]);
+
   useEffect(() => {
     if (nameTouched || !selectedSite || editing) return;
     setForm((prev) => ({
@@ -293,6 +876,7 @@ export default function CreateOnboardingJob() {
     setNotice("");
     try {
       const entries = splitScopeEntries(form.scope);
+      const exclusions = splitScopeEntries(form.exclusionScope);
       if (!form.siteId) throw new Error("Select site.");
       if (!entries.length) throw new Error("Enter at least one IP address, CIDR, range, or FQDN.");
       if (!form.credentialId) throw new Error("Select SSH credential.");
@@ -316,6 +900,7 @@ export default function CreateOnboardingJob() {
             site_id: Number(form.siteId),
             site_name: siteName,
             entries,
+            exclusions,
           },
         ],
         schedule: {
@@ -392,28 +977,67 @@ export default function CreateOnboardingJob() {
         variant="content_panel"
         fillHeight={false}
       >
-          <Stack spacing={2}>
-            {error ? <Alert severity="error">{error}</Alert> : null}
-            {notice ? <Alert severity="success">{notice}</Alert> : null}
-            <Box sx={PANEL_SX}>
-              <Stack spacing={2.25}>
-                <TextField
-                  label="Job Name"
-                  value={form.name}
-                  onChange={(event) => {
-                    setNameTouched(true);
-                    setField("name", event.target.value);
-                  }}
-                  fullWidth
-                />
-                <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-                  <FormControl fullWidth>
+        <Stack spacing={2}>
+          {error ? <Alert severity="error">{error}</Alert> : null}
+          {notice ? <Alert severity="success">{notice}</Alert> : null}
+          {saving ? (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: MAGIC_UI.textMuted }}>
+              <CircularProgress size={18} sx={{ color: MAGIC_UI.accentA }} />
+              <Typography variant="body2">Saving onboarding job...</Typography>
+            </Box>
+          ) : null}
+
+          <Box sx={PANEL_SX}>
+            <Tabs
+              value={activeTabIndex}
+              onChange={(_, value) => setActiveTabUrlKey(tabDefs[value]?.key || "name")}
+              variant="scrollable"
+              scrollButtons="auto"
+              TabIndicatorProps={{
+                style: {
+                  height: 3,
+                  borderRadius: 3,
+                  background: NAV_TAB_COLORS.iconActive,
+                },
+              }}
+              sx={TABS_SX}
+            >
+              {tabDefs.map((tabDef) => (
+                <Tab key={tabDef.key} label={tabDef.label} />
+              ))}
+            </Tabs>
+
+            <Box sx={{ mt: 2, minHeight: 360 }}>
+              {activeTabKey === "name" ? (
+                <Box sx={TAB_SECTION_SX}>
+                  <SectionHeader title="Job Name" />
+                  <TextField
+                    label="Job Name"
+                    value={form.name}
+                    onChange={(event) => {
+                      setNameTouched(true);
+                      setField("name", event.target.value);
+                    }}
+                    sx={{ maxWidth: 560, ...FIELD_SX }}
+                    fullWidth
+                  />
+                </Box>
+              ) : null}
+
+              {activeTabKey === "scope" ? (
+                <Box sx={TAB_SECTION_SX}>
+                  <SectionHeader
+                    title="Scope"
+                    detail="Discovery scope defines eligible targets. Exclusion scope removes blacklisted IPs, FQDNs, CIDRs, and ranges before SSH attempts start."
+                  />
+                  <FormControl fullWidth sx={FIELD_SX}>
                     <InputLabel id="onboarding-site-label">Site</InputLabel>
                     <Select
                       labelId="onboarding-site-label"
                       label="Site"
                       value={form.siteId}
                       onChange={(event) => setField("siteId", event.target.value)}
+                      MenuProps={SELECT_MENU_PROPS}
                     >
                       {sites.map((site) => (
                         <MenuItem key={site.id} value={String(site.id)}>
@@ -422,208 +1046,284 @@ export default function CreateOnboardingJob() {
                       ))}
                     </Select>
                   </FormControl>
-                  <FormControl fullWidth>
-                    <InputLabel id="onboarding-credential-label">SSH Credential</InputLabel>
-                    <Select
-                      labelId="onboarding-credential-label"
-                      label="SSH Credential"
-                      value={form.credentialId}
-                      onChange={(event) => setField("credentialId", event.target.value)}
-                    >
-                      {sshCredentials.map((credential) => (
-                        <MenuItem
-                          key={credential.id}
-                          value={String(credential.id)}
-                          disabled={Boolean(credential.secret_reset_required)}
-                        >
-                          {credential.name || `Credential ${credential.id}`}
-                          {credential.secret_reset_required ? " (Secret Re-Entry Required)" : ""}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                </Stack>
-                <TextField
-                  label="Discovery Scope"
-                  value={form.scope}
-                  onChange={(event) => setField("scope", event.target.value)}
-                  multiline
-                  minRows={7}
-                  placeholder={"192.168.1.10\n192.168.1.20-192.168.1.30\n192.168.2.0/24\nserver01.local"}
-                  fullWidth
-                />
-                <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-                  <FormControl fullWidth error={Boolean(branchLoadError)}>
-                    <InputLabel id="onboarding-install-branch-label">Install Branch</InputLabel>
-                    <Select
-                      labelId="onboarding-install-branch-label"
-                      label="Install Branch"
-                      value={normalizeBranchName(form.branch)}
-                      onChange={(event) => setField("branch", event.target.value)}
-                      onOpen={() => {
-                        if (!branchRows.length && !branchesLoading) {
-                          void fetchInstallBranches();
-                        }
-                      }}
-                    >
-                      {branchOptions.map((branch) => (
-                        <MenuItem key={branch.name} value={branch.name}>
-                          {branch.name}
-                          {branch.default ? " (default)" : ""}
-                          {branch.sha ? ` - ${branch.sha.slice(0, 12)}` : ""}
-                        </MenuItem>
-                      ))}
-                      {branchesLoading ? (
-                        <MenuItem disabled value="__loading">
-                          Loading branches...
-                        </MenuItem>
-                      ) : null}
+                  <Stack direction={{ xs: "column", lg: "row" }} spacing={2}>
+                    <TextField
+                      label="Discovery Scope"
+                      value={form.scope}
+                      onChange={(event) => setField("scope", event.target.value)}
+                      multiline
+                      minRows={9}
+                      placeholder={"192.168.1.10\n192.168.1.20-192.168.1.30\n192.168.2.0/24\nserver01.local"}
+                      sx={{ flex: 1, ...FIELD_SX }}
+                      fullWidth
+                    />
+                    <TextField
+                      label="Exclusion Scope"
+                      value={form.exclusionScope}
+                      onChange={(event) => setField("exclusionScope", event.target.value)}
+                      multiline
+                      minRows={9}
+                      placeholder={"192.168.1.1\n192.168.1.40-192.168.1.50\nprinter01.local"}
+                      sx={{ flex: 1, ...FIELD_SX }}
+                      fullWidth
+                    />
+                  </Stack>
+                </Box>
+              ) : null}
+
+              {activeTabKey === "context" ? (
+                <Box sx={TAB_SECTION_SX}>
+                  <SectionHeader title="SSH Context" detail="Choose stored machine credentials and target agent branch for Linux SSH enrollment." />
+                  <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+                    <FormControl fullWidth sx={FIELD_SX}>
+                      <InputLabel id="onboarding-credential-label">SSH Credential</InputLabel>
+                      <Select
+                        labelId="onboarding-credential-label"
+                        label="SSH Credential"
+                        value={form.credentialId}
+                        onChange={(event) => setField("credentialId", event.target.value)}
+                        MenuProps={SELECT_MENU_PROPS}
+                      >
+                        {sshCredentials.map((credential) => (
+                          <MenuItem
+                            key={credential.id}
+                            value={String(credential.id)}
+                            disabled={Boolean(credential.secret_reset_required)}
+                          >
+                            {credential.name || `Credential ${credential.id}`}
+                            {credential.secret_reset_required ? " (Secret Re-Entry Required)" : ""}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                    <TextField
+                      label="SSH Port"
+                      type="number"
+                      value={form.sshPort}
+                      onChange={(event) => setField("sshPort", event.target.value)}
+                      sx={{ width: { xs: "100%", md: 180 }, ...FIELD_SX }}
+                    />
+                  </Stack>
+                  <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ xs: "stretch", md: "center" }}>
+                    <FormControl fullWidth error={Boolean(branchLoadError)} sx={FIELD_SX}>
+                      <InputLabel id="onboarding-install-branch-label">Agent Install Branch</InputLabel>
+                      <Select
+                        labelId="onboarding-install-branch-label"
+                        label="Agent Install Branch"
+                        value={normalizeBranchName(form.branch)}
+                        onChange={(event) => setField("branch", event.target.value)}
+                        onOpen={() => {
+                          if (!branchRows.length && !branchesLoading) {
+                            void fetchInstallBranches();
+                          }
+                        }}
+                        MenuProps={SELECT_MENU_PROPS}
+                      >
+                        {branchOptions.map((branch) => (
+                          <MenuItem key={branch.name} value={branch.name}>
+                            {branch.name}
+                            {branch.default ? " (default)" : ""}
+                            {branch.sha ? ` - ${branch.sha.slice(0, 12)}` : ""}
+                          </MenuItem>
+                        ))}
+                        {branchesLoading ? <MenuItem disabled value="__loading">Loading branches...</MenuItem> : null}
+                        {branchLoadError ? <MenuItem disabled value="__error">Branch lookup failed</MenuItem> : null}
+                      </Select>
                       {branchLoadError ? (
-                        <MenuItem disabled value="__error">
-                          Branch lookup failed
-                        </MenuItem>
+                        <Typography variant="caption" sx={{ mt: 0.75, color: "#fca5a5" }}>
+                          {branchLoadError}
+                        </Typography>
                       ) : null}
-                    </Select>
-                    {branchLoadError ? (
-                      <Typography variant="caption" sx={{ mt: 0.75, color: "#fca5a5" }}>
-                        {branchLoadError}
-                      </Typography>
-                    ) : null}
-                  </FormControl>
-                  <TextField
-                    label="SSH Port"
-                    type="number"
-                    value={form.sshPort}
-                    onChange={(event) => setField("sshPort", event.target.value)}
-                    sx={{ minWidth: 180 }}
-                  />
-                </Stack>
-                <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-                  <FormControl fullWidth>
-                    <InputLabel id="onboarding-schedule-label">Schedule</InputLabel>
-                    <Select
-                      labelId="onboarding-schedule-label"
-                      label="Schedule"
-                      value={form.scheduleType}
-                      onChange={(event) => setField("scheduleType", event.target.value)}
+                    </FormControl>
+                    <Button
+                      startIcon={branchesLoading ? <CircularProgress size={16} /> : <RefreshIcon fontSize="small" />}
+                      disabled={branchesLoading}
+                      onClick={() => void fetchInstallBranches()}
+                      sx={{ ...PRIMARY_BUTTON_SX, minWidth: 132 }}
                     >
-                      <MenuItem value="immediately">Immediately</MenuItem>
-                      <MenuItem value="once">Once</MenuItem>
-                      <MenuItem value="daily">Daily</MenuItem>
-                      <MenuItem value="weekly">Weekly</MenuItem>
-                      <MenuItem value="monthly">Monthly</MenuItem>
-                    </Select>
-                  </FormControl>
-                  <TextField
-                    label="Start"
-                    type="datetime-local"
-                    value={form.start}
-                    onChange={(event) => setField("start", event.target.value)}
-                    disabled={form.scheduleType === "immediately"}
-                    fullWidth
-                    InputLabelProps={{ shrink: true }}
-                  />
-                </Stack>
-                <Typography variant="body2" sx={{ color: "#94a3b8" }}>
-                  Remote installer creates normal pending device approvals after SSH deploy succeeds.
-                </Typography>
-              </Stack>
-            </Box>
-            {saving ? (
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: "#94a3b8" }}>
-                <CircularProgress size={18} sx={{ color: "#7dd3fc" }} />
-                <Typography variant="body2">Saving onboarding job...</Typography>
-              </Box>
-            ) : null}
-            {editing ? (
-              <Box sx={PANEL_SX}>
-                <Stack spacing={1.25}>
-                  <Typography variant="h6" sx={{ fontSize: "1rem", fontWeight: 700 }}>
-                    Target Status
+                      Refresh
+                    </Button>
+                  </Stack>
+                </Box>
+              ) : null}
+
+              {activeTabKey === "schedule" ? (
+                <Box sx={TAB_SECTION_SX}>
+                  <SectionHeader title="Schedule" detail="Immediate jobs start now. Scheduled jobs use existing recurrence behavior." />
+                  <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+                    <FormControl fullWidth sx={FIELD_SX}>
+                      <InputLabel id="onboarding-schedule-label">Schedule</InputLabel>
+                      <Select
+                        labelId="onboarding-schedule-label"
+                        label="Schedule"
+                        value={form.scheduleType}
+                        onChange={(event) => setField("scheduleType", event.target.value)}
+                        MenuProps={SELECT_MENU_PROPS}
+                      >
+                        <MenuItem value="immediately">Immediately</MenuItem>
+                        <MenuItem value="once">Once</MenuItem>
+                        <MenuItem value="daily">Daily</MenuItem>
+                        <MenuItem value="weekly">Weekly</MenuItem>
+                        <MenuItem value="monthly">Monthly</MenuItem>
+                      </Select>
+                    </FormControl>
+                    <TextField
+                      label="Start"
+                      type="datetime-local"
+                      value={form.start}
+                      onChange={(event) => setField("start", event.target.value)}
+                      disabled={form.scheduleType === "immediately"}
+                      fullWidth
+                      InputLabelProps={{ shrink: true }}
+                      sx={FIELD_SX}
+                    />
+                  </Stack>
+                  <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
+                    Remote installer creates normal pending device approvals after SSH deploy succeeds.
                   </Typography>
+                </Box>
+              ) : null}
+
+              {activeTabKey === "targets" ? (
+                <Box sx={{ ...TAB_SECTION_SX, minHeight: 0 }}>
+                  <SectionHeader
+                    title="Target Status"
+                    detail="Use AG Grid filters to inspect current target attempts. StdOut and StdErr open in a separate viewer."
+                    action={
+                      <Button startIcon={<RefreshIcon />} onClick={() => void loadTargets()} sx={PRIMARY_BUTTON_SX}>
+                        Refresh
+                      </Button>
+                    }
+                  />
                   <Box
+                    className={gridThemeClass}
                     sx={{
-                      display: "grid",
-                      gridTemplateColumns: { xs: "1fr", md: "1.2fr 0.8fr 1.5fr 1fr" },
-                      gap: 1,
-                      color: "#94a3b8",
-                      fontSize: 12,
-                      fontWeight: 700,
-                      textTransform: "uppercase",
+                      ...GRID_PANEL_SX,
+                      height: { xs: 460, md: 620 },
                     }}
                   >
-                    <Box>Target</Box>
-                    <Box>Status</Box>
-                    <Box>Detail</Box>
-                    <Box>Approval</Box>
+                    <AgGridReact
+                      rowData={targetGridRows}
+                      columnDefs={targetGridColumnDefs}
+                      defaultColDef={targetGridDefaultColDef}
+                      suppressCellFocus
+                      headerHeight={44}
+                      rowHeight={50}
+                      pagination
+                      paginationPageSize={20}
+                      paginationPageSizeSelector={[20, 50, 100]}
+                      overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No target attempts recorded yet.</span>"
+                      getRowId={(params) => String(params.data?.id || params.rowIndex)}
+                      onGridReady={handleTargetGridReady}
+                      theme={gridTheme}
+                    />
                   </Box>
-                  {targetRows.length ? targetRows.map((target) => {
-                    const outputSnippet = targetOutputSnippet(target);
-                    return (
-                    <Box
-                      key={target.id || `${target.target_address}:${target.ssh_port}`}
+                </Box>
+              ) : null}
+            </Box>
+          </Box>
+        </Stack>
+      </PageBodyFrame>
+
+      <Dialog
+        open={outputOpen}
+        onClose={() => setOutputOpen(false)}
+        fullWidth
+        maxWidth={false}
+        PaperProps={{
+          sx: {
+            ...DIALOG_PAPER_SX,
+            display: "flex",
+            flexDirection: "column",
+            width: "95vw",
+            maxWidth: "95vw",
+            height: "95vh",
+            maxHeight: "95vh",
+          },
+        }}
+      >
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 2, flexWrap: "wrap" }}>
+            <DialogHeaderBlock title={outputTitle} subtitle="Review remote onboarding output." />
+            <Button onClick={() => setOutputOpen(false)} sx={PRIMARY_BUTTON_SX}>
+              Close
+            </Button>
+          </Box>
+        </DialogTitle>
+        <DialogContent
+          sx={{
+            ...DIALOG_CONTENT_SX,
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            flex: 1,
+            minHeight: 0,
+            pb: 3,
+            overflow: "hidden",
+          }}
+        >
+          {outputSections.map((section) => (
+            <Box key={section.key} sx={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+              <Typography variant="subtitle2" sx={{ color: MAGIC_UI.textBright }}>
+                {section.title}
+              </Typography>
+              <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted, display: "block", mb: 0.5 }}>
+                {section.path}
+              </Typography>
+              <Box
+                sx={{
+                  border: `1px solid ${MAGIC_UI.panelBorder}`,
+                  borderRadius: 2,
+                  bgcolor: "rgba(4,7,17,0.65)",
+                  position: "relative",
+                  display: "flex",
+                  flexDirection: "column",
+                  flex: 1,
+                  minHeight: 0,
+                  overflow: "auto",
+                }}
+              >
+                <Box sx={{ position: "absolute", top: 10, right: 10, zIndex: 1 }}>
+                  <Tooltip title={copiedOutputKey === section.key ? "Copied" : "Copy output"}>
+                    <IconButton
+                      size="small"
+                      disabled={!section.content}
+                      onClick={() => void handleCopyOutputSection(section)}
                       sx={{
-                        py: 1,
-                        borderTop: "1px solid rgba(148,163,184,0.18)",
+                        color: copiedOutputKey === section.key ? MAGIC_UI.accentC : MAGIC_UI.textMuted,
+                        backgroundColor: "rgba(2,6,23,0.58)",
+                        border: "1px solid rgba(148,163,184,0.2)",
+                        "&:hover": {
+                          backgroundColor: "rgba(8,15,33,0.82)",
+                          color: copiedOutputKey === section.key ? MAGIC_UI.accentC : MAGIC_UI.textBright,
+                        },
                       }}
                     >
-                      <Box
-                        sx={{
-                          display: "grid",
-                          gridTemplateColumns: { xs: "1fr", md: "1.2fr 0.8fr 1.5fr 1fr" },
-                          gap: 1,
-                          alignItems: "center",
-                        }}
-                      >
-                        <Typography variant="body2" sx={{ color: "#e2e8f0" }}>
-                          {target.target_hostname || target.target_address || target.target_input || "Target"}
-                          {target.ssh_port ? `:${target.ssh_port}` : ""}
-                        </Typography>
-                        <Typography variant="body2" sx={{ color: "#7dd3fc", fontWeight: 700 }}>
-                          {target.status || "pending"}
-                        </Typography>
-                        <Typography variant="body2" sx={{ color: "#cbd5e1" }}>
-                          {target.detail || "—"}
-                        </Typography>
-                        <Typography variant="body2" sx={{ color: "#cbd5e1" }}>
-                          {target.approval_reference || "—"}
-                        </Typography>
-                      </Box>
-                      {outputSnippet ? (
-                        <Box
-                          component="pre"
-                          sx={{
-                            mt: 1,
-                            mb: 0,
-                            maxHeight: 220,
-                            overflow: "auto",
-                            whiteSpace: "pre-wrap",
-                            wordBreak: "break-word",
-                            borderRadius: 1,
-                            border: "1px solid rgba(148,163,184,0.18)",
-                            background: "rgba(2,6,23,0.58)",
-                            color: "#cbd5e1",
-                            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-                            fontSize: 12,
-                            lineHeight: 1.5,
-                            p: 1.25,
-                          }}
-                        >
-                          {outputSnippet}
-                        </Box>
-                      ) : null}
-                    </Box>
-                    );
-                  }) : (
-                    <Typography variant="body2" sx={{ color: "#94a3b8" }}>
-                      No target attempts recorded yet.
-                    </Typography>
-                  )}
-                </Stack>
+                      {copiedOutputKey === section.key ? <CheckIcon fontSize="small" /> : <ContentCopyIcon fontSize="small" />}
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+                <Box
+                  component="pre"
+                  sx={{
+                    m: 0,
+                    p: 1.5,
+                    pr: 5.5,
+                    minHeight: "100%",
+                    whiteSpace: "pre",
+                    color: "#e6edf3",
+                    fontSize: 12,
+                    lineHeight: 1.45,
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                  }}
+                >
+                  {section.content || "No output captured."}
+                </Box>
               </Box>
-            ) : null}
-          </Stack>
-      </PageBodyFrame>
+            </Box>
+          ))}
+        </DialogContent>
+      </Dialog>
     </Paper>
   );
 }

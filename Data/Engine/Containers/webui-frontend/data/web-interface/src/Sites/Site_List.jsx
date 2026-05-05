@@ -26,6 +26,7 @@ import LocationCityIcon from "@mui/icons-material/LocationCity";
 import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import AltRouteRoundedIcon from "@mui/icons-material/AltRouteRounded";
+import DevicesIcon from "@mui/icons-material/Devices";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { CreateSiteDialog, RenameSiteDialog } from "../Dialogs.jsx";
@@ -1247,6 +1248,13 @@ export default function SiteList() {
         onClick: handleOpenInstallMenu,
       },
       {
+        id: "onboard-site-devices",
+        label: "Onboard Devices",
+        icon: <DevicesIcon />,
+        tone: "primary",
+        onClick: () => navigate(APP_PATHS.jobOnboardingNew),
+      },
+      {
         id: "create-site",
         label: "Create Site",
         icon: <AddIcon />,
@@ -1258,6 +1266,7 @@ export default function SiteList() {
       canOpenInstallMenu,
       handleOpenInstallMenu,
       installActionTooltip,
+      navigate,
     ]
   );
 

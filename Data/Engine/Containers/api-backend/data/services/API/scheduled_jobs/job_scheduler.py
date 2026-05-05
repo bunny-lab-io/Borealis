@@ -227,7 +227,7 @@ def _normalize_job_kind(value: Any) -> str:
 
 def _onboarding_status_bucket(status: Any) -> str:
     normalized = str(status or "").strip().lower()
-    if normalized in {ONBOARDING_STATUS_WAITING_APPROVAL, "installed", "success"}:
+    if normalized in {ONBOARDING_STATUS_WAITING_APPROVAL, "approved", "completed", "installed", "success"}:
         return "success"
     if normalized == ONBOARDING_STATUS_RUNNING:
         return "running"
@@ -2912,6 +2912,7 @@ class JobScheduler:
         site_id: Optional[int] = None
         site_name = ""
         scope_entries: List[str] = []
+        exclusion_entries: List[str] = []
         for target in targets or []:
             if not isinstance(target, dict):
                 continue
@@ -2924,9 +2925,20 @@ class JobScheduler:
             site_name = str(target.get("site_name") or target.get("site") or site_name or "").strip()
             raw_entries = target.get("entries")
             if isinstance(raw_entries, str):
-                scope_entries.extend([line.strip() for line in raw_entries.replace(",", "\n").splitlines() if line.strip()])
+                scope_entries.extend([line.strip() for line in raw_entries.replace(",", "\n").replace(";", "\n").splitlines() if line.strip()])
             elif isinstance(raw_entries, (list, tuple)):
                 scope_entries.extend([str(value).strip() for value in raw_entries if str(value).strip()])
+            raw_exclusions = (
+                target.get("exclusions")
+                or target.get("exclude_entries")
+                or target.get("exclusion_scope")
+                or target.get("exclusionScope")
+                or []
+            )
+            if isinstance(raw_exclusions, str):
+                exclusion_entries.extend([line.strip() for line in raw_exclusions.replace(",", "\n").replace(";", "\n").splitlines() if line.strip()])
+            elif isinstance(raw_exclusions, (list, tuple)):
+                exclusion_entries.extend([str(value).strip() for value in raw_exclusions if str(value).strip()])
         if site_id is None:
             return {}, "Onboarding jobs require a site."
         if not scope_entries:
@@ -2954,6 +2966,7 @@ class JobScheduler:
             "site_id": site_id,
             "site_name": site_name,
             "entries": scope_entries,
+            "exclusions": exclusion_entries,
             "install_branch": branch,
             "ssh_port": port,
         }, None
@@ -3153,25 +3166,68 @@ class JobScheduler:
             conn.close()
 
     def _lookup_onboarding_approval(self, *, job_id: int, run_id: int, target: str) -> str:
+        context = self._lookup_onboarding_approval_context(job_id=job_id, run_id=run_id, target=target)
+        return str(context.get("approval_reference") or "").strip()
+
+    def _lookup_onboarding_approval_context(
+        self,
+        *,
+        job_id: int,
+        run_id: int,
+        target: str,
+        approval_reference: str = "",
+    ) -> Dict[str, Any]:
         conn = self._conn()
         try:
             cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT approval_reference
-                  FROM device_approvals
-                 WHERE onboarding_job_id=?
-                   AND onboarding_run_id=?
-                   AND onboarding_target=?
-              ORDER BY updated_at DESC
-                 LIMIT 1
-                """,
-                (int(job_id), int(run_id), str(target or "").strip()),
-            )
+            normalized_reference = str(approval_reference or "").strip()
+            if normalized_reference:
+                cur.execute(
+                    """
+                    SELECT id,
+                           approval_reference,
+                           status,
+                           hostname_claimed,
+                           updated_at,
+                           approved_by_user_id
+                      FROM device_approvals
+                     WHERE approval_reference=?
+                  ORDER BY updated_at DESC
+                     LIMIT 1
+                    """,
+                    (normalized_reference,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT id,
+                           approval_reference,
+                           status,
+                           hostname_claimed,
+                           updated_at,
+                           approved_by_user_id
+                      FROM device_approvals
+                     WHERE onboarding_job_id=?
+                       AND onboarding_run_id=?
+                       AND onboarding_target=?
+                  ORDER BY updated_at DESC
+                     LIMIT 1
+                    """,
+                    (int(job_id), int(run_id), str(target or "").strip()),
+                )
             row = cur.fetchone()
-            return str(row[0] or "").strip() if row else ""
+            if not row:
+                return {}
+            return {
+                "approval_id": row[0] or "",
+                "approval_reference": row[1] or "",
+                "approval_status": row[2] or "",
+                "approval_hostname": row[3] or "",
+                "approval_updated_at": row[4] or "",
+                "approved_by_user_id": row[5] or "",
+            }
         except Exception:
-            return ""
+            return {}
         finally:
             conn.close()
 
@@ -3202,21 +3258,34 @@ class JobScheduler:
         for row in rows:
             next_row = dict(row)
             status = str(next_row.get("status") or "").strip().lower()
-            if status == ONBOARDING_STATUS_WAITING_APPROVAL and not str(next_row.get("approval_reference") or "").strip():
+            if status == ONBOARDING_STATUS_WAITING_APPROVAL:
                 target = str(
                     next_row.get("target_address")
                     or next_row.get("target_hostname")
                     or next_row.get("target_input")
                     or ""
                 ).strip()
-                approval_reference = self._lookup_onboarding_approval(
+                approval_context = self._lookup_onboarding_approval_context(
                     job_id=int(next_row.get("job_id") or 0),
                     run_id=int(next_row.get("run_id") or 0),
                     target=target,
+                    approval_reference=str(next_row.get("approval_reference") or "").strip(),
                 )
+                next_row.update(approval_context)
+                approval_reference = str(approval_context.get("approval_reference") or "").strip()
                 if approval_reference:
                     next_row["approval_reference"] = approval_reference
                     self._update_onboarding_target_approval_reference(int(next_row.get("id") or 0), approval_reference)
+                approval_status = str(approval_context.get("approval_status") or "").strip().lower()
+                if approval_status == "approved":
+                    next_row["status"] = "approved"
+                    next_row["detail"] = "Device approved. Agent finalizing enrollment."
+                elif approval_status == "completed":
+                    next_row["status"] = "completed"
+                    next_row["detail"] = "Device approved and enrollment completed."
+                elif approval_status in {"denied", "expired"}:
+                    next_row["status"] = approval_status
+                    next_row["detail"] = f"Device approval {approval_status}."
             hydrated.append(next_row)
         return hydrated
 
@@ -3672,6 +3741,23 @@ class JobScheduler:
                 default_port=int(config.get("ssh_port") or DEFAULT_ONBOARDING_SSH_PORT),
                 max_targets=self._onboarding_target_cap(),
             )
+            excluded_targets, exclusion_errors = parse_onboarding_scope(
+                config.get("exclusions") or [],
+                default_port=int(config.get("ssh_port") or DEFAULT_ONBOARDING_SSH_PORT),
+                max_targets=max(self._onboarding_target_cap(), len(expanded_targets) or 1),
+            )
+            if excluded_targets:
+                excluded_keys = {
+                    f"{str(target.get('host') or '').strip().lower()}:{int(target.get('port') or DEFAULT_ONBOARDING_SSH_PORT)}"
+                    for target in excluded_targets
+                }
+                expanded_targets = [
+                    target
+                    for target in expanded_targets
+                    if f"{str(target.get('host') or '').strip().lower()}:{int(target.get('port') or DEFAULT_ONBOARDING_SSH_PORT)}" not in excluded_keys
+                ]
+            if exclusion_errors:
+                parse_errors.extend([f"exclusion_{error}" for error in exclusion_errors])
             if not expanded_targets:
                 final_status = RUN_STATUS_SKIPPED
                 final_error = "; ".join(parse_errors) if parse_errors else SKIP_REASON_NO_TARGETS

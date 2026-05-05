@@ -32,7 +32,7 @@ Supported schedule types (from the scheduler core):
 - Engine-side Ansible jobs persist structured device targets with `device_guid`, `hostname`, and site context so duplicate hostnames across sites can be targeted safely.
 - When an operator creates or edits a job, Borealis constrains targets to the operator's assigned sites before persistence.
 - Filter targets created by operators persist `allowed_site_ids` alongside the filter reference so future scheduler runs stay inside the operator's approved site scope.
-- Onboarding jobs use `kind = onboarding_scope` targets. Scope entries accept single IPv4 addresses, IPv4 ranges, CIDR blocks, and FQDNs. Borealis deduplicates expanded targets and enforces `BOREALIS_ONBOARDING_TARGET_CAP` (default `512`).
+- Onboarding jobs use `kind = onboarding_scope` targets. Scope entries accept single IPv4 addresses, IPv4 ranges, CIDR blocks, and FQDNs. Optional `exclusions` entries use the same formats and are expanded as a blacklist before SSH attempts start. Borealis deduplicates expanded targets and enforces `BOREALIS_ONBOARDING_TARGET_CAP` (default `512`).
 
 ## Execution Flow
 1) Scheduler tick loads enabled jobs.
@@ -56,11 +56,11 @@ Supported schedule types (from the scheduler core):
 
 ## Automatic Device Onboarding
 - Linux SSH onboarding is scheduled through the same job service with `job_kind = onboarding`.
-- The WebUI flow lives at `/jobs/onboarding/new` and creates jobs named like `Automatic Device Onboarding <SiteName>`.
-- Operators select one site, one stored SSH credential, discovery scope entries, install branch, SSH port, and normal schedule options.
+- The WebUI flow lives at `/jobs/onboarding/new`, is launched from the Sites page action rail, and creates jobs named like `Automatic Device Onboarding <SiteName>`.
+- Operators select one site, one stored SSH credential, discovery scope entries, exclusion scope entries, agent install branch, SSH port, and normal schedule options.
 - At run time the Engine probes TCP/SSH, authenticates with the selected credential, confirms the target is Linux, downloads `Agent.sh` from the selected branch, and runs `Agent.sh --repo-branch <branch> deploy --serverurl <engine_url> --enrollmentcode <site_code> --newEngine`.
 - Remote machine credentials stay only in existing Aegis-protected credential records. Onboarding target output is stored as sanitized snippets in `scheduled_job_onboarding_targets`.
-- Successful remote installs do not auto-approve devices. Agents submit normal enrollment requests and remain in the existing approval queue. When possible, Borealis records `onboarding_job_id`, `onboarding_run_id`, and `onboarding_target` on the approval.
+- Successful remote installs do not auto-approve devices. Agents submit normal enrollment requests and remain in the existing approval queue. When possible, Borealis records `onboarding_job_id`, `onboarding_run_id`, and `onboarding_target` on the approval. The onboarding target endpoint hydrates pending target rows with current approval status so approved or completed devices stop showing as `waiting_approval`.
 - Fan-out is bounded by `BOREALIS_ONBOARDING_CONCURRENCY` (default `8`). Install command timeout is controlled by `BOREALIS_ONBOARDING_INSTALL_TIMEOUT_SECONDS` (default `900`).
 
 ## Execution Contexts
@@ -97,7 +97,7 @@ Supported schedule types (from the scheduler core):
 - `GET /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - run history.
 - `GET /api/scheduled_jobs/<int:job_id>/devices` (Token Authenticated) - device results.
 - `DELETE /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - clear run history.
-- `GET /api/onboarding/jobs/<int:job_id>/targets` (Token Authenticated) - onboarding target attempts for an occurrence.
+- `GET /api/onboarding/jobs/<int:job_id>/targets` (Token Authenticated) - onboarding target attempts for an occurrence, including sanitized output snippets and approval context when available.
 
 ## Related Documentation
 - [Assemblies and Quick Jobs](assemblies.md)
@@ -172,7 +172,8 @@ Supported schedule types (from the scheduler core):
 - WebUI deep links:
 - Create route: `/jobs/new`
 - Edit route: `/jobs/<job_id>`
-- Tab query keys: `job_name`, `assemblies`, `targets`, `schedule`, `execution_context`, `job_history` (edit mode only).
+- Scheduled automation tab query keys: `job_name`, `assemblies`, `targets`, `schedule`, `execution_context`, `job_history` (edit mode only).
+- Automatic onboarding tab query keys: `job_name`, `scope`, `ssh_context`, `schedule`, `target_status` (edit mode only).
 - Route registration and URL preservation are implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/paths.js`; component-level tab URL sync is implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/Create_Job.jsx`.
 
 ### Debug checklist
