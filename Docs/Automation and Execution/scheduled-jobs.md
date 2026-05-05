@@ -57,12 +57,12 @@ Supported schedule types (from the scheduler core):
 ## Automatic Device Onboarding
 - Linux SSH onboarding is scheduled through the same job service with `job_kind = onboarding`.
 - The WebUI flow lives at `/jobs/onboarding/new`, is launched from the Sites page action rail, and creates jobs named like `Automatic Device Onboarding <SiteName>`.
-- Operators select one site, one stored SSH credential, discovery scope entries, exclusion scope entries, agent install branch, SSH port, and normal schedule options.
+- Operators select one site, one stored SSH credential, discovery scope entries, exclusion scope entries, agent install branch, SSH port, per-job device onboarding concurrency, and normal schedule options.
 - At run time the Engine probes TCP/SSH, authenticates with the selected credential, confirms the target is Linux, downloads `Agent.sh` from the selected branch, and runs `Agent.sh --repo-branch <branch> deploy --serverurl <engine_url> --enrollmentcode <site_code> --newEngine`.
 - Remote machine credentials stay only in existing Aegis-protected credential records. Onboarding target output is stored as sanitized snippets in `scheduled_job_onboarding_targets`.
 - Successful remote installs do not auto-approve devices. Agents submit normal enrollment requests and remain in the existing approval queue. When possible, Borealis records `onboarding_job_id`, `onboarding_run_id`, and `onboarding_target` on the approval. The onboarding target endpoint hydrates pending target rows with current approval status so approved or completed devices stop showing as `waiting_approval`.
 - Re-deploying an onboarding job saves the current job definition, deletes prior run history for that job, creates a fresh immediate onboarding occurrence, and repopulates target status from the new run.
-- Fan-out is bounded by `BOREALIS_ONBOARDING_CONCURRENCY` (default `8`). Install command timeout is controlled by `BOREALIS_ONBOARDING_INSTALL_TIMEOUT_SECONDS` (default `900`).
+- Fan-out is bounded by each job's `onboarding_concurrency` component field (default `5`). Jobs without that field fall back to `BOREALIS_ONBOARDING_CONCURRENCY` (default `5`). Install command timeout is controlled by `BOREALIS_ONBOARDING_INSTALL_TIMEOUT_SECONDS` (default `900`).
 
 ## Execution Contexts
 - `system` - runs on the agent as SYSTEM.
@@ -175,7 +175,7 @@ Supported schedule types (from the scheduler core):
 - Create route: `/jobs/new`
 - Edit route: `/jobs/<job_id>`
 - Scheduled automation tab query keys: `job_name`, `assemblies`, `targets`, `schedule`, `execution_context`, `job_history` (edit mode only).
-- Automatic onboarding tab query keys: `job_name`, `scope`, `ssh_context`, `schedule`, `target_status` (edit mode only).
+- Automatic onboarding tab query keys: `job_name`, `scope`, `connection_method`, `schedule`, `discovered_devices` (edit mode only). Legacy `ssh_context` and `target_status` links still map to the current tabs.
 - Route registration and URL preservation are implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/paths.js`; component-level tab URL sync is implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/Create_Job.jsx`.
 
 ### Debug checklist

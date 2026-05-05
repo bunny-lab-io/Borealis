@@ -56,6 +56,7 @@ const PAGE_TITLE = "Automatic Device Onboarding";
 const PAGE_SUBTITLE = "Enroll remote devices automatically as long as they are reachable by the Borealis Engine using stored machine or domain credentials.";
 const DEFAULT_BRANCH = "main";
 const DEFAULT_SSH_PORT = 22;
+const DEFAULT_ONBOARDING_CONCURRENCY = 5;
 const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
 const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
 const ONBOARDING_TAB_URL_BY_KEY = Object.freeze({
@@ -504,6 +505,7 @@ export default function CreateOnboardingJob() {
     credentialId: "",
     branch: DEFAULT_BRANCH,
     sshPort: DEFAULT_SSH_PORT,
+    onboardingConcurrency: DEFAULT_ONBOARDING_CONCURRENCY,
     scheduleType: "immediately",
     start: "",
     enabled: true,
@@ -682,6 +684,12 @@ export default function CreateOnboardingJob() {
           credentialId: job.credential_id ? String(job.credential_id) : "",
           branch: firstComponent.install_branch || firstComponent.repo_branch || firstComponent.branch || DEFAULT_BRANCH,
           sshPort: Number(firstComponent.ssh_port || firstComponent.port || DEFAULT_SSH_PORT),
+          onboardingConcurrency: Number(
+            firstComponent.onboarding_concurrency ||
+              firstComponent.device_onboarding_concurrency ||
+              firstComponent.concurrency ||
+              DEFAULT_ONBOARDING_CONCURRENCY
+          ),
           scheduleType: job.schedule_type || "immediately",
           start: datetimeLocalValue(job.start_ts),
           enabled: Boolean(job.enabled),
@@ -993,6 +1001,10 @@ export default function CreateOnboardingJob() {
       if (!form.credentialId) throw new Error("Select SSH credential.");
       const port = Number(form.sshPort || DEFAULT_SSH_PORT);
       if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("SSH port must be 1-65535.");
+      const onboardingConcurrency = Number(form.onboardingConcurrency || DEFAULT_ONBOARDING_CONCURRENCY);
+      if (!Number.isInteger(onboardingConcurrency) || onboardingConcurrency < 1 || onboardingConcurrency > 100) {
+        throw new Error("Device onboarding concurrency must be 1-100.");
+      }
       const siteName = selectedSite?.name || "";
       const payload = {
         job_kind: "onboarding",
@@ -1003,6 +1015,7 @@ export default function CreateOnboardingJob() {
             name: "Linux SSH Device Onboarding",
             install_branch: form.branch || DEFAULT_BRANCH,
             ssh_port: port,
+            onboarding_concurrency: onboardingConcurrency,
           },
         ],
         targets: [
@@ -1249,6 +1262,13 @@ export default function CreateOnboardingJob() {
                       onChange={(event) => setField("sshPort", event.target.value)}
                       sx={{ width: { xs: "100%", md: 180 }, ...FIELD_SX }}
                     />
+                    <TextField
+                      label="Device Onboarding Concurrency"
+                      type="number"
+                      value={form.onboardingConcurrency}
+                      onChange={(event) => setField("onboardingConcurrency", event.target.value)}
+                      sx={{ width: { xs: "100%", md: 300 }, ...FIELD_SX }}
+                    />
                   </Stack>
                   <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ xs: "stretch", md: "center" }}>
                     <FormControl fullWidth error={Boolean(branchLoadError)} sx={FIELD_SX}>
@@ -1384,7 +1404,7 @@ export default function CreateOnboardingJob() {
                       headerHeight={44}
                       rowHeight={50}
                       pagination
-                      paginationPageSize={20}
+                      paginationPageSize={100}
                       paginationPageSizeSelector={[20, 50, 100]}
                       overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No target attempts recorded yet.</span>"
                       getRowId={(params) => String(params.data?.id || params.rowIndex)}

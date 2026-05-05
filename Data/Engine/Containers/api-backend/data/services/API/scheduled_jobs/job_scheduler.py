@@ -2961,6 +2961,17 @@ class JobScheduler:
                         break
                 except Exception:
                     pass
+        concurrency = self._onboarding_concurrency()
+        for key in ("onboarding_concurrency", "device_onboarding_concurrency", "concurrency", "max_concurrency"):
+            if component.get(key) not in (None, ""):
+                try:
+                    parsed = int(component.get(key))
+                    if 1 <= parsed <= 100:
+                        concurrency = parsed
+                        break
+                except Exception:
+                    return {}, "Device onboarding concurrency must be 1-100."
+                return {}, "Device onboarding concurrency must be 1-100."
         return {
             "component": component,
             "site_id": site_id,
@@ -2969,6 +2980,7 @@ class JobScheduler:
             "exclusions": exclusion_entries,
             "install_branch": branch,
             "ssh_port": port,
+            "onboarding_concurrency": concurrency,
         }, None
 
     def _record_onboarding_occurrence_snapshot(
@@ -3828,7 +3840,8 @@ class JobScheduler:
                 existing_rows = self._load_onboarding_target_rows(job_id, scheduled_ts)
 
             statuses: List[str] = []
-            max_workers = max(1, min(self._onboarding_concurrency(), len(existing_rows)))
+            configured_concurrency = int(config.get("onboarding_concurrency") or self._onboarding_concurrency())
+            max_workers = max(1, min(configured_concurrency, len(existing_rows)))
             import concurrent.futures
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:

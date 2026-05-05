@@ -561,7 +561,7 @@ finally:
 - Notes:
 - `credential_id` is logical linkage to `credentials.id`; no FK constraint in schema.
 - `job_kind = automation` is normal scheduled automation. `job_kind = onboarding` is automatic local-network SSH device enrollment.
-- Onboarding jobs store discovery entries and exclusion entries inside the JSON `targets_json` `onboarding_scope` record; no remote machine credential material is copied into that JSON.
+- Onboarding jobs store discovery entries and exclusion entries inside the JSON `targets_json` `onboarding_scope` record. Agent branch, SSH port, and per-job onboarding concurrency live in the JSON `components_json` `device_onboarding` record. No remote machine credential material is copied into either JSON payload.
 
 #### `scheduled_job_runs`
 - Status: Active.

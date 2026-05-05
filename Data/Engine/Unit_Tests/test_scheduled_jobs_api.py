@@ -201,6 +201,7 @@ def test_scheduled_jobs_api_creates_onboarding_job(engine_harness: EngineTestHar
                     "kind": "device_onboarding",
                     "install_branch": "main",
                     "ssh_port": 22,
+                    "onboarding_concurrency": 5,
                 }
             ],
             "credential_id": 77,
@@ -215,8 +216,59 @@ def test_scheduled_jobs_api_creates_onboarding_job(engine_harness: EngineTestHar
     assert job["job_kind"] == "onboarding"
     assert job["execution_context"] == "onboarding_linux_ssh"
     assert job["components"][0]["kind"] == "device_onboarding"
+    assert job["components"][0]["onboarding_concurrency"] == 5
     assert job["targets"][0]["kind"] == "onboarding_scope"
     assert job["targets"][0]["exclusions"] == ["192.168.10.99"]
+
+
+def test_onboarding_scope_config_parses_concurrency(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    config, error = scheduler._onboarding_scope_config(
+        components=[
+            {
+                "kind": "device_onboarding",
+                "install_branch": "main",
+                "ssh_port": 22,
+                "onboarding_concurrency": "5",
+            }
+        ],
+        targets=[
+            {
+                "kind": "onboarding_scope",
+                "site_id": 1,
+                "entries": ["192.168.10.5"],
+            }
+        ],
+    )
+
+    assert error is None
+    assert config["onboarding_concurrency"] == 5
+
+
+def test_onboarding_scope_config_rejects_invalid_concurrency(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    config, error = scheduler._onboarding_scope_config(
+        components=[
+            {
+                "kind": "device_onboarding",
+                "install_branch": "main",
+                "ssh_port": 22,
+                "onboarding_concurrency": 0,
+            }
+        ],
+        targets=[
+            {
+                "kind": "onboarding_scope",
+                "site_id": 1,
+                "entries": ["192.168.10.5"],
+            }
+        ],
+    )
+
+    assert config == {}
+    assert error == "Device onboarding concurrency must be 1-100."
 
 
 def test_onboarding_target_status_hydrates_approved_context(engine_harness: EngineTestHarness) -> None:

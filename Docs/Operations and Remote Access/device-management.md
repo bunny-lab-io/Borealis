@@ -87,7 +87,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - The Engine reaches targets directly over the local network through SSH; no WireGuard tunnel or existing Borealis agent is required.
 - Borealis uses one stored SSH credential per onboarding job and does not copy credentials into the job definition.
 - The remote installer uses the selected agent install branch of `Agent.sh`, the Engine public URL, and the selected site's enrollment code. Device approval remains manual, but pending approvals can be approved directly from the onboarding job target status table when no hostname conflict prompt is required.
-- Re-deploy clears prior onboarding run history for that job and starts a new immediate local-network SSH deployment.
+- Re-deploy clears prior onboarding run history for that job and starts a new immediate local-network SSH deployment. Device onboarding concurrency defaults to `5` so subnet scans do not flood the Engine, and operators can tune it per onboarding job.
 
 ## Device Purge
 - The Device List `Delete` action is now an admin-only purge flow backed by `POST /api/devices/<guid>/purge`.
