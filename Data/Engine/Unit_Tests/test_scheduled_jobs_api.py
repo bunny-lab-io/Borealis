@@ -215,6 +215,38 @@ def test_scheduled_jobs_api_creates_onboarding_job(engine_harness: EngineTestHar
     assert job["targets"][0]["kind"] == "onboarding_scope"
 
 
+def test_onboarding_remote_command_marks_agent_noninteractive(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    command = scheduler._remote_onboarding_command(
+        branch="feature/test",
+        server_url="https://engine.example",
+        enrollment_code="secret-code",
+        job_id=11,
+        run_id=38,
+        target="192.168.3.8",
+    )
+
+    assert "BOREALIS_AGENT_NONINTERACTIVE=1" in command
+    assert "BOREALIS_AGENT_NO_TTY=1" in command
+    assert "BOREALIS_ONBOARDING_TARGET=192.168.3.8" in command
+
+
+def test_onboarding_failure_hint_prefers_actionable_output() -> None:
+    hint = scheduled_job_module._onboarding_failure_hint(
+        stdout=(
+            "Warning: Permanently added '192.168.3.8' (ED25519) to the list of known hosts.\n"
+            "[2026-05-05T03:01:04] Launching /opt/Borealis/Agent.sh deploy --serverurl secret-url.\n"
+            "/tmp/borealis-agent.64Rvmd: line 77: /dev/tty: No such device or address\n"
+        ),
+        stderr="nicole@192.168.3.8's password:",
+        redactions=["secret-url"],
+    )
+
+    assert "/dev/tty" in hint
+    assert "secret-url" not in hint
+
+
 def test_preflight_remote_port_accepts_valid_ssh_banner(
     engine_harness: EngineTestHarness,
     monkeypatch,

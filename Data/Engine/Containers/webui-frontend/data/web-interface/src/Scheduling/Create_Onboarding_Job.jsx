@@ -66,6 +66,15 @@ function isoFromDatetimeLocal(value) {
   return date.toISOString();
 }
 
+function targetOutputSnippet(target) {
+  const stderr = String(target?.stderr_snippet || "").trim();
+  const stdout = String(target?.stdout_snippet || "").trim();
+  return [
+    stderr ? `stderr\n${stderr}` : "",
+    stdout ? `stdout\n${stdout}` : "",
+  ].filter(Boolean).join("\n\n");
+}
+
 export default function CreateOnboardingJob() {
   const navigate = useNavigate();
   const params = useParams();
@@ -418,33 +427,64 @@ export default function CreateOnboardingJob() {
                     <Box>Detail</Box>
                     <Box>Approval</Box>
                   </Box>
-                  {targetRows.length ? targetRows.map((target) => (
+                  {targetRows.length ? targetRows.map((target) => {
+                    const outputSnippet = targetOutputSnippet(target);
+                    return (
                     <Box
                       key={target.id || `${target.target_address}:${target.ssh_port}`}
                       sx={{
-                        display: "grid",
-                        gridTemplateColumns: { xs: "1fr", md: "1.2fr 0.8fr 1.5fr 1fr" },
-                        gap: 1,
-                        alignItems: "center",
                         py: 1,
                         borderTop: "1px solid rgba(148,163,184,0.18)",
                       }}
                     >
-                      <Typography variant="body2" sx={{ color: "#e2e8f0" }}>
-                        {target.target_hostname || target.target_address || target.target_input || "Target"}
-                        {target.ssh_port ? `:${target.ssh_port}` : ""}
-                      </Typography>
-                      <Typography variant="body2" sx={{ color: "#7dd3fc", fontWeight: 700 }}>
-                        {target.status || "pending"}
-                      </Typography>
-                      <Typography variant="body2" sx={{ color: "#cbd5e1" }}>
-                        {target.detail || "—"}
-                      </Typography>
-                      <Typography variant="body2" sx={{ color: "#cbd5e1" }}>
-                        {target.approval_reference || "—"}
-                      </Typography>
+                      <Box
+                        sx={{
+                          display: "grid",
+                          gridTemplateColumns: { xs: "1fr", md: "1.2fr 0.8fr 1.5fr 1fr" },
+                          gap: 1,
+                          alignItems: "center",
+                        }}
+                      >
+                        <Typography variant="body2" sx={{ color: "#e2e8f0" }}>
+                          {target.target_hostname || target.target_address || target.target_input || "Target"}
+                          {target.ssh_port ? `:${target.ssh_port}` : ""}
+                        </Typography>
+                        <Typography variant="body2" sx={{ color: "#7dd3fc", fontWeight: 700 }}>
+                          {target.status || "pending"}
+                        </Typography>
+                        <Typography variant="body2" sx={{ color: "#cbd5e1" }}>
+                          {target.detail || "—"}
+                        </Typography>
+                        <Typography variant="body2" sx={{ color: "#cbd5e1" }}>
+                          {target.approval_reference || "—"}
+                        </Typography>
+                      </Box>
+                      {outputSnippet ? (
+                        <Box
+                          component="pre"
+                          sx={{
+                            mt: 1,
+                            mb: 0,
+                            maxHeight: 220,
+                            overflow: "auto",
+                            whiteSpace: "pre-wrap",
+                            wordBreak: "break-word",
+                            borderRadius: 1,
+                            border: "1px solid rgba(148,163,184,0.18)",
+                            background: "rgba(2,6,23,0.58)",
+                            color: "#cbd5e1",
+                            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                            fontSize: 12,
+                            lineHeight: 1.5,
+                            p: 1.25,
+                          }}
+                        >
+                          {outputSnippet}
+                        </Box>
+                      ) : null}
                     </Box>
-                  )) : (
+                    );
+                  }) : (
                     <Typography variant="body2" sx={{ color: "#94a3b8" }}>
                       No target attempts recorded yet.
                     </Typography>

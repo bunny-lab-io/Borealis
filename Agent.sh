@@ -73,8 +73,14 @@ ensure_privilege_available() {
 }
 
 exec_with_optional_tty() {
-  if [[ ! -t 0 && -r /dev/tty ]]; then
-    exec "$@" < /dev/tty
+  if [[ "${BOREALIS_AGENT_NONINTERACTIVE:-0}" == "1" || "${BOREALIS_AGENT_NO_TTY:-0}" == "1" ]]; then
+    exec "$@"
+  fi
+  if [[ ! -t 0 ]]; then
+    local tty_fd
+    if { exec {tty_fd}< /dev/tty; } 2>/dev/null; then
+      exec "$@" <&"${tty_fd}"
+    fi
   fi
   exec "$@"
 }

@@ -120,6 +120,41 @@ ONBOARDING_STATUS_FAILED = "failed"
 ONBOARDING_STATUS_UNREACHABLE = "ssh_unreachable"
 
 
+def _onboarding_failure_hint(*, stdout: Any = "", stderr: Any = "", redactions: Optional[Sequence[Any]] = None) -> str:
+    clean = sanitize_output(
+        "\n".join(str(part or "") for part in (stderr, stdout) if str(part or "")),
+        redactions=redactions,
+        limit=5000,
+    )
+    if not clean:
+        return ""
+    lines = [line.strip() for line in clean.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    ignore_prefixes = (
+        "warning: permanently added",
+        "from https://github.com/",
+        "* branch ",
+        "* [new branch]",
+        "head is now at ",
+        "switched to ",
+    )
+    candidates = [line for line in lines if not line.lower().startswith(ignore_prefixes)]
+    if not candidates:
+        candidates = lines
+    important = [
+        line
+        for line in candidates
+        if "ERROR:" in line
+        or "/dev/tty" in line
+        or "failed" in line.lower()
+        or "required" in line.lower()
+        or "refusing" in line.lower()
+        or "permission denied" in line.lower()
+    ]
+    return sanitize_output((important or candidates)[-1], redactions=redactions, limit=240)
+
+
 def _now_ts() -> int:
     return int(time.time())
 
@@ -3155,6 +3190,8 @@ class JobScheduler:
             f"BOREALIS_ONBOARDING_JOB_ID={shlex.quote(str(int(job_id)))}",
             f"BOREALIS_ONBOARDING_RUN_ID={shlex.quote(str(int(run_id)))}",
             f"BOREALIS_ONBOARDING_TARGET={shlex.quote(str(target or '').strip())}",
+            "BOREALIS_AGENT_NONINTERACTIVE=1",
+            "BOREALIS_AGENT_NO_TTY=1",
         ]
         args = [
             "--repo-branch",
@@ -3473,6 +3510,9 @@ class JobScheduler:
                 detail = "Target user needs root or sudo for agent deployment."
             elif exit_code == 45:
                 detail = "sudo password required or rejected."
+            output_hint = _onboarding_failure_hint(stdout=stdout, stderr=stderr, redactions=redactions)
+            if output_hint:
+                detail = f"{detail} {output_hint}"
             self._update_onboarding_target_row(
                 row_id,
                 status=ONBOARDING_STATUS_FAILED,
