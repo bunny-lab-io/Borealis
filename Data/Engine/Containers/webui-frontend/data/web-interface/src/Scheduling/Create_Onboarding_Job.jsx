@@ -26,9 +26,18 @@ import {
   Check as CheckIcon,
   ContentCopy as ContentCopyIcon,
   Devices as DevicesIcon,
+  DevicesRounded as DevicesRoundedIcon,
+  DriveFileRenameOutline as DriveFileRenameOutlineIcon,
   PlayArrow as PlayArrowIcon,
   Refresh as RefreshIcon,
+  ScheduleRounded as ScheduleRoundedIcon,
+  SettingsApplicationsRounded as SettingsApplicationsRoundedIcon,
+  TravelExplore as TravelExploreIcon,
 } from "@mui/icons-material";
+import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
+import { DateTimePicker } from "@mui/x-date-pickers/DateTimePicker";
+import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
+import dayjs from "dayjs";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import {
@@ -44,7 +53,7 @@ import { APP_PATHS } from "../app/routes/paths.js";
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const PAGE_TITLE = "Automatic Device Onboarding";
-const PAGE_SUBTITLE = "Enroll Linux devices over local-network SSH with stored machine credentials.";
+const PAGE_SUBTITLE = "Enroll remote devices automatically as long as they are reachable by the Borealis Engine using stored machine or domain credentials.";
 const DEFAULT_BRANCH = "main";
 const DEFAULT_SSH_PORT = 22;
 const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
@@ -52,17 +61,19 @@ const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_
 const ONBOARDING_TAB_URL_BY_KEY = Object.freeze({
   name: "job_name",
   scope: "scope",
-  context: "ssh_context",
+  context: "connection_method",
   schedule: "schedule",
-  targets: "target_status",
+  targets: "discovered_devices",
 });
 const ONBOARDING_TAB_KEY_BY_URL = Object.freeze({
   job_name: "name",
   name: "name",
   scope: "scope",
+  connection_method: "context",
   ssh_context: "context",
   context: "context",
   schedule: "schedule",
+  discovered_devices: "targets",
   target_status: "targets",
   targets: "targets",
 });
@@ -121,14 +132,14 @@ const GRID_PANEL_SX = {
   "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
   "--ag-border-color": "rgba(125,183,255,0.18)",
   "--ag-row-border-color": "rgba(125,183,255,0.14)",
-  "--ag-border-radius": "0px",
-  borderRadius: 0,
+  "--ag-border-radius": "8px",
+  borderRadius: 1,
   border: `1px solid ${MAGIC_UI.panelBorder}`,
   background: "transparent",
   boxShadow: "none",
   overflow: "hidden",
   "& .ag-root-wrapper": {
-    borderRadius: 0,
+    borderRadius: "8px",
   },
   "& .ag-root, & .ag-header, & .ag-center-cols-container": {
     fontFamily: gridFontFamily,
@@ -359,6 +370,21 @@ function isoFromDatetimeLocal(value) {
   return date.toISOString();
 }
 
+function defaultStartDateTime() {
+  return dayjs().add(5, "minute").second(0);
+}
+
+function dateTimePickerValue(value) {
+  const text = String(value || "").trim();
+  const parsed = text ? dayjs(text).second(0) : defaultStartDateTime();
+  return parsed?.isValid?.() ? parsed : defaultStartDateTime();
+}
+
+function datetimeLocalValueFromDayjs(value) {
+  const parsed = value?.second ? value.second(0) : dayjs(value).second(0);
+  return parsed?.isValid?.() ? parsed.format("YYYY-MM-DDTHH:mm") : "";
+}
+
 function targetOutputContent(target, mode) {
   return String(mode === "stderr" ? target?.stderr_snippet || "" : target?.stdout_snippet || "").trim();
 }
@@ -512,13 +538,13 @@ export default function CreateOnboardingJob() {
 
   const tabDefs = useMemo(() => {
     const tabs = [
-      { key: "name", label: "Job Name" },
-      { key: "scope", label: "Scope" },
-      { key: "context", label: "SSH Context" },
-      { key: "schedule", label: "Schedule" },
+      { key: "name", label: "Job Name", icon: DriveFileRenameOutlineIcon },
+      { key: "scope", label: "Scope", icon: TravelExploreIcon },
+      { key: "context", label: "Connection Method", icon: SettingsApplicationsRoundedIcon },
+      { key: "schedule", label: "Schedule", icon: ScheduleRoundedIcon },
     ];
     if (editing) {
-      tabs.push({ key: "targets", label: "Target Status" });
+      tabs.push({ key: "targets", label: "Discovered Devices", icon: DevicesRoundedIcon });
     }
     return tabs;
   }, [editing]);
@@ -546,6 +572,18 @@ export default function CreateOnboardingJob() {
 
   const setField = useCallback((key, value) => {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }, []);
+
+  const setScheduleType = useCallback((nextScheduleType) => {
+    const normalizedType = String(nextScheduleType || "immediately").trim() || "immediately";
+    setForm((prev) => ({
+      ...prev,
+      scheduleType: normalizedType,
+      start:
+        normalizedType === "immediately"
+          ? prev.start
+          : prev.start || datetimeLocalValueFromDayjs(defaultStartDateTime()),
+    }));
   }, []);
 
   const fetchInstallBranches = useCallback(async () => {
@@ -1077,7 +1115,7 @@ export default function CreateOnboardingJob() {
 
   return (
     <Box sx={PAGE_SX}>
-      <Stack spacing={2}>
+      <Stack spacing={2} sx={{ flexGrow: 1, minHeight: 0 }}>
           {error ? <Alert severity="error">{error}</Alert> : null}
           {notice ? <Alert severity="success">{notice}</Alert> : null}
           {saving ? (
@@ -1101,12 +1139,21 @@ export default function CreateOnboardingJob() {
               }}
               sx={TABS_SX}
             >
-              {tabDefs.map((tabDef) => (
-                <Tab key={tabDef.key} value={tabDef.key} label={tabDef.label} />
-              ))}
+              {tabDefs.map((tabDef) => {
+                const TabIcon = tabDef.icon || null;
+                return (
+                  <Tab
+                    key={tabDef.key}
+                    value={tabDef.key}
+                    label={tabDef.label}
+                    icon={TabIcon ? <TabIcon sx={{ fontSize: 18 }} /> : undefined}
+                    iconPosition="start"
+                  />
+                );
+              })}
             </Tabs>
 
-            <Box sx={{ mt: 2, minHeight: 360 }}>
+            <Box sx={{ mt: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
               {activeTabKey === "name" ? (
                 <Box sx={TAB_SECTION_SX}>
                   <SectionHeader title="Job Name" />
@@ -1172,7 +1219,7 @@ export default function CreateOnboardingJob() {
 
               {activeTabKey === "context" ? (
                 <Box sx={TAB_SECTION_SX}>
-                  <SectionHeader title="SSH Context" detail="Choose stored machine credentials and target agent branch for Linux SSH enrollment." />
+                  <SectionHeader title="Connection Method" detail="Choose stored machine credentials and target agent branch for Linux SSH enrollment." />
                   <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
                     <FormControl fullWidth sx={FIELD_SX}>
                       <InputLabel id="onboarding-credential-label">SSH Credential</InputLabel>
@@ -1250,32 +1297,44 @@ export default function CreateOnboardingJob() {
                 <Box sx={TAB_SECTION_SX}>
                   <SectionHeader title="Schedule" detail="Immediate jobs start now. Scheduled jobs use existing recurrence behavior." />
                   <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-                    <FormControl fullWidth sx={FIELD_SX}>
-                      <InputLabel id="onboarding-schedule-label">Schedule</InputLabel>
-                      <Select
-                        labelId="onboarding-schedule-label"
-                        label="Schedule"
-                        value={form.scheduleType}
-                        onChange={(event) => setField("scheduleType", event.target.value)}
-                        MenuProps={SELECT_MENU_PROPS}
-                      >
-                        <MenuItem value="immediately">Immediately</MenuItem>
-                        <MenuItem value="once">Once</MenuItem>
-                        <MenuItem value="daily">Daily</MenuItem>
-                        <MenuItem value="weekly">Weekly</MenuItem>
-                        <MenuItem value="monthly">Monthly</MenuItem>
-                      </Select>
-                    </FormControl>
                     <TextField
-                      label="Start"
-                      type="datetime-local"
-                      value={form.start}
-                      onChange={(event) => setField("start", event.target.value)}
-                      disabled={form.scheduleType === "immediately"}
-                      fullWidth
-                      InputLabelProps={{ shrink: true }}
-                      sx={FIELD_SX}
-                    />
+                      select
+                      size="small"
+                      label="Recurrence"
+                      value={form.scheduleType}
+                      onChange={(event) => setScheduleType(event.target.value)}
+                      sx={{ minWidth: 240, flex: "1 1 260px", ...FIELD_SX }}
+                      SelectProps={{ MenuProps: SELECT_MENU_PROPS }}
+                    >
+                      <MenuItem value="immediately">Immediately</MenuItem>
+                      <MenuItem value="once">At selected date and time</MenuItem>
+                      <MenuItem value="every_5_minutes">Every 5 Minutes</MenuItem>
+                      <MenuItem value="every_10_minutes">Every 10 Minutes</MenuItem>
+                      <MenuItem value="every_15_minutes">Every 15 Minutes</MenuItem>
+                      <MenuItem value="every_30_minutes">Every 30 Minutes</MenuItem>
+                      <MenuItem value="every_hour">Every Hour</MenuItem>
+                      <MenuItem value="daily">Daily</MenuItem>
+                      <MenuItem value="weekly">Weekly</MenuItem>
+                      <MenuItem value="monthly">Monthly</MenuItem>
+                      <MenuItem value="yearly">Yearly</MenuItem>
+                    </TextField>
+                    {form.scheduleType !== "immediately" ? (
+                      <LocalizationProvider dateAdapter={AdapterDayjs}>
+                        <DateTimePicker
+                          label="Start"
+                          value={dateTimePickerValue(form.start)}
+                          onChange={(value) => setField("start", datetimeLocalValueFromDayjs(value))}
+                          views={["year", "month", "day", "hours", "minutes"]}
+                          format="YYYY-MM-DD hh:mm A"
+                          slotProps={{
+                            textField: {
+                              size: "small",
+                              sx: { minWidth: 260, flex: "1 1 280px", ...FIELD_SX },
+                            },
+                          }}
+                        />
+                      </LocalizationProvider>
+                    ) : null}
                   </Stack>
                   <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
                     Remote installer creates normal pending device approvals after SSH deploy succeeds.
@@ -1284,11 +1343,7 @@ export default function CreateOnboardingJob() {
               ) : null}
 
               {activeTabKey === "targets" ? (
-                <Box sx={{ ...TAB_SECTION_SX, minHeight: 0 }}>
-                  <SectionHeader
-                    title="Target Status"
-                    detail="Use AG Grid filters to inspect current target attempts. StdOut and StdErr open in a separate viewer."
-                  />
+                <Box sx={{ ...TAB_SECTION_SX, flexGrow: 1, minHeight: 0, pb: 0 }}>
                   <Box
                     sx={{
                       display: "flex",
@@ -1310,14 +1365,15 @@ export default function CreateOnboardingJob() {
                       />
                     </Box>
                     <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
-                      Showing {visibleTargetGridRows.length.toLocaleString()} of {targetGridRows.length.toLocaleString()} targets
+                      Showing {visibleTargetGridRows.length.toLocaleString()} of {targetGridRows.length.toLocaleString()} devices
                     </Typography>
                   </Box>
                   <Box
                     className={gridThemeClass}
                     sx={{
                       ...GRID_PANEL_SX,
-                      height: { xs: 460, md: 620 },
+                      flexGrow: 1,
+                      minHeight: { xs: 460, md: 0 },
                     }}
                   >
                     <AgGridReact
