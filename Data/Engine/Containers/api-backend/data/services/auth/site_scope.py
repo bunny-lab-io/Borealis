@@ -260,6 +260,16 @@ class UserSiteAccessManager:
         for target in normalized_targets:
             if isinstance(target, dict):
                 kind = _normalize_text(target.get("kind") or target.get("type")).lower()
+                if kind == "onboarding_scope":
+                    site_id = _normalize_int(target.get("site_id") or target.get("siteId"))
+                    if site_id is None or site_id not in scope.site_ids:
+                        return None, "Onboarding scope is outside your assigned sites."
+                    scoped_target = dict(target)
+                    scoped_target["kind"] = "onboarding_scope"
+                    scoped_target["site_id"] = site_id
+                    scoped_target["allowed_site_ids"] = [site_id]
+                    scoped_targets.append(scoped_target)
+                    continue
                 if kind == "filter" or target.get("filter_id") is not None:
                     scoped_target = dict(target)
                     scoped_target["allowed_site_ids"] = sorted(scope.site_ids)
@@ -368,6 +378,9 @@ class UserSiteAccessManager:
     def _target_site_scope(self, conn: sqlite3.Connection, target: Any) -> Optional[Set[int]]:
         if isinstance(target, dict):
             kind = _normalize_text(target.get("kind") or target.get("type")).lower()
+            if kind == "onboarding_scope":
+                site_id = _normalize_int(target.get("site_id") or target.get("siteId"))
+                return {site_id} if site_id is not None else set()
             if kind == "filter" or target.get("filter_id") is not None:
                 allowed_site_ids = _normalize_int_set(
                     target.get("allowed_site_ids") or target.get("scope_site_ids")

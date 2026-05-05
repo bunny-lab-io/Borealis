@@ -904,6 +904,7 @@ def _ensure_scheduled_jobs(conn: sqlite3.Connection, *, logger: Optional[logging
                 execution_context TEXT NOT NULL,
                 credential_id INTEGER,
                 use_service_account INTEGER NOT NULL DEFAULT 1,
+                job_kind TEXT NOT NULL DEFAULT 'automation',
                 enabled INTEGER DEFAULT 1,
                 created_at INTEGER,
                 updated_at INTEGER
@@ -920,6 +921,8 @@ def _ensure_scheduled_jobs(conn: sqlite3.Connection, *, logger: Optional[logging
             cur.execute(
                 "ALTER TABLE scheduled_jobs ADD COLUMN use_service_account INTEGER NOT NULL DEFAULT 1"
             )
+        if "job_kind" not in existing:
+            cur.execute("ALTER TABLE scheduled_jobs ADD COLUMN job_kind TEXT NOT NULL DEFAULT 'automation'")
     except Exception as exc:
         if logger:
             logger.error("Failed to ensure scheduled_jobs table: %s", exc, exc_info=True)
@@ -999,6 +1002,49 @@ def _ensure_scheduled_job_support_tables(conn: sqlite3.Connection, *, logger: Op
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_run_activity_activity
                 ON scheduled_job_run_activity(activity_id)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scheduled_job_onboarding_targets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                job_id INTEGER NOT NULL,
+                scheduled_ts INTEGER NOT NULL,
+                site_id INTEGER,
+                target_input TEXT NOT NULL,
+                target_address TEXT,
+                target_hostname TEXT,
+                ssh_port INTEGER NOT NULL DEFAULT 22,
+                status TEXT NOT NULL,
+                detail TEXT,
+                stdout_snippet TEXT,
+                stderr_snippet TEXT,
+                approval_reference TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                finished_at INTEGER,
+                FOREIGN KEY(run_id) REFERENCES scheduled_job_runs(id) ON DELETE CASCADE,
+                FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_onboarding_targets_run
+                ON scheduled_job_onboarding_targets(run_id)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_onboarding_targets_job
+                ON scheduled_job_onboarding_targets(job_id, scheduled_ts)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_onboarding_targets_status
+                ON scheduled_job_onboarding_targets(status)
             """
         )
         cur.execute(

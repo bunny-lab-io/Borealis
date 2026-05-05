@@ -25,6 +25,7 @@ def normalize_targets_for_save(entries: Sequence[Any]) -> List[Any]:
     normalized: List[Any] = []
     seen_filters: set[int] = set()
     seen_devices: set[str] = set()
+    seen_onboarding_scopes: set[str] = set()
     include_all_devices = False
     if not isinstance(entries, (list, tuple)):
         return normalized
@@ -42,6 +43,34 @@ def normalize_targets_for_save(entries: Sequence[Any]) -> List[Any]:
         if not isinstance(entry, dict):
             continue
         kind = str(entry.get("kind") or entry.get("type") or "").strip().lower()
+        if kind == "onboarding_scope":
+            site_id_value = _normalize_site_id(entry.get("site_id") or entry.get("siteId"))
+            if site_id_value is None:
+                continue
+            raw_entries = entry.get("entries")
+            if raw_entries is None:
+                raw_entries = entry.get("scope") or entry.get("targets") or entry.get("discovery_scope")
+            if isinstance(raw_entries, str):
+                scope_entries = [line.strip() for line in raw_entries.replace(",", "\n").splitlines() if line.strip()]
+            elif isinstance(raw_entries, (list, tuple)):
+                scope_entries = [str(value).strip() for value in raw_entries if str(value).strip()]
+            else:
+                scope_entries = []
+            if not scope_entries:
+                continue
+            dedupe_key = f"onboarding:{site_id_value}:{'|'.join(value.lower() for value in scope_entries)}"
+            if dedupe_key in seen_onboarding_scopes:
+                continue
+            seen_onboarding_scopes.add(dedupe_key)
+            normalized.append(
+                {
+                    "kind": "onboarding_scope",
+                    "site_id": site_id_value,
+                    "site_name": entry.get("site_name") or entry.get("site") or "",
+                    "entries": scope_entries,
+                }
+            )
+            continue
         if kind == "all_devices" or entry.get("all_devices") is True:
             if include_all_devices:
                 continue

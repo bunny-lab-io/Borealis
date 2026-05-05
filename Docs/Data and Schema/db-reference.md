@@ -304,19 +304,21 @@ finally:
 #### `device_approvals`
 - Status: Active.
 - Purpose: Enrollment approval queue and history.
-- Columns: `id`, `approval_reference`, `guid`, `hostname_claimed`, `ssl_key_fingerprint_claimed`, `enrollment_code`, `site_id`, `status`, `client_nonce`, `server_nonce`, `agent_pubkey_der`, `created_at`, `updated_at`, `approved_by_user_id`.
+- Columns: `id`, `approval_reference`, `guid`, `hostname_claimed`, `ssl_key_fingerprint_claimed`, `enrollment_code`, `site_id`, `status`, `client_nonce`, `server_nonce`, `agent_pubkey_der`, `created_at`, `updated_at`, `approved_by_user_id`, `onboarding_job_id`, `onboarding_run_id`, `onboarding_target`.
 - Constraints and indexes:
 - `id` primary key.
 - `approval_reference` unique.
 - `idx_da_status` on `status`.
 - `idx_da_fp_status` on `(ssl_key_fingerprint_claimed, status)`.
 - `idx_da_site` on `site_id`.
+- `idx_da_onboarding_job` on `onboarding_job_id`.
 - Used by:
 - Enrollment request and poll endpoints.
 - Admin approval APIs (`/api/admin/device-approvals*`).
 - Notes:
 - `status` lifecycle typically `pending -> approved|denied|expired -> completed`.
 - `site_id` and `approved_by_user_id` are soft relations (not enforced FK in schema).
+- Automatic SSH onboarding stores source job/run/target context when the agent submits it. Approval trust flow remains unchanged.
 - Rebuild migration removes legacy `enrollment_code_id` if present.
 
 #### `enrollment_code_failures`
@@ -550,7 +552,7 @@ finally:
 #### `scheduled_jobs`
 - Status: Active.
 - Purpose: Scheduled-job definitions.
-- Columns: `id`, `name`, `components_json`, `targets_json`, `schedule_type`, `start_ts`, `duration_stop_enabled`, `expiration`, `execution_context`, `credential_id`, `use_service_account`, `enabled`, `created_at`, `updated_at`.
+- Columns: `id`, `name`, `components_json`, `targets_json`, `schedule_type`, `start_ts`, `duration_stop_enabled`, `expiration`, `execution_context`, `credential_id`, `use_service_account`, `job_kind`, `enabled`, `created_at`, `updated_at`.
 - Constraints and indexes:
 - `id` autoincrement primary key.
 - Used by:
@@ -558,6 +560,7 @@ finally:
 - Scheduler background loop.
 - Notes:
 - `credential_id` is logical linkage to `credentials.id`; no FK constraint in schema.
+- `job_kind = automation` is normal scheduled automation. `job_kind = onboarding` is automatic local-network SSH device enrollment.
 
 #### `scheduled_job_runs`
 - Status: Active.
@@ -588,6 +591,24 @@ finally:
 - Used by:
 - Scheduler component dispatch bookkeeping.
 - WebSocket run status propagation and run activity lookups.
+
+#### `scheduled_job_onboarding_targets`
+- Status: Active.
+- Purpose: Per-target status for automatic Linux SSH onboarding jobs.
+- Columns: `id`, `run_id`, `job_id`, `scheduled_ts`, `site_id`, `target_input`, `target_address`, `target_hostname`, `ssh_port`, `status`, `detail`, `stdout_snippet`, `stderr_snippet`, `approval_reference`, `created_at`, `updated_at`, `finished_at`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- FK declared: `run_id -> scheduled_job_runs(id) ON DELETE CASCADE`.
+- FK declared: `job_id -> scheduled_jobs(id) ON DELETE CASCADE`.
+- `idx_onboarding_targets_run` on `run_id`.
+- `idx_onboarding_targets_job` on `(job_id, scheduled_ts)`.
+- `idx_onboarding_targets_status` on `status`.
+- Used by:
+- Automatic SSH onboarding runner.
+- Scheduled Jobs result summaries.
+- `/api/onboarding/jobs/<job_id>/targets`.
+- Notes:
+- stdout/stderr are sanitized snippets only. Stored SSH credentials remain in `credentials` and are not copied into onboarding attempts.
 
 #### `scheduled_job_run_targets`
 - Status: Active.

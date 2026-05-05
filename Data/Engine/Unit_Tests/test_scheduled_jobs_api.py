@@ -14,6 +14,9 @@ from types import SimpleNamespace
 import pytest
 
 from Data.Engine.services.API.scheduled_jobs import job_scheduler as scheduled_job_module
+from Data.Engine.services.API.scheduled_jobs.onboarding import parse_onboarding_scope
+from Data.Engine.services.API.scheduled_jobs.targets import normalize_targets_for_save
+from Data.Engine.services.auth import UserSiteAccessManager
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.server import create_app
 
@@ -104,6 +107,112 @@ class _FakePreflightSocket:
 
     def close(self) -> None:
         self.closed = True
+
+
+def test_onboarding_scope_parser_expands_supported_targets() -> None:
+    targets, errors = parse_onboarding_scope(
+        ["192.168.10.5", "192.168.10.10-12", "10.0.0.0/30", "server01.lab"],
+        max_targets=16,
+    )
+
+    assert errors == []
+    assert [target["host"] for target in targets] == [
+        "192.168.10.5",
+        "192.168.10.10",
+        "192.168.10.11",
+        "192.168.10.12",
+        "10.0.0.1",
+        "10.0.0.2",
+        "server01.lab",
+    ]
+
+
+def test_onboarding_scope_target_normalization_and_site_scope(engine_harness: EngineTestHarness) -> None:
+    normalized = normalize_targets_for_save(
+        [
+            {
+                "kind": "onboarding_scope",
+                "site_id": 1,
+                "site_name": "Main Lab",
+                "entries": "192.168.1.10\nserver01.lab",
+            }
+        ]
+    )
+    assert normalized == [
+        {
+            "kind": "onboarding_scope",
+            "site_id": 1,
+            "site_name": "Main Lab",
+            "entries": ["192.168.1.10", "server01.lab"],
+        }
+    ]
+
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (id, username, display_name, password_sha512, role, last_login, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "site-user", "Site User", "test", "User", 0, 0, 0),
+        )
+        cur.execute(
+            "INSERT INTO user_site_assignments (user_id, site_id, assigned_at) VALUES (?, ?, ?)",
+            (2, 1, 1_700_000_000),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    manager = UserSiteAccessManager(lambda: sqlite3.connect(engine_harness.db_path))
+    scoped, error = manager.scope_job_targets_for_persistence(
+        {"username": "site-user", "role": "User"},
+        normalized,
+    )
+
+    assert error is None
+    assert scoped[0]["kind"] == "onboarding_scope"
+    assert scoped[0]["allowed_site_ids"] == [1]
+    assert manager.job_targets_fit_scope({"username": "site-user", "role": "User"}, scoped)
+
+
+def test_scheduled_jobs_api_creates_onboarding_job(engine_harness: EngineTestHarness) -> None:
+    client, _scheduler = _scheduled_jobs_client(engine_harness)
+
+    response = client.post(
+        "/api/scheduled_jobs",
+        json={
+            "job_kind": "onboarding",
+            "name": "Automatic Device Onboarding Main Lab",
+            "targets": [
+                {
+                    "kind": "onboarding_scope",
+                    "site_id": 1,
+                    "site_name": "Main Lab",
+                    "entries": ["192.168.10.5", "server01.lab"],
+                }
+            ],
+            "components": [
+                {
+                    "kind": "device_onboarding",
+                    "install_branch": "main",
+                    "ssh_port": 22,
+                }
+            ],
+            "credential_id": 77,
+            "execution_context": "onboarding_linux_ssh",
+            "schedule": {"type": "immediately"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    job = payload["job"]
+    assert job["job_kind"] == "onboarding"
+    assert job["execution_context"] == "onboarding_linux_ssh"
+    assert job["components"][0]["kind"] == "device_onboarding"
+    assert job["targets"][0]["kind"] == "onboarding_scope"
 
 
 def test_preflight_remote_port_accepts_valid_ssh_banner(

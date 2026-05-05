@@ -1347,6 +1347,29 @@ def _load_installer_code_from_file(path: str) -> str:
     return ""
 
 
+def _load_onboarding_context() -> Dict[str, Any]:
+    try:
+        path = os.path.join(_settings_dir(), "onboarding_context.json")
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    context: Dict[str, Any] = {}
+    for key in ("job_id", "run_id"):
+        try:
+            value = int(str(data.get(key) or "").strip())
+            if value > 0:
+                context[key] = value
+        except Exception:
+            pass
+    target = str(data.get("target") or "").strip()
+    if target:
+        context["target"] = target[:253]
+    return context
+
+
 def _clear_installer_code_from_file(path: str, rejected_code: str) -> bool:
     rejected = (rejected_code or "").strip()
     if not rejected or not path:
@@ -1777,6 +1800,9 @@ class AgentHttpClient:
                     "agent_pubkey": PUBLIC_KEY_B64,
                     "client_nonce": base64.b64encode(client_nonce).decode("ascii"),
                 }
+                onboarding_context = _load_onboarding_context()
+                if onboarding_context:
+                    payload["onboarding_context"] = onboarding_context
                 request_url = f"{self.base_url}/api/agent/enroll/request"
                 request_attempt = 1
                 while True:

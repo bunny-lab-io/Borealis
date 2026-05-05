@@ -15,6 +15,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Sites group devices for organizational and targeting purposes.
 - Each site can have an enrollment code that agents can use during install.
 - Site mapping is stored separately from device records and exposed via API.
+- Automatic local-network onboarding uses the selected site's enrollment code after a successful SSH install. The resulting device still lands in the normal approval queue.
 
 ## Operator Site Scope (RBAC)
 - Admins implicitly see all sites, devices, approvals, and remote-access surfaces.
@@ -78,6 +79,14 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Enrollment requests are queued for approval within the request's site.
 - Admins can approve any site; operators can approve only requests for sites they are assigned to.
 - Approvals enforce hostname conflict checks and device identity tracking.
+- Approvals created by automatic SSH onboarding can include `onboarding_job_id`, `onboarding_run_id`, and `onboarding_target` so operators can trace a pending approval back to the scheduled onboarding run and target.
+
+## Automatic SSH Onboarding
+- Jobs are created from Jobs > Onboard Devices and appear in Scheduled Jobs alongside automation jobs.
+- Linux targets can be supplied as IPv4 addresses, IPv4 ranges, CIDR blocks, or FQDNs.
+- The Engine reaches targets directly over the local network through SSH; no WireGuard tunnel or existing Borealis agent is required.
+- Borealis uses one stored SSH credential per onboarding job and does not copy credentials into the job definition.
+- The remote installer uses the selected branch of `Agent.sh`, the Engine public URL, and the selected site's enrollment code. Device approval remains manual.
 
 ## Device Purge
 - The Device List `Delete` action is now an admin-only purge flow backed by `POST /api/devices/<guid>/purge`.
@@ -159,6 +168,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `GET /api/admin/device-approvals` (Token Authenticated) - approval queue scoped to the current operator's assigned sites unless the operator is an admin. Admins can use `status=wrong_code` for recent invalid enrollment-code attempts.
 - `POST /api/admin/device-approvals/<approval_id>/approve` (Token Authenticated) - approve an in-scope device.
 - `POST /api/admin/device-approvals/<approval_id>/deny` (Token Authenticated) - deny an in-scope device.
+- `GET /api/onboarding/jobs/<job_id>/targets` (Token Authenticated) - per-target automatic onboarding attempts for a scheduled job occurrence.
 
 ## Related Documentation
 - [Agent Runtime](../Core%20Runtimes/agent-runtime.md)

@@ -24,6 +24,7 @@ import {
   Cached as CachedIcon,
   Add as AddIcon,
   DeleteOutline as DeleteIcon,
+  Devices as DevicesIcon,
   WarningAmberRounded as WarningAmberRoundedIcon,
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
@@ -95,6 +96,7 @@ const FILTER_OPTIONS = [
 const AUTO_SIZE_COLUMNS = [
   "name",
   "componentsMeta",
+  "jobType",
   "target",
   "occurrence",
   "lastRun",
@@ -336,6 +338,8 @@ export default function ScheduledJobsList({ refreshToken }) {
           }
         };
         const mappedRows = (data?.jobs || []).map((j) => {
+          const jobKind = String(j.job_kind || "automation").toLowerCase();
+          const isOnboardingJob = jobKind === "onboarding";
           const components = Array.isArray(j.components) ? j.components : [];
           const normalizedComponents = components.map((component) => {
             const record = resolveAssemblyForComponent(assemblyIndex, component);
@@ -368,24 +372,36 @@ export default function ScheduledJobsList({ refreshToken }) {
             label: comp.name,
             domain: comp.domain
           }));
+          const displayComponentSummaries = isOnboardingJob
+            ? [{ key: `onboarding-${j.id || j.name}`, label: "Linux SSH Device Onboarding", domain: "system" }]
+            : componentSummaries;
           const hasWorkflowComponent = normalizedComponents.some((comp) => {
             const typeRaw = String(comp?.type || comp?.assembly_type || "").trim().toLowerCase();
             const subtypeRaw = String(comp?.assembly_subtype || "").trim().toLowerCase();
             return typeRaw === "workflow" || subtypeRaw === "workflow";
           });
           const compName =
-            componentSummaries.length === 1
-              ? componentSummaries[0].label
-              : componentSummaries.length > 1
-                ? `${componentSummaries.length} Assemblies`
+            displayComponentSummaries.length === 1
+              ? displayComponentSummaries[0].label
+              : displayComponentSummaries.length > 1
+                ? `${displayComponentSummaries.length} Assemblies`
                 : "No Assemblies";
+          const onboardingScopeCount = Array.isArray(j.targets)
+            ? j.targets
+                .filter((target) => target?.kind === "onboarding_scope")
+                .reduce((total, target) => total + (Array.isArray(target.entries) ? target.entries.length : 0), 0)
+            : 0;
           const targetText = Array.isArray(j.targets)
-            ? hasWorkflowComponent
+            ? isOnboardingJob
+              ? `${Math.max(Number(j?.result_counts?.total_targets || 0), onboardingScopeCount)} discovery target${Math.max(Number(j?.result_counts?.total_targets || 0), onboardingScopeCount) !== 1 ? "s" : ""}`
+              : hasWorkflowComponent
               ? "Workflow-defined"
               : `${j.targets.length} device${j.targets.length !== 1 ? "s" : ""}`
             : "";
           const occurrence = pretty(j.schedule_type || "immediately");
-          const fallbackTargetCount = hasWorkflowComponent
+          const fallbackTargetCount = isOnboardingJob
+            ? onboardingScopeCount
+            : hasWorkflowComponent
             ? Math.max(1, Array.isArray(j.targets) ? j.targets.length : 0)
             : Array.isArray(j.targets) ? j.targets.length : 0;
           const resultsCounts = {
@@ -433,7 +449,8 @@ export default function ScheduledJobsList({ refreshToken }) {
             id: j.id,
             name: j.name,
             scriptWorkflow: compName,
-            componentsMeta: componentSummaries,
+            componentsMeta: displayComponentSummaries,
+            jobType: isOnboardingJob ? "Device Onboarding" : "Automation",
             target: targetText,
             occurrence,
             lastRun: fmt(j.last_run_ts),
@@ -444,6 +461,7 @@ export default function ScheduledJobsList({ refreshToken }) {
             warningCode: j.warning_code || "",
             warningMessage: j.warning_message || "",
             categoryFlags,
+            jobKind,
             raw: { ...j, components: normalizedComponents }
           };
         });
@@ -618,15 +636,20 @@ export default function ScheduledJobsList({ refreshToken }) {
       const row = params.data;
       if (!row) return null;
       const resolvedJobId = Number(row?.raw?.id ?? row?.id);
+      const isOnboarding = String(row?.raw?.job_kind || row?.jobKind || "").toLowerCase() === "onboarding";
       const editorHref =
         Number.isInteger(resolvedJobId) && resolvedJobId > 0
-          ? `${APP_PATHS.job(resolvedJobId)}?tab=job_name`
-          : `${APP_PATHS.jobNew}?tab=job_name`;
+          ? isOnboarding
+            ? APP_PATHS.jobOnboarding(resolvedJobId)
+            : `${APP_PATHS.job(resolvedJobId)}?tab=job_name`
+          : isOnboarding
+            ? APP_PATHS.jobOnboardingNew
+            : `${APP_PATHS.jobNew}?tab=job_name`;
       let pointerNavigationHandled = false;
       const dispatchEdit = (event) => {
         event.preventDefault();
         event.stopPropagation();
-        navigate(APP_PATHS.job(resolvedJobId), {
+        navigate(isOnboarding ? APP_PATHS.jobOnboarding(resolvedJobId) : APP_PATHS.job(resolvedJobId), {
           state: row.raw ? { initialJob: row.raw } : undefined,
         });
       };
@@ -803,6 +826,7 @@ export default function ScheduledJobsList({ refreshToken }) {
         cellRenderer: assembliesCellRenderer,
         cellClass: "auto-col-tight",
       },
+      { headerName: "Type", field: "jobType", minWidth: 150, cellClass: "auto-col-tight" },
       { headerName: "Target", field: "target", minWidth: 140, cellClass: "auto-col-tight" },
       { headerName: "Recurrence", field: "occurrence", minWidth: 150, cellClass: "auto-col-tight" },
       { headerName: "Last Run", field: "lastRun", minWidth: 150, cellClass: "auto-col-tight" },
@@ -898,6 +922,13 @@ export default function ScheduledJobsList({ refreshToken }) {
         icon: <AddIcon />,
         tone: "primary",
         onClick: () => navigate(APP_PATHS.jobNew),
+      },
+      {
+        id: "scheduled-jobs-onboarding",
+        label: "Onboard Devices",
+        icon: <DevicesIcon />,
+        tone: "primary",
+        onClick: () => navigate(APP_PATHS.jobOnboardingNew),
       },
     ],
     [anySelected, handleRefreshClick, loading, navigate]

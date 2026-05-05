@@ -527,7 +527,7 @@ configure_agent_settings() {
 
   local python_bin
   python_bin="$(resolve_python_bin)" || die "Python interpreter missing."
-  CONFIG_PATHS="${config_path}:${system_config_path}" ENROLLMENT_CODE_VALUE="${provided_code}" "${python_bin}" - <<'PY'
+CONFIG_PATHS="${config_path}:${system_config_path}" ENROLLMENT_CODE_VALUE="${provided_code}" "${python_bin}" - <<'PY'
 import json
 import os
 paths = [path for path in os.environ["CONFIG_PATHS"].split(":") if path]
@@ -555,6 +555,33 @@ for path in paths:
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(data, handle)
 PY
+  if [[ -n "${BOREALIS_ONBOARDING_JOB_ID:-}" || -n "${BOREALIS_ONBOARDING_RUN_ID:-}" || -n "${BOREALIS_ONBOARDING_TARGET:-}" ]]; then
+    local onboarding_path="${SCRIPT_DIR}/Agent/Borealis/Settings/onboarding_context.json"
+    run_privileged mkdir -p "$(dirname "${onboarding_path}")"
+    BOREALIS_ONBOARDING_CONTEXT_PATH="${onboarding_path}" "${python_bin}" - <<'PY'
+import json
+import os
+
+def clean_int(value):
+    try:
+        parsed = int(str(value or "").strip())
+        return parsed if parsed > 0 else None
+    except Exception:
+        return None
+
+payload = {
+    "job_id": clean_int(os.environ.get("BOREALIS_ONBOARDING_JOB_ID")),
+    "run_id": clean_int(os.environ.get("BOREALIS_ONBOARDING_RUN_ID")),
+    "target": str(os.environ.get("BOREALIS_ONBOARDING_TARGET") or "").strip()[:253],
+}
+payload = {key: value for key, value in payload.items() if value not in (None, "")}
+path = os.environ.get("BOREALIS_ONBOARDING_CONTEXT_PATH") or ""
+if payload and path:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+PY
+  fi
 }
 
 stop_agent_supervision() {

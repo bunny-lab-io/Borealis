@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, List, Optional
 from ...ansible import EngineAnsibleRunner
 from ...assemblies.service import AssemblyRuntimeService
 from ...aegis_cipher import AegisSecretResetRequiredError, credential_secret_reset_required
+from ....public_endpoints import public_base_url
 from ..workflows import management as workflows_management
 from . import job_scheduler
 
@@ -379,6 +380,9 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
             "metadata": metadata if isinstance(metadata, dict) else {},
         }
 
+    def _scheduler_public_base_url() -> str:
+        return str(public_base_url(adapters.context) or "").strip()
+
     scheduler = job_scheduler.register(
         app,
         socketio,
@@ -392,6 +396,7 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     job_scheduler.set_vpn_session_prepare(scheduler, _prepare_vpn_session_snapshot)
     job_scheduler.set_server_ansible_runner(scheduler, ansible_runner.queue_run)
     job_scheduler.set_credential_fetcher(scheduler, _load_decrypted_credential)
+    job_scheduler.set_public_base_url_lookup(scheduler, _scheduler_public_base_url)
     emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
     if callable(emit_host_service_event):
         job_scheduler.set_host_service_emitter(scheduler, emit_host_service_event)

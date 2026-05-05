@@ -7,7 +7,8 @@ Explain how Borealis schedules recurring jobs, targets devices, and records run 
 ## Scheduler Overview
 - Scheduler implementation lives in `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`.
 - It reads job definitions from PostgreSQL and emits quick job payloads over the host's SYSTEM socket.
-- Run history is stored in `scheduled_job_runs`, `scheduled_job_run_targets`, and `scheduled_job_run_activity` tables.
+- Run history is stored in `scheduled_job_runs`, `scheduled_job_run_targets`, `scheduled_job_run_activity`, and, for automatic onboarding, `scheduled_job_onboarding_targets`.
+- Scheduled job definitions carry `job_kind`; normal jobs use `automation`, while local-network device enrollment uses `onboarding`.
 
 ## Schedule Types
 Supported schedule types (from the scheduler core):
@@ -31,6 +32,7 @@ Supported schedule types (from the scheduler core):
 - Engine-side Ansible jobs persist structured device targets with `device_guid`, `hostname`, and site context so duplicate hostnames across sites can be targeted safely.
 - When an operator creates or edits a job, Borealis constrains targets to the operator's assigned sites before persistence.
 - Filter targets created by operators persist `allowed_site_ids` alongside the filter reference so future scheduler runs stay inside the operator's approved site scope.
+- Onboarding jobs use `kind = onboarding_scope` targets. Scope entries accept single IPv4 addresses, IPv4 ranges, CIDR blocks, and FQDNs. Borealis deduplicates expanded targets and enforces `BOREALIS_ONBOARDING_TARGET_CAP` (default `512`).
 
 ## Execution Flow
 1) Scheduler tick loads enabled jobs.
@@ -51,6 +53,15 @@ Supported schedule types (from the scheduler core):
   - global limit: `global_concurrency_limit` (default `50`)
 15) The Engine updates run status, activity links, and Ansible recap rows as results arrive.
 16) If zero devices are resolved, the occurrence is recorded as `Skipped` with `skip_reason = no_devices_targeted`.
+
+## Automatic Device Onboarding
+- Linux SSH onboarding is scheduled through the same job service with `job_kind = onboarding`.
+- The WebUI flow lives at `/jobs/onboarding/new` and creates jobs named like `Automatic Device Onboarding <SiteName>`.
+- Operators select one site, one stored SSH credential, discovery scope entries, install branch, SSH port, and normal schedule options.
+- At run time the Engine probes TCP/SSH, authenticates with the selected credential, confirms the target is Linux, downloads `Agent.sh` from the selected branch, and runs `Agent.sh --repo-branch <branch> deploy --serverurl <engine_url> --enrollmentcode <site_code> --newEngine`.
+- Remote machine credentials stay only in existing Aegis-protected credential records. Onboarding target output is stored as sanitized snippets in `scheduled_job_onboarding_targets`.
+- Successful remote installs do not auto-approve devices. Agents submit normal enrollment requests and remain in the existing approval queue. When possible, Borealis records `onboarding_job_id`, `onboarding_run_id`, and `onboarding_target` on the approval.
+- Fan-out is bounded by `BOREALIS_ONBOARDING_CONCURRENCY` (default `8`). Install command timeout is controlled by `BOREALIS_ONBOARDING_INSTALL_TIMEOUT_SECONDS` (default `900`).
 
 ## Execution Contexts
 - `system` - runs on the agent as SYSTEM.
@@ -86,6 +97,7 @@ Supported schedule types (from the scheduler core):
 - `GET /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - run history.
 - `GET /api/scheduled_jobs/<int:job_id>/devices` (Token Authenticated) - device results.
 - `DELETE /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - clear run history.
+- `GET /api/onboarding/jobs/<int:job_id>/targets` (Token Authenticated) - onboarding target attempts for an occurrence.
 
 ## Related Documentation
 - [Assemblies and Quick Jobs](assemblies.md)
@@ -105,6 +117,7 @@ Supported schedule types (from the scheduler core):
 - `scheduled_job_runs` - per-run status, timestamps, error fields, skip reason.
 - `scheduled_job_run_targets` - frozen occurrence target snapshot and originating filter links.
 - `scheduled_job_run_activity` - links activity_history to scheduled runs.
+- `scheduled_job_onboarding_targets` - per-target SSH onboarding attempt state and sanitized output.
 
 ### Schedule computation
 - `_compute_next_run` normalizes timestamps to minutes and applies schedule type logic.

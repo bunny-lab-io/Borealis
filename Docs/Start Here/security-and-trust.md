@@ -43,6 +43,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Device authentication checks GUID normalization, SSL fingerprint matches, token version counters, and quarantine flags before admitting requests; missing rows with valid tokens auto-recover into placeholder records to avoid accidental lockouts.
 - Refresh tokens are never stored in cleartext; only SHA-256 hashes plus DPoP bindings are stored in PostgreSQL, and reuse after revocation/expiry returns explicit error codes.
 - Enrollment workflow queues approvals, detects hostname and fingerprint conflicts, offers merge/overwrite options, and records auditor identities so trust decisions are traceable.
+- Automatic SSH onboarding never bypasses enrollment approval. It only performs a remote Linux agent install using stored SSH credentials; the installed agent must still request approval with the selected site's enrollment code.
 - Background pruning of expired enrollment codes and refresh tokens is not wired yet; a maintenance task is still needed.
 
 ### Agent
@@ -94,6 +95,12 @@ If you deploy the agent via Group Policy or another automation platform, you can
 curl -fsSL "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Agent.sh" | { if [ "$(id -u)" -eq 0 ]; then bash -s -- deploy --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --newEngine; else sudo bash -s -- deploy --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --newEngine; fi; }
 ```
 Passing an enrollment code to `Agent.sh` refreshes stale Linux Agent enrollment state before the service starts so the supplied code wins over cached installer codes. Linux one-line installs do not require `sudo` in the pipe when run from a root shell; non-root launches still use `sudo bash` before script execution so password prompts work normally.
+
+### Automatic SSH-Based Enrollment
+- Jobs > Onboard Devices creates scheduler-backed Linux SSH enrollment jobs for local-network targets.
+- Operators provide a site, discovery scope, stored SSH credential, install branch, and schedule. The SSH credential remains in Aegis-protected credential storage.
+- Borealis writes only non-secret onboarding correlation (`job_id`, `run_id`, target) to the agent settings during remote install so pending approvals can show their source.
+- Manual approval remains the trust boundary. A successful SSH install means the agent reached the approval queue, not that the device is trusted.
 
 ## Agent/Server Enrollment (Sequence Diagram)
 ```mermaid
