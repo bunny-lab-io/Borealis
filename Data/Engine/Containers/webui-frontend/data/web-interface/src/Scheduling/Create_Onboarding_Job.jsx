@@ -69,6 +69,9 @@ function isoFromDatetimeLocal(value) {
 }
 
 function targetOutputSnippet(target) {
+  const status = String(target?.status || "").trim().toLowerCase();
+  const showOutput = status === "failed" || status === "ssh_unreachable";
+  if (!showOutput) return "";
   const stderr = String(target?.stderr_snippet || "").trim();
   const stdout = String(target?.stdout_snippet || "").trim();
   return [

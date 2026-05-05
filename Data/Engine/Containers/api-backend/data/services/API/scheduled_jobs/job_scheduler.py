@@ -3175,6 +3175,51 @@ class JobScheduler:
         finally:
             conn.close()
 
+    def _update_onboarding_target_approval_reference(self, row_id: int, approval_reference: str) -> None:
+        value = str(approval_reference or "").strip()
+        if not value:
+            return
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            now = _now_ts()
+            cur.execute(
+                """
+                UPDATE scheduled_job_onboarding_targets
+                   SET approval_reference=?,
+                       updated_at=?
+                 WHERE id=?
+                   AND COALESCE(approval_reference, '')=''
+                """,
+                (value, now, int(row_id)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _backfill_onboarding_target_approval_references(self, rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        hydrated: List[Dict[str, Any]] = []
+        for row in rows:
+            next_row = dict(row)
+            status = str(next_row.get("status") or "").strip().lower()
+            if status == ONBOARDING_STATUS_WAITING_APPROVAL and not str(next_row.get("approval_reference") or "").strip():
+                target = str(
+                    next_row.get("target_address")
+                    or next_row.get("target_hostname")
+                    or next_row.get("target_input")
+                    or ""
+                ).strip()
+                approval_reference = self._lookup_onboarding_approval(
+                    job_id=int(next_row.get("job_id") or 0),
+                    run_id=int(next_row.get("run_id") or 0),
+                    target=target,
+                )
+                if approval_reference:
+                    next_row["approval_reference"] = approval_reference
+                    self._update_onboarding_target_approval_reference(int(next_row.get("id") or 0), approval_reference)
+            hydrated.append(next_row)
+        return hydrated
+
     def _remote_onboarding_command(
         self,
         *,
@@ -3382,9 +3427,6 @@ class JobScheduler:
                         "stdout": "".join(stdout_parts),
                         "stderr": "permission_denied\n" + "".join(stderr_parts),
                     }
-            trailing = str(child.before or "")
-            if trailing:
-                stdout_parts.append(trailing)
             try:
                 child.close()
             except Exception:
@@ -7741,6 +7783,7 @@ class JobScheduler:
                 finally:
                     conn.close()
                 rows = self._load_onboarding_target_rows(int(job_id), int(occ)) if occ is not None else []
+                rows = self._backfill_onboarding_target_approval_references(rows)
                 return json.dumps({"occurrence": occ, "targets": rows}), 200, {"Content-Type": "application/json"}
             except Exception as e:
                 return json.dumps({"error": str(e)}), 500, {"Content-Type": "application/json"}
