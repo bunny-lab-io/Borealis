@@ -320,6 +320,42 @@ const FILTER_LABEL_SX = {
   pl: 1,
 };
 
+const SCOPE_DISCOVERY_EXAMPLE = `# Core Linux Servers
+192.168.3.10
+192.168.3.20-192.168.3.30 # application nodes
+
+# Lab Network
+192.168.50.0/24
+
+# Named Hosts
+nas01.lab.local
+build01.lab.local`;
+
+const SCOPE_EXCLUSION_EXAMPLE = `# Server Network
+192.168.3.0/24
+192.168.3.252 # Borealis Engine
+
+# LAN
+10.0.0.0/24
+
+# Default Gateways
+192.168.3.1
+10.0.0.1`;
+
+const SCOPE_MONO_FONT = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+const SCOPE_TEXT_SX = {
+  m: 0,
+  p: "18px 14px 14px",
+  minHeight: 214,
+  width: "100%",
+  fontFamily: SCOPE_MONO_FONT,
+  fontSize: 13,
+  lineHeight: 1.55,
+  whiteSpace: "pre-wrap",
+  overflowWrap: "anywhere",
+  tabSize: 2,
+};
+
 function toScopeText(entries) {
   if (Array.isArray(entries)) {
     return entries.map((entry) => String(entry || "").trim()).filter(Boolean).join("\n");
@@ -327,11 +363,129 @@ function toScopeText(entries) {
   return String(entries || "");
 }
 
+function stripScopeComment(line) {
+  const text = String(line || "");
+  const hashIndex = text.indexOf("#");
+  return hashIndex >= 0 ? text.slice(0, hashIndex) : text;
+}
+
 function splitScopeEntries(value) {
   return String(value || "")
-    .split(/[\n\r,;]+/)
+    .split(/\r?\n/)
+    .flatMap((line) => stripScopeComment(line).split(/[;,]+/))
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function renderScopeHighlightedText(value, muted = false) {
+  const lines = String(value || "").split(/\r?\n/);
+  return lines.map((line, index) => {
+    const hashIndex = line.indexOf("#");
+    const hasComment = hashIndex >= 0;
+    const beforeComment = hasComment ? line.slice(0, hashIndex) : line;
+    const commentText = hasComment ? line.slice(hashIndex) : "";
+    const isCommentLine = beforeComment.trim() === "" && hasComment;
+    const entryColor = muted ? "rgba(226,232,240,0.56)" : "#e6edf3";
+    const commentColor = muted ? "rgba(125,211,252,0.48)" : "rgba(125,211,252,0.78)";
+    return (
+      <React.Fragment key={`${index}-${line}`}>
+        {isCommentLine ? (
+          <Box component="span" sx={{ color: commentColor, fontStyle: "italic" }}>
+            {line}
+          </Box>
+        ) : (
+          <>
+            <Box component="span" sx={{ color: entryColor }}>
+              {beforeComment}
+            </Box>
+            {hasComment ? (
+              <Box component="span" sx={{ color: commentColor, fontStyle: "italic" }}>
+                {commentText}
+              </Box>
+            ) : null}
+          </>
+        )}
+        {index < lines.length - 1 ? "\n" : null}
+      </React.Fragment>
+    );
+  });
+}
+
+function ScopeEditor({ label, value, onChange, example }) {
+  const hasValue = String(value || "").length > 0;
+  const displayValue = hasValue ? value : example;
+  return (
+    <Box sx={{ flex: 1, minWidth: 0, position: "relative", pt: 0.75 }}>
+      <Typography
+        component="label"
+        variant="caption"
+        sx={{
+          position: "absolute",
+          top: 0,
+          left: 12,
+          zIndex: 3,
+          px: 0.5,
+          color: MAGIC_UI.textMuted,
+          bgcolor: "#070b1a",
+          lineHeight: 1,
+        }}
+      >
+        {label}
+      </Typography>
+      <Box
+        sx={{
+          position: "relative",
+          border: "1px solid rgba(148,163,184,0.35)",
+          borderRadius: 2,
+          bgcolor: "rgba(5,9,18,0.85)",
+          overflow: "hidden",
+          minHeight: 246,
+          "&:hover": {
+            borderColor: MAGIC_UI.accentA,
+          },
+          "&:focus-within": {
+            borderColor: MAGIC_UI.accentB,
+            boxShadow: "0 0 0 1px rgba(192,132,252,0.3)",
+          },
+        }}
+      >
+        <Box
+          component="pre"
+          aria-hidden="true"
+          sx={{
+            ...SCOPE_TEXT_SX,
+            pointerEvents: "none",
+            color: "#e6edf3",
+          }}
+        >
+          {renderScopeHighlightedText(displayValue, !hasValue)}
+        </Box>
+        <Box
+          component="textarea"
+          value={value}
+          onChange={onChange}
+          spellCheck={false}
+          aria-label={label}
+          sx={{
+            ...SCOPE_TEXT_SX,
+            position: "absolute",
+            inset: 0,
+            border: 0,
+            outline: 0,
+            resize: "vertical",
+            minHeight: "100%",
+            color: "transparent",
+            WebkitTextFillColor: "transparent",
+            caretColor: MAGIC_UI.textBright,
+            bgcolor: "transparent",
+            "&::selection": {
+              backgroundColor: "rgba(125,211,252,0.28)",
+            },
+          }}
+        />
+      </Box>
+    </Box>
+  );
 }
 
 function formatStatusLabel(status) {
@@ -998,7 +1152,7 @@ export default function CreateOnboardingJob() {
       const exclusions = splitScopeEntries(form.exclusionScope);
       if (!form.siteId) throw new Error("Select site.");
       if (!entries.length) throw new Error("Enter at least one IP address, CIDR, range, or FQDN.");
-      if (!form.credentialId) throw new Error("Select SSH credential.");
+      if (!form.credentialId) throw new Error("Select stored credential.");
       const port = Number(form.sshPort || DEFAULT_SSH_PORT);
       if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("SSH port must be 1-65535.");
       const onboardingConcurrency = Number(form.onboardingConcurrency || DEFAULT_ONBOARDING_CONCURRENCY);
@@ -1049,7 +1203,7 @@ export default function CreateOnboardingJob() {
       }
       const savedId = body?.job?.id || jobId;
       if (savedId && !editing) {
-        setNotice("Onboarding deployment started.");
+        setNotice("Onboarding started.");
         navigate(APP_PATHS.jobOnboarding(savedId), { replace: true });
       } else if (editing && savedId) {
         setTargetRows([]);
@@ -1061,9 +1215,9 @@ export default function CreateOnboardingJob() {
         });
         const redeployBody = await redeployResp.json().catch(() => ({}));
         if (!redeployResp.ok) {
-          throw new Error(redeployBody?.message || redeployBody?.error || `Re-deploy failed (${redeployResp.status})`);
+          throw new Error(redeployBody?.message || redeployBody?.error || `Re-onboard failed (${redeployResp.status})`);
         }
-        setNotice("Onboarding re-deploy started.");
+        setNotice("Onboarding re-run started.");
         selectTabKey("targets");
         window.setTimeout(() => {
           void loadTargets();
@@ -1100,7 +1254,7 @@ export default function CreateOnboardingJob() {
       }
       actions.push({
         id: "onboarding-save",
-        label: editing ? "Re-Deploy" : "Deploy",
+        label: editing ? "Re-Onboard" : "Onboard",
         icon: <PlayArrowIcon />,
         tone: "primary",
         loading: saving,
@@ -1134,7 +1288,7 @@ export default function CreateOnboardingJob() {
           {saving ? (
             <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: MAGIC_UI.textMuted }}>
               <CircularProgress size={18} sx={{ color: MAGIC_UI.accentA }} />
-              <Typography variant="body2">{editing ? "Re-deploying onboarding job..." : "Deploying onboarding job..."}</Typography>
+              <Typography variant="body2">{editing ? "Re-onboarding devices..." : "Onboarding devices..."}</Typography>
             </Box>
           ) : null}
 
@@ -1206,25 +1360,17 @@ export default function CreateOnboardingJob() {
                     </Select>
                   </FormControl>
                   <Stack direction={{ xs: "column", lg: "row" }} spacing={2}>
-                    <TextField
+                    <ScopeEditor
                       label="Discovery Scope"
                       value={form.scope}
                       onChange={(event) => setField("scope", event.target.value)}
-                      multiline
-                      minRows={9}
-                      placeholder={"192.168.1.10\n192.168.1.20-192.168.1.30\n192.168.2.0/24\nserver01.local"}
-                      sx={{ flex: 1, ...FIELD_SX }}
-                      fullWidth
+                      example={SCOPE_DISCOVERY_EXAMPLE}
                     />
-                    <TextField
+                    <ScopeEditor
                       label="Exclusion Scope"
                       value={form.exclusionScope}
                       onChange={(event) => setField("exclusionScope", event.target.value)}
-                      multiline
-                      minRows={9}
-                      placeholder={"192.168.1.1\n192.168.1.40-192.168.1.50\nprinter01.local"}
-                      sx={{ flex: 1, ...FIELD_SX }}
-                      fullWidth
+                      example={SCOPE_EXCLUSION_EXAMPLE}
                     />
                   </Stack>
                 </Box>
@@ -1232,13 +1378,13 @@ export default function CreateOnboardingJob() {
 
               {activeTabKey === "context" ? (
                 <Box sx={TAB_SECTION_SX}>
-                  <SectionHeader title="Connection Method" detail="Choose stored machine credentials and target agent branch for Linux SSH enrollment." />
+                  <SectionHeader title="Connection Method" detail="Choose a stored machine or domain credential to connect to the devices and trigger automatic enrollment." />
                   <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
                     <FormControl fullWidth sx={FIELD_SX}>
-                      <InputLabel id="onboarding-credential-label">SSH Credential</InputLabel>
+                      <InputLabel id="onboarding-credential-label">Stored Credential</InputLabel>
                       <Select
                         labelId="onboarding-credential-label"
-                        label="SSH Credential"
+                        label="Stored Credential"
                         value={form.credentialId}
                         onChange={(event) => setField("credentialId", event.target.value)}
                         MenuProps={SELECT_MENU_PROPS}
