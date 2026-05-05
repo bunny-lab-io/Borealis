@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -39,7 +39,6 @@ import {
 } from "../DialogStyles.jsx";
 import { CountSliderGroup } from "../Automation/Watchdogs/shared.jsx";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
-import { useUrlTabState } from "../app/hooks/useUrlTabState.js";
 import { APP_PATHS } from "../app/routes/paths.js";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -368,6 +367,29 @@ function normalizeBranchName(value) {
   return String(value || DEFAULT_BRANCH).trim() || DEFAULT_BRANCH;
 }
 
+function normalizeTabToken(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function resolveOnboardingTabKey(search, allowedKeys, defaultKey) {
+  const fallbackKey = String(defaultKey || "name").trim() || "name";
+  const allowed = Array.isArray(allowedKeys) ? allowedKeys : [];
+  const params = new URLSearchParams(String(search || ""));
+  const rawValue = normalizeTabToken(params.get("tab"));
+  const decodedValue = ONBOARDING_TAB_KEY_BY_URL[rawValue] || rawValue || fallbackKey;
+  return allowed.length && !allowed.includes(decodedValue) ? fallbackKey : decodedValue;
+}
+
+function replaceOnboardingTabQuery(nextKey) {
+  if (typeof window === "undefined") return;
+  const serializedKey = normalizeTabToken(ONBOARDING_TAB_URL_BY_KEY[nextKey] || nextKey);
+  if (!serializedKey) return;
+  const url = new URL(window.location.href);
+  if (normalizeTabToken(url.searchParams.get("tab")) === serializedKey) return;
+  url.searchParams.set("tab", serializedKey);
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
 function SectionHeader({ title, detail, action }) {
   return (
     <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 2, flexWrap: "wrap" }}>
@@ -425,6 +447,7 @@ function StatusPill({ status }) {
 }
 
 export default function CreateOnboardingJob() {
+  const location = useLocation();
   const navigate = useNavigate();
   const params = useParams();
   const jobId = params?.jobId ? Number(params.jobId) : null;
@@ -500,23 +523,26 @@ export default function CreateOnboardingJob() {
     return tabs;
   }, [editing]);
 
-  const { activeKey: activeTabUrlKey, setActiveKey: setActiveTabUrlKey } = useUrlTabState({
-    param: "tab",
-    defaultKey: tabDefs[0]?.key || "name",
-    allowedKeys: tabDefs.map((tabDef) => tabDef.key),
-    keyByUrl: ONBOARDING_TAB_KEY_BY_URL,
-    urlByKey: ONBOARDING_TAB_URL_BY_KEY,
-  });
+  const allowedTabKeys = useMemo(() => tabDefs.map((tabDef) => tabDef.key), [tabDefs]);
+  const fallbackTabKey = tabDefs[0]?.key || "name";
+  const [activeTabKey, setActiveTabKey] = useState(() =>
+    resolveOnboardingTabKey(location.search, allowedTabKeys, fallbackTabKey)
+  );
 
-  const activeTabKey = useMemo(() => {
-    const fallbackKey = tabDefs[0]?.key || "name";
-    return tabDefs.some((tabDef) => tabDef.key === activeTabUrlKey) ? activeTabUrlKey : fallbackKey;
-  }, [activeTabUrlKey, tabDefs]);
+  useEffect(() => {
+    const nextKey = resolveOnboardingTabKey(location.search, allowedTabKeys, fallbackTabKey);
+    setActiveTabKey(nextKey);
+  }, [allowedTabKeys, fallbackTabKey, jobId, location.pathname, location.search]);
 
-  const activeTabIndex = useMemo(() => {
-    const index = tabDefs.findIndex((tabDef) => tabDef.key === activeTabKey);
-    return index >= 0 ? index : 0;
-  }, [activeTabKey, tabDefs]);
+  const selectTabKey = useCallback(
+    (nextTabKey) => {
+      const normalizedKey = String(nextTabKey || "").trim();
+      if (!normalizedKey || !allowedTabKeys.includes(normalizedKey)) return;
+      setActiveTabKey(normalizedKey);
+      replaceOnboardingTabQuery(normalizedKey);
+    },
+    [allowedTabKeys]
+  );
 
   const setField = useCallback((key, value) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -987,7 +1013,7 @@ export default function CreateOnboardingJob() {
           throw new Error(redeployBody?.message || redeployBody?.error || `Re-deploy failed (${redeployResp.status})`);
         }
         setNotice("Onboarding re-deploy started.");
-        setActiveTabUrlKey("targets");
+        selectTabKey("targets");
         window.setTimeout(() => {
           void loadTargets();
         }, 1200);
@@ -999,7 +1025,7 @@ export default function CreateOnboardingJob() {
     } finally {
       setSaving(false);
     }
-  }, [editing, form, jobId, loadTargets, navigate, selectedSite, setActiveTabUrlKey]);
+  }, [editing, form, jobId, loadTargets, navigate, selectTabKey, selectedSite]);
 
   const pageHeaderActions = useMemo(
     () => {
@@ -1062,8 +1088,8 @@ export default function CreateOnboardingJob() {
           ) : null}
 
             <Tabs
-              value={activeTabIndex}
-              onChange={(_, value) => setActiveTabUrlKey(tabDefs[value]?.key || "name")}
+              value={activeTabKey}
+              onChange={(_, value) => selectTabKey(value)}
               variant="scrollable"
               scrollButtons="auto"
               TabIndicatorProps={{
@@ -1076,7 +1102,7 @@ export default function CreateOnboardingJob() {
               sx={TABS_SX}
             >
               {tabDefs.map((tabDef) => (
-                <Tab key={tabDef.key} label={tabDef.label} />
+                <Tab key={tabDef.key} value={tabDef.key} label={tabDef.label} />
               ))}
             </Tabs>
 
