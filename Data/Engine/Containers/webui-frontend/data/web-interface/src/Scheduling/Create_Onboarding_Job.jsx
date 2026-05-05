@@ -1312,7 +1312,8 @@ export default function CreateOnboardingJob() {
                   </Box>
                 </Box>
               ) : null}
-      </Stack>
+            </Box>
+          </Stack>
 
       <Dialog
         open={outputOpen}
@@ -1413,6 +1414,6 @@ export default function CreateOnboardingJob() {
           ))}
         </DialogContent>
       </Dialog>
-    </Paper>
+    </Box>
   );
 }
