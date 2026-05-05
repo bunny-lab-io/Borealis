@@ -87,6 +87,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - The Engine reaches targets directly over the local network through SSH; no WireGuard tunnel or existing Borealis agent is required.
 - Borealis uses one stored SSH credential per onboarding job and does not copy credentials into the job definition.
 - The remote installer uses the selected agent install branch of `Agent.sh`, the Engine public URL, and the selected site's enrollment code. Device approval remains manual, but pending approvals can be approved directly from the onboarding job target status table when no hostname conflict prompt is required.
+- Re-deploy clears prior onboarding run history for that job and starts a new immediate local-network SSH deployment.
 
 ## Device Purge
 - The Device List `Delete` action is now an admin-only purge flow backed by `POST /api/devices/<guid>/purge`.
@@ -168,6 +169,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `GET /api/admin/device-approvals` (Token Authenticated) - approval queue scoped to the current operator's assigned sites unless the operator is an admin. Admins can use `status=wrong_code` for recent invalid enrollment-code attempts.
 - `POST /api/admin/device-approvals/<approval_id>/approve` (Token Authenticated) - approve an in-scope device.
 - `POST /api/admin/device-approvals/<approval_id>/deny` (Token Authenticated) - deny an in-scope device.
+- `POST /api/onboarding/jobs/<job_id>/redeploy` (Token Authenticated) - clear onboarding history for a job and start a fresh run.
 - `GET /api/onboarding/jobs/<job_id>/targets` (Token Authenticated) - per-target automatic onboarding attempts for a scheduled job occurrence, including current approval context when available.
 
 ## Related Documentation

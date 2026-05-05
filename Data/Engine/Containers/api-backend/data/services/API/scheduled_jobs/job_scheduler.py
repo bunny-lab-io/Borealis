@@ -3075,6 +3075,26 @@ class JobScheduler:
         finally:
             conn.close()
 
+    def _clear_scheduled_job_run_history(self, job_id: int) -> int:
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM scheduled_job_runs WHERE job_id=?", (int(job_id),))
+            run_ids = [int(row[0]) for row in cur.fetchall()]
+            if not run_ids:
+                return 0
+            placeholders = ",".join(["?"] * len(run_ids))
+            params = tuple(run_ids)
+            cur.execute(f"DELETE FROM scheduled_job_run_activity WHERE run_id IN ({placeholders})", params)
+            cur.execute(f"DELETE FROM scheduled_job_run_targets WHERE run_id IN ({placeholders})", params)
+            cur.execute(f"DELETE FROM scheduled_job_onboarding_targets WHERE run_id IN ({placeholders})", params)
+            cur.execute(f"DELETE FROM scheduled_job_runs WHERE id IN ({placeholders})", params)
+            cleared = int(cur.rowcount or 0)
+            conn.commit()
+            return cleared
+        finally:
+            conn.close()
+
     def _update_onboarding_target_row(
         self,
         row_id: int,
@@ -7837,6 +7857,82 @@ class JobScheduler:
                 conn.commit()
                 conn.close()
                 return json.dumps({"status": "ok", "cleared": int(cleared), "kept_occurrence": latest}), 200, {"Content-Type": "application/json"}
+            except Exception as e:
+                return json.dumps({"error": str(e)}), 500, {"Content-Type": "application/json"}
+
+        @app.route("/api/onboarding/jobs/<int:job_id>/redeploy", methods=["POST"])
+        def api_onboarding_job_redeploy(job_id: int):
+            requirement = self._require_user()
+            if requirement:
+                return json.dumps(requirement[0]), requirement[1], {"Content-Type": "application/json"}
+            user = self._current_user() or {}
+            try:
+                conn = self._conn()
+                try:
+                    cur = conn.cursor()
+                    cur.execute(
+                        """
+                        SELECT components_json,
+                               targets_json,
+                               credential_id,
+                               job_kind
+                          FROM scheduled_jobs
+                         WHERE id=?
+                        """,
+                        (int(job_id),),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                    if not self._job_visible_to_user(user, row[1]):
+                        return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                    if _normalize_job_kind(row[3]) != JOB_KIND_ONBOARDING:
+                        return json.dumps({"error": "not onboarding job"}), 400, {"Content-Type": "application/json"}
+                    components_json = row[0] or "[]"
+                    targets_json = row[1] or "[]"
+                    credential_id = row[2]
+                finally:
+                    conn.close()
+
+                try:
+                    components = json.loads(components_json or "[]")
+                except Exception:
+                    components = []
+                try:
+                    targets = json.loads(targets_json or "[]")
+                except Exception:
+                    targets = []
+                try:
+                    job_credential_id = int(credential_id) if credential_id is not None else None
+                except Exception:
+                    job_credential_id = None
+
+                cleared = self._clear_scheduled_job_run_history(int(job_id))
+                occurrence_ts = _now_minute()
+                created_at = _now_ts()
+                self._record_onboarding_occurrence_snapshot(
+                    job_id=int(job_id),
+                    scheduled_ts=int(occurrence_ts),
+                    created_at=created_at,
+                )
+                occurrence_runs = self._load_occurrence_runs(int(job_id), int(occurrence_ts))
+                for run in occurrence_runs:
+                    self._dispatch_onboarding_run(
+                        job_id=int(job_id),
+                        run_row_id=int(run["id"]),
+                        scheduled_ts=int(occurrence_ts),
+                        components=components,
+                        targets=targets,
+                        credential_id=job_credential_id,
+                    )
+                return json.dumps(
+                    {
+                        "status": "ok",
+                        "cleared": int(cleared),
+                        "occurrence": int(occurrence_ts),
+                        "run_ids": [int(run["id"]) for run in occurrence_runs],
+                    }
+                ), 200, {"Content-Type": "application/json"}
             except Exception as e:
                 return json.dumps({"error": str(e)}), 500, {"Content-Type": "application/json"}
 

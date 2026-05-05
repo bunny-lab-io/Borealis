@@ -28,7 +28,6 @@ import {
   Devices as DevicesIcon,
   PlayArrow as PlayArrowIcon,
   Refresh as RefreshIcon,
-  Save as SaveIcon,
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
@@ -38,7 +37,7 @@ import {
   DIALOG_TITLE_SX,
   DialogHeaderBlock,
 } from "../DialogStyles.jsx";
-import PageBodyFrame from "../PageBodyFrame.jsx";
+import { CountSliderGroup } from "../Automation/Watchdogs/shared.jsx";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import { useUrlTabState } from "../app/hooks/useUrlTabState.js";
 import { APP_PATHS } from "../app/routes/paths.js";
@@ -92,13 +91,20 @@ const gridThemeClass = gridTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans","Helvetica Neue",Arial,sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 
-const PANEL_SX = {
-  p: 2.5,
-  borderRadius: 3,
-  border: `1px solid ${MAGIC_UI.panelBorder}`,
-  background: MAGIC_UI.panelBg,
+const PAGE_SX = {
+  m: 0,
+  p: { xs: 2, md: 3 },
+  flexGrow: 1,
+  minWidth: 0,
+  minHeight: 0,
+  display: "flex",
+  flexDirection: "column",
+  gap: 3,
+  borderRadius: 0,
+  background: "transparent",
+  border: "none",
+  boxShadow: "none",
   color: MAGIC_UI.textBright,
-  boxShadow: "0 22px 60px rgba(2,6,23,0.72)",
 };
 
 const GRID_PANEL_SX = {
@@ -116,14 +122,14 @@ const GRID_PANEL_SX = {
   "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
   "--ag-border-color": "rgba(125,183,255,0.18)",
   "--ag-row-border-color": "rgba(125,183,255,0.14)",
-  "--ag-border-radius": "8px",
-  borderRadius: 3,
+  "--ag-border-radius": "0px",
+  borderRadius: 0,
   border: `1px solid ${MAGIC_UI.panelBorder}`,
-  background: "linear-gradient(170deg, rgba(5,8,20,0.92), rgba(8,13,32,0.9))",
-  boxShadow: "0 22px 60px rgba(2,6,23,0.75)",
+  background: "transparent",
+  boxShadow: "none",
   overflow: "hidden",
   "& .ag-root-wrapper": {
-    borderRadius: 3,
+    borderRadius: 0,
   },
   "& .ag-root, & .ag-header, & .ag-center-cols-container": {
     fontFamily: gridFontFamily,
@@ -270,7 +276,7 @@ const STATUS_THEME = {
   approved: { label: "Approved", text: "#60a5fa", background: "rgba(96,165,250,0.16)", border: "1px solid rgba(96,165,250,0.4)", dot: "#60a5fa" },
   completed: { label: "Completed", text: "#34d399", background: "rgba(52,211,153,0.18)", border: "1px solid rgba(52,211,153,0.42)", dot: "#34d399" },
   failed: { label: "Failed", text: "#fb7185", background: "rgba(251,113,133,0.18)", border: "1px solid rgba(251,113,133,0.45)", dot: "#fb7185" },
-  ssh_unreachable: { label: "SSH Unreachable", text: "#fb7185", background: "rgba(251,113,133,0.18)", border: "1px solid rgba(251,113,133,0.45)", dot: "#fb7185" },
+  ssh_unreachable: { label: "Unreachable", text: "#fb7185", background: "rgba(251,113,133,0.18)", border: "1px solid rgba(251,113,133,0.45)", dot: "#fb7185" },
   skipped: { label: "Skipped", text: "#fbbf24", background: "rgba(251,191,36,0.14)", border: "1px solid rgba(251,191,36,0.32)", dot: "#f59e0b" },
   denied: { label: "Denied", text: "#9aa0a6", background: "rgba(148,163,184,0.12)", border: "1px solid rgba(148,163,184,0.25)", dot: "#94a3b8" },
   expired: { label: "Expired", text: "#9aa0a6", background: "rgba(148,163,184,0.12)", border: "1px solid rgba(148,163,184,0.25)", dot: "#94a3b8" },
@@ -286,7 +292,22 @@ const SELECT_MENU_PROPS = {
   },
 };
 
-const TARGET_AUTO_SIZE_COLUMNS = ["targetLabel", "statusLabel", "approvalReference", "output", "actions"];
+const TARGET_AUTO_SIZE_COLUMNS = ["targetLabel", "statusLabel", "detail", "output"];
+const TARGET_STATUS_FILTER_OPTIONS = [
+  { key: "pending_approval", label: "Pending Approval" },
+  { key: "skipped", label: "Skipped" },
+  { key: "failed", label: "Failed" },
+  { key: "completed", label: "Completed" },
+  { key: "unreachable", label: "Unreachable" },
+];
+
+const FILTER_LABEL_SX = {
+  color: "#58a6ff",
+  fontSize: 11,
+  fontWeight: 600,
+  lineHeight: 1.1,
+  pl: 1,
+};
 
 function toScopeText(entries) {
   if (Array.isArray(entries)) {
@@ -305,6 +326,23 @@ function splitScopeEntries(value) {
 function formatStatusLabel(status) {
   const key = String(status || "").trim().toLowerCase();
   return STATUS_THEME[key]?.label || key.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()) || "Pending";
+}
+
+function targetStatusBucket(status) {
+  const key = String(status || "pending").trim().toLowerCase();
+  if (key === "ssh_unreachable") return "unreachable";
+  if (["completed", "approved", "success", "installed"].includes(key)) return "completed";
+  if (["skipped", "denied", "expired", "already_enrolled", "already_pending", "unsupported_os"].includes(key)) return "skipped";
+  if (["failed", "failure", "error"].includes(key)) return "failed";
+  return "pending_approval";
+}
+
+function targetVisibleForStatusFilter(row, activeFilter) {
+  const bucket = targetStatusBucket(row?.status);
+  if (activeFilter) {
+    return bucket === activeFilter;
+  }
+  return bucket !== "unreachable";
 }
 
 function datetimeLocalValue(epochSeconds) {
@@ -407,6 +445,7 @@ export default function CreateOnboardingJob() {
   const [outputSections, setOutputSections] = useState([]);
   const [copiedOutputKey, setCopiedOutputKey] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
+  const [targetStatusFilter, setTargetStatusFilter] = useState("");
   const targetGridApiRef = useRef(null);
   const [form, setForm] = useState({
     name: "",
@@ -646,6 +685,7 @@ export default function CreateOnboardingJob() {
         id: target.id || `${targetLabel}-${target.run_id || ""}`,
         targetLabel,
         status,
+        statusBucket: targetStatusBucket(status),
         statusLabel: formatStatusLabel(status),
         detail: target.detail || "",
         approvalReference: target.approval_reference || "",
@@ -657,6 +697,20 @@ export default function CreateOnboardingJob() {
       };
     }),
     [targetRows]
+  );
+
+  const targetStatusCounts = useMemo(
+    () => targetGridRows.reduce((acc, row) => {
+      const bucket = row.statusBucket || targetStatusBucket(row.status);
+      acc[bucket] = (acc[bucket] || 0) + 1;
+      return acc;
+    }, {}),
+    [targetGridRows]
+  );
+
+  const visibleTargetGridRows = useMemo(
+    () => targetGridRows.filter((row) => targetVisibleForStatusFilter(row, targetStatusFilter)),
+    [targetGridRows, targetStatusFilter]
   );
 
   const handleCopyOutputSection = useCallback(async (section) => {
@@ -739,19 +793,11 @@ export default function CreateOnboardingJob() {
         field: "statusLabel",
         headerName: "Status",
         minWidth: 180,
-        filter: "agSetColumnFilter",
+        filter: false,
         cellClass: "auto-col-tight",
         cellRenderer: (params) => <StatusPill status={params.data?.status} />,
       },
-      { field: "detail", headerName: "Detail", minWidth: 320, flex: 1, filter: "agTextColumnFilter", cellClass: "auto-col-tight" },
-      {
-        field: "approvalReference",
-        headerName: "Approval",
-        minWidth: 230,
-        filter: "agTextColumnFilter",
-        cellClass: "auto-col-tight",
-        valueFormatter: (params) => params.value || "-",
-      },
+      { field: "detail", headerName: "Detail", minWidth: 360, filter: "agTextColumnFilter", cellClass: "auto-col-tight" },
       {
         field: "output",
         headerName: "StdOut / StdErr",
@@ -796,6 +842,7 @@ export default function CreateOnboardingJob() {
         field: "actions",
         headerName: "Actions",
         minWidth: 170,
+        flex: 1,
         cellClass: "auto-col-tight",
         cellRenderer: (params) => {
           const row = params.data;
@@ -836,7 +883,7 @@ export default function CreateOnboardingJob() {
 
   const autoSizeTargetGrid = useCallback(() => {
     const api = targetGridApiRef.current;
-    if (!api || !targetGridRows.length) return;
+    if (!api || !visibleTargetGridRows.length) return;
     const run = () => {
       try {
         if (typeof api.autoSizeColumns === "function") {
@@ -851,7 +898,7 @@ export default function CreateOnboardingJob() {
     } else {
       setTimeout(run, 0);
     }
-  }, [targetGridRows.length]);
+  }, [visibleTargetGridRows.length]);
 
   const handleTargetGridReady = useCallback((params) => {
     targetGridApiRef.current = params.api;
@@ -924,36 +971,67 @@ export default function CreateOnboardingJob() {
         throw new Error(body?.message || body?.error || `Save failed (${resp.status})`);
       }
       const savedId = body?.job?.id || jobId;
-      setNotice("Onboarding job saved.");
       if (savedId && !editing) {
+        setNotice("Onboarding deployment started.");
         navigate(APP_PATHS.jobOnboarding(savedId), { replace: true });
+      } else if (editing && savedId) {
+        setTargetRows([]);
+        const redeployResp = await fetch(`/api/onboarding/jobs/${encodeURIComponent(savedId)}/redeploy`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        const redeployBody = await redeployResp.json().catch(() => ({}));
+        if (!redeployResp.ok) {
+          throw new Error(redeployBody?.message || redeployBody?.error || `Re-deploy failed (${redeployResp.status})`);
+        }
+        setNotice("Onboarding re-deploy started.");
+        setActiveTabUrlKey("targets");
+        window.setTimeout(() => {
+          void loadTargets();
+        }, 1200);
+      } else {
+        setNotice("Onboarding job saved.");
       }
     } catch (err) {
       setError(err?.message || "Unable to save onboarding job.");
     } finally {
       setSaving(false);
     }
-  }, [editing, form, jobId, navigate, selectedSite]);
+  }, [editing, form, jobId, loadTargets, navigate, selectedSite, setActiveTabUrlKey]);
 
   const pageHeaderActions = useMemo(
-    () => [
-      {
-        id: "onboarding-back",
-        label: "Back",
-        icon: <ArrowBackIcon />,
-        tone: "secondary",
-        onClick: () => navigate(APP_PATHS.jobs),
-      },
-      {
+    () => {
+      const actions = [
+        {
+          id: "onboarding-back",
+          label: "Back",
+          icon: <ArrowBackIcon />,
+          tone: "secondary",
+          onClick: () => navigate(APP_PATHS.jobs),
+        },
+      ];
+      if (editing) {
+        actions.push({
+          id: "onboarding-refresh",
+          label: "Refresh",
+          icon: <RefreshIcon />,
+          tone: "secondary",
+          onClick: () => void loadTargets(),
+        });
+      }
+      actions.push({
         id: "onboarding-save",
-        label: editing ? "Save" : "Create",
-        icon: editing ? <SaveIcon /> : <PlayArrowIcon />,
+        label: editing ? "Re-Deploy" : "Deploy",
+        icon: <PlayArrowIcon />,
         tone: "primary",
         loading: saving,
         onClick: submit,
-      },
-    ],
-    [editing, navigate, saving, submit]
+      });
+      return actions;
+    },
+    [editing, loadTargets, navigate, saving, submit]
   );
 
   useRoutePageChrome({
@@ -972,22 +1050,17 @@ export default function CreateOnboardingJob() {
   }
 
   return (
-    <Paper elevation={0} sx={{ m: 0, p: 0, background: "transparent", color: "#e2e8f0" }}>
-      <PageBodyFrame
-        variant="content_panel"
-        fillHeight={false}
-      >
-        <Stack spacing={2}>
+    <Box sx={PAGE_SX}>
+      <Stack spacing={2}>
           {error ? <Alert severity="error">{error}</Alert> : null}
           {notice ? <Alert severity="success">{notice}</Alert> : null}
           {saving ? (
             <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: MAGIC_UI.textMuted }}>
               <CircularProgress size={18} sx={{ color: MAGIC_UI.accentA }} />
-              <Typography variant="body2">Saving onboarding job...</Typography>
+              <Typography variant="body2">{editing ? "Re-deploying onboarding job..." : "Deploying onboarding job..."}</Typography>
             </Box>
           ) : null}
 
-          <Box sx={PANEL_SX}>
             <Tabs
               value={activeTabIndex}
               onChange={(_, value) => setActiveTabUrlKey(tabDefs[value]?.key || "name")}
@@ -1189,12 +1262,31 @@ export default function CreateOnboardingJob() {
                   <SectionHeader
                     title="Target Status"
                     detail="Use AG Grid filters to inspect current target attempts. StdOut and StdErr open in a separate viewer."
-                    action={
-                      <Button startIcon={<RefreshIcon />} onClick={() => void loadTargets()} sx={PRIMARY_BUTTON_SX}>
-                        Refresh
-                      </Button>
-                    }
                   />
+                  <Box
+                    sx={{
+                      display: "flex",
+                      alignItems: { xs: "flex-start", md: "flex-end" },
+                      justifyContent: "space-between",
+                      flexWrap: "wrap",
+                      gap: 2,
+                    }}
+                  >
+                    <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "8px" }}>
+                      <Typography component="span" sx={FILTER_LABEL_SX}>
+                        Status
+                      </Typography>
+                      <CountSliderGroup
+                        options={TARGET_STATUS_FILTER_OPTIONS}
+                        activeKey={targetStatusFilter}
+                        counts={targetStatusCounts}
+                        onChange={setTargetStatusFilter}
+                      />
+                    </Box>
+                    <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
+                      Showing {visibleTargetGridRows.length.toLocaleString()} of {targetGridRows.length.toLocaleString()} targets
+                    </Typography>
+                  </Box>
                   <Box
                     className={gridThemeClass}
                     sx={{
@@ -1203,7 +1295,7 @@ export default function CreateOnboardingJob() {
                     }}
                   >
                     <AgGridReact
-                      rowData={targetGridRows}
+                      rowData={visibleTargetGridRows}
                       columnDefs={targetGridColumnDefs}
                       defaultColDef={targetGridDefaultColDef}
                       suppressCellFocus
@@ -1220,10 +1312,7 @@ export default function CreateOnboardingJob() {
                   </Box>
                 </Box>
               ) : null}
-            </Box>
-          </Box>
-        </Stack>
-      </PageBodyFrame>
+      </Stack>
 
       <Dialog
         open={outputOpen}

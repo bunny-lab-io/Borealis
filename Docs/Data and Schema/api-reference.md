@@ -180,6 +180,7 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 - `GET /api/scheduled_jobs/<int:job_id>/devices` (Token Authenticated) - device results.
 - `DELETE /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - clear run history.
 - `job_kind = onboarding` on scheduled-job create/update creates an automatic Linux SSH onboarding job. Payloads use a `device_onboarding` component and an `onboarding_scope` target. The target accepts `entries` for discovery scope and optional `exclusions` for IP/FQDN/CIDR/range blacklist entries.
+- `POST /api/onboarding/jobs/<int:job_id>/redeploy` (Token Authenticated) - delete prior run history for one onboarding job and dispatch a fresh immediate onboarding occurrence.
 - `GET /api/onboarding/jobs/<int:job_id>/targets` (Token Authenticated) - per-target onboarding status, sanitized output snippets, SSH port, approval reference, approval id, and current approval status when available.
 
 ### Notifications

@@ -61,6 +61,7 @@ Supported schedule types (from the scheduler core):
 - At run time the Engine probes TCP/SSH, authenticates with the selected credential, confirms the target is Linux, downloads `Agent.sh` from the selected branch, and runs `Agent.sh --repo-branch <branch> deploy --serverurl <engine_url> --enrollmentcode <site_code> --newEngine`.
 - Remote machine credentials stay only in existing Aegis-protected credential records. Onboarding target output is stored as sanitized snippets in `scheduled_job_onboarding_targets`.
 - Successful remote installs do not auto-approve devices. Agents submit normal enrollment requests and remain in the existing approval queue. When possible, Borealis records `onboarding_job_id`, `onboarding_run_id`, and `onboarding_target` on the approval. The onboarding target endpoint hydrates pending target rows with current approval status so approved or completed devices stop showing as `waiting_approval`.
+- Re-deploying an onboarding job saves the current job definition, deletes prior run history for that job, creates a fresh immediate onboarding occurrence, and repopulates target status from the new run.
 - Fan-out is bounded by `BOREALIS_ONBOARDING_CONCURRENCY` (default `8`). Install command timeout is controlled by `BOREALIS_ONBOARDING_INSTALL_TIMEOUT_SECONDS` (default `900`).
 
 ## Execution Contexts
@@ -97,6 +98,7 @@ Supported schedule types (from the scheduler core):
 - `GET /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - run history.
 - `GET /api/scheduled_jobs/<int:job_id>/devices` (Token Authenticated) - device results.
 - `DELETE /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - clear run history.
+- `POST /api/onboarding/jobs/<int:job_id>/redeploy` (Token Authenticated) - clear onboarding job history and start a fresh immediate onboarding run.
 - `GET /api/onboarding/jobs/<int:job_id>/targets` (Token Authenticated) - onboarding target attempts for an occurrence, including sanitized output snippets and approval context when available.
 
 ## Related Documentation

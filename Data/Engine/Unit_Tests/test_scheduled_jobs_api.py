@@ -306,6 +306,109 @@ def test_onboarding_target_status_hydrates_approved_context(engine_harness: Engi
     assert hydrated[0]["detail"] == "Device approved. Agent finalizing enrollment."
 
 
+def test_onboarding_redeploy_clears_history_and_dispatches(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client, scheduler = _scheduled_jobs_client(engine_harness)
+    response = client.post(
+        "/api/scheduled_jobs",
+        json={
+            "job_kind": "onboarding",
+            "name": "Automatic Device Onboarding Main Lab",
+            "targets": [
+                {
+                    "kind": "onboarding_scope",
+                    "site_id": 1,
+                    "site_name": "Main Lab",
+                    "entries": ["192.168.10.5"],
+                }
+            ],
+            "components": [{"kind": "device_onboarding", "install_branch": "main", "ssh_port": 22}],
+            "credential_id": 77,
+            "execution_context": "onboarding_linux_ssh",
+            "schedule": {"type": "immediately"},
+        },
+    )
+    assert response.status_code == 200
+    job_id = int(response.get_json()["job"]["id"])
+
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_runs (
+                job_id,
+                scheduled_ts,
+                status,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (job_id, 1_700_000_000, "Success", 1_700_000_000, 1_700_000_001),
+        )
+        old_run_id = int(cur.lastrowid)
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_onboarding_targets (
+                run_id,
+                job_id,
+                scheduled_ts,
+                site_id,
+                target_input,
+                target_address,
+                target_hostname,
+                ssh_port,
+                status,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                old_run_id,
+                job_id,
+                1_700_000_000,
+                1,
+                "192.168.10.5",
+                "192.168.10.5",
+                "192.168.10.5",
+                22,
+                "waiting_approval",
+                1_700_000_000,
+                1_700_000_001,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    dispatched = []
+
+    def fake_dispatch(**kwargs):
+        dispatched.append(kwargs)
+
+    monkeypatch.setattr(scheduler, "_dispatch_onboarding_run", fake_dispatch)
+
+    redeploy = client.post(f"/api/onboarding/jobs/{job_id}/redeploy", json={})
+
+    assert redeploy.status_code == 200
+    payload = redeploy.get_json()
+    assert payload["cleared"] == 1
+    assert len(payload["run_ids"]) == 1
+    assert dispatched and dispatched[0]["job_id"] == job_id
+
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM scheduled_job_onboarding_targets WHERE run_id=?", (old_run_id,))
+        assert int(cur.fetchone()[0]) == 0
+        cur.execute("SELECT COUNT(*) FROM scheduled_job_runs WHERE job_id=?", (job_id,))
+        assert int(cur.fetchone()[0]) == 1
+    finally:
+        conn.close()
+
+
 def test_onboarding_remote_command_marks_agent_noninteractive(engine_harness: EngineTestHarness) -> None:
     _client, scheduler = _scheduled_jobs_client(engine_harness)
 
