@@ -28,6 +28,8 @@ const PAGE_TITLE = "Automatic Device Onboarding";
 const PAGE_SUBTITLE = "Enroll Linux devices over local-network SSH with stored machine credentials.";
 const DEFAULT_BRANCH = "main";
 const DEFAULT_SSH_PORT = 22;
+const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
+const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
 
 const PANEL_SX = {
   p: 2.5,
@@ -75,6 +77,10 @@ function targetOutputSnippet(target) {
   ].filter(Boolean).join("\n\n");
 }
 
+function normalizeBranchName(value) {
+  return String(value || DEFAULT_BRANCH).trim() || DEFAULT_BRANCH;
+}
+
 export default function CreateOnboardingJob() {
   const navigate = useNavigate();
   const params = useParams();
@@ -87,6 +93,9 @@ export default function CreateOnboardingJob() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [targetRows, setTargetRows] = useState([]);
+  const [branchRows, setBranchRows] = useState([]);
+  const [branchesLoading, setBranchesLoading] = useState(false);
+  const [branchLoadError, setBranchLoadError] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
   const [form, setForm] = useState({
     name: "",
@@ -110,8 +119,91 @@ export default function CreateOnboardingJob() {
     [credentials]
   );
 
+  const branchOptions = useMemo(() => {
+    const currentBranch = normalizeBranchName(form.branch);
+    const rows = Array.isArray(branchRows) ? branchRows : [];
+    if (rows.some((branch) => branch.name === currentBranch)) {
+      return rows;
+    }
+    return [
+      {
+        name: currentBranch,
+        sha: "",
+        protected: false,
+        default: currentBranch === DEFAULT_BRANCH,
+      },
+      ...rows,
+    ];
+  }, [branchRows, form.branch]);
+
   const setField = useCallback((key, value) => {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }, []);
+
+  const fetchInstallBranches = useCallback(async () => {
+    setBranchesLoading(true);
+    setBranchLoadError("");
+    try {
+      const tokenRes = await fetch("/api/github/token", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const tokenData = await tokenRes.json().catch(() => ({}));
+      if (!tokenRes.ok) {
+        const message = tokenData?.message || tokenData?.error || `GitHub token lookup failed (HTTP ${tokenRes.status}).`;
+        throw new Error(message);
+      }
+      const githubToken = String(tokenData?.token || "").trim();
+      if (!githubToken) {
+        throw new Error(tokenData?.message || "GitHub API token is unavailable.");
+      }
+
+      const nextRows = [];
+      for (let page = 1; page <= 10; page += 1) {
+        const branchRes = await fetch(`${GITHUB_BRANCHES_API_URL}?per_page=100&page=${page}`, {
+          cache: "no-store",
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${githubToken}`,
+          },
+        });
+        if (!branchRes.ok) {
+          const body = await branchRes.text().catch(() => "");
+          throw new Error(`GitHub branch lookup failed (HTTP ${branchRes.status})${body ? `: ${body.slice(0, 180)}` : ""}`);
+        }
+        const pageRows = await branchRes.json().catch(() => []);
+        if (!Array.isArray(pageRows)) {
+          throw new Error("GitHub branch lookup returned an unexpected payload.");
+        }
+        pageRows.forEach((branch) => {
+          const name = String(branch?.name || "").trim();
+          if (!name) return;
+          nextRows.push({
+            name,
+            sha: String(branch?.commit?.sha || "").trim(),
+            protected: Boolean(branch?.protected),
+            default: name === DEFAULT_BRANCH,
+          });
+        });
+        if (pageRows.length < 100) {
+          break;
+        }
+      }
+      nextRows.sort((a, b) => {
+        if (a.name === DEFAULT_BRANCH) return -1;
+        if (b.name === DEFAULT_BRANCH) return 1;
+        return a.name.localeCompare(b.name);
+      });
+      setBranchRows(nextRows);
+      if (!nextRows.length) {
+        setBranchLoadError("No GitHub branches returned.");
+      }
+    } catch (err) {
+      setBranchRows([]);
+      setBranchLoadError(err instanceof Error ? err.message : "GitHub branch lookup failed.");
+    } finally {
+      setBranchesLoading(false);
+    }
   }, []);
 
   const loadData = useCallback(async () => {
@@ -159,6 +251,10 @@ export default function CreateOnboardingJob() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    fetchInstallBranches();
+  }, [fetchInstallBranches]);
 
   const loadTargets = useCallback(async () => {
     if (!editing || !jobId) return;
@@ -354,12 +450,43 @@ export default function CreateOnboardingJob() {
                   fullWidth
                 />
                 <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-                  <TextField
-                    label="Install Branch"
-                    value={form.branch}
-                    onChange={(event) => setField("branch", event.target.value)}
-                    fullWidth
-                  />
+                  <FormControl fullWidth error={Boolean(branchLoadError)}>
+                    <InputLabel id="onboarding-install-branch-label">Install Branch</InputLabel>
+                    <Select
+                      labelId="onboarding-install-branch-label"
+                      label="Install Branch"
+                      value={normalizeBranchName(form.branch)}
+                      onChange={(event) => setField("branch", event.target.value)}
+                      onOpen={() => {
+                        if (!branchRows.length && !branchesLoading) {
+                          void fetchInstallBranches();
+                        }
+                      }}
+                    >
+                      {branchOptions.map((branch) => (
+                        <MenuItem key={branch.name} value={branch.name}>
+                          {branch.name}
+                          {branch.default ? " (default)" : ""}
+                          {branch.sha ? ` - ${branch.sha.slice(0, 12)}` : ""}
+                        </MenuItem>
+                      ))}
+                      {branchesLoading ? (
+                        <MenuItem disabled value="__loading">
+                          Loading branches...
+                        </MenuItem>
+                      ) : null}
+                      {branchLoadError ? (
+                        <MenuItem disabled value="__error">
+                          Branch lookup failed
+                        </MenuItem>
+                      ) : null}
+                    </Select>
+                    {branchLoadError ? (
+                      <Typography variant="caption" sx={{ mt: 0.75, color: "#fca5a5" }}>
+                        {branchLoadError}
+                      </Typography>
+                    ) : null}
+                  </FormControl>
                   <TextField
                     label="SSH Port"
                     type="number"
