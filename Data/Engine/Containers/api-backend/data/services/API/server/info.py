@@ -35,12 +35,14 @@ from zoneinfo import available_timezones
 from cryptography import x509
 from flask import Blueprint, Flask, jsonify, request
 
+from Data.Engine.db import dbapi as sqlite3
 from ....edge_runtime import DEFAULT_ACME_STORAGE_PATH, PROJECT_ROOT, load_settings
 from ....public_endpoints import public_hostname as resolve_public_hostname
 from ....public_endpoints import public_vnc_path as resolve_public_vnc_path
 from ...RemoteDesktop.guacamole_proxy import guacd_health
 from ....public_endpoints import wireguard_endpoint
 from ....security import signing
+from ...task_scheduler.queue import enqueue_service_action, list_service_snapshots, list_worker_snapshots
 from ...ansible.runtime_settings import (
     DEFAULT_ANSIBLE_RUNNER_GLOBAL_CONCURRENCY_LIMIT,
     DEFAULT_ANSIBLE_RUNNER_JOB_CONCURRENCY_LIMIT,
@@ -81,6 +83,7 @@ _SYSTEMD_COMMAND_TIMEOUT_SECONDS = 8
 
 _COMPOSE_SERVICE_SPECS: Tuple[Tuple[str, str], ...] = (
     ("api-backend", "API Backend"),
+    ("job-scheduler", "Job Scheduler"),
     ("webui-frontend", "WebUI Frontend"),
     ("traefik-edge", "Traefik Edge"),
     ("postgres-db", "PostgreSQL"),
@@ -89,6 +92,9 @@ _COMPOSE_SERVICE_SPECS: Tuple[Tuple[str, str], ...] = (
 )
 _COMPOSE_SERVICE_ACTIONS: Mapping[str, Tuple[Mapping[str, str], ...]] = {
     "api-backend": (
+        {"id": "restart", "label": "Restart", "action": "restart"},
+    ),
+    "job-scheduler": (
         {"id": "restart", "label": "Restart", "action": "restart"},
     ),
     "webui-frontend": (
@@ -557,11 +563,11 @@ def _parse_compose_ps_json(raw: str) -> Dict[str, Mapping[str, Any]]:
     return by_service
 
 
-def _compose_ps_rows() -> Dict[str, Mapping[str, Any]]:
+def _compose_ps_rows(context: Any = None) -> Dict[str, Mapping[str, Any]]:
     docker_bin = shutil.which("docker") or ""
     compose_file, env_file, project_name = _compose_runtime_paths()
-    if not docker_bin or not compose_file.is_file() or not env_file.is_file():
-        return {}
+    if not docker_bin or not Path("/var/run/docker.sock").exists() or not compose_file.is_file() or not env_file.is_file():
+        return _compose_ps_rows_from_scheduler_snapshot(context)
     args = [
         docker_bin,
         "compose",
@@ -577,14 +583,29 @@ def _compose_ps_rows() -> Dict[str, Mapping[str, Any]]:
     ]
     code, out, _err = _run_command(args, timeout=8)
     if code != 0:
-        return {}
+        return _compose_ps_rows_from_scheduler_snapshot(context)
     return _parse_compose_ps_json(out)
+
+
+def _compose_ps_rows_from_scheduler_snapshot(context: Any = None) -> Dict[str, Mapping[str, Any]]:
+    database_url = str(getattr(context, "database_url", "") or "").strip()
+    if not database_url:
+        return {}
+    conn = sqlite3.connect(database_url, timeout=5)
+    try:
+        snapshots = dict(list_service_snapshots(conn))
+        conn.commit()
+        return snapshots
+    except Exception:
+        return {}
+    finally:
+        conn.close()
 
 
 def _docker_inspect_container(container_name: str) -> Mapping[str, Any]:
     normalized_name = str(container_name or "").strip()
     docker_bin = shutil.which("docker") or ""
-    if not docker_bin or not normalized_name:
+    if not docker_bin or not normalized_name or not Path("/var/run/docker.sock").exists():
         return {}
     code, out, _err = _run_command([docker_bin, "inspect", normalized_name], timeout=8)
     if code != 0 or not str(out or "").strip():
@@ -715,7 +736,7 @@ def format_title_case_for_api(value: Any) -> str:
 
 def _compose_service_rows(context: Any) -> List[Dict[str, Any]]:
     tracker = _get_action_tracker(context)
-    ps_rows = _compose_ps_rows()
+    ps_rows = _compose_ps_rows(context)
     rows: List[Dict[str, Any]] = []
     for service_key, label in _COMPOSE_SERVICE_SPECS:
         record = ps_rows.get(service_key) or {}
@@ -1321,6 +1342,21 @@ def _build_overview_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]
         "agent_release_channels": _collect_agent_release_channels_payload(adapters),
         "remote_desktop": _collect_vnc_session_payload(adapters),
         "operator_session_count": _collect_operator_session_count(adapters),
+        "workers": _collect_worker_payload(adapters),
+    }
+
+
+def _collect_worker_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]:
+    conn = adapters.db_conn_factory()
+    try:
+        rows = list_worker_snapshots(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    active = [row for row in rows if str(row.get("status") or "").lower() in {"starting", "running", "idle"}]
+    return {
+        "active_count": len(active),
+        "workers": rows,
     }
 
 
@@ -1476,6 +1512,27 @@ def _queue_compose_service_action(
     return True, helper_id, ""
 
 
+def _queue_task_scheduler_service_action(
+    adapters: "EngineServiceAdapters",
+    *,
+    service_key: str,
+    action: Mapping[str, str],
+) -> Tuple[bool, str, str]:
+    conn = adapters.db_conn_factory()
+    try:
+        work_id = enqueue_service_action(conn, service_key=service_key, action=action)
+        conn.commit()
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False, "", str(exc)
+    finally:
+        conn.close()
+    return True, str(work_id), ""
+
+
 def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
     """Expose server telemetry endpoints used by the admin interface."""
 
@@ -1554,6 +1611,13 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if admin_error:
             return jsonify(admin_error[0]), admin_error[1]
         return jsonify(_build_overview_payload(adapters))
+
+    @blueprint.route("/api/server/workers", methods=["GET"])
+    def server_workers() -> Any:
+        admin_error = auth.require_admin()
+        if admin_error:
+            return jsonify(admin_error[0]), admin_error[1]
+        return jsonify(_collect_worker_payload(adapters))
 
     @blueprint.route("/api/server/agent-release-channels", methods=["GET"])
     def get_agent_release_channels() -> Any:
@@ -1655,7 +1719,8 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if action is None:
             return _error_response("invalid_service_action", "Unsupported action for this service.", 400)
 
-        queued, helper_id, error_message = _queue_compose_service_action(
+        queued, helper_id, error_message = _queue_task_scheduler_service_action(
+            adapters,
             service_key=normalized_key,
             action=action,
         )
@@ -1678,7 +1743,7 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
                     "service_key": normalized_key,
                     "action": action_name,
                     "mode": mode or None,
-                    "helper_container": helper_id,
+                    "work_item_id": helper_id,
                     "scheduled_for": scheduled_for,
                 }
             ),
@@ -1696,7 +1761,8 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
             action = _resolve_compose_service_action(normalized_key, {"action": "restart"})
             if action is None:
                 return _error_response("invalid_service_key", "Unsupported service key.", 404)
-            queued, helper_id, error_message = _queue_compose_service_action(
+            queued, helper_id, error_message = _queue_task_scheduler_service_action(
+                adapters,
                 service_key=normalized_key,
                 action=action,
             )
@@ -1715,7 +1781,7 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
                         "queued": True,
                         "service_key": normalized_key,
                         "action": "restart",
-                        "helper_container": helper_id,
+                        "work_item_id": helper_id,
                         "scheduled_for": scheduled_for,
                     }
                 ),

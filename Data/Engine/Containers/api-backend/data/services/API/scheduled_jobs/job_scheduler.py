@@ -15,7 +15,9 @@ import io
 import json
 import logging
 import math
+import multiprocessing
 import os
+import queue as queue_module
 import re
 import shlex
 import shutil
@@ -283,6 +285,61 @@ def _windows_exit_code_from_output(output: Any) -> Optional[int]:
         return int(matches[-1])
     except Exception:
         return None
+
+
+def _set_impacket_timeout(obj: Any, timeout_seconds: float) -> None:
+    timeout = max(3, min(60, int(float(timeout_seconds or 0.0) or 10)))
+    for method_name in ("set_timeout", "setTimeout", "set_connect_timeout", "setConnectTimeout"):
+        method = getattr(obj, method_name, None)
+        if not callable(method):
+            continue
+        try:
+            method(timeout)
+            return
+        except Exception:
+            continue
+    get_socket = getattr(obj, "get_socket", None)
+    if callable(get_socket):
+        try:
+            sock = get_socket()
+            if hasattr(sock, "settimeout"):
+                sock.settimeout(timeout)
+        except Exception:
+            pass
+
+
+def _windows_onboarding_child_entry(result_queue: Any, method: Callable[..., Dict[str, Any]], kwargs: Dict[str, Any]) -> None:
+    def _status_update(detail: str, stdout: str = "", stderr: str = "") -> None:
+        try:
+            result_queue.put(
+                {
+                    "type": "status",
+                    "detail": str(detail or ""),
+                    "stdout": str(stdout or ""),
+                    "stderr": str(stderr or ""),
+                },
+                block=False,
+            )
+        except Exception:
+            pass
+
+    child_kwargs = dict(kwargs or {})
+    child_kwargs["approval_check"] = None
+    child_kwargs["status_update"] = _status_update
+    try:
+        result = method(**child_kwargs)
+        if not isinstance(result, dict):
+            result = {"exit_code": 1, "stdout": "", "stderr": "windows_onboarding_child_invalid_result"}
+    except BaseException as exc:
+        result = {
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": f"{exc.__class__.__name__}: {exc}",
+        }
+    try:
+        result_queue.put({"type": "result", "result": result}, block=True, timeout=2.0)
+    except Exception:
+        pass
 
 
 def _now_ts() -> int:
@@ -960,6 +1017,7 @@ class JobScheduler:
         script_signer=None,
         service_logger: Optional[Callable[[str, str, Optional[str]], None]] = None,
         assembly_runtime: Optional[AssemblyRuntimeService] = None,
+        register_routes: bool = True,
     ):
         self.app = app
         self.socketio = socketio
@@ -1000,6 +1058,8 @@ class JobScheduler:
         self._workflow_run_launcher: Optional[Callable[..., Dict[str, Any]]] = None
         # Optional callback to validate a saved workflow document before jobs reference it.
         self._workflow_document_validator: Optional[Callable[..., List[str]]] = None
+        # Optional callback that moves onboarding execution into job-scheduler/site-workers.
+        self._onboarding_run_dispatcher: Optional[Callable[..., Any]] = None
         self._onboarding_dispatch_lock = threading.Lock()
         self._onboarding_running_runs: set[int] = set()
 
@@ -1007,7 +1067,8 @@ class JobScheduler:
         self._init_tables()
 
         # Bind routes
-        self._register_routes()
+        if register_routes:
+            self._register_routes()
         self._log_event(
             "scheduler initialised",
             extra={
@@ -2274,6 +2335,9 @@ class JobScheduler:
     def set_workflow_run_launcher(self, fn: Optional[Callable[..., Dict[str, Any]]]):
         self._workflow_run_launcher = fn
 
+    def set_onboarding_run_dispatcher(self, fn: Optional[Callable[..., Any]]):
+        self._onboarding_run_dispatcher = fn
+
     def _init_tables(self):
         conn = self._conn()
         cur = conn.cursor()
@@ -2974,6 +3038,125 @@ class JobScheduler:
     def _onboarding_install_timeout_seconds(self) -> float:
         return _env_non_negative_float("BOREALIS_ONBOARDING_INSTALL_TIMEOUT_SECONDS", 900.0) or 900.0
 
+    def _windows_onboarding_observation_timeout_seconds(self) -> float:
+        configured = _env_non_negative_float("BOREALIS_WINDOWS_ONBOARDING_OBSERVATION_TIMEOUT_SECONDS", 0.0)
+        if configured > 0:
+            return configured
+        return min(self._onboarding_install_timeout_seconds(), 300.0)
+
+    def _windows_onboarding_launch_grace_seconds(self) -> float:
+        configured = _env_non_negative_float("BOREALIS_WINDOWS_ONBOARDING_LAUNCH_GRACE_SECONDS", 45.0) or 45.0
+        observation_timeout = self._windows_onboarding_observation_timeout_seconds()
+        return max(10.0, min(float(configured), float(observation_timeout)))
+
+    def _windows_wmi_dcom_timeout_seconds(self) -> float:
+        configured = _env_non_negative_float("BOREALIS_WINDOWS_WMI_DCOM_TIMEOUT_SECONDS", 0.0)
+        if configured > 0:
+            return max(10.0, configured)
+        return max(20.0, min(self._windows_onboarding_observation_timeout_seconds(), 75.0))
+
+    def _run_windows_onboarding_method_in_child(
+        self,
+        *,
+        method: Callable[..., Dict[str, Any]],
+        method_kwargs: Dict[str, Any],
+        timeout_seconds: float,
+        timeout_label: str,
+        approval_check: Optional[Callable[[], str]] = None,
+        status_update: Optional[Callable[[str, str, str], None]] = None,
+    ) -> Dict[str, Any]:
+        try:
+            context = multiprocessing.get_context("fork")
+        except Exception:
+            return method(**method_kwargs)
+
+        result_queue = context.Queue()
+        process = context.Process(
+            target=_windows_onboarding_child_entry,
+            args=(result_queue, method, dict(method_kwargs or {})),
+        )
+        process.daemon = True
+        process.start()
+        deadline = time.monotonic() + max(10.0, float(timeout_seconds or 0.0))
+        result: Optional[Dict[str, Any]] = None
+        approval_reference = ""
+
+        def _drain_messages() -> None:
+            nonlocal result
+            while True:
+                try:
+                    message = result_queue.get_nowait()
+                except queue_module.Empty:
+                    break
+                except Exception:
+                    break
+                if not isinstance(message, dict):
+                    continue
+                if message.get("type") == "status" and callable(status_update):
+                    status_update(
+                        str(message.get("detail") or ""),
+                        str(message.get("stdout") or ""),
+                        str(message.get("stderr") or ""),
+                    )
+                elif message.get("type") == "result":
+                    payload = message.get("result")
+                    result = dict(payload) if isinstance(payload, dict) else {
+                        "exit_code": 1,
+                        "stdout": "",
+                        "stderr": "windows_onboarding_child_invalid_result",
+                    }
+
+        while time.monotonic() < deadline:
+            process.join(timeout=0.5)
+            _drain_messages()
+            if result is not None or not process.is_alive():
+                break
+            if callable(approval_check):
+                try:
+                    approval_reference = str(approval_check() or "").strip()
+                except Exception:
+                    approval_reference = ""
+                if approval_reference:
+                    break
+
+        _drain_messages()
+        if approval_reference:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=3.0)
+            return {
+                "exit_code": 0,
+                "stdout": "Borealis approval detected while Windows remote method was still running.",
+                "stderr": "",
+                "approval_reference": approval_reference,
+            }
+        if result is not None:
+            if process.is_alive():
+                process.join(timeout=1.0)
+            return result
+        if process.is_alive():
+            if callable(status_update):
+                status_update(f"{timeout_label} timed out; falling back to next Windows enrollment method.", "", "")
+            process.terminate()
+            process.join(timeout=3.0)
+            if process.is_alive():
+                try:
+                    process.kill()
+                    process.join(timeout=3.0)
+                except Exception:
+                    pass
+            return {
+                "exit_code": 124,
+                "stdout": "",
+                "stderr": f"{timeout_label.lower().replace('/', '_').replace(' ', '_')}_timeout",
+            }
+        exit_code = process.exitcode
+        return {
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": f"{timeout_label} exited without result (exit_code={exit_code}).",
+        }
+
     def _public_base_url(self) -> str:
         if callable(self._public_base_url_lookup):
             try:
@@ -3434,6 +3617,8 @@ class JobScheduler:
                     (normalized_reference,),
                 )
             else:
+                normalized_target = str(target or "").strip()
+                target_port_pattern = f"{normalized_target}:%" if normalized_target else ""
                 cur.execute(
                     """
                     SELECT id,
@@ -3445,11 +3630,14 @@ class JobScheduler:
                       FROM device_approvals
                      WHERE onboarding_job_id=?
                        AND onboarding_run_id=?
-                       AND onboarding_target=?
+                       AND (
+                            LOWER(COALESCE(onboarding_target, ''))=LOWER(?)
+                            OR (?<>'' AND LOWER(COALESCE(onboarding_target, '')) LIKE LOWER(?))
+                       )
                   ORDER BY updated_at DESC
                      LIMIT 1
                     """,
-                    (int(job_id), int(run_id), str(target or "").strip()),
+                    (int(job_id), int(run_id), normalized_target, target_port_pattern, target_port_pattern),
                 )
             row = cur.fetchone()
             if not row:
@@ -4110,6 +4298,14 @@ class JobScheduler:
                 f"  $env:BOREALIS_ONBOARDING_TARGET = { _powershell_single_quoted(str(target or '').strip()) }",
                 "  $env:BOREALIS_AGENT_NONINTERACTIVE = '1'",
                 "  $env:BOREALIS_AGENT_NO_TTY = '1'",
+                "  $agentSettingsRoot = Join-Path $repoRoot 'Agent\\Borealis\\Settings'",
+                "  New-Item -ItemType Directory -Force -Path $agentSettingsRoot | Out-Null",
+                "  $onboardingContext = [ordered]@{",
+                f"    job_id = {int(job_id)}",
+                f"    run_id = {int(run_id)}",
+                f"    target = { _powershell_single_quoted(str(target or '').strip()) }",
+                "  }",
+                "  $onboardingContext | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $agentSettingsRoot 'onboarding_context.json') -Encoding UTF8",
                 "  Write-Output ('Launching ' + $deployScript + ' -Agent -ServerUrl [redacted] -EnrollmentCode [redacted].')",
                 f"  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $deployScript -Agent -ServerUrl { _powershell_single_quoted(server_url) } -EnrollmentCode { _powershell_single_quoted(enrollment_code) }",
                 "  if ($null -ne $LASTEXITCODE) { $exitCode = [int]$LASTEXITCODE } else { $exitCode = 0 }",
@@ -4189,12 +4385,14 @@ class JobScheduler:
         except Exception as exc:
             raise RuntimeError(f"impacket_unavailable:{exc}") from exc
         domain, username, password = _parse_windows_credential_parts(credential)
+        connect_timeout = max(3, min(30, int(_env_non_negative_float("BOREALIS_WINDOWS_SMB_TIMEOUT_SECONDS", 8.0) or 8.0)))
+        login_attempts = max(1, min(3, _env_positive_int("BOREALIS_WINDOWS_SMB_LOGIN_ATTEMPTS", 1)))
         last_error = ""
         for remote_name in _windows_smb_remote_names(host, credential):
-            for attempt in range(3):
+            for attempt in range(login_attempts):
                 smb = None
                 try:
-                    smb = SMBConnection(remote_name, host, sess_port=int(port), timeout=20)
+                    smb = SMBConnection(remote_name, host, sess_port=int(port), timeout=connect_timeout)
                     smb.login(username, password, domain)
                     return smb
                 except Exception as exc:
@@ -4204,7 +4402,7 @@ class JobScheduler:
                             smb.close()
                         except Exception:
                             pass
-                    if attempt < 2:
+                    if attempt < login_attempts - 1:
                         time.sleep(1.0)
         raise RuntimeError(f"smb_connection_failed:{last_error or 'connection_failed'}")
 
@@ -4225,15 +4423,34 @@ class JobScheduler:
             output_path,
         )
 
-    def _read_windows_smb_file(self, smb: Any, path: str) -> str:
+    def _read_windows_smb_file(self, smb: Any, path: str, *, share: str = "ADMIN$") -> str:
         buffer = io.BytesIO()
-        smb.getFile("ADMIN$", path, buffer.write)
+        smb.getFile(str(share or "ADMIN$"), path, buffer.write)
         return buffer.getvalue().decode("utf-8", errors="replace")
 
-    def _poll_windows_smb_onboarding_output(self, *, smb: Any, output_path: str, timeout_seconds: float) -> Dict[str, Any]:
+    def _read_windows_onboarding_state(self, smb: Any) -> Dict[str, Any]:
+        try:
+            text = self._read_windows_smb_file(smb, "Borealis\\Temp\\Onboarding\\state.json", share="C$")
+            parsed = json.loads(text)
+        except Exception:
+            return {}
+        return dict(parsed) if isinstance(parsed, Mapping) else {}
+
+    def _poll_windows_smb_onboarding_output(
+        self,
+        *,
+        smb: Any,
+        output_path: str,
+        timeout_seconds: float,
+        approval_check: Optional[Callable[[], str]] = None,
+        status_update: Optional[Callable[[str, str, str], None]] = None,
+    ) -> Dict[str, Any]:
         deadline = time.monotonic() + max(30.0, float(timeout_seconds or 0.0))
+        started_at = time.monotonic()
+        launch_grace_seconds = self._windows_onboarding_launch_grace_seconds()
         last_output = ""
         last_error = ""
+        last_status_update = 0.0
         while time.monotonic() < deadline:
             try:
                 output = self._read_windows_smb_file(smb, output_path)
@@ -4244,6 +4461,64 @@ class JobScheduler:
                         return {"exit_code": exit_code, "stdout": output, "stderr": ""}
             except Exception as exc:
                 last_error = str(exc).strip() or exc.__class__.__name__
+            state = self._read_windows_onboarding_state(smb)
+            state_status = str(state.get("status") or "").strip().lower()
+            state_exit_code: Optional[int] = None
+            try:
+                state_exit_code = int(state.get("exit_code")) if state.get("exit_code") is not None else None
+            except Exception:
+                state_exit_code = None
+            if state_status in {"pending_approval", "completed", "success"}:
+                stdout = last_output
+                if stdout:
+                    stdout += "\n"
+                stdout += f"Borealis Windows onboarding state={state_status}."
+                return {"exit_code": 0, "stdout": stdout, "stderr": "", "state": state}
+            if state_status in {"already_enrolled", "already_pending"}:
+                stdout = last_output
+                if stdout:
+                    stdout += "\n"
+                stdout += f"__BOREALIS_ONBOARDING_ALREADY_PENDING__=1 status={state_status}"
+                return {"exit_code": 73, "stdout": stdout, "stderr": "", "state": state}
+            if state_status == "failed":
+                stdout = last_output
+                if stdout:
+                    stdout += "\n"
+                stdout += "Borealis Windows onboarding state=failed."
+                return {"exit_code": state_exit_code if state_exit_code is not None else 1, "stdout": stdout, "stderr": "", "state": state}
+            if callable(approval_check):
+                try:
+                    approval_reference = str(approval_check() or "").strip()
+                except Exception:
+                    approval_reference = ""
+                if approval_reference:
+                    stdout = last_output
+                    if stdout:
+                        stdout += "\n"
+                    stdout += "Borealis approval detected before Windows remote output completed."
+                    return {
+                        "exit_code": 0,
+                        "stdout": stdout,
+                        "stderr": "",
+                        "approval_reference": approval_reference,
+                    }
+            if not last_output and not state_status and (time.monotonic() - started_at) >= launch_grace_seconds:
+                detail = (
+                    "Windows remote launch produced no output, state marker, or approval callback before launch grace expired."
+                )
+                if callable(status_update):
+                    status_update(detail, last_output, last_error)
+                return {
+                    "exit_code": 124,
+                    "stdout": last_output,
+                    "stderr": f"windows_onboarding_launch_timeout{': ' + last_error if last_error else ''}",
+                }
+            if callable(status_update) and (time.monotonic() - last_status_update) >= 5.0:
+                detail = "Waiting for Windows SMB service enrollment output or approval callback."
+                if state_status:
+                    detail = f"Waiting for Windows onboarding state '{state_status}' to complete."
+                status_update(detail, last_output, last_error)
+                last_status_update = time.monotonic()
             time.sleep(2.0)
         return {
             "exit_code": 124,
@@ -4259,6 +4534,8 @@ class JobScheduler:
         credential: Dict[str, Any],
         script: str,
         timeout_seconds: float,
+        approval_check: Optional[Callable[[], str]] = None,
+        status_update: Optional[Callable[[str, str, str], None]] = None,
     ) -> Dict[str, Any]:
         try:
             from impacket.dcerpc.v5 import scmr, transport  # type: ignore
@@ -4269,19 +4546,30 @@ class JobScheduler:
         service_handle = None
         scm_handle = None
         stage = "SMB login"
+        rpc_timeout = _env_non_negative_float("BOREALIS_WINDOWS_RPC_TIMEOUT_SECONDS", 10.0) or 10.0
         try:
+            if callable(status_update):
+                status_update("Connecting to Windows SMB for service enrollment.")
             smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
             stage = "ADMIN$ script staging"
+            if callable(status_update):
+                status_update("Staging Borealis onboarding script over ADMIN$.")
             script_abs, output_abs, output_path = self._windows_smb_stage_script(smb, script)
             service_name = f"BorealisOnboarding{uuid.uuid4().hex[:12]}"
             command = f'cmd.exe /Q /C powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{script_abs}" > "{output_abs}" 2>&1'
             start_warning = ""
             stage = "svcctl RPC bind"
+            if callable(status_update):
+                status_update("Binding to Windows Service Control Manager.")
             rpc_transport = transport.SMBTransport(host, int(port), r"\svcctl", smb_connection=smb)
+            _set_impacket_timeout(rpc_transport, rpc_timeout)
             dce = rpc_transport.get_dce_rpc()
+            _set_impacket_timeout(dce, rpc_timeout)
             dce.connect()
             dce.bind(scmr.MSRPC_UUID_SCMR)
             stage = "service creation"
+            if callable(status_update):
+                status_update("Creating transient Borealis onboarding service.")
             scm_resp = scmr.hROpenSCManagerW(dce)
             scm_handle = scm_resp["lpScHandle"]
             service_resp = scmr.hRCreateServiceW(
@@ -4295,16 +4583,22 @@ class JobScheduler:
             service_handle = service_resp["lpServiceHandle"]
             try:
                 stage = "service start"
+                if callable(status_update):
+                    status_update("Starting transient Borealis onboarding service.")
                 scmr.hRStartServiceW(dce, service_handle)
             except Exception as exc:
                 if not _windows_service_start_error_allows_output_poll(exc):
                     raise
                 start_warning = f"service start: {exc}"
             stage = "service output polling"
+            if callable(status_update):
+                status_update("Waiting for Windows SMB service enrollment output or approval callback.")
             result = self._poll_windows_smb_onboarding_output(
                 smb=smb,
                 output_path=output_path,
                 timeout_seconds=timeout_seconds,
+                approval_check=approval_check,
+                status_update=status_update,
             )
             if start_warning and int(result.get("exit_code") or 0) != 0:
                 stderr = str(result.get("stderr") or "")
@@ -4346,6 +4640,8 @@ class JobScheduler:
         credential: Dict[str, Any],
         script: str,
         timeout_seconds: float,
+        approval_check: Optional[Callable[[], str]] = None,
+        status_update: Optional[Callable[[str, str, str], None]] = None,
     ) -> Dict[str, Any]:
         try:
             from impacket.dcerpc.v5 import tsch, transport  # type: ignore
@@ -4356,27 +4652,44 @@ class JobScheduler:
         dce = None
         task_path = f"\\BorealisOnboarding{uuid.uuid4().hex[:12]}"
         stage = "SMB login"
+        rpc_timeout = _env_non_negative_float("BOREALIS_WINDOWS_RPC_TIMEOUT_SECONDS", 10.0) or 10.0
         try:
+            if callable(status_update):
+                status_update("Connecting to Windows SMB for scheduled task enrollment.")
             smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
             stage = "ADMIN$ script staging"
+            if callable(status_update):
+                status_update("Staging Borealis onboarding script over ADMIN$.")
             script_abs, output_abs, output_path = self._windows_smb_stage_script(smb, script)
             command = "cmd.exe"
             arguments = f'/Q /C powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{script_abs}" > "{output_abs}" 2>&1'
             xml = self._windows_task_xml(task_name=task_path, command=command, arguments=arguments)
             stage = "Task Scheduler RPC bind"
+            if callable(status_update):
+                status_update("Binding to Windows Task Scheduler RPC.")
             rpc_transport = transport.SMBTransport(host, int(port), r"\atsvc", smb_connection=smb)
+            _set_impacket_timeout(rpc_transport, rpc_timeout)
             dce = rpc_transport.get_dce_rpc()
+            _set_impacket_timeout(dce, rpc_timeout)
             dce.connect()
             dce.bind(tsch.MSRPC_UUID_TSCHS)
             stage = "task registration"
+            if callable(status_update):
+                status_update("Registering transient Borealis onboarding scheduled task.")
             tsch.hSchRpcRegisterTask(dce, task_path, xml, tsch.TASK_CREATE, NULL, tsch.TASK_LOGON_NONE)
             stage = "task start"
+            if callable(status_update):
+                status_update("Starting transient Borealis onboarding scheduled task.")
             tsch.hSchRpcRun(dce, task_path)
             stage = "task output polling"
+            if callable(status_update):
+                status_update("Waiting for Windows scheduled task enrollment output or approval callback.")
             result = self._poll_windows_smb_onboarding_output(
                 smb=smb,
                 output_path=output_path,
                 timeout_seconds=timeout_seconds,
+                approval_check=approval_check,
+                status_update=status_update,
             )
             try:
                 tsch.hSchRpcDelete(dce, task_path)
@@ -4405,6 +4718,8 @@ class JobScheduler:
         credential: Dict[str, Any],
         script: str,
         timeout_seconds: float,
+        approval_check: Optional[Callable[[], str]] = None,
+        status_update: Optional[Callable[[str, str, str], None]] = None,
     ) -> Dict[str, Any]:
         try:
             from impacket.dcerpc.v5.dcom import wmi  # type: ignore
@@ -4417,27 +4732,44 @@ class JobScheduler:
         dcom = None
         login = None
         stage = "SMB login"
+        rpc_timeout = _env_non_negative_float("BOREALIS_WINDOWS_RPC_TIMEOUT_SECONDS", 10.0) or 10.0
         try:
+            if callable(status_update):
+                status_update("Connecting to Windows SMB for WMI/DCOM enrollment.")
             smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
             stage = "ADMIN$ script staging"
+            if callable(status_update):
+                status_update("Staging Borealis onboarding script over ADMIN$.")
             script_abs, output_abs, output_path = self._windows_smb_stage_script(smb, script)
             command = f'cmd.exe /Q /C powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{script_abs}" > "{output_abs}" 2>&1'
             stage = "DCOM connect"
+            if callable(status_update):
+                status_update("Connecting to Windows WMI/DCOM.")
             dcom = DCOMConnection(host, username, password, domain, oxidResolver=False)
+            _set_impacket_timeout(dcom, rpc_timeout)
             stage = "WMI login"
+            if callable(status_update):
+                status_update("Authenticating to Windows WMI.")
             interface = dcom.CoCreateInstanceEx(wmi.CLSID_WbemLevel1Login, wmi.IID_IWbemLevel1Login)
+            _set_impacket_timeout(interface, rpc_timeout)
             login = wmi.IWbemLevel1Login(interface)
             services = login.NTLMLogin("//./root/cimv2", NULL, NULL)
             login.RemRelease()
             login = None
             stage = "WMI process creation"
+            if callable(status_update):
+                status_update("Creating Borealis onboarding process through WMI.")
             win32_process, _ = services.GetObject("Win32_Process")
             win32_process.Create(command, "C:\\Windows", None)
             stage = "WMI output polling"
+            if callable(status_update):
+                status_update("Waiting for Windows WMI/DCOM enrollment output or approval callback.")
             return self._poll_windows_smb_onboarding_output(
                 smb=smb,
                 output_path=output_path,
                 timeout_seconds=timeout_seconds,
+                approval_check=approval_check,
+                status_update=status_update,
             )
         except Exception as exc:
             return {"exit_code": 1, "stdout": "", "stderr": f"{stage}: {exc}"}
@@ -4549,7 +4881,22 @@ class JobScheduler:
         stderr_parts: List[str] = []
         port_failures = 0
         attempted_methods = 0
-        timeout_seconds = self._onboarding_install_timeout_seconds()
+        timeout_seconds = self._windows_onboarding_observation_timeout_seconds()
+
+        def _approval_check() -> str:
+            return self._lookup_onboarding_approval(job_id=job_id, run_id=run_id, target=host)
+
+        def _status_update(detail: str, stdout: str = "", stderr: str = "") -> None:
+            merged_stdout = "\n\n".join([part for part in [*stdout_parts, str(stdout or "")] if part])
+            merged_stderr = "\n\n".join([part for part in [*stderr_parts, str(stderr or "")] if part])
+            self._update_onboarding_target_row(
+                row_id,
+                status=ONBOARDING_STATUS_RUNNING,
+                detail=detail,
+                stdout=merged_stdout,
+                stderr=merged_stderr,
+                redactions=redactions,
+            )
 
         for method in normalized_methods:
             label = _windows_method_label(method)
@@ -4585,6 +4932,8 @@ class JobScheduler:
                     credential=credential,
                     script=script,
                     timeout_seconds=timeout_seconds,
+                    approval_check=_approval_check,
+                    status_update=_status_update,
                 )
             elif method == ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK:
                 result = self._execute_windows_scheduled_task_onboarding(
@@ -4593,14 +4942,23 @@ class JobScheduler:
                     credential=credential,
                     script=script,
                     timeout_seconds=timeout_seconds,
+                    approval_check=_approval_check,
+                    status_update=_status_update,
                 )
             elif method == ONBOARDING_WINDOWS_METHOD_WMI_DCOM:
-                result = self._execute_windows_wmi_dcom_onboarding(
-                    host=host,
-                    port=smb_port,
-                    credential=credential,
-                    script=script,
-                    timeout_seconds=timeout_seconds,
+                result = self._run_windows_onboarding_method_in_child(
+                    method=self._execute_windows_wmi_dcom_onboarding,
+                    method_kwargs={
+                        "host": host,
+                        "port": smb_port,
+                        "credential": credential,
+                        "script": script,
+                        "timeout_seconds": timeout_seconds,
+                    },
+                    timeout_seconds=self._windows_wmi_dcom_timeout_seconds(),
+                    timeout_label="Windows WMI/DCOM enrollment",
+                    approval_check=_approval_check,
+                    status_update=_status_update,
                 )
             else:
                 result = self._execute_windows_winrm_onboarding(
@@ -4618,10 +4976,10 @@ class JobScheduler:
             if stderr:
                 stderr_parts.append(f"[{label}]\n{stderr}")
             if exit_code == 0:
-                approval_reference = ""
+                approval_reference = str(result.get("approval_reference") or "").strip()
                 deadline = time.monotonic() + 10.0
                 while time.monotonic() < deadline:
-                    approval_reference = self._lookup_onboarding_approval(job_id=job_id, run_id=run_id, target=host)
+                    approval_reference = approval_reference or _approval_check()
                     if approval_reference:
                         break
                     time.sleep(1.0)
@@ -4649,10 +5007,10 @@ class JobScheduler:
                 )
                 return ONBOARDING_STATUS_SKIPPED
             if _windows_onboarding_result_may_have_created_approval(method=method, stdout=stdout, stderr=stderr):
-                approval_reference = ""
+                approval_reference = str(result.get("approval_reference") or "").strip()
                 deadline = time.monotonic() + 10.0
                 while time.monotonic() < deadline:
-                    approval_reference = self._lookup_onboarding_approval(job_id=job_id, run_id=run_id, target=host)
+                    approval_reference = approval_reference or _approval_check()
                     if approval_reference:
                         break
                     time.sleep(1.0)
@@ -4709,6 +5067,16 @@ class JobScheduler:
         targets: Sequence[Any],
         credential_id: Optional[int],
     ) -> None:
+        if callable(self._onboarding_run_dispatcher):
+            self._onboarding_run_dispatcher(
+                job_id=int(job_id),
+                run_row_id=int(run_row_id),
+                scheduled_ts=int(scheduled_ts),
+                components=list(components or []),
+                targets=list(targets or []),
+                credential_id=credential_id,
+            )
+            return
         with self._onboarding_dispatch_lock:
             if int(run_row_id) in self._onboarding_running_runs:
                 return
@@ -9023,6 +9391,7 @@ def register(
     script_signer=None,
     service_logger: Optional[Callable[[str, str, Optional[str]], None]] = None,
     assembly_runtime: Optional[AssemblyRuntimeService] = None,
+    register_routes: bool = True,
 ) -> JobScheduler:
     """Factory to create and return a JobScheduler instance."""
     return JobScheduler(
@@ -9032,6 +9401,7 @@ def register(
         script_signer=script_signer,
         service_logger=service_logger,
         assembly_runtime=assembly_runtime,
+        register_routes=register_routes,
     )
 
 
@@ -9072,3 +9442,7 @@ def set_workflow_run_launcher(scheduler: JobScheduler, fn: Callable[..., Dict[st
 
 def set_workflow_document_validator(scheduler: JobScheduler, fn: Callable[..., List[str]]):
     scheduler._workflow_document_validator = fn
+
+
+def set_onboarding_run_dispatcher(scheduler: JobScheduler, fn: Callable[..., Any]):
+    scheduler._onboarding_run_dispatcher = fn

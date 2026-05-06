@@ -10,6 +10,7 @@ Describe the Borealis PostgreSQL schema, table ownership, runtime interactions, 
 - `Data/Engine/Containers/api-backend/data/database.py`
 - `Data/Engine/Containers/api-backend/data/database_migrations.py`
 - `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`
+- `Data/Engine/Containers/api-backend/data/services/task_scheduler/queue.py`
 - Assembly catalog tables live in PostgreSQL `assemblies.*`.
 - Bundled official assembly snapshot lives in `Data/Engine/Containers/api-backend/data/Official_Assemblies/`.
 - Assembly schema source: `Data/Engine/Containers/api-backend/data/assembly_management/databases.py`.
@@ -628,6 +629,37 @@ finally:
 - Notes:
 - Legacy rows may still repeat a host when more than one saved filter contributed to the same occurrence target.
 - Shared Ansible rows store the generated inventory alias and target-resolution outcome per device.
+
+#### `task_scheduler_work_items`
+- Status: Active.
+- Purpose: Durable work queue for `job-scheduler` and `site-worker-<uuid>` containers.
+- Columns: `id`, `dedupe_key`, `kind`, `site_id`, `lane`, `job_id`, `run_id`, `target_id`, `payload_json`, `status`, `attempt_count`, `priority`, `available_at`, `lease_owner`, `lease_expires_at`, `heartbeat_at`, `worker_guid`, `container_name`, `error`, `created_at`, `updated_at`, `started_at`, `finished_at`.
+- Used by:
+- `job-scheduler` scheduled ticking and service-action dispatch.
+- Site-worker onboarding execution.
+- Notes:
+- Credentials are not stored in `payload_json`; workers retrieve decrypted credential material from the internal API only while executing.
+- `lease_owner` plus `lease_expires_at` protect work from duplicate claims and allow stale work to be reclaimed.
+
+#### `task_scheduler_workers`
+- Status: Active.
+- Purpose: Worker lifecycle/status visibility for ephemeral site workers.
+- Columns: `worker_guid`, `container_name`, `site_id`, `status`, `started_at`, `last_seen_at`, `idle_since`, `stopped_at`, `current_lanes_json`, `claimed_count`, `task_links_json`, `docker_state`, `exit_code`, `created_at`, `updated_at`.
+- Used by:
+- Server Info Workers view.
+- Task-scheduler worker reconciliation.
+- Notes:
+- Worker container names use random UUIDs (`site-worker-<uuid>`) and do not include site names.
+
+#### `task_scheduler_service_snapshots`
+- Status: Active.
+- Purpose: Last known Compose service visibility snapshot written by `job-scheduler` for Server Info when `api-backend` has no Docker socket.
+- Columns: `service_key`, `payload_json`, `updated_at`.
+- Used by:
+- `/api/server/overview` and `/api/server/services` fallback service rows.
+- Task-scheduler Compose reconciliation.
+- Notes:
+- `api-backend` reads this table only for display. Docker-backed service actions are queued into `task_scheduler_work_items` and executed by `job-scheduler`.
 
 #### `credentials`
 - Status: Active for scheduler and WebUI credential selection; protected at rest after Aegis Cipher setup.

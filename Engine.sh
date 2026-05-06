@@ -47,11 +47,16 @@ if [[ -n "${REPO_REF}" ]]; then
 fi
 SERVICE_ROLES=(
   "api-backend"
+  "job-scheduler"
   "webui-frontend"
   "traefik-edge"
   "postgres-db"
   "remote-desktop-guacd"
   "wireguard-tunnel"
+)
+BUILD_ROLES=(
+  "${SERVICE_ROLES[@]}"
+  "site-worker"
 )
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
@@ -786,6 +791,8 @@ BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS=${BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS:-60000}
 
 BOREALIS_WEBUI_EXTERNAL=1
 BOREALIS_ENGINE_CONTAINERIZED=1
+BOREALIS_SCHEDULED_JOBS_START_LOOP=0
+BOREALIS_INTERNAL_API_BASE_URL=http://127.0.0.1:5000
 BOREALIS_COOKIE_SECURE=1
 BOREALIS_GUACAMOLE_ENABLED=1
 BOREALIS_GUACD_HOST=127.0.0.1
@@ -818,6 +825,8 @@ EOF
   cp "${RUNTIME_ENV}" "${COMPOSE_ENV}"
   cat >> "${COMPOSE_ENV}" <<EOF
 BOREALIS_API_BACKEND_IMAGE=${IMAGE_TAGS[api-backend]:-borealis-engine/api-backend:local}
+BOREALIS_JOB_SCHEDULER_IMAGE=${IMAGE_TAGS[job-scheduler]:-borealis-engine/job-scheduler:local}
+BOREALIS_SITE_WORKER_IMAGE=${IMAGE_TAGS[site-worker]:-borealis-engine/site-worker:local}
 BOREALIS_WEBUI_FRONTEND_IMAGE=${IMAGE_TAGS[webui-frontend]:-borealis-engine/webui-frontend:local}
 BOREALIS_TRAEFIK_EDGE_IMAGE=${IMAGE_TAGS[traefik-edge]:-borealis-engine/traefik-edge:local}
 BOREALIS_POSTGRES_DB_IMAGE=${IMAGE_TAGS[postgres-db]:-borealis-engine/postgres-db:local}
@@ -1040,19 +1049,19 @@ build_images() {
   shift || true
   local selected=("$@")
   if [[ "${#selected[@]}" -eq 0 ]]; then
-    selected=("${SERVICE_ROLES[@]}")
+    selected=("${BUILD_ROLES[@]}")
   fi
   local service=""
   : > "${BUILD_LOG}"
   for service in "${selected[@]}"; do
-    validate_service "${service}"
+    validate_build_role "${service}"
     build_service_image "${service}" "${mode}"
   done
 }
 
 write_image_manifest() {
   local mode="$1"
-  python3 - "${IMAGE_MANIFEST}" "${mode}" "${SERVICE_ROLES[@]}" <<PY
+  python3 - "${IMAGE_MANIFEST}" "${mode}" "${BUILD_ROLES[@]}" <<PY
 import json
 import os
 import pathlib
@@ -1099,7 +1108,7 @@ PY
 
 export_image_manifest_env() {
   local service=""
-  for service in "${SERVICE_ROLES[@]}"; do
+  for service in "${BUILD_ROLES[@]}"; do
     if [[ -n "${IMAGE_TAGS[${service}]:-}" && -n "${IMAGE_HASHES[${service}]:-}" ]]; then
       local prefix
       prefix="$(service_env_prefix "${service}")"
@@ -1114,7 +1123,7 @@ export_image_manifest_env() {
 load_existing_image_tags() {
   [[ -f "${IMAGE_MANIFEST}" ]] || return 0
   local service=""
-  for service in "${SERVICE_ROLES[@]}"; do
+  for service in "${BUILD_ROLES[@]}"; do
     local image
     image="$(python3 - "${IMAGE_MANIFEST}" "${service}" <<'PY'
 import json
@@ -1140,6 +1149,9 @@ changed_build_services() {
       printf '%s\n' "${service}"
     fi
   done
+  if [[ "${BUILD_STATUSES[site-worker]:-}" == "built" ]]; then
+    printf '%s\n' job-scheduler
+  fi
 }
 
 previous_deploy_mode() {
@@ -1189,6 +1201,10 @@ def env_settings_hash(path: pathlib.Path) -> str:
         if raw.startswith("BOREALIS_") and raw.endswith("_IMAGE="):
             continue
         if raw.startswith("BOREALIS_API_BACKEND_IMAGE="):
+            continue
+        if raw.startswith("BOREALIS_JOB_SCHEDULER_IMAGE="):
+            continue
+        if raw.startswith("BOREALIS_SITE_WORKER_IMAGE="):
             continue
         if raw.startswith("BOREALIS_WEBUI_FRONTEND_IMAGE="):
             continue
@@ -1260,6 +1276,8 @@ def env_settings_hash(path: pathlib.Path) -> str:
     lines = []
     image_keys = {
         "BOREALIS_API_BACKEND_IMAGE",
+        "BOREALIS_JOB_SCHEDULER_IMAGE",
+        "BOREALIS_SITE_WORKER_IMAGE",
         "BOREALIS_WEBUI_FRONTEND_IMAGE",
         "BOREALIS_TRAEFIK_EDGE_IMAGE",
         "BOREALIS_POSTGRES_DB_IMAGE",
@@ -1342,6 +1360,7 @@ def env_settings_hash(path: pathlib.Path) -> str:
 
 services = [
     "api-backend",
+    "job-scheduler",
     "webui-frontend",
     "traefik-edge",
     "postgres-db",
@@ -1391,6 +1410,15 @@ validate_service() {
     [[ "${candidate}" == "${service}" ]] && return 0
   done
   die "Unknown Engine service '${service}'."
+}
+
+validate_build_role() {
+  local service="$1"
+  local candidate=""
+  for candidate in "${BUILD_ROLES[@]}"; do
+    [[ "${candidate}" == "${service}" ]] && return 0
+  done
+  die "Unknown Engine build role '${service}'."
 }
 
 prepare_runtime() {
@@ -1452,7 +1480,7 @@ deploy_engine() {
   if ((${#changed_services[@]} > 0)); then
     log_status "Compose" "(Re)Building Stack" "${C_YELLOW}"
   else
-    log_status "Compose" "Applying Stack" "${C_YELLOW}"
+    log_status "Compose" "Reconciling Stack" "${C_YELLOW}"
   fi
   compose_base up -d
   write_deploy_manifest "${mode}" "up" "${changed_services[@]}"
@@ -1507,7 +1535,7 @@ usage() {
   cat <<'EOF'
 Usage:
   Engine.sh deploy [prod|dev]
-  Engine.sh --service <api-backend|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
+  Engine.sh --service <api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
   Engine.sh [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
 EOF
 }

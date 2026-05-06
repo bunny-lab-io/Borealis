@@ -23,10 +23,15 @@ import time
 from urllib.parse import urlsplit
 from typing import TYPE_CHECKING, List, Optional
 
+from flask import jsonify, request
+
 from ...ansible import EngineAnsibleRunner
 from ...assemblies.service import AssemblyRuntimeService
 from ...aegis_cipher import AegisSecretResetRequiredError, credential_secret_reset_required
 from ....public_endpoints import public_base_url
+from ...auth.secrets import require_app_secret
+from ...task_scheduler.queue import enqueue_onboarding_run
+from ...task_scheduler.security import INTERNAL_TOKEN_HEADER, validate_internal_token
 from ..workflows import management as workflows_management
 from . import job_scheduler
 
@@ -42,6 +47,11 @@ _LEGACY_SHARED_ANSIBLE_VPN_PREP_WAIT_ENV = "BOREALIS_SHARED_ANSIBLE_VPN_PREP_WAI
 _LEGACY_SHARED_ANSIBLE_VPN_PREP_POLL_INTERVAL_ENV = "BOREALIS_SHARED_ANSIBLE_VPN_PREP_POLL_INTERVAL_SECONDS"
 _DEFAULT_SHARED_ANSIBLE_VPN_READY_TIMEOUT_SECONDS = 45.0
 _DEFAULT_SHARED_ANSIBLE_VPN_READY_POLL_INTERVAL_SECONDS = 0.5
+
+
+def _scheduler_loop_enabled() -> bool:
+    raw_value = str(os.getenv("BOREALIS_SCHEDULED_JOBS_START_LOOP", "1") or "1").strip().lower()
+    return raw_value not in {"0", "false", "no", "off"}
 
 
 def _shared_ansible_vpn_ready_timeout_seconds() -> float:
@@ -397,16 +407,183 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     job_scheduler.set_server_ansible_runner(scheduler, ansible_runner.queue_run)
     job_scheduler.set_credential_fetcher(scheduler, _load_decrypted_credential)
     job_scheduler.set_public_base_url_lookup(scheduler, _scheduler_public_base_url)
+
+    def _enqueue_onboarding_run(**kwargs):
+        components = list(kwargs.get("components") or [])
+        targets = list(kwargs.get("targets") or [])
+        config, config_error = scheduler._onboarding_scope_config(components=components, targets=targets)
+        if config_error:
+            now = int(time.time())
+            conn = adapters.db_conn_factory()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=?,
+                           updated_at=?,
+                           error=?
+                     WHERE id=?
+                    """,
+                    (
+                        job_scheduler.RUN_STATUS_FAILED,
+                        now,
+                        now,
+                        str(config_error),
+                        int(kwargs.get("run_row_id") or 0),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return None
+        conn = adapters.db_conn_factory()
+        try:
+            work_id = enqueue_onboarding_run(
+                conn,
+                job_id=int(kwargs.get("job_id") or 0),
+                run_id=int(kwargs.get("run_row_id") or 0),
+                scheduled_ts=int(kwargs.get("scheduled_ts") or 0),
+                site_id=config.get("site_id"),
+                components=components,
+                targets=targets,
+                credential_id=kwargs.get("credential_id"),
+            )
+            conn.commit()
+            return work_id
+        finally:
+            conn.close()
+
+    job_scheduler.set_onboarding_run_dispatcher(scheduler, _enqueue_onboarding_run)
     emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
     if callable(emit_host_service_event):
         job_scheduler.set_host_service_emitter(scheduler, emit_host_service_event)
     workflow_runtime = workflows_management.ensure_workflow_runtime(app, adapters)
     job_scheduler.set_workflow_run_launcher(scheduler, workflow_runtime.start_run)
     job_scheduler.set_workflow_document_validator(scheduler, workflow_runtime.validate_saved_workflow)
-    scheduler.start()
+    _register_internal_task_scheduler_routes(
+        app,
+        adapters,
+        _load_decrypted_credential,
+        _scheduler_public_base_url,
+        _active_vpn_session_snapshot,
+        _prepare_vpn_session_snapshot,
+    )
+    if _scheduler_loop_enabled():
+        scheduler.start()
+    else:
+        adapters.service_log("scheduled_jobs", "scheduler loop disabled in api-backend; job-scheduler owns ticks", level="INFO")
     adapters.context.scheduler = scheduler
     adapters.service_log("scheduled_jobs", "engine scheduler initialised", level="INFO")
     return scheduler
+
+
+def _register_internal_task_scheduler_routes(
+    app: "Flask",
+    adapters: "EngineServiceAdapters",
+    credential_loader,
+    public_base_url_loader,
+    vpn_session_loader=None,
+    vpn_session_prepare=None,
+) -> None:
+    if getattr(app, "_borealis_task_scheduler_internal_routes", False):
+        return
+
+    def _internal_error(message: str, status: int = 500):
+        return jsonify({"error": message}), status
+
+    def _require_internal():
+        try:
+            secret = require_app_secret(app)
+        except Exception:
+            return False
+        return validate_internal_token(secret, request.headers.get(INTERNAL_TOKEN_HEADER))
+
+    @app.route("/api/internal/job-scheduler/credential/<int:credential_id>", methods=["GET"])
+    def _internal_task_scheduler_credential(credential_id: int):
+        if not _require_internal():
+            return _internal_error("unauthorized", 401)
+        try:
+            credential = credential_loader(int(credential_id))
+        except Exception as exc:
+            return _internal_error(str(exc), 423)
+        if not credential:
+            return _internal_error("credential_not_found", 404)
+        return jsonify({"credential": credential})
+
+    @app.route("/api/internal/job-scheduler/public-base-url", methods=["GET"])
+    def _internal_task_scheduler_public_base_url():
+        if not _require_internal():
+            return _internal_error("unauthorized", 401)
+        return jsonify({"public_base_url": public_base_url_loader()})
+
+    @app.route("/api/internal/job-scheduler/vpn-sessions", methods=["GET"])
+    def _internal_task_scheduler_vpn_sessions():
+        if not _require_internal():
+            return _internal_error("unauthorized", 401)
+        if not callable(vpn_session_loader):
+            return _internal_error("vpn_session_loader_unavailable", 503)
+        try:
+            sessions = vpn_session_loader()
+        except Exception as exc:
+            return _internal_error(str(exc), 500)
+        return jsonify({"sessions": sessions if isinstance(sessions, dict) else {}})
+
+    @app.route("/api/internal/job-scheduler/vpn-prepare", methods=["POST"])
+    def _internal_task_scheduler_vpn_prepare():
+        if not _require_internal():
+            return _internal_error("unauthorized", 401)
+        if not callable(vpn_session_prepare):
+            return _internal_error("vpn_session_prepare_unavailable", 503)
+        body = request.get_json(silent=True) or {}
+        agent_ids = [str(item).strip() for item in (body.get("agent_ids") or []) if str(item).strip()]
+        required_ports = []
+        for item in body.get("required_ports") or []:
+            try:
+                port = int(item)
+            except Exception:
+                continue
+            if port > 0:
+                required_ports.append(port)
+        try:
+            sessions = vpn_session_prepare(agent_ids, required_ports=required_ports)
+        except Exception as exc:
+            return _internal_error(str(exc), 500)
+        return jsonify({"sessions": sessions if isinstance(sessions, dict) else {}})
+
+    @app.route("/api/internal/job-scheduler/host-service-event", methods=["POST"])
+    def _internal_task_scheduler_host_service_event():
+        if not _require_internal():
+            return _internal_error("unauthorized", 401)
+        body = request.get_json(silent=True) or {}
+        hostname = str(body.get("hostname") or "").strip()
+        service_mode = str(body.get("service_mode") or body.get("mode") or "system").strip() or "system"
+        event_name = str(body.get("event_name") or "").strip()
+        payload = body.get("payload")
+        if not hostname or not event_name:
+            return _internal_error("hostname_and_event_name_required", 400)
+        emitter = getattr(adapters.context, "emit_host_service_event", None)
+        if not callable(emitter):
+            return _internal_error("host_service_emitter_unavailable", 503)
+        emitted = bool(emitter(hostname, service_mode, event_name, payload))
+        return jsonify({"emitted": emitted})
+
+    @app.route("/api/internal/job-scheduler/workflow/start", methods=["POST"])
+    def _internal_task_scheduler_workflow_start():
+        if not _require_internal():
+            return _internal_error("unauthorized", 401)
+        runtime = getattr(adapters.context, "workflow_runtime", None)
+        if runtime is None or not hasattr(runtime, "start_run"):
+            return _internal_error("workflow_runtime_unavailable", 503)
+        body = request.get_json(silent=True) or {}
+        try:
+            result = runtime.start_run(**body)
+        except Exception as exc:
+            return _internal_error(str(exc), 500)
+        return jsonify(result if isinstance(result, dict) else {"result": result})
+
+    setattr(app, "_borealis_task_scheduler_internal_routes", True)
 
 
 def get_scheduler(adapters: "EngineServiceAdapters"):

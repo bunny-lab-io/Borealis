@@ -67,6 +67,7 @@ const MASTER_AUTO_SIZE_COLUMNS = ["domain", "name", "health", "state", "enabled"
 const NAME_COLUMN_PRIMARY_COLOR = "#58a6ff";
 const COMPOSE_SERVICE_ACTIONS = Object.freeze({
   "api-backend": [{ id: "restart", label: "Restart", action: "restart" }],
+  "job-scheduler": [{ id: "restart", label: "Restart", action: "restart" }],
   "webui-frontend": [
     { id: "rebuild_prod", label: "Rebuild Prod", action: "rebuild", mode: "prod" },
     { id: "rebuild_dev", label: "Rebuild Dev", action: "rebuild", mode: "dev" },
@@ -1369,6 +1370,8 @@ export default function ServerInfo() {
   const publicEdge = overview?.public_edge || {};
   const ansibleRunner = overview?.ansible_runner || {};
   const agentReleaseChannels = overview?.agent_release_channels || {};
+  const workerPayload = overview?.workers || {};
+  const workers = Array.isArray(workerPayload?.workers) ? workerPayload.workers : [];
   const certificates = Array.isArray(publicEdge?.certificates) ? publicEdge.certificates : [];
   const worstCert = getWorstCertificate(certificates);
   const aegis = overview?.security?.aegis || {};
@@ -1513,6 +1516,13 @@ export default function ServerInfo() {
         ],
       },
       {
+        id: "site_workers",
+        name: "Site Workers",
+        value: String(Number(workerPayload?.active_count || 0)),
+        details: workers.length ? `${workers.length} worker record${workers.length === 1 ? "" : "s"} tracked by job-scheduler` : "No active site workers",
+        actions: [],
+      },
+      {
         id: "agent_release_channels",
         name: "Agent Release Channels",
         value: `${formatTitleCase(agentReleaseChannels?.default_channel || "stable")} / ${String(agentReleaseChannels?.github?.repo || "Unavailable")}`,
@@ -1573,6 +1583,8 @@ export default function ServerInfo() {
       timezoneDisplayValue,
       timezoneSaving,
       unstableChannel,
+      workerPayload?.active_count,
+      workers.length,
     ]
   );
 
@@ -1764,6 +1776,25 @@ export default function ServerInfo() {
       sort_order: index,
     }));
 
+    const workerMasterRows = workers.map((row, index) => {
+      const started = row?.started_at ? formatDateTime(new Date(Number(row.started_at) * 1000).toISOString()) : "Unavailable";
+      const lanes = Array.isArray(row?.current_lanes) ? row.current_lanes.filter(Boolean).join(", ") : "";
+      const links = Array.isArray(row?.task_links) ? row.task_links : [];
+      return {
+        id: `workers:${row?.worker_guid || index}`,
+        domain: "Workers",
+        name: row?.container_name || row?.worker_guid || "Site Worker",
+        details: `Site ${row?.site_id || "—"}${lanes ? ` · ${lanes}` : ""}${links.length ? ` · ${links.length} task link${links.length === 1 ? "" : "s"}` : ""}`,
+        value: row?.worker_guid || "—",
+        health: String(row?.status || "").toLowerCase() === "lost" ? "critical" : String(row?.status || "").toLowerCase() === "stopped" ? "unknown" : "healthy",
+        state: formatTitleCase(row?.status),
+        enabled: "Ephemeral",
+        started,
+        actions: [],
+        sort_order: index,
+      };
+    });
+
     const accessMasterRows = accessRows.map((row, index) => {
       const health =
         row.id === "active_vpn_tunnels"
@@ -1825,11 +1856,12 @@ export default function ServerInfo() {
     return [
       ...runtimeMasterRows,
       ...serviceMasterRows,
+      ...workerMasterRows,
       ...resourceMasterRows,
       ...accessMasterRows,
       ...securityMasterRows,
     ];
-  }, [accessRows, actionBusyKey, operatorSessionCount, requestRestart, requestServiceAction, resourceRows, runtimeRows, securityRows, services, wireguard, worstCert]);
+  }, [accessRows, actionBusyKey, operatorSessionCount, requestRestart, requestServiceAction, resourceRows, runtimeRows, securityRows, services, wireguard, workers, worstCert]);
 
   if (!isAdmin) return null;
 

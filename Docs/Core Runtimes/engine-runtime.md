@@ -64,8 +64,9 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Compose health checks gate startup: PostgreSQL `pg_isready`, WireGuard control socket presence, guacd TCP `4822`, WebUI loopback HTTP, API `/health`, and Traefik ping on `127.0.0.1:8082`.
 
 ### Container service boundaries
-- `api-backend` runs the Python Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, and Engine-side Ansible execution. It binds `127.0.0.1:5000`.
-- `api-backend` has Docker CLI/Compose access to the host Docker socket in container mode so Server Info can mirror Docker service health and queue detached `Engine.sh --service ...` actions through helper containers.
+- `api-backend` runs the Python Engine API, Socket.IO, live operator sessions, workflow APIs, and VNC WebSocket proxy. It binds `127.0.0.1:5000`.
+- `job-scheduler` owns the scheduled-job tick loop, Postgres work leases, Docker-backed service actions, and `site-worker-<uuid>` lifecycle. It owns the host Docker socket in container mode.
+- Site workers execute site-scoped pressure work such as automatic local-network onboarding outside the API process. They do not mount the Docker socket.
 - `webui-frontend` serves the production WebUI or Vite HMR on stable loopback port `127.0.0.1:8000`. Dev mode bind-mounts `Engine/Services/webui-frontend/data/web-interface/` into the container for host-side UI edits.
 - `traefik-edge` owns public HTTP/HTTPS on `80/443`, ACME storage, Traefik config, UI/API/Socket.IO/VNC routing, and edge logs.
 - `postgres-db` owns PostgreSQL state under `Engine/Services/postgres-db/state` and binds `127.0.0.1:5432`.

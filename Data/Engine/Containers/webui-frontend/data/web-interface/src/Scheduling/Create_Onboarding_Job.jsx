@@ -1053,7 +1053,7 @@ export default function CreateOnboardingJob() {
         cellClass: "auto-col-tight",
         cellRenderer: (params) => <StatusPill status={params.data?.status} />,
       },
-      { field: "detail", headerName: "Detail", minWidth: 360, filter: "agTextColumnFilter", cellClass: "auto-col-tight" },
+      { field: "detail", headerName: "Detail", minWidth: 360, flex: 1, filter: "agTextColumnFilter", cellClass: "auto-col-tight" },
       {
         field: "output",
         headerName: "StdOut / StdErr",
@@ -1097,8 +1097,7 @@ export default function CreateOnboardingJob() {
       {
         field: "actions",
         headerName: "Actions",
-        minWidth: 170,
-        flex: 1,
+        width: 170,
         cellClass: "auto-col-tight",
         cellRenderer: (params) => {
           const row = params.data;

@@ -6,7 +6,9 @@ Explain how Borealis schedules recurring jobs, targets devices, and records run 
 
 ## Scheduler Overview
 - Scheduler implementation lives in `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`.
-- It reads job definitions from PostgreSQL and emits quick job payloads over the host's SYSTEM socket.
+- `job-scheduler` owns the scheduled tick loop in container deployments. `api-backend` keeps CRUD/status APIs and the live Socket.IO bridge.
+- Site-scoped pressure work is queued in PostgreSQL and executed by ephemeral `site-worker-<uuid>` containers.
+- Existing agent-side quick job dispatch still crosses `api-backend` because active agent sockets live there.
 - Run history is stored in `scheduled_job_runs`, `scheduled_job_run_targets`, `scheduled_job_run_activity`, and, for automatic onboarding, `scheduled_job_onboarding_targets`.
 - Scheduled job definitions carry `job_kind`; normal jobs use `automation`, while local-network device enrollment uses `onboarding`.
 
@@ -35,12 +37,12 @@ Supported schedule types (from the scheduler core):
 - Onboarding jobs use `kind = onboarding_scope` targets. Scope entries accept single IPv4 addresses, IPv4 ranges, CIDR blocks, and FQDNs. Optional `exclusions` entries use the same formats and are expanded as a blacklist before SSH attempts start. Borealis deduplicates expanded targets and enforces `BOREALIS_ONBOARDING_TARGET_CAP` (default `512`).
 
 ## Execution Flow
-1) Scheduler tick loads enabled jobs.
+1) `job-scheduler` tick loads enabled jobs.
 2) Each due occurrence resolves its targets once and creates `scheduled_job_runs` plus `scheduled_job_run_targets` rows.
-3) Pending targets dispatch when their host is online.
+3) Pending agent targets dispatch through the `api-backend` internal Socket.IO bridge when their host is online.
 4) Device-local script runs emit quick job payloads with `scheduled_job_id`, `target_context`, and helper-routing metadata when the job targets current-user execution.
-5) Engine-side Ansible jobs using `local`, `ssh`, or `winrm` create one shared run row per playbook component, synthesize an ephemeral inventory, and execute directly on the Linux Engine.
-6) Engine-side Ansible jobs using `ssh_individual` or `winrm_individual` create one `scheduled_job_runs` row per target host per playbook component, synthesize a one-host inventory for each row, and execute those rows with bounded concurrency on the Linux Engine.
+5) Engine-side Ansible jobs using `local`, `ssh`, or `winrm` create one shared run row per playbook component, synthesize an ephemeral inventory, and execute in the Linux `job-scheduler` runtime.
+6) Engine-side Ansible jobs using `ssh_individual` or `winrm_individual` create one `scheduled_job_runs` row per target host per playbook component, synthesize a one-host inventory for each row, and execute those rows with bounded concurrency in the Linux `job-scheduler` runtime.
 7) Remote Ansible runs map Borealis inventory aliases to active WireGuard peer IPs and exclude devices that are not currently eligible.
 8) Remote SSH/WinRM targets require an active WireGuard peer IP and an agent-side WireGuard readiness callback before they can enter the generated inventory. Borealis emits or refreshes the tunnel, waits for `/api/agent/vpn/ready` for the current tunnel and selected transport port, then dispatches. Standard SSH `22` is part of the default shell/VNC/SSH allowlist, while non-default SSH or WinRM ports are widened in addition to that baseline.
 9) For `execution_context = ssh` and `ssh_individual`, Borealis defers host reachability, authentication, and task connectivity to Ansible itself instead of running scheduler-side SSH banner/session probes first. The Engine passes through the WireGuard peer IP plus the selected credential, and Ansible records unreachable/auth/task failures in the normal recap and per-device status surfaces.
@@ -54,8 +56,17 @@ Supported schedule types (from the scheduler core):
 15) The Engine updates run status, activity links, and Ansible recap rows as results arrive.
 16) If zero devices are resolved, the occurrence is recorded as `Skipped` with `skip_reason = no_devices_targeted`.
 
+## Job Scheduler And Site Workers
+- `job-scheduler` is a long-lived Engine container with Docker socket access. It owns scheduled ticking, queue lease reconciliation, service-action execution, and site-worker lifecycle.
+- Site workers are dynamic containers named `site-worker-<uuid>`. They receive a site id, claim work for that site only, and exit after 2 minutes idle.
+- Worker lanes are site-local. Onboarding work claims the `onboarding` lane and honors the job's device onboarding concurrency. Scheduled ticking and Engine-side Ansible execution run in `job-scheduler` for v1 so they are still outside `api-backend`.
+- Work items use Postgres leases. A worker heartbeat extends the lease; stale leases return to `queued` so another worker can reclaim them.
+- Worker records are visible in Server Info under the Workers domain and through `GET /api/server/workers`.
+- VNC, interactive shell, live file browsing/transfers, live process actions, live service actions, and software refresh remain in `api-backend` for v1 because those paths are browser/session-affine.
+
 ## Automatic Device Onboarding
 - Local-network device onboarding is scheduled through the same job service with `job_kind = onboarding`.
+- Onboarding execution runs in a site worker, not in `api-backend`.
 - The WebUI flow lives at `/jobs/onboarding/new`, is launched from the Sites page action rail, and creates jobs named like `Automatic Device Onboarding <SiteName>`.
 - Operators select one site, target OS, one stored machine or domain credential, discovery scope entries, exclusion scope entries, agent install branch, remote ports, per-job device onboarding concurrency, and normal schedule options.
 - Linux targets use SSH. At run time the Engine probes TCP/SSH, authenticates with the selected credential, confirms the target is Linux, downloads `Agent.sh` from the selected branch, and runs `Agent.sh --repo-branch <branch> deploy --serverurl <engine_url> --enrollmentcode <site_code> --newEngine`.
@@ -102,6 +113,7 @@ Supported schedule types (from the scheduler core):
 - `DELETE /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - clear run history.
 - `POST /api/onboarding/jobs/<int:job_id>/redeploy` (Token Authenticated) - clear onboarding job history and start a fresh immediate onboarding run.
 - `GET /api/onboarding/jobs/<int:job_id>/targets` (Token Authenticated) - onboarding target attempts for an occurrence, including sanitized output snippets and approval context when available.
+- `GET /api/server/workers` (Admin) - active and recent job-scheduler site worker state.
 
 ## Related Documentation
 - [Assemblies and Quick Jobs](assemblies.md)
@@ -114,7 +126,8 @@ Supported schedule types (from the scheduler core):
 ### Scheduler entry points
 - API registration: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/management.py`.
 - Scheduler core: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`.
-- Scheduler runner: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/runner.py`.
+- Task scheduler runtime: `Data/Engine/Containers/api-backend/data/services/task_scheduler/manager.py`.
+- Site worker runtime: `Data/Engine/Containers/api-backend/data/services/task_scheduler/worker.py`.
 
 ### Core tables (Engine DB)
 - `scheduled_jobs` - job definition, schedule, targets, execution context.
@@ -122,6 +135,9 @@ Supported schedule types (from the scheduler core):
 - `scheduled_job_run_targets` - frozen occurrence target snapshot and originating filter links.
 - `scheduled_job_run_activity` - links activity_history to scheduled runs.
 - `scheduled_job_onboarding_targets` - per-target local-network onboarding attempt state and sanitized output.
+- `task_scheduler_work_items` - durable queued/running/completed work with Postgres leases.
+- `task_scheduler_workers` - active/recent site-worker lifecycle snapshots.
+- `task_scheduler_service_snapshots` - last known Compose service state from `job-scheduler` for Server Info when `api-backend` has no Docker socket.
 
 ### Schedule computation
 - `_compute_next_run` normalizes timestamps to minutes and applies schedule type logic.
