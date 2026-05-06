@@ -772,6 +772,139 @@ $wintunDownloadUrl    = "https://www.wintun.net/builds/$wintunZipName"
 $wintunZipPath        = Join-Path $wireGuardInstallerDir $wintunZipName
 
 # ---------------------- Dependency Installation Functions ----------------------
+function Find-BorealisPythonExecutable {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$InstallDir
+    )
+
+    $expected = Join-Path $InstallDir 'python.exe'
+    if (Test-Path $expected -PathType Leaf) {
+        return $expected
+    }
+
+    try {
+        $matches = Get-ChildItem -LiteralPath $InstallDir -Filter 'python.exe' -File -Recurse -ErrorAction SilentlyContinue |
+            Sort-Object @{ Expression = { $_.FullName.Length } }, FullName
+        foreach ($match in $matches) {
+            if ($match -and (Test-Path $match.FullName -PathType Leaf)) {
+                return $match.FullName
+            }
+        }
+    } catch {}
+
+    return ''
+}
+
+function Repair-BorealisPythonBootstrapLayout {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$InstallDir
+    )
+
+    $expected = Join-Path $InstallDir 'python.exe'
+    if (Test-Path $expected -PathType Leaf) {
+        return $expected
+    }
+
+    $discovered = Find-BorealisPythonExecutable -InstallDir $InstallDir
+    if ([string]::IsNullOrWhiteSpace($discovered) -or -not (Test-Path $discovered -PathType Leaf)) {
+        return ''
+    }
+
+    $sourceRoot = Split-Path -Path $discovered -Parent
+    $sourceRootNorm = ''
+    $installDirNorm = ''
+    try { $sourceRootNorm = (Resolve-Path -LiteralPath $sourceRoot -ErrorAction Stop).ProviderPath.ToLowerInvariant() } catch { $sourceRootNorm = $sourceRoot.ToLowerInvariant() }
+    try { $installDirNorm = (Resolve-Path -LiteralPath $InstallDir -ErrorAction Stop).ProviderPath.ToLowerInvariant() } catch { $installDirNorm = $InstallDir.ToLowerInvariant() }
+    if ($sourceRootNorm -eq $installDirNorm) {
+        return $discovered
+    }
+
+    Write-AgentLog -FileName 'Install.log' -Message ("[Python] Normalizing MSI administrative install layout from '{0}' into '{1}'." -f $sourceRoot, $InstallDir)
+    Get-ChildItem -LiteralPath $sourceRoot -Force -ErrorAction Stop | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $InstallDir -Recurse -Force -ErrorAction Stop
+    }
+
+    if (Test-Path $expected -PathType Leaf) {
+        return $expected
+    }
+    return ''
+}
+
+function Get-BorealisPythonBootstrapLayoutSummary {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$InstallDir
+    )
+
+    if (-not (Test-Path $InstallDir -PathType Container)) {
+        return "install directory missing: $InstallDir"
+    }
+
+    try {
+        $items = Get-ChildItem -LiteralPath $InstallDir -Force -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 20 -ExpandProperty FullName
+        if (-not $items -or $items.Count -eq 0) {
+            return "install directory empty: $InstallDir"
+        }
+        return ($items -join '; ')
+    } catch {
+        return ("unable to inspect install directory '{0}': {1}" -f $InstallDir, $_.Exception.Message)
+    }
+}
+
+function Install-BorealisPythonFromInstaller {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$InstallerUrl,
+
+        [Parameter(Mandatory = $true)]
+        [string]$InstallerPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$InstallDir
+    )
+
+    Write-AgentLog -FileName 'Install.log' -Message ("[Python] MSI administrative extraction did not produce python.exe. Trying Python installer fallback into '{0}'." -f $InstallDir)
+    if (Test-Path $InstallDir -PathType Container) {
+        Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+
+    Invoke-BorealisDownload -Url $InstallerUrl -DestinationPath $InstallerPath -LogName 'Install.log' -LogPrefix '[Python]'
+
+    $installerLog = Join-Path (Ensure-AgentLogDir) 'python-installer.log'
+    Remove-Item -LiteralPath $installerLog -Force -ErrorAction SilentlyContinue
+    $installerArgs = @(
+        '/quiet',
+        '/log',
+        "`"$installerLog`"",
+        'InstallAllUsers=0',
+        "TargetDir=`"$InstallDir`"",
+        'Include_exe=1',
+        'Include_lib=1',
+        'Include_pip=1',
+        'Include_dev=1',
+        'Include_launcher=0',
+        'Include_tcltk=0',
+        'Include_test=0',
+        'Include_tools=1',
+        'AssociateFiles=0',
+        'Shortcuts=0',
+        'PrependPath=0',
+        'CompileAll=0'
+    )
+    $installerProc = Start-Process -Wait -NoNewWindow -PassThru -FilePath $InstallerPath -ArgumentList $installerArgs
+    $installerExitCode = 1
+    try { $installerExitCode = [int]$installerProc.ExitCode } catch {}
+    if ($installerExitCode -notin @(0, 3010)) {
+        throw "Python installer fallback failed with exit code $installerExitCode. Log: $installerLog"
+    }
+
+    return (Repair-BorealisPythonBootstrapLayout -InstallDir $InstallDir)
+}
+
 function Install_Shared_Dependencies {
     # Python bootstrap for the Borealis Agent runtime.
     Run-Step "Dependency: Python" {
@@ -779,6 +912,8 @@ function Install_Shared_Dependencies {
         $localPythonExe   = Join-Path $pythonInstallDir "python.exe"
 
         $pythonMsiBaseUrl = "https://www.python.org/ftp/python/3.13.3/amd64/"
+        $pythonInstallerUrl = "https://www.python.org/ftp/python/3.13.3/python-3.13.3-amd64.exe"
+        $pythonInstallerPath = Join-Path $scriptDir "Dependencies\python-3.13.3-amd64.exe"
         $pythonMsiFiles = @(
             "core.msi",
             "exe.msi",
@@ -792,6 +927,11 @@ function Install_Shared_Dependencies {
                 New-Item -ItemType Directory -Path $pythonInstallDir | Out-Null
             }
 
+            Repair-BorealisPythonBootstrapLayout -InstallDir $pythonInstallDir | Out-Null
+        }
+
+        if (-not (Test-Path $localPythonExe)) {
+
             foreach ($file in $pythonMsiFiles) {
                 $url = "$pythonMsiBaseUrl$file"
                 $localPath = Join-Path $scriptDir "Dependencies\$file"
@@ -802,8 +942,13 @@ function Install_Shared_Dependencies {
                 }
 
                 # Extract MSI into install directory
-                Start-Process -Wait -NoNewWindow -FilePath "msiexec.exe" `
+                $extractProc = Start-Process -Wait -NoNewWindow -PassThru -FilePath "msiexec.exe" `
                     -ArgumentList "/a `"$localPath`" /qn TARGETDIR=`"$pythonInstallDir`""
+                $extractExitCode = 1
+                try { $extractExitCode = [int]$extractProc.ExitCode } catch {}
+                if ($extractExitCode -notin @(0, 3010)) {
+                    throw "Python MSI extraction failed for '$file' with exit code $extractExitCode."
+                }
             }
 
             # Clean up downloaded MSIs
@@ -812,9 +957,17 @@ function Install_Shared_Dependencies {
                 Remove-Item $localPath -Force -ErrorAction SilentlyContinue
             }
 
+            Repair-BorealisPythonBootstrapLayout -InstallDir $pythonInstallDir | Out-Null
+
+            if (-not (Test-Path $localPythonExe)) {
+                Install-BorealisPythonFromInstaller -InstallerUrl $pythonInstallerUrl -InstallerPath $pythonInstallerPath -InstallDir $pythonInstallDir | Out-Null
+                Remove-Item $pythonInstallerPath -Force -ErrorAction SilentlyContinue
+            }
+
             # Validate success
             if (-not (Test-Path $localPythonExe)) {
-                throw "Python executable not found after MSI extraction."
+                $layoutSummary = Get-BorealisPythonBootstrapLayoutSummary -InstallDir $pythonInstallDir
+                throw "Python executable not found after MSI extraction or installer fallback. Layout: $layoutSummary"
             }
         }
     }

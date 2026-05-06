@@ -312,6 +312,19 @@ def test_windows_onboarding_script_uses_stable_repo_and_remote_lock(engine_harne
     assert "Global\\BorealisAgentOnboarding" in script
     assert "$repoRoot = 'C:\\Borealis'" in script
     assert "Temp\\Onboarding" in script
+    assert "function Ensure-BorealisDirectory" in script
+    assert "Ensure-BorealisDirectory -Path (Split-Path -Parent $statePath)" in script
+    assert "Ensure-BorealisDirectory -Path $repoRoot" in script
+    assert script.index("Ensure-BorealisDirectory -Path $root") < script.index(
+        "Write-BorealisOnboardingState -Status 'running' -ExitCode 1"
+    )
+    download_guard_index = script.rfind(
+        "Ensure-BorealisDirectory -Path $root",
+        0,
+        script.index("Invoke-WebRequest"),
+    )
+    assert download_guard_index > script.index("$zipPath = Join-Path $root")
+    assert "Ensure-BorealisDirectory -Path $agentSettingsRoot" in script
     assert "__BOREALIS_ONBOARDING_ALREADY_PENDING__=1" in script
     assert "__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1" in script
     assert "function Stop-BorealisPythonProcesses" in script
@@ -319,8 +332,62 @@ def test_windows_onboarding_script_uses_stable_repo_and_remote_lock(engine_harne
     assert "taskkill.exe /PID $procId /F" in script
     assert "Invoke-CimMethod -InputObject $_ -MethodName Terminate" in script
     assert "source-*" in script
-    assert "Where-Object { $_.Name -notin @('Agent','Temp') }" in script
+    assert "Where-Object { $_.Name -notin @('Agent','Temp','Dependencies') }" in script
+    assert "__BOREALIS_ONBOARDING_STALE_RUNNING_STATE_IGNORED__=1" in script
+    assert "$script:staleOnboardingProcessCount += 1" in script
+    assert "Extracting Agent Installation Files." in script
+    assert "Copying Files to C:\\Borealis." in script
+    assert "$status -eq 'pending_approval'" in script
+    assert "$status -eq 'running'" in script
+    assert "@('running','pending_approval') -contains $status" not in script
     assert "-NewEngine" not in script
+
+
+def test_windows_smb_poll_treats_sharing_violation_as_active_writer(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    reads = [
+        RuntimeError("SMB SessionError: code: 0xc0000043 - STATUS_SHARING_VIOLATION"),
+        RuntimeError("SMB SessionError: code: 0xc0000043 - STATUS_SHARING_VIOLATION"),
+        "__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=0",
+    ]
+    updates = []
+
+    def fake_read(_smb, _path, *, share="ADMIN$"):
+        value = reads.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    monkeypatch.setattr(scheduler, "_read_windows_smb_file", fake_read)
+    monkeypatch.setattr(scheduler, "_read_windows_onboarding_state", lambda _smb: {})
+    monkeypatch.setattr(scheduler, "_windows_onboarding_launch_grace_seconds", lambda: 0.0)
+    monkeypatch.setattr(scheduled_job_module.time, "sleep", lambda _seconds: None)
+
+    result = scheduler._poll_windows_smb_onboarding_output(
+        smb=object(),
+        output_path="Temp\\BorealisOnboarding\\run.log",
+        timeout_seconds=1.0,
+        status_update=lambda detail, stdout="", stderr="": updates.append(detail),
+    )
+
+    assert result["exit_code"] == 0
+    assert "STATUS_SHARING_VIOLATION" not in str(result.get("stderr") or "")
+    assert any("output file lock" in detail for detail in updates)
+
+
+def test_windows_running_state_marker_does_not_stop_fallback_chain() -> None:
+    assert (
+        scheduled_job_module._windows_onboarding_skip_detail(
+            stdout="__BOREALIS_ONBOARDING_ALREADY_PENDING__=1 status=running"
+        )
+        == ""
+    )
+    assert "pending approval" in scheduled_job_module._windows_onboarding_skip_detail(
+        stdout="__BOREALIS_ONBOARDING_ALREADY_PENDING__=1 status=pending_approval"
+    )
 
 
 def test_windows_onboarding_falls_back_to_winrm(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -635,6 +702,91 @@ def test_onboarding_target_status_hydrates_approved_context(engine_harness: Engi
     assert hydrated[0]["detail"] == "Device approved. Agent finalizing enrollment."
 
 
+def test_onboarding_target_update_records_persistent_timeline(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    now = 1_700_000_200
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_onboarding_targets (
+                run_id,
+                job_id,
+                scheduled_ts,
+                site_id,
+                target_input,
+                target_address,
+                target_hostname,
+                ssh_port,
+                status,
+                detail,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                65,
+                54,
+                now,
+                1,
+                "LAB-AIO-01",
+                "10.0.0.56",
+                "LAB-AIO-01",
+                445,
+                "pending",
+                "",
+                now,
+                now,
+            ),
+        )
+        row_id = int(cur.lastrowid)
+        conn.commit()
+    finally:
+        conn.close()
+
+    scheduler._update_onboarding_target_row(row_id, status="running", detail="Connecting to Windows SMB.")
+    scheduler._update_onboarding_target_row(row_id, status="running", detail="Staging Borealis onboarding script.")
+    scheduler._update_onboarding_target_row(
+        row_id,
+        status="failed",
+        detail="Python executable not found after MSI extraction.",
+        stdout="Dependency: Python",
+        stderr="Failed.",
+        finished=True,
+    )
+
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT status, task, finished_at
+              FROM scheduled_job_onboarding_target_events
+             WHERE target_row_id=?
+          ORDER BY id ASC
+            """,
+            (row_id,),
+        )
+        events = cur.fetchall()
+    finally:
+        conn.close()
+
+    assert [row[1] for row in events] == [
+        "Establishing Connection to Remote Device",
+        "Transferring Agent Installation Files",
+        "Onboarding Failed",
+    ]
+    assert events[0][0] == "completed"
+    assert events[0][2] is not None
+    assert events[-1][0] == "failed"
+    assert events[-1][2] is not None
+
+    rows = scheduler._load_onboarding_target_rows(54, now)
+    assert rows[0]["timeline"][1]["task"] == "Transferring Agent Installation Files"
+    assert rows[0]["events"] == rows[0]["timeline"]
+
+
 def test_onboarding_redeploy_clears_history_and_dispatches(
     engine_harness: EngineTestHarness,
     monkeypatch,
@@ -708,6 +860,31 @@ def test_onboarding_redeploy_clears_history_and_dispatches(
                 1_700_000_001,
             ),
         )
+        target_row_id = int(cur.lastrowid)
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_onboarding_target_events (
+                target_row_id,
+                run_id,
+                job_id,
+                status,
+                task,
+                started_at,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                target_row_id,
+                old_run_id,
+                job_id,
+                "waiting_approval",
+                "Awaiting Approval",
+                1_700_000_000,
+                1_700_000_000,
+                1_700_000_001,
+            ),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -731,6 +908,8 @@ def test_onboarding_redeploy_clears_history_and_dispatches(
     try:
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM scheduled_job_onboarding_targets WHERE run_id=?", (old_run_id,))
+        assert int(cur.fetchone()[0]) == 0
+        cur.execute("SELECT COUNT(*) FROM scheduled_job_onboarding_target_events WHERE run_id=?", (old_run_id,))
         assert int(cur.fetchone()[0]) == 0
         cur.execute("SELECT COUNT(*) FROM scheduled_job_runs WHERE job_id=?", (job_id,))
         assert int(cur.fetchone()[0]) == 1

@@ -167,6 +167,10 @@ const GRID_PANEL_SX = {
     backgroundColor: "rgba(125,211,252,0.2) !important",
     boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
   },
+  "& .ag-row.onboarding-target-row-selected": {
+    backgroundColor: "rgba(125,211,252,0.16) !important",
+    boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.38)",
+  },
   "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
     display: "flex",
     alignItems: "center",
@@ -306,7 +310,8 @@ const SELECT_MENU_PROPS = {
   },
 };
 
-const TARGET_AUTO_SIZE_COLUMNS = ["targetLabel", "statusLabel", "detail", "output"];
+const TARGET_AUTO_SIZE_COLUMNS = ["targetLabel", "statusLabel", "detail"];
+const PROGRESSION_AUTO_SIZE_COLUMNS = ["statusLabel", "task", "output", "startedLabel", "elapsedLabel"];
 const TARGET_STATUS_FILTER_OPTIONS = [
   { key: "pending_approval", label: "Pending Approval" },
   { key: "skipped", label: "Skipped" },
@@ -547,6 +552,51 @@ function targetOutputContent(target, mode) {
   return String(mode === "stderr" ? target?.stderr_snippet || "" : target?.stdout_snippet || "").trim();
 }
 
+function epochToMs(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return parsed > 1_000_000_000_000 ? parsed : parsed * 1000;
+}
+
+function formatOnboardingProgressTimestamp(value) {
+  const date = new Date(Number(value || 0));
+  if (Number.isNaN(date.getTime())) return "-";
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const year = date.getFullYear();
+  const suffix = date.getHours() >= 12 ? "PM" : "AM";
+  const hour = date.getHours() % 12 || 12;
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${month}-${day}-${year} @ ${hour}:${minute}${suffix}`;
+}
+
+function formatElapsedDuration(startedAt, endedAt) {
+  const start = Number(startedAt || 0);
+  const end = Number(endedAt || 0);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start <= 0 || end <= 0) return "-";
+  const totalSeconds = Math.max(0, Math.floor((end - start) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function targetProgressionKey(row) {
+  const raw = row?.raw || row || {};
+  return String(
+    row?.id ||
+      raw.id ||
+      `${raw.run_id || ""}:${raw.target_hostname || raw.target_address || raw.target_input || row?.targetLabel || ""}`
+  );
+}
+
+function statusIsActiveProgress(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  return ["pending", "running", "waiting_approval"].includes(normalized);
+}
+
 function normalizeBranchName(value) {
   return String(value || DEFAULT_BRANCH).trim() || DEFAULT_BRANCH;
 }
@@ -653,7 +703,10 @@ export default function CreateOnboardingJob() {
   const [copiedOutputKey, setCopiedOutputKey] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
   const [targetStatusFilter, setTargetStatusFilter] = useState("");
+  const [selectedTargetId, setSelectedTargetId] = useState("");
+  const [progressionClock, setProgressionClock] = useState(() => Date.now());
   const targetGridApiRef = useRef(null);
+  const progressionGridApiRef = useRef(null);
   const [form, setForm] = useState({
     name: "",
     siteId: "",
@@ -895,6 +948,10 @@ export default function CreateOnboardingJob() {
     fetchInstallBranches();
   }, [fetchInstallBranches]);
 
+  useEffect(() => {
+    setSelectedTargetId("");
+  }, [jobId]);
+
   const loadTargets = useCallback(async () => {
     if (!editing || !jobId) return;
     try {
@@ -947,8 +1004,6 @@ export default function CreateOnboardingJob() {
         approvalReference: target.approval_reference || "",
         approvalId: target.approval_id || "",
         approvalStatus,
-        hasStdOut: Boolean(String(target.stdout_snippet || "").trim()),
-        hasStdErr: Boolean(String(target.stderr_snippet || "").trim()),
         raw: target,
       };
     }),
@@ -969,6 +1024,48 @@ export default function CreateOnboardingJob() {
     [targetGridRows, targetStatusFilter]
   );
 
+  const selectedTargetRow = useMemo(
+    () => targetGridRows.find((row) => targetProgressionKey(row) === String(selectedTargetId)) || null,
+    [selectedTargetId, targetGridRows]
+  );
+
+  useEffect(() => {
+    const timer = setInterval(() => setProgressionClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedTargetId) return;
+    if (targetGridRows.some((row) => targetProgressionKey(row) === String(selectedTargetId))) return;
+    setSelectedTargetId("");
+  }, [selectedTargetId, targetGridRows]);
+
+  const selectedProgressionRows = useMemo(() => {
+    if (!selectedTargetRow) return [];
+    const rawRows = Array.isArray(selectedTargetRow.raw?.timeline)
+      ? selectedTargetRow.raw.timeline
+      : (Array.isArray(selectedTargetRow.raw?.events) ? selectedTargetRow.raw.events : []);
+    return rawRows.map((event, index) => {
+      const startedAt = epochToMs(event?.started_at ?? event?.startedAt);
+      const endedAt = epochToMs(event?.finished_at ?? event?.finishedAt) || null;
+      const status = String(event?.status || "pending").trim().toLowerCase() || "pending";
+      const elapsedEnd = endedAt || (statusIsActiveProgress(status) ? progressionClock : startedAt);
+      return {
+        id: event?.id || `${selectedTargetRow.id || selectedTargetId}-${index}`,
+        status,
+        statusLabel: formatStatusLabel(status),
+        task: event?.task || "Waiting For Onboarding Work",
+        startedAt,
+        endedAt,
+        startedLabel: formatOnboardingProgressTimestamp(startedAt),
+        elapsedLabel: formatElapsedDuration(startedAt, elapsedEnd),
+        hasStdOut: Boolean(String(event?.stdout_snippet || "").trim()),
+        hasStdErr: Boolean(String(event?.stderr_snippet || "").trim()),
+        raw: event,
+      };
+    });
+  }, [progressionClock, selectedTargetId, selectedTargetRow]);
+
   const handleCopyOutputSection = useCallback(async (section) => {
     const content = String(section?.content || "");
     if (!content) {
@@ -985,28 +1082,30 @@ export default function CreateOnboardingJob() {
     }
   }, [copyTextToClipboard]);
 
-  const handleViewTargetOutput = useCallback((target, mode = "stdout") => {
+  const handleViewProgressOutput = useCallback((row, mode = "stdout") => {
     const label = mode === "stderr" ? "StdErr" : "StdOut";
-    const targetLabel = `${target?.target_hostname || target?.target_address || target?.target_input || "Target"}${target?.ssh_port ? `:${target.ssh_port}` : ""}`;
-    const content = targetOutputContent(target, mode);
-    setOutputTitle(`${label} - ${targetLabel}`);
+    const event = row?.raw || row || {};
+    const targetLabel = selectedTargetRow?.targetLabel || "Target";
+    const taskLabel = row?.task || event?.task || "Onboarding Task";
+    const content = targetOutputContent(event, mode);
+    setOutputTitle(`${label} - ${targetLabel} - ${taskLabel}`);
     setOutputSections([
       {
-        key: `${target?.id || targetLabel}-${mode}`,
+        key: `${event?.id || row?.id || targetLabel}-${mode}`,
         title: label,
-        path: targetLabel,
+        path: taskLabel,
         content,
       },
     ]);
     setCopiedOutputKey("");
     setOutputOpen(true);
-  }, []);
+  }, [selectedTargetRow]);
 
-  const handleCopyTargetOutput = useCallback(async (target, mode = "stdout") => {
+  const handleCopyProgressOutput = useCallback(async (row, mode = "stdout") => {
     const label = mode === "stderr" ? "StdErr" : "StdOut";
-    const content = targetOutputContent(target, mode);
+    const content = targetOutputContent(row?.raw || row, mode);
     if (!content) {
-      setError(`No ${label} available for this target.`);
+      setError(`No ${label} available for this task.`);
       return;
     }
     const copied = await copyTextToClipboard(content, `Copy ${label}`);
@@ -1055,46 +1154,6 @@ export default function CreateOnboardingJob() {
       },
       { field: "detail", headerName: "Detail", minWidth: 360, flex: 1, filter: "agTextColumnFilter", cellClass: "auto-col-tight" },
       {
-        field: "output",
-        headerName: "StdOut / StdErr",
-        minWidth: 220,
-        cellClass: "auto-col-tight",
-        cellRenderer: (params) => {
-          const row = params.data;
-          const target = row?.raw;
-          if (!row) return null;
-          return (
-            <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flexWrap: "wrap" }}>
-              {row.hasStdOut ? (
-                <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.25 }}>
-                  <Button size="small" sx={{ color: MAGIC_UI.accentA, textTransform: "none", minWidth: 0, p: 0 }} onClick={(event) => { event.stopPropagation(); handleViewTargetOutput(target, "stdout"); }}>
-                    StdOut
-                  </Button>
-                  <Tooltip title="Copy StdOut">
-                    <IconButton size="small" sx={{ color: MAGIC_UI.accentA, p: 0.35 }} onClick={(event) => { event.stopPropagation(); void handleCopyTargetOutput(target, "stdout"); }}>
-                      <ContentCopyIcon sx={{ fontSize: 15 }} />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-              ) : null}
-              {row.hasStdOut && row.hasStdErr ? <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>/</Typography> : null}
-              {row.hasStdErr ? (
-                <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.25 }}>
-                  <Button size="small" sx={{ color: MAGIC_UI.danger, textTransform: "none", minWidth: 0, p: 0 }} onClick={(event) => { event.stopPropagation(); handleViewTargetOutput(target, "stderr"); }}>
-                    StdErr
-                  </Button>
-                  <Tooltip title="Copy StdErr">
-                    <IconButton size="small" sx={{ color: MAGIC_UI.danger, p: 0.35 }} onClick={(event) => { event.stopPropagation(); void handleCopyTargetOutput(target, "stderr"); }}>
-                      <ContentCopyIcon sx={{ fontSize: 15 }} />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-              ) : null}
-            </Box>
-          );
-        },
-      },
-      {
         field: "actions",
         headerName: "Actions",
         width: 170,
@@ -1124,7 +1183,83 @@ export default function CreateOnboardingJob() {
         },
       },
     ],
-    [actioningApprovalId, handleApproveTarget, handleCopyTargetOutput, handleViewTargetOutput]
+    [actioningApprovalId, handleApproveTarget]
+  );
+
+  const progressionGridColumnDefs = useMemo(
+    () => [
+      {
+        field: "statusLabel",
+        headerName: "Status",
+        minWidth: 150,
+        filter: false,
+        cellClass: "auto-col-tight",
+        cellRenderer: (params) => <StatusPill status={params.data?.status} />,
+      },
+      { field: "task", headerName: "Task", minWidth: 260, flex: 1, filter: "agTextColumnFilter", cellClass: "auto-col-tight" },
+      {
+        field: "output",
+        headerName: "StdOut / StdErr",
+        minWidth: 210,
+        filter: false,
+        cellClass: "auto-col-tight",
+        cellRenderer: (params) => {
+          const row = params.data;
+          if (!row) return null;
+          return (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flexWrap: "wrap" }}>
+              {row.hasStdOut ? (
+                <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.25 }}>
+                  <Button size="small" sx={{ color: MAGIC_UI.accentA, textTransform: "none", minWidth: 0, p: 0 }} onClick={(event) => { event.stopPropagation(); handleViewProgressOutput(row, "stdout"); }}>
+                    StdOut
+                  </Button>
+                  <Tooltip title="Copy StdOut">
+                    <IconButton size="small" sx={{ color: MAGIC_UI.accentA, p: 0.35 }} onClick={(event) => { event.stopPropagation(); void handleCopyProgressOutput(row, "stdout"); }}>
+                      <ContentCopyIcon sx={{ fontSize: 15 }} />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              ) : null}
+              {row.hasStdOut && row.hasStdErr ? <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>/</Typography> : null}
+              {row.hasStdErr ? (
+                <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.25 }}>
+                  <Button size="small" sx={{ color: MAGIC_UI.danger, textTransform: "none", minWidth: 0, p: 0 }} onClick={(event) => { event.stopPropagation(); handleViewProgressOutput(row, "stderr"); }}>
+                    StdErr
+                  </Button>
+                  <Tooltip title="Copy StdErr">
+                    <IconButton size="small" sx={{ color: MAGIC_UI.danger, p: 0.35 }} onClick={(event) => { event.stopPropagation(); void handleCopyProgressOutput(row, "stderr"); }}>
+                      <ContentCopyIcon sx={{ fontSize: 15 }} />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              ) : null}
+            </Box>
+          );
+        },
+      },
+      {
+        field: "startedLabel",
+        headerName: "Started",
+        minWidth: 185,
+        filter: false,
+        cellClass: "auto-col-tight",
+        comparator: (_a, _b, nodeA, nodeB) => Number(nodeA?.data?.startedAt || 0) - Number(nodeB?.data?.startedAt || 0),
+      },
+      {
+        field: "elapsedLabel",
+        headerName: "Time Elapsed",
+        minWidth: 150,
+        filter: false,
+        cellClass: "auto-col-tight",
+        comparator: (_a, _b, nodeA, nodeB) => {
+          const now = Date.now();
+          const elapsedA = Number((nodeA?.data?.endedAt || now) - (nodeA?.data?.startedAt || 0));
+          const elapsedB = Number((nodeB?.data?.endedAt || now) - (nodeB?.data?.startedAt || 0));
+          return elapsedA - elapsedB;
+        },
+      },
+    ],
+    [handleCopyProgressOutput, handleViewProgressOutput]
   );
 
   const targetGridDefaultColDef = useMemo(
@@ -1160,9 +1295,42 @@ export default function CreateOnboardingJob() {
     autoSizeTargetGrid();
   }, [autoSizeTargetGrid]);
 
+  const autoSizeProgressionGrid = useCallback(() => {
+    const api = progressionGridApiRef.current;
+    if (!api || !selectedProgressionRows.length) return;
+    const run = () => {
+      try {
+        if (typeof api.autoSizeColumns === "function") {
+          api.autoSizeColumns(PROGRESSION_AUTO_SIZE_COLUMNS, true);
+        }
+      } catch {
+        /* grid may not be ready yet */
+      }
+    };
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(run);
+    } else {
+      setTimeout(run, 0);
+    }
+  }, [selectedProgressionRows.length]);
+
+  const handleProgressionGridReady = useCallback((params) => {
+    progressionGridApiRef.current = params.api;
+    autoSizeProgressionGrid();
+  }, [autoSizeProgressionGrid]);
+
+  const handleTargetRowClicked = useCallback((params) => {
+    const key = targetProgressionKey(params?.data);
+    setSelectedTargetId(key);
+  }, []);
+
   useEffect(() => {
     autoSizeTargetGrid();
   }, [autoSizeTargetGrid]);
+
+  useEffect(() => {
+    autoSizeProgressionGrid();
+  }, [autoSizeProgressionGrid]);
 
   useEffect(() => {
     if (nameTouched || !selectedSite || editing) return;
@@ -1605,28 +1773,80 @@ export default function CreateOnboardingJob() {
                     </Typography>
                   </Box>
                   <Box
-                    className={gridThemeClass}
                     sx={{
-                      ...GRID_PANEL_SX,
+                      display: "grid",
+                      gridTemplateColumns: { xs: "1fr", xl: "minmax(0, 1fr) minmax(0, 1fr)" },
+                      gap: 2,
                       flexGrow: 1,
-                      minHeight: { xs: 460, md: 0 },
+                      minHeight: { xs: 940, xl: 0 },
                     }}
                   >
-                    <AgGridReact
-                      rowData={visibleTargetGridRows}
-                      columnDefs={targetGridColumnDefs}
-                      defaultColDef={targetGridDefaultColDef}
-                      suppressCellFocus
-                      headerHeight={44}
-                      rowHeight={50}
-                      pagination
-                      paginationPageSize={100}
-                      paginationPageSizeSelector={[20, 50, 100]}
-                      overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No target attempts recorded yet.</span>"
-                      getRowId={(params) => String(params.data?.id || params.rowIndex)}
-                      onGridReady={handleTargetGridReady}
-                      theme={gridTheme}
-                    />
+                    <Box sx={{ display: "flex", flexDirection: "column", gap: 1, minHeight: { xs: 460, xl: 0 }, minWidth: 0 }}>
+                      <Box sx={{ minHeight: 24, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, flexWrap: "wrap" }}>
+                        <Typography variant="body2" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
+                          Onboarding Summary
+                        </Typography>
+                      </Box>
+                      <Box
+                        className={gridThemeClass}
+                        sx={{
+                          ...GRID_PANEL_SX,
+                          flexGrow: 1,
+                          minHeight: 0,
+                        }}
+                      >
+                        <AgGridReact
+                          rowData={visibleTargetGridRows}
+                          columnDefs={targetGridColumnDefs}
+                          defaultColDef={targetGridDefaultColDef}
+                          suppressCellFocus
+                          headerHeight={44}
+                          rowHeight={50}
+                          pagination
+                          paginationPageSize={100}
+                          paginationPageSizeSelector={[20, 50, 100]}
+                          overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No target attempts recorded yet.</span>"
+                          getRowId={(params) => String(params.data?.id || params.rowIndex)}
+                          getRowClass={(params) => (
+                            targetProgressionKey(params.data) === String(selectedTargetId) ? "onboarding-target-row-selected" : ""
+                          )}
+                          onGridReady={handleTargetGridReady}
+                          onRowClicked={handleTargetRowClicked}
+                          theme={gridTheme}
+                        />
+                      </Box>
+                    </Box>
+                    <Box sx={{ display: "flex", flexDirection: "column", gap: 1, minHeight: { xs: 460, xl: 0 }, minWidth: 0 }}>
+                      <Box sx={{ minHeight: 24, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, flexWrap: "wrap" }}>
+                        <Typography variant="body2" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
+                          Detailed Breakdown
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted, maxWidth: "70%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {selectedTargetRow?.targetLabel || ""}
+                        </Typography>
+                      </Box>
+                      <Box
+                        className={gridThemeClass}
+                        sx={{
+                          ...GRID_PANEL_SX,
+                          flexGrow: 1,
+                          minHeight: 0,
+                        }}
+                      >
+                        <AgGridReact
+                          rowData={selectedProgressionRows}
+                          columnDefs={progressionGridColumnDefs}
+                          defaultColDef={targetGridDefaultColDef}
+                          suppressCellFocus
+                          headerHeight={44}
+                          rowHeight={50}
+                          overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No progression recorded.</span>"
+                          getRowId={(params) => String(params.data?.id || params.rowIndex)}
+                          onGridReady={handleProgressionGridReady}
+                          theme={gridTheme}
+                        />
+                      </Box>
+                    </Box>
                   </Box>
                 </Box>
               ) : null}

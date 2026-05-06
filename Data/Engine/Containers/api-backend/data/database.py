@@ -1051,6 +1051,40 @@ def _ensure_scheduled_job_support_tables(conn: sqlite3.Connection, *, logger: Op
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS scheduled_job_onboarding_target_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                target_row_id INTEGER NOT NULL,
+                run_id INTEGER NOT NULL,
+                job_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                task TEXT NOT NULL,
+                detail TEXT,
+                stdout_snippet TEXT,
+                stderr_snippet TEXT,
+                started_at INTEGER NOT NULL,
+                finished_at INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                FOREIGN KEY(target_row_id) REFERENCES scheduled_job_onboarding_targets(id) ON DELETE CASCADE,
+                FOREIGN KEY(run_id) REFERENCES scheduled_job_runs(id) ON DELETE CASCADE,
+                FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_onboarding_target_events_target
+                ON scheduled_job_onboarding_target_events(target_row_id, started_at)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_onboarding_target_events_run
+                ON scheduled_job_onboarding_target_events(run_id)
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS scheduled_job_run_targets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 run_id INTEGER NOT NULL,

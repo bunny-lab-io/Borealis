@@ -9,7 +9,7 @@ Explain how Borealis schedules recurring jobs, targets devices, and records run 
 - `job-scheduler` owns the scheduled tick loop in container deployments. `api-backend` keeps CRUD/status APIs and the live Socket.IO bridge.
 - Site-scoped pressure work is queued in PostgreSQL and executed by ephemeral `site-worker-<uuid>` containers.
 - Existing agent-side quick job dispatch still crosses `api-backend` because active agent sockets live there.
-- Run history is stored in `scheduled_job_runs`, `scheduled_job_run_targets`, `scheduled_job_run_activity`, and, for automatic onboarding, `scheduled_job_onboarding_targets`.
+- Run history is stored in `scheduled_job_runs`, `scheduled_job_run_targets`, `scheduled_job_run_activity`, and, for automatic onboarding, `scheduled_job_onboarding_targets` plus `scheduled_job_onboarding_target_events`.
 - Scheduled job definitions carry `job_kind`; normal jobs use `automation`, while local-network device enrollment uses `onboarding`.
 
 ## Schedule Types
@@ -71,7 +71,7 @@ Supported schedule types (from the scheduler core):
 - Operators select one site, target OS, one stored machine or domain credential, discovery scope entries, exclusion scope entries, agent install branch, remote ports, per-job device onboarding concurrency, and normal schedule options.
 - Linux targets use SSH. At run time the Engine probes TCP/SSH, authenticates with the selected credential, confirms the target is Linux, downloads `Agent.sh` from the selected branch, and runs `Agent.sh --repo-branch <branch> deploy --serverurl <engine_url> --enrollmentcode <site_code> --newEngine`.
 - Windows targets use the same discovery/exclusion model. The Engine first tries SMB `ADMIN$` plus a temporary Remote Service Control Manager service, then a remote scheduled task, then WMI/DCOM process creation, then WinRM. The remote script syncs the selected branch into `C:\Borealis`, preserves the installed `C:\Borealis\Agent` runtime and onboarding temp/state, uses a host-wide onboarding mutex, stops `python.exe` / `pythonw.exe` processes with the same `Stop-Process` then `taskkill.exe` fallback used by `Update.ps1`, cleans stale per-run onboarding source folders/processes plus `BorealisOnboarding*` service/task artifacts, and skips duplicate attempts when a matching pending approval was already created in the last 24 hours. If all paths fail, the target records a manual-install-required failure because local security policy blocked remote enrollment.
-- Remote machine credentials stay only in existing Aegis-protected credential records. Onboarding target output is stored as sanitized snippets in `scheduled_job_onboarding_targets`.
+- Remote machine credentials stay only in existing Aegis-protected credential records. Onboarding target output is stored as sanitized snippets in `scheduled_job_onboarding_targets`; per-target task timeline snippets are stored in `scheduled_job_onboarding_target_events`.
 - Successful remote installs do not auto-approve devices. Agents submit normal enrollment requests and remain in the existing approval queue. When possible, Borealis records `onboarding_job_id`, `onboarding_run_id`, and `onboarding_target` on the approval. The onboarding target endpoint hydrates pending target rows with current approval status so approved or completed devices stop showing as `waiting_approval`.
 - Windows SCM-based deployment may return a service-control timeout after the non-service PowerShell payload launches. Borealis treats that launch-state timeout as recoverable, polls the staged output file, and also accepts a matching approval record as proof that the installer reached the Engine.
 - Re-deploying an onboarding job saves the current job definition, deletes prior run history for that job, creates a fresh immediate onboarding occurrence, and repopulates target status from the new run.
@@ -112,7 +112,7 @@ Supported schedule types (from the scheduler core):
 - `GET /api/scheduled_jobs/<int:job_id>/devices` (Token Authenticated) - device results.
 - `DELETE /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - clear run history.
 - `POST /api/onboarding/jobs/<int:job_id>/redeploy` (Token Authenticated) - clear onboarding job history and start a fresh immediate onboarding run.
-- `GET /api/onboarding/jobs/<int:job_id>/targets` (Token Authenticated) - onboarding target attempts for an occurrence, including sanitized output snippets and approval context when available.
+- `GET /api/onboarding/jobs/<int:job_id>/targets` (Token Authenticated) - onboarding target attempts for an occurrence, including approval context and persistent per-target timeline events with sanitized output snippets when available.
 - `GET /api/server/workers` (Admin) - active and recent job-scheduler site worker state.
 
 ## Related Documentation
@@ -135,6 +135,7 @@ Supported schedule types (from the scheduler core):
 - `scheduled_job_run_targets` - frozen occurrence target snapshot and originating filter links.
 - `scheduled_job_run_activity` - links activity_history to scheduled runs.
 - `scheduled_job_onboarding_targets` - per-target local-network onboarding attempt state and sanitized output.
+- `scheduled_job_onboarding_target_events` - persistent per-target onboarding task timeline for Detailed Breakdown.
 - `task_scheduler_work_items` - durable queued/running/completed work with Postgres leases.
 - `task_scheduler_workers` - active/recent site-worker lifecycle snapshots.
 - `task_scheduler_service_snapshots` - last known Compose service state from `job-scheduler` for Server Info when `api-backend` has no Docker socket.

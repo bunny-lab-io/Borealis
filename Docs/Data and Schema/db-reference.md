@@ -613,6 +613,24 @@ finally:
 - stdout/stderr are sanitized snippets only. Stored machine and domain credentials remain in `credentials` and are not copied into onboarding attempts.
 - Approval status is not duplicated here. `/api/onboarding/jobs/<job_id>/targets` joins back to `device_approvals` by saved approval reference or onboarding context and hydrates approval id/status for UI display and inline approval actions.
 
+#### `scheduled_job_onboarding_target_events`
+- Status: Active.
+- Purpose: Persistent per-target onboarding timeline used by the WebUI Detailed Breakdown table.
+- Columns: `id`, `target_row_id`, `run_id`, `job_id`, `status`, `task`, `detail`, `stdout_snippet`, `stderr_snippet`, `started_at`, `finished_at`, `created_at`, `updated_at`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- FK declared: `target_row_id -> scheduled_job_onboarding_targets(id) ON DELETE CASCADE`.
+- FK declared: `run_id -> scheduled_job_runs(id) ON DELETE CASCADE`.
+- FK declared: `job_id -> scheduled_jobs(id) ON DELETE CASCADE`.
+- `idx_onboarding_target_events_target` on `(target_row_id, started_at)`.
+- `idx_onboarding_target_events_run` on `run_id`.
+- Used by:
+- Automatic local-network onboarding runner.
+- `/api/onboarding/jobs/<job_id>/targets`, nested under each target as `timeline` and `events`.
+- Notes:
+- Rows are appended when target task/status changes. Active prior rows are closed with `finished_at`; terminal rows are written as completed/failed/skipped snapshots.
+- stdout/stderr are sanitized snippets captured for the specific task event, not raw remote logs.
+
 #### `scheduled_job_run_targets`
 - Status: Active.
 - Purpose: Frozen point-in-time target membership for each scheduled occurrence or shared Ansible playbook run.

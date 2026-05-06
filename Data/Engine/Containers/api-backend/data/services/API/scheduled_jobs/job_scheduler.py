@@ -210,6 +210,8 @@ def _windows_onboarding_skip_detail(*, stdout: Any = "", stderr: Any = "") -> st
     if "__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1" in combined:
         return "Another Borealis onboarding deployment is already running on this target."
     if "__BOREALIS_ONBOARDING_ALREADY_PENDING__=1" in combined:
+        if re.search(r"__BOREALIS_ONBOARDING_ALREADY_PENDING__=1[^\r\n]*status=running\b", combined, re.IGNORECASE):
+            return ""
         return "Previous Borealis onboarding attempt is already pending approval on this target."
     if "__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1" in combined:
         return "Borealis agent already appears enrolled on this target."
@@ -227,9 +229,13 @@ def _windows_service_start_error_allows_output_poll(error: Any) -> bool:
             "timely fashion",
             "netbios connection",
             "timed out",
+            "timeout",
             "connection reset",
             "connection aborted",
             "rpc_x_call_failed",
+            "error_service_not_active",
+            "error_service_specific_error",
+            "service process could not connect",
         )
     )
 
@@ -285,6 +291,115 @@ def _windows_exit_code_from_output(output: Any) -> Optional[int]:
         return int(matches[-1])
     except Exception:
         return None
+
+
+def _windows_output_is_launcher_marker_only(output: Any) -> bool:
+    lines = [line.strip() for line in str(output or "").splitlines() if line.strip()]
+    launch_markers = {
+        "__BOREALIS_WINDOWS_ONBOARDING_STAGED__=1",
+        "__BOREALIS_WINDOWS_ONBOARDING_LAUNCHER_STARTED__=1",
+    }
+    return bool(lines) and all(line in launch_markers for line in lines)
+
+
+def _windows_smb_object_missing_error(error: Any) -> bool:
+    normalized = str(error or "").strip().lower()
+    return "status_object_name_not_found" in normalized or "0xc0000034" in normalized
+
+
+def _windows_smb_sharing_violation_error(error: Any) -> bool:
+    normalized = str(error or "").strip().lower()
+    return "status_sharing_violation" in normalized or "0xc0000043" in normalized
+
+
+def _onboarding_progress_status(status: Any) -> str:
+    normalized = str(status or "pending").strip().lower()
+    if normalized in {"ssh_unreachable", "unreachable"}:
+        return ONBOARDING_STATUS_UNREACHABLE
+    if normalized in {"failed", "failure", "error"}:
+        return ONBOARDING_STATUS_FAILED
+    if normalized in {"skipped", "denied", "expired", "already_enrolled", "already_pending", "unsupported_os"}:
+        return ONBOARDING_STATUS_SKIPPED
+    if normalized in {"waiting_approval"}:
+        return ONBOARDING_STATUS_WAITING_APPROVAL
+    if normalized in {"completed", "approved", "success", "installed"}:
+        return "completed"
+    if normalized in {"running"}:
+        return ONBOARDING_STATUS_RUNNING
+    return ONBOARDING_STATUS_PENDING
+
+
+def _onboarding_progress_status_is_active(status: Any) -> bool:
+    return str(status or "").strip().lower() in {
+        ONBOARDING_STATUS_PENDING,
+        ONBOARDING_STATUS_RUNNING,
+        ONBOARDING_STATUS_WAITING_APPROVAL,
+    }
+
+
+def _onboarding_progress_task_from_output(*, stdout: Any = "", stderr: Any = "") -> str:
+    combined = f"{stdout or ''}\n{stderr or ''}".lower()
+    if not combined.strip():
+        return ""
+    if "__borealis_windows_onboarding_exit_code__=0" in combined or "agent installed" in combined:
+        return "Awaiting Approval"
+    if "dependency: python" in combined:
+        return "Installing Python Dependency"
+    if "ensuring agent dependencies exist" in combined:
+        return "Ensuring Agent Dependencies Exist"
+    if "deploying borealis agent" in combined:
+        return "Deploying Borealis Agent Runtime"
+    if "launching c:\\borealis\\borealis.ps1" in combined:
+        return "Running Agent Bootstrap"
+    if "copying files to c:\\borealis" in combined:
+        return "Copying Files to C:\\Borealis"
+    if "extracting agent installation files" in combined:
+        return "Extracting Agent Installation Files"
+    if "syncing borealis ref" in combined:
+        return "Transferring Agent Installation Files"
+    if "__borealis_onboarding_stale_process_killed__" in combined:
+        return "Cleaning Stale Onboarding Processes"
+    return ""
+
+
+def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any = "", stderr: Any = "") -> str:
+    normalized_status = str(status or "pending").strip().lower()
+    if normalized_status == ONBOARDING_STATUS_WAITING_APPROVAL:
+        return "Awaiting Approval"
+    if normalized_status in {"approved", "completed", "success", "installed"}:
+        return "Enrollment Approved"
+    if normalized_status in {"failed", "failure", "error"}:
+        return "Onboarding Failed"
+    if normalized_status in {"unreachable", "ssh_unreachable"}:
+        return "Remote Device Unreachable"
+    if normalized_status in {"skipped", "already_enrolled", "already_pending", "denied", "expired", "unsupported_os"}:
+        return "Onboarding Skipped"
+
+    detail_text = str(detail or "").strip()
+    detail_lower = detail_text.lower()
+    if "connecting to windows smb" in detail_lower or "connecting to ssh" in detail_lower:
+        return "Establishing Connection to Remote Device"
+    if "staging borealis onboarding script" in detail_lower:
+        return "Transferring Agent Installation Files"
+    if "binding to windows service control manager" in detail_lower or "creating transient borealis onboarding service" in detail_lower:
+        return "Creating Windows Service to One-Shot Bootstrap Agent"
+    if "starting transient borealis onboarding service" in detail_lower:
+        return "Ensuring Windows Service is Running"
+    if "scheduled task" in detail_lower:
+        if "registering" in detail_lower:
+            return "Creating Remote Scheduled Task"
+        if "starting" in detail_lower:
+            return "Ensuring Remote Scheduled Task is Running"
+        return "Establishing Scheduled Task Fallback"
+    if "wmi" in detail_lower or "dcom" in detail_lower:
+        return "Running WMI/DCOM Fallback"
+    if "winrm" in detail_lower:
+        return "Running WinRM Fallback"
+    if "waiting for windows" in detail_lower or "output file lock" in detail_lower:
+        return _onboarding_progress_task_from_output(stdout=stdout, stderr=stderr) or "Running Agent Bootstrap"
+    if detail_lower:
+        return detail_text
+    return _onboarding_progress_task_from_output(stdout=stdout, stderr=stderr) or "Waiting For Onboarding Work"
 
 
 def _set_impacket_timeout(obj: Any, timeout_seconds: float) -> None:
@@ -2440,6 +2555,30 @@ class JobScheduler:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_onboarding_targets_run ON scheduled_job_onboarding_targets(run_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_onboarding_targets_job ON scheduled_job_onboarding_targets(job_id, scheduled_ts)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_onboarding_targets_status ON scheduled_job_onboarding_targets(status)")
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scheduled_job_onboarding_target_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    target_row_id INTEGER NOT NULL,
+                    run_id INTEGER NOT NULL,
+                    job_id INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    task TEXT NOT NULL,
+                    detail TEXT,
+                    stdout_snippet TEXT,
+                    stderr_snippet TEXT,
+                    started_at INTEGER NOT NULL,
+                    finished_at INTEGER,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    FOREIGN KEY(target_row_id) REFERENCES scheduled_job_onboarding_targets(id) ON DELETE CASCADE,
+                    FOREIGN KEY(run_id) REFERENCES scheduled_job_runs(id) ON DELETE CASCADE,
+                    FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
+                )
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_onboarding_target_events_target ON scheduled_job_onboarding_target_events(target_row_id, started_at)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_onboarding_target_events_run ON scheduled_job_onboarding_target_events(run_id)")
         except Exception:
             pass
         try:
@@ -3449,7 +3588,7 @@ class JobScheduler:
                 """,
                 (int(job_id), int(scheduled_ts)),
             )
-            return [
+            rows = [
                 {
                     "id": int(row[0]),
                     "run_id": int(row[1]),
@@ -3473,6 +3612,66 @@ class JobScheduler:
             ]
         finally:
             conn.close()
+        timelines = self._load_onboarding_target_event_rows([int(row["id"]) for row in rows])
+        for row in rows:
+            timeline = timelines.get(int(row["id"]), [])
+            row["timeline"] = timeline
+            row["events"] = timeline
+        return rows
+
+    def _load_onboarding_target_event_rows(self, target_row_ids: Sequence[int]) -> Dict[int, List[Dict[str, Any]]]:
+        row_ids = [int(row_id) for row_id in target_row_ids if int(row_id or 0) > 0]
+        if not row_ids:
+            return {}
+        placeholders = ",".join(["?"] * len(row_ids))
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT
+                    id,
+                    target_row_id,
+                    run_id,
+                    job_id,
+                    status,
+                    task,
+                    detail,
+                    stdout_snippet,
+                    stderr_snippet,
+                    started_at,
+                    finished_at,
+                    created_at,
+                    updated_at
+                  FROM scheduled_job_onboarding_target_events
+                 WHERE target_row_id IN ({placeholders})
+              ORDER BY target_row_id ASC, id ASC
+                """,
+                tuple(row_ids),
+            )
+            timelines: Dict[int, List[Dict[str, Any]]] = {row_id: [] for row_id in row_ids}
+            for row in cur.fetchall():
+                target_row_id = int(row[1])
+                timelines.setdefault(target_row_id, []).append(
+                    {
+                        "id": int(row[0]),
+                        "target_row_id": target_row_id,
+                        "run_id": int(row[2]),
+                        "job_id": int(row[3]),
+                        "status": row[4] or "",
+                        "task": row[5] or "",
+                        "detail": row[6] or "",
+                        "stdout_snippet": row[7] or "",
+                        "stderr_snippet": row[8] or "",
+                        "started_at": row[9],
+                        "finished_at": row[10],
+                        "created_at": row[11],
+                        "updated_at": row[12],
+                    }
+                )
+            return timelines
+        finally:
+            conn.close()
 
     def _clear_scheduled_job_run_history(self, job_id: int) -> int:
         conn = self._conn()
@@ -3486,6 +3685,7 @@ class JobScheduler:
             params = tuple(run_ids)
             cur.execute(f"DELETE FROM scheduled_job_run_activity WHERE run_id IN ({placeholders})", params)
             cur.execute(f"DELETE FROM scheduled_job_run_targets WHERE run_id IN ({placeholders})", params)
+            cur.execute(f"DELETE FROM scheduled_job_onboarding_target_events WHERE run_id IN ({placeholders})", params)
             cur.execute(f"DELETE FROM scheduled_job_onboarding_targets WHERE run_id IN ({placeholders})", params)
             cur.execute(f"DELETE FROM scheduled_job_runs WHERE id IN ({placeholders})", params)
             cleared = int(cur.rowcount or 0)
@@ -3493,6 +3693,114 @@ class JobScheduler:
             return cleared
         finally:
             conn.close()
+
+    def _record_onboarding_target_event(
+        self,
+        cur,
+        *,
+        row_id: int,
+        status: str,
+        detail: str = "",
+        stdout: str = "",
+        stderr: str = "",
+        now: Optional[int] = None,
+        finished: bool = False,
+    ) -> None:
+        target_row_id = int(row_id or 0)
+        if target_row_id <= 0:
+            return
+        timestamp = int(now or _now_ts())
+        progress_status = _onboarding_progress_status(status)
+        task = _onboarding_progress_task(status=status, detail=detail, stdout=stdout, stderr=stderr)
+        insert_finished = bool(finished) or not _onboarding_progress_status_is_active(progress_status)
+        cur.execute(
+            "SELECT run_id, job_id FROM scheduled_job_onboarding_targets WHERE id=?",
+            (target_row_id,),
+        )
+        target_row = cur.fetchone()
+        if not target_row:
+            return
+        run_id = int(target_row[0])
+        job_id = int(target_row[1])
+        cur.execute(
+            """
+            SELECT id, status, task, finished_at
+              FROM scheduled_job_onboarding_target_events
+             WHERE target_row_id=?
+          ORDER BY id DESC
+             LIMIT 1
+            """,
+            (target_row_id,),
+        )
+        previous = cur.fetchone()
+        if previous and str(previous[1] or "") == progress_status and str(previous[2] or "") == task:
+            cur.execute(
+                """
+                UPDATE scheduled_job_onboarding_target_events
+                   SET detail=?,
+                       stdout_snippet=?,
+                       stderr_snippet=?,
+                       finished_at=?,
+                       updated_at=?
+                 WHERE id=?
+                """,
+                (
+                    detail,
+                    stdout,
+                    stderr,
+                    timestamp if insert_finished else previous[3],
+                    timestamp,
+                    int(previous[0]),
+                ),
+            )
+            return
+
+        if previous and previous[3] is None:
+            previous_status = str(previous[1] or "")
+            closing_status = "completed" if _onboarding_progress_status_is_active(previous_status) else previous_status
+            cur.execute(
+                """
+                UPDATE scheduled_job_onboarding_target_events
+                   SET status=?,
+                       finished_at=?,
+                       updated_at=?
+                 WHERE id=?
+                """,
+                (closing_status, timestamp, timestamp, int(previous[0])),
+            )
+
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_onboarding_target_events(
+                target_row_id,
+                run_id,
+                job_id,
+                status,
+                task,
+                detail,
+                stdout_snippet,
+                stderr_snippet,
+                started_at,
+                finished_at,
+                created_at,
+                updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                target_row_id,
+                run_id,
+                job_id,
+                progress_status,
+                task,
+                detail,
+                stdout,
+                stderr,
+                timestamp,
+                timestamp if insert_finished else None,
+                timestamp,
+                timestamp,
+            ),
+        )
 
     def _update_onboarding_target_row(
         self,
@@ -3507,6 +3815,9 @@ class JobScheduler:
         redactions: Optional[Sequence[Any]] = None,
     ) -> None:
         now = _now_ts()
+        clean_detail = sanitize_output(detail, redactions=redactions, limit=500)
+        clean_stdout = sanitize_output(stdout, redactions=redactions)
+        clean_stderr = sanitize_output(stderr, redactions=redactions)
         conn = self._conn()
         try:
             cur = conn.cursor()
@@ -3524,14 +3835,24 @@ class JobScheduler:
                 """,
                 (
                     str(status or ""),
-                    sanitize_output(detail, redactions=redactions, limit=500),
-                    sanitize_output(stdout, redactions=redactions),
-                    sanitize_output(stderr, redactions=redactions),
+                    clean_detail,
+                    clean_stdout,
+                    clean_stderr,
                     str(approval_reference or ""),
                     now,
                     now if finished else None,
                     int(row_id),
                 ),
+            )
+            self._record_onboarding_target_event(
+                cur,
+                row_id=int(row_id),
+                status=str(status or ""),
+                detail=clean_detail,
+                stdout=clean_stdout,
+                stderr=clean_stderr,
+                now=now,
+                finished=finished,
             )
             conn.commit()
         finally:
@@ -3701,15 +4022,33 @@ class JobScheduler:
                     next_row["approval_reference"] = approval_reference
                     self._update_onboarding_target_approval_reference(int(next_row.get("id") or 0), approval_reference)
                 approval_status = str(approval_context.get("approval_status") or "").strip().lower()
+                approval_detail = ""
                 if approval_status == "approved":
                     next_row["status"] = "approved"
-                    next_row["detail"] = "Device approved. Agent finalizing enrollment."
+                    approval_detail = "Device approved. Agent finalizing enrollment."
+                    next_row["detail"] = approval_detail
                 elif approval_status == "completed":
                     next_row["status"] = "completed"
-                    next_row["detail"] = "Device approved and enrollment completed."
+                    approval_detail = "Device approved and enrollment completed."
+                    next_row["detail"] = approval_detail
                 elif approval_status in {"denied", "expired"}:
                     next_row["status"] = approval_status
-                    next_row["detail"] = f"Device approval {approval_status}."
+                    approval_detail = f"Device approval {approval_status}."
+                    next_row["detail"] = approval_detail
+                if approval_detail:
+                    row_id = int(next_row.get("id") or 0)
+                    self._update_onboarding_target_row(
+                        row_id,
+                        status=str(next_row.get("status") or approval_status),
+                        detail=approval_detail,
+                        stdout=next_row.get("stdout_snippet") or "",
+                        stderr=next_row.get("stderr_snippet") or "",
+                        approval_reference=approval_reference or str(next_row.get("approval_reference") or ""),
+                        finished=approval_status in {"approved", "completed", "denied", "expired"},
+                    )
+                    timeline = self._load_onboarding_target_event_rows([row_id]).get(row_id, [])
+                    next_row["timeline"] = timeline
+                    next_row["events"] = timeline
             hydrated.append(next_row)
         return hydrated
 
@@ -4135,6 +4474,7 @@ class JobScheduler:
                 "$hasLock = $false",
                 "$mutex = $null",
                 "$skipDeploy = $false",
+                "$script:staleOnboardingProcessCount = 0",
                 "function Get-BorealisSha256 {",
                 "  param([string]$Text)",
                 "  $sha = [System.Security.Cryptography.SHA256]::Create()",
@@ -4145,9 +4485,15 @@ class JobScheduler:
                 "    $sha.Dispose()",
                 "  }",
                 "}",
+                "function Ensure-BorealisDirectory {",
+                "  param([string]$Path)",
+                "  if ([string]::IsNullOrWhiteSpace($Path)) { return }",
+                "  New-Item -ItemType Directory -Force -Path $Path | Out-Null",
+                "}",
                 "function Write-BorealisOnboardingState {",
                 "  param([string]$Status, [int]$ExitCode)",
                 "  try {",
+                "    Ensure-BorealisDirectory -Path (Split-Path -Parent $statePath)",
                 "    $state = [ordered]@{",
                 f"      job_id = {int(job_id)}",
                 f"      run_id = {int(run_id)}",
@@ -4192,6 +4538,38 @@ class JobScheduler:
                 "      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue",
                 "  } catch { }",
                 "}",
+                "function Stop-StaleBorealisOnboardingProcesses {",
+                "  try {",
+                "    $currentPid = [int]$PID",
+                "    $cutoff = [DateTime]::UtcNow.AddSeconds(-60)",
+                "    $processes = Get-CimInstance -ClassName Win32_Process -Filter \"Name='powershell.exe' OR Name='pwsh.exe' OR Name='cmd.exe'\" -ErrorAction SilentlyContinue",
+                "    foreach ($proc in $processes) {",
+                "      try { $procId = [int]$proc.ProcessId } catch { continue }",
+                "      if ($procId -eq $currentPid) { continue }",
+                "      $cmd = ($proc.CommandLine -as [string])",
+                "      if (-not $cmd) { continue }",
+                "      $normalizedCmd = $cmd.ToLowerInvariant()",
+                "      if (-not ($normalizedCmd.Contains('\\temp\\borealisonboarding\\') -or $normalizedCmd.Contains('temp\\borealisonboarding'))) { continue }",
+                "      $created = [DateTime]::MinValue",
+                "      try { $created = [System.Management.ManagementDateTimeConverter]::ToDateTime([string]$proc.CreationDate).ToUniversalTime() } catch { }",
+                "      if ($created -ne [DateTime]::MinValue -and $created -gt $cutoff) { continue }",
+                "      $terminated = $false",
+                "      try {",
+                "        Invoke-CimMethod -InputObject $proc -MethodName Terminate -ErrorAction Stop | Out-Null",
+                "        $terminated = $true",
+                "      } catch { }",
+                "      if (-not $terminated) {",
+                "        try { Stop-Process -Id $procId -Force -ErrorAction Stop; $terminated = $true } catch { }",
+                "      }",
+                "      if ($terminated) {",
+                "        $script:staleOnboardingProcessCount += 1",
+                "        Write-Output ('__BOREALIS_ONBOARDING_STALE_PROCESS_KILLED__=' + $procId)",
+                "      }",
+                "    }",
+                "  } catch {",
+                "    Write-Warning ('Unable to cleanup stale Borealis onboarding processes: ' + $_.Exception.Message)",
+                "  }",
+                "}",
                 "function Stop-BorealisPythonProcesses {",
                 "  $enginePids = @()",
                 "  $engineRoot = Join-Path $repoRoot 'Engine'",
@@ -4234,8 +4612,9 @@ class JobScheduler:
                 "  $root = Join-Path $repoRoot 'Temp\\Onboarding'",
                 "  $statePath = Join-Path $root 'state.json'",
                 f"  $enrollmentCodeSha256 = Get-BorealisSha256 { _powershell_single_quoted(enrollment_code) }",
-                "  New-Item -ItemType Directory -Force -Path $repoRoot | Out-Null",
-                "  New-Item -ItemType Directory -Force -Path $root | Out-Null",
+                "  Ensure-BorealisDirectory -Path $repoRoot",
+                "  Ensure-BorealisDirectory -Path $root",
+                "  Stop-StaleBorealisOnboardingProcesses",
                 "  $mutex = New-Object System.Threading.Mutex($false, 'Global\\BorealisAgentOnboarding')",
                 "  try {",
                 "    $hasLock = $mutex.WaitOne(0)",
@@ -4267,10 +4646,14 @@ class JobScheduler:
                 "      $updatedAt = [DateTime]::MinValue",
                 "      try { $updatedAt = ([DateTime]::Parse([string]$existingState.updated_at)).ToUniversalTime() } catch { }",
                 "      $ageHours = ([DateTime]::UtcNow - $updatedAt).TotalHours",
-                "      if ($sameEnrollment -and $sameServer -and $ageHours -lt 24 -and (@('running','pending_approval') -contains $status)) {",
+                "      if ($sameEnrollment -and $sameServer -and $ageHours -lt 24 -and $status -eq 'pending_approval') {",
                 "        Write-Output ('__BOREALIS_ONBOARDING_ALREADY_PENDING__=1 status=' + $status)",
                 "        $exitCode = 73",
                 "        $skipDeploy = $true",
+                "      }",
+                "      if (-not $skipDeploy -and $sameEnrollment -and $sameServer -and $status -eq 'running') {",
+                "        Write-Output ('__BOREALIS_ONBOARDING_STALE_RUNNING_STATE_IGNORED__=1 age_hours=' + [Math]::Round($ageHours, 2))",
+                "        try { Remove-Item -Force $statePath -ErrorAction SilentlyContinue } catch { }",
                 "      }",
                 "    } catch {",
                 "      Write-Warning ('Unable to inspect Borealis onboarding state: ' + $_.Exception.Message)",
@@ -4281,16 +4664,44 @@ class JobScheduler:
                 "    Stop-BorealisPythonProcesses",
                 f"  $zipPath = Join-Path $root { _powershell_single_quoted(f'Borealis-{int(run_id)}.zip') }",
                 f"  $extractPath = Join-Path $root { _powershell_single_quoted(f'source-{int(run_id)}') }",
+                "  Ensure-BorealisDirectory -Path $root",
                 "  if (Test-Path $zipPath) { Remove-Item -Force $zipPath }",
                 "  if (Test-Path $extractPath) { Remove-Item -Recurse -Force $extractPath }",
                 "  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12",
                 f"  Write-Output ('Syncing Borealis ref {branch_ref} from {zip_url}.')",
                 f"  Invoke-WebRequest -UseBasicParsing -Uri { _powershell_single_quoted(zip_url) } -OutFile $zipPath",
+                "  Write-Output 'Extracting Agent Installation Files.'",
                 "  Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force",
                 "  $sourceRoot = Get-ChildItem -Path $extractPath -Directory | Select-Object -First 1",
                 "  if (-not $sourceRoot) { throw 'Borealis branch archive did not contain a source folder.' }",
-                "  Get-ChildItem -Path $repoRoot -Force | Where-Object { $_.Name -notin @('Agent','Temp') } | Remove-Item -Recurse -Force",
-                "  Copy-Item -Path (Join-Path $sourceRoot.FullName '*') -Destination $repoRoot -Recurse -Force",
+                "  Write-Output 'Copying Files to C:\\Borealis.'",
+                "  Get-ChildItem -Path $repoRoot -Force |",
+                "    Where-Object { $_.Name -notin @('Agent','Temp','Dependencies') } |",
+                "    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue",
+                "  $sourceDependencies = Join-Path $sourceRoot.FullName 'Dependencies'",
+                "  $destinationDependencies = Join-Path $repoRoot 'Dependencies'",
+                "  if (-not (Test-Path $destinationDependencies)) { New-Item -ItemType Directory -Force -Path $destinationDependencies | Out-Null }",
+                "  Get-ChildItem -Path $sourceRoot.FullName -Force | ForEach-Object {",
+                "    $sourceItem = $_",
+                "    if ($sourceItem.Name -eq 'Dependencies') {",
+                "      Get-ChildItem -Path $sourceDependencies -Force |",
+                "        Where-Object { $_.Name -ne 'VPN_Tunnel_Adapter' } |",
+                "        ForEach-Object {",
+                "          $depItem = $_",
+                "          $depDestination = Join-Path $destinationDependencies $depItem.Name",
+                "          try {",
+                "            if ($depItem.PSIsContainer) { Copy-Item -Path $depItem.FullName -Destination $depDestination -Recurse -Force -ErrorAction Stop }",
+                "            else { Copy-Item -Path $depItem.FullName -Destination $destinationDependencies -Force -ErrorAction Stop }",
+                "          } catch {",
+                "            Write-Warning ('Unable to refresh dependency item ' + $depItem.FullName + ': ' + $_.Exception.Message)",
+                "          }",
+                "        }",
+                "    } else {",
+                "      $destination = Join-Path $repoRoot $sourceItem.Name",
+                "      if ($sourceItem.PSIsContainer) { Copy-Item -Path $sourceItem.FullName -Destination $destination -Recurse -Force }",
+                "      else { Copy-Item -Path $sourceItem.FullName -Destination $repoRoot -Force }",
+                "    }",
+                "  }",
                 "  $deployScript = Join-Path $repoRoot 'Borealis.ps1'",
                 "  if (-not (Test-Path $deployScript -PathType Leaf)) { throw 'Borealis.ps1 missing from synchronized repository.' }",
                 f"  $env:BOREALIS_ONBOARDING_JOB_ID = { _powershell_single_quoted(str(int(job_id))) }",
@@ -4299,7 +4710,7 @@ class JobScheduler:
                 "  $env:BOREALIS_AGENT_NONINTERACTIVE = '1'",
                 "  $env:BOREALIS_AGENT_NO_TTY = '1'",
                 "  $agentSettingsRoot = Join-Path $repoRoot 'Agent\\Borealis\\Settings'",
-                "  New-Item -ItemType Directory -Force -Path $agentSettingsRoot | Out-Null",
+                "  Ensure-BorealisDirectory -Path $agentSettingsRoot",
                 "  $onboardingContext = [ordered]@{",
                 f"    job_id = {int(job_id)}",
                 f"    run_id = {int(run_id)}",
@@ -4406,7 +4817,7 @@ class JobScheduler:
                         time.sleep(1.0)
         raise RuntimeError(f"smb_connection_failed:{last_error or 'connection_failed'}")
 
-    def _windows_smb_stage_script(self, smb: Any, script: str) -> Tuple[str, str, str]:
+    def _windows_smb_stage_script(self, smb: Any, script: str) -> Tuple[str, str, str, str]:
         stem = f"BorealisOnboard-{uuid.uuid4().hex}"
         remote_dir = "Temp\\BorealisOnboarding"
         try:
@@ -4414,14 +4825,30 @@ class JobScheduler:
         except Exception:
             pass
         script_path = f"{remote_dir}\\{stem}.ps1"
+        launcher_path = f"{remote_dir}\\{stem}.cmd"
         output_path = f"{remote_dir}\\{stem}.log"
-        script_bytes = io.BytesIO(str(script or "").encode("utf-8-sig"))
-        smb.putFile("ADMIN$", script_path, script_bytes.read)
-        return (
-            f"C:\\Windows\\{script_path}",
-            f"C:\\Windows\\{output_path}",
-            output_path,
+        script_abs = f"C:\\Windows\\{script_path}"
+        launcher_abs = f"C:\\Windows\\{launcher_path}"
+        output_abs = f"C:\\Windows\\{output_path}"
+        launcher = "\n".join(
+            [
+                "@echo off",
+                f"echo __BOREALIS_WINDOWS_ONBOARDING_LAUNCHER_STARTED__=1 > {output_abs}",
+                (
+                    "start \"\" /B %SystemRoot%\\System32\\cmd.exe /Q /C "
+                    f"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe "
+                    f"-NoProfile -ExecutionPolicy Bypass -File {script_abs} ^>^> {output_abs} 2^>^&1"
+                ),
+                "exit /b 0",
+            ]
         )
+        script_bytes = io.BytesIO(str(script or "").encode("utf-8-sig"))
+        launcher_bytes = io.BytesIO(launcher.encode("utf-8"))
+        output_bytes = io.BytesIO(b"__BOREALIS_WINDOWS_ONBOARDING_STAGED__=1\r\n")
+        smb.putFile("ADMIN$", script_path, script_bytes.read)
+        smb.putFile("ADMIN$", launcher_path, launcher_bytes.read)
+        smb.putFile("ADMIN$", output_path, output_bytes.read)
+        return script_abs, output_abs, output_path, launcher_abs
 
     def _read_windows_smb_file(self, smb: Any, path: str, *, share: str = "ADMIN$") -> str:
         buffer = io.BytesIO()
@@ -4451,16 +4878,26 @@ class JobScheduler:
         last_output = ""
         last_error = ""
         last_status_update = 0.0
+        saw_output_share_lock = False
         while time.monotonic() < deadline:
             try:
                 output = self._read_windows_smb_file(smb, output_path)
                 if output:
                     last_output = output
+                    last_error = ""
+                    saw_output_share_lock = False
                     exit_code = _windows_exit_code_from_output(output)
                     if exit_code is not None:
-                        return {"exit_code": exit_code, "stdout": output, "stderr": ""}
+                        if exit_code == 73 and "__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1" in output:
+                            pass
+                        else:
+                            return {"exit_code": exit_code, "stdout": output, "stderr": ""}
             except Exception as exc:
-                last_error = str(exc).strip() or exc.__class__.__name__
+                if _windows_smb_sharing_violation_error(exc):
+                    saw_output_share_lock = True
+                    last_error = ""
+                elif not _windows_smb_object_missing_error(exc):
+                    last_error = str(exc).strip() or exc.__class__.__name__
             state = self._read_windows_onboarding_state(smb)
             state_status = str(state.get("status") or "").strip().lower()
             state_exit_code: Optional[int] = None
@@ -4502,21 +4939,27 @@ class JobScheduler:
                         "stderr": "",
                         "approval_reference": approval_reference,
                     }
-            if not last_output and not state_status and (time.monotonic() - started_at) >= launch_grace_seconds:
+            if not state_status and not saw_output_share_lock and (time.monotonic() - started_at) >= launch_grace_seconds and (
+                not last_output or _windows_output_is_launcher_marker_only(last_output)
+            ):
                 detail = (
-                    "Windows remote launch produced no output, state marker, or approval callback before launch grace expired."
+                    "Windows remote launch produced no installer output, state marker, or approval callback before launch grace expired."
                 )
                 if callable(status_update):
                     status_update(detail, last_output, last_error)
                 return {
                     "exit_code": 124,
                     "stdout": last_output,
-                    "stderr": f"windows_onboarding_launch_timeout{': ' + last_error if last_error else ''}",
+                    "stderr": f"windows_onboarding_child_launch_timeout{': ' + last_error if last_error else ''}",
                 }
             if callable(status_update) and (time.monotonic() - last_status_update) >= 5.0:
                 detail = "Waiting for Windows SMB service enrollment output or approval callback."
                 if state_status:
                     detail = f"Waiting for Windows onboarding state '{state_status}' to complete."
+                elif saw_output_share_lock:
+                    detail = "Waiting for Windows onboarding output file lock to clear."
+                elif "__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1" in last_output:
+                    detail = "Another Borealis onboarding deployment is active on this target; waiting for state or approval."
                 status_update(detail, last_output, last_error)
                 last_status_update = time.monotonic()
             time.sleep(2.0)
@@ -4554,9 +4997,9 @@ class JobScheduler:
             stage = "ADMIN$ script staging"
             if callable(status_update):
                 status_update("Staging Borealis onboarding script over ADMIN$.")
-            script_abs, output_abs, output_path = self._windows_smb_stage_script(smb, script)
+            _script_abs, _output_abs, output_path, launcher_abs = self._windows_smb_stage_script(smb, script)
             service_name = f"BorealisOnboarding{uuid.uuid4().hex[:12]}"
-            command = f'cmd.exe /Q /C powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{script_abs}" > "{output_abs}" 2>&1'
+            command = f"C:\\Windows\\System32\\cmd.exe /Q /C {launcher_abs}"
             start_warning = ""
             stage = "svcctl RPC bind"
             if callable(status_update):
@@ -4660,9 +5103,9 @@ class JobScheduler:
             stage = "ADMIN$ script staging"
             if callable(status_update):
                 status_update("Staging Borealis onboarding script over ADMIN$.")
-            script_abs, output_abs, output_path = self._windows_smb_stage_script(smb, script)
+            _script_abs, _output_abs, output_path, launcher_abs = self._windows_smb_stage_script(smb, script)
             command = "cmd.exe"
-            arguments = f'/Q /C powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{script_abs}" > "{output_abs}" 2>&1'
+            arguments = f'/Q /C "{launcher_abs}"'
             xml = self._windows_task_xml(task_name=task_path, command=command, arguments=arguments)
             stage = "Task Scheduler RPC bind"
             if callable(status_update):
@@ -4740,8 +5183,8 @@ class JobScheduler:
             stage = "ADMIN$ script staging"
             if callable(status_update):
                 status_update("Staging Borealis onboarding script over ADMIN$.")
-            script_abs, output_abs, output_path = self._windows_smb_stage_script(smb, script)
-            command = f'cmd.exe /Q /C powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{script_abs}" > "{output_abs}" 2>&1'
+            _script_abs, _output_abs, output_path, launcher_abs = self._windows_smb_stage_script(smb, script)
+            command = f'cmd.exe /Q /C "{launcher_abs}"'
             stage = "DCOM connect"
             if callable(status_update):
                 status_update("Connecting to Windows WMI/DCOM.")
@@ -5222,6 +5665,15 @@ class JobScheduler:
                                 insert_now,
                             ),
                         )
+                        row_id = int(cur.lastrowid or 0)
+                        if row_id > 0:
+                            self._record_onboarding_target_event(
+                                cur,
+                                row_id=row_id,
+                                status=ONBOARDING_STATUS_PENDING,
+                                detail="Waiting For Onboarding Work",
+                                now=insert_now,
+                            )
                     conn.commit()
                 finally:
                     conn.close()
@@ -7553,6 +8005,7 @@ class JobScheduler:
                 placeholders = ",".join("?" for _ in stale_run_ids)
                 cur.execute(f"DELETE FROM scheduled_job_run_activity WHERE run_id IN ({placeholders})", tuple(stale_run_ids))
                 cur.execute(f"DELETE FROM scheduled_job_run_targets WHERE run_id IN ({placeholders})", tuple(stale_run_ids))
+                cur.execute(f"DELETE FROM scheduled_job_onboarding_target_events WHERE run_id IN ({placeholders})", tuple(stale_run_ids))
                 cur.execute(f"DELETE FROM scheduled_job_onboarding_targets WHERE run_id IN ({placeholders})", tuple(stale_run_ids))
                 cur.execute(f"DELETE FROM scheduled_job_runs WHERE id IN ({placeholders})", tuple(stale_run_ids))
                 conn.commit()
@@ -9253,6 +9706,7 @@ class JobScheduler:
                     placeholders = ",".join(["?"] * len(old_run_ids))
                     cur.execute(f"DELETE FROM scheduled_job_run_activity WHERE run_id IN ({placeholders})", tuple(old_run_ids))
                     cur.execute(f"DELETE FROM scheduled_job_run_targets WHERE run_id IN ({placeholders})", tuple(old_run_ids))
+                    cur.execute(f"DELETE FROM scheduled_job_onboarding_target_events WHERE run_id IN ({placeholders})", tuple(old_run_ids))
                     cur.execute(f"DELETE FROM scheduled_job_onboarding_targets WHERE run_id IN ({placeholders})", tuple(old_run_ids))
                     cur.execute(f"DELETE FROM scheduled_job_runs WHERE id IN ({placeholders})", tuple(old_run_ids))
                     cleared = cur.rowcount or 0

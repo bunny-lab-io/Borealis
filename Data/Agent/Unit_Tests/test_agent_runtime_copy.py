@@ -80,3 +80,22 @@ def test_borealis_ps1_hardens_tray_folder_permissions() -> None:
     assert "Join-Path $settingsDir 'Tray'" in content
     assert "S-1-5-11" in content
     assert "S-1-5-32-545" in content
+
+
+def test_borealis_ps1_repairs_nested_python_msi_layout() -> None:
+    script_path = Path(__file__).resolve().parents[3] / "Borealis.ps1"
+    content = script_path.read_text(encoding="utf-8")
+
+    assert "function Find-BorealisPythonExecutable" in content
+    assert "function Repair-BorealisPythonBootstrapLayout" in content
+    assert "function Install-BorealisPythonFromInstaller" in content
+    assert "function Get-BorealisPythonBootstrapLayoutSummary" in content
+    assert "Get-ChildItem -LiteralPath $InstallDir -Filter 'python.exe' -File -Recurse" in content
+    assert "Normalizing MSI administrative install layout" in content
+    assert "$extractExitCode -notin @(0, 3010)" in content
+    assert "Python MSI extraction failed for '$file' with exit code $extractExitCode." in content
+    assert "python-3.13.3-amd64.exe" in content
+    assert "MSI administrative extraction did not produce python.exe" in content
+    assert "Include_pip=1" in content
+    assert "Include_test=0" in content
+    assert "Python executable not found after MSI extraction or installer fallback." in content
