@@ -214,6 +214,36 @@ def _windows_onboarding_skip_detail(*, stdout: Any = "", stderr: Any = "") -> st
     return ""
 
 
+def _windows_service_start_error_allows_output_poll(error: Any) -> bool:
+    normalized = str(error or "").strip().lower()
+    if not normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "1053",
+            "timely fashion",
+            "netbios connection",
+            "timed out",
+            "connection reset",
+            "connection aborted",
+            "rpc_x_call_failed",
+        )
+    )
+
+
+def _windows_onboarding_result_may_have_created_approval(*, method: Any, stdout: Any = "", stderr: Any = "") -> bool:
+    combined = f"{stdout or ''}\n{stderr or ''}".lower()
+    normalized_method = str(method or "").strip().lower()
+    if normalized_method == ONBOARDING_WINDOWS_METHOD_SMB_SCM:
+        return "service start:" in combined and any(marker in combined for marker in ("timed out", "netbios", "rpc_x_call_failed"))
+    if normalized_method == ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK:
+        return "task start:" in combined or "task output polling" in combined
+    if normalized_method == ONBOARDING_WINDOWS_METHOD_WMI_DCOM:
+        return "wmi process creation:" in combined or "wmi output polling" in combined
+    return False
+
+
 def _parse_windows_credential_parts(credential: Mapping[str, Any]) -> Tuple[str, str, str]:
     username = str(credential.get("username") or "").strip()
     metadata = credential.get("metadata") if isinstance(credential.get("metadata"), dict) else {}
@@ -4207,6 +4237,7 @@ class JobScheduler:
             script_abs, output_abs, output_path = self._windows_smb_stage_script(smb, script)
             service_name = f"BorealisOnboarding{uuid.uuid4().hex[:12]}"
             command = f'cmd.exe /Q /C powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{script_abs}" > "{output_abs}" 2>&1'
+            start_warning = ""
             stage = "svcctl RPC bind"
             rpc_transport = transport.SMBTransport(host, int(port), r"\svcctl", smb_connection=smb)
             dce = rpc_transport.get_dce_rpc()
@@ -4228,15 +4259,19 @@ class JobScheduler:
                 stage = "service start"
                 scmr.hRStartServiceW(dce, service_handle)
             except Exception as exc:
-                start_error = str(exc).lower()
-                if "1053" not in start_error and "timely fashion" not in start_error:
+                if not _windows_service_start_error_allows_output_poll(exc):
                     raise
+                start_warning = f"service start: {exc}"
             stage = "service output polling"
-            return self._poll_windows_smb_onboarding_output(
+            result = self._poll_windows_smb_onboarding_output(
                 smb=smb,
                 output_path=output_path,
                 timeout_seconds=timeout_seconds,
             )
+            if start_warning and int(result.get("exit_code") or 0) != 0:
+                stderr = str(result.get("stderr") or "")
+                result["stderr"] = start_warning + (("\n" + stderr) if stderr else "")
+            return result
         except Exception as exc:
             return {"exit_code": 1, "stdout": "", "stderr": f"{stage}: {exc}"}
         finally:
@@ -4575,6 +4610,26 @@ class JobScheduler:
                     redactions=redactions,
                 )
                 return ONBOARDING_STATUS_SKIPPED
+            if _windows_onboarding_result_may_have_created_approval(method=method, stdout=stdout, stderr=stderr):
+                approval_reference = ""
+                deadline = time.monotonic() + 10.0
+                while time.monotonic() < deadline:
+                    approval_reference = self._lookup_onboarding_approval(job_id=job_id, run_id=run_id, target=host)
+                    if approval_reference:
+                        break
+                    time.sleep(1.0)
+                if approval_reference:
+                    self._update_onboarding_target_row(
+                        row_id,
+                        status=ONBOARDING_STATUS_WAITING_APPROVAL,
+                        detail=f"Agent reached approval queue through Windows {label}; remote status channel timed out after launch.",
+                        stdout="\n\n".join(stdout_parts),
+                        stderr="\n\n".join(stderr_parts),
+                        approval_reference=approval_reference,
+                        finished=True,
+                        redactions=redactions,
+                    )
+                    return ONBOARDING_STATUS_WAITING_APPROVAL
             failure_hint = _onboarding_failure_hint(stdout=stdout, stderr=stderr, redactions=redactions)
             stderr_parts.append(f"[{label}] failed with exit code {exit_code}.{(' ' + failure_hint) if failure_hint else ''}")
 
