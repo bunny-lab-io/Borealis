@@ -297,6 +297,29 @@ def test_windows_scheduled_task_xml_uses_localsystem_sid(engine_harness: EngineT
     assert "<AllowStartOnDemand>true</AllowStartOnDemand>" in xml
 
 
+def test_windows_onboarding_script_uses_stable_repo_and_remote_lock(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    script = scheduler._windows_onboarding_script(
+        branch="main",
+        server_url="https://borealis.example",
+        enrollment_code="ENROLL",
+        job_id=10,
+        run_id=20,
+        target="win01.lab",
+    )
+
+    assert "Global\\BorealisAgentOnboarding" in script
+    assert "Borealis\\Repository" in script
+    assert "__BOREALIS_ONBOARDING_ALREADY_PENDING__=1" in script
+    assert "__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1" in script
+    assert "Stop-Process -Id $_.Id -Force" in script
+    assert "Invoke-CimMethod -InputObject $_ -MethodName Terminate" in script
+    assert "source-*" in script
+    assert "Where-Object { $_.Name -ne 'Agent' }" in script
+    assert "-NewEngine" not in script
+
+
 def test_windows_onboarding_falls_back_to_winrm(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
     _client, scheduler = _scheduled_jobs_client(engine_harness)
     updates = []
@@ -347,6 +370,48 @@ def test_windows_onboarding_falls_back_to_winrm(engine_harness: EngineTestHarnes
     assert updates[-1]["status"] == scheduled_job_module.ONBOARDING_STATUS_WAITING_APPROVAL
     assert "WinRM" in updates[-1]["detail"]
     assert updates[-1]["approval_reference"] == "APR-WIN-1"
+
+
+def test_windows_onboarding_skip_marker_stops_fallback_chain(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    updates = []
+    attempts = []
+
+    monkeypatch.setattr(scheduler, "_update_onboarding_target_row", lambda row_id, **kwargs: updates.append({"row_id": row_id, **kwargs}))
+    monkeypatch.setattr(scheduler, "_onboarding_target_already_known", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(scheduler, "_preflight_remote_port", lambda **_kwargs: "")
+    monkeypatch.setattr(scheduler, "_onboarding_install_timeout_seconds", lambda: 30.0)
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_smb_scm_onboarding",
+        lambda **_kwargs: (
+            attempts.append("smb_scm")
+            or {"exit_code": 73, "stdout": "__BOREALIS_ONBOARDING_ALREADY_PENDING__=1", "stderr": ""}
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_scheduled_task_onboarding",
+        lambda **_kwargs: attempts.append("scheduled_task") or {"exit_code": 1, "stdout": "", "stderr": "task blocked"},
+    )
+
+    status = scheduler._run_single_onboarding_target(
+        row={"id": 1, "target_address": "win03.lab", "target_hostname": "win03.lab", "ssh_port": 445},
+        site={"id": 1, "enrollment_code": "ENROLL"},
+        credential={"connection_type": "windows", "username": "LAB\\svc", "password": "secret"},
+        branch="main",
+        server_url="https://borealis.example",
+        job_id=10,
+        run_id=20,
+        platform="windows",
+        windows_methods=["smb_scm", "scheduled_task", "winrm"],
+        winrm_port=5985,
+    )
+
+    assert attempts == ["smb_scm"]
+    assert status == scheduled_job_module.ONBOARDING_STATUS_SKIPPED
+    assert updates[-1]["status"] == scheduled_job_module.ONBOARDING_STATUS_SKIPPED
+    assert "pending approval" in updates[-1]["detail"]
 
 
 def test_windows_onboarding_reports_manual_install_after_all_methods_fail(
