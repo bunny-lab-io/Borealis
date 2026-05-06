@@ -310,13 +310,16 @@ def test_windows_onboarding_script_uses_stable_repo_and_remote_lock(engine_harne
     )
 
     assert "Global\\BorealisAgentOnboarding" in script
-    assert "Borealis\\Repository" in script
+    assert "$repoRoot = 'C:\\Borealis'" in script
+    assert "Temp\\Onboarding" in script
     assert "__BOREALIS_ONBOARDING_ALREADY_PENDING__=1" in script
     assert "__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1" in script
+    assert "function Stop-BorealisPythonProcesses" in script
     assert "Stop-Process -Id $_.Id -Force" in script
+    assert "taskkill.exe /PID $procId /F" in script
     assert "Invoke-CimMethod -InputObject $_ -MethodName Terminate" in script
     assert "source-*" in script
-    assert "Where-Object { $_.Name -ne 'Agent' }" in script
+    assert "Where-Object { $_.Name -notin @('Agent','Temp') }" in script
     assert "-NewEngine" not in script
 
 

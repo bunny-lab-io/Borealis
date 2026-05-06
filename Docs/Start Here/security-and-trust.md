@@ -99,7 +99,7 @@ Passing an enrollment code to `Agent.sh` refreshes stale Linux Agent enrollment 
 ### Automatic Local-Network Enrollment
 - Sites > Onboard Devices creates scheduler-backed enrollment jobs for local-network Linux and Windows targets.
 - Operators provide a site, device OS, discovery scope, stored machine or domain credential, install branch, and schedule. The selected credential remains in Aegis-protected credential storage.
-- Linux enrollment uses SSH. Windows enrollment tries SMB `ADMIN$` plus Remote Service Control Manager, then a remote scheduled task, then WMI/DCOM process creation, then WinRM before requiring manual install. Windows onboarding uses a stable `%ProgramData%\Borealis\Repository` install root plus a host-wide mutex and a non-secret state marker so repeated Engine redeploys do not create parallel installers or duplicate pending approvals.
+- Linux enrollment uses SSH. Windows enrollment tries SMB `ADMIN$` plus Remote Service Control Manager, then a remote scheduled task, then WMI/DCOM process creation, then WinRM before requiring manual install. Windows onboarding uses the standard `C:\Borealis` install root plus a host-wide mutex and a non-secret state marker so repeated Engine redeploys do not create parallel installers or duplicate pending approvals.
 - Borealis writes only non-secret onboarding correlation (`job_id`, `run_id`, target) to the agent settings during remote install so pending approvals can show their source.
 - Manual approval remains the trust boundary. A successful remote install means the agent reached the approval queue, not that the device is trusted.
 
