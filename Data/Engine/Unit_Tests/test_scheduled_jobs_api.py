@@ -277,6 +277,26 @@ def test_onboarding_scope_config_parses_windows_platform(engine_harness: EngineT
     assert config["onboarding_methods"] == ["smb_scm", "scheduled_task", "winrm"]
 
 
+def test_windows_smb_remote_names_include_wildcard_fallback() -> None:
+    names = scheduled_job_module._windows_smb_remote_names(
+        "192.168.10.25",
+        {"metadata": {"netbios_name": "LABDOCS01"}},
+    )
+
+    assert names == ["LABDOCS01", "*SMBSERVER", "192.168.10.25"]
+
+
+def test_windows_scheduled_task_xml_uses_localsystem_sid(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    xml = scheduler._windows_task_xml(task_name="\\BorealisTest", command="cmd.exe", arguments="/C whoami")
+
+    assert "<Principal id=\"LocalSystem\">" in xml
+    assert "<UserId>S-1-5-18</UserId>" in xml
+    assert "<Actions Context=\"LocalSystem\">" in xml
+    assert "<AllowStartOnDemand>true</AllowStartOnDemand>" in xml
+
+
 def test_windows_onboarding_falls_back_to_winrm(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
     _client, scheduler = _scheduled_jobs_client(engine_harness)
     updates = []

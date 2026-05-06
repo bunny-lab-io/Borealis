@@ -198,6 +198,23 @@ def _parse_windows_credential_parts(credential: Mapping[str, Any]) -> Tuple[str,
     return domain, username, str(credential.get("password") or "")
 
 
+def _windows_smb_remote_names(host: str, credential: Mapping[str, Any]) -> List[str]:
+    metadata = credential.get("metadata") if isinstance(credential.get("metadata"), dict) else {}
+    candidates = [
+        metadata.get("netbios_name"),
+        metadata.get("windows_netbios_name"),
+        metadata.get("smb_remote_name"),
+        "*SMBSERVER",
+        host,
+    ]
+    names: List[str] = []
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if value and value not in names:
+            names.append(value)
+    return names or [str(host or "").strip()]
+
+
 def _windows_exit_code_from_output(output: Any) -> Optional[int]:
     text = str(output or "")
     matches = re.findall(r"__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__\s*=\s*(-?\d+)", text)
@@ -3911,8 +3928,8 @@ class JobScheduler:
                 "    </TimeTrigger>",
                 "  </Triggers>",
                 "  <Principals>",
-                "    <Principal id=\"Author\">",
-                "      <UserId>SYSTEM</UserId>",
+                "    <Principal id=\"LocalSystem\">",
+                "      <UserId>S-1-5-18</UserId>",
                 "      <RunLevel>HighestAvailable</RunLevel>",
                 "    </Principal>",
                 "  </Principals>",
@@ -3922,13 +3939,16 @@ class JobScheduler:
                 "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
                 "    <AllowHardTerminate>true</AllowHardTerminate>",
                 "    <StartWhenAvailable>true</StartWhenAvailable>",
+                "    <AllowStartOnDemand>true</AllowStartOnDemand>",
                 "    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>",
                 "    <Enabled>true</Enabled>",
                 "    <Hidden>true</Hidden>",
+                "    <RunOnlyIfIdle>false</RunOnlyIfIdle>",
+                "    <WakeToRun>false</WakeToRun>",
                 "    <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>",
                 "    <Priority>7</Priority>",
                 "  </Settings>",
-                "  <Actions Context=\"Author\">",
+                "  <Actions Context=\"LocalSystem\">",
                 "    <Exec>",
                 f"      <Command>{html.escape(command)}</Command>",
                 f"      <Arguments>{html.escape(arguments)}</Arguments>",
@@ -3944,9 +3964,24 @@ class JobScheduler:
         except Exception as exc:
             raise RuntimeError(f"impacket_unavailable:{exc}") from exc
         domain, username, password = _parse_windows_credential_parts(credential)
-        smb = SMBConnection(host, host, sess_port=int(port), timeout=10)
-        smb.login(username, password, domain)
-        return smb
+        last_error = ""
+        for remote_name in _windows_smb_remote_names(host, credential):
+            for attempt in range(3):
+                smb = None
+                try:
+                    smb = SMBConnection(remote_name, host, sess_port=int(port), timeout=20)
+                    smb.login(username, password, domain)
+                    return smb
+                except Exception as exc:
+                    last_error = str(exc).strip() or exc.__class__.__name__
+                    if smb is not None:
+                        try:
+                            smb.close()
+                        except Exception:
+                            pass
+                    if attempt < 2:
+                        time.sleep(1.0)
+        raise RuntimeError(f"smb_connection_failed:{last_error or 'connection_failed'}")
 
     def _windows_smb_stage_script(self, smb: Any, script: str) -> Tuple[str, str, str]:
         stem = f"BorealisOnboard-{uuid.uuid4().hex}"
