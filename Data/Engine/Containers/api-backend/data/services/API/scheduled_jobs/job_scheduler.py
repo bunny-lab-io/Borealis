@@ -127,10 +127,12 @@ ONBOARDING_PLATFORM_LINUX = "linux"
 ONBOARDING_PLATFORM_WINDOWS = "windows"
 ONBOARDING_WINDOWS_METHOD_SMB_SCM = "smb_scm"
 ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK = "scheduled_task"
+ONBOARDING_WINDOWS_METHOD_WMI_DCOM = "wmi_dcom"
 ONBOARDING_WINDOWS_METHOD_WINRM = "winrm"
 ONBOARDING_WINDOWS_METHODS = (
     ONBOARDING_WINDOWS_METHOD_SMB_SCM,
     ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK,
+    ONBOARDING_WINDOWS_METHOD_WMI_DCOM,
     ONBOARDING_WINDOWS_METHOD_WINRM,
 )
 
@@ -166,6 +168,7 @@ def _onboarding_failure_hint(*, stdout: Any = "", stderr: Any = "", redactions: 
         or "required" in line.lower()
         or "refusing" in line.lower()
         or "permission denied" in line.lower()
+        or "access denied" in line.lower()
     ]
     return sanitize_output((important or candidates)[-1], redactions=redactions, limit=240)
 
@@ -180,9 +183,24 @@ def _windows_method_label(method: Any) -> str:
         return "SMB service"
     if normalized == ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK:
         return "scheduled task"
+    if normalized == ONBOARDING_WINDOWS_METHOD_WMI_DCOM:
+        return "WMI/DCOM"
     if normalized == ONBOARDING_WINDOWS_METHOD_WINRM:
         return "WinRM"
     return normalized.replace("_", " ") or "Windows remote install"
+
+
+def _windows_onboarding_methods_with_required_fallbacks(methods: Sequence[str]) -> List[str]:
+    normalized = [method for method in methods if method in ONBOARDING_WINDOWS_METHODS]
+    if (
+        ONBOARDING_WINDOWS_METHOD_WMI_DCOM not in normalized
+        and ONBOARDING_WINDOWS_METHOD_SMB_SCM in normalized
+        and ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK in normalized
+        and ONBOARDING_WINDOWS_METHOD_WINRM in normalized
+    ):
+        insert_at = normalized.index(ONBOARDING_WINDOWS_METHOD_WINRM)
+        normalized.insert(insert_at, ONBOARDING_WINDOWS_METHOD_WMI_DCOM)
+    return normalized or list(ONBOARDING_WINDOWS_METHODS)
 
 
 def _parse_windows_credential_parts(credential: Mapping[str, Any]) -> Tuple[str, str, str]:
@@ -3085,6 +3103,10 @@ class JobScheduler:
                 "tasks": ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK,
                 "schtask": ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK,
                 "schtasks": ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK,
+                "dcom": ONBOARDING_WINDOWS_METHOD_WMI_DCOM,
+                "wmi": ONBOARDING_WINDOWS_METHOD_WMI_DCOM,
+                "wmi_dcom": ONBOARDING_WINDOWS_METHOD_WMI_DCOM,
+                "wmic": ONBOARDING_WINDOWS_METHOD_WMI_DCOM,
                 "winrm": ONBOARDING_WINDOWS_METHOD_WINRM,
             }
             for method in method_candidates:
@@ -3093,6 +3115,7 @@ class JobScheduler:
                     return {}, "Unsupported Windows onboarding method."
                 if normalized_method not in methods:
                     methods.append(normalized_method)
+            methods = _windows_onboarding_methods_with_required_fallbacks(methods)
         else:
             methods = ["ssh"]
         transport_port = ssh_port if platform == ONBOARDING_PLATFORM_LINUX else windows_port
@@ -4043,15 +4066,19 @@ class JobScheduler:
         dce = None
         service_handle = None
         scm_handle = None
+        stage = "SMB login"
         try:
             smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
+            stage = "ADMIN$ script staging"
             script_abs, output_abs, output_path = self._windows_smb_stage_script(smb, script)
             service_name = f"BorealisOnboarding{uuid.uuid4().hex[:12]}"
             command = f'cmd.exe /Q /C powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{script_abs}" > "{output_abs}" 2>&1'
+            stage = "svcctl RPC bind"
             rpc_transport = transport.SMBTransport(host, int(port), r"\svcctl", smb_connection=smb)
             dce = rpc_transport.get_dce_rpc()
             dce.connect()
             dce.bind(scmr.MSRPC_UUID_SCMR)
+            stage = "service creation"
             scm_resp = scmr.hROpenSCManagerW(dce)
             scm_handle = scm_resp["lpScHandle"]
             service_resp = scmr.hRCreateServiceW(
@@ -4064,18 +4091,20 @@ class JobScheduler:
             )
             service_handle = service_resp["lpServiceHandle"]
             try:
+                stage = "service start"
                 scmr.hRStartServiceW(dce, service_handle)
             except Exception as exc:
                 start_error = str(exc).lower()
                 if "1053" not in start_error and "timely fashion" not in start_error:
                     raise
+            stage = "service output polling"
             return self._poll_windows_smb_onboarding_output(
                 smb=smb,
                 output_path=output_path,
                 timeout_seconds=timeout_seconds,
             )
         except Exception as exc:
-            return {"exit_code": 1, "stdout": "", "stderr": str(exc)}
+            return {"exit_code": 1, "stdout": "", "stderr": f"{stage}: {exc}"}
         finally:
             if dce is not None and service_handle is not None:
                 try:
@@ -4119,18 +4148,24 @@ class JobScheduler:
         smb = None
         dce = None
         task_path = f"\\BorealisOnboarding{uuid.uuid4().hex[:12]}"
+        stage = "SMB login"
         try:
             smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
+            stage = "ADMIN$ script staging"
             script_abs, output_abs, output_path = self._windows_smb_stage_script(smb, script)
             command = "cmd.exe"
             arguments = f'/Q /C powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{script_abs}" > "{output_abs}" 2>&1'
             xml = self._windows_task_xml(task_name=task_path, command=command, arguments=arguments)
+            stage = "Task Scheduler RPC bind"
             rpc_transport = transport.SMBTransport(host, int(port), r"\atsvc", smb_connection=smb)
             dce = rpc_transport.get_dce_rpc()
             dce.connect()
             dce.bind(tsch.MSRPC_UUID_TSCHS)
+            stage = "task registration"
             tsch.hSchRpcRegisterTask(dce, task_path, xml, tsch.TASK_CREATE, NULL, tsch.TASK_LOGON_NONE)
+            stage = "task start"
             tsch.hSchRpcRun(dce, task_path)
+            stage = "task output polling"
             result = self._poll_windows_smb_onboarding_output(
                 smb=smb,
                 output_path=output_path,
@@ -4142,11 +4177,72 @@ class JobScheduler:
                 pass
             return result
         except Exception as exc:
-            return {"exit_code": 1, "stdout": "", "stderr": str(exc)}
+            return {"exit_code": 1, "stdout": "", "stderr": f"{stage}: {exc}"}
         finally:
             if dce is not None:
                 try:
                     dce.disconnect()
+                except Exception:
+                    pass
+            if smb is not None:
+                try:
+                    smb.logoff()
+                except Exception:
+                    pass
+
+    def _execute_windows_wmi_dcom_onboarding(
+        self,
+        *,
+        host: str,
+        port: int,
+        credential: Dict[str, Any],
+        script: str,
+        timeout_seconds: float,
+    ) -> Dict[str, Any]:
+        try:
+            from impacket.dcerpc.v5.dcom import wmi  # type: ignore
+            from impacket.dcerpc.v5.dcomrt import DCOMConnection  # type: ignore
+            from impacket.dcerpc.v5.dtypes import NULL  # type: ignore
+        except Exception as exc:
+            return {"exit_code": 127, "stdout": "", "stderr": f"impacket_wmi_unavailable:{exc}"}
+        domain, username, password = _parse_windows_credential_parts(credential)
+        smb = None
+        dcom = None
+        login = None
+        stage = "SMB login"
+        try:
+            smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
+            stage = "ADMIN$ script staging"
+            script_abs, output_abs, output_path = self._windows_smb_stage_script(smb, script)
+            command = f'cmd.exe /Q /C powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{script_abs}" > "{output_abs}" 2>&1'
+            stage = "DCOM connect"
+            dcom = DCOMConnection(host, username, password, domain, oxidResolver=False)
+            stage = "WMI login"
+            interface = dcom.CoCreateInstanceEx(wmi.CLSID_WbemLevel1Login, wmi.IID_IWbemLevel1Login)
+            login = wmi.IWbemLevel1Login(interface)
+            services = login.NTLMLogin("//./root/cimv2", NULL, NULL)
+            login.RemRelease()
+            login = None
+            stage = "WMI process creation"
+            win32_process, _ = services.GetObject("Win32_Process")
+            win32_process.Create(command, "C:\\Windows", None)
+            stage = "WMI output polling"
+            return self._poll_windows_smb_onboarding_output(
+                smb=smb,
+                output_path=output_path,
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception as exc:
+            return {"exit_code": 1, "stdout": "", "stderr": f"{stage}: {exc}"}
+        finally:
+            if login is not None:
+                try:
+                    login.RemRelease()
+                except Exception:
+                    pass
+            if dcom is not None:
+                try:
+                    dcom.disconnect()
                 except Exception:
                     pass
             if smb is not None:
@@ -4235,11 +4331,13 @@ class JobScheduler:
             run_id=run_id,
             target=host,
         )
-        normalized_methods = [
-            method
-            for method in (str(item or "").strip().lower() for item in windows_methods or ONBOARDING_WINDOWS_METHODS)
-            if method in ONBOARDING_WINDOWS_METHODS
-        ] or list(ONBOARDING_WINDOWS_METHODS)
+        normalized_methods = _windows_onboarding_methods_with_required_fallbacks(
+            [
+                method
+                for method in (str(item or "").strip().lower() for item in windows_methods or ONBOARDING_WINDOWS_METHODS)
+                if method in ONBOARDING_WINDOWS_METHODS
+            ]
+        )
         stdout_parts: List[str] = []
         stderr_parts: List[str] = []
         port_failures = 0
@@ -4248,11 +4346,21 @@ class JobScheduler:
 
         for method in normalized_methods:
             label = _windows_method_label(method)
-            method_port = int(winrm_port) if method == ONBOARDING_WINDOWS_METHOD_WINRM else smb_port
-            tcp_error = self._preflight_remote_port(host=host, port=method_port, attempts=1, timeout_seconds=3.0)
-            if tcp_error:
+            if method == ONBOARDING_WINDOWS_METHOD_WINRM:
+                method_ports = [int(winrm_port)]
+            elif method == ONBOARDING_WINDOWS_METHOD_WMI_DCOM:
+                method_ports = [smb_port, 135]
+            else:
+                method_ports = [smb_port]
+            method_port_failures = []
+            for method_port in method_ports:
+                tcp_error = self._preflight_remote_port(host=host, port=method_port, attempts=1, timeout_seconds=3.0)
+                if tcp_error:
+                    method_port_failures.append((method_port, tcp_error))
+            if method_port_failures:
                 port_failures += 1
-                stderr_parts.append(f"[{label}] port {method_port} unreachable: {tcp_error}")
+                for method_port, tcp_error in method_port_failures:
+                    stderr_parts.append(f"[{label}] port {method_port} unreachable: {tcp_error}")
                 continue
             attempted_methods += 1
             self._update_onboarding_target_row(
@@ -4273,6 +4381,14 @@ class JobScheduler:
                 )
             elif method == ONBOARDING_WINDOWS_METHOD_SCHEDULED_TASK:
                 result = self._execute_windows_scheduled_task_onboarding(
+                    host=host,
+                    port=smb_port,
+                    credential=credential,
+                    script=script,
+                    timeout_seconds=timeout_seconds,
+                )
+            elif method == ONBOARDING_WINDOWS_METHOD_WMI_DCOM:
+                result = self._execute_windows_wmi_dcom_onboarding(
                     host=host,
                     port=smb_port,
                     credential=credential,
@@ -4334,7 +4450,7 @@ class JobScheduler:
             row_id,
             status=ONBOARDING_STATUS_FAILED,
             detail=(
-                "Windows automatic onboarding failed through SMB service, scheduled task, and WinRM. "
+                "Windows automatic onboarding failed through SMB service, scheduled task, WMI/DCOM, and WinRM. "
                 "Manual agent installation required; target security policy appears too locked down for remote enrollment."
             ),
             stdout=combined_stdout,

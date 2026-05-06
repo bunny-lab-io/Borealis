@@ -1209,7 +1209,7 @@ export default function CreateOnboardingJob() {
             ssh_port: sshPort,
             windows_port: windowsPort,
             winrm_port: winrmPort,
-            onboarding_methods: agentPlatform === "windows" ? ["smb_scm", "scheduled_task", "winrm"] : ["ssh"],
+            onboarding_methods: agentPlatform === "windows" ? ["smb_scm", "scheduled_task", "wmi_dcom", "winrm"] : ["ssh"],
             onboarding_concurrency: onboardingConcurrency,
           },
         ],

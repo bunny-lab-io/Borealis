@@ -274,7 +274,7 @@ def test_onboarding_scope_config_parses_windows_platform(engine_harness: EngineT
     assert config["agent_platform"] == "windows"
     assert config["transport_port"] == 445
     assert config["winrm_port"] == 5986
-    assert config["onboarding_methods"] == ["smb_scm", "scheduled_task", "winrm"]
+    assert config["onboarding_methods"] == ["smb_scm", "scheduled_task", "wmi_dcom", "winrm"]
 
 
 def test_windows_smb_remote_names_include_wildcard_fallback() -> None:
@@ -322,6 +322,11 @@ def test_windows_onboarding_falls_back_to_winrm(engine_harness: EngineTestHarnes
 
     monkeypatch.setattr(scheduler, "_execute_windows_smb_scm_onboarding", fail_smb)
     monkeypatch.setattr(scheduler, "_execute_windows_scheduled_task_onboarding", fail_task)
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_wmi_dcom_onboarding",
+        lambda **_kwargs: (attempts.append("wmi_dcom") or {"exit_code": 1, "stdout": "", "stderr": "wmi blocked"}),
+    )
     monkeypatch.setattr(scheduler, "_execute_windows_winrm_onboarding", pass_winrm)
 
     status = scheduler._run_single_onboarding_target(
@@ -337,7 +342,7 @@ def test_windows_onboarding_falls_back_to_winrm(engine_harness: EngineTestHarnes
         winrm_port=5985,
     )
 
-    assert attempts == ["smb_scm", "scheduled_task", "winrm"]
+    assert attempts == ["smb_scm", "scheduled_task", "wmi_dcom", "winrm"]
     assert status == scheduled_job_module.ONBOARDING_STATUS_WAITING_APPROVAL
     assert updates[-1]["status"] == scheduled_job_module.ONBOARDING_STATUS_WAITING_APPROVAL
     assert "WinRM" in updates[-1]["detail"]
@@ -364,6 +369,11 @@ def test_windows_onboarding_reports_manual_install_after_all_methods_fail(
         scheduler,
         "_execute_windows_scheduled_task_onboarding",
         lambda **_kwargs: {"exit_code": 1, "stdout": "", "stderr": "task blocked"},
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_wmi_dcom_onboarding",
+        lambda **_kwargs: {"exit_code": 1, "stdout": "", "stderr": "wmi blocked"},
     )
     monkeypatch.setattr(
         scheduler,
