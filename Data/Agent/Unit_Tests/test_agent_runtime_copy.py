@@ -90,9 +90,13 @@ def test_borealis_ps1_repairs_nested_python_msi_layout() -> None:
     assert "function Repair-BorealisPythonBootstrapLayout" in content
     assert "function Invoke-BorealisInstallerProcess" in content
     assert "function Install-BorealisPythonFromInstaller" in content
+    assert "function Install-BorealisPythonFromNuGetPackage" in content
     assert "function Get-BorealisPythonBootstrapLayoutSummary" in content
     assert "Get-ChildItem -LiteralPath $InstallDir -Filter 'python.exe' -File -Recurse" in content
     assert "Normalizing MSI administrative install layout" in content
+    assert "https://www.nuget.org/api/v2/package/python/3.13.3" in content
+    assert "Python NuGet package did not contain tools\\python.exe." in content
+    assert "Installing Python from NuGet package" in content
     assert "$lastExitCode -ne 1618" in content
     assert "Windows Installer busy while running" in content
     assert "Start-Sleep -Seconds $DelaySeconds" in content

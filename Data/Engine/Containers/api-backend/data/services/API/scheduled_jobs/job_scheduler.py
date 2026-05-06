@@ -3181,7 +3181,7 @@ class JobScheduler:
         configured = _env_non_negative_float("BOREALIS_WINDOWS_ONBOARDING_OBSERVATION_TIMEOUT_SECONDS", 0.0)
         if configured > 0:
             return configured
-        return min(self._onboarding_install_timeout_seconds(), 300.0)
+        return self._onboarding_install_timeout_seconds()
 
     def _windows_onboarding_launch_grace_seconds(self) -> float:
         configured = _env_non_negative_float("BOREALIS_WINDOWS_ONBOARDING_LAUNCH_GRACE_SECONDS", 45.0) or 45.0

@@ -75,7 +75,7 @@ Supported schedule types (from the scheduler core):
 - Successful remote installs do not auto-approve devices. Agents submit normal enrollment requests and remain in the existing approval queue. When possible, Borealis records `onboarding_job_id`, `onboarding_run_id`, and `onboarding_target` on the approval. The onboarding target endpoint hydrates pending target rows with current approval status so approved or completed devices stop showing as `waiting_approval`.
 - Windows SCM-based deployment may return a service-control timeout after the non-service PowerShell payload launches. Borealis treats that launch-state timeout as recoverable, polls the staged output file, and also accepts a matching approval record as proof that the installer reached the Engine.
 - Re-deploying an onboarding job saves the current job definition, deletes prior run history for that job, creates a fresh immediate onboarding occurrence, and repopulates target status from the new run.
-- Fan-out is bounded by each job's `onboarding_concurrency` component field (default `5`). Jobs without that field fall back to `BOREALIS_ONBOARDING_CONCURRENCY` (default `5`). Install command timeout is controlled by `BOREALIS_ONBOARDING_INSTALL_TIMEOUT_SECONDS` (default `900`).
+- Fan-out is bounded by each job's `onboarding_concurrency` component field (default `5`). Jobs without that field fall back to `BOREALIS_ONBOARDING_CONCURRENCY` (default `5`). Install command timeout is controlled by `BOREALIS_ONBOARDING_INSTALL_TIMEOUT_SECONDS` (default `900`), and Windows SMB/scheduled-task observation follows that value unless `BOREALIS_WINDOWS_ONBOARDING_OBSERVATION_TIMEOUT_SECONDS` is set.
 
 ## Execution Contexts
 - `system` - runs on the agent as SYSTEM.

@@ -6,7 +6,7 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 
 ## Borealis Agent Dependencies
 
-- Python (system Python on Linux; Windows bootstrap downloads Python 3.13.3 MSI packages and installer fallback) - PSF License - https://docs.python.org/3/license.html
+- Python (system Python on Linux; Windows bootstrap downloads Python 3.13.3 NuGet package, MSI packages, and installer fallback) - PSF License - https://docs.python.org/3/license.html
 - requests - Apache-2.0 - https://spdx.org/licenses/Apache-2.0.html
 - python-socketio - MIT - https://spdx.org/licenses/MIT.html
 - websocket-client - Apache-2.0 - https://spdx.org/licenses/Apache-2.0.html

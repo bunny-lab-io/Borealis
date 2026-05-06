@@ -390,6 +390,28 @@ def test_windows_running_state_marker_does_not_stop_fallback_chain() -> None:
     )
 
 
+def test_windows_onboarding_observation_uses_install_timeout_by_default(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    monkeypatch.setenv("BOREALIS_ONBOARDING_INSTALL_TIMEOUT_SECONDS", "900")
+    monkeypatch.delenv("BOREALIS_WINDOWS_ONBOARDING_OBSERVATION_TIMEOUT_SECONDS", raising=False)
+
+    assert scheduler._windows_onboarding_observation_timeout_seconds() == 900
+
+
+def test_windows_onboarding_observation_timeout_can_override_install_timeout(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    monkeypatch.setenv("BOREALIS_ONBOARDING_INSTALL_TIMEOUT_SECONDS", "900")
+    monkeypatch.setenv("BOREALIS_WINDOWS_ONBOARDING_OBSERVATION_TIMEOUT_SECONDS", "420")
+
+    assert scheduler._windows_onboarding_observation_timeout_seconds() == 420
+
+
 def test_windows_onboarding_falls_back_to_winrm(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
     _client, scheduler = _scheduled_jobs_client(engine_harness)
     updates = []

@@ -936,6 +936,62 @@ function Install-BorealisPythonFromInstaller {
     return (Repair-BorealisPythonBootstrapLayout -InstallDir $InstallDir)
 }
 
+function Install-BorealisPythonFromNuGetPackage {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackageUrl,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PackagePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$InstallDir
+    )
+
+    Write-AgentLog -FileName 'Install.log' -Message ("[Python] Installing Python from NuGet package into '{0}' to avoid Windows Installer mutex." -f $InstallDir)
+    $packageParent = Split-Path -Path $PackagePath -Parent
+    if (-not (Test-Path $packageParent -PathType Container)) {
+        New-Item -ItemType Directory -Path $packageParent -Force | Out-Null
+    }
+    $extractRoot = Join-Path $packageParent 'python-nuget-extract'
+    if (Test-Path $extractRoot -PathType Container) {
+        Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
+
+    try {
+        Invoke-BorealisDownload -Url $PackageUrl -DestinationPath $PackagePath -LogName 'Install.log' -LogPrefix '[Python-NuGet]'
+        try {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+            [System.IO.Compression.ZipFile]::ExtractToDirectory($PackagePath, $extractRoot)
+        } catch {
+            if (Test-Path $sevenZipExe -PathType Leaf) {
+                Expand-ZipArchiveWithFallback -ArchivePath $PackagePath -DestinationPath $extractRoot -SevenZipPath $sevenZipExe -ClearDestination
+            } else {
+                throw
+            }
+        }
+
+        $toolsRoot = Join-Path $extractRoot 'tools'
+        $toolsPython = Join-Path $toolsRoot 'python.exe'
+        if (-not (Test-Path $toolsPython -PathType Leaf)) {
+            throw "Python NuGet package did not contain tools\python.exe."
+        }
+
+        if (Test-Path $InstallDir -PathType Container) {
+            Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+        Get-ChildItem -LiteralPath $toolsRoot -Force -ErrorAction Stop | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $InstallDir -Recurse -Force -ErrorAction Stop
+        }
+        return (Repair-BorealisPythonBootstrapLayout -InstallDir $InstallDir)
+    } finally {
+        Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $PackagePath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Install_Shared_Dependencies {
     # Python bootstrap for the Borealis Agent runtime.
     Run-Step "Dependency: Python" {
@@ -945,6 +1001,8 @@ function Install_Shared_Dependencies {
         $pythonMsiBaseUrl = "https://www.python.org/ftp/python/3.13.3/amd64/"
         $pythonInstallerUrl = "https://www.python.org/ftp/python/3.13.3/python-3.13.3-amd64.exe"
         $pythonInstallerPath = Join-Path $scriptDir "Dependencies\python-3.13.3-amd64.exe"
+        $pythonNugetPackageUrl = "https://www.nuget.org/api/v2/package/python/3.13.3"
+        $pythonNugetPackagePath = Join-Path $scriptDir "Dependencies\python-3.13.3.nupkg"
         $pythonMsiFiles = @(
             "core.msi",
             "exe.msi",
@@ -959,6 +1017,18 @@ function Install_Shared_Dependencies {
             }
 
             Repair-BorealisPythonBootstrapLayout -InstallDir $pythonInstallDir | Out-Null
+        }
+
+        if (-not (Test-Path $localPythonExe)) {
+
+            $pythonNugetError = ''
+            try {
+                Install-BorealisPythonFromNuGetPackage -PackageUrl $pythonNugetPackageUrl -PackagePath $pythonNugetPackagePath -InstallDir $pythonInstallDir | Out-Null
+            } catch {
+                $pythonNugetError = $_.Exception.Message
+                Write-AgentLog -FileName 'Install.log' -Message ("[Python] NuGet package install failed: {0}" -f $pythonNugetError)
+                Write-Host ("Python NuGet package install failed: {0}" -f $pythonNugetError) -ForegroundColor Yellow
+            }
         }
 
         if (-not (Test-Path $localPythonExe)) {
@@ -995,6 +1065,9 @@ function Install_Shared_Dependencies {
             if (-not (Test-Path $localPythonExe)) {
                 if (-not [string]::IsNullOrWhiteSpace($pythonMsiExtractionError)) {
                     Write-AgentLog -FileName 'Install.log' -Message ("[Python] Falling back to full Python installer after MSI failure: {0}" -f $pythonMsiExtractionError)
+                }
+                if (-not [string]::IsNullOrWhiteSpace($pythonNugetError)) {
+                    Write-AgentLog -FileName 'Install.log' -Message ("[Python] Full installer fallback follows NuGet failure: {0}" -f $pythonNugetError)
                 }
                 Install-BorealisPythonFromInstaller -InstallerUrl $pythonInstallerUrl -InstallerPath $pythonInstallerPath -InstallDir $pythonInstallDir | Out-Null
                 Remove-Item $pythonInstallerPath -Force -ErrorAction SilentlyContinue
