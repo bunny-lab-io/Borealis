@@ -854,6 +854,39 @@ function Get-BorealisPythonBootstrapLayoutSummary {
     }
 }
 
+function Invoke-BorealisInstallerProcess {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$ArgumentList,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Description,
+
+        [int]$MaxAttempts = 8,
+        [int]$DelaySeconds = 15
+    )
+
+    $lastExitCode = 1
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $proc = Start-Process -Wait -NoNewWindow -PassThru -FilePath $FilePath -ArgumentList $ArgumentList
+        try { $lastExitCode = [int]$proc.ExitCode } catch { $lastExitCode = 1 }
+        if ($lastExitCode -ne 1618) {
+            return $lastExitCode
+        }
+        if ($attempt -lt $MaxAttempts) {
+            $message = ("[Python] Windows Installer busy while running {0} (exit code 1618). Retry {1}/{2} in {3}s." -f $Description, ($attempt + 1), $MaxAttempts, $DelaySeconds)
+            Write-AgentLog -FileName 'Install.log' -Message $message
+            Write-Host $message -ForegroundColor Yellow
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+
+    return $lastExitCode
+}
+
 function Install-BorealisPythonFromInstaller {
     param(
         [Parameter(Mandatory = $true)]
@@ -895,9 +928,7 @@ function Install-BorealisPythonFromInstaller {
         'PrependPath=0',
         'CompileAll=0'
     )
-    $installerProc = Start-Process -Wait -NoNewWindow -PassThru -FilePath $InstallerPath -ArgumentList $installerArgs
-    $installerExitCode = 1
-    try { $installerExitCode = [int]$installerProc.ExitCode } catch {}
+    $installerExitCode = Invoke-BorealisInstallerProcess -FilePath $InstallerPath -ArgumentList $installerArgs -Description 'Python installer fallback'
     if ($installerExitCode -notin @(0, 3010)) {
         throw "Python installer fallback failed with exit code $installerExitCode. Log: $installerLog"
     }
@@ -932,6 +963,7 @@ function Install_Shared_Dependencies {
 
         if (-not (Test-Path $localPythonExe)) {
 
+            $pythonMsiExtractionError = ''
             foreach ($file in $pythonMsiFiles) {
                 $url = "$pythonMsiBaseUrl$file"
                 $localPath = Join-Path $scriptDir "Dependencies\$file"
@@ -942,12 +974,13 @@ function Install_Shared_Dependencies {
                 }
 
                 # Extract MSI into install directory
-                $extractProc = Start-Process -Wait -NoNewWindow -PassThru -FilePath "msiexec.exe" `
-                    -ArgumentList "/a `"$localPath`" /qn TARGETDIR=`"$pythonInstallDir`""
-                $extractExitCode = 1
-                try { $extractExitCode = [int]$extractProc.ExitCode } catch {}
+                $extractArgs = @('/a', "`"$localPath`"", '/qn', "TARGETDIR=`"$pythonInstallDir`"")
+                $extractExitCode = Invoke-BorealisInstallerProcess -FilePath "msiexec.exe" -ArgumentList $extractArgs -Description ("Python MSI extraction for {0}" -f $file)
                 if ($extractExitCode -notin @(0, 3010)) {
-                    throw "Python MSI extraction failed for '$file' with exit code $extractExitCode."
+                    $pythonMsiExtractionError = "Python MSI extraction failed for '$file' with exit code $extractExitCode."
+                    Write-AgentLog -FileName 'Install.log' -Message ("[Python] {0}" -f $pythonMsiExtractionError)
+                    Write-Host $pythonMsiExtractionError -ForegroundColor Yellow
+                    break
                 }
             }
 
@@ -960,6 +993,9 @@ function Install_Shared_Dependencies {
             Repair-BorealisPythonBootstrapLayout -InstallDir $pythonInstallDir | Out-Null
 
             if (-not (Test-Path $localPythonExe)) {
+                if (-not [string]::IsNullOrWhiteSpace($pythonMsiExtractionError)) {
+                    Write-AgentLog -FileName 'Install.log' -Message ("[Python] Falling back to full Python installer after MSI failure: {0}" -f $pythonMsiExtractionError)
+                }
                 Install-BorealisPythonFromInstaller -InstallerUrl $pythonInstallerUrl -InstallerPath $pythonInstallerPath -InstallDir $pythonInstallDir | Out-Null
                 Remove-Item $pythonInstallerPath -Force -ErrorAction SilentlyContinue
             }

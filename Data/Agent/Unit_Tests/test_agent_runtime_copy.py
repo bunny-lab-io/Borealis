@@ -88,12 +88,17 @@ def test_borealis_ps1_repairs_nested_python_msi_layout() -> None:
 
     assert "function Find-BorealisPythonExecutable" in content
     assert "function Repair-BorealisPythonBootstrapLayout" in content
+    assert "function Invoke-BorealisInstallerProcess" in content
     assert "function Install-BorealisPythonFromInstaller" in content
     assert "function Get-BorealisPythonBootstrapLayoutSummary" in content
     assert "Get-ChildItem -LiteralPath $InstallDir -Filter 'python.exe' -File -Recurse" in content
     assert "Normalizing MSI administrative install layout" in content
+    assert "$lastExitCode -ne 1618" in content
+    assert "Windows Installer busy while running" in content
+    assert "Start-Sleep -Seconds $DelaySeconds" in content
     assert "$extractExitCode -notin @(0, 3010)" in content
     assert "Python MSI extraction failed for '$file' with exit code $extractExitCode." in content
+    assert "Falling back to full Python installer after MSI failure" in content
     assert "python-3.13.3-amd64.exe" in content
     assert "MSI administrative extraction did not produce python.exe" in content
     assert "Include_pip=1" in content
