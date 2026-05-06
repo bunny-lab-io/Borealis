@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from Data.Engine.db import dbapi as sqlite3
+import threading
 import time
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -130,6 +131,90 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
     db_conn_factory = adapters.db_conn_factory
     script_signer = adapters.script_signer
     release_manager = getattr(adapters, "agent_release_manager", None)
+    status_cache_lock = threading.Lock()
+    status_cache: Dict[str, Dict[str, Any]] = {}
+    script_signing_key_cache: Dict[str, Any] = {"value": "", "expires_at": 0.0}
+
+    STATUS_DUPLICATE_SUPPRESS_SECONDS = 30.0
+    STATUS_EMIT_MIN_INTERVAL_SECONDS = 10.0
+    STATUS_CACHE_MAX_ENTRIES = 2048
+
+    def _status_cache_key(guid: str, service_mode: str) -> str:
+        return f"{normalize_guid(guid) or str(guid or '').strip()}|{str(service_mode or '').strip().lower()}"
+
+    def _status_signature(payload: Dict[str, Any]) -> str:
+        try:
+            return json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        except Exception:
+            return str(payload)
+
+    def _cached_status_response(cache_key: str, signature: str, now_mono: float) -> Optional[Dict[str, Any]]:
+        with status_cache_lock:
+            cached = status_cache.get(cache_key)
+            if not cached:
+                return None
+            if cached.get("signature") != signature:
+                return None
+            seen_at = float(cached.get("seen_at") or 0.0)
+            if now_mono - seen_at > STATUS_DUPLICATE_SUPPRESS_SECONDS:
+                return None
+            cached["seen_at"] = now_mono
+            return {
+                "status": "ok",
+                "poll_after_ms": 30000,
+                "site_id": cached.get("site_id"),
+                "site_name": cached.get("site_name") or "",
+                "coalesced": True,
+            }
+
+    def _remember_status_response(
+        cache_key: str,
+        signature: str,
+        now_mono: float,
+        *,
+        site_id: Optional[int],
+        site_name: str,
+    ) -> bool:
+        emit_allowed = False
+        with status_cache_lock:
+            cached = status_cache.get(cache_key) or {}
+            last_emit_at = float(cached.get("last_emit_at") or 0.0)
+            if now_mono - last_emit_at >= STATUS_EMIT_MIN_INTERVAL_SECONDS:
+                emit_allowed = True
+                cached["last_emit_at"] = now_mono
+            cached.update(
+                {
+                    "signature": signature,
+                    "seen_at": now_mono,
+                    "site_id": site_id,
+                    "site_name": site_name,
+                }
+            )
+            status_cache[cache_key] = cached
+            if len(status_cache) > STATUS_CACHE_MAX_ENTRIES:
+                stale_keys = sorted(status_cache, key=lambda key: float(status_cache[key].get("seen_at") or 0.0))
+                for stale_key in stale_keys[: max(1, len(status_cache) - STATUS_CACHE_MAX_ENTRIES)]:
+                    status_cache.pop(stale_key, None)
+        return emit_allowed
+
+    def _script_signing_key() -> str:
+        if script_signer is None:
+            return ""
+        now_mono = time.monotonic()
+        cached_value = str(script_signing_key_cache.get("value") or "")
+        try:
+            expires_at = float(script_signing_key_cache.get("expires_at") or 0.0)
+        except Exception:
+            expires_at = 0.0
+        if cached_value and now_mono < expires_at:
+            return cached_value
+        try:
+            signing_key = script_signer.public_base64_spki()
+        except Exception:
+            signing_key = ""
+        script_signing_key_cache["value"] = signing_key
+        script_signing_key_cache["expires_at"] = now_mono + 300.0
+        return signing_key
 
     def _vnc_trace(step: str, context_hint: Optional[str], *, level: str = "INFO", **fields: Any) -> None:
         parts = [f"vnc_trace step={str(step or '-').strip() or '-'}"]
@@ -513,6 +598,22 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             "milestones_json": json.dumps(milestones, ensure_ascii=True, sort_keys=True),
             "last_error_json": json.dumps(last_error, ensure_ascii=True, sort_keys=True) if last_error else "",
         }
+        status_cache_key = _status_cache_key(guid_lookup, service_mode)
+        status_signature = _status_signature(
+            {
+                "boot_id": boot_id,
+                "phase": phase,
+                "message": message,
+                "status": status_code,
+                "milestones": milestones,
+                "last_error": last_error,
+            }
+        )
+        now_mono = time.monotonic()
+        cached_response = _cached_status_response(status_cache_key, status_signature, now_mono)
+        if cached_response is not None:
+            return jsonify(cached_response)
+
         role = {
             "role_id": f"{service_mode}:system_heartbeat",
             "role_name": "system_heartbeat",
@@ -586,8 +687,15 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         finally:
             conn.close()
 
+        emit_allowed = _remember_status_response(
+            status_cache_key,
+            status_signature,
+            time.monotonic(),
+            site_id=site_id,
+            site_name=site_name,
+        )
         socketio = getattr(adapters.context, "socketio", None)
-        if socketio is not None:
+        if socketio is not None and emit_allowed:
             try:
                 socketio.emit(
                     "agent_status_changed",
@@ -618,12 +726,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         if ctx is None:
             return jsonify({"error": "auth_context_missing"}), 500
 
-        signing_key = ""
-        if script_signer is not None:
-            try:
-                signing_key = script_signer.public_base64_spki()
-            except Exception:
-                signing_key = ""
+        signing_key = _script_signing_key()
 
         if ctx.status != "active":
             return jsonify(

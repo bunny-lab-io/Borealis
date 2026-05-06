@@ -32,6 +32,15 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5000
 
 
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    raw = os.environ.get(name)
+    try:
+        value = int(str(raw).strip()) if raw is not None else default
+    except Exception:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
 def _bootstrap_logger() -> logging.Logger:
     """Create a bootstrap logger that writes to Engine log files."""
 
@@ -474,7 +483,11 @@ def main() -> None:
     host = config.get("HOST", DEFAULT_HOST)
     port = int(config.get("PORT", DEFAULT_PORT))
 
-    run_kwargs: Dict[str, Any] = {"host": host, "port": port}
+    run_kwargs: Dict[str, Any] = {
+        "host": host,
+        "port": port,
+        "backlog": _env_int("BOREALIS_API_BACKLOG", 512, minimum=50, maximum=4096),
+    }
     context.logger.info(
         "Engine loopback runtime ready on http://%s:%s behind the embedded Borealis Traefik edge.",
         host,
