@@ -4728,10 +4728,11 @@ class JobScheduler:
                 with self._onboarding_dispatch_lock:
                     self._onboarding_running_runs.discard(int(run_row_id))
 
-        try:
-            self.socketio.start_background_task(_runner)
-        except Exception:
-            threading.Thread(target=_runner, daemon=True).start()
+        threading.Thread(
+            target=_runner,
+            name=f"borealis-onboarding-run-{int(run_row_id)}",
+            daemon=True,
+        ).start()
 
     def _run_onboarding_job(
         self,
