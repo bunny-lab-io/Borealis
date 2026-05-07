@@ -562,7 +562,7 @@ finally:
 - Notes:
 - `credential_id` is logical linkage to `credentials.id`; no FK constraint in schema.
 - `job_kind = automation` is normal scheduled automation. `job_kind = onboarding` is automatic local-network device enrollment.
-- Onboarding jobs store discovery entries and exclusion entries inside the JSON `targets_json` `onboarding_scope` record. Agent branch, target platform, remote ports, Windows fallback methods, and per-job onboarding concurrency live in the JSON `components_json` `device_onboarding` record. No remote machine credential material is copied into either JSON payload.
+- Onboarding jobs store discovery entries and exclusion entries inside the JSON `targets_json` `onboarding_scope` record. Inline `#` comments remain in these saved JSON entries and are stripped only when runtime parsing expands the target list. New onboarding target rows preserve the raw matching scope entry in `target_input` so comments such as `10.0.0.56 # LAB-AIO-01` can help correlate pending approvals back to the summary row. Agent branch, target platform, remote ports, Windows fallback methods, and per-job onboarding concurrency live in the JSON `components_json` `device_onboarding` record. No remote machine credential material is copied into either JSON payload.
 
 #### `scheduled_job_runs`
 - Status: Active.

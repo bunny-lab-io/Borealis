@@ -111,9 +111,12 @@ const iconFontFamily = '"Quartz Regular"';
 const PAGE_SX = {
   m: 0,
   p: { xs: 2, md: 3 },
+  pb: { xs: 2, md: 3 },
   flexGrow: 1,
   minWidth: 0,
   minHeight: 0,
+  height: "100%",
+  boxSizing: "border-box",
   display: "flex",
   flexDirection: "column",
   gap: 3,
@@ -408,10 +411,17 @@ function stripScopeComment(line) {
   return hashIndex >= 0 ? text.slice(0, hashIndex) : text;
 }
 
-function splitScopeEntries(value) {
+function splitScopeTargetTokens(value) {
   return String(value || "")
     .split(/\r?\n/)
     .flatMap((line) => stripScopeComment(line).split(/[;,]+/))
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function splitScopeEntries(value) {
+  return String(value || "")
+    .split(/\r?\n/)
     .map((entry) => entry.trim())
     .filter(Boolean);
 }
@@ -597,6 +607,15 @@ function normalizeOnboardingProgressTask(task, status = "") {
   ) {
     return "Onboarding Completed";
   }
+  if (normalizedTask.includes("unable to repair agent") || normalizedTask.includes("re-deploying")) {
+    return "Unable to Repair Agent > Re-Deploying";
+  }
+  if (normalizedTask.includes("successfully repaired agent") || normalizedTask.includes("agent repaired")) {
+    return "Successfully Repaired Agent";
+  }
+  if (normalizedTask.includes("existing agent detected") || normalizedTask.includes("existing borealis agent")) {
+    return "Existing Agent Detected";
+  }
   if (
     normalizedTask.includes("waiting for onboarding work") ||
     normalizedTask.includes("trying windows remote enrollment") ||
@@ -631,7 +650,10 @@ function normalizeOnboardingProgressTask(task, status = "") {
     return "Uploading Agent Service Bootstrapper to Remote Device";
   }
   if (normalizedTask.includes("creating windows service")) {
-    return "Creating Windows Service to One-Shot Bootstrap Agent";
+    if (normalizedTask.includes("using")) {
+      return original;
+    }
+    return "Creating Windows Service to One-Shot Bootstrap Agent using SMB Service";
   }
   if (normalizedTask.includes("ensuring windows service")) {
     return "Ensuring Windows Service is Running";
@@ -825,8 +847,8 @@ function ProgressStatusIcon({ status }) {
         <Box
           component="span"
           sx={{
-            width: 22,
-            height: 22,
+            width: 44,
+            height: 44,
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
@@ -842,7 +864,7 @@ function ProgressStatusIcon({ status }) {
         >
           <Icon
             sx={{
-              fontSize: 18,
+              fontSize: 34,
               ...(isActive ? { animation: "onboardingProgressSpin 1.15s linear infinite" } : null),
             }}
           />
@@ -1352,9 +1374,9 @@ export default function CreateOnboardingJob() {
       {
         field: "statusLabel",
         headerName: "Status",
-        width: 78,
-        minWidth: 70,
-        maxWidth: 84,
+        width: 112,
+        minWidth: 104,
+        maxWidth: 120,
         filter: false,
         cellClass: "auto-col-tight onboarding-progress-status-cell",
         cellRenderer: (params) => <ProgressStatusIcon status={params.data?.status} />,
@@ -1369,7 +1391,7 @@ export default function CreateOnboardingJob() {
           const rowStatus = String(row?.status || "").trim().toLowerCase();
           const approvalStatus = String(row?.approvalStatus || "").trim().toLowerCase();
           const canApprove = Boolean(row?.approvalId)
-            && (approvalStatus === "pending" || (!approvalStatus && rowStatus === "waiting_approval"))
+            && (approvalStatus === "pending" || !approvalStatus)
             && !["approved", "completed", "success", "installed", "denied", "expired"].includes(rowStatus);
           if (!canApprove) {
             return <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>-</Typography>;
@@ -1400,9 +1422,9 @@ export default function CreateOnboardingJob() {
       {
         field: "statusLabel",
         headerName: "Status",
-        width: 78,
-        minWidth: 70,
-        maxWidth: 84,
+        width: 112,
+        minWidth: 104,
+        maxWidth: 120,
         filter: false,
         cellClass: "auto-col-tight onboarding-progress-status-cell",
         cellRenderer: (params) => <ProgressStatusIcon status={params.data?.status} />,
@@ -1484,6 +1506,21 @@ export default function CreateOnboardingJob() {
     []
   );
 
+  const targetGridRowSelection = useMemo(
+    () => ({
+      mode: "singleRow",
+      checkboxes: false,
+      headerCheckbox: false,
+      enableClickSelection: true,
+    }),
+    []
+  );
+
+  const getTargetGridRowId = useCallback(
+    (params) => String(params.data?.id || params.rowIndex),
+    []
+  );
+
   const autoSizeTargetGrid = useCallback(() => {
     const api = targetGridApiRef.current;
     if (!api || !visibleTargetGridRows.length) return;
@@ -1532,10 +1569,37 @@ export default function CreateOnboardingJob() {
     autoSizeProgressionGrid();
   }, [autoSizeProgressionGrid]);
 
-  const handleTargetRowClicked = useCallback((params) => {
-    const key = targetProgressionKey(params?.data);
-    setSelectedTargetId(key);
+  const selectTargetRow = useCallback((row) => {
+    const key = targetProgressionKey(row);
+    if (key) {
+      setSelectedTargetId(key);
+    }
   }, []);
+
+  const handleTargetSelectionChanged = useCallback((event) => {
+    const selectedRow = event?.api?.getSelectedRows?.()?.[0];
+    if (selectedRow) {
+      selectTargetRow(selectedRow);
+    }
+  }, [selectTargetRow]);
+
+  const handleTargetRowClicked = useCallback((params) => {
+    params?.node?.setSelected?.(true, true);
+    selectTargetRow(params?.data);
+  }, [selectTargetRow]);
+
+  useEffect(() => {
+    const api = targetGridApiRef.current;
+    if (!api) return;
+    const selectedKey = String(selectedTargetId || "");
+    api.forEachNode((node) => {
+      const matches = selectedKey && targetProgressionKey(node?.data) === selectedKey;
+      if (node?.isSelected?.() !== Boolean(matches)) {
+        node?.setSelected?.(Boolean(matches), false);
+      }
+    });
+    api.redrawRows?.();
+  }, [selectedTargetId, visibleTargetGridRows]);
 
   useEffect(() => {
     autoSizeTargetGrid();
@@ -1560,8 +1624,9 @@ export default function CreateOnboardingJob() {
     try {
       const entries = splitScopeEntries(form.scope);
       const exclusions = splitScopeEntries(form.exclusionScope);
+      const parsedEntries = splitScopeTargetTokens(form.scope);
       if (!form.siteId) throw new Error("Select site.");
-      if (!entries.length) throw new Error("Enter at least one IP address, CIDR, range, or FQDN.");
+      if (!parsedEntries.length) throw new Error("Enter at least one IP address, CIDR, range, or FQDN.");
       if (!form.credentialId) throw new Error("Select stored credential.");
       const agentPlatform = form.agentPlatform === "windows" ? "windows" : "linux";
       const sshPort = Number(form.sshPort || DEFAULT_SSH_PORT);
@@ -1703,7 +1768,7 @@ export default function CreateOnboardingJob() {
 
   return (
     <Box sx={PAGE_SX}>
-      <Stack spacing={2} sx={{ flexGrow: 1, minHeight: 0 }}>
+      <Stack spacing={2} sx={{ flexGrow: 1, minHeight: 0, height: "100%" }}>
           {error ? <Alert severity="error">{error}</Alert> : null}
           {notice ? <Alert severity="success">{notice}</Alert> : null}
           {saving ? (
@@ -2014,17 +2079,19 @@ export default function CreateOnboardingJob() {
                           defaultColDef={targetGridDefaultColDef}
                           suppressCellFocus
                           headerHeight={44}
-                          rowHeight={50}
+                          rowHeight={58}
                           pagination
                           paginationPageSize={100}
                           paginationPageSizeSelector={[20, 50, 100]}
+                          rowSelection={targetGridRowSelection}
                           overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No target attempts recorded yet.</span>"
-                          getRowId={(params) => String(params.data?.id || params.rowIndex)}
+                          getRowId={getTargetGridRowId}
                           getRowClass={(params) => (
                             targetProgressionKey(params.data) === String(selectedTargetId) ? "onboarding-target-row-selected" : ""
                           )}
                           onGridReady={handleTargetGridReady}
                           onRowClicked={handleTargetRowClicked}
+                          onSelectionChanged={handleTargetSelectionChanged}
                           theme={gridTheme}
                         />
                       </Box>
@@ -2052,7 +2119,7 @@ export default function CreateOnboardingJob() {
                           defaultColDef={targetGridDefaultColDef}
                           suppressCellFocus
                           headerHeight={44}
-                          rowHeight={50}
+                          rowHeight={58}
                           overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No progression recorded.</span>"
                           getRowId={(params) => String(params.data?.id || params.rowIndex)}
                           onGridReady={handleProgressionGridReady}

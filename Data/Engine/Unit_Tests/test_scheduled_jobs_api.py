@@ -134,8 +134,8 @@ def test_onboarding_scope_target_normalization_and_site_scope(engine_harness: En
                 "kind": "onboarding_scope",
                 "site_id": 1,
                 "site_name": "Main Lab",
-                "entries": "192.168.1.10;server01.lab",
-                "exclusions": "192.168.1.1;printer01.lab",
+                "entries": "192.168.1.10 # LAB-AIO-01\nserver01.lab # build node",
+                "exclusions": "192.168.1.1 # gateway\nprinter01.lab # office printer",
             }
         ]
     )
@@ -144,10 +144,19 @@ def test_onboarding_scope_target_normalization_and_site_scope(engine_harness: En
             "kind": "onboarding_scope",
             "site_id": 1,
             "site_name": "Main Lab",
-            "entries": ["192.168.1.10", "server01.lab"],
-            "exclusions": ["192.168.1.1", "printer01.lab"],
+            "entries": ["192.168.1.10 # LAB-AIO-01", "server01.lab # build node"],
+            "exclusions": ["192.168.1.1 # gateway", "printer01.lab # office printer"],
         }
     ]
+
+    expanded, parse_errors = parse_onboarding_scope(normalized[0]["entries"])
+    assert parse_errors == []
+    assert [target["host"] for target in expanded] == ["192.168.1.10", "server01.lab"]
+    raw_input_by_target = scheduled_job_module._onboarding_raw_input_map(normalized[0]["entries"], default_port=22)
+    assert raw_input_by_target["192.168.1.10:22"] == "192.168.1.10 # LAB-AIO-01"
+    assert "LAB-AIO-01" in scheduled_job_module._onboarding_approval_lookup_candidates(
+        {"target_input": raw_input_by_target["192.168.1.10:22"]}
+    )
 
     conn = sqlite3.connect(engine_harness.db_path)
     try:

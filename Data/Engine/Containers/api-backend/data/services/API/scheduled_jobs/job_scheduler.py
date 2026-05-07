@@ -211,6 +211,8 @@ def _windows_onboarding_skip_detail(*, stdout: Any = "", stderr: Any = "") -> st
     combined = f"{stdout or ''}\n{stderr or ''}"
     if "__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1" in combined:
         return "Another Borealis onboarding deployment is already running on this target."
+    if "__BOREALIS_ONBOARDING_AGENT_REPAIRED__=1" in combined:
+        return "Existing Borealis Agent repaired and started."
     if "__BOREALIS_ONBOARDING_ALREADY_PENDING__=1" in combined:
         if re.search(r"__BOREALIS_ONBOARDING_ALREADY_PENDING__=1[^\r\n]*status=running\b", combined, re.IGNORECASE):
             return ""
@@ -218,6 +220,56 @@ def _windows_onboarding_skip_detail(*, stdout: Any = "", stderr: Any = "") -> st
     if "__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1" in combined:
         return "Borealis agent already appears enrolled on this target."
     return ""
+
+
+def _windows_onboarding_repair_succeeded(*, stdout: Any = "", stderr: Any = "") -> bool:
+    combined = f"{stdout or ''}\n{stderr or ''}"
+    return "__BOREALIS_ONBOARDING_AGENT_REPAIRED__=1" in combined
+
+
+def _onboarding_raw_input_map(entries: Any, *, default_port: int) -> Dict[str, str]:
+    if isinstance(entries, str):
+        raw_entries = [line for line in re.split(r"[\r\n]+", entries) if str(line or "").strip()]
+    elif isinstance(entries, (list, tuple, set)):
+        raw_entries = [str(entry or "") for entry in entries if str(entry or "").strip()]
+    else:
+        raw_entries = [str(entries or "")] if str(entries or "").strip() else []
+    mapped: Dict[str, str] = {}
+    for raw_entry in raw_entries:
+        raw_text = str(raw_entry or "").strip()
+        if not raw_text:
+            continue
+        expanded, _errors = parse_onboarding_scope(
+            [raw_text],
+            default_port=int(default_port or DEFAULT_ONBOARDING_SSH_PORT),
+            max_targets=DEFAULT_ONBOARDING_TARGET_CAP,
+        )
+        for target in expanded:
+            key = f"{str(target.get('host') or '').strip().lower()}:{int(target.get('port') or default_port or DEFAULT_ONBOARDING_SSH_PORT)}"
+            mapped.setdefault(key, raw_text)
+    return mapped
+
+
+def _onboarding_approval_lookup_candidates(row: Mapping[str, Any]) -> List[str]:
+    candidates: List[str] = []
+
+    def _add(value: Any) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        if text not in candidates:
+            candidates.append(text)
+
+    _add(row.get("target_address"))
+    _add(row.get("target_hostname"))
+    target_input = str(row.get("target_input") or "").strip()
+    _add(target_input)
+    if "#" in target_input:
+        comment = target_input.split("#", 1)[1].strip()
+        _add(comment)
+        first_comment_token = comment.split()[0].strip() if comment.split() else ""
+        _add(first_comment_token)
+    return candidates
 
 
 def _windows_service_start_error_allows_output_poll(error: Any) -> bool:
@@ -361,6 +413,12 @@ def _onboarding_progress_task_from_output(*, stdout: Any = "", stderr: Any = "")
     combined = text.lower()
     if "__borealis_windows_onboarding_exit_code__=0" in combined or "agent installed" in combined or "approval pending" in combined:
         return "Agent Ready and Awaiting Approval"
+    if "__borealis_onboarding_agent_repaired__=1" in combined or "successfully repaired agent" in combined:
+        return "Successfully Repaired Agent"
+    if "__borealis_onboarding_redeploy_required__=1" in combined or "unable to repair agent" in combined:
+        return "Unable to Repair Agent > Re-Deploying"
+    if "__borealis_onboarding_existing_agent_detected__=1" in combined or "existing agent detected" in combined:
+        return "Existing Agent Detected"
     if "dependency: python" in combined:
         return "Installing Agent Dependencies"
     if "ensuring agent dependencies exist" in combined:
@@ -418,12 +476,26 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
     if normalized_status == ONBOARDING_STATUS_WAITING_APPROVAL:
         return "Agent Ready and Awaiting Approval"
     if normalized_status in {"approved", "completed", "success", "installed"}:
+        output_task = _onboarding_progress_task_from_output(stdout=stdout, stderr=stderr)
+        if output_task == "Successfully Repaired Agent":
+            return output_task
+        completed_detail_lower = str(detail or "").strip().lower()
+        if "successfully repaired agent" in completed_detail_lower or "agent repaired" in completed_detail_lower:
+            return "Successfully Repaired Agent"
         return "Onboarding Completed"
     if normalized_status in {"failed", "failure", "error"}:
         return "Onboarding Failed"
     if normalized_status in {"unreachable", "ssh_unreachable"}:
         return "Remote Device Unreachable"
     if normalized_status in {"skipped", "already_enrolled", "already_pending", "denied", "expired", "unsupported_os"}:
+        output_task = _onboarding_progress_task_from_output(stdout=stdout, stderr=stderr)
+        if output_task in {"Successfully Repaired Agent", "Existing Agent Detected"}:
+            return output_task
+        skipped_detail_lower = str(detail or "").strip().lower()
+        if "successfully repaired agent" in skipped_detail_lower or "agent repaired" in skipped_detail_lower:
+            return "Successfully Repaired Agent"
+        if "existing borealis agent" in skipped_detail_lower or "existing agent detected" in skipped_detail_lower:
+            return "Existing Agent Detected"
         return "Onboarding Skipped"
 
     detail_text = str(detail or "").strip()
@@ -453,7 +525,7 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
     if "stale onboarding process" in detail_lower:
         return "Spinning-Up Site-Worker Container"
     if "binding to windows service control manager" in detail_lower or "creating transient borealis onboarding service" in detail_lower:
-        return "Creating Windows Service to One-Shot Bootstrap Agent"
+        return "Creating Windows Service to One-Shot Bootstrap Agent using SMB Service"
     if "starting transient borealis onboarding service" in detail_lower:
         return "Ensuring Windows Service is Running"
     if "scheduled task" in detail_lower:
@@ -470,6 +542,12 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
         return "Agent Ready and Awaiting Approval"
     if "device approved" in detail_lower or "enrollment completed" in detail_lower:
         return "Onboarding Completed"
+    if "successfully repaired agent" in detail_lower or "agent repaired" in detail_lower:
+        return "Successfully Repaired Agent"
+    if "unable to repair agent" in detail_lower or "re-deploying" in detail_lower:
+        return "Unable to Repair Agent > Re-Deploying"
+    if "existing borealis agent" in detail_lower or "existing agent detected" in detail_lower:
+        return "Existing Agent Detected"
     if "running agent bootstrap" in detail_lower or "running agent.ps1" in detail_lower:
         return "Running Agent Bootstrap"
     if "installing agent dependencies" in detail_lower:
@@ -4129,19 +4207,19 @@ class JobScheduler:
                 "approved",
                 "completed",
             } or approval_reference_current:
-                target = str(
-                    next_row.get("target_address")
-                    or next_row.get("target_hostname")
-                    or next_row.get("target_input")
-                    or ""
-                ).strip()
-                approval_context = self._lookup_onboarding_approval_context(
-                    job_id=int(next_row.get("job_id") or 0),
-                    run_id=int(next_row.get("run_id") or 0),
-                    target=target,
-                    approval_reference=approval_reference_current,
-                    site_id=int(next_row.get("site_id")) if next_row.get("site_id") is not None else None,
-                )
+                site_id = int(next_row.get("site_id")) if next_row.get("site_id") is not None else None
+                approval_context: Dict[str, Any] = {}
+                lookup_candidates = _onboarding_approval_lookup_candidates(next_row) or [""]
+                for target in lookup_candidates:
+                    approval_context = self._lookup_onboarding_approval_context(
+                        job_id=int(next_row.get("job_id") or 0),
+                        run_id=int(next_row.get("run_id") or 0),
+                        target=target,
+                        approval_reference=approval_reference_current,
+                        site_id=site_id,
+                    )
+                    if approval_context:
+                        break
                 next_row.update(approval_context)
                 approval_reference = str(approval_context.get("approval_reference") or "").strip()
                 if approval_reference:
@@ -4927,7 +5005,10 @@ class JobScheduler:
                 stdout = last_output
                 if stdout:
                     stdout += "\n"
-                stdout += f"__BOREALIS_ONBOARDING_ALREADY_PENDING__=1 status={state_status}"
+                if state_status == "already_enrolled":
+                    stdout += "__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1"
+                else:
+                    stdout += f"__BOREALIS_ONBOARDING_ALREADY_PENDING__=1 status={state_status}"
                 return {"exit_code": 73, "stdout": stdout, "stderr": "", "state": state}
             if state_status == "failed":
                 stdout = last_output
@@ -5396,15 +5477,6 @@ class JobScheduler:
             detail="Trying Windows remote enrollment.",
             redactions=redactions,
         )
-        if self._onboarding_target_already_known(host, site.get("id")):
-            self._update_onboarding_target_row(
-                row_id,
-                status=ONBOARDING_STATUS_SKIPPED,
-                detail="Target already appears enrolled for this site.",
-                finished=True,
-                redactions=redactions,
-            )
-            return ONBOARDING_STATUS_SKIPPED
 
         timeout_seconds = self._windows_onboarding_observation_timeout_seconds()
         normalized_methods = _windows_onboarding_methods_with_required_fallbacks(
@@ -5553,16 +5625,18 @@ class JobScheduler:
                 return ONBOARDING_STATUS_WAITING_APPROVAL
             skip_detail = _windows_onboarding_skip_detail(stdout=stdout, stderr=stderr)
             if skip_detail:
+                repaired = _windows_onboarding_repair_succeeded(stdout=stdout, stderr=stderr)
+                terminal_status = "completed" if repaired else ONBOARDING_STATUS_SKIPPED
                 self._update_onboarding_target_row(
                     row_id,
-                    status=ONBOARDING_STATUS_SKIPPED,
+                    status=terminal_status,
                     detail=skip_detail,
                     stdout="\n\n".join(stdout_parts),
                     stderr="\n\n".join(stderr_parts),
                     finished=True,
                     redactions=redactions,
                 )
-                return ONBOARDING_STATUS_SKIPPED
+                return terminal_status
             if _windows_onboarding_result_may_have_created_approval(method=method, stdout=stdout, stderr=stderr):
                 approval_reference = str(result.get("approval_reference") or "").strip()
                 deadline = time.monotonic() + 10.0
@@ -5746,7 +5820,14 @@ class JobScheduler:
                 try:
                     cur = conn.cursor()
                     insert_now = _now_ts()
+                    raw_input_by_target = _onboarding_raw_input_map(
+                        config.get("entries") or [],
+                        default_port=int(config.get("transport_port") or DEFAULT_ONBOARDING_SSH_PORT),
+                    )
                     for target in expanded_targets:
+                        target_host = str(target.get("host") or "").strip()
+                        target_port = int(target.get("port") or config.get("transport_port") or DEFAULT_ONBOARDING_SSH_PORT)
+                        target_key = f"{target_host.lower()}:{target_port}"
                         cur.execute(
                             """
                             INSERT INTO scheduled_job_onboarding_targets(
@@ -5769,10 +5850,10 @@ class JobScheduler:
                                 int(job_id),
                                 int(scheduled_ts),
                                 int(site["id"]),
-                                target.get("input") or target.get("host") or "",
-                                target.get("host") or "",
-                                target.get("host") or "",
-                                int(target.get("port") or config.get("transport_port") or DEFAULT_ONBOARDING_SSH_PORT),
+                                raw_input_by_target.get(target_key) or target.get("input") or target_host,
+                                target_host,
+                                target_host,
+                                target_port,
                                 ONBOARDING_STATUS_PENDING,
                                 "",
                                 insert_now,

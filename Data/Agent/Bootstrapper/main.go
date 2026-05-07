@@ -30,6 +30,7 @@ const (
 	defaultServiceName    = "BorealisOnboarding"
 	defaultInstallDir     = `C:\Borealis`
 	defaultTimeoutSeconds = 900
+	agentTaskName         = "Borealis Agent"
 	waitAbandoned         = 0x00000080
 )
 
@@ -73,6 +74,23 @@ type EventPayload struct {
 	Detail    string `json:"detail"`
 	ExitCode  int    `json:"exit_code"`
 	CreatedAt string `json:"created_at"`
+}
+
+type ExistingAgentAssessment struct {
+	Detected        bool
+	TaskExists      bool
+	TaskRunning     bool
+	TaskState       string
+	EngineValid     bool
+	RepairSucceeded bool
+	Detail          string
+}
+
+type ScheduledTaskInfo struct {
+	Exists bool
+	State  string
+	Raw    string
+	Error  string
 }
 
 type bootstrapService struct {
@@ -180,14 +198,6 @@ func runFromConfig(ctx context.Context, configPath string) int {
 	}
 	defer releaseOnboardingMutex(mutex)
 
-	if alreadyEnrolled(cfg) {
-		logger("__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1")
-		logger("__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=73")
-		writeState(cfg, "already_enrolled", 73, "Borealis Agent already appears enrolled on this target.")
-		writeEvent(cfg, "skipped", "Existing Agent Enrollment Check", "Borealis Agent already appears enrolled on this target.", 73)
-		return 73
-	}
-
 	writeState(cfg, "running", 1, "Agent service bootstrapper started.")
 	writeEvent(cfg, "running", "Agent Service Bootstrapper Started", "Agent service bootstrapper started.", 1)
 
@@ -202,6 +212,32 @@ func runFromConfig(ctx context.Context, configPath string) int {
 	}
 	logger("__BOREALIS_ONBOARDING_TEMP_CLEANED__=1")
 	writeState(cfg, "running", 1, "Onboarding temp folder cleaned.")
+
+	assessment := assessExistingAgent(ctx, cfg, logger)
+	if assessment.Detected {
+		detail := assessment.Detail
+		if detail == "" {
+			detail = "Existing Borealis Agent runtime detected."
+		}
+		logger("__BOREALIS_ONBOARDING_EXISTING_AGENT_DETECTED__=1")
+		writeState(cfg, "running", 1, detail)
+		writeEvent(cfg, "running", "Existing Agent Detected", detail, 1)
+		if assessment.RepairSucceeded {
+			logger("__BOREALIS_ONBOARDING_AGENT_REPAIRED__=1")
+			logger("__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1")
+			logger("__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=73")
+			writeState(cfg, "already_enrolled", 73, "Existing Borealis Agent repaired and started.")
+			writeEvent(cfg, "completed", "Successfully Repaired Agent", "Existing Borealis Agent repaired and started.", 0)
+			return 73
+		}
+		redeployDetail := assessment.Detail
+		if redeployDetail == "" {
+			redeployDetail = "Existing Borealis Agent could not be validated or repaired; re-deploying."
+		}
+		logger("__BOREALIS_ONBOARDING_REDEPLOY_REQUIRED__=1")
+		writeState(cfg, "running", 1, redeployDetail)
+		writeEvent(cfg, "running", "Unable to Repair Agent > Re-Deploying", redeployDetail, 1)
+	}
 
 	if cfg.AgentURL != "" {
 		writeState(cfg, "running", 1, "Downloading Agent.ps1.")
@@ -503,10 +539,192 @@ func cleanOnboardingTemp(cfg BootstrapConfig) error {
 	return os.MkdirAll(dir, 0755)
 }
 
-func alreadyEnrolled(cfg BootstrapConfig) bool {
-	settingsPath := filepath.Join(cfg.InstallDir, "Agent", "Borealis", "Settings", "access.jwt")
-	_, err := os.Stat(settingsPath)
-	return err == nil
+func assessExistingAgent(ctx context.Context, cfg BootstrapConfig, logger func(string, ...any)) ExistingAgentAssessment {
+	assessment := ExistingAgentAssessment{}
+	if !existingAgentDetected(cfg) {
+		return assessment
+	}
+	assessment.Detected = true
+
+	taskCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	taskInfo := queryAgentScheduledTask(taskCtx)
+	cancel()
+	assessment.TaskExists = taskInfo.Exists
+	assessment.TaskState = taskInfo.State
+	assessment.TaskRunning = taskScheduledStateIsRunning(taskInfo.State)
+	if taskInfo.Exists {
+		logger("__BOREALIS_AGENT_TASK_STATE__=%s", taskInfo.State)
+	}
+
+	if !taskInfo.Exists {
+		assessment.Detail = "Existing Borealis Agent files found, but Borealis Agent scheduled task is missing."
+		return assessment
+	}
+
+	if !assessment.TaskRunning {
+		logger("__BOREALIS_AGENT_TASK_START_ATTEMPTED__=1")
+		if err := startAgentScheduledTask(ctx); err != nil {
+			assessment.Detail = fmt.Sprintf("Existing Borealis Agent scheduled task could not be started: %v", err)
+			return assessment
+		}
+		taskCtx, cancel = context.WithTimeout(ctx, 20*time.Second)
+		taskInfo = waitForAgentScheduledTaskRunning(taskCtx)
+		cancel()
+		assessment.TaskState = taskInfo.State
+		assessment.TaskRunning = taskScheduledStateIsRunning(taskInfo.State)
+		if !assessment.TaskRunning {
+			stateDetail := taskInfo.State
+			if stateDetail == "" {
+				stateDetail = taskInfo.Error
+			}
+			assessment.Detail = fmt.Sprintf("Existing Borealis Agent scheduled task did not enter Running state after start attempt: %s", stateDetail)
+			return assessment
+		}
+	}
+
+	valid, detail := validateExistingAgentWithEngine(ctx, cfg)
+	assessment.EngineValid = valid
+	if !valid {
+		if detail == "" {
+			detail = "Engine did not accept existing Borealis Agent token."
+		}
+		assessment.Detail = detail
+		return assessment
+	}
+
+	if assessment.TaskRunning {
+		assessment.RepairSucceeded = true
+		if strings.EqualFold(taskInfo.State, "Running") {
+			assessment.Detail = "Existing Borealis Agent scheduled task is running and Engine authentication is valid."
+		} else {
+			assessment.Detail = "Existing Borealis Agent scheduled task was started and Engine authentication is valid."
+		}
+	}
+	return assessment
+}
+
+func existingAgentDetected(cfg BootstrapConfig) bool {
+	candidates := []string{
+		filepath.Join(agentSettingsDir(cfg), "access.jwt"),
+		filepath.Join(agentSettingsDir(cfg), "refresh.token"),
+		filepath.Join(agentSettingsDir(cfg), "Agent_GUID.txt"),
+		filepath.Join(cfg.InstallDir, "Agent", "Borealis", "agent.py"),
+		filepath.Join(cfg.InstallDir, "Agent", "Borealis", "launch_service.ps1"),
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return true
+		}
+	}
+	taskCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return queryAgentScheduledTask(taskCtx).Exists
+}
+
+func agentSettingsDir(cfg BootstrapConfig) string {
+	return filepath.Join(cfg.InstallDir, "Agent", "Borealis", "Settings")
+}
+
+func readExistingAccessToken(cfg BootstrapConfig) string {
+	data, err := os.ReadFile(filepath.Join(agentSettingsDir(cfg), "access.jwt"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func validateExistingAgentWithEngine(ctx context.Context, cfg BootstrapConfig) (bool, string) {
+	serverURL := strings.TrimRight(strings.TrimSpace(cfg.ServerURL), "/")
+	if serverURL == "" {
+		return false, "Server URL is unavailable for existing Borealis Agent validation."
+	}
+	token := readExistingAccessToken(cfg)
+	if token == "" {
+		return false, "Existing Borealis Agent access token is missing."
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, serverURL+"/api/repo/current_hash?ttl=300", nil)
+	if err != nil {
+		return false, fmt.Sprintf("Existing Borealis Agent validation request failed: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, fmt.Sprintf("Engine did not answer existing Borealis Agent validation: %v", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return true, "Existing Borealis Agent token accepted by Engine."
+	}
+	return false, fmt.Sprintf("Engine rejected existing Borealis Agent token with HTTP %d.", resp.StatusCode)
+}
+
+func queryAgentScheduledTask(ctx context.Context) ScheduledTaskInfo {
+	cmd := exec.CommandContext(ctx, "schtasks.exe", "/Query", "/TN", agentTaskName, "/FO", "LIST", "/V")
+	output, err := cmd.CombinedOutput()
+	text := strings.TrimSpace(string(output))
+	if err != nil {
+		return ScheduledTaskInfo{Exists: false, Raw: text, Error: strings.TrimSpace(err.Error() + " " + text)}
+	}
+	return ScheduledTaskInfo{
+		Exists: true,
+		State:  parseScheduledTaskState(text),
+		Raw:    text,
+	}
+}
+
+func parseScheduledTaskState(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(strings.ToLower(parts[0]))
+		if key == "status" || key == "scheduled task state" {
+			return strings.TrimSpace(parts[1])
+		}
+	}
+	return ""
+}
+
+func taskScheduledStateIsRunning(state string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(state)), "running")
+}
+
+func startAgentScheduledTask(ctx context.Context) error {
+	startCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(startCtx, "schtasks.exe", "/Run", "/TN", agentTaskName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		text := strings.TrimSpace(string(output))
+		if text != "" {
+			return fmt.Errorf("%v: %s", err, text)
+		}
+		return err
+	}
+	return nil
+}
+
+func waitForAgentScheduledTaskRunning(ctx context.Context) ScheduledTaskInfo {
+	var last ScheduledTaskInfo
+	for {
+		last = queryAgentScheduledTask(ctx)
+		if taskScheduledStateIsRunning(last.State) || ctx.Err() != nil {
+			return last
+		}
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return last
+		case <-timer.C:
+		}
+	}
 }
 
 func acquireOnboardingMutex() (windows.Handle, bool, error) {
