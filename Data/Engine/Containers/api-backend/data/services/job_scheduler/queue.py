@@ -49,11 +49,11 @@ def _json_loads(value: Any, default: Any) -> Any:
     return parsed if parsed is not None else default
 
 
-def ensure_task_scheduler_tables(conn: sqlite3.Connection) -> None:
+def ensure_job_scheduler_tables(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
     cur.execute(
         """
-        CREATE TABLE IF NOT EXISTS task_scheduler_work_items (
+        CREATE TABLE IF NOT EXISTS job_scheduler_work_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             dedupe_key TEXT,
             kind TEXT NOT NULL,
@@ -80,24 +80,24 @@ def ensure_task_scheduler_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    cur.execute("PRAGMA table_info(task_scheduler_work_items)")
+    cur.execute("PRAGMA table_info(job_scheduler_work_items)")
     work_cols = {str(row[1]) for row in cur.fetchall() or [] if len(row) > 1}
     for column_name, sql in (
-        ("dedupe_key", "ALTER TABLE task_scheduler_work_items ADD COLUMN dedupe_key TEXT"),
-        ("lease_owner", "ALTER TABLE task_scheduler_work_items ADD COLUMN lease_owner TEXT"),
-        ("lease_expires_at", "ALTER TABLE task_scheduler_work_items ADD COLUMN lease_expires_at INTEGER"),
-        ("heartbeat_at", "ALTER TABLE task_scheduler_work_items ADD COLUMN heartbeat_at INTEGER"),
-        ("worker_guid", "ALTER TABLE task_scheduler_work_items ADD COLUMN worker_guid TEXT"),
-        ("container_name", "ALTER TABLE task_scheduler_work_items ADD COLUMN container_name TEXT"),
-        ("error", "ALTER TABLE task_scheduler_work_items ADD COLUMN error TEXT"),
-        ("started_at", "ALTER TABLE task_scheduler_work_items ADD COLUMN started_at INTEGER"),
-        ("finished_at", "ALTER TABLE task_scheduler_work_items ADD COLUMN finished_at INTEGER"),
+        ("dedupe_key", "ALTER TABLE job_scheduler_work_items ADD COLUMN dedupe_key TEXT"),
+        ("lease_owner", "ALTER TABLE job_scheduler_work_items ADD COLUMN lease_owner TEXT"),
+        ("lease_expires_at", "ALTER TABLE job_scheduler_work_items ADD COLUMN lease_expires_at INTEGER"),
+        ("heartbeat_at", "ALTER TABLE job_scheduler_work_items ADD COLUMN heartbeat_at INTEGER"),
+        ("worker_guid", "ALTER TABLE job_scheduler_work_items ADD COLUMN worker_guid TEXT"),
+        ("container_name", "ALTER TABLE job_scheduler_work_items ADD COLUMN container_name TEXT"),
+        ("error", "ALTER TABLE job_scheduler_work_items ADD COLUMN error TEXT"),
+        ("started_at", "ALTER TABLE job_scheduler_work_items ADD COLUMN started_at INTEGER"),
+        ("finished_at", "ALTER TABLE job_scheduler_work_items ADD COLUMN finished_at INTEGER"),
     ):
         if column_name not in work_cols:
             cur.execute(sql)
     cur.execute(
         """
-        CREATE TABLE IF NOT EXISTS task_scheduler_workers (
+        CREATE TABLE IF NOT EXISTS job_scheduler_workers (
             worker_guid TEXT PRIMARY KEY,
             container_name TEXT NOT NULL,
             site_id INTEGER,
@@ -116,13 +116,13 @@ def ensure_task_scheduler_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_task_scheduler_work_dedupe ON task_scheduler_work_items(dedupe_key)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_task_scheduler_work_claim ON task_scheduler_work_items(site_id, lane, status, available_at, priority)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_task_scheduler_work_lease ON task_scheduler_work_items(status, lease_expires_at)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_task_scheduler_workers_site ON task_scheduler_workers(site_id, status, last_seen_at)")
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_job_scheduler_work_dedupe ON job_scheduler_work_items(dedupe_key)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_job_scheduler_work_claim ON job_scheduler_work_items(site_id, lane, status, available_at, priority)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_job_scheduler_work_lease ON job_scheduler_work_items(status, lease_expires_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_job_scheduler_workers_site ON job_scheduler_workers(site_id, status, last_seen_at)")
     cur.execute(
         """
-        CREATE TABLE IF NOT EXISTS task_scheduler_service_snapshots (
+        CREATE TABLE IF NOT EXISTS job_scheduler_service_snapshots (
             service_key TEXT PRIMARY KEY,
             payload_json TEXT NOT NULL,
             updated_at INTEGER NOT NULL
@@ -144,24 +144,24 @@ def _insert_work_item(
     payload: Mapping[str, Any],
     priority: int = 0,
 ) -> int:
-    ensure_task_scheduler_tables(conn)
+    ensure_job_scheduler_tables(conn)
     now = _now_ts()
     cur = conn.cursor()
     if dedupe_key:
         cur.execute(
-            "SELECT id FROM task_scheduler_work_items WHERE dedupe_key=?",
+            "SELECT id FROM job_scheduler_work_items WHERE dedupe_key=?",
             (dedupe_key,),
         )
         row = cur.fetchone()
         if row:
             cur.execute(
-                "UPDATE task_scheduler_work_items SET updated_at=? WHERE id=?",
+                "UPDATE job_scheduler_work_items SET updated_at=? WHERE id=?",
                 (now, int(row[0])),
             )
             return int(row[0])
     cur.execute(
         """
-        INSERT INTO task_scheduler_work_items(
+        INSERT INTO job_scheduler_work_items(
             dedupe_key, kind, site_id, lane, job_id, run_id, target_id, payload_json,
             status, attempt_count, priority, available_at, created_at, updated_at
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -265,7 +265,7 @@ def claim_next_work_item(
     lease_owner: str,
     lease_seconds: int = 300,
 ) -> Optional[Dict[str, Any]]:
-    ensure_task_scheduler_tables(conn)
+    ensure_job_scheduler_tables(conn)
     now = _now_ts()
     lanes_norm = [str(lane or "").strip() for lane in lanes if str(lane or "").strip()]
     if not lanes_norm:
@@ -273,7 +273,7 @@ def claim_next_work_item(
     placeholders = ",".join("?" for _ in lanes_norm)
     select_sql = f"""
         SELECT id
-          FROM task_scheduler_work_items
+          FROM job_scheduler_work_items
          WHERE site_id=?
            AND lane IN ({placeholders})
            AND status=?
@@ -296,7 +296,7 @@ def claim_next_work_item(
         cur.execute(
             f"""
             SELECT id
-              FROM task_scheduler_work_items
+              FROM job_scheduler_work_items
              WHERE site_id=?
                AND lane IN ({placeholders})
                AND status=?
@@ -314,7 +314,7 @@ def claim_next_work_item(
     lease_expires = now + max(30, int(lease_seconds or 300))
     cur.execute(
         """
-        UPDATE task_scheduler_work_items
+        UPDATE job_scheduler_work_items
            SET status=?,
                lease_owner=?,
                lease_expires_at=?,
@@ -341,7 +341,7 @@ def claim_next_work_item(
     cur.execute(
         """
         SELECT id, kind, site_id, lane, job_id, run_id, target_id, payload_json, status, attempt_count
-          FROM task_scheduler_work_items
+          FROM job_scheduler_work_items
          WHERE id=?
         """,
         (work_id,),
@@ -365,13 +365,13 @@ def claim_next_work_item(
 
 
 def complete_work_item(conn: sqlite3.Connection, *, work_id: int, status: str, error: str = "") -> None:
-    ensure_task_scheduler_tables(conn)
+    ensure_job_scheduler_tables(conn)
     now = _now_ts()
     normalized = status if status in {WORK_STATUS_SUCCEEDED, WORK_STATUS_FAILED, WORK_STATUS_CANCELLED} else WORK_STATUS_FAILED
     cur = conn.cursor()
     cur.execute(
         """
-        UPDATE task_scheduler_work_items
+        UPDATE job_scheduler_work_items
            SET status=?,
                lease_expires_at=NULL,
                heartbeat_at=?,
@@ -385,12 +385,12 @@ def complete_work_item(conn: sqlite3.Connection, *, work_id: int, status: str, e
 
 
 def heartbeat_work_item(conn: sqlite3.Connection, *, work_id: int, lease_owner: str, lease_seconds: int = 300) -> None:
-    ensure_task_scheduler_tables(conn)
+    ensure_job_scheduler_tables(conn)
     now = _now_ts()
     cur = conn.cursor()
     cur.execute(
         """
-        UPDATE task_scheduler_work_items
+        UPDATE job_scheduler_work_items
            SET heartbeat_at=?,
                lease_expires_at=?,
                updated_at=?
@@ -401,12 +401,12 @@ def heartbeat_work_item(conn: sqlite3.Connection, *, work_id: int, lease_owner: 
 
 
 def expire_stale_leases(conn: sqlite3.Connection) -> int:
-    ensure_task_scheduler_tables(conn)
+    ensure_job_scheduler_tables(conn)
     now = _now_ts()
     cur = conn.cursor()
     cur.execute(
         """
-        UPDATE task_scheduler_work_items
+        UPDATE job_scheduler_work_items
            SET status=?,
                lease_owner=NULL,
                lease_expires_at=NULL,
@@ -421,12 +421,12 @@ def expire_stale_leases(conn: sqlite3.Connection) -> int:
 
 
 def queued_site_ids(conn: sqlite3.Connection) -> List[int]:
-    ensure_task_scheduler_tables(conn)
+    ensure_job_scheduler_tables(conn)
     cur = conn.cursor()
     cur.execute(
         """
         SELECT DISTINCT site_id
-          FROM task_scheduler_work_items
+          FROM job_scheduler_work_items
          WHERE status=?
            AND site_id IS NOT NULL
            AND site_id>0
@@ -449,12 +449,12 @@ def register_worker(
     site_id: int,
     status: str = WORKER_STATUS_STARTING,
 ) -> None:
-    ensure_task_scheduler_tables(conn)
+    ensure_job_scheduler_tables(conn)
     now = _now_ts()
     cur = conn.cursor()
     cur.execute(
         """
-        INSERT INTO task_scheduler_workers(
+        INSERT INTO job_scheduler_workers(
             worker_guid, container_name, site_id, status, started_at, last_seen_at,
             idle_since, stopped_at, current_lanes_json, claimed_count, task_links_json,
             docker_state, exit_code, created_at, updated_at
@@ -497,12 +497,12 @@ def heartbeat_worker(
     idle_since: Optional[int] = None,
     claimed_count: Optional[int] = None,
 ) -> None:
-    ensure_task_scheduler_tables(conn)
+    ensure_job_scheduler_tables(conn)
     now = _now_ts()
     cur = conn.cursor()
     cur.execute(
         """
-        UPDATE task_scheduler_workers
+        UPDATE job_scheduler_workers
            SET status=?,
                last_seen_at=?,
                idle_since=?,
@@ -526,12 +526,12 @@ def heartbeat_worker(
 
 
 def stop_worker(conn: sqlite3.Connection, *, worker_guid: str, status: str = WORKER_STATUS_STOPPED) -> None:
-    ensure_task_scheduler_tables(conn)
+    ensure_job_scheduler_tables(conn)
     now = _now_ts()
     cur = conn.cursor()
     cur.execute(
         """
-        UPDATE task_scheduler_workers
+        UPDATE job_scheduler_workers
            SET status=?,
                stopped_at=?,
                last_seen_at=?,
@@ -549,12 +549,12 @@ def update_worker_docker_state(
     docker_state: str,
     exit_code: Optional[int] = None,
 ) -> None:
-    ensure_task_scheduler_tables(conn)
+    ensure_job_scheduler_tables(conn)
     now = _now_ts()
     cur = conn.cursor()
     cur.execute(
         """
-        UPDATE task_scheduler_workers
+        UPDATE job_scheduler_workers
            SET docker_state=?,
                exit_code=?,
                updated_at=?
@@ -565,13 +565,13 @@ def update_worker_docker_state(
 
 
 def active_worker_for_site(conn: sqlite3.Connection, *, site_id: int, stale_after_seconds: int = 180) -> Optional[Dict[str, Any]]:
-    ensure_task_scheduler_tables(conn)
+    ensure_job_scheduler_tables(conn)
     cutoff = _now_ts() - max(30, int(stale_after_seconds or 180))
     cur = conn.cursor()
     cur.execute(
         """
         SELECT worker_guid, container_name, site_id, status, started_at, last_seen_at
-          FROM task_scheduler_workers
+          FROM job_scheduler_workers
          WHERE site_id=?
            AND status IN (?,?,?)
            AND last_seen_at>=?
@@ -594,13 +594,13 @@ def active_worker_for_site(conn: sqlite3.Connection, *, site_id: int, stale_afte
 
 
 def mark_lost_workers(conn: sqlite3.Connection, *, stale_after_seconds: int = 300) -> int:
-    ensure_task_scheduler_tables(conn)
+    ensure_job_scheduler_tables(conn)
     cutoff = _now_ts() - max(60, int(stale_after_seconds or 300))
     now = _now_ts()
     cur = conn.cursor()
     cur.execute(
         """
-        UPDATE task_scheduler_workers
+        UPDATE job_scheduler_workers
            SET status=?,
                stopped_at=COALESCE(stopped_at, ?),
                updated_at=?
@@ -613,17 +613,18 @@ def mark_lost_workers(conn: sqlite3.Connection, *, stale_after_seconds: int = 30
 
 
 def mark_missing_workers_lost(conn: sqlite3.Connection, *, live_worker_guids: Sequence[str]) -> int:
-    ensure_task_scheduler_tables(conn)
+    ensure_job_scheduler_tables(conn)
     now = _now_ts()
     live = [str(item or "").strip() for item in live_worker_guids or [] if str(item or "").strip()]
     cur = conn.cursor()
     base_sql = """
-        UPDATE task_scheduler_workers
+        UPDATE job_scheduler_workers
            SET status=?,
                docker_state=?,
                stopped_at=COALESCE(stopped_at, ?),
                updated_at=?
          WHERE status IN (?,?,?)
+           AND COALESCE(site_id, 0)>0
     """
     params: List[Any] = [WORKER_STATUS_LOST, "missing", now, now, *WORKER_ACTIVE_STATUSES]
     if live:
@@ -635,7 +636,7 @@ def mark_missing_workers_lost(conn: sqlite3.Connection, *, live_worker_guids: Se
 
 
 def list_worker_snapshots(conn: sqlite3.Connection, *, include_stopped_since: int = 86400) -> List[Dict[str, Any]]:
-    ensure_task_scheduler_tables(conn)
+    ensure_job_scheduler_tables(conn)
     cutoff = _now_ts() - max(0, int(include_stopped_since or 0))
     cur = conn.cursor()
     cur.execute(
@@ -644,7 +645,7 @@ def list_worker_snapshots(conn: sqlite3.Connection, *, include_stopped_since: in
             worker_guid, container_name, site_id, status, started_at, last_seen_at,
             idle_since, stopped_at, current_lanes_json, claimed_count, task_links_json,
             docker_state, exit_code
-          FROM task_scheduler_workers
+          FROM job_scheduler_workers
          WHERE stopped_at IS NULL OR stopped_at>=?
          ORDER BY COALESCE(stopped_at, last_seen_at, started_at) DESC
         """,
@@ -672,8 +673,44 @@ def list_worker_snapshots(conn: sqlite3.Connection, *, include_stopped_since: in
     return rows
 
 
+def list_active_work_items(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    ensure_job_scheduler_tables(conn)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, kind, site_id, lane, job_id, run_id, target_id, status, lease_owner,
+               worker_guid, container_name, attempt_count, heartbeat_at, started_at
+          FROM job_scheduler_work_items
+         WHERE status=?
+      ORDER BY started_at DESC, id DESC
+        """,
+        (WORK_STATUS_RUNNING,),
+    )
+    rows = []
+    for row in cur.fetchall() or []:
+        rows.append(
+            {
+                "id": int(row[0]),
+                "kind": row[1] or "",
+                "site_id": row[2],
+                "lane": row[3] or "",
+                "job_id": row[4],
+                "run_id": row[5],
+                "target_id": row[6],
+                "status": row[7] or "",
+                "lease_owner": row[8] or "",
+                "worker_guid": row[9] or "",
+                "container_name": row[10] or "",
+                "attempt_count": int(row[11] or 0),
+                "heartbeat_at": row[12],
+                "started_at": row[13],
+            }
+        )
+    return rows
+
+
 def replace_service_snapshots(conn: sqlite3.Connection, snapshots: Sequence[Mapping[str, Any]]) -> None:
-    ensure_task_scheduler_tables(conn)
+    ensure_job_scheduler_tables(conn)
     now = _now_ts()
     cur = conn.cursor()
     for snapshot in snapshots or []:
@@ -682,7 +719,7 @@ def replace_service_snapshots(conn: sqlite3.Connection, snapshots: Sequence[Mapp
             continue
         cur.execute(
             """
-            INSERT INTO task_scheduler_service_snapshots(service_key, payload_json, updated_at)
+            INSERT INTO job_scheduler_service_snapshots(service_key, payload_json, updated_at)
             VALUES (?,?,?)
             ON CONFLICT (service_key) DO UPDATE SET
                 payload_json=EXCLUDED.payload_json,
@@ -693,13 +730,13 @@ def replace_service_snapshots(conn: sqlite3.Connection, snapshots: Sequence[Mapp
 
 
 def list_service_snapshots(conn: sqlite3.Connection, *, max_age_seconds: int = 120) -> Dict[str, Mapping[str, Any]]:
-    ensure_task_scheduler_tables(conn)
+    ensure_job_scheduler_tables(conn)
     cutoff = _now_ts() - max(10, int(max_age_seconds or 120))
     cur = conn.cursor()
     cur.execute(
         """
         SELECT service_key, payload_json
-          FROM task_scheduler_service_snapshots
+          FROM job_scheduler_service_snapshots
          WHERE updated_at>=?
         """,
         (cutoff,),

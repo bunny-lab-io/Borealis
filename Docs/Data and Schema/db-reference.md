@@ -10,7 +10,7 @@ Describe the Borealis PostgreSQL schema, table ownership, runtime interactions, 
 - `Data/Engine/Containers/api-backend/data/database.py`
 - `Data/Engine/Containers/api-backend/data/database_migrations.py`
 - `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`
-- `Data/Engine/Containers/api-backend/data/services/task_scheduler/queue.py`
+- `Data/Engine/Containers/api-backend/data/services/job_scheduler/queue.py`
 - Assembly catalog tables live in PostgreSQL `assemblies.*`.
 - Bundled official assembly snapshot lives in `Data/Engine/Containers/api-backend/data/Official_Assemblies/`.
 - Assembly schema source: `Data/Engine/Containers/api-backend/data/assembly_management/databases.py`.
@@ -611,7 +611,7 @@ finally:
 - `/api/onboarding/jobs/<job_id>/targets`.
 - Notes:
 - stdout/stderr are sanitized snippets only. Stored machine and domain credentials remain in `credentials` and are not copied into onboarding attempts.
-- Approval status is not duplicated here. `/api/onboarding/jobs/<job_id>/targets` joins back to `device_approvals` by saved approval reference or onboarding context and hydrates approval id/status for UI display and inline approval actions.
+- Approval status is not duplicated here. `/api/onboarding/jobs/<job_id>/targets` joins back to `device_approvals` by saved approval reference or onboarding context, then falls back through hostname/IP matching for legacy rows, and hydrates approval id/status for UI display and inline approval actions.
 
 #### `scheduled_job_onboarding_target_events`
 - Status: Active.
@@ -648,7 +648,7 @@ finally:
 - Legacy rows may still repeat a host when more than one saved filter contributed to the same occurrence target.
 - Shared Ansible rows store the generated inventory alias and target-resolution outcome per device.
 
-#### `task_scheduler_work_items`
+#### `job_scheduler_work_items`
 - Status: Active.
 - Purpose: Durable work queue for `job-scheduler` and `site-worker-<uuid>` containers.
 - Columns: `id`, `dedupe_key`, `kind`, `site_id`, `lane`, `job_id`, `run_id`, `target_id`, `payload_json`, `status`, `attempt_count`, `priority`, `available_at`, `lease_owner`, `lease_expires_at`, `heartbeat_at`, `worker_guid`, `container_name`, `error`, `created_at`, `updated_at`, `started_at`, `finished_at`.
@@ -659,7 +659,7 @@ finally:
 - Credentials are not stored in `payload_json`; workers retrieve decrypted credential material from the internal API only while executing.
 - `lease_owner` plus `lease_expires_at` protect work from duplicate claims and allow stale work to be reclaimed.
 
-#### `task_scheduler_workers`
+#### `job_scheduler_workers`
 - Status: Active.
 - Purpose: Worker lifecycle/status visibility for ephemeral site workers.
 - Columns: `worker_guid`, `container_name`, `site_id`, `status`, `started_at`, `last_seen_at`, `idle_since`, `stopped_at`, `current_lanes_json`, `claimed_count`, `task_links_json`, `docker_state`, `exit_code`, `created_at`, `updated_at`.
@@ -669,7 +669,7 @@ finally:
 - Notes:
 - Worker container names use random UUIDs (`site-worker-<uuid>`) and do not include site names.
 
-#### `task_scheduler_service_snapshots`
+#### `job_scheduler_service_snapshots`
 - Status: Active.
 - Purpose: Last known Compose service visibility snapshot written by `job-scheduler` for Server Info when `api-backend` has no Docker socket.
 - Columns: `service_key`, `payload_json`, `updated_at`.
@@ -677,7 +677,7 @@ finally:
 - `/api/server/overview` and `/api/server/services` fallback service rows.
 - Task-scheduler Compose reconciliation.
 - Notes:
-- `api-backend` reads this table only for display. Docker-backed service actions are queued into `task_scheduler_work_items` and executed by `job-scheduler`.
+- `api-backend` reads this table only for display. Docker-backed service actions are queued into `job_scheduler_work_items` and executed by `job-scheduler`.
 
 #### `credentials`
 - Status: Active for scheduler and WebUI credential selection; protected at rest after Aegis Cipher setup.

@@ -17,7 +17,7 @@ import time
 from typing import Optional, Sequence
 
 from . import database_migrations
-from .services.task_scheduler.queue import ensure_task_scheduler_tables
+from .services.job_scheduler.queue import ensure_job_scheduler_tables
 
 
 def _generate_install_code() -> str:
@@ -57,7 +57,7 @@ def initialise_engine_database(database_url: str, *, logger: Optional[logging.Lo
         _ensure_device_software_inventory(conn, logger=logger)
         _ensure_scheduled_jobs(conn, logger=logger)
         _ensure_scheduled_job_support_tables(conn, logger=logger)
-        ensure_task_scheduler_tables(conn)
+        ensure_job_scheduler_tables(conn)
         _ensure_workflow_runtime_tables(conn, logger=logger)
         conn.commit()
     except Exception as exc:  # pragma: no cover - defensive runtime guard

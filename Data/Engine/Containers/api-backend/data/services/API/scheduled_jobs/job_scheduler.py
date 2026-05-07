@@ -341,7 +341,6 @@ def _onboarding_progress_status_is_active(status: Any) -> bool:
     return str(status or "").strip().lower() in {
         ONBOARDING_STATUS_PENDING,
         ONBOARDING_STATUS_RUNNING,
-        ONBOARDING_STATUS_WAITING_APPROVAL,
     }
 
 
@@ -360,28 +359,30 @@ def _onboarding_progress_task_from_output(*, stdout: Any = "", stderr: Any = "")
         if task:
             return task
     combined = text.lower()
-    if "__borealis_windows_onboarding_exit_code__=0" in combined or "agent installed" in combined:
-        return "Awaiting Approval"
+    if "__borealis_windows_onboarding_exit_code__=0" in combined or "agent installed" in combined or "approval pending" in combined:
+        return "Agent Ready and Awaiting Approval"
     if "dependency: python" in combined:
-        return "Installing Python Dependency"
+        return "Installing Agent Dependencies"
     if "ensuring agent dependencies exist" in combined:
-        return "Ensuring Agent Dependencies Exist"
+        return "Installing Agent Dependencies"
     if "deploying borealis agent" in combined:
-        return "Deploying Borealis Agent Runtime"
+        return "Running Agent Bootstrap"
     if "launching" in combined and "agent.ps1" in combined:
         return "Running Agent Bootstrap"
     if "syncing borealis repository into" in combined:
-        return "Syncing Borealis Repository"
+        return "Running Agent Bootstrap"
     if "downloading windows agent bootstrap" in combined:
-        return "Downloading Agent Bootstrap"
+        return "Running Agent Bootstrap"
     if "__borealis_agent_service_bootstrapper_started__" in combined:
-        return "Running Agent Service Bootstrapper"
+        return "Running Agent Bootstrap"
+    if "__borealis_agent_service_bootstrapper_staged__" in combined:
+        return "Uploading Agent Service Bootstrapper to Remote Device"
     if "__borealis_onboarding_temp_cleaned__" in combined:
-        return "Preparing Clean Onboarding Workspace"
+        return "Spinning-Up Site-Worker Container"
     if "syncing borealis ref" in combined:
-        return "Transferring Agent Installation Files"
+        return "Running Agent Bootstrap"
     if "__borealis_onboarding_stale_process_killed__" in combined:
-        return "Cleaning Stale Onboarding Processes"
+        return "Spinning-Up Site-Worker Container"
     return ""
 
 
@@ -393,21 +394,31 @@ def _onboarding_agent_step_task_name(value: Any) -> str:
     text = re.sub(r"\s+started$", "", text, flags=re.IGNORECASE).strip()
     text = re.sub(r"\s+failed:.*$", "", text, flags=re.IGNORECASE).strip()
     if text.lower().startswith("dependency:"):
-        dependency = text.split(":", 1)[1].strip(" .")
-        if not dependency:
-            return ""
-        if dependency.lower().endswith("dependency"):
-            return f"Installing {dependency}"
-        return f"Installing {dependency} Dependency"
+        return "Installing Agent Dependencies"
     return text
+
+
+def _onboarding_windows_protocol_name(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if "smb service" in normalized or "smb" in normalized:
+        return "SMB Service"
+    if "scheduled task" in normalized:
+        return "Scheduled Task"
+    if "wmi" in normalized or "dcom" in normalized:
+        return "WMI/DCOM"
+    if "winrm" in normalized:
+        return "WinRM"
+    if "ssh" in normalized:
+        return "SSH"
+    return ""
 
 
 def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any = "", stderr: Any = "") -> str:
     normalized_status = str(status or "pending").strip().lower()
     if normalized_status == ONBOARDING_STATUS_WAITING_APPROVAL:
-        return "Awaiting Approval"
+        return "Agent Ready and Awaiting Approval"
     if normalized_status in {"approved", "completed", "success", "installed"}:
-        return "Enrollment Approved"
+        return "Onboarding Completed"
     if normalized_status in {"failed", "failure", "error"}:
         return "Onboarding Failed"
     if normalized_status in {"unreachable", "ssh_unreachable"}:
@@ -421,16 +432,26 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
         task = _onboarding_agent_step_task_name(detail_text)
         if task:
             return task
+    if "waiting for onboarding work" in detail_lower or "trying windows remote enrollment" in detail_lower:
+        return "Spinning-Up Site-Worker Container"
+    if detail_lower.startswith("trying windows") and "enrollment" in detail_lower:
+        return "Establishing Connection to Remote Device"
+    if "connection established" in detail_lower:
+        protocol = _onboarding_windows_protocol_name(detail_lower)
+        if protocol:
+            return f"Connection Established using {protocol}"
     if "connecting to windows smb" in detail_lower or "connecting to ssh" in detail_lower:
         return "Establishing Connection to Remote Device"
     if "staging borealis agent service bootstrapper" in detail_lower:
-        return "Transferring Agent Service Bootstrapper"
+        return "Uploading Agent Service Bootstrapper to Remote Device"
     if "staging borealis onboarding script" in detail_lower:
-        return "Transferring Agent Installation Files"
+        return "Uploading Agent Service Bootstrapper to Remote Device"
     if "downloading agent.ps1" in detail_lower:
-        return "Downloading Agent Bootstrap"
+        return "Running Agent Bootstrap"
     if "cleaning onboarding temp" in detail_lower:
-        return "Preparing Clean Onboarding Workspace"
+        return "Spinning-Up Site-Worker Container"
+    if "stale onboarding process" in detail_lower:
+        return "Spinning-Up Site-Worker Container"
     if "binding to windows service control manager" in detail_lower or "creating transient borealis onboarding service" in detail_lower:
         return "Creating Windows Service to One-Shot Bootstrap Agent"
     if "starting transient borealis onboarding service" in detail_lower:
@@ -440,16 +461,24 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
             return "Creating Remote Scheduled Task"
         if "starting" in detail_lower:
             return "Ensuring Remote Scheduled Task is Running"
-        return "Establishing Scheduled Task Fallback"
+        return "Connection Established using Scheduled Task"
     if "wmi" in detail_lower or "dcom" in detail_lower:
-        return "Running WMI/DCOM Fallback"
+        return "Connection Established using WMI/DCOM"
     if "winrm" in detail_lower:
-        return "Running WinRM Fallback"
+        return "Connection Established using WinRM"
+    if "agent installed through" in detail_lower or "approval pending" in detail_lower or "approval queue" in detail_lower:
+        return "Agent Ready and Awaiting Approval"
+    if "device approved" in detail_lower or "enrollment completed" in detail_lower:
+        return "Onboarding Completed"
+    if "running agent bootstrap" in detail_lower or "running agent.ps1" in detail_lower:
+        return "Running Agent Bootstrap"
+    if "installing agent dependencies" in detail_lower:
+        return "Installing Agent Dependencies"
     if "waiting for windows" in detail_lower or "output file lock" in detail_lower:
         return _onboarding_progress_task_from_output(stdout=stdout, stderr=stderr) or "Running Agent Bootstrap"
     if detail_lower:
         return detail_text
-    return _onboarding_progress_task_from_output(stdout=stdout, stderr=stderr) or "Waiting For Onboarding Work"
+    return _onboarding_progress_task_from_output(stdout=stdout, stderr=stderr) or "Spinning-Up Site-Worker Container"
 
 
 def _set_impacket_timeout(obj: Any, timeout_seconds: float) -> None:
@@ -3783,11 +3812,12 @@ class JobScheduler:
             (target_row_id,),
         )
         previous = cur.fetchone()
-        if previous and str(previous[1] or "") == progress_status and str(previous[2] or "") == task:
+        if previous and str(previous[2] or "") == task:
             cur.execute(
                 """
                 UPDATE scheduled_job_onboarding_target_events
-                   SET detail=?,
+                   SET status=?,
+                       detail=?,
                        stdout_snippet=?,
                        stderr_snippet=?,
                        finished_at=?,
@@ -3795,6 +3825,7 @@ class JobScheduler:
                  WHERE id=?
                 """,
                 (
+                    progress_status,
                     detail,
                     stdout,
                     stderr,
@@ -3966,6 +3997,7 @@ class JobScheduler:
         run_id: int,
         target: str,
         approval_reference: str = "",
+        site_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         conn = self._conn()
         try:
@@ -4011,6 +4043,41 @@ class JobScheduler:
                     (int(job_id), int(run_id), normalized_target, target_port_pattern, target_port_pattern),
                 )
             row = cur.fetchone()
+            if not row and not normalized_reference:
+                normalized_target = str(target or "").strip()
+                target_port_pattern = f"{normalized_target}:%" if normalized_target else ""
+                fallback_params: List[Any] = [normalized_target, normalized_target, normalized_target, target_port_pattern, target_port_pattern, normalized_target, normalized_target]
+                fallback_site_clause = ""
+                if site_id is not None:
+                    fallback_site_clause = " AND (da.site_id=? OR da.site_id IS NULL)"
+                    fallback_params.append(int(site_id))
+                cur.execute(
+                    f"""
+                    SELECT da.id,
+                           da.approval_reference,
+                           da.status,
+                           da.hostname_claimed,
+                           da.updated_at,
+                           da.approved_by_user_id
+                      FROM device_approvals AS da
+                 LEFT JOIN devices AS d
+                        ON LOWER(COALESCE(d.hostname, ''))=LOWER(COALESCE(da.hostname_claimed, ''))
+                        OR LOWER(COALESCE(d.guid, ''))=LOWER(COALESCE(da.guid, ''))
+                     WHERE (
+                            LOWER(COALESCE(da.onboarding_target, ''))=LOWER(?)
+                            OR LOWER(COALESCE(da.hostname_claimed, ''))=LOWER(?)
+                            OR LOWER(COALESCE(d.hostname, ''))=LOWER(?)
+                            OR (?<>'' AND LOWER(COALESCE(da.onboarding_target, '')) LIKE LOWER(?))
+                            OR LOWER(COALESCE(d.internal_ip, ''))=LOWER(?)
+                            OR LOWER(COALESCE(d.external_ip, ''))=LOWER(?)
+                           )
+                       {fallback_site_clause}
+                  ORDER BY da.updated_at DESC
+                     LIMIT 1
+                    """,
+                    tuple(fallback_params),
+                )
+                row = cur.fetchone()
             if not row:
                 return {}
             return {
@@ -4053,7 +4120,15 @@ class JobScheduler:
         for row in rows:
             next_row = dict(row)
             status = str(next_row.get("status") or "").strip().lower()
-            if status == ONBOARDING_STATUS_WAITING_APPROVAL:
+            detail_current = str(next_row.get("detail") or "").strip()
+            approval_reference_current = str(next_row.get("approval_reference") or "").strip()
+            if status in {
+                ONBOARDING_STATUS_PENDING,
+                ONBOARDING_STATUS_RUNNING,
+                ONBOARDING_STATUS_WAITING_APPROVAL,
+                "approved",
+                "completed",
+            } or approval_reference_current:
                 target = str(
                     next_row.get("target_address")
                     or next_row.get("target_hostname")
@@ -4064,7 +4139,8 @@ class JobScheduler:
                     job_id=int(next_row.get("job_id") or 0),
                     run_id=int(next_row.get("run_id") or 0),
                     target=target,
-                    approval_reference=str(next_row.get("approval_reference") or "").strip(),
+                    approval_reference=approval_reference_current,
+                    site_id=int(next_row.get("site_id")) if next_row.get("site_id") is not None else None,
                 )
                 next_row.update(approval_context)
                 approval_reference = str(approval_context.get("approval_reference") or "").strip()
@@ -4073,7 +4149,11 @@ class JobScheduler:
                     self._update_onboarding_target_approval_reference(int(next_row.get("id") or 0), approval_reference)
                 approval_status = str(approval_context.get("approval_status") or "").strip().lower()
                 approval_detail = ""
-                if approval_status == "approved":
+                if approval_status == "pending":
+                    next_row["status"] = ONBOARDING_STATUS_WAITING_APPROVAL
+                    approval_detail = "Agent ready and awaiting approval."
+                    next_row["detail"] = approval_detail
+                elif approval_status == "approved":
                     next_row["status"] = "approved"
                     approval_detail = "Device approved. Agent finalizing enrollment."
                     next_row["detail"] = approval_detail
@@ -4087,18 +4167,25 @@ class JobScheduler:
                     next_row["detail"] = approval_detail
                 if approval_detail:
                     row_id = int(next_row.get("id") or 0)
-                    self._update_onboarding_target_row(
-                        row_id,
-                        status=str(next_row.get("status") or approval_status),
-                        detail=approval_detail,
-                        stdout=next_row.get("stdout_snippet") or "",
-                        stderr=next_row.get("stderr_snippet") or "",
-                        approval_reference=approval_reference or str(next_row.get("approval_reference") or ""),
-                        finished=approval_status in {"approved", "completed", "denied", "expired"},
+                    next_status = str(next_row.get("status") or approval_status)
+                    should_update_row = (
+                        status != next_status
+                        or detail_current != approval_detail
+                        or bool(approval_reference and approval_reference != approval_reference_current)
                     )
-                    timeline = self._load_onboarding_target_event_rows([row_id]).get(row_id, [])
-                    next_row["timeline"] = timeline
-                    next_row["events"] = timeline
+                    if should_update_row:
+                        self._update_onboarding_target_row(
+                            row_id,
+                            status=next_status,
+                            detail=approval_detail,
+                            stdout=next_row.get("stdout_snippet") or "",
+                            stderr=next_row.get("stderr_snippet") or "",
+                            approval_reference=approval_reference or str(next_row.get("approval_reference") or ""),
+                            finished=approval_status in {"pending", "approved", "completed", "denied", "expired"},
+                        )
+                        timeline = self._load_onboarding_target_event_rows([row_id]).get(row_id, [])
+                        next_row["timeline"] = timeline
+                        next_row["events"] = timeline
             hydrated.append(next_row)
         return hydrated
 
@@ -4655,8 +4742,8 @@ class JobScheduler:
             roots.insert(0, Path(env_root).expanduser())
         for root in roots:
             for candidate in (
-                root / "Data" / "Agent" / "Bootstrapper" / "dist" / AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME,
                 root / "Data" / "Agent" / "Bootstrapper" / AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME,
+                root / "Data" / "Agent" / "Bootstrapper" / "dist" / AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME,
                 root / "Engine" / "Services" / "api-backend" / "data" / AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME,
             ):
                 if candidate.is_file():
@@ -4669,7 +4756,8 @@ class JobScheduler:
             "stdout": "",
             "stderr": (
                 f"{AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME} unavailable. Build "
-                "Data/Agent/Bootstrapper/dist/Agent_Service_Bootstrapper.exe or set "
+                "Data/Agent/Bootstrapper/Agent_Service_Bootstrapper.exe or "
+                "Data/Agent/Bootstrapper/dist/Agent_Service_Bootstrapper.exe, or set "
                 "BOREALIS_WINDOWS_AGENT_SERVICE_BOOTSTRAPPER_EXE."
             ),
         }
@@ -4755,6 +4843,23 @@ class JobScheduler:
             return {}
         return dict(parsed) if isinstance(parsed, Mapping) else {}
 
+    def _read_windows_onboarding_events(self, smb: Any) -> List[Dict[str, Any]]:
+        try:
+            text = self._read_windows_smb_file(smb, "Borealis\\Temp\\Onboarding\\events.jsonl", share="C$")
+        except Exception:
+            return []
+        events: List[Dict[str, Any]] = []
+        for line in str(text or "").splitlines()[-50:]:
+            if not line.strip():
+                continue
+            try:
+                parsed = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(parsed, Mapping):
+                events.append(dict(parsed))
+        return events
+
     def _poll_windows_smb_onboarding_output(
         self,
         *,
@@ -4770,6 +4875,7 @@ class JobScheduler:
         last_output = ""
         last_error = ""
         last_status_update = 0.0
+        last_event_key = ""
         saw_output_share_lock = False
         while time.monotonic() < deadline:
             try:
@@ -4793,6 +4899,19 @@ class JobScheduler:
             state = self._read_windows_onboarding_state(smb)
             state_status = str(state.get("status") or "").strip().lower()
             state_detail = str(state.get("detail") or "").strip()
+            events = self._read_windows_onboarding_events(smb)
+            latest_event = events[-1] if events else {}
+            if latest_event and callable(status_update):
+                try:
+                    event_key = json.dumps(latest_event, sort_keys=True)
+                except Exception:
+                    event_key = str(latest_event)
+                if event_key != last_event_key:
+                    event_task = str(latest_event.get("task") or "").strip()
+                    event_detail = str(latest_event.get("detail") or "").strip()
+                    status_update(event_task or event_detail or state_detail or "Running Agent Bootstrap", last_output, last_error)
+                    last_status_update = time.monotonic()
+                    last_event_key = event_key
             state_exit_code: Optional[int] = None
             try:
                 state_exit_code = int(state.get("exit_code")) if state.get("exit_code") is not None else None
@@ -4896,6 +5015,8 @@ class JobScheduler:
             if callable(status_update):
                 status_update("Connecting to Windows SMB for service enrollment.")
             smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
+            if callable(status_update):
+                status_update("Windows SMB service connection established.")
             stage = "ADMIN$ bootstrapper staging"
             if callable(status_update):
                 status_update("Staging Borealis Agent service bootstrapper over ADMIN$.")
@@ -5022,6 +5143,8 @@ class JobScheduler:
             if callable(status_update):
                 status_update("Connecting to Windows SMB for scheduled task enrollment.")
             smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
+            if callable(status_update):
+                status_update("Windows scheduled task connection established.")
             stage = "ADMIN$ bootstrapper staging"
             if callable(status_update):
                 status_update("Staging Borealis Agent service bootstrapper over ADMIN$.")
@@ -5118,6 +5241,8 @@ class JobScheduler:
             if callable(status_update):
                 status_update("Connecting to Windows SMB for WMI/DCOM enrollment.")
             smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
+            if callable(status_update):
+                status_update("Windows WMI/DCOM connection established.")
             stage = "ADMIN$ bootstrapper staging"
             if callable(status_update):
                 status_update("Staging Borealis Agent service bootstrapper over ADMIN$.")
@@ -5660,7 +5785,7 @@ class JobScheduler:
                                 cur,
                                 row_id=row_id,
                                 status=ONBOARDING_STATUS_PENDING,
-                                detail="Waiting For Onboarding Work",
+                                detail="Spinning-Up Site-Worker Container",
                                 now=insert_now,
                             )
                     conn.commit()

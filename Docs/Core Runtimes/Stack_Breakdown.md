@@ -134,7 +134,7 @@ Engine/Services/wireguard-tunnel/secrets -> /opt/Borealis/Engine/Services/wiregu
 /var/run/docker.sock -> /var/run/docker.sock
 ```
 
-`api-backend` does not mount the whole `Engine/Services` tree. It receives its own runtime plus specific Traefik and WireGuard paths needed for edge settings and tunnel control. It also receives the Docker socket so the Server Info admin page can read Docker health/state and launch detached helper containers for `Engine.sh --service ...` actions.
+`api-backend` does not mount the whole `Engine/Services` tree. It receives its own runtime plus specific Traefik and WireGuard paths needed for edge settings and tunnel control. It does not mount the Docker socket in container mode; Server Info reads service snapshots from `job-scheduler`, and service actions are queued for `job-scheduler` execution.
 
 `postgres-db`:
 ```text
@@ -371,7 +371,7 @@ Action support:
 | `reload` | `traefik-edge` only | Restarts Traefik after config/env changes. |
 | `reconcile` | `wireguard-tunnel` only | Runs `borealis-wireguard-control-client reconcile` inside tunnel container. |
 
-Server Info service actions use the same command surface. The API backend queues those actions by launching a short-lived helper container from the current `api-backend` image with `/opt/Borealis` and the Docker socket mounted, then returns immediately while the helper runs `Engine.sh --service ...`.
+Server Info service actions use the same command surface. The API backend writes a service-action work item, then `job-scheduler` launches the short-lived helper container with `/opt/Borealis` and the Docker socket mounted while the API returns immediately.
 
 ## Direct Compose Commands
 Use `Engine.sh` when possible. Direct Compose commands are useful for read-only inspection or emergency operations.

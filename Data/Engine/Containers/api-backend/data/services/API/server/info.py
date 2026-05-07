@@ -42,7 +42,7 @@ from ....public_endpoints import public_vnc_path as resolve_public_vnc_path
 from ...RemoteDesktop.guacamole_proxy import guacd_health
 from ....public_endpoints import wireguard_endpoint
 from ....security import signing
-from ...task_scheduler.queue import enqueue_service_action, list_service_snapshots, list_worker_snapshots
+from ...job_scheduler.queue import enqueue_service_action, list_active_work_items, list_service_snapshots, list_worker_snapshots
 from ...ansible.runtime_settings import (
     DEFAULT_ANSIBLE_RUNNER_GLOBAL_CONCURRENCY_LIMIT,
     DEFAULT_ANSIBLE_RUNNER_JOB_CONCURRENCY_LIMIT,
@@ -1350,13 +1350,18 @@ def _collect_worker_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]
     conn = adapters.db_conn_factory()
     try:
         rows = list_worker_snapshots(conn)
+        active_work = list_active_work_items(conn)
         conn.commit()
     finally:
         conn.close()
     active = [row for row in rows if str(row.get("status") or "").lower() in {"starting", "running", "idle"}]
+    active_site_workers = [row for row in active if int(row.get("site_id") or 0) > 0]
+    active_managers = [row for row in active if int(row.get("site_id") or 0) <= 0]
     return {
-        "active_count": len(active),
+        "active_count": len(active_site_workers),
+        "manager_active_count": len(active_managers),
         "workers": rows,
+        "active_work": active_work,
     }
 
 
@@ -1512,7 +1517,7 @@ def _queue_compose_service_action(
     return True, helper_id, ""
 
 
-def _queue_task_scheduler_service_action(
+def _queue_job_scheduler_service_action(
     adapters: "EngineServiceAdapters",
     *,
     service_key: str,
@@ -1719,7 +1724,7 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if action is None:
             return _error_response("invalid_service_action", "Unsupported action for this service.", 400)
 
-        queued, helper_id, error_message = _queue_task_scheduler_service_action(
+        queued, helper_id, error_message = _queue_job_scheduler_service_action(
             adapters,
             service_key=normalized_key,
             action=action,
@@ -1761,7 +1766,7 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
             action = _resolve_compose_service_action(normalized_key, {"action": "restart"})
             if action is None:
                 return _error_response("invalid_service_key", "Unsupported service key.", 404)
-            queued, helper_id, error_message = _queue_task_scheduler_service_action(
+            queued, helper_id, error_message = _queue_job_scheduler_service_action(
                 adapters,
                 service_key=normalized_key,
                 action=action,

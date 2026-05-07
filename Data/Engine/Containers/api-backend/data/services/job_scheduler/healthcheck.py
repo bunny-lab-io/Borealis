@@ -1,4 +1,4 @@
-"""Task scheduler container healthcheck."""
+"""Job scheduler container healthcheck."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import sys
 
 from Data.Engine.config import load_runtime_config
 from Data.Engine.db import dbapi as sqlite3
-from Data.Engine.services.task_scheduler.queue import ensure_task_scheduler_tables
+from Data.Engine.services.job_scheduler.queue import ensure_job_scheduler_tables
 
 
 def main() -> int:
@@ -15,7 +15,7 @@ def main() -> int:
         settings = load_runtime_config()
         conn = sqlite3.connect(settings.database_url, timeout=5)
         try:
-            ensure_task_scheduler_tables(conn)
+            ensure_job_scheduler_tables(conn)
             conn.commit()
         finally:
             conn.close()

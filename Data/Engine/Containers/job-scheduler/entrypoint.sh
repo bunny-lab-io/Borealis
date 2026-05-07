@@ -37,4 +37,4 @@ export BOREALIS_INTERNAL_API_BASE_URL="${BOREALIS_INTERNAL_API_BASE_URL:-http://
 export PYTHONPATH="/opt/Borealis:/opt/Borealis/Data/Engine:/opt/Borealis/Data/Agent:${PYTHONPATH:-}"
 
 cd /opt/Borealis
-exec python -m Data.Engine.services.task_scheduler.manager
+exec python -m Data.Engine.services.job_scheduler.manager

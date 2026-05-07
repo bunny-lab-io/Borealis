@@ -31,7 +31,7 @@ from .queue import (
     claim_service_action,
     complete_work_item,
     enqueue_onboarding_run,
-    ensure_task_scheduler_tables,
+    ensure_job_scheduler_tables,
     expire_stale_leases,
     mark_missing_workers_lost,
     mark_lost_workers,
@@ -39,6 +39,7 @@ from .queue import (
     register_worker,
     replace_service_snapshots,
     update_worker_docker_state,
+    heartbeat_worker,
 )
 from .security import INTERNAL_TOKEN_HEADER, internal_token
 
@@ -249,7 +250,7 @@ def _build_scheduler(settings, logger):
     db_factory = _db_factory(settings.database_url)
     conn = db_factory()
     try:
-        ensure_task_scheduler_tables(conn)
+        ensure_job_scheduler_tables(conn)
         conn.commit()
     finally:
         conn.close()
@@ -599,6 +600,36 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
     logger.info("launched %s for site_id=%s", container_name, site_id)
 
 
+def _heartbeat_manager(db_factory) -> None:
+    worker_guid = str(os.environ.get("BOREALIS_JOB_SCHEDULER_GUID") or "job-scheduler").strip() or "job-scheduler"
+    container_name = str(os.environ.get("BOREALIS_JOB_SCHEDULER_CONTAINER_NAME") or "borealis-engine-job-scheduler").strip()
+    conn = db_factory()
+    try:
+        register_worker(
+            conn,
+            worker_guid=worker_guid,
+            container_name=container_name,
+            site_id=0,
+            status=WORKER_STATUS_RUNNING,
+        )
+        heartbeat_worker(
+            conn,
+            worker_guid=worker_guid,
+            status=WORKER_STATUS_RUNNING,
+            lanes=["scheduled_tick", "worker_reconcile", "service_action"],
+            task_links=[
+                {
+                    "kind": "manager",
+                    "label": "Job Scheduler Manager",
+                    "path": "/server-info",
+                }
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _run_service_action(payload: Mapping[str, Any], *, logger) -> str:
     service_key = str(payload.get("service_key") or "").strip().lower()
     action = payload.get("action") if isinstance(payload.get("action"), Mapping) else {}
@@ -672,9 +703,13 @@ def _process_service_actions(db_factory, logger) -> None:
 
 def main() -> None:
     settings = load_runtime_config()
-    logger = initialise_engine_logger(settings, name="borealis.task_scheduler")
+    logger = initialise_engine_logger(settings, name="borealis.job_scheduler")
     scheduler, db_factory = _build_scheduler(settings, logger)
     logger.info("job-scheduler starting")
+    try:
+        _heartbeat_manager(db_factory)
+    except Exception:
+        logger.exception("job-scheduler manager heartbeat failed")
     try:
         _reconcile_site_workers(db_factory, logger)
     except Exception:
@@ -684,6 +719,10 @@ def main() -> None:
     worker_reconcile_interval = max(10, int(str(os.environ.get("BOREALIS_SITE_WORKER_RECONCILE_SECONDS") or "30").strip() or "30"))
     while True:
         now = _now_ts()
+        try:
+            _heartbeat_manager(db_factory)
+        except Exception:
+            logger.exception("job-scheduler manager heartbeat failed")
         if now >= next_tick:
             try:
                 scheduler._tick_once()

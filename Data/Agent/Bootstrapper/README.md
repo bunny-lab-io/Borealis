@@ -10,6 +10,7 @@ It owns only remote launch mechanics:
 - download `Agent.ps1`
 - write onboarding `state.json` and `events.jsonl`
 - run `Agent.ps1`
+- mirror Agent step markers into `events.jsonl` so Engine polling can show live task progress
 - enforce timeout and kill the child process tree
 
 `Agent.ps1` remains the single Windows Agent install/update brain.
@@ -22,7 +23,7 @@ Build from Linux only with native Go 1.22+:
 
 The script uses `go` on `PATH` when available. If Go is missing or too old, it installs official native Go under `Dependencies/Go/` and uses that. It does not use Docker, Podman, or any containerized compiler.
 
-`dist/Agent_Service_Bootstrapper.exe` is a committed release artifact. Engine images copy that prebuilt EXE and do not compile Go during image build.
+`Agent_Service_Bootstrapper.exe` is a committed release artifact. `dist/Agent_Service_Bootstrapper.exe` is accepted as a legacy artifact path, but Engine images copy the top-level prebuilt EXE and do not compile Go during image build.
 
 Rebuild only when this bootstrapper source changes or when developer release process intentionally refreshes the EXE. Operators and end users should never need to build it.
 
@@ -33,5 +34,5 @@ docker build -f Data/Engine/Containers/job-scheduler/Dockerfile .
 Output:
 
 ```text
-Data/Agent/Bootstrapper/dist/Agent_Service_Bootstrapper.exe
+Data/Agent/Bootstrapper/Agent_Service_Bootstrapper.exe
 ```

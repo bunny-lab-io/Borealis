@@ -583,6 +583,84 @@ function targetOutputContent(target, mode) {
   return String(mode === "stderr" ? target?.stderr_snippet || "" : target?.stdout_snippet || "").trim();
 }
 
+function normalizeOnboardingProgressTask(task, status = "") {
+  const original = String(task || "").trim();
+  const normalizedTask = original.toLowerCase();
+  const normalizedStatus = String(status || "").trim().toLowerCase();
+  if (normalizedStatus === "waiting_approval" || normalizedTask.includes("awaiting approval")) {
+    return "Agent Ready and Awaiting Approval";
+  }
+  if (
+    normalizedTask.includes("enrollment approved") ||
+    normalizedTask.includes("onboarding completed") ||
+    normalizedTask.includes("device approved")
+  ) {
+    return "Onboarding Completed";
+  }
+  if (
+    normalizedTask.includes("waiting for onboarding work") ||
+    normalizedTask.includes("trying windows remote enrollment") ||
+    normalizedTask.includes("preparing clean onboarding workspace") ||
+    normalizedTask.includes("cleaning stale onboarding processes")
+  ) {
+    return "Spinning-Up Site-Worker Container";
+  }
+  if (normalizedTask.includes("establishing connection") || normalizedTask.includes("trying windows smb service")) {
+    return "Establishing Connection to Remote Device";
+  }
+  if (normalizedTask.includes("using smb service") || normalizedTask.includes("smb service connection established")) {
+    return "Connection Established using SMB Service";
+  }
+  if (
+    (normalizedTask.includes("scheduled task") && normalizedTask.includes("connection established")) ||
+    normalizedTask.includes("establishing scheduled task")
+  ) {
+    return "Connection Established using Scheduled Task";
+  }
+  if (normalizedTask.includes("wmi") || normalizedTask.includes("dcom")) {
+    return "Connection Established using WMI/DCOM";
+  }
+  if (normalizedTask.includes("winrm")) {
+    return "Connection Established using WinRM";
+  }
+  if (
+    normalizedTask.includes("transferring agent service bootstrapper") ||
+    normalizedTask.includes("transferring agent installation files") ||
+    normalizedTask.includes("uploading agent service bootstrapper")
+  ) {
+    return "Uploading Agent Service Bootstrapper to Remote Device";
+  }
+  if (normalizedTask.includes("creating windows service")) {
+    return "Creating Windows Service to One-Shot Bootstrap Agent";
+  }
+  if (normalizedTask.includes("ensuring windows service")) {
+    return "Ensuring Windows Service is Running";
+  }
+  if (
+    normalizedTask.includes("downloading agent bootstrap") ||
+    normalizedTask.includes("deploying borealis agent runtime") ||
+    normalizedTask.includes("running agent service bootstrapper") ||
+    normalizedTask.includes("syncing borealis repository") ||
+    normalizedTask.includes("running agent bootstrap")
+  ) {
+    return "Running Agent Bootstrap";
+  }
+  if (normalizedTask.includes("dependency") || normalizedTask.includes("ensuring agent dependencies")) {
+    return "Installing Agent Dependencies";
+  }
+  return original || "Spinning-Up Site-Worker Container";
+}
+
+function mergeOutputSnippet(first, second) {
+  const left = String(first || "").trim();
+  const right = String(second || "").trim();
+  if (!left) return right;
+  if (!right) return left;
+  if (left.includes(right)) return left;
+  if (right.includes(left)) return right;
+  return `${left}\n\n${right}`;
+}
+
 function epochToMs(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return 0;
@@ -625,7 +703,7 @@ function targetProgressionKey(row) {
 
 function statusIsActiveProgress(status) {
   const normalized = String(status || "").trim().toLowerCase();
-  return ["pending", "running", "waiting_approval"].includes(normalized);
+  return ["pending", "running"].includes(normalized);
 }
 
 function normalizeBranchName(value) {
@@ -715,25 +793,31 @@ function ProgressStatusIcon({ status }) {
   const key = String(status || "pending").trim().toLowerCase() || "pending";
   const label = STATUS_THEME[key]?.label || formatStatusLabel(key);
   const completeStatuses = new Set(["approved", "completed", "complete", "success", "succeeded"]);
-  const activeStatuses = new Set(["pending", "running", "waiting_approval", "in_progress"]);
+  const activeStatuses = new Set(["pending", "running", "in_progress"]);
+  const waitingStatuses = new Set(["waiting_approval"]);
   const failedStatuses = new Set(["failed", "error", "ssh_unreachable", "unreachable", "timeout"]);
   const isComplete = completeStatuses.has(key);
   const isActive = activeStatuses.has(key);
+  const isWaiting = waitingStatuses.has(key);
   const isFailed = failedStatuses.has(key);
   const Icon = isComplete
     ? ProgressCompleteIcon
     : isActive
       ? ProgressActiveIcon
-      : isFailed
-        ? ProgressErrorIcon
-        : ProgressPendingIcon;
+      : isWaiting
+        ? ProgressPendingIcon
+        : isFailed
+          ? ProgressErrorIcon
+          : ProgressPendingIcon;
   const color = isComplete
     ? MAGIC_UI.accentC
     : isActive
       ? MAGIC_UI.accentA
-      : isFailed
-        ? MAGIC_UI.danger
-        : MAGIC_UI.textMuted;
+      : isWaiting
+        ? MAGIC_UI.accentB
+        : isFailed
+          ? MAGIC_UI.danger
+          : MAGIC_UI.textMuted;
 
   return (
     <Tooltip title={label}>
@@ -1090,7 +1174,7 @@ export default function CreateOnboardingJob() {
         statusLabel: formatStatusLabel(status),
         detail: target.detail || "",
         approvalReference: target.approval_reference || "",
-        approvalId: target.approval_id || "",
+        approvalId: String(target.approval_id || target.approvalId || "").trim(),
         approvalStatus,
         raw: target,
       };
@@ -1133,16 +1217,17 @@ export default function CreateOnboardingJob() {
     const rawRows = Array.isArray(selectedTargetRow.raw?.timeline)
       ? selectedTargetRow.raw.timeline
       : (Array.isArray(selectedTargetRow.raw?.events) ? selectedTargetRow.raw.events : []);
-    return rawRows.map((event, index) => {
+    const mappedRows = rawRows.map((event, index) => {
       const startedAt = epochToMs(event?.started_at ?? event?.startedAt);
       const endedAt = epochToMs(event?.finished_at ?? event?.finishedAt) || null;
       const status = String(event?.status || "pending").trim().toLowerCase() || "pending";
       const elapsedEnd = endedAt || (statusIsActiveProgress(status) ? progressionClock : startedAt);
+      const task = normalizeOnboardingProgressTask(event?.task || "Spinning-Up Site-Worker Container", status);
       return {
         id: event?.id || `${selectedTargetRow.id || selectedTargetId}-${index}`,
         status,
         statusLabel: formatStatusLabel(status),
-        task: event?.task || "Waiting For Onboarding Work",
+        task,
         startedAt,
         endedAt,
         startedLabel: formatOnboardingProgressTimestamp(startedAt),
@@ -1152,6 +1237,38 @@ export default function CreateOnboardingJob() {
         raw: event,
       };
     });
+    return mappedRows.reduce((acc, row) => {
+      const previous = acc[acc.length - 1];
+      if (!previous || previous.task !== row.task) {
+        acc.push(row);
+        return acc;
+      }
+      const startedAt = previous.startedAt || row.startedAt;
+      const endedAt = row.endedAt || previous.endedAt;
+      const status = row.status || previous.status;
+      const raw = {
+        ...(previous.raw || {}),
+        ...(row.raw || {}),
+        stdout_snippet: mergeOutputSnippet(previous.raw?.stdout_snippet, row.raw?.stdout_snippet),
+        stderr_snippet: mergeOutputSnippet(previous.raw?.stderr_snippet, row.raw?.stderr_snippet),
+      };
+      const elapsedEnd = endedAt || (statusIsActiveProgress(status) ? progressionClock : startedAt);
+      acc[acc.length - 1] = {
+        ...previous,
+        ...row,
+        id: previous.id,
+        status,
+        statusLabel: formatStatusLabel(status),
+        startedAt,
+        endedAt,
+        startedLabel: formatOnboardingProgressTimestamp(startedAt),
+        elapsedLabel: formatElapsedDuration(startedAt, elapsedEnd),
+        hasStdOut: Boolean(String(raw.stdout_snippet || "").trim()),
+        hasStdErr: Boolean(String(raw.stderr_snippet || "").trim()),
+        raw,
+      };
+      return acc;
+    }, []);
   }, [progressionClock, selectedTargetId, selectedTargetRow]);
 
   const handleCopyOutputSection = useCallback(async (section) => {
@@ -1201,7 +1318,7 @@ export default function CreateOnboardingJob() {
   }, [copyTextToClipboard]);
 
   const handleApproveTarget = useCallback(async (target) => {
-    const approvalId = String(target?.approval_id || "").trim();
+    const approvalId = String(target?.approval_id || target?.approvalId || "").trim();
     if (!approvalId) return;
     setActioningApprovalId(approvalId);
     setError("");
@@ -1249,8 +1366,11 @@ export default function CreateOnboardingJob() {
         cellClass: "auto-col-tight",
         cellRenderer: (params) => {
           const row = params.data;
-          const target = row?.raw;
-          const canApprove = Boolean(row?.approvalId) && row?.status === "waiting_approval" && (!row?.approvalStatus || row.approvalStatus === "pending");
+          const rowStatus = String(row?.status || "").trim().toLowerCase();
+          const approvalStatus = String(row?.approvalStatus || "").trim().toLowerCase();
+          const canApprove = Boolean(row?.approvalId)
+            && (approvalStatus === "pending" || (!approvalStatus && rowStatus === "waiting_approval"))
+            && !["approved", "completed", "success", "installed", "denied", "expired"].includes(rowStatus);
           if (!canApprove) {
             return <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>-</Typography>;
           }
@@ -1263,7 +1383,7 @@ export default function CreateOnboardingJob() {
               sx={{ color: MAGIC_UI.accentC, textTransform: "none", minWidth: 0, p: 0 }}
               onClick={(event) => {
                 event.stopPropagation();
-                void handleApproveTarget(target);
+                void handleApproveTarget(row);
               }}
             >
               Approve

@@ -3618,6 +3618,28 @@ function InstallOrUpdate-BorealisAgent {
             Write-AgentLog -FileName 'Install.log' -Message ("[CONFIG] Failed to persist agent_settings_SYSTEM.json: {0}" -f $_.Exception.Message)
             Write-Host "Failed to update agent_settings_SYSTEM.json. Check Agent/Logs/install.log for details." -ForegroundColor Red
         }
+
+        $onboardingContextPath = Join-Path $settingsDir 'onboarding_context.json'
+        $onboardingContext = [ordered]@{}
+        $onboardingJobId = ''
+        $onboardingRunId = ''
+        $onboardingTarget = ''
+        if ($env:BOREALIS_ONBOARDING_JOB_ID -and $env:BOREALIS_ONBOARDING_JOB_ID.Trim()) { $onboardingJobId = $env:BOREALIS_ONBOARDING_JOB_ID.Trim() }
+        if ($env:BOREALIS_ONBOARDING_RUN_ID -and $env:BOREALIS_ONBOARDING_RUN_ID.Trim()) { $onboardingRunId = $env:BOREALIS_ONBOARDING_RUN_ID.Trim() }
+        if ($env:BOREALIS_ONBOARDING_TARGET -and $env:BOREALIS_ONBOARDING_TARGET.Trim()) { $onboardingTarget = $env:BOREALIS_ONBOARDING_TARGET.Trim() }
+        if ($onboardingJobId -or $onboardingRunId -or $onboardingTarget) {
+            if ($onboardingJobId) { $onboardingContext['job_id'] = $onboardingJobId }
+            if ($onboardingRunId) { $onboardingContext['run_id'] = $onboardingRunId }
+            if ($onboardingTarget) { $onboardingContext['target'] = $onboardingTarget }
+            try {
+                [System.IO.File]::WriteAllText($onboardingContextPath, ($onboardingContext | ConvertTo-Json -Depth 5), $utf8NoBom)
+                Write-AgentLog -FileName 'Install.log' -Message '[CONFIG] Onboarding context saved for approval correlation.'
+            } catch {
+                Write-AgentLog -FileName 'Install.log' -Message ("[CONFIG] Failed to persist onboarding_context.json: {0}" -f $_.Exception.Message)
+            }
+        } else {
+            try { Remove-Item -LiteralPath $onboardingContextPath -Force -ErrorAction SilentlyContinue } catch {}
+        }
     }
 
     Write-Host "`nConfiguring Borealis Agent (tasks)..." -ForegroundColor Blue

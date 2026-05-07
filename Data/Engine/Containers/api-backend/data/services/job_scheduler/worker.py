@@ -147,7 +147,24 @@ def _run_onboarding_item(scheduler, item: Mapping[str, Any]) -> str:
     return WORK_STATUS_SUCCEEDED
 
 
-def _heartbeat_until(stop_event: threading.Event, db_factory, *, worker_guid: str, work_id: int) -> None:
+def _work_item_links(item: Mapping[str, Any]) -> list[Dict[str, Any]]:
+    payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
+    job_id = int(payload.get("job_id") or item.get("job_id") or 0)
+    run_id = int(payload.get("run_id") or item.get("run_id") or 0)
+    if str(item.get("kind") or "") == "onboarding_run" and job_id > 0:
+        return [
+            {
+                "kind": "onboarding_run",
+                "label": f"Onboarding Job {job_id}",
+                "job_id": job_id,
+                "run_id": run_id,
+                "path": f"/jobs/onboarding/{job_id}?tab=discovered_devices",
+            }
+        ]
+    return []
+
+
+def _heartbeat_until(stop_event: threading.Event, db_factory, *, worker_guid: str, work_id: int, task_links: list[Dict[str, Any]]) -> None:
     while not stop_event.wait(20.0):
         conn = db_factory()
         try:
@@ -157,6 +174,7 @@ def _heartbeat_until(stop_event: threading.Event, db_factory, *, worker_guid: st
                 worker_guid=worker_guid,
                 status=WORKER_STATUS_RUNNING,
                 lanes=[LANE_ONBOARDING],
+                task_links=task_links,
             )
             conn.commit()
         finally:
@@ -196,11 +214,13 @@ def main() -> None:
                 )
                 if item:
                     claimed_count += 1
+                    task_links = _work_item_links(item)
                     heartbeat_worker(
                         conn,
                         worker_guid=worker_guid,
                         status=WORKER_STATUS_RUNNING,
                         lanes=[LANE_ONBOARDING],
+                        task_links=task_links,
                         claimed_count=claimed_count,
                     )
                 else:
@@ -227,10 +247,11 @@ def main() -> None:
             error = ""
             final_status = WORK_STATUS_FAILED
             stop_event = threading.Event()
+            task_links = _work_item_links(item)
             heartbeat = threading.Thread(
                 target=_heartbeat_until,
                 args=(stop_event, db_factory),
-                kwargs={"worker_guid": worker_guid, "work_id": int(item["id"])},
+                kwargs={"worker_guid": worker_guid, "work_id": int(item["id"]), "task_links": task_links},
                 daemon=True,
             )
             heartbeat.start()

@@ -30,8 +30,8 @@ from ...assemblies.service import AssemblyRuntimeService
 from ...aegis_cipher import AegisSecretResetRequiredError, credential_secret_reset_required
 from ....public_endpoints import public_base_url
 from ...auth.secrets import require_app_secret
-from ...task_scheduler.queue import enqueue_onboarding_run
-from ...task_scheduler.security import INTERNAL_TOKEN_HEADER, validate_internal_token
+from ...job_scheduler.queue import enqueue_onboarding_run
+from ...job_scheduler.security import INTERNAL_TOKEN_HEADER, validate_internal_token
 from ..workflows import management as workflows_management
 from . import job_scheduler
 
@@ -462,7 +462,7 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     workflow_runtime = workflows_management.ensure_workflow_runtime(app, adapters)
     job_scheduler.set_workflow_run_launcher(scheduler, workflow_runtime.start_run)
     job_scheduler.set_workflow_document_validator(scheduler, workflow_runtime.validate_saved_workflow)
-    _register_internal_task_scheduler_routes(
+    _register_internal_job_scheduler_routes(
         app,
         adapters,
         _load_decrypted_credential,
@@ -479,7 +479,7 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     return scheduler
 
 
-def _register_internal_task_scheduler_routes(
+def _register_internal_job_scheduler_routes(
     app: "Flask",
     adapters: "EngineServiceAdapters",
     credential_loader,
@@ -487,7 +487,7 @@ def _register_internal_task_scheduler_routes(
     vpn_session_loader=None,
     vpn_session_prepare=None,
 ) -> None:
-    if getattr(app, "_borealis_task_scheduler_internal_routes", False):
+    if getattr(app, "_borealis_job_scheduler_internal_routes", False):
         return
 
     def _internal_error(message: str, status: int = 500):
@@ -501,7 +501,7 @@ def _register_internal_task_scheduler_routes(
         return validate_internal_token(secret, request.headers.get(INTERNAL_TOKEN_HEADER))
 
     @app.route("/api/internal/job-scheduler/credential/<int:credential_id>", methods=["GET"])
-    def _internal_task_scheduler_credential(credential_id: int):
+    def _internal_job_scheduler_credential(credential_id: int):
         if not _require_internal():
             return _internal_error("unauthorized", 401)
         try:
@@ -513,13 +513,13 @@ def _register_internal_task_scheduler_routes(
         return jsonify({"credential": credential})
 
     @app.route("/api/internal/job-scheduler/public-base-url", methods=["GET"])
-    def _internal_task_scheduler_public_base_url():
+    def _internal_job_scheduler_public_base_url():
         if not _require_internal():
             return _internal_error("unauthorized", 401)
         return jsonify({"public_base_url": public_base_url_loader()})
 
     @app.route("/api/internal/job-scheduler/vpn-sessions", methods=["GET"])
-    def _internal_task_scheduler_vpn_sessions():
+    def _internal_job_scheduler_vpn_sessions():
         if not _require_internal():
             return _internal_error("unauthorized", 401)
         if not callable(vpn_session_loader):
@@ -531,7 +531,7 @@ def _register_internal_task_scheduler_routes(
         return jsonify({"sessions": sessions if isinstance(sessions, dict) else {}})
 
     @app.route("/api/internal/job-scheduler/vpn-prepare", methods=["POST"])
-    def _internal_task_scheduler_vpn_prepare():
+    def _internal_job_scheduler_vpn_prepare():
         if not _require_internal():
             return _internal_error("unauthorized", 401)
         if not callable(vpn_session_prepare):
@@ -553,7 +553,7 @@ def _register_internal_task_scheduler_routes(
         return jsonify({"sessions": sessions if isinstance(sessions, dict) else {}})
 
     @app.route("/api/internal/job-scheduler/host-service-event", methods=["POST"])
-    def _internal_task_scheduler_host_service_event():
+    def _internal_job_scheduler_host_service_event():
         if not _require_internal():
             return _internal_error("unauthorized", 401)
         body = request.get_json(silent=True) or {}
@@ -570,7 +570,7 @@ def _register_internal_task_scheduler_routes(
         return jsonify({"emitted": emitted})
 
     @app.route("/api/internal/job-scheduler/workflow/start", methods=["POST"])
-    def _internal_task_scheduler_workflow_start():
+    def _internal_job_scheduler_workflow_start():
         if not _require_internal():
             return _internal_error("unauthorized", 401)
         runtime = getattr(adapters.context, "workflow_runtime", None)
@@ -583,7 +583,7 @@ def _register_internal_task_scheduler_routes(
             return _internal_error(str(exc), 500)
         return jsonify(result if isinstance(result, dict) else {"result": result})
 
-    setattr(app, "_borealis_task_scheduler_internal_routes", True)
+    setattr(app, "_borealis_job_scheduler_internal_routes", True)
 
 
 def get_scheduler(adapters: "EngineServiceAdapters"):

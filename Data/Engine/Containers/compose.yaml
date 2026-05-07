@@ -43,6 +43,8 @@ services:
     environment:
       BOREALIS_INTERNAL_API_BASE_URL: ${BOREALIS_INTERNAL_API_BASE_URL:-http://127.0.0.1:5000}
       BOREALIS_SITE_WORKER_IMAGE: ${BOREALIS_SITE_WORKER_IMAGE:-borealis-engine/site-worker:local}
+      BOREALIS_JOB_SCHEDULER_GUID: job-scheduler
+      BOREALIS_JOB_SCHEDULER_CONTAINER_NAME: borealis-engine-job-scheduler
     volumes:
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Deploy:/opt/Borealis/Engine/Deploy:ro
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend:/opt/Borealis/Engine/Services/api-backend

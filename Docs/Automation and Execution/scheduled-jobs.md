@@ -61,7 +61,7 @@ Supported schedule types (from the scheduler core):
 - Site workers are dynamic containers named `site-worker-<uuid>`. They receive a site id, claim work for that site only, and exit after 2 minutes idle.
 - Worker lanes are site-local. Onboarding work claims the `onboarding` lane and honors the job's device onboarding concurrency. Scheduled ticking and Engine-side Ansible execution run in `job-scheduler` for v1 so they are still outside `api-backend`.
 - Work items use Postgres leases. A worker heartbeat extends the lease; stale leases return to `queued` so another worker can reclaim them.
-- Worker records are visible in Server Info under the Workers domain and through `GET /api/server/workers`.
+- Worker records are visible in Server Info under the Workers domain and through `GET /api/server/workers`. The long-lived manager heartbeats as `job-scheduler`; active site workers expose site id, lanes, claimed counts, and task links.
 - VNC, interactive shell, live file browsing/transfers, live process actions, live service actions, and software refresh remain in `api-backend` for v1 because those paths are browser/session-affine.
 
 ## Automatic Device Onboarding
@@ -71,8 +71,9 @@ Supported schedule types (from the scheduler core):
 - Operators select one site, target OS, one stored machine or domain credential, discovery scope entries, exclusion scope entries, agent install branch, remote ports, per-job device onboarding concurrency, and normal schedule options.
 - Linux targets use SSH. At run time the Engine probes TCP/SSH, authenticates with the selected credential, confirms the target is Linux, downloads `Agent.sh` from the selected branch, and runs `Agent.sh --repo-branch <branch> deploy --serverurl <engine_url> --enrollmentcode <site_code> --newEngine`.
 - Windows targets use the same discovery/exclusion model. The Engine first tries SMB `ADMIN$` plus a temporary Remote Service Control Manager service, then a remote scheduled task, then WMI/DCOM process creation, then WinRM. The Engine stages `Agent_Service_Bootstrapper.exe`, and that EXE handles remote service/process semantics, temp cleanup, `Agent.ps1` download, state/events, timeout, and process-tree termination before launching `Agent.ps1`. `Agent.ps1` performs Git sync into `C:\Borealis`, preserves `C:\Borealis\Agent`, `C:\Borealis\Temp`, and `C:\Borealis\Dependencies`, emits onboarding step markers for detailed progress tracking, and skips duplicate attempts when a matching pending approval already exists. Installer subprocesses and archive extraction steps that are known to block unattended deployment are run with bounded waits and process-tree cleanup. AutoHotKey, Git CLI, and WireGuard dependency failures are deferred during remote onboarding so non-core dependency repair can occur after the agent is enrolled. If all paths fail, the target records a manual-install-required failure because local security policy blocked remote enrollment.
+- The Detailed Breakdown table intentionally collapses low-level logs into task-oriented rows: `Spinning-Up Site-Worker Container`, `Establishing Connection to Remote Device`, `Connection Established using <protocol>`, `Uploading Agent Service Bootstrapper to Remote Device`, `Creating Windows Service to One-Shot Bootstrap Agent`, `Ensuring Windows Service is Running`, `Running Agent Bootstrap`, `Installing Agent Dependencies`, and `Agent Ready and Awaiting Approval`. StdOut/StdErr snippets remain attached to each task row for drilldown.
 - Remote machine credentials stay only in existing Aegis-protected credential records. Onboarding target output is stored as sanitized snippets in `scheduled_job_onboarding_targets`; per-target task timeline snippets are stored in `scheduled_job_onboarding_target_events`.
-- Successful remote installs do not auto-approve devices. Agents submit normal enrollment requests and remain in the existing approval queue. When possible, Borealis records `onboarding_job_id`, `onboarding_run_id`, and `onboarding_target` on the approval. The onboarding target endpoint hydrates pending target rows with current approval status so approved or completed devices stop showing as `waiting_approval`.
+- Successful remote installs do not auto-approve devices. Agents submit normal enrollment requests and remain in the existing approval queue. Remote onboarding writes `onboarding_context.json` into the Agent settings directory so the approval records `onboarding_job_id`, `onboarding_run_id`, and `onboarding_target`. The onboarding target endpoint hydrates pending target rows with current approval status, with hostname/IP fallback for older rows that predate context persistence, so approved or completed devices stop showing as `waiting_approval`.
 - Windows SCM-based deployment may still report a service-control timeout if the remote Service Control Manager is slow. Borealis treats that timeout as recoverable, polls the staged EXE output/state files, and also accepts a matching approval record as proof that the installer reached the Engine.
 - Re-deploying an onboarding job saves the current job definition, deletes prior run history for that job, creates a fresh immediate onboarding occurrence, and repopulates target status from the new run.
 - Fan-out is bounded by each job's `onboarding_concurrency` component field (default `5`). Jobs without that field fall back to `BOREALIS_ONBOARDING_CONCURRENCY` (default `5`). Install command timeout is controlled by `BOREALIS_ONBOARDING_INSTALL_TIMEOUT_SECONDS` (default `900`), and Windows SMB/scheduled-task observation follows that value unless `BOREALIS_WINDOWS_ONBOARDING_OBSERVATION_TIMEOUT_SECONDS` is set.
@@ -126,8 +127,8 @@ Supported schedule types (from the scheduler core):
 ### Scheduler entry points
 - API registration: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/management.py`.
 - Scheduler core: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`.
-- Task scheduler runtime: `Data/Engine/Containers/api-backend/data/services/task_scheduler/manager.py`.
-- Site worker runtime: `Data/Engine/Containers/api-backend/data/services/task_scheduler/worker.py`.
+- Job scheduler runtime: `Data/Engine/Containers/api-backend/data/services/job_scheduler/manager.py`.
+- Site worker runtime: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker.py`.
 
 ### Core tables (Engine DB)
 - `scheduled_jobs` - job definition, schedule, targets, execution context.
@@ -136,9 +137,9 @@ Supported schedule types (from the scheduler core):
 - `scheduled_job_run_activity` - links activity_history to scheduled runs.
 - `scheduled_job_onboarding_targets` - per-target local-network onboarding attempt state and sanitized output.
 - `scheduled_job_onboarding_target_events` - persistent per-target onboarding task timeline for Detailed Breakdown.
-- `task_scheduler_work_items` - durable queued/running/completed work with Postgres leases.
-- `task_scheduler_workers` - active/recent site-worker lifecycle snapshots.
-- `task_scheduler_service_snapshots` - last known Compose service state from `job-scheduler` for Server Info when `api-backend` has no Docker socket.
+- `job_scheduler_work_items` - durable queued/running/completed work with Postgres leases.
+- `job_scheduler_workers` - active/recent site-worker lifecycle snapshots.
+- `job_scheduler_service_snapshots` - last known Compose service state from `job-scheduler` for Server Info when `api-backend` has no Docker socket.
 
 ### Schedule computation
 - `_compute_next_run` normalizes timestamps to minutes and applies schedule type logic.

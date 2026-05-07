@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,8 @@ const (
 	defaultTimeoutSeconds = 900
 	waitAbandoned         = 0x00000080
 )
+
+var agentStepMarkerPattern = regexp.MustCompile(`^__BOREALIS_AGENT_STEP_(STARTED|COMPLETED|FAILED|DEFERRED)__=(.+)$`)
 
 type BootstrapConfig struct {
 	AgentURL        string   `json:"agent_url"`
@@ -250,7 +253,7 @@ func runFromConfig(ctx context.Context, configPath string) int {
 
 	if exitCode == 0 {
 		writeState(cfg, "pending_approval", 0, "Agent.ps1 completed; device approval pending operator action.")
-		writeEvent(cfg, "completed", "Running Agent Bootstrap", "Agent.ps1 completed.", 0)
+		writeEvent(cfg, "completed", "Agent Ready and Awaiting Approval", "Agent.ps1 completed; device approval pending operator action.", 0)
 	} else {
 		writeState(cfg, "failed", exitCode, fmt.Sprintf("Agent.ps1 failed with exit code %d.", exitCode))
 		writeEvent(cfg, "failed", "Running Agent Bootstrap", fmt.Sprintf("Agent.ps1 failed with exit code %d.", exitCode), exitCode)
@@ -352,8 +355,12 @@ func runAgent(ctx context.Context, cfg BootstrapConfig, logs *logWriter, args []
 
 	var copyWG sync.WaitGroup
 	copyWG.Add(2)
-	go copyStream(&copyWG, stdout, logs, "")
-	go copyStream(&copyWG, stderr, logs, "")
+	go copyStream(&copyWG, stdout, logs, "", func(line string) {
+		writeAgentStepEvent(cfg, line)
+	})
+	go copyStream(&copyWG, stderr, logs, "", func(line string) {
+		writeAgentStepEvent(cfg, line)
+	})
 
 	waitCh := make(chan error, 1)
 	go func() {
@@ -380,7 +387,7 @@ func runAgent(ctx context.Context, cfg BootstrapConfig, logs *logWriter, args []
 	return 0, nil
 }
 
-func copyStream(wg *sync.WaitGroup, reader io.Reader, logs *logWriter, prefix string) {
+func copyStream(wg *sync.WaitGroup, reader io.Reader, logs *logWriter, prefix string, onLine func(string)) {
 	defer wg.Done()
 	scanner := bufio.NewScanner(reader)
 	buffer := make([]byte, 0, 64*1024)
@@ -391,7 +398,51 @@ func copyStream(wg *sync.WaitGroup, reader io.Reader, logs *logWriter, prefix st
 			line = prefix + line
 		}
 		logs.WriteLine(line)
+		if onLine != nil {
+			onLine(line)
+		}
 	}
+}
+
+func writeAgentStepEvent(cfg BootstrapConfig, line string) {
+	match := agentStepMarkerPattern.FindStringSubmatch(strings.TrimSpace(line))
+	if len(match) != 3 {
+		return
+	}
+	markerState := strings.ToUpper(strings.TrimSpace(match[1]))
+	rawTask := strings.TrimSpace(match[2])
+	task := normalizeAgentTask(rawTask)
+	if task == "" {
+		return
+	}
+	status := "running"
+	exitCode := 1
+	switch markerState {
+	case "COMPLETED", "DEFERRED":
+		status = "completed"
+		exitCode = 0
+	case "FAILED":
+		status = "failed"
+		exitCode = 1
+	default:
+		status = "running"
+		exitCode = 1
+	}
+	writeEvent(cfg, status, task, rawTask, exitCode)
+	if status == "running" {
+		writeState(cfg, "running", exitCode, task)
+	}
+}
+
+func normalizeAgentTask(task string) string {
+	text := strings.TrimSpace(task)
+	if text == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(text), "dependency:") {
+		return "Installing Agent Dependencies"
+	}
+	return text
 }
 
 func powershellPath() string {
