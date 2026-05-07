@@ -313,8 +313,13 @@ def test_windows_onboarding_script_uses_stable_repo_and_remote_lock(engine_harne
     assert "$repoRoot = 'C:\\Borealis'" in script
     assert "Temp\\Onboarding" in script
     assert "function Ensure-BorealisDirectory" in script
+    assert "function Clear-BorealisOnboardingTemp" in script
     assert "Ensure-BorealisDirectory -Path (Split-Path -Parent $statePath)" in script
     assert "Ensure-BorealisDirectory -Path $repoRoot" in script
+    assert "__BOREALIS_ONBOARDING_TEMP_CLEANED__=1" in script
+    assert script.index("Clear-BorealisOnboardingTemp") < script.index(
+        "Write-BorealisOnboardingState -Status 'running' -ExitCode 1"
+    )
     assert script.index("Ensure-BorealisDirectory -Path $root") < script.index(
         "Write-BorealisOnboardingState -Status 'running' -ExitCode 1"
     )

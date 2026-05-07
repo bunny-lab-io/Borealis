@@ -310,7 +310,7 @@ const SELECT_MENU_PROPS = {
   },
 };
 
-const TARGET_AUTO_SIZE_COLUMNS = ["targetLabel", "statusLabel", "detail"];
+const TARGET_AUTO_SIZE_COLUMNS = ["targetLabel", "statusLabel"];
 const PROGRESSION_AUTO_SIZE_COLUMNS = ["statusLabel", "task", "output", "startedLabel", "elapsedLabel"];
 const TARGET_STATUS_FILTER_OPTIONS = [
   { key: "pending_approval", label: "Pending Approval" },
@@ -1147,16 +1147,15 @@ export default function CreateOnboardingJob() {
       {
         field: "statusLabel",
         headerName: "Status",
-        minWidth: 180,
+        minWidth: 145,
         filter: false,
         cellClass: "auto-col-tight",
         cellRenderer: (params) => <StatusPill status={params.data?.status} />,
       },
-      { field: "detail", headerName: "Detail", minWidth: 360, flex: 1, filter: "agTextColumnFilter", cellClass: "auto-col-tight" },
       {
         field: "actions",
         headerName: "Actions",
-        width: 170,
+        width: 130,
         cellClass: "auto-col-tight",
         cellRenderer: (params) => {
           const row = params.data;
@@ -1775,7 +1774,7 @@ export default function CreateOnboardingJob() {
                   <Box
                     sx={{
                       display: "grid",
-                      gridTemplateColumns: { xs: "1fr", xl: "minmax(0, 1fr) minmax(0, 1fr)" },
+                      gridTemplateColumns: { xs: "1fr", xl: "minmax(320px, 1fr) minmax(0, 2fr)" },
                       gap: 2,
                       flexGrow: 1,
                       minHeight: { xs: 940, xl: 0 },

@@ -15,6 +15,8 @@ def test_agent_ps1_stages_runtime_paths_into_agent_runtime() -> None:
     assert "session_runtime.py" in content
     assert "tray_state.py" in content
     assert "PreserveDirectories @('Agent', 'Temp')" in content
+    assert "$cleanArgs.Add('-ffdx')" in content
+    assert '$cleanArgs.Add(("{0}/**" -f $normalizedPreserve))' in content
 
 
 def test_agent_sh_stages_runtime_paths_into_agent_runtime() -> None:

@@ -620,11 +620,16 @@ function Sync-BorealisRepository {
 
     $cleanArgs = New-Object System.Collections.Generic.List[string]
     $cleanArgs.Add('clean')
-    $cleanArgs.Add('-fdx')
+    $cleanArgs.Add('-ffdx')
     foreach ($preserve in $PreserveDirectories) {
         if (-not [string]::IsNullOrWhiteSpace($preserve)) {
+            $normalizedPreserve = ($preserve.Trim() -replace '[\\/]+$', '')
             $cleanArgs.Add('-e')
-            $cleanArgs.Add($preserve)
+            $cleanArgs.Add($normalizedPreserve)
+            $cleanArgs.Add('-e')
+            $cleanArgs.Add(("{0}/" -f $normalizedPreserve))
+            $cleanArgs.Add('-e')
+            $cleanArgs.Add(("{0}/**" -f $normalizedPreserve))
         }
     }
     Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @($cleanArgs.ToArray())

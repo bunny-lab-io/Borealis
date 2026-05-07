@@ -355,6 +355,8 @@ def _onboarding_progress_task_from_output(*, stdout: Any = "", stderr: Any = "")
         return "Syncing Borealis Repository"
     if "downloading windows agent bootstrap" in combined:
         return "Downloading Agent Bootstrap"
+    if "__borealis_onboarding_temp_cleaned__" in combined:
+        return "Preparing Clean Onboarding Workspace"
     if "syncing borealis ref" in combined:
         return "Transferring Agent Installation Files"
     if "__borealis_onboarding_stale_process_killed__" in combined:
@@ -4538,6 +4540,18 @@ class JobScheduler:
                 "      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue",
                 "  } catch { }",
                 "}",
+                "function Clear-BorealisOnboardingTemp {",
+                "  try {",
+                "    if ([string]::IsNullOrWhiteSpace($root)) { return }",
+                "    Ensure-BorealisDirectory -Path $root",
+                "    Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue |",
+                "      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue",
+                "    Ensure-BorealisDirectory -Path $root",
+                "    Write-Output '__BOREALIS_ONBOARDING_TEMP_CLEANED__=1'",
+                "  } catch {",
+                "    Write-Warning ('Unable to clean Borealis onboarding temp folder: ' + $_.Exception.Message)",
+                "  }",
+                "}",
                 "function Stop-StaleBorealisOnboardingProcesses {",
                 "  try {",
                 "    $currentPid = [int]$PID",
@@ -4660,6 +4674,7 @@ class JobScheduler:
                 "    }",
                 "  }",
                 "  if (-not $skipDeploy) {",
+                "    Clear-BorealisOnboardingTemp",
                 "    Write-BorealisOnboardingState -Status 'running' -ExitCode 1",
                 "    Stop-BorealisPythonProcesses",
                 f"  $agentBootstrapPath = Join-Path $root { _powershell_single_quoted(f'Agent-{int(run_id)}.ps1') }",
