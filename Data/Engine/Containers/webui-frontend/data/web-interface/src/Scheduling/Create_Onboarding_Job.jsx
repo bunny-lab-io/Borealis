@@ -218,8 +218,10 @@ const GRID_PANEL_SX = {
   },
   "& .ag-center-cols-container .ag-cell.onboarding-progress-status-cell, & .ag-pinned-left-cols-container .ag-cell.onboarding-progress-status-cell, & .ag-pinned-right-cols-container .ag-cell.onboarding-progress-status-cell": {
     justifyContent: "center",
-    paddingLeft: "8px",
-    paddingRight: "8px",
+    paddingTop: 0,
+    paddingBottom: 0,
+    paddingLeft: "2px",
+    paddingRight: "2px",
   },
   "& .ag-center-cols-container .ag-cell.onboarding-progress-status-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell.onboarding-progress-status-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell.onboarding-progress-status-cell .ag-cell-wrapper": {
     justifyContent: "center",
@@ -347,9 +349,11 @@ const SELECT_MENU_PROPS = {
 
 const TARGET_AUTO_SIZE_COLUMNS = [];
 const PROGRESSION_AUTO_SIZE_COLUMNS = ["startedLabel", "elapsedLabel"];
+const AG_GRID_STANDARD_ROW_HEIGHT = 44;
+const AG_GRID_STANDARD_HEADER_HEIGHT = 44;
 const STATUS_ICON_BOX_SIZE = 40;
 const STATUS_ICON_SIZE = 31;
-const STATUS_COLUMN_SIZE = 58;
+const STATUS_COLUMN_SIZE = AG_GRID_STANDARD_ROW_HEIGHT;
 const TARGET_STATUS_FILTER_OPTIONS = [
   { key: "pending_approval", label: "Pending Approval" },
   { key: "skipped", label: "Skipped" },
@@ -2184,8 +2188,8 @@ export default function CreateOnboardingJob() {
                           columnDefs={targetGridColumnDefs}
                           defaultColDef={targetGridDefaultColDef}
                           suppressCellFocus
-                          headerHeight={44}
-                          rowHeight={58}
+                          headerHeight={AG_GRID_STANDARD_HEADER_HEIGHT}
+                          rowHeight={AG_GRID_STANDARD_ROW_HEIGHT}
                           pagination
                           paginationPageSize={100}
                           paginationPageSizeSelector={[20, 50, 100]}
@@ -2224,8 +2228,8 @@ export default function CreateOnboardingJob() {
                           columnDefs={progressionGridColumnDefs}
                           defaultColDef={progressionGridDefaultColDef}
                           suppressCellFocus
-                          headerHeight={44}
-                          rowHeight={58}
+                          headerHeight={AG_GRID_STANDARD_HEADER_HEIGHT}
+                          rowHeight={AG_GRID_STANDARD_ROW_HEIGHT}
                           overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No progression recorded.</span>"
                           getRowId={(params) => String(params.data?.id || params.rowIndex)}
                           onGridReady={handleProgressionGridReady}
