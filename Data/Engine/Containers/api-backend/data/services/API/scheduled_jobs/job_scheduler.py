@@ -341,9 +341,20 @@ def _onboarding_progress_status_is_active(status: Any) -> bool:
 
 
 def _onboarding_progress_task_from_output(*, stdout: Any = "", stderr: Any = "") -> str:
-    combined = f"{stdout or ''}\n{stderr or ''}".lower()
-    if not combined.strip():
+    text = f"{stdout or ''}\n{stderr or ''}"
+    if not text.strip():
         return ""
+    marker_matches = re.findall(r"__BOREALIS_AGENT_STEP_(?:STARTED|COMPLETED|FAILED)__=([^\r\n]+)", text, re.IGNORECASE)
+    if marker_matches:
+        task = _onboarding_agent_step_task_name(marker_matches[-1])
+        if task:
+            return task
+    dependency_matches = re.findall(r"Dependency:\s*([^\r\n]+)", text, re.IGNORECASE)
+    if dependency_matches:
+        task = _onboarding_agent_step_task_name(f"Dependency: {dependency_matches[-1]}")
+        if task:
+            return task
+    combined = text.lower()
     if "__borealis_windows_onboarding_exit_code__=0" in combined or "agent installed" in combined:
         return "Awaiting Approval"
     if "dependency: python" in combined:
@@ -369,6 +380,23 @@ def _onboarding_progress_task_from_output(*, stdout: Any = "", stderr: Any = "")
     return ""
 
 
+def _onboarding_agent_step_task_name(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+completed$", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"\s+started$", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"\s+failed:.*$", "", text, flags=re.IGNORECASE).strip()
+    if text.lower().startswith("dependency:"):
+        dependency = text.split(":", 1)[1].strip(" .")
+        if not dependency:
+            return ""
+        if dependency.lower().endswith("dependency"):
+            return f"Installing {dependency}"
+        return f"Installing {dependency} Dependency"
+    return text
+
+
 def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any = "", stderr: Any = "") -> str:
     normalized_status = str(status or "pending").strip().lower()
     if normalized_status == ONBOARDING_STATUS_WAITING_APPROVAL:
@@ -384,6 +412,10 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
 
     detail_text = str(detail or "").strip()
     detail_lower = detail_text.lower()
+    if detail_lower.startswith("dependency:"):
+        task = _onboarding_agent_step_task_name(detail_text)
+        if task:
+            return task
     if "connecting to windows smb" in detail_lower or "connecting to ssh" in detail_lower:
         return "Establishing Connection to Remote Device"
     if "staging borealis agent service bootstrapper" in detail_lower:
@@ -4543,7 +4575,11 @@ class JobScheduler:
 
     def _read_windows_smb_file(self, smb: Any, path: str, *, share: str = "ADMIN$") -> str:
         buffer = io.BytesIO()
-        smb.getFile(str(share or "ADMIN$"), path, buffer.write)
+        share_name = str(share or "ADMIN$")
+        try:
+            smb.getFile(share_name, path, buffer.write, shareAccessMode=0x7)
+        except TypeError:
+            smb.getFile(share_name, path, buffer.write)
         return buffer.getvalue().decode("utf-8", errors="replace")
 
     def _windows_agent_service_bootstrapper_path(self) -> Optional[Path]:

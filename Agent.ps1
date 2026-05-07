@@ -1010,6 +1010,20 @@ function Write-BorealisOnboardingProgressState {
     } catch {}
 }
 
+function Write-BorealisOnboardingProgressMarker {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$State,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Task
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Task)) { return }
+    $markerState = ($State.Trim().ToUpperInvariant() -replace '[^A-Z0-9_]', '_')
+    Write-Host ("__BOREALIS_AGENT_STEP_{0}__={1}" -f $markerState, $Task.Trim())
+}
+
 $script:Utf8CodePageChanged = $false
 
 function Ensure-SystemUtf8CodePage {
@@ -1158,18 +1172,21 @@ function Run-Step {
         [scriptblock]$Script
     )
     Write-BorealisOnboardingProgressState -Detail $Message
+    Write-BorealisOnboardingProgressMarker -State 'started' -Task $Message
     Write-ProgressStep -Message $Message -Status "$($symbols.Running)"
     try {
         & $Script
         if ($LASTEXITCODE -eq 0 -or $?) {
             Write-Host "`r$($symbols.Success) $Message                        "
             Write-BorealisOnboardingProgressState -Detail ("{0} completed" -f $Message)
+            Write-BorealisOnboardingProgressMarker -State 'completed' -Task $Message
         } else {
             throw "Non-zero exit code"
         }
     } catch {
         Write-Host "`r$($symbols.Fail) $Message - Failed: $_                        " -ForegroundColor Red
         Write-BorealisOnboardingProgressState -Detail ("{0} failed: {1}" -f $Message, $_)
+        Write-BorealisOnboardingProgressMarker -State 'failed' -Task $Message
         throw
     }
 }
@@ -1264,6 +1281,7 @@ function Invoke-BorealisDownload {
                         '--retry', '3',
                         '--retry-all-errors',
                         '--connect-timeout', '20',
+                        '--max-time', '300',
                         '--output', $DestinationPath,
                         $Url
                     )
@@ -1303,6 +1321,9 @@ function Invoke-BorealisDownload {
                     $iwrCommand = Get-Command Invoke-WebRequest -ErrorAction Stop
                     if ($iwrCommand.Parameters.ContainsKey('UseBasicParsing')) {
                         $iwrParams['UseBasicParsing'] = $true
+                    }
+                    if ($iwrCommand.Parameters.ContainsKey('TimeoutSec')) {
+                        $iwrParams['TimeoutSec'] = 300
                     }
                     $oldProgressPreference = $ProgressPreference
                     $ProgressPreference = 'SilentlyContinue'
@@ -1599,6 +1620,61 @@ function Get-BorealisPythonBootstrapLayoutSummary {
     }
 }
 
+function Stop-BorealisProcessTree {
+    param([int]$ProcessId)
+
+    if ($ProcessId -le 0) { return }
+    try {
+        $taskkill = Get-Command taskkill.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1
+        if ($taskkill) {
+            & $taskkill /PID $ProcessId /T /F | Out-Null
+            return
+        }
+    } catch {}
+    try { Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+}
+
+function Invoke-BorealisTimedProcess {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$ArgumentList,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Description,
+
+        [int]$TimeoutSeconds = 300,
+
+        [string]$LogName = 'Install.log',
+
+        [string]$LogPrefix = '[Process]'
+    )
+
+    if ($TimeoutSeconds -le 0) { $TimeoutSeconds = 300 }
+    $proc = $null
+    try {
+        $proc = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -PassThru -WindowStyle Hidden -ErrorAction Stop
+        $timeoutMs = [Math]::Max(1000, [int]($TimeoutSeconds * 1000))
+        if (-not $proc.WaitForExit($timeoutMs)) {
+            Stop-BorealisProcessTree -ProcessId ([int]$proc.Id)
+            $message = ("{0} {1} timed out after {2}s." -f $LogPrefix, $Description, $TimeoutSeconds)
+            Write-AgentLog -FileName $LogName -Message $message
+            Write-Host $message -ForegroundColor Yellow
+            return 124
+        }
+        $exitCode = 1
+        try { $exitCode = [int]$proc.ExitCode } catch { $exitCode = 1 }
+        Write-AgentLog -FileName $LogName -Message ("{0} {1} exit code: {2}" -f $LogPrefix, $Description, $exitCode)
+        return $exitCode
+    } catch {
+        $message = ("{0} {1} failed to start or wait: {2}" -f $LogPrefix, $Description, $_.Exception.Message)
+        Write-AgentLog -FileName $LogName -Message $message
+        throw $message
+    }
+}
+
 function Invoke-BorealisInstallerProcess {
     param(
         [Parameter(Mandatory = $true)]
@@ -1611,13 +1687,19 @@ function Invoke-BorealisInstallerProcess {
         [string]$Description,
 
         [int]$MaxAttempts = 8,
-        [int]$DelaySeconds = 15
+        [int]$DelaySeconds = 15,
+        [int]$TimeoutSeconds = 300
     )
 
     $lastExitCode = 1
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-        $proc = Start-Process -Wait -NoNewWindow -PassThru -FilePath $FilePath -ArgumentList $ArgumentList
-        try { $lastExitCode = [int]$proc.ExitCode } catch { $lastExitCode = 1 }
+        $lastExitCode = Invoke-BorealisTimedProcess `
+            -FilePath $FilePath `
+            -ArgumentList $ArgumentList `
+            -Description $Description `
+            -TimeoutSeconds $TimeoutSeconds `
+            -LogName 'Install.log' `
+            -LogPrefix '[Installer]'
         if ($lastExitCode -ne 1618) {
             return $lastExitCode
         }
@@ -1996,8 +2078,13 @@ function Install_Agent_Dependencies {
         Write-AgentLog -FileName $LogName -Message ("$logPrefix Installing WireGuard from {0}" -f $InstallerPath)
         $args = "/i `"$InstallerPath`" /qn /norestart"
         try {
-            $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList $args -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
-            $exitCode = $proc.ExitCode
+            $exitCode = Invoke-BorealisTimedProcess `
+                -FilePath 'msiexec.exe' `
+                -ArgumentList @($args) `
+                -Description 'WireGuard MSI install' `
+                -TimeoutSeconds 300 `
+                -LogName $LogName `
+                -LogPrefix $logPrefix
             Write-AgentLog -FileName $LogName -Message ("$logPrefix msiexec exit code: {0}" -f $exitCode)
             if ($exitCode -eq 0) { return }
 
@@ -2007,8 +2094,13 @@ function Install_Agent_Dependencies {
             if ($BootstrapperPath -and (Test-Path $BootstrapperPath -PathType Leaf)) {
                 Write-AgentLog -FileName $LogName -Message ("$logPrefix Falling back to bootstrapper at {0}" -f $BootstrapperPath)
                 try {
-                    $bp = Start-Process -FilePath $BootstrapperPath -ArgumentList '/install','/quiet' -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
-                    $bpExit = $bp.ExitCode
+                    $bpExit = Invoke-BorealisTimedProcess `
+                        -FilePath $BootstrapperPath `
+                        -ArgumentList @('/install', '/quiet') `
+                        -Description 'WireGuard bootstrapper install fallback' `
+                        -TimeoutSeconds 300 `
+                        -LogName $LogName `
+                        -LogPrefix $logPrefix
                     Write-AgentLog -FileName $LogName -Message ("$logPrefix Bootstrapper exit code: {0}" -f $bpExit)
                     if ($bpExit -eq 0) { return }
                     throw "$logPrefix Bootstrapper returned exit code $bpExit"
@@ -2618,8 +2710,13 @@ ListenPort = 0
         # Try installing/refreshing the manager service (also stages the driver)
         try {
             Write-AgentLog -FileName $LogName -Message "$logPrefix Invoking wireguard.exe /installmanagerservice to seed driver."
-            & $WireGuardExe /installmanagerservice | Out-Null
-            $wgExit = $LASTEXITCODE
+            $wgExit = Invoke-BorealisTimedProcess `
+                -FilePath $WireGuardExe `
+                -ArgumentList @('/installmanagerservice') `
+                -Description 'WireGuard manager service install' `
+                -TimeoutSeconds 60 `
+                -LogName $LogName `
+                -LogPrefix $logPrefix
             Write-AgentLog -FileName $LogName -Message ("$logPrefix /installmanagerservice exit code: {0}" -f $wgExit)
         } catch {
             Write-AgentLog -FileName $LogName -Message ("$logPrefix /installmanagerservice failed: {0}" -f $_.Exception.Message)
@@ -2653,7 +2750,16 @@ ListenPort = 0
             if (Test-Path $infPath -PathType Leaf) {
                 try {
                     Write-AgentLog -FileName $LogName -Message ("$logPrefix Installing WireGuard driver via pnputil: {0}" -f $infPath)
-                    pnputil.exe /add-driver "`"$infPath`"" /install | Out-Null
+                    $pnpExit = Invoke-BorealisTimedProcess `
+                        -FilePath 'pnputil.exe' `
+                        -ArgumentList @('/add-driver', "`"$infPath`"", '/install') `
+                        -Description 'WireGuard driver pnputil install' `
+                        -TimeoutSeconds 60 `
+                        -LogName $LogName `
+                        -LogPrefix $logPrefix
+                    if ($pnpExit -ne 0) {
+                        Write-AgentLog -FileName $LogName -Message ("$logPrefix pnputil driver install returned exit code {0}." -f $pnpExit)
+                    }
                 } catch {
                     Write-AgentLog -FileName $LogName -Message ("$logPrefix pnputil driver install failed: {0}" -f $_.Exception.Message)
                 }
@@ -2769,9 +2875,15 @@ ListenPort = 0
                     "/qn",
                     "TARGETDIR=`"$msiExtractRoot`""
                 )
-                $msiProc = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Wait -NoNewWindow -PassThru
-                if ($msiProc.ExitCode -ne 0) {
-                    Write-Host "UltraVNC MSI extraction failed with code $($msiProc.ExitCode). Trying installer fallback." -ForegroundColor Yellow
+                $msiExit = Invoke-BorealisTimedProcess `
+                    -FilePath "msiexec.exe" `
+                    -ArgumentList $msiArgs `
+                    -Description 'UltraVNC MSI extraction' `
+                    -TimeoutSeconds 180 `
+                    -LogName 'Install.log' `
+                    -LogPrefix '[UltraVNC]'
+                if ($msiExit -ne 0) {
+                    Write-Host "UltraVNC MSI extraction failed with code $msiExit. Trying installer fallback." -ForegroundColor Yellow
                 }
             } catch {
                 Write-Host "UltraVNC MSI extraction failed. Trying installer fallback." -ForegroundColor Yellow
@@ -2952,12 +3064,17 @@ ListenPort = 0
             } else {
                 $logPrefix = '[WireGuard]'
                 Write-AgentLog -FileName $logName -Message ("$logPrefix Installing via bootstrapper at {0}" -f $installerCandidate)
-                $bootstrapArgs = '/install /quiet'
                 try {
-                    $proc = Start-Process -FilePath $installerCandidate -ArgumentList $bootstrapArgs -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
-                    Write-AgentLog -FileName $logName -Message ("$logPrefix Bootstrapper exit code: {0}" -f $proc.ExitCode)
-                    if ($proc.ExitCode -ne 0) {
-                        throw "WireGuard bootstrapper returned exit code $($proc.ExitCode)"
+                    $bootstrapExit = Invoke-BorealisTimedProcess `
+                        -FilePath $installerCandidate `
+                        -ArgumentList @('/install', '/quiet') `
+                        -Description 'WireGuard bootstrapper install' `
+                        -TimeoutSeconds 300 `
+                        -LogName $logName `
+                        -LogPrefix $logPrefix
+                    Write-AgentLog -FileName $logName -Message ("$logPrefix Bootstrapper exit code: {0}" -f $bootstrapExit)
+                    if ($bootstrapExit -ne 0) {
+                        throw "WireGuard bootstrapper returned exit code $bootstrapExit"
                     }
                 } catch {
                     $err = $_.Exception.Message
