@@ -1653,6 +1653,7 @@ $wireGuardBootstrapperName = 'wireguard-installer.exe'
 $wireGuardBootstrapperPath = Join-Path $wireGuardInstallerDir $wireGuardBootstrapperName
 $wireGuardMsiVersion       = '0.5.3'
 $wireGuardTunnelLegacyName   = 'BorealisWireGuardTunnel'
+$wireGuardTunnelEngineLegacyName = 'borealis-wg'
 $wireGuardTunnelNameInternal = 'Borealis'
 $wireGuardTunnelNameFriendly = 'Borealis'
 $wireGuardTunnelBootstrapAddress = '169.254.255.254/32'
@@ -2613,6 +2614,9 @@ function Install_Agent_Dependencies {
         $serviceName = 'WireGuardTunnel$' + $internalName
 
         Write-AgentLog -FileName $LogName -Message ("$logPrefix Ensuring tunnel adapter: {0}" -f $friendlyName)
+        if ($wireGuardTunnelEngineLegacyName -and $wireGuardTunnelEngineLegacyName -ne $internalName) {
+            Remove-WireGuardTunnelService -TunnelName $wireGuardTunnelEngineLegacyName -WireGuardExe $WireGuardExe -LogName $LogName
+        }
         $existing = Get-WireGuardAdapterByName -AdapterName $friendlyName
         if ($existing) {
             Write-AgentLog -FileName $LogName -Message ("$logPrefix Adapter already present: {0}" -f $friendlyName)

@@ -189,9 +189,9 @@ Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Boreal
 13. Re-render `compose.env` with resolved image tags while keeping service runtime env files free of image tag variables.
 14. Compare compose/env/image hashes against `Engine/Deploy/deploy-manifest.json`.
 15. Skip Compose if nothing changed and all containers are running.
-15. Run scoped Compose `up -d --no-deps <service...>` when only service images changed or when switching prod/dev WebUI mode.
-16. Run full Compose `up -d` when compose config, shared runtime env, or container state requires it.
-17. Write `Engine/Deploy/deploy-manifest.json`.
+16. Run scoped Compose `up -d --no-deps --no-build <service...>` when only service images changed or when switching prod/dev WebUI mode.
+17. Run full Compose `up -d --no-build` when compose config, shared runtime env, or container state requires it.
+18. Write `Engine/Deploy/deploy-manifest.json`.
 
 Build order follows `Engine.sh` service order:
 ```text
@@ -227,7 +227,7 @@ Build cache:
 
 Deploy output:
 - Terminal output uses compact service status lines such as `<timestamp> <service>: [Already Up-to-Date]` or `<timestamp> <service>: [(Re)Building]`.
-- Compose uses `Applying Stack` when env/Compose metadata changed without image rebuilds.
+- Compose uses `Reconciling <service...>` for scoped service updates and `Reconciling Stack` only when shared Compose metadata must be applied.
 - Color is enabled only for interactive terminals. Set `NO_COLOR=1` to disable it.
 - Successful deploys print `WebUI Accessible @ <public-base-url>`.
 - Full Docker build detail remains in `Engine/Deploy/build.log`.
@@ -562,8 +562,8 @@ bash Engine.sh deploy prod
 ## Operational Notes
 - `Engine.sh deploy` is idempotent for unchanged inputs and skips Compose when deploy manifest, env, image hashes, and running containers already match.
 - Unchanged image hashes skip Docker builds.
-- Service image changes can use scoped Compose `up -d --no-deps <service...>` when compose config and non-image env settings are unchanged.
-- Service-specific `rebuild` uses `--no-deps`, so dependent services are not intentionally restarted.
+- Service image changes use scoped Compose `up -d --no-deps --no-build <service...>` when compose config and non-image env settings are unchanged.
+- Service-specific `rebuild` uses `--no-deps --no-build`, so dependent services are not intentionally restarted and Compose does not rebuild images Borealis already built.
 - `restart` does not rebuild images.
 - `reload` is currently a Traefik restart.
 - `reconcile` is currently WireGuard-only.

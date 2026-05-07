@@ -1472,12 +1472,22 @@ export default function CreateOnboardingJob() {
           const row = params.data || {};
           return (
             <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, gap: 0.75 }}>
-              <Typography component="span" variant="body2" sx={{ color: MAGIC_UI.textBright, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <Typography
+                component="span"
+                variant="body2"
+                sx={{
+                  color: "#58a6ff",
+                  fontWeight: 500,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
                 {row.targetLabel || ""}
               </Typography>
               {row.discoveredHostname ? (
                 <Typography component="span" variant="body2" sx={{ color: "rgba(148, 163, 184, 0.78)", flexShrink: 0 }}>
-                  [{row.discoveredHostname}]
+                  ({row.discoveredHostname})
                 </Typography>
               ) : null}
             </Box>
@@ -1536,9 +1546,9 @@ export default function CreateOnboardingJob() {
       {
         field: "output",
         headerName: "StdOut / StdErr",
-        width: 152,
-        minWidth: 144,
-        maxWidth: 162,
+        width: 198,
+        minWidth: 188,
+        maxWidth: 212,
         filter: false,
         cellClass: "auto-col-tight",
         cellRenderer: (params) => {

@@ -60,7 +60,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Docker Buildx cache is stored under `Engine/Deploy/cache/buildkit/<service>/` when usable; plain Docker build remains the fallback.
 - Deploy output uses compact colored service status lines in interactive terminals; set `NO_COLOR=1` to force plain text.
 - No-op redeploys reuse existing image tags and skip Compose when deploy manifest, runtime env, image hashes, and container state already match.
-- Image tag changes and WebUI mode changes are kept out of the shared service `env_file`; a WebUI-only image change or prod/dev mode flip should recreate only `webui-frontend` when the rest of the stack is healthy.
+- Image tag changes and WebUI mode changes are kept out of shared service state hashes; a WebUI-only image change or prod/dev mode flip should run scoped Compose reconciliation for `webui-frontend` only when the rest of the stack is healthy.
+- Scoped image redeploys use `docker compose up -d --no-deps --no-build <service...>` after Borealis has already built changed images, so unrelated services are not intentionally recreated.
 - Compose health checks gate startup: PostgreSQL `pg_isready`, WireGuard control socket presence, guacd TCP `4822`, WebUI loopback HTTP, API `/health`, and Traefik ping on `127.0.0.1:8082`.
 
 ### Container service boundaries

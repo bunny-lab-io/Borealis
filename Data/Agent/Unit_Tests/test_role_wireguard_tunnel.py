@@ -268,6 +268,24 @@ def _build_windows_client() -> WireGuardClient:
     return client
 
 
+def test_windows_client_removes_stale_engine_listener_service(monkeypatch) -> None:
+    client = _build_windows_client()
+    calls: list[list[str]] = []
+    exists_checks: list[str] = []
+
+    monkeypatch.setattr(wireguard_role.os, "name", "nt")
+    client._named_service_exists = lambda tunnel_name: exists_checks.append(tunnel_name) or len(exists_checks) == 1
+    client._run = lambda args: calls.append(list(args)) or (0, "", "")
+
+    client._remove_stale_engine_listener_services()
+
+    assert exists_checks == ["borealis-wg", "borealis-wg"]
+    assert calls == [
+        ["sc.exe", "stop", "WireGuardTunnel$borealis-wg"],
+        ["wireguard.exe", "/uninstalltunnelservice", "borealis-wg"],
+    ]
+
+
 def test_windows_client_reuses_same_session_and_primes_engine_path(monkeypatch) -> None:
     client = _build_windows_client()
     client.session = _build_session()

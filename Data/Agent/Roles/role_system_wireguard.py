@@ -62,6 +62,7 @@ ROLE_CONTEXTS = ["system"]
 TUNNEL_NAME = "Borealis"
 TUNNEL_DISPLAY_NAME = "Borealis"
 SERVICE_DISPLAY_NAME = "Borealis - WireGuard - Agent"
+STALE_ENGINE_TUNNEL_NAMES = ("borealis-wg",)
 TUNNEL_IDLE_ADDRESS = "169.254.255.254/32"
 FIREWALL_RULE_NAME = "Borealis - WireGuard - Agent"
 DEFAULT_VNC_PORT = 5900
@@ -311,6 +312,7 @@ class WireGuardClient:
         self._wg_exe = self._resolve_wireguard_exe()
         self._last_install_already_present = False
         try:
+            self._remove_stale_engine_listener_services()
             self._ensure_idle_service()
         except Exception:
             pass
@@ -326,16 +328,19 @@ class WireGuardClient:
         return "wireguard.exe"
 
     def _service_id(self) -> str:
-        return f"WireGuardTunnel${self.service_name}"
+        return self._service_id_for(self.service_name)
 
-    def _service_reg_path(self) -> str:
-        return f"SYSTEM\\CurrentControlSet\\Services\\{self._service_id()}"
+    def _service_id_for(self, tunnel_name: str) -> str:
+        return f"WireGuardTunnel${tunnel_name}"
 
-    def _service_reg_exists(self) -> bool:
+    def _service_reg_path(self, tunnel_name: Optional[str] = None) -> str:
+        return f"SYSTEM\\CurrentControlSet\\Services\\{self._service_id_for(tunnel_name or self.service_name)}"
+
+    def _service_reg_exists(self, tunnel_name: Optional[str] = None) -> bool:
         if winreg is None:
             return False
         try:
-            winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, self._service_reg_path())
+            winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, self._service_reg_path(tunnel_name))
             return True
         except FileNotFoundError:
             return False
@@ -546,6 +551,27 @@ class WireGuardClient:
         if code == 0:
             return True
         return self._service_reg_exists()
+
+    def _named_service_exists(self, tunnel_name: str) -> bool:
+        code, _, _ = self._run(["sc.exe", "query", self._service_id_for(tunnel_name)])
+        if code == 0:
+            return True
+        return self._service_reg_exists(tunnel_name)
+
+    def _remove_stale_engine_listener_services(self) -> None:
+        if os.name != "nt":
+            return
+        for tunnel_name in STALE_ENGINE_TUNNEL_NAMES:
+            if not tunnel_name or tunnel_name.lower() == self.service_name.lower():
+                continue
+            if not self._named_service_exists(tunnel_name):
+                continue
+            service_id = self._service_id_for(tunnel_name)
+            _write_log(f"Removing stale Windows Engine WireGuard listener service {service_id}.")
+            self._run(["sc.exe", "stop", service_id])
+            self._run([self._wg_exe, "/uninstalltunnelservice", tunnel_name])
+            if self._named_service_exists(tunnel_name):
+                self._run(["sc.exe", "delete", service_id])
 
     def _install_service(self, config_path: Optional[Path] = None) -> bool:
         target_path = config_path or self.conf_path
