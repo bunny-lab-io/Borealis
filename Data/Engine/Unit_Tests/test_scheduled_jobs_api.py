@@ -323,7 +323,7 @@ def test_windows_onboarding_script_uses_stable_repo_and_remote_lock(engine_harne
         0,
         script.index("Invoke-WebRequest"),
     )
-    assert download_guard_index > script.index("$zipPath = Join-Path $root")
+    assert download_guard_index > script.index("$agentBootstrapPath = Join-Path $root")
     assert "Ensure-BorealisDirectory -Path $agentSettingsRoot" in script
     assert "__BOREALIS_ONBOARDING_ALREADY_PENDING__=1" in script
     assert "__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1" in script
@@ -332,11 +332,12 @@ def test_windows_onboarding_script_uses_stable_repo_and_remote_lock(engine_harne
     assert "taskkill.exe /PID $procId /F" in script
     assert "Invoke-CimMethod -InputObject $_ -MethodName Terminate" in script
     assert "source-*" in script
-    assert "Where-Object { $_.Name -notin @('Agent','Temp','Dependencies') }" in script
     assert "__BOREALIS_ONBOARDING_STALE_RUNNING_STATE_IGNORED__=1" in script
     assert "$script:staleOnboardingProcessCount += 1" in script
-    assert "Extracting Agent Installation Files." in script
-    assert "Copying Files to C:\\Borealis." in script
+    assert "Downloading Windows Agent bootstrap" in script
+    assert "Agent.ps1" in script
+    assert "--repo-branch" in script
+    assert "--reset-enrollment" in script
     assert "$status -eq 'pending_approval'" in script
     assert "$status -eq 'running'" in script
     assert "@('running','pending_approval') -contains $status" not in script

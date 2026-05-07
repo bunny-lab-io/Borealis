@@ -349,12 +349,12 @@ def _onboarding_progress_task_from_output(*, stdout: Any = "", stderr: Any = "")
         return "Ensuring Agent Dependencies Exist"
     if "deploying borealis agent" in combined:
         return "Deploying Borealis Agent Runtime"
-    if "launching c:\\borealis\\borealis.ps1" in combined:
+    if "launching" in combined and "agent.ps1" in combined:
         return "Running Agent Bootstrap"
-    if "copying files to c:\\borealis" in combined:
-        return "Copying Files to C:\\Borealis"
-    if "extracting agent installation files" in combined:
-        return "Extracting Agent Installation Files"
+    if "syncing borealis repository into" in combined:
+        return "Syncing Borealis Repository"
+    if "downloading windows agent bootstrap" in combined:
+        return "Downloading Agent Bootstrap"
     if "syncing borealis ref" in combined:
         return "Transferring Agent Installation Files"
     if "__borealis_onboarding_stale_process_killed__" in combined:
@@ -4465,7 +4465,7 @@ class JobScheduler:
         target: str,
     ) -> str:
         branch_ref = str(branch or "main").strip() or "main"
-        zip_url = f"https://codeload.github.com/bunny-lab-io/Borealis/zip/refs/heads/{url_quote(branch_ref, safe='/._-')}"
+        agent_url = f"https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/{url_quote(branch_ref, safe='/._-')}/Agent.ps1"
         return "\n".join(
             [
                 "$ErrorActionPreference = 'Stop'",
@@ -4662,48 +4662,12 @@ class JobScheduler:
                 "  if (-not $skipDeploy) {",
                 "    Write-BorealisOnboardingState -Status 'running' -ExitCode 1",
                 "    Stop-BorealisPythonProcesses",
-                f"  $zipPath = Join-Path $root { _powershell_single_quoted(f'Borealis-{int(run_id)}.zip') }",
-                f"  $extractPath = Join-Path $root { _powershell_single_quoted(f'source-{int(run_id)}') }",
+                f"  $agentBootstrapPath = Join-Path $root { _powershell_single_quoted(f'Agent-{int(run_id)}.ps1') }",
                 "  Ensure-BorealisDirectory -Path $root",
-                "  if (Test-Path $zipPath) { Remove-Item -Force $zipPath }",
-                "  if (Test-Path $extractPath) { Remove-Item -Recurse -Force $extractPath }",
+                "  if (Test-Path $agentBootstrapPath) { Remove-Item -Force $agentBootstrapPath }",
                 "  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12",
-                f"  Write-Output ('Syncing Borealis ref {branch_ref} from {zip_url}.')",
-                f"  Invoke-WebRequest -UseBasicParsing -Uri { _powershell_single_quoted(zip_url) } -OutFile $zipPath",
-                "  Write-Output 'Extracting Agent Installation Files.'",
-                "  Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force",
-                "  $sourceRoot = Get-ChildItem -Path $extractPath -Directory | Select-Object -First 1",
-                "  if (-not $sourceRoot) { throw 'Borealis branch archive did not contain a source folder.' }",
-                "  Write-Output 'Copying Files to C:\\Borealis.'",
-                "  Get-ChildItem -Path $repoRoot -Force |",
-                "    Where-Object { $_.Name -notin @('Agent','Temp','Dependencies') } |",
-                "    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue",
-                "  $sourceDependencies = Join-Path $sourceRoot.FullName 'Dependencies'",
-                "  $destinationDependencies = Join-Path $repoRoot 'Dependencies'",
-                "  if (-not (Test-Path $destinationDependencies)) { New-Item -ItemType Directory -Force -Path $destinationDependencies | Out-Null }",
-                "  Get-ChildItem -Path $sourceRoot.FullName -Force | ForEach-Object {",
-                "    $sourceItem = $_",
-                "    if ($sourceItem.Name -eq 'Dependencies') {",
-                "      Get-ChildItem -Path $sourceDependencies -Force |",
-                "        Where-Object { $_.Name -ne 'VPN_Tunnel_Adapter' } |",
-                "        ForEach-Object {",
-                "          $depItem = $_",
-                "          $depDestination = Join-Path $destinationDependencies $depItem.Name",
-                "          try {",
-                "            if ($depItem.PSIsContainer) { Copy-Item -Path $depItem.FullName -Destination $depDestination -Recurse -Force -ErrorAction Stop }",
-                "            else { Copy-Item -Path $depItem.FullName -Destination $destinationDependencies -Force -ErrorAction Stop }",
-                "          } catch {",
-                "            Write-Warning ('Unable to refresh dependency item ' + $depItem.FullName + ': ' + $_.Exception.Message)",
-                "          }",
-                "        }",
-                "    } else {",
-                "      $destination = Join-Path $repoRoot $sourceItem.Name",
-                "      if ($sourceItem.PSIsContainer) { Copy-Item -Path $sourceItem.FullName -Destination $destination -Recurse -Force }",
-                "      else { Copy-Item -Path $sourceItem.FullName -Destination $repoRoot -Force }",
-                "    }",
-                "  }",
-                "  $deployScript = Join-Path $repoRoot 'Borealis.ps1'",
-                "  if (-not (Test-Path $deployScript -PathType Leaf)) { throw 'Borealis.ps1 missing from synchronized repository.' }",
+                f"  Write-Output ('Downloading Windows Agent bootstrap from {agent_url}.')",
+                f"  Invoke-WebRequest -UseBasicParsing -Uri { _powershell_single_quoted(agent_url) } -OutFile $agentBootstrapPath",
                 f"  $env:BOREALIS_ONBOARDING_JOB_ID = { _powershell_single_quoted(str(int(job_id))) }",
                 f"  $env:BOREALIS_ONBOARDING_RUN_ID = { _powershell_single_quoted(str(int(run_id))) }",
                 f"  $env:BOREALIS_ONBOARDING_TARGET = { _powershell_single_quoted(str(target or '').strip()) }",
@@ -4717,8 +4681,8 @@ class JobScheduler:
                 f"    target = { _powershell_single_quoted(str(target or '').strip()) }",
                 "  }",
                 "  $onboardingContext | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $agentSettingsRoot 'onboarding_context.json') -Encoding UTF8",
-                "  Write-Output ('Launching ' + $deployScript + ' -Agent -ServerUrl [redacted] -EnrollmentCode [redacted].')",
-                f"  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $deployScript -Agent -ServerUrl { _powershell_single_quoted(server_url) } -EnrollmentCode { _powershell_single_quoted(enrollment_code) }",
+                "  Write-Output ('Launching ' + $agentBootstrapPath + ' --agent --repo-branch [redacted] --serverurl [redacted] --enrollmentcode [redacted].')",
+                f"  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $agentBootstrapPath --install-dir $repoRoot --repo-branch { _powershell_single_quoted(branch_ref) } --agent --serverurl { _powershell_single_quoted(server_url) } --enrollmentcode { _powershell_single_quoted(enrollment_code) } --reset-enrollment",
                 "  if ($null -ne $LASTEXITCODE) { $exitCode = [int]$LASTEXITCODE } else { $exitCode = 0 }",
                 "    if ($exitCode -eq 0) {",
                 "      Write-BorealisOnboardingState -Status 'pending_approval' -ExitCode 0",

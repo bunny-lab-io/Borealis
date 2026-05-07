@@ -23,7 +23,7 @@ COPY Data/Engine/Containers/api-backend/data/engine-requirements.txt /tmp/boreal
 RUN python -m pip install --upgrade pip \
     && python -m pip install -r /tmp/borealis-engine-requirements.txt
 
-COPY Borealis.ps1 /opt/Borealis/Borealis.ps1
+COPY Agent.ps1 /opt/Borealis/Agent.ps1
 COPY Data/Engine/Containers/api-backend/data /opt/Borealis/Data/Engine
 COPY Data/Agent /opt/Borealis/Data/Agent
 COPY Data/Engine/Containers/site-worker/entrypoint.sh /usr/local/bin/borealis-site-worker

@@ -14,7 +14,7 @@
         "Data/Agent/**/*.py",
         "Data/Agent/agent-requirements.txt",
         "Data/Engine/Containers/api-backend/**",
-        "Borealis.ps1"
+        "Agent.ps1"
       ]
     },
     "job-scheduler": {
@@ -32,7 +32,7 @@
         "Data/Agent/agent-requirements.txt",
         "Data/Engine/Containers/compose.yaml",
         "Data/Engine/Containers/job-scheduler/**",
-        "Borealis.ps1"
+        "Agent.ps1"
       ]
     },
     "site-worker": {
@@ -49,7 +49,7 @@
         "Data/Agent/**/*.py",
         "Data/Agent/agent-requirements.txt",
         "Data/Engine/Containers/site-worker/**",
-        "Borealis.ps1"
+        "Agent.ps1"
       ]
     },
     "webui-frontend": {

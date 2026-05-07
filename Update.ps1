@@ -793,9 +793,9 @@ function Invoke-BorealisAgentRuntimeRefresh {
     )
 
     if (-not $ProjectRoot) { $ProjectRoot = $scriptDir }
-    $scriptPath = Join-Path $ProjectRoot 'Borealis.ps1'
+    $scriptPath = Join-Path $ProjectRoot 'Agent.ps1'
     if (-not (Test-Path $scriptPath -PathType Leaf)) {
-        Write-UpdateLog ("Borealis.ps1 not found at '{0}'." -f $scriptPath) 'ERROR'
+        Write-UpdateLog ("Agent.ps1 not found at '{0}'." -f $scriptPath) 'ERROR'
         return $false
     }
 
@@ -803,8 +803,8 @@ function Invoke-BorealisAgentRuntimeRefresh {
         '-NoProfile',
         '-ExecutionPolicy', 'Bypass',
         '-File', $scriptPath,
-        '-Agent',
-        '-RefreshAgentRuntime'
+        '--agent',
+        '--refresh-agent-runtime'
     )
 
     $argLine = ($argTokens | ForEach-Object {
@@ -1210,9 +1210,9 @@ function Invoke-BorealisAgentRedeploy {
     )
 
     if (-not $ProjectRoot) { $ProjectRoot = $scriptDir }
-    $scriptPath = Join-Path $ProjectRoot 'Borealis.ps1'
+    $scriptPath = Join-Path $ProjectRoot 'Agent.ps1'
     if (-not (Test-Path $scriptPath -PathType Leaf)) {
-        Write-UpdateLog ("Borealis.ps1 not found at '{0}'." -f $scriptPath) 'ERROR'
+        Write-UpdateLog ("Agent.ps1 not found at '{0}'." -f $scriptPath) 'ERROR'
         return $false
     }
 
@@ -1237,9 +1237,9 @@ function Invoke-BorealisAgentRedeploy {
         '-NoProfile',
         '-ExecutionPolicy', 'Bypass',
         '-File', $scriptPath,
-        '-Agent',
-        '-ServerUrl', $normalizedUrl,
-        '-EnrollmentCode', $normalizedCode
+        '--agent',
+        '--serverurl', $normalizedUrl,
+        '--enrollmentcode', $normalizedCode
     )
 
     $argLine = ($argTokens | ForEach-Object {

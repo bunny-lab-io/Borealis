@@ -166,7 +166,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 Use this section for Engine work (successor to the legacy server). Shared guidance is consolidated in `Docs/Start Here/ui-and-notifications.md` and other knowledgebase pages.
 
 #### Scope and runtime paths
-- Staging / launch: `Engine.sh` handles Linux first install, dependency checks, Engine container build, and Compose deployment. (`Borealis.ps1` is agent-only.)
+- Staging / launch: `Engine.sh` handles Linux first install, dependency checks, Engine container build, and Compose deployment. (`Agent.ps1` is agent-only.)
 - Edit in `Data/Engine` and `Data/Engine/Containers`; use `Engine.sh deploy dev|prod` when source changes need to reach the running service.
 - Container redeploys use committed source JSON for `software_icons_overrides.json`, `software_uninstall_overrides.json`, and `software_uninstall_blocklist.json`; commit operator-tested hotloaded rules that must survive image rebuilds.
 - Raw one-line or repo-option `Engine.sh` runs sync first, then re-execs the installed `Engine.sh`; local `Engine.sh deploy` uses existing on-disk source and does not update git.

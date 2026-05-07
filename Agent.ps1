@@ -1,14 +1,717 @@
-#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Borealis.ps1
+# Borealis Windows Agent bootstrapper/deployer:
+# - Ensures portable Git is available
+# - Uses Git to fetch/checkout Borealis into C:\Borealis (or --install-dir)
+# - Deploys only the Borealis Agent runtime
+# - Re-execs installed Agent.ps1 so Windows has one agent entrypoint
 
-[CmdletBinding()]
-param(
-    [switch]$Agent,
-    [switch]$RefreshAgentRuntime,
-    [Alias('DeleteServerTrust', 'ForceReEnroll')]
-    [switch]$NewEngine,
-    [string]$EnrollmentCode = '',
-    [string]$ServerUrl = ''
-)
+$ErrorActionPreference = 'Stop'
+
+$defaultInstallDir = if ($env:BOREALIS_INSTALL_DIR) { $env:BOREALIS_INSTALL_DIR } else { 'C:\Borealis' }
+$defaultRepoUrl = if ($env:BOREALIS_BOOTSTRAP_REPO_URL) { $env:BOREALIS_BOOTSTRAP_REPO_URL } else { 'https://github.com/bunny-lab-io/Borealis.git' }
+$defaultRepoRef = if ($env:BOREALIS_BOOTSTRAP_REF) { $env:BOREALIS_BOOTSTRAP_REF } else { 'main' }
+$defaultReleaseChannel = if ($env:BOREALIS_BOOTSTRAP_RELEASE_CHANNEL) { $env:BOREALIS_BOOTSTRAP_RELEASE_CHANNEL } else { 'unstable' }
+$defaultStableRef = if ($env:BOREALIS_BOOTSTRAP_STABLE_REF) { $env:BOREALIS_BOOTSTRAP_STABLE_REF } else { '' }
+$defaultUnstableRef = if ($env:BOREALIS_BOOTSTRAP_UNSTABLE_REF) { $env:BOREALIS_BOOTSTRAP_UNSTABLE_REF } else { $defaultRepoRef }
+$defaultGitZipUrl = if ($env:BOREALIS_BOOTSTRAP_GIT_ZIP_URL) { $env:BOREALIS_BOOTSTRAP_GIT_ZIP_URL } else { 'https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip' }
+$defaultGitZipPath = if ($env:BOREALIS_BOOTSTRAP_GIT_ZIP_PATH) { $env:BOREALIS_BOOTSTRAP_GIT_ZIP_PATH } else { Join-Path $env:TEMP 'BorealisBootstrap_MinGit.zip' }
+$defaultGitCacheDir = if ($env:BOREALIS_BOOTSTRAP_GIT_DIR) {
+    $env:BOREALIS_BOOTSTRAP_GIT_DIR
+} elseif (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+    Join-Path $env:LOCALAPPDATA 'Borealis\Bootstrap\git'
+} else {
+    Join-Path $env:TEMP 'BorealisBootstrapGit'
+}
+
+$installDir = $defaultInstallDir
+$repoUrl = $defaultRepoUrl
+$repoRef = if ($env:BOREALIS_BOOTSTRAP_REF) { $env:BOREALIS_BOOTSTRAP_REF } else { '' }
+$repoRefExplicit = -not [string]::IsNullOrWhiteSpace($repoRef)
+$releaseChannel = $defaultReleaseChannel
+$gitZipUrl = $defaultGitZipUrl
+$gitZipPath = $defaultGitZipPath
+$gitCacheDir = $defaultGitCacheDir
+$forwardedServerUrl = $null
+$forwardedEnrollmentCode = $null
+$forwardedResetEnrollment = $false
+$forwardedRefreshAgentRuntime = $false
+$runLocalInstallOnly = $false
+$syncRequested = $false
+$passthroughArgs = New-Object System.Collections.Generic.List[string]
+$Agent = $true
+$RefreshAgentRuntime = $false
+$ResetEnrollment = $false
+$ServerUrl = ''
+$EnrollmentCode = ''
+$script:BootstrapCurlExe = $null
+$script:BootstrapSevenZipExe = $null
+$script:BootstrapScriptPath = $PSCommandPath
+if (-not $script:BootstrapScriptPath -or [string]::IsNullOrWhiteSpace($script:BootstrapScriptPath)) {
+    $script:BootstrapScriptPath = $MyInvocation.MyCommand.Path
+}
+$script:BootstrapScriptDir = if (-not [string]::IsNullOrWhiteSpace($script:BootstrapScriptPath)) {
+    Split-Path -Path $script:BootstrapScriptPath -Parent
+} else {
+    $null
+}
+
+function Get-AgentScriptDirectory {
+    $candidatePath = $PSCommandPath
+    if ([string]::IsNullOrWhiteSpace($candidatePath)) {
+        try { $candidatePath = $MyInvocation.MyCommand.Path } catch { $candidatePath = '' }
+    }
+    if ([string]::IsNullOrWhiteSpace($candidatePath)) {
+        try { $candidatePath = $MyInvocation.MyCommand.Definition } catch { $candidatePath = '' }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($candidatePath) -and (Test-Path $candidatePath -PathType Leaf)) {
+        return (Split-Path -Path $candidatePath -Parent)
+    }
+    try {
+        return (Get-Location).Path
+    } catch {
+        return ''
+    }
+}
+
+function Show-Usage {
+    @'
+Usage:
+  Agent.ps1 deploy [--serverurl URL] [--enrollmentcode CODE] [--reset-enrollment]
+  Agent.ps1 [bootstrap options] deploy [--serverurl URL] [--enrollmentcode CODE] [--reset-enrollment]
+
+Bootstrap options:
+  --install-dir <path>                 Install location (default: C:\Borealis)
+  --repo-url <url>                     Git repository URL (default: https://github.com/bunny-lab-io/Borealis.git)
+  --release-channel <stable|unstable>  Select deploy channel (default: unstable)
+  --repo-branch <name>                 Git branch to deploy for testing; alias for --ref
+  --ref <name>                         Git ref/branch/tag/commit to deploy; overrides release-channel
+  --git-zip-url <url>                  Portable Git ZIP URL
+  --git-zip-path <path>                Portable Git ZIP cache path
+  --git-dir <path>                     Portable Git extraction directory
+  -h, --help                           Show this help
+
+Agent options:
+  --agent                              Accepted for compatibility; Agent.ps1 is agent-only
+  --serverurl <url>                    Engine public URL used by Agent enrollment
+  --enrollmentcode <code>              Enrollment code saved into Agent settings
+  --reset-enrollment                   Clear existing Agent identity/tokens before deploy
+  --newEngine                          Legacy alias for --reset-enrollment
+  --refresh-agent-runtime              Refresh staged Agent runtime without prompting
+
+Agent.ps1 syncs Borealis source with Git, then re-execs installed Agent.ps1 so Windows has one agent bootstrap/deploy entrypoint.
+'@ | Write-Host
+}
+
+function Read-OptionValue {
+    param(
+        [string]$Token,
+        [int]$Index,
+        [string[]]$SourceArgs,
+        [string]$OptionName
+    )
+
+    if ($Token.Contains('=')) {
+        $parts = $Token -split '=', 2
+        return [pscustomobject]@{
+            Value = [string]$parts[1]
+            NextIndex = $Index
+        }
+    }
+
+    if (($Index + 1) -ge $SourceArgs.Count) {
+        throw "Missing value for $OptionName."
+    }
+
+    return [pscustomobject]@{
+        Value = [string]$SourceArgs[$Index + 1]
+        NextIndex = $Index + 1
+    }
+}
+
+function Normalize-AgentArgument {
+    param(
+        [string]$Token,
+        [int]$Index,
+        [string[]]$SourceArgs
+    )
+
+    $normalized = $Token.ToLowerInvariant()
+    switch -Regex ($normalized) {
+        '^(--agent|-agent|deploy)$' {
+            return [pscustomobject]@{ NextIndex = $Index; Handled = $true }
+        }
+        '^(--serverurl|--server-url|-serverurl|-server-url)(=.*)?$' {
+            $result = Read-OptionValue -Token $Token -Index $Index -SourceArgs $SourceArgs -OptionName '--serverurl'
+            $script:forwardedServerUrl = $result.Value
+            return [pscustomobject]@{ NextIndex = $result.NextIndex; Handled = $true }
+        }
+        '^(--enrollmentcode|--enrollment-code|-enrollmentcode|-enrollment-code)(=.*)?$' {
+            $result = Read-OptionValue -Token $Token -Index $Index -SourceArgs $SourceArgs -OptionName '--enrollmentcode'
+            $script:forwardedEnrollmentCode = $result.Value
+            return [pscustomobject]@{ NextIndex = $result.NextIndex; Handled = $true }
+        }
+        '^(--reset-enrollment|--resetenrollment|-reset-enrollment|-resetenrollment|--newengine|-newengine|--delete-servertrust|--deleteservertrust|-deleteservertrust|-delete-servertrust|--force-reenroll|--forcereenroll|-forcereenroll|-force-reenroll)$' {
+            $script:forwardedResetEnrollment = $true
+            return [pscustomobject]@{ NextIndex = $Index; Handled = $true }
+        }
+        '^(--refresh-agent-runtime|-refresh-agent-runtime|-refreshagentruntime|--refreshagentruntime)$' {
+            $script:forwardedRefreshAgentRuntime = $true
+            return [pscustomobject]@{ NextIndex = $Index; Handled = $true }
+        }
+        '^(--agent-local-install|-agent-local-install|--agentlocalinstall|-agentlocalinstall)$' {
+            $script:runLocalInstallOnly = $true
+            return [pscustomobject]@{ NextIndex = $Index; Handled = $true }
+        }
+        default {
+            return [pscustomobject]@{ NextIndex = $Index; Handled = $false }
+        }
+    }
+}
+
+function Normalize-ReleaseChannel {
+    param(
+        [string]$Value
+    )
+
+    $rawValue = if ($null -eq $Value) { '' } else { [string]$Value }
+    $normalized = $rawValue.Trim().ToLowerInvariant()
+    switch ($normalized) {
+        '' { return 'unstable' }
+        'stable' { return 'stable' }
+        'unstable' { return 'unstable' }
+        default { throw "Unsupported release channel '$Value'. Use stable or unstable." }
+    }
+}
+
+function Get-BootstrapCurlExe {
+    param(
+        [string]$InstallDirHint = '',
+        [switch]$Refresh
+    )
+
+    if ($Refresh) {
+        $script:BootstrapCurlExe = $null
+    }
+    if ($script:BootstrapCurlExe -and (Test-Path $script:BootstrapCurlExe -PathType Leaf)) {
+        return $script:BootstrapCurlExe
+    }
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($env:BOREALIS_CURL_EXE)) {
+        $candidates.Add($env:BOREALIS_CURL_EXE.Trim())
+    }
+    if (-not [string]::IsNullOrWhiteSpace($script:BootstrapScriptDir)) {
+        $candidates.Add((Join-Path $script:BootstrapScriptDir 'Dependencies\curl\bin\curl.exe'))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($InstallDirHint)) {
+        $candidates.Add((Join-Path $InstallDirHint 'Dependencies\curl\bin\curl.exe'))
+    }
+    $systemCurl = Get-Command curl.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1
+    if (-not [string]::IsNullOrWhiteSpace($systemCurl)) {
+        $candidates.Add($systemCurl)
+    }
+
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate -PathType Leaf)) {
+            $script:BootstrapCurlExe = $candidate
+            break
+        }
+    }
+
+    return $script:BootstrapCurlExe
+}
+
+function Get-BootstrapSevenZipExe {
+    param(
+        [string]$InstallDirHint = '',
+        [switch]$Refresh
+    )
+
+    if ($Refresh) {
+        $script:BootstrapSevenZipExe = $null
+    }
+    if ($script:BootstrapSevenZipExe -and (Test-Path $script:BootstrapSevenZipExe -PathType Leaf)) {
+        return $script:BootstrapSevenZipExe
+    }
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($env:BOREALIS_7ZIP_EXE)) {
+        $candidates.Add($env:BOREALIS_7ZIP_EXE.Trim())
+    }
+    if (-not [string]::IsNullOrWhiteSpace($script:BootstrapScriptDir)) {
+        $candidates.Add((Join-Path $script:BootstrapScriptDir 'Dependencies\7zip\7z.exe'))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($InstallDirHint)) {
+        $candidates.Add((Join-Path $InstallDirHint 'Dependencies\7zip\7z.exe'))
+    }
+    $candidates.Add((Join-Path (Get-Location).Path 'Dependencies\7zip\7z.exe'))
+
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate -PathType Leaf)) {
+            $script:BootstrapSevenZipExe = $candidate
+            break
+        }
+    }
+
+    return $script:BootstrapSevenZipExe
+}
+
+function Invoke-WebRequestWithRetry {
+    param(
+        [string]$Uri,
+        [string]$OutFile,
+        [string]$InstallDirHint = '',
+        [int]$MaxAttempts = 3,
+        [int]$InitialDelaySeconds = 2
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Uri)) {
+        throw 'Download URL cannot be empty.'
+    }
+
+    $lastError = $null
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            if (Test-Path $OutFile) {
+                Remove-Item -Path $OutFile -Force -ErrorAction SilentlyContinue
+            }
+
+            Write-Host ("[i] Download attempt {0}/{1} from {2}" -f $attempt, $MaxAttempts, $Uri)
+            $downloaded = $false
+            $methodErrors = New-Object System.Collections.Generic.List[string]
+
+            $curlExe = Get-BootstrapCurlExe -InstallDirHint $InstallDirHint
+            if (-not [string]::IsNullOrWhiteSpace($curlExe)) {
+                try {
+                    $curlArgs = @(
+                        '--fail',
+                        '--location',
+                        '--retry', '3',
+                        '--retry-all-errors',
+                        '--connect-timeout', '20',
+                        '--output', $OutFile,
+                        $Uri
+                    )
+                    & $curlExe @curlArgs | Out-Null
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "curl exited with code $LASTEXITCODE."
+                    }
+                    $downloaded = $true
+                } catch {
+                    $methodErrors.Add("curl: $($_.Exception.Message)")
+                }
+            } else {
+                $methodErrors.Add('curl: no curl executable found')
+            }
+
+            if (-not $downloaded) {
+                $bitsCommand = Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue
+                if ($bitsCommand) {
+                    try {
+                        Start-BitsTransfer -Source $Uri -Destination $OutFile -ErrorAction Stop
+                        $downloaded = $true
+                    } catch {
+                        $methodErrors.Add("BITS: $($_.Exception.Message)")
+                    }
+                } else {
+                    $methodErrors.Add('BITS: Start-BitsTransfer unavailable')
+                }
+            }
+
+            if (-not $downloaded) {
+                try {
+                    $iwrParams = @{
+                        Uri = $Uri
+                        OutFile = $OutFile
+                        ErrorAction = 'Stop'
+                    }
+                    $iwrCommand = Get-Command Invoke-WebRequest -ErrorAction Stop
+                    if ($iwrCommand.Parameters.ContainsKey('UseBasicParsing')) {
+                        $iwrParams['UseBasicParsing'] = $true
+                    }
+                    $oldProgressPreference = $ProgressPreference
+                    $ProgressPreference = 'SilentlyContinue'
+                    try {
+                        Invoke-WebRequest @iwrParams
+                    } finally {
+                        $ProgressPreference = $oldProgressPreference
+                    }
+                    $downloaded = $true
+                } catch {
+                    $methodErrors.Add("Invoke-WebRequest: $($_.Exception.Message)")
+                }
+            }
+
+            if (-not $downloaded) {
+                throw "All download methods failed. $($methodErrors -join '; ')"
+            }
+
+            if (-not (Test-Path $OutFile -PathType Leaf)) {
+                throw "Download completed but '$OutFile' was not created."
+            }
+            $fileInfo = Get-Item -LiteralPath $OutFile -ErrorAction Stop
+            if ($fileInfo.Length -le 0) {
+                throw "Downloaded file '$OutFile' is empty."
+            }
+
+            return
+        } catch {
+            $lastError = $_
+            if ($attempt -lt $MaxAttempts) {
+                $delaySeconds = [Math]::Min(30, [int]([Math]::Pow(2, $attempt - 1) * $InitialDelaySeconds))
+                Write-Host ("[!] Download failed from {0}: {1}" -f $Uri, $_.Exception.Message) -ForegroundColor Yellow
+                Write-Host ("[i] Retrying in {0} second(s)..." -f $delaySeconds) -ForegroundColor Yellow
+                Start-Sleep -Seconds $delaySeconds
+            }
+        }
+    }
+
+    if ($lastError) {
+        throw $lastError
+    }
+    throw "Failed to download from '$Uri'."
+}
+
+function Expand-ZipArchiveCompat {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ArchivePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationPath,
+
+        [Parameter()]
+        [string]$SevenZipPath = '',
+
+        [Parameter()]
+        [string]$InstallDirHint = '',
+
+        [Parameter()]
+        [switch]$ClearDestination
+    )
+
+    if (-not (Test-Path $ArchivePath -PathType Leaf)) {
+        throw "Archive file not found: $ArchivePath"
+    }
+
+    if ($ClearDestination -and (Test-Path $DestinationPath)) {
+        Remove-Item -Path $DestinationPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (-not (Test-Path $DestinationPath)) {
+        New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($SevenZipPath)) {
+        $SevenZipPath = Get-BootstrapSevenZipExe -InstallDirHint $InstallDirHint
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SevenZipPath) -and (Test-Path $SevenZipPath -PathType Leaf)) {
+        & $SevenZipPath x $ArchivePath "-o$DestinationPath" -y | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "7-Zip extraction failed for '$ArchivePath' with exit code $LASTEXITCODE."
+        }
+        return
+    }
+
+    # First-run bootstrap may not have the repository staged yet, so bundled 7-Zip
+    # can be unavailable. Allow a one-time built-in fallback for portable Git unzip.
+    Write-Host "[i] Bundled 7-Zip not found yet; using bootstrap ZIP fallback extractor."
+    $extractErrors = New-Object System.Collections.Generic.List[string]
+
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $DestinationPath)
+        return
+    } catch {
+        $extractErrors.Add(".NET ZipFile: $($_.Exception.Message)")
+    }
+
+    try {
+        $oldProgressPreference = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
+        try {
+            Expand-Archive -LiteralPath $ArchivePath -DestinationPath $DestinationPath -Force -ErrorAction Stop
+        } finally {
+            $ProgressPreference = $oldProgressPreference
+        }
+        return
+    } catch {
+        $extractErrors.Add("Expand-Archive: $($_.Exception.Message)")
+    }
+
+    $tarExe = Get-Command tar.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1
+    if (-not [string]::IsNullOrWhiteSpace($tarExe)) {
+        & $tarExe -xf $ArchivePath -C $DestinationPath
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+        $extractErrors.Add("tar: exited with code $LASTEXITCODE")
+    } else {
+        $extractErrors.Add('tar: tar.exe unavailable')
+    }
+
+    throw "Failed to extract '$ArchivePath'. Tried bundled 7-Zip and bootstrap fallbacks. $($extractErrors -join '; ')"
+}
+
+function Invoke-GitCommand {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$GitExe,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments,
+
+        [Parameter()]
+        [string]$WorkingDirectory = ''
+    )
+
+    if ($WorkingDirectory) {
+        & $GitExe -C $WorkingDirectory @Arguments
+    } else {
+        & $GitExe @Arguments
+    }
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        throw "Git command failed with exit code ${exitCode}: git $($Arguments -join ' ')"
+    }
+}
+
+function Ensure-PortableGit {
+    param(
+        [string]$GitZipUrl,
+        [string]$GitZipPath,
+        [string]$GitRoot
+    )
+
+    if ([string]::IsNullOrWhiteSpace($GitRoot)) {
+        throw 'Portable Git destination cannot be empty.'
+    }
+
+    $gitExe = Join-Path $GitRoot 'cmd\git.exe'
+    if (Test-Path $gitExe -PathType Leaf) {
+        try {
+            & $gitExe --version | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                return $gitExe
+            }
+        } catch {}
+    }
+
+    $gitZipDir = Split-Path -Path $GitZipPath -Parent
+    if (-not [string]::IsNullOrWhiteSpace($gitZipDir) -and -not (Test-Path $gitZipDir)) {
+        New-Item -Path $gitZipDir -ItemType Directory -Force | Out-Null
+    }
+
+    Write-Host "[i] Downloading portable Git from $GitZipUrl"
+    Invoke-WebRequestWithRetry -Uri $GitZipUrl -OutFile $GitZipPath -InstallDirHint $installDir
+    Expand-ZipArchiveCompat -ArchivePath $GitZipPath -DestinationPath $GitRoot -ClearDestination -InstallDirHint $installDir
+
+    if (-not (Test-Path $gitExe -PathType Leaf)) {
+        throw "Portable Git was extracted but git.exe was not found at '$gitExe'."
+    }
+
+    & $gitExe --version | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Portable Git failed validation after extraction.'
+    }
+
+    return $gitExe
+}
+
+function Stop-BorealisPythonProcesses {
+    param(
+        [string]$DestinationPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DestinationPath)) {
+        return
+    }
+
+    $resolvedDestination = $DestinationPath
+    try {
+        $resolvedDestination = [System.IO.Path]::GetFullPath($DestinationPath)
+    } catch {}
+
+    $scopePattern = Join-Path $resolvedDestination '*'
+    $stoppedCount = 0
+
+    $candidates = @()
+    try {
+        $candidates = Get-Process python,pythonw -ErrorAction SilentlyContinue
+    } catch {
+        $candidates = @()
+    }
+
+    foreach ($proc in $candidates) {
+        $procPath = $null
+        try {
+            $procPath = $proc.Path
+        } catch {
+            $procPath = $null
+        }
+
+        if ([string]::IsNullOrWhiteSpace($procPath)) {
+            try {
+                $cimProc = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $proc.Id) -ErrorAction SilentlyContinue
+                if ($cimProc) {
+                    $procPath = [string]$cimProc.ExecutablePath
+                }
+            } catch {
+                $procPath = $null
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($procPath)) {
+            continue
+        }
+
+        if ($procPath -like $scopePattern) {
+            try {
+                Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+                $stoppedCount++
+            } catch {}
+        }
+    }
+
+    if ($stoppedCount -gt 0) {
+        Write-Host ("[i] Stopped {0} Borealis Python process(es) before repository sync." -f $stoppedCount)
+    }
+}
+
+function Sync-BorealisRepository {
+    param(
+        [string]$GitExe,
+        [string]$RepositoryUrl,
+        [string]$Ref,
+        [string]$DestinationPath,
+        [string[]]$PreserveDirectories = @('Agent', 'Temp')
+    )
+
+    if (-not (Test-Path $DestinationPath)) {
+        New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null
+    }
+
+    $gitMetadataPath = Join-Path $DestinationPath '.git'
+    if (-not (Test-Path $gitMetadataPath -PathType Container)) {
+        Get-ChildItem -Path $DestinationPath -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($PreserveDirectories -contains $_.Name) { return }
+            Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @('init')
+        Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @('remote', 'add', 'origin', $RepositoryUrl)
+    } else {
+        $originUrl = ''
+        try {
+            $originUrl = (& $GitExe -C $DestinationPath remote get-url origin 2>$null | Select-Object -First 1)
+        } catch {
+            $originUrl = ''
+        }
+
+        if ([string]::IsNullOrWhiteSpace($originUrl)) {
+            Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @('remote', 'add', 'origin', $RepositoryUrl)
+        } elseif ($originUrl.Trim() -ne $RepositoryUrl) {
+            Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @('remote', 'set-url', 'origin', $RepositoryUrl)
+        }
+    }
+
+    Write-Host "[i] Fetching Borealis ref '$Ref' from $RepositoryUrl"
+    Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @('fetch', '--depth', '1', '--force', 'origin', $Ref)
+    Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @('checkout', '--force', '-B', 'bootstrap-deploy', 'FETCH_HEAD')
+    Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @('reset', '--hard', 'FETCH_HEAD')
+
+    $cleanArgs = New-Object System.Collections.Generic.List[string]
+    $cleanArgs.Add('clean')
+    $cleanArgs.Add('-fdx')
+    foreach ($preserve in $PreserveDirectories) {
+        if (-not [string]::IsNullOrWhiteSpace($preserve)) {
+            $cleanArgs.Add('-e')
+            $cleanArgs.Add($preserve)
+        }
+    }
+    Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @($cleanArgs.ToArray())
+}
+
+function Resolve-StableReleaseTag {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$GitExe,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryUrl
+    )
+
+    $lines = Invoke-GitCommand -GitExe $GitExe -Arguments @('ls-remote', '--tags', '--refs', $RepositoryUrl)
+    $candidates = New-Object System.Collections.Generic.List[string]
+    foreach ($line in @($lines)) {
+        $text = [string]$line
+        if ($text -match 'refs/tags/([0-9]+(?:\.[0-9]+)*)$') {
+            $candidates.Add($Matches[1])
+        }
+    }
+    if ($candidates.Count -eq 0) {
+        return ''
+    }
+    return ($candidates.ToArray() | Sort-Object { [version]$_ } -Descending | Select-Object -First 1)
+}
+
+function Resolve-RepositoryRef {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$GitExe,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryUrl,
+
+        [string]$ReleaseChannel,
+
+        [string]$ExplicitRef,
+
+        [string]$StableRefOverride = '',
+
+        [string]$UnstableRef = 'main'
+    )
+
+    $normalizedChannel = Normalize-ReleaseChannel -Value $ReleaseChannel
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitRef)) {
+        return [pscustomobject]@{
+            Ref = $ExplicitRef.Trim()
+            ReleaseChannel = $normalizedChannel
+        }
+    }
+
+    if ($normalizedChannel -eq 'stable') {
+        if (-not [string]::IsNullOrWhiteSpace($StableRefOverride)) {
+            Write-Host ("[i] Resolved stable release channel to configured ref '{0}'" -f $StableRefOverride)
+            return [pscustomobject]@{
+                Ref = $StableRefOverride.Trim()
+                ReleaseChannel = $normalizedChannel
+            }
+        }
+
+        $stableTag = Resolve-StableReleaseTag -GitExe $GitExe -RepositoryUrl $RepositoryUrl
+        if (-not [string]::IsNullOrWhiteSpace($stableTag)) {
+            Write-Host ("[i] Resolved stable release channel to latest tag '{0}'" -f $stableTag)
+            return [pscustomobject]@{
+                Ref = $stableTag.Trim()
+                ReleaseChannel = $normalizedChannel
+            }
+        }
+
+        $fallbackRef = if ([string]::IsNullOrWhiteSpace($UnstableRef)) { 'main' } else { $UnstableRef.Trim() }
+        Write-Host ("[!] Stable release channel could not resolve a remote release tag; falling back to '{0}'." -f $fallbackRef) -ForegroundColor Yellow
+        return [pscustomobject]@{
+            Ref = $fallbackRef
+            ReleaseChannel = $normalizedChannel
+        }
+    }
+
+    $resolvedUnstableRef = if ([string]::IsNullOrWhiteSpace($UnstableRef)) { 'main' } else { $UnstableRef.Trim() }
+    Write-Host ("[i] Resolved unstable release channel to ref '{0}'" -f $resolvedUnstableRef)
+    return [pscustomobject]@{
+        Ref = $resolvedUnstableRef
+        ReleaseChannel = $normalizedChannel
+    }
+}
+
 
 function Test-BorealisTruthyValue {
     param(
@@ -31,10 +734,6 @@ function Test-BorealisTruthyValue {
         'on' { return $true }
         default { return $false }
     }
-}
-
-if (-not $NewEngine -and $Agent -and (Test-BorealisTruthyValue $env:BOREALIS_BOOTSTRAP_NEW_ENGINE)) {
-    $NewEngine = $true
 }
 
 # Admin/Elevation helpers for Borealis runtime
@@ -118,16 +817,7 @@ function Request-BorealisElevation {
     }
 }
 
-$scriptPath = $PSCommandPath
-if (-not $scriptPath -or $scriptPath -eq '') { $scriptPath = $MyInvocation.MyCommand.Definition }
-if (-not (Request-BorealisElevation -ScriptPath $scriptPath -BoundParameters $PSBoundParameters -ExtraArgs $MyInvocation.UnboundArguments)) {
-    if ($null -ne $script:BorealisElevatedExitCode) {
-        exit ([int]$script:BorealisElevatedExitCode)
-    }
-    exit 0
-}
-
-$scriptDir = Split-Path $MyInvocation.MyCommand.Path -Parent
+$scriptDir = Get-AgentScriptDirectory
 $host.UI.RawUI.WindowTitle = "Borealis"
 Clear-Host
 
@@ -741,7 +1431,7 @@ function Invoke-BorealisVerifiedDownload {
 }
 
 # ---------------------- Bundle Executables Setup ----------------------
-$scriptDir  = Split-Path $MyInvocation.MyCommand.Path -Parent
+$scriptDir  = Get-AgentScriptDirectory
 $depsRoot   = Join-Path $scriptDir 'Dependencies'
 $pythonExe  = Join-Path $depsRoot 'Python\python.exe'
 $sevenZipExe = Join-Path $depsRoot '7zip\7z.exe'
@@ -2344,7 +3034,7 @@ function InstallOrUpdate-BorealisAgent {
     $venvPython             = Join-Path $venvFolderPath 'Scripts\python.exe'
     $existingServerUrl      = $null
 
-    if ($NewEngine) {
+    if ($ResetEnrollment) {
         Run-Step "Clear Persisted Borealis Agent Enrollment State" {
             Clear-AgentEnrollmentState -LogName 'Install.log'
         }
@@ -2544,7 +3234,7 @@ function InstallOrUpdate-BorealisAgent {
             }
 
             # Do not restart UltraVNC during deployment; the agent keeps it running.
-            
+
         }
         . (Join-Path $venvFolderPath 'Scripts\Activate')
     }
@@ -2612,7 +3302,7 @@ function InstallOrUpdate-BorealisAgent {
         if (-not $inputUrl) {
             throw "Borealis agent runtime requires a configured public HTTPS FQDN in server_url.txt or -ServerUrl."
         }
-        
+
         # Write UTF-8 without BOM to avoid BOM being read into the URL
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
         [System.IO.File]::WriteAllText($serverUrlPath, $inputUrl, $utf8NoBom)
@@ -2746,15 +3436,344 @@ function InstallOrUpdate-BorealisAgent {
     }
 }
 
-# ---------------------- Main -----------------------
-$Host.UI.RawUI.BackgroundColor = 'Black'
-Clear-Host
-$host.UI.RawUI.WindowTitle = 'Borealis Agent'
-Write-Host ''
-if (-not (Test-IsAdmin)) {
-    Write-Host 'Administrator permissions are required to deploy the Borealis Agent.' -ForegroundColor Red
-    exit 1
+
+
+function Add-AgentInvocationPair {
+    param(
+        [System.Collections.Generic.List[string]]$Target,
+        [string]$Name,
+        [AllowNull()]
+        [string]$Value
+    )
+    if (-not [string]::IsNullOrWhiteSpace($Value)) {
+        $Target.Add($Name)
+        $Target.Add($Value)
+    }
 }
-Write-Host 'Escalated Permissions Granted > Agent is Eligible for Deployment.' -ForegroundColor Green
-Write-Host 'Deploying Borealis Agent (fresh install/update path)...' -ForegroundColor Cyan
-InstallOrUpdate-BorealisAgent
+
+function New-AgentInvocationArgs {
+    param(
+        [switch]$LocalInstall
+    )
+
+    $items = New-Object System.Collections.Generic.List[string]
+    if ($LocalInstall) {
+        $items.Add('--agent-local-install')
+    }
+    Add-AgentInvocationPair -Target $items -Name '--install-dir' -Value $installDir
+    Add-AgentInvocationPair -Target $items -Name '--repo-url' -Value $repoUrl
+    if ($repoRefExplicit) {
+        Add-AgentInvocationPair -Target $items -Name '--ref' -Value $repoRef
+    } else {
+        Add-AgentInvocationPair -Target $items -Name '--release-channel' -Value $releaseChannel
+    }
+    Add-AgentInvocationPair -Target $items -Name '--git-zip-url' -Value $gitZipUrl
+    Add-AgentInvocationPair -Target $items -Name '--git-zip-path' -Value $gitZipPath
+    Add-AgentInvocationPair -Target $items -Name '--git-dir' -Value $gitCacheDir
+    $items.Add('deploy')
+    $items.Add('--agent')
+    if (-not [string]::IsNullOrWhiteSpace($forwardedServerUrl)) {
+        $items.Add('--serverurl')
+        $items.Add($forwardedServerUrl)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($forwardedEnrollmentCode)) {
+        $items.Add('--enrollmentcode')
+        $items.Add($forwardedEnrollmentCode)
+    }
+    if ($forwardedResetEnrollment) {
+        $items.Add('--reset-enrollment')
+    }
+    if ($forwardedRefreshAgentRuntime) {
+        $items.Add('--refresh-agent-runtime')
+    }
+    foreach ($arg in $passthroughArgs) {
+        if (-not [string]::IsNullOrWhiteSpace($arg)) {
+            $items.Add($arg)
+        }
+    }
+    return [string[]]$items.ToArray()
+}
+
+function Test-AgentSourceAvailable {
+    param(
+        [string]$ScriptPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
+        return $false
+    }
+    try {
+        $candidateRoot = Split-Path -Path $ScriptPath -Parent
+    } catch {
+        return $false
+    }
+    if ([string]::IsNullOrWhiteSpace($candidateRoot)) {
+        return $false
+    }
+    return (
+        (Test-Path (Join-Path $candidateRoot 'Agent.ps1') -PathType Leaf) -and
+        (Test-Path (Join-Path $candidateRoot 'Data\Agent\agent.py') -PathType Leaf)
+    )
+}
+
+function Invoke-AgentDeploymentFromLocalSource {
+    $script:Agent = $true
+    $script:RefreshAgentRuntime = [bool]$forwardedRefreshAgentRuntime
+    $script:ResetEnrollment = [bool]$forwardedResetEnrollment
+    $script:ServerUrl = if ($null -eq $forwardedServerUrl) { '' } else { [string]$forwardedServerUrl }
+    $script:EnrollmentCode = if ($null -eq $forwardedEnrollmentCode) { '' } else { [string]$forwardedEnrollmentCode }
+
+    $script:scriptDir = Get-AgentScriptDirectory
+    $script:depsRoot = Join-Path $script:scriptDir 'Dependencies'
+    $script:pythonExe = Join-Path $script:depsRoot 'Python\python.exe'
+    $script:sevenZipExe = Join-Path $script:depsRoot '7zip\7z.exe'
+    $script:gitZipPath = Join-Path $script:depsRoot $gitPackageName
+    $script:gitInstallDir = Join-Path $script:depsRoot 'git'
+    $script:gitExePath = Join-Path $script:gitInstallDir 'cmd\git.exe'
+    $script:wireGuardInstallerDir = Join-Path $script:depsRoot 'VPN_Tunnel_Adapter'
+    $script:wireGuardBootstrapperPath = Join-Path $script:wireGuardInstallerDir $wireGuardBootstrapperName
+    $script:wintunZipPath = Join-Path $script:wireGuardInstallerDir $wintunZipName
+
+    $Host.UI.RawUI.BackgroundColor = 'Black'
+    Clear-Host
+    $host.UI.RawUI.WindowTitle = 'Borealis Agent'
+    Write-Host ''
+    if (-not (Test-IsAdmin)) {
+        Write-Host 'Administrator permissions are required to deploy the Borealis Agent.' -ForegroundColor Red
+        exit 1
+    }
+    Write-Host 'Escalated Permissions Granted > Agent is Eligible for Deployment.' -ForegroundColor Green
+    Write-Host 'Deploying Borealis Agent (fresh install/update path)...' -ForegroundColor Cyan
+    InstallOrUpdate-BorealisAgent
+}
+
+$gitZipUrl = $defaultGitZipUrl
+$gitZipPath = $defaultGitZipPath
+
+$rawArgs = @($args)
+for ($i = 0; $i -lt $rawArgs.Count; $i++) {
+    $token = [string]$rawArgs[$i]
+    $normalized = $token.ToLowerInvariant()
+    $handledBootstrapOption = $false
+
+    switch -Regex ($normalized) {
+        '^(-h|--help|-help|/\?)$' {
+            Show-Usage
+            exit 0
+        }
+        '^(--install-dir|-install-dir|-installdir)(=.*)?$' {
+            $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--install-dir'
+            $installDir = $result.Value
+            $syncRequested = $true
+            $i = $result.NextIndex
+            $handledBootstrapOption = $true
+            break
+        }
+        '^(--repo-url|-repo-url|-repourl)(=.*)?$' {
+            $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--repo-url'
+            $repoUrl = $result.Value
+            $syncRequested = $true
+            $i = $result.NextIndex
+            $handledBootstrapOption = $true
+            break
+        }
+        '^(--release-channel|--release_channel|-release-channel|-releasechannel)(=.*)?$' {
+            $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--release-channel'
+            $releaseChannel = $result.Value
+            $syncRequested = $true
+            $i = $result.NextIndex
+            $handledBootstrapOption = $true
+            break
+        }
+        '^(--ref|--branch|--repo-branch|--repo_branch|-ref|-branch|-repo-branch|-repobranch)(=.*)?$' {
+            $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--ref'
+            $repoRef = $result.Value
+            $repoRefExplicit = $true
+            $syncRequested = $true
+            $i = $result.NextIndex
+            $handledBootstrapOption = $true
+            break
+        }
+        '^(--git-zip-url|-git-zip-url|-gitzipurl)(=.*)?$' {
+            $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--git-zip-url'
+            $gitZipUrl = $result.Value
+            $syncRequested = $true
+            $i = $result.NextIndex
+            $handledBootstrapOption = $true
+            break
+        }
+        '^(--git-zip-path|-git-zip-path|-gitzippath)(=.*)?$' {
+            $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--git-zip-path'
+            $gitZipPath = $result.Value
+            $syncRequested = $true
+            $i = $result.NextIndex
+            $handledBootstrapOption = $true
+            break
+        }
+        '^(--git-dir|-git-dir|-gitdir)(=.*)?$' {
+            $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--git-dir'
+            $gitCacheDir = $result.Value
+            $syncRequested = $true
+            $i = $result.NextIndex
+            $handledBootstrapOption = $true
+            break
+        }
+        '^(--zip-url|-zip-url|-zipurl)(=.*)?$' {
+            throw 'ZIP-based repository bootstrap is no longer supported. Use --repo-url/--ref.'
+        }
+        '^(--zip-path|-zip-path|-zippath)(=.*)?$' {
+            throw 'ZIP-based repository bootstrap is no longer supported. Use --repo-url/--ref.'
+        }
+    }
+
+    if ($handledBootstrapOption) {
+        continue
+    }
+
+    $normalizedResult = Normalize-AgentArgument -Token $token -Index $i -SourceArgs $rawArgs
+    if ($normalizedResult.Handled) {
+        $i = $normalizedResult.NextIndex
+        continue
+    }
+
+    $passthroughArgs.Add($token)
+}
+
+if ([string]::IsNullOrWhiteSpace($forwardedServerUrl) -and -not [string]::IsNullOrWhiteSpace($env:BOREALIS_SERVER_URL)) {
+    $forwardedServerUrl = $env:BOREALIS_SERVER_URL
+}
+if ([string]::IsNullOrWhiteSpace($forwardedEnrollmentCode) -and -not [string]::IsNullOrWhiteSpace($env:BOREALIS_ENROLLMENT_CODE)) {
+    $forwardedEnrollmentCode = $env:BOREALIS_ENROLLMENT_CODE
+}
+if (-not $forwardedResetEnrollment -and (Test-BorealisTruthyValue $env:BOREALIS_AGENT_RESET_ENROLLMENT)) {
+    $forwardedResetEnrollment = $true
+}
+if (-not $forwardedResetEnrollment -and (Test-BorealisTruthyValue $env:BOREALIS_BOOTSTRAP_NEW_ENGINE)) {
+    $forwardedResetEnrollment = $true
+}
+if (Test-BorealisTruthyValue $env:BOREALIS_AGENT_LOCAL_INSTALL) {
+    $runLocalInstallOnly = $true
+}
+if (-not [string]::IsNullOrWhiteSpace($forwardedServerUrl)) {
+    $forwardedServerUrl = $forwardedServerUrl.Trim()
+    $env:BOREALIS_SERVER_URL = $forwardedServerUrl
+}
+if (-not [string]::IsNullOrWhiteSpace($forwardedEnrollmentCode)) {
+    $forwardedEnrollmentCode = $forwardedEnrollmentCode.Trim()
+    $env:BOREALIS_ENROLLMENT_CODE = $forwardedEnrollmentCode
+    $env:BOREALIS_INSTALLER_CODE = $forwardedEnrollmentCode
+    $forwardedResetEnrollment = $true
+}
+
+if ([string]::IsNullOrWhiteSpace($installDir)) {
+    throw 'Refusing to install into an empty path or root path.'
+}
+$resolvedInstallDir = [System.IO.Path]::GetFullPath($installDir)
+$installRoot = [System.IO.Path]::GetPathRoot($resolvedInstallDir)
+if ([string]::IsNullOrWhiteSpace($installRoot)) {
+    throw "Refusing to install into an invalid path: '$installDir'."
+}
+if ($resolvedInstallDir.TrimEnd('\') -eq $installRoot.TrimEnd('\')) {
+    throw "Refusing to install into root path '$resolvedInstallDir'."
+}
+if ($resolvedInstallDir -ne $installDir) {
+    $installDir = $resolvedInstallDir
+}
+if ([string]::IsNullOrWhiteSpace($repoUrl)) {
+    throw 'Repository URL cannot be empty.'
+}
+Normalize-ReleaseChannel -Value $releaseChannel | Out-Null
+
+$agentScriptPath = $PSCommandPath
+if (-not $agentScriptPath -or $agentScriptPath -eq '') { $agentScriptPath = $MyInvocation.MyCommand.Definition }
+if (-not $runLocalInstallOnly -and -not $syncRequested -and (Test-AgentSourceAvailable -ScriptPath $agentScriptPath)) {
+    $runLocalInstallOnly = $true
+}
+if (-not $runLocalInstallOnly -and -not $forwardedResetEnrollment -and -not $forwardedRefreshAgentRuntime) {
+    $forwardedResetEnrollment = $true
+}
+if ($forwardedResetEnrollment) {
+    $env:BOREALIS_AGENT_RESET_ENROLLMENT = '1'
+    $env:BOREALIS_BOOTSTRAP_NEW_ENGINE = '1'
+}
+$elevationArgs = New-AgentInvocationArgs -LocalInstall:$runLocalInstallOnly
+if (-not (Request-BorealisElevation -ScriptPath $agentScriptPath -BoundParameters @{} -ExtraArgs $elevationArgs)) {
+    if ($null -ne $script:BorealisElevatedExitCode) {
+        exit ([int]$script:BorealisElevatedExitCode)
+    }
+    exit 0
+}
+
+if ($runLocalInstallOnly) {
+    Invoke-AgentDeploymentFromLocalSource
+    exit 0
+}
+
+try {
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    } catch {}
+
+    if (-not (Test-Path $installDir -PathType Container)) {
+        New-Item -Path $installDir -ItemType Directory -Force | Out-Null
+    }
+
+    $bootstrapGitExe = Ensure-PortableGit -GitZipUrl $gitZipUrl -GitZipPath $gitZipPath -GitRoot $gitCacheDir
+
+    Stop-BorealisPythonProcesses -DestinationPath $installDir
+
+    $resolvedRef = Resolve-RepositoryRef `
+        -GitExe $bootstrapGitExe `
+        -RepositoryUrl $repoUrl `
+        -ReleaseChannel $releaseChannel `
+        -ExplicitRef $repoRef `
+        -StableRefOverride $defaultStableRef `
+        -UnstableRef $defaultUnstableRef
+    $repoRef = [string]$resolvedRef.Ref
+    $releaseChannel = [string]$resolvedRef.ReleaseChannel
+    if ([string]::IsNullOrWhiteSpace($repoRef)) {
+        throw 'Repository ref cannot be empty.'
+    }
+
+    Write-Host "[i] Syncing Borealis repository into $installDir"
+    Sync-BorealisRepository -GitExe $bootstrapGitExe -RepositoryUrl $repoUrl -Ref $repoRef -DestinationPath $installDir -PreserveDirectories @('Agent', 'Temp')
+
+    $agentScript = Join-Path $installDir 'Agent.ps1'
+    if (-not (Test-Path $agentScript -PathType Leaf)) {
+        throw "Agent.ps1 not found at '$agentScript' after Git checkout."
+    }
+
+    $env:BOREALIS_AGENT_LOCAL_INSTALL = '1'
+    $env:BOREALIS_BOOTSTRAP_RELEASE_CHANNEL = $releaseChannel
+    $env:BOREALIS_BOOTSTRAP_RESOLVED_REF = $repoRef
+
+    $powershellExe = (Get-Command powershell.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1)
+    if (-not $powershellExe) {
+        $powershellExe = (Get-Process -Id $PID).Path
+    }
+    if (-not $powershellExe) {
+        throw 'Unable to locate a PowerShell host to launch Agent.ps1.'
+    }
+
+    $launcherArgs = New-Object System.Collections.Generic.List[string]
+    $launcherArgs.Add('-NoProfile')
+    $launcherArgs.Add('-ExecutionPolicy')
+    $launcherArgs.Add('Bypass')
+    $launcherArgs.Add('-File')
+    $launcherArgs.Add($agentScript)
+    foreach ($arg in (New-AgentInvocationArgs -LocalInstall)) {
+        $launcherArgs.Add($arg)
+    }
+
+    Write-Host "[i] Launching $agentScript"
+    & $powershellExe @($launcherArgs.ToArray())
+    if ($null -ne $LASTEXITCODE) {
+        exit $LASTEXITCODE
+    }
+    exit 0
+}
+finally {
+    if (Test-Path $gitZipPath) {
+        Remove-Item -Path $gitZipPath -Force -ErrorAction SilentlyContinue
+    }
+}

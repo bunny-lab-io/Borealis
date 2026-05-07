@@ -33,7 +33,7 @@ COPY Data/Engine/Containers/api-backend/data/engine-requirements.txt /tmp/boreal
 RUN python -m pip install --upgrade pip \
     && python -m pip install -r /tmp/borealis-engine-requirements.txt
 
-COPY Borealis.ps1 /opt/Borealis/Borealis.ps1
+COPY Agent.ps1 /opt/Borealis/Agent.ps1
 COPY Data/Engine/Containers/api-backend/data /opt/Borealis/Data/Engine
 RUN mkdir -p /opt/Borealis/Data/Engine/Containers
 COPY Data/Engine/Containers/compose.yaml /opt/Borealis/Data/Engine/Containers/compose.yaml

@@ -40,16 +40,16 @@ def _bootstrap_logger() -> logging.Logger:
 
 
 def _project_root() -> Path:
-    """Locate the repository root by discovering the Borealis bootstrap script."""
+    """Locate the repository root by discovering the Borealis Agent entrypoint."""
 
     current = Path(__file__).resolve().parent
 
     for candidate in (current, *current.parents):
-        if (candidate / "Borealis.ps1").is_file():
+        if (candidate / "Agent.ps1").is_file():
             return candidate
 
     raise RuntimeError(
-        "Unable to locate the Borealis project root; Borealis.ps1 was not found "
+        "Unable to locate the Borealis project root; Agent.ps1 was not found "
         "in any parent directory."
     )
 

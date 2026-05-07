@@ -240,7 +240,7 @@ This section consolidates the troubleshooting context and environment notes for 
 - Remote Agent: mounted read-only at Z:\ (maps to C:\Borealis on the remote device; logs/configs under Z:\Agent\...).
 - Agent and Engine launch:
   - Engine: `Engine.sh` on Linux.
-  - Agent (Windows): `Borealis.ps1` (or `bootstrap.ps1` -> `Borealis.ps1`) with elevation.
+  - Agent (Windows): `Agent.ps1` with elevation.
 - Network: Engine on 10.0.0.54; remote agent uses server_url.txt to derive endpoint host.
 - WireGuard tooling:
   - Engine host: `wg`, `ip`, and `wg-quick` for first-interface bootstrap only.
@@ -290,7 +290,7 @@ This section consolidates the troubleshooting context and environment notes for 
   - Successful backend VNC TCP connects confirm transport with `reason=vnc_backend_connect`.
   - The VNC backend writer socket enables `TCP_NODELAY`.
 
-Note: Data/Agent changes only apply after Borealis.ps1 re-stages the agent under Agent\.
+Note: Data/Agent changes only apply after Agent.ps1 re-stages the agent under Agent\.
 
 #### Current operational notes (2026-03-31)
 - `LAB-OPERATOR-01` shell and VNC are generally interactive in fresh tests, and intentional shell closes now end with `vpn_shell_closed ... reason=close_request` instead of warning-level post-close read errors.

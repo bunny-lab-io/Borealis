@@ -88,7 +88,7 @@ If you deploy the agent via Group Policy or another automation platform, you can
 
 **Windows**:
 ```powershell
-.\Borealis.ps1 -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
+.\Agent.ps1 -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
 ```
 **Linux**:
 ```bash

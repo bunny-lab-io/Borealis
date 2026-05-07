@@ -149,7 +149,7 @@ def test_role_manager_adds_project_data_agent_to_import_path(tmp_path, monkeypat
     RoleManager = _load_role_manager()
     repo_root = tmp_path / "Borealis"
     repo_root.mkdir(parents=True, exist_ok=True)
-    (repo_root / "Borealis.ps1").write_text("", encoding="utf-8")
+    (repo_root / "Agent.ps1").write_text("", encoding="utf-8")
 
     runtime_root = repo_root / "Agent" / "Borealis"
     roles_dir = runtime_root / "Roles"
