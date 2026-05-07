@@ -29,6 +29,8 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - MinGit 2.47.1 (Windows bootstrap only) - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
 - curl (vendored Windows download helper) - curl license - https://curl.se/docs/copyright.html
 - 7-Zip CLI (vendored Windows archive helper) - LGPL-2.1-or-later with unRAR restriction - https://www.7-zip.org/license.txt
+- Go toolchain (native Linux build helper installs official Go into `Dependencies/Go` when missing) - BSD-3-Clause - https://go.dev/LICENSE
+- golang.org/x/sys v0.28.0 (Windows service APIs for `Agent_Service_Bootstrapper.exe`) - BSD-3-Clause - https://cs.opensource.google/go/x/sys/+/master:LICENSE
 
 ## Borealis Engine Dependencies
 

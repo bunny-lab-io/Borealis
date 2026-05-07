@@ -118,6 +118,8 @@ CREDENTIAL_RESET_REQUIRED_MESSAGE = (
 JOB_KIND_AUTOMATION = "automation"
 JOB_KIND_ONBOARDING = "onboarding"
 ONBOARDING_COMPONENT_KIND = "device_onboarding"
+AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME = "Agent_Service_Bootstrapper.exe"
+DEFAULT_BOREALIS_REPO_GIT_URL = "https://github.com/bunny-lab-io/Borealis.git"
 ONBOARDING_COMPONENT_NAME = "Device Onboarding"
 ONBOARDING_STATUS_PENDING = "pending"
 ONBOARDING_STATUS_RUNNING = "running"
@@ -296,6 +298,7 @@ def _windows_exit_code_from_output(output: Any) -> Optional[int]:
 def _windows_output_is_launcher_marker_only(output: Any) -> bool:
     lines = [line.strip() for line in str(output or "").splitlines() if line.strip()]
     launch_markers = {
+        "__BOREALIS_AGENT_SERVICE_BOOTSTRAPPER_STAGED__=1",
         "__BOREALIS_WINDOWS_ONBOARDING_STAGED__=1",
         "__BOREALIS_WINDOWS_ONBOARDING_LAUNCHER_STARTED__=1",
     }
@@ -355,6 +358,8 @@ def _onboarding_progress_task_from_output(*, stdout: Any = "", stderr: Any = "")
         return "Syncing Borealis Repository"
     if "downloading windows agent bootstrap" in combined:
         return "Downloading Agent Bootstrap"
+    if "__borealis_agent_service_bootstrapper_started__" in combined:
+        return "Running Agent Service Bootstrapper"
     if "__borealis_onboarding_temp_cleaned__" in combined:
         return "Preparing Clean Onboarding Workspace"
     if "syncing borealis ref" in combined:
@@ -381,8 +386,14 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
     detail_lower = detail_text.lower()
     if "connecting to windows smb" in detail_lower or "connecting to ssh" in detail_lower:
         return "Establishing Connection to Remote Device"
+    if "staging borealis agent service bootstrapper" in detail_lower:
+        return "Transferring Agent Service Bootstrapper"
     if "staging borealis onboarding script" in detail_lower:
         return "Transferring Agent Installation Files"
+    if "downloading agent.ps1" in detail_lower:
+        return "Downloading Agent Bootstrap"
+    if "cleaning onboarding temp" in detail_lower:
+        return "Preparing Clean Onboarding Workspace"
     if "binding to windows service control manager" in detail_lower or "creating transient borealis onboarding service" in detail_lower:
         return "Creating Windows Service to One-Shot Bootstrap Agent"
     if "starting transient borealis onboarding service" in detail_lower:
@@ -4456,354 +4467,6 @@ class JobScheduler:
         )
         return ONBOARDING_STATUS_WAITING_APPROVAL
 
-    def _windows_onboarding_script(
-        self,
-        *,
-        branch: str,
-        server_url: str,
-        enrollment_code: str,
-        job_id: int,
-        run_id: int,
-        target: str,
-        timeout_seconds: float = 900.0,
-    ) -> str:
-        branch_ref = str(branch or "main").strip() or "main"
-        bootstrap_timeout_seconds = max(60, int(max(60.0, float(timeout_seconds or 900.0)) - 30))
-        agent_url = f"https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/{url_quote(branch_ref, safe='/._-')}/Agent.ps1"
-        return "\n".join(
-            [
-                "$ErrorActionPreference = 'Stop'",
-                "$ProgressPreference = 'SilentlyContinue'",
-                "$exitCode = 1",
-                "$hasLock = $false",
-                "$mutex = $null",
-                "$skipDeploy = $false",
-                "$script:staleOnboardingProcessCount = 0",
-                "function Get-BorealisSha256 {",
-                "  param([string]$Text)",
-                "  $sha = [System.Security.Cryptography.SHA256]::Create()",
-                "  try {",
-                "    $bytes = [System.Text.Encoding]::UTF8.GetBytes([string]$Text)",
-                "    return ([System.BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()",
-                "  } finally {",
-                "    $sha.Dispose()",
-                "  }",
-                "}",
-                "function Ensure-BorealisDirectory {",
-                "  param([string]$Path)",
-                "  if ([string]::IsNullOrWhiteSpace($Path)) { return }",
-                "  New-Item -ItemType Directory -Force -Path $Path | Out-Null",
-                "}",
-                "function Write-BorealisOnboardingState {",
-                "  param([string]$Status, [int]$ExitCode, [string]$Detail = '')",
-                "  try {",
-                "    Ensure-BorealisDirectory -Path (Split-Path -Parent $statePath)",
-                "    $state = [ordered]@{",
-                f"      job_id = {int(job_id)}",
-                f"      run_id = {int(run_id)}",
-                f"      target = { _powershell_single_quoted(str(target or '').strip()) }",
-                f"      branch = { _powershell_single_quoted(branch_ref) }",
-                f"      server_url = { _powershell_single_quoted(server_url) }",
-                "      enrollment_code_sha256 = $enrollmentCodeSha256",
-                "      status = $Status",
-                "      exit_code = $ExitCode",
-                "      detail = $Detail",
-                "      updated_at = ([DateTime]::UtcNow.ToString('o'))",
-                "    }",
-                "    $state | ConvertTo-Json -Depth 6 | Set-Content -Path $statePath -Encoding UTF8",
-                "  } catch {",
-                "    Write-Warning ('Unable to persist Borealis onboarding state: ' + $_.Exception.Message)",
-                "  }",
-                "}",
-                "function Remove-StaleBorealisOnboardingArtifacts {",
-                "  try {",
-                "    $staleSourcePattern = (Join-Path $root 'source-*') + '\\*'",
-                "    Get-Process python,pythonw -ErrorAction SilentlyContinue |",
-                "      Where-Object { $_.Path -and $_.Path -like $staleSourcePattern } |",
-                "      ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }",
-                "  } catch { }",
-                "  try {",
-                "    $staleSourceText = Join-Path $root 'source-'",
-                "    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |",
-                "      Where-Object { $_.CommandLine -and $_.CommandLine -like ('*' + $staleSourceText + '*') } |",
-                "      ForEach-Object { Invoke-CimMethod -InputObject $_ -MethodName Terminate -ErrorAction SilentlyContinue | Out-Null }",
-                "  } catch { }",
-                "  try {",
-                "    Get-CimInstance Win32_Service -Filter \"Name LIKE 'BorealisOnboarding%'\" -ErrorAction SilentlyContinue |",
-                "      Where-Object { $_.State -ne 'Running' } |",
-                "      ForEach-Object { sc.exe delete $_.Name | Out-Null }",
-                "  } catch { }",
-                "  try {",
-                "    Get-ScheduledTask -TaskName 'BorealisOnboarding*' -ErrorAction SilentlyContinue |",
-                "      Where-Object { $_.State -ne 'Running' } |",
-                "      ForEach-Object { Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction SilentlyContinue }",
-                "  } catch { }",
-                "  try {",
-                "    Get-ChildItem -Path $root -Directory -Filter 'source-*' -ErrorAction SilentlyContinue |",
-                "      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue",
-                "  } catch { }",
-                "}",
-                "function Clear-BorealisOnboardingTemp {",
-                "  try {",
-                "    if ([string]::IsNullOrWhiteSpace($root)) { return }",
-                "    Ensure-BorealisDirectory -Path $root",
-                "    Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue |",
-                "      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue",
-                "    Ensure-BorealisDirectory -Path $root",
-                "    Write-Output '__BOREALIS_ONBOARDING_TEMP_CLEANED__=1'",
-                "  } catch {",
-                "    Write-Warning ('Unable to clean Borealis onboarding temp folder: ' + $_.Exception.Message)",
-                "  }",
-                "}",
-                "function Stop-StaleBorealisOnboardingProcesses {",
-                "  try {",
-                "    $currentPid = [int]$PID",
-                "    $ancestorIds = @{}",
-                "    try {",
-                "      $walkPid = $currentPid",
-                "      while ($walkPid -gt 0) {",
-                "        $walkProc = Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId=' + $walkPid) -ErrorAction SilentlyContinue",
-                "        if (-not $walkProc) { break }",
-                "        $parentPid = 0",
-                "        try { $parentPid = [int]$walkProc.ParentProcessId } catch { $parentPid = 0 }",
-                "        if ($parentPid -le 0 -or $ancestorIds.ContainsKey($parentPid)) { break }",
-                "        $ancestorIds[$parentPid] = $true",
-                "        $walkPid = $parentPid",
-                "      }",
-                "    } catch { }",
-                "    $cutoff = [DateTime]::UtcNow.AddSeconds(-60)",
-                "    $processes = Get-CimInstance -ClassName Win32_Process -Filter \"Name='powershell.exe' OR Name='pwsh.exe' OR Name='cmd.exe'\" -ErrorAction SilentlyContinue",
-                "    foreach ($proc in $processes) {",
-                "      try { $procId = [int]$proc.ProcessId } catch { continue }",
-                "      if ($procId -eq $currentPid) { continue }",
-                "      if ($ancestorIds.ContainsKey($procId)) { continue }",
-                "      $cmd = ($proc.CommandLine -as [string])",
-                "      if (-not $cmd) { continue }",
-                "      $normalizedCmd = $cmd.ToLowerInvariant()",
-                "      $isOnboardingProcess = $false",
-                "      foreach ($marker in @('\\temp\\borealisonboarding\\', 'temp\\borealisonboarding', '\\borealis\\temp\\onboarding\\', 'borealis\\temp\\onboarding')) {",
-                "        if ($normalizedCmd.Contains($marker)) { $isOnboardingProcess = $true; break }",
-                "      }",
-                "      if (-not $isOnboardingProcess -and $normalizedCmd.Contains('\\borealis\\agent.ps1') -and ($normalizedCmd.Contains('--agent-local-install') -or $normalizedCmd.Contains('-agent-local-install'))) {",
-                "        $isOnboardingProcess = $true",
-                "      }",
-                "      if (-not $isOnboardingProcess) { continue }",
-                "      $created = [DateTime]::MinValue",
-                "      try { $created = [System.Management.ManagementDateTimeConverter]::ToDateTime([string]$proc.CreationDate).ToUniversalTime() } catch { }",
-                "      if ($created -ne [DateTime]::MinValue -and $created -gt $cutoff) { continue }",
-                "      $terminated = $false",
-                "      try {",
-                "        taskkill.exe /PID $procId /T /F 2>$null | Out-Null",
-                "        if ($LASTEXITCODE -eq 0) { $terminated = $true }",
-                "      } catch { }",
-                "      if (-not $terminated) {",
-                "        try { Invoke-CimMethod -InputObject $proc -MethodName Terminate -ErrorAction Stop | Out-Null; $terminated = $true } catch { }",
-                "      }",
-                "      if (-not $terminated) {",
-                "        try { Stop-Process -Id $procId -Force -ErrorAction Stop; $terminated = $true } catch { }",
-                "      }",
-                "      if ($terminated) {",
-                "        $script:staleOnboardingProcessCount += 1",
-                "        Write-Output ('__BOREALIS_ONBOARDING_STALE_PROCESS_KILLED__=' + $procId)",
-                "      }",
-                "    }",
-                "  } catch {",
-                "    Write-Warning ('Unable to cleanup stale Borealis onboarding processes: ' + $_.Exception.Message)",
-                "  }",
-                "}",
-                "function Stop-BorealisProcessTree {",
-                "  param([int]$ProcessId)",
-                "  if ($ProcessId -le 0) { return }",
-                "  try { taskkill.exe /PID $ProcessId /T /F 2>$null | Out-Null; if ($LASTEXITCODE -eq 0) { return } } catch { }",
-                "  try {",
-                "    Get-CimInstance -ClassName Win32_Process -Filter ('ParentProcessId=' + $ProcessId) -ErrorAction SilentlyContinue |",
-                "      ForEach-Object { Stop-BorealisProcessTree -ProcessId ([int]$_.ProcessId) }",
-                "  } catch { }",
-                "  try { Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue } catch { }",
-                "}",
-                "function Quote-BorealisProcessArgument {",
-                "  param([AllowNull()][object]$Value)",
-                "  $text = if ($null -eq $Value) { '' } else { [string]$Value }",
-                "  if ($text.Length -eq 0) { return '\"\"' }",
-                "  if ($text -notmatch '[\\s\"]') { return $text }",
-                "  return '\"' + ($text -replace '([\\\\]*)\"', '$1$1\\\"' -replace '([\\\\]+)$', '$1$1') + '\"'",
-                "}",
-                "function Invoke-BorealisOnboardingAgentBootstrap {",
-                "  param([string]$FilePath, [string[]]$Arguments, [int]$TimeoutSeconds)",
-                "  $argumentLine = (($Arguments | ForEach-Object { Quote-BorealisProcessArgument $_ }) -join ' ')",
-                "  $timeout = [Math]::Max(60, [int]$TimeoutSeconds)",
-                "  $deadline = [DateTime]::UtcNow.AddSeconds($timeout)",
-                "  $proc = Start-Process -FilePath $FilePath -ArgumentList $argumentLine -NoNewWindow -PassThru -ErrorAction Stop",
-                "  while (-not $proc.WaitForExit(1000)) {",
-                "    try { Write-BorealisOnboardingState -Status 'running' -ExitCode 1 } catch { }",
-                "    if ([DateTime]::UtcNow -ge $deadline) {",
-                "      Write-Error ('windows_onboarding_agent_bootstrap_timeout after ' + $timeout + ' seconds')",
-                "      try { Write-BorealisOnboardingState -Status 'failed' -ExitCode 124 -Detail 'windows_onboarding_agent_bootstrap_timeout' } catch { }",
-                "      Stop-BorealisProcessTree -ProcessId ([int]$proc.Id)",
-                "      return 124",
-                "    }",
-                "  }",
-                "  try { return [int]$proc.ExitCode } catch { return 1 }",
-                "}",
-                "function Stop-BorealisPythonProcesses {",
-                "  $enginePids = @()",
-                "  $engineRoot = Join-Path $repoRoot 'Engine'",
-                "  $dataEngineRoot = Join-Path $repoRoot 'Data\\Engine'",
-                "  try {",
-                "    $cims = Get-CimInstance -ClassName Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" -ErrorAction Stop",
-                "    foreach ($proc in $cims) {",
-                "      try { $procId = [int]$proc.ProcessId } catch { continue }",
-                "      $cmd = ($proc.CommandLine -as [string])",
-                "      $exePath = ($proc.ExecutablePath -as [string])",
-                "      $isEngine = $false",
-                "      foreach ($marker in @($engineRoot, $dataEngineRoot, '\\Engine\\', '\\Data\\Engine\\', 'Engine\\server.py', 'Data\\Engine\\server.py')) {",
-                "        if (-not $marker) { continue }",
-                "        try {",
-                "          if ($cmd -and $cmd.ToLowerInvariant().Contains($marker.ToLowerInvariant())) { $isEngine = $true; break }",
-                "          if ($exePath -and $exePath.ToLowerInvariant().Contains($marker.ToLowerInvariant())) { $isEngine = $true; break }",
-                "        } catch { }",
-                "      }",
-                "      if ($isEngine -and ($enginePids -notcontains $procId)) { $enginePids += $procId }",
-                "    }",
-                "  } catch { }",
-                "  foreach ($name in @('python','pythonw')) {",
-                "    try { $processes = Get-Process -Name $name -ErrorAction Stop } catch { $processes = @() }",
-                "    foreach ($proc in $processes) {",
-                "      try { $procId = [int]$proc.Id } catch { continue }",
-                "      if ($enginePids -and ($enginePids -contains $procId)) { continue }",
-                "      $stopped = $false",
-                "      try {",
-                "        Stop-Process -Id $procId -Force -ErrorAction Stop",
-                "        $stopped = $true",
-                "      } catch { }",
-                "      if (-not $stopped) {",
-                "        try { taskkill.exe /PID $procId /F | Out-Null } catch { }",
-                "      }",
-                "    }",
-                "  }",
-                "}",
-                "try {",
-                "  $repoRoot = 'C:\\Borealis'",
-                "  $root = Join-Path $repoRoot 'Temp\\Onboarding'",
-                "  $statePath = Join-Path $root 'state.json'",
-                f"  $enrollmentCodeSha256 = Get-BorealisSha256 { _powershell_single_quoted(enrollment_code) }",
-                "  Ensure-BorealisDirectory -Path $repoRoot",
-                "  Ensure-BorealisDirectory -Path $root",
-                "  Stop-StaleBorealisOnboardingProcesses",
-                "  $mutex = New-Object System.Threading.Mutex($false, 'Global\\BorealisAgentOnboarding')",
-                "  try {",
-                "    $hasLock = $mutex.WaitOne(0)",
-                "  } catch [System.Threading.AbandonedMutexException] {",
-                "    $hasLock = $true",
-                "  }",
-                "  if (-not $hasLock) {",
-                "    Write-Output '__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1'",
-                "    $exitCode = 73",
-                "    $skipDeploy = $true",
-                "  }",
-                "  if (-not $skipDeploy) {",
-                "    Remove-StaleBorealisOnboardingArtifacts",
-                "    $settingsRoot = Join-Path $repoRoot 'Agent\\Borealis\\Settings'",
-                "    $accessTokenPath = Join-Path $settingsRoot 'access.jwt'",
-                "    if (Test-Path $accessTokenPath -PathType Leaf) {",
-                "      Write-Output '__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1'",
-                "      Write-BorealisOnboardingState -Status 'already_enrolled' -ExitCode 73",
-                "      $exitCode = 73",
-                "      $skipDeploy = $true",
-                "    }",
-                "  }",
-                "  if (-not $skipDeploy -and (Test-Path $statePath -PathType Leaf)) {",
-                "    try {",
-                "      $existingState = Get-Content -Path $statePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop",
-                "      $sameEnrollment = ([string]$existingState.enrollment_code_sha256 -eq [string]$enrollmentCodeSha256)",
-                f"      $sameServer = ([string]$existingState.server_url -eq { _powershell_single_quoted(server_url) })",
-                "      $status = ([string]$existingState.status).ToLowerInvariant()",
-                "      $updatedAt = [DateTime]::MinValue",
-                "      try { $updatedAt = ([DateTime]::Parse([string]$existingState.updated_at)).ToUniversalTime() } catch { }",
-                "      $ageHours = ([DateTime]::UtcNow - $updatedAt).TotalHours",
-                "      if ($sameEnrollment -and $sameServer -and $ageHours -lt 24 -and $status -eq 'pending_approval') {",
-                "        Write-Output ('__BOREALIS_ONBOARDING_ALREADY_PENDING__=1 status=' + $status)",
-                "        $exitCode = 73",
-                "        $skipDeploy = $true",
-                "      }",
-                "      if (-not $skipDeploy -and $sameEnrollment -and $sameServer -and $status -eq 'running') {",
-                "        Write-Output ('__BOREALIS_ONBOARDING_STALE_RUNNING_STATE_IGNORED__=1 age_hours=' + [Math]::Round($ageHours, 2))",
-                "        try { Remove-Item -Force $statePath -ErrorAction SilentlyContinue } catch { }",
-                "      }",
-                "    } catch {",
-                "      Write-Warning ('Unable to inspect Borealis onboarding state: ' + $_.Exception.Message)",
-                "    }",
-                "  }",
-                "  if (-not $skipDeploy) {",
-                "    Clear-BorealisOnboardingTemp",
-                "    Write-BorealisOnboardingState -Status 'running' -ExitCode 1",
-                "    Stop-BorealisPythonProcesses",
-                f"  $agentBootstrapPath = Join-Path $root { _powershell_single_quoted(f'Agent-{int(run_id)}.ps1') }",
-                "  Ensure-BorealisDirectory -Path $root",
-                "  if (Test-Path $agentBootstrapPath) { Remove-Item -Force $agentBootstrapPath }",
-                "  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12",
-                f"  Write-Output ('Downloading Windows Agent bootstrap from {agent_url}.')",
-                f"  Invoke-WebRequest -UseBasicParsing -Uri { _powershell_single_quoted(agent_url) } -OutFile $agentBootstrapPath",
-                f"  $env:BOREALIS_ONBOARDING_JOB_ID = { _powershell_single_quoted(str(int(job_id))) }",
-                f"  $env:BOREALIS_ONBOARDING_RUN_ID = { _powershell_single_quoted(str(int(run_id))) }",
-                f"  $env:BOREALIS_ONBOARDING_TARGET = { _powershell_single_quoted(str(target or '').strip()) }",
-                f"  $env:BOREALIS_ONBOARDING_TIMEOUT_SECONDS = { _powershell_single_quoted(str(bootstrap_timeout_seconds)) }",
-                "  $env:BOREALIS_ONBOARDING_STATE_PATH = $statePath",
-                "  $env:BOREALIS_AGENT_NONINTERACTIVE = '1'",
-                "  $env:BOREALIS_AGENT_NO_TTY = '1'",
-                "  $agentSettingsRoot = Join-Path $repoRoot 'Agent\\Borealis\\Settings'",
-                "  Ensure-BorealisDirectory -Path $agentSettingsRoot",
-                "  $onboardingContext = [ordered]@{",
-                f"    job_id = {int(job_id)}",
-                f"    run_id = {int(run_id)}",
-                f"    target = { _powershell_single_quoted(str(target or '').strip()) }",
-                "  }",
-                "  $onboardingContext | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $agentSettingsRoot 'onboarding_context.json') -Encoding UTF8",
-                "  Write-Output ('Launching ' + $agentBootstrapPath + ' --agent --repo-branch [redacted] --serverurl [redacted] --enrollmentcode [redacted].')",
-                "  $agentArgs = @(",
-                "    '-NoProfile',",
-                "    '-NonInteractive',",
-                "    '-ExecutionPolicy',",
-                "    'Bypass',",
-                "    '-WindowStyle',",
-                "    'Hidden',",
-                "    '-File',",
-                "    $agentBootstrapPath,",
-                "    '--install-dir',",
-                "    $repoRoot,",
-                "    '--repo-branch',",
-                f"    { _powershell_single_quoted(branch_ref) },",
-                "    '--agent',",
-                "    '--serverurl',",
-                f"    { _powershell_single_quoted(server_url) },",
-                "    '--enrollmentcode',",
-                f"    { _powershell_single_quoted(enrollment_code) },",
-                "    '--reset-enrollment'",
-                "  )",
-                f"  $exitCode = Invoke-BorealisOnboardingAgentBootstrap -FilePath 'powershell.exe' -Arguments $agentArgs -TimeoutSeconds {bootstrap_timeout_seconds}",
-                "    if ($exitCode -eq 0) {",
-                "      Write-BorealisOnboardingState -Status 'pending_approval' -ExitCode 0",
-                "    } else {",
-                "      Write-BorealisOnboardingState -Status 'failed' -ExitCode $exitCode",
-                "    }",
-                "  }",
-                "} catch {",
-                "  Write-Error $_.Exception.Message",
-                "  if ($exitCode -eq 0) { $exitCode = 1 }",
-                "  try { Write-BorealisOnboardingState -Status 'failed' -ExitCode $exitCode } catch { }",
-                "} finally {",
-                "  if ($hasLock -and $mutex -ne $null) {",
-                "    try { $mutex.ReleaseMutex() | Out-Null } catch { }",
-                "  }",
-                "  if ($mutex -ne $null) {",
-                "    try { $mutex.Dispose() } catch { }",
-                "  }",
-                "  Write-Output \"__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=$exitCode\"",
-                "}",
-                "exit $exitCode",
-            ]
-        )
-
     def _windows_task_xml(self, *, task_name: str, command: str, arguments: str) -> str:
         now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
         return "\n".join(
@@ -4878,43 +4541,118 @@ class JobScheduler:
                         time.sleep(1.0)
         raise RuntimeError(f"smb_connection_failed:{last_error or 'connection_failed'}")
 
-    def _windows_smb_stage_script(self, smb: Any, script: str) -> Tuple[str, str, str, str]:
-        stem = f"BorealisOnboard-{uuid.uuid4().hex}"
-        remote_dir = "Temp\\BorealisOnboarding"
-        try:
-            smb.createDirectory("ADMIN$", remote_dir)
-        except Exception:
-            pass
-        script_path = f"{remote_dir}\\{stem}.ps1"
-        launcher_path = f"{remote_dir}\\{stem}.cmd"
-        output_path = f"{remote_dir}\\{stem}.log"
-        script_abs = f"C:\\Windows\\{script_path}"
-        launcher_abs = f"C:\\Windows\\{launcher_path}"
-        output_abs = f"C:\\Windows\\{output_path}"
-        launcher = "\n".join(
-            [
-                "@echo off",
-                f"echo __BOREALIS_WINDOWS_ONBOARDING_LAUNCHER_STARTED__=1 > {output_abs}",
-                (
-                    "start \"\" /B %SystemRoot%\\System32\\cmd.exe /Q /C "
-                    f"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe "
-                    f"-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File {script_abs} ^>^> {output_abs} 2^>^&1"
-                ),
-                "exit /b 0",
-            ]
-        )
-        script_bytes = io.BytesIO(str(script or "").encode("utf-8-sig"))
-        launcher_bytes = io.BytesIO(launcher.encode("utf-8"))
-        output_bytes = io.BytesIO(b"__BOREALIS_WINDOWS_ONBOARDING_STAGED__=1\r\n")
-        smb.putFile("ADMIN$", script_path, script_bytes.read)
-        smb.putFile("ADMIN$", launcher_path, launcher_bytes.read)
-        smb.putFile("ADMIN$", output_path, output_bytes.read)
-        return script_abs, output_abs, output_path, launcher_abs
-
     def _read_windows_smb_file(self, smb: Any, path: str, *, share: str = "ADMIN$") -> str:
         buffer = io.BytesIO()
         smb.getFile(str(share or "ADMIN$"), path, buffer.write)
         return buffer.getvalue().decode("utf-8", errors="replace")
+
+    def _windows_agent_service_bootstrapper_path(self) -> Optional[Path]:
+        override = str(os.environ.get("BOREALIS_WINDOWS_AGENT_SERVICE_BOOTSTRAPPER_EXE") or "").strip()
+        if override:
+            candidate = Path(override).expanduser()
+            if candidate.is_file():
+                return candidate
+        current = Path(__file__).resolve()
+        roots: List[Path] = []
+        for parent in [current.parent, *current.parents]:
+            if parent not in roots:
+                roots.append(parent)
+        env_root = str(os.environ.get("BOREALIS_PROJECT_ROOT") or "").strip()
+        if env_root:
+            roots.insert(0, Path(env_root).expanduser())
+        for root in roots:
+            for candidate in (
+                root / "Data" / "Agent" / "Bootstrapper" / "dist" / AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME,
+                root / "Data" / "Agent" / "Bootstrapper" / AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME,
+                root / "Engine" / "Services" / "api-backend" / "data" / AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME,
+            ):
+                if candidate.is_file():
+                    return candidate
+        return None
+
+    def _windows_service_bootstrapper_unavailable_result(self) -> Dict[str, Any]:
+        return {
+            "exit_code": 127,
+            "stdout": "",
+            "stderr": (
+                f"{AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME} unavailable. Build "
+                "Data/Agent/Bootstrapper/dist/Agent_Service_Bootstrapper.exe or set "
+                "BOREALIS_WINDOWS_AGENT_SERVICE_BOOTSTRAPPER_EXE."
+            ),
+        }
+
+    def _windows_quote_command_arg(self, value: Any) -> str:
+        text = str(value or "")
+        if not text:
+            return '""'
+        if not re.search(r'[\s"]', text):
+            return text
+        return '"' + text.replace('"', r'\"') + '"'
+
+    def _windows_smb_stage_service_bootstrapper(
+        self,
+        smb: Any,
+        *,
+        branch: str,
+        server_url: str,
+        enrollment_code: str,
+        job_id: int,
+        run_id: int,
+        target: str,
+        timeout_seconds: float,
+    ) -> Tuple[str, str, str]:
+        bootstrapper_path = self._windows_agent_service_bootstrapper_path()
+        if bootstrapper_path is None:
+            raise FileNotFoundError(AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME)
+        branch_ref = str(branch or "main").strip() or "main"
+        stem = f"BorealisOnboard-{uuid.uuid4().hex}"
+        remote_root = "Temp\\BorealisOnboarding"
+        remote_dir = f"{remote_root}\\{stem}"
+        try:
+            smb.createDirectory("ADMIN$", remote_root)
+        except Exception:
+            pass
+        try:
+            smb.createDirectory("ADMIN$", remote_dir)
+        except Exception:
+            pass
+        exe_path = f"{remote_dir}\\{AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME}"
+        config_path = f"{remote_dir}\\config.json"
+        output_path = f"{remote_dir}\\stdout.log"
+        exe_abs = f"C:\\Windows\\{exe_path}"
+        config_abs = f"C:\\Windows\\{config_path}"
+        output_abs = f"C:\\Windows\\{output_path}"
+        state_abs = "C:\\Borealis\\Temp\\Onboarding\\state.json"
+        events_abs = "C:\\Borealis\\Temp\\Onboarding\\events.jsonl"
+        agent_script_abs = f"C:\\Borealis\\Temp\\Onboarding\\Agent-{int(run_id)}.ps1"
+        agent_url = (
+            "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/"
+            f"{url_quote(branch_ref, safe='/._-')}/Agent.ps1"
+        )
+        config = {
+            "agent_url": agent_url,
+            "agent_script_path": agent_script_abs,
+            "install_dir": "C:\\Borealis",
+            "repo_url": DEFAULT_BOREALIS_REPO_GIT_URL,
+            "repo_ref": branch_ref,
+            "server_url": str(server_url or ""),
+            "enrollment_code": str(enrollment_code or ""),
+            "state_path": state_abs,
+            "events_path": events_abs,
+            "stdout_path": output_abs,
+            "stderr_path": output_abs,
+            "timeout_seconds": max(60, int(max(60.0, float(timeout_seconds or 900.0)) - 30)),
+            "job_id": int(job_id),
+            "run_id": int(run_id),
+            "target": str(target or "").strip(),
+        }
+        with open(bootstrapper_path, "rb") as handle:
+            smb.putFile("ADMIN$", exe_path, handle.read)
+        config_bytes = io.BytesIO(json.dumps(config, separators=(",", ":")).encode("utf-8"))
+        output_bytes = io.BytesIO(b"__BOREALIS_AGENT_SERVICE_BOOTSTRAPPER_STAGED__=1\r\n")
+        smb.putFile("ADMIN$", config_path, config_bytes.read)
+        smb.putFile("ADMIN$", output_path, output_bytes.read)
+        return exe_abs, config_abs, output_path
 
     def _read_windows_onboarding_state(self, smb: Any) -> Dict[str, Any]:
         try:
@@ -5039,7 +4777,12 @@ class JobScheduler:
         host: str,
         port: int,
         credential: Dict[str, Any],
-        script: str,
+        branch: str,
+        server_url: str,
+        enrollment_code: str,
+        job_id: int,
+        run_id: int,
+        target: str,
         timeout_seconds: float,
         approval_check: Optional[Callable[[], str]] = None,
         status_update: Optional[Callable[[str, str, str], None]] = None,
@@ -5048,6 +4791,8 @@ class JobScheduler:
             from impacket.dcerpc.v5 import scmr, transport  # type: ignore
         except Exception as exc:
             return {"exit_code": 127, "stdout": "", "stderr": f"impacket_scm_unavailable:{exc}"}
+        if self._windows_agent_service_bootstrapper_path() is None:
+            return self._windows_service_bootstrapper_unavailable_result()
         smb = None
         dce = None
         service_handle = None
@@ -5058,12 +4803,25 @@ class JobScheduler:
             if callable(status_update):
                 status_update("Connecting to Windows SMB for service enrollment.")
             smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
-            stage = "ADMIN$ script staging"
+            stage = "ADMIN$ bootstrapper staging"
             if callable(status_update):
-                status_update("Staging Borealis onboarding script over ADMIN$.")
-            _script_abs, _output_abs, output_path, launcher_abs = self._windows_smb_stage_script(smb, script)
+                status_update("Staging Borealis Agent service bootstrapper over ADMIN$.")
             service_name = f"BorealisOnboarding{uuid.uuid4().hex[:12]}"
-            command = f"C:\\Windows\\System32\\cmd.exe /Q /C {launcher_abs}"
+            exe_abs, config_abs, output_path = self._windows_smb_stage_service_bootstrapper(
+                smb,
+                branch=branch,
+                server_url=server_url,
+                enrollment_code=enrollment_code,
+                job_id=job_id,
+                run_id=run_id,
+                target=target,
+                timeout_seconds=timeout_seconds,
+            )
+            command = (
+                f"{self._windows_quote_command_arg(exe_abs)} "
+                f"--config {self._windows_quote_command_arg(config_abs)} "
+                f"--service-name {self._windows_quote_command_arg(service_name)}"
+            )
             start_warning = ""
             stage = "svcctl RPC bind"
             if callable(status_update):
@@ -5145,7 +4903,12 @@ class JobScheduler:
         host: str,
         port: int,
         credential: Dict[str, Any],
-        script: str,
+        branch: str,
+        server_url: str,
+        enrollment_code: str,
+        job_id: int,
+        run_id: int,
+        target: str,
         timeout_seconds: float,
         approval_check: Optional[Callable[[], str]] = None,
         status_update: Optional[Callable[[str, str, str], None]] = None,
@@ -5155,6 +4918,8 @@ class JobScheduler:
             from impacket.dcerpc.v5.dtypes import NULL  # type: ignore
         except Exception as exc:
             return {"exit_code": 127, "stdout": "", "stderr": f"impacket_tsch_unavailable:{exc}"}
+        if self._windows_agent_service_bootstrapper_path() is None:
+            return self._windows_service_bootstrapper_unavailable_result()
         smb = None
         dce = None
         task_path = f"\\BorealisOnboarding{uuid.uuid4().hex[:12]}"
@@ -5164,12 +4929,21 @@ class JobScheduler:
             if callable(status_update):
                 status_update("Connecting to Windows SMB for scheduled task enrollment.")
             smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
-            stage = "ADMIN$ script staging"
+            stage = "ADMIN$ bootstrapper staging"
             if callable(status_update):
-                status_update("Staging Borealis onboarding script over ADMIN$.")
-            _script_abs, _output_abs, output_path, launcher_abs = self._windows_smb_stage_script(smb, script)
-            command = "cmd.exe"
-            arguments = f'/Q /C "{launcher_abs}"'
+                status_update("Staging Borealis Agent service bootstrapper over ADMIN$.")
+            exe_abs, config_abs, output_path = self._windows_smb_stage_service_bootstrapper(
+                smb,
+                branch=branch,
+                server_url=server_url,
+                enrollment_code=enrollment_code,
+                job_id=job_id,
+                run_id=run_id,
+                target=target,
+                timeout_seconds=timeout_seconds,
+            )
+            command = exe_abs
+            arguments = f"--config {self._windows_quote_command_arg(config_abs)}"
             xml = self._windows_task_xml(task_name=task_path, command=command, arguments=arguments)
             stage = "Task Scheduler RPC bind"
             if callable(status_update):
@@ -5223,7 +4997,12 @@ class JobScheduler:
         host: str,
         port: int,
         credential: Dict[str, Any],
-        script: str,
+        branch: str,
+        server_url: str,
+        enrollment_code: str,
+        job_id: int,
+        run_id: int,
+        target: str,
         timeout_seconds: float,
         approval_check: Optional[Callable[[], str]] = None,
         status_update: Optional[Callable[[str, str, str], None]] = None,
@@ -5234,6 +5013,8 @@ class JobScheduler:
             from impacket.dcerpc.v5.dtypes import NULL  # type: ignore
         except Exception as exc:
             return {"exit_code": 127, "stdout": "", "stderr": f"impacket_wmi_unavailable:{exc}"}
+        if self._windows_agent_service_bootstrapper_path() is None:
+            return self._windows_service_bootstrapper_unavailable_result()
         domain, username, password = _parse_windows_credential_parts(credential)
         smb = None
         dcom = None
@@ -5244,11 +5025,23 @@ class JobScheduler:
             if callable(status_update):
                 status_update("Connecting to Windows SMB for WMI/DCOM enrollment.")
             smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
-            stage = "ADMIN$ script staging"
+            stage = "ADMIN$ bootstrapper staging"
             if callable(status_update):
-                status_update("Staging Borealis onboarding script over ADMIN$.")
-            _script_abs, _output_abs, output_path, launcher_abs = self._windows_smb_stage_script(smb, script)
-            command = f'cmd.exe /Q /C "{launcher_abs}"'
+                status_update("Staging Borealis Agent service bootstrapper over ADMIN$.")
+            exe_abs, config_abs, output_path = self._windows_smb_stage_service_bootstrapper(
+                smb,
+                branch=branch,
+                server_url=server_url,
+                enrollment_code=enrollment_code,
+                job_id=job_id,
+                run_id=run_id,
+                target=target,
+                timeout_seconds=timeout_seconds,
+            )
+            command = (
+                f"{self._windows_quote_command_arg(exe_abs)} "
+                f"--config {self._windows_quote_command_arg(config_abs)}"
+            )
             stage = "DCOM connect"
             if callable(status_update):
                 status_update("Connecting to Windows WMI/DCOM.")
@@ -5302,19 +5095,39 @@ class JobScheduler:
         *,
         host: str,
         port: int,
+        smb_port: int,
         credential: Dict[str, Any],
-        script: str,
+        branch: str,
+        server_url: str,
+        enrollment_code: str,
+        job_id: int,
+        run_id: int,
+        target: str,
         timeout_seconds: float,
     ) -> Dict[str, Any]:
         try:
             import winrm  # type: ignore
         except Exception as exc:
             return {"exit_code": 127, "stdout": "", "stderr": f"pywinrm_unavailable:{exc}"}
+        if self._windows_agent_service_bootstrapper_path() is None:
+            return self._windows_service_bootstrapper_unavailable_result()
         metadata = credential.get("metadata") if isinstance(credential.get("metadata"), dict) else {}
         transport_mode = str(metadata.get("winrm_transport") or "ntlm").strip().lower() or "ntlm"
         scheme = "https" if int(port) == 5986 or transport_mode in {"ssl", "credssp"} else "http"
         endpoint = f"{scheme}://{host}:{int(port)}/wsman"
+        smb = None
         try:
+            smb = self._open_windows_smb_connection(host=host, port=smb_port, credential=credential)
+            exe_abs, config_abs, _output_path = self._windows_smb_stage_service_bootstrapper(
+                smb,
+                branch=branch,
+                server_url=server_url,
+                enrollment_code=enrollment_code,
+                job_id=job_id,
+                run_id=run_id,
+                target=target,
+                timeout_seconds=timeout_seconds,
+            )
             session = winrm.Session(
                 endpoint,
                 auth=(str(credential.get("username") or ""), str(credential.get("password") or "")),
@@ -5323,7 +5136,7 @@ class JobScheduler:
                 operation_timeout_sec=max(20, min(600, int(timeout_seconds or 900))),
                 read_timeout_sec=max(30, min(660, int(timeout_seconds or 900) + 30)),
             )
-            result = session.run_ps(script)
+            result = session.run_cmd(exe_abs, ["--config", config_abs])
             stdout_raw = getattr(result, "std_out", b"") or b""
             stderr_raw = getattr(result, "std_err", b"") or b""
             stdout = stdout_raw.decode("utf-8", errors="replace") if isinstance(stdout_raw, bytes) else str(stdout_raw or "")
@@ -5335,6 +5148,12 @@ class JobScheduler:
             return {"exit_code": exit_code, "stdout": stdout, "stderr": stderr}
         except Exception as exc:
             return {"exit_code": 1, "stdout": "", "stderr": str(exc)}
+        finally:
+            if smb is not None:
+                try:
+                    smb.logoff()
+                except Exception:
+                    pass
 
     def _run_windows_onboarding_target(
         self,
@@ -5370,15 +5189,6 @@ class JobScheduler:
             return ONBOARDING_STATUS_SKIPPED
 
         timeout_seconds = self._windows_onboarding_observation_timeout_seconds()
-        script = self._windows_onboarding_script(
-            branch=branch,
-            server_url=server_url,
-            enrollment_code=str(site.get("enrollment_code") or ""),
-            job_id=job_id,
-            run_id=run_id,
-            target=host,
-            timeout_seconds=timeout_seconds,
-        )
         normalized_methods = _windows_onboarding_methods_with_required_fallbacks(
             [
                 method
@@ -5438,7 +5248,12 @@ class JobScheduler:
                     host=host,
                     port=smb_port,
                     credential=credential,
-                    script=script,
+                    branch=branch,
+                    server_url=server_url,
+                    enrollment_code=str(site.get("enrollment_code") or ""),
+                    job_id=job_id,
+                    run_id=run_id,
+                    target=host,
                     timeout_seconds=timeout_seconds,
                     approval_check=_approval_check,
                     status_update=_status_update,
@@ -5448,7 +5263,12 @@ class JobScheduler:
                     host=host,
                     port=smb_port,
                     credential=credential,
-                    script=script,
+                    branch=branch,
+                    server_url=server_url,
+                    enrollment_code=str(site.get("enrollment_code") or ""),
+                    job_id=job_id,
+                    run_id=run_id,
+                    target=host,
                     timeout_seconds=timeout_seconds,
                     approval_check=_approval_check,
                     status_update=_status_update,
@@ -5460,7 +5280,12 @@ class JobScheduler:
                         "host": host,
                         "port": smb_port,
                         "credential": credential,
-                        "script": script,
+                        "branch": branch,
+                        "server_url": server_url,
+                        "enrollment_code": str(site.get("enrollment_code") or ""),
+                        "job_id": job_id,
+                        "run_id": run_id,
+                        "target": host,
                         "timeout_seconds": timeout_seconds,
                     },
                     timeout_seconds=self._windows_wmi_dcom_timeout_seconds(),
@@ -5472,8 +5297,14 @@ class JobScheduler:
                 result = self._execute_windows_winrm_onboarding(
                     host=host,
                     port=int(winrm_port),
+                    smb_port=smb_port,
                     credential=credential,
-                    script=script,
+                    branch=branch,
+                    server_url=server_url,
+                    enrollment_code=str(site.get("enrollment_code") or ""),
+                    job_id=job_id,
+                    run_id=run_id,
+                    target=host,
                     timeout_seconds=timeout_seconds,
                 )
             exit_code = int(result.get("exit_code") or 0)

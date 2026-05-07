@@ -138,7 +138,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 
 #### Scope and runtime paths
 - Purpose: outbound-only connectivity, device telemetry, scripting, UI helpers.
-- Bootstrap: `Agent.ps1` preps dependencies, activates the agent venv, keeps only the SYSTEM startup task, and removes the legacy `Borealis Agent (UserHelper)` scheduled task on install/update.
+- Bootstrap: `Agent.ps1` preps dependencies, activates the agent venv, keeps only the SYSTEM startup task, and removes the legacy `Borealis Agent (UserHelper)` scheduled task on install/update. Remote Windows onboarding stages `Agent_Service_Bootstrapper.exe` from `Data/Agent/Bootstrapper/`; that native service shim handles SCM/service semantics, temp cleanup, `Agent.ps1` download, state/events, timeout, and process-tree termination before launching `Agent.ps1`.
 - Linux first install: `Agent.sh deploy` installs dependencies and stages the runtime.
 - Raw one-line or repo-option `Agent.sh` runs sync first, then re-execs the installed `Agent.sh`; root shells do not need `sudo` in the pipe, and generated non-root commands still use `sudo bash` before script execution. Local non-root `Agent.sh deploy` self-escalates through `sudo` when available and uses existing on-disk source without updating git.
 - Edit in `Data/Agent`, not `/Agent`; runtime copies are ephemeral and wiped regularly.

@@ -297,70 +297,18 @@ def test_windows_scheduled_task_xml_uses_localsystem_sid(engine_harness: EngineT
     assert "<AllowStartOnDemand>true</AllowStartOnDemand>" in xml
 
 
-def test_windows_onboarding_script_uses_stable_repo_and_remote_lock(engine_harness: EngineTestHarness) -> None:
+def test_windows_onboarding_requires_agent_service_bootstrapper(engine_harness: EngineTestHarness) -> None:
     _client, scheduler = _scheduled_jobs_client(engine_harness)
 
-    script = scheduler._windows_onboarding_script(
-        branch="main",
-        server_url="https://borealis.example",
-        enrollment_code="ENROLL",
-        job_id=10,
-        run_id=20,
-        target="win01.lab",
-    )
+    unavailable = scheduler._windows_service_bootstrapper_unavailable_result()
 
-    assert "Global\\BorealisAgentOnboarding" in script
-    assert "$repoRoot = 'C:\\Borealis'" in script
-    assert "Temp\\Onboarding" in script
-    assert "function Ensure-BorealisDirectory" in script
-    assert "function Clear-BorealisOnboardingTemp" in script
-    assert "Ensure-BorealisDirectory -Path (Split-Path -Parent $statePath)" in script
-    assert "Ensure-BorealisDirectory -Path $repoRoot" in script
-    assert "__BOREALIS_ONBOARDING_TEMP_CLEANED__=1" in script
-    assert script.index("Clear-BorealisOnboardingTemp") < script.index(
-        "Write-BorealisOnboardingState -Status 'running' -ExitCode 1"
+    assert unavailable["exit_code"] == 127
+    assert scheduled_job_module.AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME in unavailable["stderr"]
+    assert "BOREALIS_WINDOWS_AGENT_SERVICE_BOOTSTRAPPER_EXE" in unavailable["stderr"]
+    assert scheduler._windows_quote_command_arg("C:\\Windows\\Temp\\Agent_Service_Bootstrapper.exe").endswith(
+        "Agent_Service_Bootstrapper.exe"
     )
-    assert script.index("Ensure-BorealisDirectory -Path $root") < script.index(
-        "Write-BorealisOnboardingState -Status 'running' -ExitCode 1"
-    )
-    download_guard_index = script.rfind(
-        "Ensure-BorealisDirectory -Path $root",
-        0,
-        script.index("Invoke-WebRequest"),
-    )
-    assert download_guard_index > script.index("$agentBootstrapPath = Join-Path $root")
-    assert "Ensure-BorealisDirectory -Path $agentSettingsRoot" in script
-    assert "__BOREALIS_ONBOARDING_ALREADY_PENDING__=1" in script
-    assert "__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1" in script
-    assert "function Stop-BorealisPythonProcesses" in script
-    assert "Stop-Process -Id $_.Id -Force" in script
-    assert "taskkill.exe /PID $procId /T /F" in script
-    assert "$ancestorIds.ContainsKey($procId)" in script
-    assert "ParentProcessId" in script
-    assert "Invoke-CimMethod -InputObject $_ -MethodName Terminate" in script
-    assert "\\borealis\\temp\\onboarding\\" in script
-    assert "\\borealis\\agent.ps1" in script
-    assert "--agent-local-install" in script
-    assert "function Stop-BorealisProcessTree" in script
-    assert "function Invoke-BorealisOnboardingAgentBootstrap" in script
-    assert "BOREALIS_ONBOARDING_TIMEOUT_SECONDS" in script
-    assert "BOREALIS_ONBOARDING_STATE_PATH" in script
-    assert "detail = $Detail" in script
-    assert "windows_onboarding_agent_bootstrap_timeout" in script
-    assert "source-*" in script
-    assert "__BOREALIS_ONBOARDING_STALE_RUNNING_STATE_IGNORED__=1" in script
-    assert "$script:staleOnboardingProcessCount += 1" in script
-    assert "Downloading Windows Agent bootstrap" in script
-    assert "Agent.ps1" in script
-    assert "--repo-branch" in script
-    assert "-NonInteractive" in script
-    assert "-WindowStyle" in script
-    assert "Hidden" in script
-    assert "--reset-enrollment" in script
-    assert "$status -eq 'pending_approval'" in script
-    assert "$status -eq 'running'" in script
-    assert "@('running','pending_approval') -contains $status" not in script
-    assert "-NewEngine" not in script
+    assert scheduler._windows_quote_command_arg("C:\\Windows\\Temp\\Borealis Onboarding\\config.json").startswith('"')
 
 
 def test_windows_smb_poll_treats_sharing_violation_as_active_writer(
@@ -436,6 +384,7 @@ def test_windows_onboarding_falls_back_to_winrm(engine_harness: EngineTestHarnes
     _client, scheduler = _scheduled_jobs_client(engine_harness)
     updates = []
     attempts = []
+    method_kwargs = []
 
     monkeypatch.setattr(scheduler, "_update_onboarding_target_row", lambda row_id, **kwargs: updates.append({"row_id": row_id, **kwargs}))
     monkeypatch.setattr(scheduler, "_onboarding_target_already_known", lambda *_args, **_kwargs: False)
@@ -444,6 +393,7 @@ def test_windows_onboarding_falls_back_to_winrm(engine_harness: EngineTestHarnes
     monkeypatch.setattr(scheduler, "_lookup_onboarding_approval", lambda **_kwargs: "APR-WIN-1")
 
     def fail_smb(**_kwargs):
+        method_kwargs.append(dict(_kwargs))
         attempts.append("smb_scm")
         return {"exit_code": 1, "stdout": "", "stderr": "service blocked"}
 
@@ -478,6 +428,11 @@ def test_windows_onboarding_falls_back_to_winrm(engine_harness: EngineTestHarnes
     )
 
     assert attempts == ["smb_scm", "scheduled_task", "wmi_dcom", "winrm"]
+    assert method_kwargs
+    assert "script" not in method_kwargs[0]
+    assert method_kwargs[0]["branch"] == "main"
+    assert method_kwargs[0]["server_url"] == "https://borealis.example"
+    assert method_kwargs[0]["enrollment_code"] == "ENROLL"
     assert status == scheduled_job_module.ONBOARDING_STATUS_WAITING_APPROVAL
     assert updates[-1]["status"] == scheduled_job_module.ONBOARDING_STATUS_WAITING_APPROVAL
     assert "WinRM" in updates[-1]["detail"]
