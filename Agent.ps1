@@ -589,7 +589,7 @@ function Sync-BorealisRepository {
         [string]$RepositoryUrl,
         [string]$Ref,
         [string]$DestinationPath,
-        [string[]]$PreserveDirectories = @('Agent', 'Temp')
+        [string[]]$PreserveDirectories = @('Agent', 'Temp', 'Dependencies')
     )
 
     if (-not (Test-Path $DestinationPath)) {
@@ -3791,7 +3791,7 @@ try {
     }
 
     Write-Host "[i] Syncing Borealis repository into $installDir"
-    Sync-BorealisRepository -GitExe $bootstrapGitExe -RepositoryUrl $repoUrl -Ref $repoRef -DestinationPath $installDir -PreserveDirectories @('Agent', 'Temp')
+    Sync-BorealisRepository -GitExe $bootstrapGitExe -RepositoryUrl $repoUrl -Ref $repoRef -DestinationPath $installDir -PreserveDirectories @('Agent', 'Temp', 'Dependencies')
 
     $agentScript = Join-Path $installDir 'Agent.ps1'
     if (-not (Test-Path $agentScript -PathType Leaf)) {
