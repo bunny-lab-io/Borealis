@@ -903,9 +903,15 @@ function Expand-ZipArchiveWithFallback {
         throw "7-Zip CLI not found at: $SevenZipPath"
     }
 
-    & $SevenZipPath x $ArchivePath "-o$DestinationPath" -y | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "7-Zip extraction failed for '$ArchivePath' with exit code $LASTEXITCODE."
+    $extractExit = Invoke-BorealisTimedProcess `
+        -FilePath $SevenZipPath `
+        -ArgumentList @('x', $ArchivePath, "-o$DestinationPath", '-y') `
+        -Description ("7-Zip extraction for {0}" -f $ArchivePath) `
+        -TimeoutSeconds 300 `
+        -LogName 'Install.log' `
+        -LogPrefix '[7-Zip]'
+    if ($extractExit -ne 0) {
+        throw "7-Zip extraction failed for '$ArchivePath' with exit code $extractExit."
     }
 }
 
@@ -1187,15 +1193,16 @@ function Run-Step {
         Write-Host "`r$($symbols.Fail) $Message - Failed: $_                        " -ForegroundColor Red
         Write-BorealisOnboardingProgressState -Detail ("{0} failed: {1}" -f $Message, $_)
         Write-BorealisOnboardingProgressMarker -State 'failed' -Task $Message
-        $deferWireGuardFailure = $false
-        if ($Message -eq 'Dependency: WireGuard VPN Adapter') {
-            $deferWireGuardFailure = (
+        $deferDependencyFailure = $false
+        if ($Message -in @('Dependency: AutoHotKey', 'Dependency: Git CLI', 'Dependency: WireGuard VPN Adapter')) {
+            $deferDependencyFailure = (
                 -not [string]::IsNullOrWhiteSpace($env:BOREALIS_ONBOARDING_RUN_ID) -or
+                (Test-BorealisTruthyValue $env:BOREALIS_AGENT_OPTIONAL_DEPENDENCIES) -or
                 (Test-BorealisTruthyValue $env:BOREALIS_WIREGUARD_DEPENDENCY_OPTIONAL)
             )
         }
-        if ($deferWireGuardFailure) {
-            $deferMessage = "WireGuard dependency deferred during onboarding: $_"
+        if ($deferDependencyFailure) {
+            $deferMessage = ("{0} deferred during onboarding: {1}" -f $Message, $_)
             Write-AgentLog -FileName 'Install.log' -Message $deferMessage
             Write-Host $deferMessage -ForegroundColor Yellow
             Write-BorealisOnboardingProgressState -Detail $deferMessage

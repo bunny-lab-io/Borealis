@@ -213,7 +213,9 @@ def sanitize_output(value: Any, *, redactions: Optional[Iterable[Any]] = None, l
     text = re.sub(r"[^\S\n]+", " ", text).strip()
     max_len = max(120, int(limit or ONBOARDING_SNIPPET_LIMIT))
     if len(text) > max_len:
-        return f"{text[:max_len]}..."
+        head_len = max(60, max_len // 2)
+        tail_len = max(60, max_len - head_len)
+        return f"{text[:head_len]}...\n[truncated]\n...{text[-tail_len:]}"
     return text
 
 

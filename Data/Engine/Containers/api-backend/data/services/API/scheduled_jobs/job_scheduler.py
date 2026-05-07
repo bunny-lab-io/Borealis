@@ -315,6 +315,11 @@ def _windows_smb_sharing_violation_error(error: Any) -> bool:
     return "status_sharing_violation" in normalized or "0xc0000043" in normalized
 
 
+def _windows_smb_invalid_parameter_error(error: Any) -> bool:
+    normalized = str(error or "").strip().lower()
+    return "status_invalid_parameter" in normalized or "0xc000000d" in normalized
+
+
 def _onboarding_progress_status(status: Any) -> str:
     normalized = str(status or "pending").strip().lower()
     if normalized in {"ssh_unreachable", "unreachable"}:
@@ -4576,10 +4581,12 @@ class JobScheduler:
     def _read_windows_smb_file(self, smb: Any, path: str, *, share: str = "ADMIN$") -> str:
         def _read_with_open_file() -> Optional[bytes]:
             file_id = None
+            tree_id = None
             share_name_inner = str(share or "ADMIN$")
             try:
+                tree_id = smb.connectTree(share_name_inner)
                 file_id = smb.openFile(
-                    share_name_inner,
+                    tree_id,
                     path,
                     desiredAccess=0x00000001,
                     shareMode=0x00000007,
@@ -4588,7 +4595,7 @@ class JobScheduler:
                 offset = 0
                 chunk_size = 65536
                 while True:
-                    chunk = smb.readFile(share_name_inner, file_id, offset, chunk_size)
+                    chunk = smb.readFile(tree_id, file_id, offset, chunk_size)
                     if not chunk:
                         break
                     if isinstance(chunk, str):
@@ -4600,10 +4607,19 @@ class JobScheduler:
                 return b"".join(chunks)
             except TypeError:
                 return None
+            except Exception as exc:
+                if _windows_smb_invalid_parameter_error(exc):
+                    return None
+                raise
             finally:
                 if file_id is not None:
                     try:
-                        smb.closeFile(share_name_inner, file_id)
+                        smb.closeFile(tree_id, file_id)
+                    except Exception:
+                        pass
+                if tree_id is not None:
+                    try:
+                        smb.disconnectTree(tree_id)
                     except Exception:
                         pass
 
@@ -4615,6 +4631,11 @@ class JobScheduler:
         try:
             smb.getFile(share_name, path, buffer.write, shareAccessMode=0x7)
         except TypeError:
+            smb.getFile(share_name, path, buffer.write)
+        except Exception as exc:
+            if not _windows_smb_invalid_parameter_error(exc):
+                raise
+            buffer = io.BytesIO()
             smb.getFile(share_name, path, buffer.write)
         return buffer.getvalue().decode("utf-8", errors="replace")
 
