@@ -973,6 +973,43 @@ function Write-AgentLog {
     "[$ts] $Message" | Out-File -FilePath $path -Append -Encoding UTF8
 }
 
+function Write-BorealisOnboardingProgressState {
+    param(
+        [string]$Detail,
+        [string]$Status = 'running',
+        [int]$ExitCode = 1
+    )
+
+    $statePath = $env:BOREALIS_ONBOARDING_STATE_PATH
+    if ([string]::IsNullOrWhiteSpace($statePath)) { return }
+
+    try {
+        $stateDir = Split-Path -Path $statePath -Parent
+        if (-not [string]::IsNullOrWhiteSpace($stateDir) -and -not (Test-Path $stateDir)) {
+            New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+        }
+
+        $state = [ordered]@{}
+        if (Test-Path $statePath -PathType Leaf) {
+            try {
+                $existing = Get-Content -Path $statePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                foreach ($prop in $existing.PSObject.Properties) {
+                    $state[$prop.Name] = $prop.Value
+                }
+            } catch {}
+        }
+
+        if (-not $state.Contains('job_id') -and $env:BOREALIS_ONBOARDING_JOB_ID) { $state['job_id'] = $env:BOREALIS_ONBOARDING_JOB_ID }
+        if (-not $state.Contains('run_id') -and $env:BOREALIS_ONBOARDING_RUN_ID) { $state['run_id'] = $env:BOREALIS_ONBOARDING_RUN_ID }
+        if (-not $state.Contains('target') -and $env:BOREALIS_ONBOARDING_TARGET) { $state['target'] = $env:BOREALIS_ONBOARDING_TARGET }
+        $state['status'] = $Status
+        $state['exit_code'] = $ExitCode
+        $state['detail'] = $Detail
+        $state['updated_at'] = ([DateTime]::UtcNow.ToString('o'))
+        $state | ConvertTo-Json -Depth 8 | Set-Content -Path $statePath -Encoding UTF8
+    } catch {}
+}
+
 $script:Utf8CodePageChanged = $false
 
 function Ensure-SystemUtf8CodePage {
@@ -1120,16 +1157,19 @@ function Run-Step {
         [string]     $Message,
         [scriptblock]$Script
     )
+    Write-BorealisOnboardingProgressState -Detail $Message
     Write-ProgressStep -Message $Message -Status "$($symbols.Running)"
     try {
         & $Script
         if ($LASTEXITCODE -eq 0 -or $?) {
             Write-Host "`r$($symbols.Success) $Message                        "
+            Write-BorealisOnboardingProgressState -Detail ("{0} completed" -f $Message)
         } else {
             throw "Non-zero exit code"
         }
     } catch {
         Write-Host "`r$($symbols.Fail) $Message - Failed: $_                        " -ForegroundColor Red
+        Write-BorealisOnboardingProgressState -Detail ("{0} failed: {1}" -f $Message, $_)
         throw
     }
 }
@@ -3772,8 +3812,11 @@ try {
 
     $launcherArgs = New-Object System.Collections.Generic.List[string]
     $launcherArgs.Add('-NoProfile')
+    $launcherArgs.Add('-NonInteractive')
     $launcherArgs.Add('-ExecutionPolicy')
     $launcherArgs.Add('Bypass')
+    $launcherArgs.Add('-WindowStyle')
+    $launcherArgs.Add('Hidden')
     $launcherArgs.Add('-File')
     $launcherArgs.Add($agentScript)
     foreach ($arg in (New-AgentInvocationArgs -LocalInstall)) {

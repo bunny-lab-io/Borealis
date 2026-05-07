@@ -23,12 +23,16 @@ import {
 } from "@mui/material";
 import {
   ArrowBack as ArrowBackIcon,
+  AutorenewRounded as ProgressActiveIcon,
   Check as CheckIcon,
+  CheckCircleRounded as ProgressCompleteIcon,
   ContentCopy as ContentCopyIcon,
   Devices as DevicesIcon,
   DevicesRounded as DevicesRoundedIcon,
   DriveFileRenameOutline as DriveFileRenameOutlineIcon,
+  ErrorOutlineRounded as ProgressErrorIcon,
   PlayArrow as PlayArrowIcon,
+  RadioButtonUncheckedRounded as ProgressPendingIcon,
   Refresh as RefreshIcon,
   ScheduleRounded as ScheduleRoundedIcon,
   SettingsApplicationsRounded as SettingsApplicationsRoundedIcon,
@@ -209,6 +213,23 @@ const GRID_PANEL_SX = {
   "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-value": {
     width: "100%",
   },
+  "& .ag-center-cols-container .ag-cell.onboarding-progress-status-cell, & .ag-pinned-left-cols-container .ag-cell.onboarding-progress-status-cell, & .ag-pinned-right-cols-container .ag-cell.onboarding-progress-status-cell": {
+    justifyContent: "center",
+    paddingLeft: "8px",
+    paddingRight: "8px",
+  },
+  "& .ag-center-cols-container .ag-cell.onboarding-progress-status-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell.onboarding-progress-status-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell.onboarding-progress-status-cell .ag-cell-wrapper": {
+    justifyContent: "center",
+  },
+  "@keyframes onboardingProgressSpin": {
+    from: { transform: "rotate(0deg)" },
+    to: { transform: "rotate(360deg)" },
+  },
+  "@keyframes onboardingProgressPulse": {
+    "0%": { boxShadow: "0 0 0 0 rgba(125, 201, 255, 0.28)" },
+    "70%": { boxShadow: "0 0 0 10px rgba(125, 201, 255, 0)" },
+    "100%": { boxShadow: "0 0 0 0 rgba(125, 201, 255, 0)" },
+  },
 };
 
 const TAB_SECTION_SX = {
@@ -320,7 +341,7 @@ const SELECT_MENU_PROPS = {
   },
 };
 
-const TARGET_AUTO_SIZE_COLUMNS = ["statusLabel"];
+const TARGET_AUTO_SIZE_COLUMNS = [];
 const PROGRESSION_AUTO_SIZE_COLUMNS = ["startedLabel", "elapsedLabel"];
 const TARGET_STATUS_FILTER_OPTIONS = [
   { key: "pending_approval", label: "Pending Approval" },
@@ -687,6 +708,63 @@ function StatusPill({ status }) {
       />
       {label}
     </Box>
+  );
+}
+
+function ProgressStatusIcon({ status }) {
+  const key = String(status || "pending").trim().toLowerCase() || "pending";
+  const label = STATUS_THEME[key]?.label || formatStatusLabel(key);
+  const completeStatuses = new Set(["approved", "completed", "complete", "success", "succeeded"]);
+  const activeStatuses = new Set(["pending", "running", "waiting_approval", "in_progress"]);
+  const failedStatuses = new Set(["failed", "error", "ssh_unreachable", "unreachable", "timeout"]);
+  const isComplete = completeStatuses.has(key);
+  const isActive = activeStatuses.has(key);
+  const isFailed = failedStatuses.has(key);
+  const Icon = isComplete
+    ? ProgressCompleteIcon
+    : isActive
+      ? ProgressActiveIcon
+      : isFailed
+        ? ProgressErrorIcon
+        : ProgressPendingIcon;
+  const color = isComplete
+    ? MAGIC_UI.accentC
+    : isActive
+      ? MAGIC_UI.accentA
+      : isFailed
+        ? MAGIC_UI.danger
+        : MAGIC_UI.textMuted;
+
+  return (
+    <Tooltip title={label}>
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%" }}>
+        <Box
+          component="span"
+          sx={{
+            width: 22,
+            height: 22,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color,
+            borderRadius: "50%",
+            ...(isActive
+              ? {
+                  background: "rgba(125, 201, 255, 0.12)",
+                  animation: "onboardingProgressPulse 1.8s ease-out infinite",
+                }
+              : null),
+          }}
+        >
+          <Icon
+            sx={{
+              fontSize: 18,
+              ...(isActive ? { animation: "onboardingProgressSpin 1.15s linear infinite" } : null),
+            }}
+          />
+        </Box>
+      </Box>
+    </Tooltip>
   );
 }
 
@@ -1157,10 +1235,12 @@ export default function CreateOnboardingJob() {
       {
         field: "statusLabel",
         headerName: "Status",
-        minWidth: 145,
+        width: 78,
+        minWidth: 70,
+        maxWidth: 84,
         filter: false,
-        cellClass: "auto-col-tight",
-        cellRenderer: (params) => <StatusPill status={params.data?.status} />,
+        cellClass: "auto-col-tight onboarding-progress-status-cell",
+        cellRenderer: (params) => <ProgressStatusIcon status={params.data?.status} />,
       },
       {
         field: "actions",
@@ -1200,12 +1280,12 @@ export default function CreateOnboardingJob() {
       {
         field: "statusLabel",
         headerName: "Status",
-        width: 135,
-        minWidth: 125,
-        maxWidth: 150,
+        width: 78,
+        minWidth: 70,
+        maxWidth: 84,
         filter: false,
-        cellClass: "auto-col-tight",
-        cellRenderer: (params) => <StatusPill status={params.data?.status} />,
+        cellClass: "auto-col-tight onboarding-progress-status-cell",
+        cellRenderer: (params) => <ProgressStatusIcon status={params.data?.status} />,
       },
       { field: "task", headerName: "Task", minWidth: 260, flex: 1, filter: "agTextColumnFilter", cellClass: "auto-col-tight" },
       {
@@ -1289,7 +1369,7 @@ export default function CreateOnboardingJob() {
     if (!api || !visibleTargetGridRows.length) return;
     const run = () => {
       try {
-        if (typeof api.autoSizeColumns === "function") {
+        if (TARGET_AUTO_SIZE_COLUMNS.length && typeof api.autoSizeColumns === "function") {
           api.autoSizeColumns(TARGET_AUTO_SIZE_COLUMNS, true);
         }
       } catch {
