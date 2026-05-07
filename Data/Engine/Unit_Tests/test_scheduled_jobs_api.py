@@ -335,6 +335,8 @@ def test_windows_onboarding_script_uses_stable_repo_and_remote_lock(engine_harne
     assert "function Stop-BorealisPythonProcesses" in script
     assert "Stop-Process -Id $_.Id -Force" in script
     assert "taskkill.exe /PID $procId /T /F" in script
+    assert "$ancestorIds.ContainsKey($procId)" in script
+    assert "ParentProcessId" in script
     assert "Invoke-CimMethod -InputObject $_ -MethodName Terminate" in script
     assert "\\borealis\\temp\\onboarding\\" in script
     assert "\\borealis\\agent.ps1" in script
