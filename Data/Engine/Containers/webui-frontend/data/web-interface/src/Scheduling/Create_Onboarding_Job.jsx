@@ -322,6 +322,7 @@ const PRIMARY_BUTTON_SX = {
 
 const STATUS_THEME = {
   pending: { label: "Pending", text: "#fbbf24", background: "rgba(251,191,36,0.18)", border: "1px solid rgba(251,191,36,0.35)", dot: "#f59e0b" },
+  pending_approval: { label: "Pending Approval", text: "#d8b4fe", background: "rgba(192,132,252,0.18)", border: "1px solid rgba(192,132,252,0.4)", dot: "#c084fc" },
   running: { label: "Running", text: "#7dd3fc", background: "rgba(125,211,252,0.18)", border: "1px solid rgba(125,211,252,0.4)", dot: "#38bdf8" },
   waiting_approval: { label: "Waiting Approval", text: "#d8b4fe", background: "rgba(192,132,252,0.18)", border: "1px solid rgba(192,132,252,0.4)", dot: "#c084fc" },
   approved: { label: "Approved", text: "#60a5fa", background: "rgba(96,165,250,0.16)", border: "1px solid rgba(96,165,250,0.4)", dot: "#60a5fa" },
@@ -346,6 +347,9 @@ const SELECT_MENU_PROPS = {
 
 const TARGET_AUTO_SIZE_COLUMNS = [];
 const PROGRESSION_AUTO_SIZE_COLUMNS = ["startedLabel", "elapsedLabel"];
+const STATUS_ICON_BOX_SIZE = 40;
+const STATUS_ICON_SIZE = 31;
+const STATUS_COLUMN_SIZE = 58;
 const TARGET_STATUS_FILTER_OPTIONS = [
   { key: "pending_approval", label: "Pending Approval" },
   { key: "skipped", label: "Skipped" },
@@ -593,19 +597,30 @@ function targetOutputContent(target, mode) {
   return String(mode === "stderr" ? target?.stderr_snippet || "" : target?.stdout_snippet || "").trim();
 }
 
+function isOnboardingApprovalReadyTask(task) {
+  return String(task || "").trim() === "Agent Ready and Awaiting Approval";
+}
+
+function isOnboardingApprovalCompleteTask(task) {
+  return String(task || "").trim() === "Device Approved > Onboarding Complete";
+}
+
 function normalizeOnboardingProgressTask(task, status = "") {
   const original = String(task || "").trim();
   const normalizedTask = original.toLowerCase();
   const normalizedStatus = String(status || "").trim().toLowerCase();
-  if (normalizedStatus === "waiting_approval" || normalizedTask.includes("awaiting approval")) {
-    return "Agent Ready and Awaiting Approval";
-  }
+  const isApprovalReady = normalizedStatus === "waiting_approval" || normalizedTask.includes("awaiting approval");
+  const isApprovalComplete = ["approved", "completed", "complete", "success", "succeeded", "installed"].includes(normalizedStatus);
   if (
+    (isApprovalReady && isApprovalComplete) ||
     normalizedTask.includes("enrollment approved") ||
     normalizedTask.includes("onboarding completed") ||
     normalizedTask.includes("device approved")
   ) {
-    return "Onboarding Completed";
+    return "Device Approved > Onboarding Complete";
+  }
+  if (isApprovalReady) {
+    return "Agent Ready and Awaiting Approval";
   }
   if (normalizedTask.includes("unable to repair agent") || normalizedTask.includes("re-deploying")) {
     return "Unable to Repair Agent > Re-Deploying";
@@ -723,9 +738,29 @@ function targetProgressionKey(row) {
   );
 }
 
+function normalizeDiscoveredDeviceName(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function buildDiscoveredDeviceLabel(target) {
+  const address = String(target?.target_address || target?.hostname || target?.target_input || "").trim();
+  const hostname = String(target?.target_hostname || target?.discovered_hostname || "").trim();
+  const base = address || hostname || "Target";
+  const port = target?.ssh_port ? `:${target.ssh_port}` : "";
+  const showHostname = Boolean(
+    hostname &&
+      normalizeDiscoveredDeviceName(hostname) !== normalizeDiscoveredDeviceName(address) &&
+      normalizeDiscoveredDeviceName(hostname) !== normalizeDiscoveredDeviceName(base)
+  );
+  return {
+    primary: `${base}${port}`,
+    hostname: showHostname ? hostname : "",
+  };
+}
+
 function statusIsActiveProgress(status) {
   const normalized = String(status || "").trim().toLowerCase();
-  return ["pending", "running"].includes(normalized);
+  return ["pending", "pending_approval", "running", "in_progress", "waiting_approval"].includes(normalized);
 }
 
 function normalizeBranchName(value) {
@@ -815,8 +850,8 @@ function ProgressStatusIcon({ status }) {
   const key = String(status || "pending").trim().toLowerCase() || "pending";
   const label = STATUS_THEME[key]?.label || formatStatusLabel(key);
   const completeStatuses = new Set(["approved", "completed", "complete", "success", "succeeded"]);
-  const activeStatuses = new Set(["pending", "running", "in_progress"]);
-  const waitingStatuses = new Set(["waiting_approval"]);
+  const activeStatuses = new Set(["pending", "pending_approval", "running", "in_progress", "waiting_approval"]);
+  const waitingStatuses = new Set(["pending_approval", "waiting_approval"]);
   const failedStatuses = new Set(["failed", "error", "ssh_unreachable", "unreachable", "timeout"]);
   const isComplete = completeStatuses.has(key);
   const isActive = activeStatuses.has(key);
@@ -834,7 +869,7 @@ function ProgressStatusIcon({ status }) {
   const color = isComplete
     ? MAGIC_UI.accentC
     : isActive
-      ? MAGIC_UI.accentA
+      ? (isWaiting ? MAGIC_UI.accentB : MAGIC_UI.accentA)
       : isWaiting
         ? MAGIC_UI.accentB
         : isFailed
@@ -847,8 +882,8 @@ function ProgressStatusIcon({ status }) {
         <Box
           component="span"
           sx={{
-            width: 44,
-            height: 44,
+            width: STATUS_ICON_BOX_SIZE,
+            height: STATUS_ICON_BOX_SIZE,
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
@@ -856,7 +891,7 @@ function ProgressStatusIcon({ status }) {
             borderRadius: "50%",
             ...(isActive
               ? {
-                  background: "rgba(125, 201, 255, 0.12)",
+                  background: isWaiting ? "rgba(192, 132, 252, 0.12)" : "rgba(125, 201, 255, 0.12)",
                   animation: "onboardingProgressPulse 1.8s ease-out infinite",
                 }
               : null),
@@ -864,7 +899,7 @@ function ProgressStatusIcon({ status }) {
         >
           <Icon
             sx={{
-              fontSize: 34,
+              fontSize: STATUS_ICON_SIZE,
               ...(isActive ? { animation: "onboardingProgressSpin 1.15s linear infinite" } : null),
             }}
           />
@@ -1185,12 +1220,14 @@ export default function CreateOnboardingJob() {
 
   const targetGridRows = useMemo(
     () => targetRows.map((target) => {
-      const targetLabel = `${target.target_hostname || target.target_address || target.target_input || "Target"}${target.ssh_port ? `:${target.ssh_port}` : ""}`;
+      const discoveredDevice = buildDiscoveredDeviceLabel(target);
+      const targetLabel = discoveredDevice.primary;
       const status = String(target.status || "pending").trim().toLowerCase() || "pending";
       const approvalStatus = String(target.approval_status || "").trim().toLowerCase();
       return {
         id: target.id || `${targetLabel}-${target.run_id || ""}`,
         targetLabel,
+        discoveredHostname: discoveredDevice.hostname,
         status,
         statusBucket: targetStatusBucket(status),
         statusLabel: formatStatusLabel(status),
@@ -1261,6 +1298,46 @@ export default function CreateOnboardingJob() {
     });
     return mappedRows.reduce((acc, row) => {
       const previous = acc[acc.length - 1];
+      if (isOnboardingApprovalCompleteTask(row.task)) {
+        let readyIndex = -1;
+        for (let index = acc.length - 1; index >= 0; index -= 1) {
+          if (isOnboardingApprovalReadyTask(acc[index]?.task)) {
+            readyIndex = index;
+            break;
+          }
+        }
+        if (readyIndex < 0) {
+          acc.push(row);
+          return acc;
+        }
+        const previous = acc[readyIndex];
+        const startedAt = previous.startedAt || row.startedAt;
+        const endedAt = row.endedAt || row.startedAt || previous.endedAt;
+        const status = row.status || "completed";
+        const raw = {
+          ...(previous.raw || {}),
+          ...(row.raw || {}),
+          stdout_snippet: mergeOutputSnippet(previous.raw?.stdout_snippet, row.raw?.stdout_snippet),
+          stderr_snippet: mergeOutputSnippet(previous.raw?.stderr_snippet, row.raw?.stderr_snippet),
+        };
+        const elapsedEnd = endedAt || (statusIsActiveProgress(status) ? progressionClock : startedAt);
+        acc[readyIndex] = {
+          ...previous,
+          ...row,
+          id: previous.id,
+          task: row.task,
+          status,
+          statusLabel: formatStatusLabel(status),
+          startedAt,
+          endedAt,
+          startedLabel: formatOnboardingProgressTimestamp(startedAt),
+          elapsedLabel: formatElapsedDuration(startedAt, elapsedEnd),
+          hasStdOut: Boolean(String(raw.stdout_snippet || "").trim()),
+          hasStdErr: Boolean(String(raw.stderr_snippet || "").trim()),
+          raw,
+        };
+        return acc;
+      }
       if (!previous || previous.task !== row.task) {
         acc.push(row);
         return acc;
@@ -1370,16 +1447,38 @@ export default function CreateOnboardingJob() {
 
   const targetGridColumnDefs = useMemo(
     () => [
-      { field: "targetLabel", headerName: "Target", minWidth: 180, flex: 1, filter: "agTextColumnFilter", cellClass: "auto-col-tight" },
       {
         field: "statusLabel",
-        headerName: "Status",
-        width: 112,
-        minWidth: 104,
-        maxWidth: 120,
+        headerName: "",
+        width: STATUS_COLUMN_SIZE,
+        minWidth: STATUS_COLUMN_SIZE,
+        maxWidth: STATUS_COLUMN_SIZE,
         filter: false,
         cellClass: "auto-col-tight onboarding-progress-status-cell",
         cellRenderer: (params) => <ProgressStatusIcon status={params.data?.status} />,
+      },
+      {
+        field: "targetLabel",
+        headerName: "Discovered Device",
+        minWidth: 180,
+        flex: 1,
+        filter: "agTextColumnFilter",
+        cellClass: "auto-col-tight",
+        cellRenderer: (params) => {
+          const row = params.data || {};
+          return (
+            <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, gap: 0.75 }}>
+              <Typography component="span" variant="body2" sx={{ color: MAGIC_UI.textBright, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {row.targetLabel || ""}
+              </Typography>
+              {row.discoveredHostname ? (
+                <Typography component="span" variant="body2" sx={{ color: "rgba(148, 163, 184, 0.78)", flexShrink: 0 }}>
+                  [{row.discoveredHostname}]
+                </Typography>
+              ) : null}
+            </Box>
+          );
+        },
       },
       {
         field: "actions",
@@ -1421,21 +1520,21 @@ export default function CreateOnboardingJob() {
     () => [
       {
         field: "statusLabel",
-        headerName: "Status",
-        width: 112,
-        minWidth: 104,
-        maxWidth: 120,
+        headerName: "",
+        width: STATUS_COLUMN_SIZE,
+        minWidth: STATUS_COLUMN_SIZE,
+        maxWidth: STATUS_COLUMN_SIZE,
         filter: false,
         cellClass: "auto-col-tight onboarding-progress-status-cell",
         cellRenderer: (params) => <ProgressStatusIcon status={params.data?.status} />,
       },
-      { field: "task", headerName: "Task", minWidth: 260, flex: 1, filter: "agTextColumnFilter", cellClass: "auto-col-tight" },
+      { field: "task", headerName: "Task", minWidth: 260, flex: 1, filter: false, cellClass: "auto-col-tight" },
       {
         field: "output",
         headerName: "StdOut / StdErr",
-        width: 168,
-        minWidth: 160,
-        maxWidth: 180,
+        width: 152,
+        minWidth: 144,
+        maxWidth: 162,
         filter: false,
         cellClass: "auto-col-tight",
         cellRenderer: (params) => {
@@ -1478,20 +1577,15 @@ export default function CreateOnboardingJob() {
         minWidth: 185,
         filter: false,
         cellClass: "auto-col-tight",
-        comparator: (_a, _b, nodeA, nodeB) => Number(nodeA?.data?.startedAt || 0) - Number(nodeB?.data?.startedAt || 0),
       },
       {
         field: "elapsedLabel",
         headerName: "Time Elapsed",
-        minWidth: 150,
+        width: 128,
+        minWidth: 126,
+        maxWidth: 140,
         filter: false,
         cellClass: "auto-col-tight",
-        comparator: (_a, _b, nodeA, nodeB) => {
-          const now = Date.now();
-          const elapsedA = Number((nodeA?.data?.endedAt || now) - (nodeA?.data?.startedAt || 0));
-          const elapsedB = Number((nodeB?.data?.endedAt || now) - (nodeB?.data?.startedAt || 0));
-          return elapsedA - elapsedB;
-        },
       },
     ],
     [handleCopyProgressOutput, handleViewProgressOutput]
@@ -1502,6 +1596,18 @@ export default function CreateOnboardingJob() {
       sortable: true,
       resizable: true,
       filter: true,
+    }),
+    []
+  );
+
+  const progressionGridDefaultColDef = useMemo(
+    () => ({
+      sortable: false,
+      resizable: true,
+      filter: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      suppressMovable: true,
     }),
     []
   );
@@ -2116,7 +2222,7 @@ export default function CreateOnboardingJob() {
                         <AgGridReact
                           rowData={selectedProgressionRows}
                           columnDefs={progressionGridColumnDefs}
-                          defaultColDef={targetGridDefaultColDef}
+                          defaultColDef={progressionGridDefaultColDef}
                           suppressCellFocus
                           headerHeight={44}
                           rowHeight={58}

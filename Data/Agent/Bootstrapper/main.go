@@ -59,6 +59,7 @@ type StatePayload struct {
 	JobID                int    `json:"job_id,omitempty"`
 	RunID                int    `json:"run_id,omitempty"`
 	Target               string `json:"target,omitempty"`
+	Hostname             string `json:"hostname,omitempty"`
 	RepoRef              string `json:"repo_ref,omitempty"`
 	ServerURL            string `json:"server_url,omitempty"`
 	EnrollmentCodeSHA256 string `json:"enrollment_code_sha256,omitempty"`
@@ -73,6 +74,7 @@ type EventPayload struct {
 	Task      string `json:"task"`
 	Detail    string `json:"detail"`
 	ExitCode  int    `json:"exit_code"`
+	Hostname  string `json:"hostname,omitempty"`
 	CreatedAt string `json:"created_at"`
 }
 
@@ -181,6 +183,9 @@ func runFromConfig(ctx context.Context, configPath string) int {
 	}
 
 	logger("__BOREALIS_AGENT_SERVICE_BOOTSTRAPPER_STARTED__=1")
+	if hostname := currentHostname(); hostname != "" {
+		logger("__BOREALIS_ONBOARDING_HOSTNAME__=%s", hostname)
+	}
 
 	mutex, acquired, err := acquireOnboardingMutex()
 	if err != nil {
@@ -765,6 +770,7 @@ func writeState(cfg BootstrapConfig, status string, exitCode int, detail string)
 		JobID:                cfg.JobID,
 		RunID:                cfg.RunID,
 		Target:               cfg.Target,
+		Hostname:             currentHostname(),
 		RepoRef:              cfg.RepoRef,
 		ServerURL:            cfg.ServerURL,
 		EnrollmentCodeSHA256: hashText(cfg.EnrollmentCode),
@@ -795,6 +801,7 @@ func writeEvent(cfg BootstrapConfig, status string, task string, detail string, 
 		Task:      task,
 		Detail:    detail,
 		ExitCode:  exitCode,
+		Hostname:  currentHostname(),
 		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	data, err := json.Marshal(payload)
@@ -848,6 +855,28 @@ func killProcessTree(pid int) {
 func hashText(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
+}
+
+func currentHostname() string {
+	candidates := []string{}
+	if hostname, err := os.Hostname(); err == nil {
+		candidates = append(candidates, hostname)
+	}
+	candidates = append(candidates, os.Getenv("COMPUTERNAME"))
+	for _, candidate := range candidates {
+		value := strings.TrimSpace(candidate)
+		value = strings.Trim(value, "[]")
+		if value == "" {
+			continue
+		}
+		if index := strings.IndexAny(value, "\r\n\t "); index >= 0 {
+			value = strings.TrimSpace(value[:index])
+		}
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func redactArgsForLog(args []string) string {

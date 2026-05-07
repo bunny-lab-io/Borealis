@@ -347,6 +347,42 @@ def _windows_exit_code_from_output(output: Any) -> Optional[int]:
         return None
 
 
+def _clean_onboarding_reported_hostname(value: Any) -> str:
+    text = str(value or "").strip().strip("[]")
+    if not text:
+        return ""
+    text = re.split(r"\s+", text, maxsplit=1)[0].strip().strip("[]")
+    if not text or len(text) > 255:
+        return ""
+    if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", text):
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,254}", text):
+        return ""
+    return text
+
+
+def _windows_onboarding_reported_hostname(
+    *,
+    stdout: Any = "",
+    stderr: Any = "",
+    state: Optional[Mapping[str, Any]] = None,
+    events: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> str:
+    candidates: List[Any] = []
+    if isinstance(state, Mapping):
+        candidates.extend([state.get("hostname"), state.get("computer_name"), state.get("device_hostname")])
+    for event in reversed(list(events or [])):
+        if isinstance(event, Mapping):
+            candidates.extend([event.get("hostname"), event.get("computer_name"), event.get("device_hostname")])
+    combined = f"{stdout or ''}\n{stderr or ''}"
+    candidates.extend(re.findall(r"__BOREALIS_ONBOARDING_HOSTNAME__\s*=\s*([^\r\n]+)", combined, re.IGNORECASE))
+    for candidate in candidates:
+        hostname = _clean_onboarding_reported_hostname(candidate)
+        if hostname:
+            return hostname
+    return ""
+
+
 def _windows_output_is_launcher_marker_only(output: Any) -> bool:
     lines = [line.strip() for line in str(output or "").splitlines() if line.strip()]
     launch_markers = {
@@ -581,7 +617,7 @@ def _set_impacket_timeout(obj: Any, timeout_seconds: float) -> None:
 
 
 def _windows_onboarding_child_entry(result_queue: Any, method: Callable[..., Dict[str, Any]], kwargs: Dict[str, Any]) -> None:
-    def _status_update(detail: str, stdout: str = "", stderr: str = "") -> None:
+    def _status_update(detail: str, stdout: str = "", stderr: str = "", target_hostname: str = "") -> None:
         try:
             result_queue.put(
                 {
@@ -589,6 +625,7 @@ def _windows_onboarding_child_entry(result_queue: Any, method: Callable[..., Dic
                     "detail": str(detail or ""),
                     "stdout": str(stdout or ""),
                     "stderr": str(stderr or ""),
+                    "target_hostname": str(target_hostname or ""),
                 },
                 block=False,
             )
@@ -3359,7 +3396,7 @@ class JobScheduler:
         timeout_seconds: float,
         timeout_label: str,
         approval_check: Optional[Callable[[], str]] = None,
-        status_update: Optional[Callable[[str, str, str], None]] = None,
+        status_update: Optional[Callable[..., None]] = None,
     ) -> Dict[str, Any]:
         try:
             context = multiprocessing.get_context("fork")
@@ -3393,6 +3430,7 @@ class JobScheduler:
                         str(message.get("detail") or ""),
                         str(message.get("stdout") or ""),
                         str(message.get("stderr") or ""),
+                        str(message.get("target_hostname") or ""),
                     )
                 elif message.get("type") == "result":
                     payload = message.get("result")
@@ -3970,6 +4008,7 @@ class JobScheduler:
         stdout: str = "",
         stderr: str = "",
         approval_reference: str = "",
+        target_hostname: Optional[str] = None,
         finished: bool = False,
         redactions: Optional[Sequence[Any]] = None,
     ) -> None:
@@ -3977,32 +4016,60 @@ class JobScheduler:
         clean_detail = sanitize_output(detail, redactions=redactions, limit=500)
         clean_stdout = sanitize_output(stdout, redactions=redactions)
         clean_stderr = sanitize_output(stderr, redactions=redactions)
+        clean_target_hostname = _clean_onboarding_reported_hostname(target_hostname)
         conn = self._conn()
         try:
             cur = conn.cursor()
-            cur.execute(
-                """
-                UPDATE scheduled_job_onboarding_targets
-                   SET status=?,
-                       detail=?,
-                       stdout_snippet=?,
-                       stderr_snippet=?,
-                       approval_reference=?,
-                       updated_at=?,
-                       finished_at=?
-                 WHERE id=?
-                """,
-                (
-                    str(status or ""),
-                    clean_detail,
-                    clean_stdout,
-                    clean_stderr,
-                    str(approval_reference or ""),
-                    now,
-                    now if finished else None,
-                    int(row_id),
-                ),
-            )
+            if clean_target_hostname:
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_onboarding_targets
+                       SET status=?,
+                           detail=?,
+                           stdout_snippet=?,
+                           stderr_snippet=?,
+                           approval_reference=?,
+                           target_hostname=?,
+                           updated_at=?,
+                           finished_at=?
+                     WHERE id=?
+                    """,
+                    (
+                        str(status or ""),
+                        clean_detail,
+                        clean_stdout,
+                        clean_stderr,
+                        str(approval_reference or ""),
+                        clean_target_hostname,
+                        now,
+                        now if finished else None,
+                        int(row_id),
+                    ),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_onboarding_targets
+                       SET status=?,
+                           detail=?,
+                           stdout_snippet=?,
+                           stderr_snippet=?,
+                           approval_reference=?,
+                           updated_at=?,
+                           finished_at=?
+                     WHERE id=?
+                    """,
+                    (
+                        str(status or ""),
+                        clean_detail,
+                        clean_stdout,
+                        clean_stderr,
+                        str(approval_reference or ""),
+                        now,
+                        now if finished else None,
+                        int(row_id),
+                    ),
+                )
             self._record_onboarding_target_event(
                 cur,
                 row_id=int(row_id),
@@ -4945,7 +5012,7 @@ class JobScheduler:
         output_path: str,
         timeout_seconds: float,
         approval_check: Optional[Callable[[], str]] = None,
-        status_update: Optional[Callable[[str, str, str], None]] = None,
+        status_update: Optional[Callable[..., None]] = None,
     ) -> Dict[str, Any]:
         deadline = time.monotonic() + max(30.0, float(timeout_seconds or 0.0))
         started_at = time.monotonic()
@@ -4967,7 +5034,12 @@ class JobScheduler:
                         if exit_code == 73 and "__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1" in output:
                             pass
                         else:
-                            return {"exit_code": exit_code, "stdout": output, "stderr": ""}
+                            return {
+                                "exit_code": exit_code,
+                                "stdout": output,
+                                "stderr": "",
+                                "target_hostname": _windows_onboarding_reported_hostname(stdout=output),
+                            }
             except Exception as exc:
                 if _windows_smb_sharing_violation_error(exc):
                     saw_output_share_lock = True
@@ -4978,6 +5050,7 @@ class JobScheduler:
             state_status = str(state.get("status") or "").strip().lower()
             state_detail = str(state.get("detail") or "").strip()
             events = self._read_windows_onboarding_events(smb)
+            reported_hostname = _windows_onboarding_reported_hostname(stdout=last_output, stderr=last_error, state=state, events=events)
             latest_event = events[-1] if events else {}
             if latest_event and callable(status_update):
                 try:
@@ -4987,7 +5060,7 @@ class JobScheduler:
                 if event_key != last_event_key:
                     event_task = str(latest_event.get("task") or "").strip()
                     event_detail = str(latest_event.get("detail") or "").strip()
-                    status_update(event_task or event_detail or state_detail or "Running Agent Bootstrap", last_output, last_error)
+                    status_update(event_task or event_detail or state_detail or "Running Agent Bootstrap", last_output, last_error, reported_hostname)
                     last_status_update = time.monotonic()
                     last_event_key = event_key
             state_exit_code: Optional[int] = None
@@ -5000,7 +5073,7 @@ class JobScheduler:
                 if stdout:
                     stdout += "\n"
                 stdout += f"Borealis Windows onboarding state={state_status}."
-                return {"exit_code": 0, "stdout": stdout, "stderr": "", "state": state}
+                return {"exit_code": 0, "stdout": stdout, "stderr": "", "state": state, "events": events, "target_hostname": reported_hostname}
             if state_status in {"already_enrolled", "already_pending"}:
                 stdout = last_output
                 if stdout:
@@ -5009,13 +5082,20 @@ class JobScheduler:
                     stdout += "__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1"
                 else:
                     stdout += f"__BOREALIS_ONBOARDING_ALREADY_PENDING__=1 status={state_status}"
-                return {"exit_code": 73, "stdout": stdout, "stderr": "", "state": state}
+                return {"exit_code": 73, "stdout": stdout, "stderr": "", "state": state, "events": events, "target_hostname": reported_hostname}
             if state_status == "failed":
                 stdout = last_output
                 if stdout:
                     stdout += "\n"
                 stdout += "Borealis Windows onboarding state=failed."
-                return {"exit_code": state_exit_code if state_exit_code is not None else 1, "stdout": stdout, "stderr": "", "state": state}
+                return {
+                    "exit_code": state_exit_code if state_exit_code is not None else 1,
+                    "stdout": stdout,
+                    "stderr": "",
+                    "state": state,
+                    "events": events,
+                    "target_hostname": reported_hostname,
+                }
             if callable(approval_check):
                 try:
                     approval_reference = str(approval_check() or "").strip()
@@ -5031,6 +5111,9 @@ class JobScheduler:
                         "stdout": stdout,
                         "stderr": "",
                         "approval_reference": approval_reference,
+                        "state": state,
+                        "events": events,
+                        "target_hostname": reported_hostname,
                     }
             if not state_status and not saw_output_share_lock and (time.monotonic() - started_at) >= launch_grace_seconds and (
                 not last_output or _windows_output_is_launcher_marker_only(last_output)
@@ -5039,7 +5122,7 @@ class JobScheduler:
                     "Windows remote launch produced no installer output, state marker, or approval callback before launch grace expired."
                 )
                 if callable(status_update):
-                    status_update(detail, last_output, last_error)
+                    status_update(detail, last_output, last_error, reported_hostname)
                 return {
                     "exit_code": 124,
                     "stdout": last_output,
@@ -5055,13 +5138,14 @@ class JobScheduler:
                     detail = "Waiting for Windows onboarding output file lock to clear."
                 elif "__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1" in last_output:
                     detail = "Another Borealis onboarding deployment is active on this target; waiting for state or approval."
-                status_update(detail, last_output, last_error)
+                status_update(detail, last_output, last_error, reported_hostname)
                 last_status_update = time.monotonic()
             time.sleep(2.0)
         return {
             "exit_code": 124,
             "stdout": last_output,
             "stderr": f"windows_onboarding_timeout{': ' + last_error if last_error else ''}",
+            "target_hostname": _windows_onboarding_reported_hostname(stdout=last_output, stderr=last_error),
         }
 
     def _execute_windows_smb_scm_onboarding(
@@ -5078,7 +5162,7 @@ class JobScheduler:
         target: str,
         timeout_seconds: float,
         approval_check: Optional[Callable[[], str]] = None,
-        status_update: Optional[Callable[[str, str, str], None]] = None,
+        status_update: Optional[Callable[..., None]] = None,
     ) -> Dict[str, Any]:
         try:
             from impacket.dcerpc.v5 import scmr, transport  # type: ignore
@@ -5206,7 +5290,7 @@ class JobScheduler:
         target: str,
         timeout_seconds: float,
         approval_check: Optional[Callable[[], str]] = None,
-        status_update: Optional[Callable[[str, str, str], None]] = None,
+        status_update: Optional[Callable[..., None]] = None,
     ) -> Dict[str, Any]:
         try:
             from impacket.dcerpc.v5 import tsch, transport  # type: ignore
@@ -5302,7 +5386,7 @@ class JobScheduler:
         target: str,
         timeout_seconds: float,
         approval_check: Optional[Callable[[], str]] = None,
-        status_update: Optional[Callable[[str, str, str], None]] = None,
+        status_update: Optional[Callable[..., None]] = None,
     ) -> Dict[str, Any]:
         try:
             from impacket.dcerpc.v5.dcom import wmi  # type: ignore
@@ -5444,7 +5528,12 @@ class JobScheduler:
             marker_code = _windows_exit_code_from_output(stdout)
             if marker_code is not None:
                 exit_code = marker_code
-            return {"exit_code": exit_code, "stdout": stdout, "stderr": stderr}
+            return {
+                "exit_code": exit_code,
+                "stdout": stdout,
+                "stderr": stderr,
+                "target_hostname": _windows_onboarding_reported_hostname(stdout=stdout, stderr=stderr),
+            }
         except Exception as exc:
             return {"exit_code": 1, "stdout": "", "stderr": str(exc)}
         finally:
@@ -5494,15 +5583,20 @@ class JobScheduler:
         def _approval_check() -> str:
             return self._lookup_onboarding_approval(job_id=job_id, run_id=run_id, target=host)
 
-        def _status_update(detail: str, stdout: str = "", stderr: str = "") -> None:
+        def _status_update(detail: str, stdout: str = "", stderr: str = "", target_hostname: str = "") -> None:
             merged_stdout = "\n\n".join([part for part in [*stdout_parts, str(stdout or "")] if part])
             merged_stderr = "\n\n".join([part for part in [*stderr_parts, str(stderr or "")] if part])
+            reported_hostname = _windows_onboarding_reported_hostname(
+                stdout=merged_stdout,
+                stderr=merged_stderr,
+            ) or _clean_onboarding_reported_hostname(target_hostname)
             self._update_onboarding_target_row(
                 row_id,
                 status=ONBOARDING_STATUS_RUNNING,
                 detail=detail,
                 stdout=merged_stdout,
                 stderr=merged_stderr,
+                target_hostname=reported_hostname,
                 redactions=redactions,
             )
 
@@ -5600,6 +5694,15 @@ class JobScheduler:
             exit_code = int(result.get("exit_code") or 0)
             stdout = str(result.get("stdout") or "")
             stderr = str(result.get("stderr") or "")
+            reported_hostname = (
+                _clean_onboarding_reported_hostname(result.get("target_hostname"))
+                or _windows_onboarding_reported_hostname(
+                    stdout=stdout,
+                    stderr=stderr,
+                    state=result.get("state") if isinstance(result.get("state"), Mapping) else None,
+                    events=result.get("events") if isinstance(result.get("events"), (list, tuple)) else None,
+                )
+            )
             if stdout:
                 stdout_parts.append(f"[{label}]\n{stdout}")
             if stderr:
@@ -5619,6 +5722,7 @@ class JobScheduler:
                     stdout="\n\n".join(stdout_parts),
                     stderr="\n\n".join(stderr_parts),
                     approval_reference=approval_reference,
+                    target_hostname=reported_hostname,
                     finished=True,
                     redactions=redactions,
                 )
@@ -5633,6 +5737,7 @@ class JobScheduler:
                     detail=skip_detail,
                     stdout="\n\n".join(stdout_parts),
                     stderr="\n\n".join(stderr_parts),
+                    target_hostname=reported_hostname,
                     finished=True,
                     redactions=redactions,
                 )
@@ -5653,6 +5758,7 @@ class JobScheduler:
                         stdout="\n\n".join(stdout_parts),
                         stderr="\n\n".join(stderr_parts),
                         approval_reference=approval_reference,
+                        target_hostname=reported_hostname,
                         finished=True,
                         redactions=redactions,
                     )
@@ -5662,6 +5768,7 @@ class JobScheduler:
 
         combined_stdout = "\n\n".join(stdout_parts)
         combined_stderr = "\n\n".join(stderr_parts)
+        combined_reported_hostname = _windows_onboarding_reported_hostname(stdout=combined_stdout, stderr=combined_stderr)
         if port_failures and attempted_methods == 0:
             self._update_onboarding_target_row(
                 row_id,
@@ -5669,6 +5776,7 @@ class JobScheduler:
                 detail="Windows remote enrollment ports unreachable.",
                 stdout=combined_stdout,
                 stderr=combined_stderr,
+                target_hostname=combined_reported_hostname,
                 finished=True,
                 redactions=redactions,
             )
@@ -5683,6 +5791,7 @@ class JobScheduler:
             ),
             stdout=combined_stdout,
             stderr=combined_stderr,
+            target_hostname=combined_reported_hostname,
             finished=True,
             redactions=redactions,
         )

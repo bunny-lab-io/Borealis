@@ -924,6 +924,93 @@ function Ensure-AgentLogDir {
     return $agentLogDir
 }
 
+function Get-NativeCommandOutputSummary {
+    param(
+        [AllowNull()]
+        [object[]]$Output
+    )
+
+    $detail = (($Output | ForEach-Object {
+        if ($null -ne $_) { $_.ToString().Trim() }
+    }) | Where-Object { $_ } | Select-Object -First 5) -join '; '
+    if (-not $detail) { $detail = 'native command returned an error without diagnostic output.' }
+    return $detail
+}
+
+function Remove-AgentTrayVolatileFiles {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TrayDir,
+
+        [Parameter()]
+        [string]$LogName = 'Install.log'
+    )
+
+    foreach ($pattern in @('system_status.json.*.tmp', '*.tmp')) {
+        try {
+            Get-ChildItem -LiteralPath $TrayDir -Filter $pattern -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                try {
+                    Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
+                    Write-AgentLog -FileName $LogName -Message ("[TRAY-ACL] Removed stale volatile tray file '{0}'." -f $_.FullName)
+                } catch {
+                    Write-AgentLog -FileName $LogName -Message ("[TRAY-ACL] Unable to remove volatile tray file '{0}': {1}" -f $_.FullName, $_.Exception.Message)
+                }
+            }
+        } catch {
+            Write-AgentLog -FileName $LogName -Message ("[TRAY-ACL] Unable to enumerate volatile tray files matching '{0}': {1}" -f $pattern, $_.Exception.Message)
+        }
+    }
+}
+
+function Test-AgentTrayAclFailureIsVolatile {
+    param(
+        [AllowNull()]
+        [object[]]$AclOutput,
+
+        [Parameter(Mandatory = $true)]
+        [string]$TrayDir
+    )
+
+    $lines = @($AclOutput | ForEach-Object {
+        if ($null -ne $_) { $_.ToString().Trim() }
+    } | Where-Object { $_ })
+    if ($lines.Count -eq 0) { return $false }
+
+    $trayLower = $TrayDir.TrimEnd('\').ToLowerInvariant()
+    try {
+        $trayLower = ([System.IO.Path]::GetFullPath($TrayDir).TrimEnd('\')).ToLowerInvariant()
+    } catch {}
+
+    $sawVolatileTrayFailure = $false
+    foreach ($line in $lines) {
+        $lower = $line.ToLowerInvariant()
+        if ($lower -match '^(successfully processed|failed processing|no files failed)') { continue }
+
+        $mentionsTray = $lower.Contains($trayLower)
+        $mentionsTmp = $lower.Contains('.tmp')
+        if ($mentionsTray -and $mentionsTmp) {
+            $sawVolatileTrayFailure = $true
+        }
+
+        if ($mentionsTray -and -not $mentionsTmp) {
+            return $false
+        }
+
+        $isDiagnostic = $lower -match 'access is denied|failed processing|cannot access|being used by another process|invalid argument'
+        if (-not $isDiagnostic) { continue }
+
+        if ($mentionsTray -and $mentionsTmp) {
+            continue
+        }
+
+        if ($lower -notmatch '^(access is denied\.?|the process cannot access|being used by another process)') {
+            return $false
+        }
+    }
+
+    return $sawVolatileTrayFailure
+}
+
 function Ensure-AgentTrayFolderPermissions {
     param(
         [Parameter(Mandatory = $true)]
@@ -947,13 +1034,31 @@ function Ensure-AgentTrayFolderPermissions {
 
     Write-AgentLog -FileName $LogName -Message ("[TRAY-ACL] Hardening tray folder permissions at '{0}'." -f $resolvedTrayDir)
 
-    $aclArgs = @(
-        $resolvedTrayDir,
-        '/inheritance:r',
+    Remove-AgentTrayVolatileFiles -TrayDir $resolvedTrayDir -LogName $LogName
+
+    $grantArgs = @(
         '/grant:r', '*S-1-5-32-544:(OI)(CI)(F)',
         '/grant:r', '*S-1-5-18:(OI)(CI)(F)',
         '/grant:r', '*S-1-5-11:(OI)(CI)(M)',
-        '/grant:r', '*S-1-5-32-545:(OI)(CI)(RX)',
+        '/grant:r', '*S-1-5-32-545:(OI)(CI)(RX)'
+    )
+
+    $folderAclArgs = @(
+        $resolvedTrayDir,
+        '/inheritance:r'
+    ) + $grantArgs + @('/q')
+
+    $folderAclOutput = & icacls.exe @folderAclArgs 2>&1
+    $folderAclExitCode = $LASTEXITCODE
+    if ($folderAclExitCode -ne 0) {
+        $detail = Get-NativeCommandOutputSummary -Output $folderAclOutput
+        throw ("Failed to harden tray folder permissions at '{0}' (exit code {1}): {2}" -f $resolvedTrayDir, $folderAclExitCode, $detail)
+    }
+
+    $aclArgs = @(
+        $resolvedTrayDir,
+        '/inheritance:r'
+    ) + $grantArgs + @(
         '/t',
         '/c',
         '/q'
@@ -962,8 +1067,11 @@ function Ensure-AgentTrayFolderPermissions {
     $aclOutput = & icacls.exe @aclArgs 2>&1
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
-        $detail = (($aclOutput | ForEach-Object { $_.ToString().Trim() }) | Where-Object { $_ } | Select-Object -First 5) -join '; '
-        if (-not $detail) { $detail = 'icacls returned an error without diagnostic output.' }
+        $detail = Get-NativeCommandOutputSummary -Output $aclOutput
+        if (Test-AgentTrayAclFailureIsVolatile -AclOutput $aclOutput -TrayDir $resolvedTrayDir) {
+            Write-AgentLog -FileName $LogName -Message ("[TRAY-ACL] Ignored volatile tray file ACL failure while hardening '{0}': {1}" -f $resolvedTrayDir, $detail)
+            return
+        }
         throw ("Failed to harden tray folder permissions at '{0}' (exit code {1}): {2}" -f $resolvedTrayDir, $exitCode, $detail)
     }
 }
