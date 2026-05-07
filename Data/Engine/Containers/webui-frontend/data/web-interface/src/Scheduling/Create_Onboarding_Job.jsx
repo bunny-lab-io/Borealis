@@ -351,8 +351,8 @@ const TARGET_AUTO_SIZE_COLUMNS = [];
 const PROGRESSION_AUTO_SIZE_COLUMNS = ["startedLabel", "elapsedLabel"];
 const AG_GRID_STANDARD_ROW_HEIGHT = 44;
 const AG_GRID_STANDARD_HEADER_HEIGHT = 44;
-const STATUS_ICON_BOX_SIZE = 40;
-const STATUS_ICON_SIZE = 31;
+const STATUS_ICON_BOX_SIZE = 34;
+const STATUS_ICON_SIZE = 26;
 const STATUS_COLUMN_SIZE = AG_GRID_STANDARD_ROW_HEIGHT;
 const TARGET_STATUS_FILTER_OPTIONS = [
   { key: "pending_approval", label: "Pending Approval" },
