@@ -123,7 +123,9 @@ const PAGE_SX = {
 const GRID_PANEL_SX = {
   width: "100%",
   height: "100%",
+  minHeight: 0,
   fontFamily: gridFontFamily,
+  "--ag-font-family": gridFontFamily,
   "--ag-icon-font-family": iconFontFamily,
   "--ag-cell-horizontal-padding": "18px",
   "--ag-background-color": "#070b1a",
@@ -136,15 +138,23 @@ const GRID_PANEL_SX = {
   "--ag-border-color": "rgba(125,183,255,0.18)",
   "--ag-row-border-color": "rgba(125,183,255,0.14)",
   "--ag-border-radius": "8px",
-  borderRadius: 1,
+  borderRadius: "8px",
   border: `1px solid ${MAGIC_UI.panelBorder}`,
   background: "transparent",
   boxShadow: "none",
   overflow: "hidden",
   "& .ag-root-wrapper": {
+    minHeight: "100%",
+    height: "100%",
+    border: "none",
+    borderRadius: "8px !important",
+    background: "transparent",
+    overflow: "hidden",
+  },
+  "& .ag-root, & .ag-root-wrapper-body, & .ag-root-wrapper-body .ag-root": {
     borderRadius: "8px",
   },
-  "& .ag-root, & .ag-header, & .ag-center-cols-container": {
+  "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
     fontFamily: gridFontFamily,
     background: "transparent",
   },
@@ -310,8 +320,8 @@ const SELECT_MENU_PROPS = {
   },
 };
 
-const TARGET_AUTO_SIZE_COLUMNS = ["targetLabel", "statusLabel"];
-const PROGRESSION_AUTO_SIZE_COLUMNS = ["statusLabel", "task", "output", "startedLabel", "elapsedLabel"];
+const TARGET_AUTO_SIZE_COLUMNS = ["statusLabel"];
+const PROGRESSION_AUTO_SIZE_COLUMNS = ["startedLabel", "elapsedLabel"];
 const TARGET_STATUS_FILTER_OPTIONS = [
   { key: "pending_approval", label: "Pending Approval" },
   { key: "skipped", label: "Skipped" },
@@ -1143,7 +1153,7 @@ export default function CreateOnboardingJob() {
 
   const targetGridColumnDefs = useMemo(
     () => [
-      { field: "targetLabel", headerName: "Target", minWidth: 220, filter: "agTextColumnFilter", cellClass: "auto-col-tight" },
+      { field: "targetLabel", headerName: "Target", minWidth: 180, flex: 1, filter: "agTextColumnFilter", cellClass: "auto-col-tight" },
       {
         field: "statusLabel",
         headerName: "Status",
@@ -1190,7 +1200,9 @@ export default function CreateOnboardingJob() {
       {
         field: "statusLabel",
         headerName: "Status",
-        minWidth: 150,
+        width: 135,
+        minWidth: 125,
+        maxWidth: 150,
         filter: false,
         cellClass: "auto-col-tight",
         cellRenderer: (params) => <StatusPill status={params.data?.status} />,
@@ -1199,7 +1211,9 @@ export default function CreateOnboardingJob() {
       {
         field: "output",
         headerName: "StdOut / StdErr",
-        minWidth: 210,
+        width: 168,
+        minWidth: 160,
+        maxWidth: 180,
         filter: false,
         cellClass: "auto-col-tight",
         cellRenderer: (params) => {
@@ -1527,7 +1541,7 @@ export default function CreateOnboardingJob() {
               })}
             </Tabs>
 
-            <Box sx={{ mt: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <Box sx={{ mt: activeTabKey === "targets" ? 1 : 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
               {activeTabKey === "name" ? (
                 <Box sx={TAB_SECTION_SX}>
                   <SectionHeader title="Job Name" />
@@ -1746,7 +1760,7 @@ export default function CreateOnboardingJob() {
               ) : null}
 
               {activeTabKey === "targets" ? (
-                <Box sx={{ ...TAB_SECTION_SX, flexGrow: 1, minHeight: 0, pb: 0 }}>
+                <Box sx={{ ...TAB_SECTION_SX, flexGrow: 1, minHeight: 0, px: 0, pt: { xs: 0.75, md: 1 }, pb: 0 }}>
                   <Box
                     sx={{
                       display: "flex",
@@ -1775,7 +1789,7 @@ export default function CreateOnboardingJob() {
                     sx={{
                       display: "grid",
                       gridTemplateColumns: { xs: "1fr", xl: "minmax(320px, 1fr) minmax(0, 2fr)" },
-                      gap: 2,
+                      gap: 1.5,
                       flexGrow: 1,
                       minHeight: { xs: 940, xl: 0 },
                     }}

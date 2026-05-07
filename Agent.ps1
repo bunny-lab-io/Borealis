@@ -460,7 +460,10 @@ function Invoke-GitCommand {
         [string[]]$Arguments,
 
         [Parameter()]
-        [string]$WorkingDirectory = ''
+        [string]$WorkingDirectory = '',
+
+        [Parameter()]
+        [switch]$AllowFailure
     )
 
     if ($WorkingDirectory) {
@@ -470,8 +473,12 @@ function Invoke-GitCommand {
     }
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
+        if ($AllowFailure) {
+            return $exitCode
+        }
         throw "Git command failed with exit code ${exitCode}: git $($Arguments -join ' ')"
     }
+    return $exitCode
 }
 
 function Ensure-PortableGit {
@@ -632,7 +639,10 @@ function Sync-BorealisRepository {
             $cleanArgs.Add(("{0}/**" -f $normalizedPreserve))
         }
     }
-    Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @($cleanArgs.ToArray())
+    $cleanExitCode = Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @($cleanArgs.ToArray()) -AllowFailure
+    if ($cleanExitCode -ne 0) {
+        Write-Host ("[!] Git clean could not remove one or more untracked files (exit code {0}); continuing after reset." -f $cleanExitCode) -ForegroundColor Yellow
+    }
 }
 
 function Resolve-StableReleaseTag {
