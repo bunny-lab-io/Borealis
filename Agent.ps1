@@ -1187,6 +1187,21 @@ function Run-Step {
         Write-Host "`r$($symbols.Fail) $Message - Failed: $_                        " -ForegroundColor Red
         Write-BorealisOnboardingProgressState -Detail ("{0} failed: {1}" -f $Message, $_)
         Write-BorealisOnboardingProgressMarker -State 'failed' -Task $Message
+        $deferWireGuardFailure = $false
+        if ($Message -eq 'Dependency: WireGuard VPN Adapter') {
+            $deferWireGuardFailure = (
+                -not [string]::IsNullOrWhiteSpace($env:BOREALIS_ONBOARDING_RUN_ID) -or
+                (Test-BorealisTruthyValue $env:BOREALIS_WIREGUARD_DEPENDENCY_OPTIONAL)
+            )
+        }
+        if ($deferWireGuardFailure) {
+            $deferMessage = "WireGuard dependency deferred during onboarding: $_"
+            Write-AgentLog -FileName 'Install.log' -Message $deferMessage
+            Write-Host $deferMessage -ForegroundColor Yellow
+            Write-BorealisOnboardingProgressState -Detail $deferMessage
+            Write-BorealisOnboardingProgressMarker -State 'deferred' -Task $Message
+            return
+        }
         throw
     }
 }

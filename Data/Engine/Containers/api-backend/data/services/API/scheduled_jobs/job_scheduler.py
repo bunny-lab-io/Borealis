@@ -344,7 +344,7 @@ def _onboarding_progress_task_from_output(*, stdout: Any = "", stderr: Any = "")
     text = f"{stdout or ''}\n{stderr or ''}"
     if not text.strip():
         return ""
-    marker_matches = re.findall(r"__BOREALIS_AGENT_STEP_(?:STARTED|COMPLETED|FAILED)__=([^\r\n]+)", text, re.IGNORECASE)
+    marker_matches = re.findall(r"__BOREALIS_AGENT_STEP_(?:STARTED|COMPLETED|FAILED|DEFERRED)__=([^\r\n]+)", text, re.IGNORECASE)
     if marker_matches:
         task = _onboarding_agent_step_task_name(marker_matches[-1])
         if task:
@@ -4574,8 +4574,44 @@ class JobScheduler:
         raise RuntimeError(f"smb_connection_failed:{last_error or 'connection_failed'}")
 
     def _read_windows_smb_file(self, smb: Any, path: str, *, share: str = "ADMIN$") -> str:
+        def _read_with_open_file() -> Optional[bytes]:
+            file_id = None
+            share_name_inner = str(share or "ADMIN$")
+            try:
+                file_id = smb.openFile(
+                    share_name_inner,
+                    path,
+                    desiredAccess=0x00000001,
+                    shareMode=0x00000007,
+                )
+                chunks: List[bytes] = []
+                offset = 0
+                chunk_size = 65536
+                while True:
+                    chunk = smb.readFile(share_name_inner, file_id, offset, chunk_size)
+                    if not chunk:
+                        break
+                    if isinstance(chunk, str):
+                        chunk = chunk.encode("utf-8", errors="replace")
+                    chunks.append(bytes(chunk))
+                    offset += len(chunk)
+                    if len(chunk) < chunk_size:
+                        break
+                return b"".join(chunks)
+            except TypeError:
+                return None
+            finally:
+                if file_id is not None:
+                    try:
+                        smb.closeFile(share_name_inner, file_id)
+                    except Exception:
+                        pass
+
         buffer = io.BytesIO()
         share_name = str(share or "ADMIN$")
+        raw = _read_with_open_file()
+        if raw is not None:
+            return raw.decode("utf-8", errors="replace")
         try:
             smb.getFile(share_name, path, buffer.write, shareAccessMode=0x7)
         except TypeError:
