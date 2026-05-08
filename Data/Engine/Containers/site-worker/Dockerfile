@@ -23,10 +23,9 @@ COPY Data/Engine/Containers/api-backend/data/engine-requirements.txt /tmp/boreal
 RUN python -m pip install --upgrade pip \
     && python -m pip install -r /tmp/borealis-engine-requirements.txt
 
-COPY Agent.ps1 /opt/Borealis/Agent.ps1
 COPY Data/Engine/Containers/api-backend/data /opt/Borealis/Data/Engine
 COPY Data/Agent /opt/Borealis/Data/Agent
-COPY Data/Agent/Bootstrapper/Agent_Service_Bootstrapper.exe /opt/Borealis/Data/Agent/Bootstrapper/Agent_Service_Bootstrapper.exe
+COPY Data/Agent/Bootstrap/Agent.exe /opt/Borealis/Data/Agent/Bootstrap/Agent.exe
 COPY Data/Engine/Containers/site-worker/entrypoint.sh /usr/local/bin/borealis-site-worker
 
 RUN chmod +x /usr/local/bin/borealis-site-worker

@@ -13,8 +13,8 @@
         "Data/Engine/Containers/api-backend/data/Official_Assemblies/**",
         "Data/Agent/**/*.py",
         "Data/Agent/agent-requirements.txt",
-        "Data/Engine/Containers/api-backend/**",
-        "Agent.ps1"
+        "Data/Agent/Bootstrap/**",
+        "Data/Engine/Containers/api-backend/**"
       ]
     },
     "job-scheduler": {
@@ -30,9 +30,9 @@
         "Data/Engine/Containers/api-backend/data/Official_Assemblies/**",
         "Data/Agent/**/*.py",
         "Data/Agent/agent-requirements.txt",
+        "Data/Agent/Bootstrap/**",
         "Data/Engine/Containers/compose.yaml",
-        "Data/Engine/Containers/job-scheduler/**",
-        "Agent.ps1"
+        "Data/Engine/Containers/job-scheduler/**"
       ]
     },
     "site-worker": {
@@ -48,8 +48,8 @@
         "Data/Engine/Containers/api-backend/data/Official_Assemblies/**",
         "Data/Agent/**/*.py",
         "Data/Agent/agent-requirements.txt",
-        "Data/Engine/Containers/site-worker/**",
-        "Agent.ps1"
+        "Data/Agent/Bootstrap/**",
+        "Data/Engine/Containers/site-worker/**"
       ]
     },
     "webui-frontend": {

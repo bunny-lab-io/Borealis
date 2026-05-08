@@ -99,7 +99,8 @@ def _discover_project_root() -> Path:
     current = ENGINE_DIR
     for candidate in (current, *current.parents):
         if (
-            (candidate / "Agent.ps1").is_file()
+            (candidate / "Agent.exe").is_file()
+            or (candidate / "Agent.ps1").is_file()
             or (candidate / "Engine.sh").is_file()
             or (candidate / "Agent.sh").is_file()
         ):

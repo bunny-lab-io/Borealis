@@ -432,13 +432,11 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
   }
 
   if (osId === "windows") {
-    const bootstrapUrl = rawBorealisFileUrl(normalizedBranch, "Agent.ps1");
-    const bootstrapCommand = usesDefaultBranch
-      ? `irm ${bootstrapUrl} | iex`
-      : `& ([ScriptBlock]::Create((irm ${quotePowerShellValue(bootstrapUrl)}))) --agent --repo-branch ${quotePowerShellValue(normalizedBranch)}`;
-    return `$env:BOREALIS_SERVER_URL="${escapePowerShellDoubleQuoted(normalizedServerUrl)}"; ` +
-      `$env:BOREALIS_ENROLLMENT_CODE="${escapePowerShellDoubleQuoted(normalizedEnrollmentCode)}"; ` +
-      bootstrapCommand;
+    const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/Bootstrap/Agent.exe");
+    return `$borealisAgent = Join-Path $env:TEMP "Borealis-Agent.exe"; ` +
+      `Invoke-WebRequest -UseBasicParsing -Uri ${quotePowerShellValue(agentUrl)} -OutFile $borealisAgent; ` +
+      `& $borealisAgent --server-url ${quotePowerShellValue(normalizedServerUrl)} ` +
+      `--site-enrollment-code ${quotePowerShellValue(normalizedEnrollmentCode)}`;
   }
 
   const agentUrl = rawBorealisFileUrl(normalizedBranch, "Agent.sh");

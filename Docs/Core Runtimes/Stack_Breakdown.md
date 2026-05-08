@@ -216,7 +216,7 @@ borealis-engine/<service>:sha-<inputhash12>
 Build cache:
 - Docker Buildx uses `Engine/Deploy/cache/buildkit/<service>/` when available.
 - Hosts without usable Buildx fall back to `DOCKER_BUILDKIT=1 docker build`.
-- `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Agent.ps1`.
+- `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Agent.exe`.
 - `webui-frontend`, `traefik-edge`, `postgres-db`, `remote-desktop-guacd`, and `wireguard-tunnel` use service-local build contexts.
 - Service-local build contexts carry their own `.dockerignore` files so `node_modules`, WebUI build output, Python bytecode, pytest caches, logs, and local test output stay out of image contexts.
 - Deploy mode is part of the image hash only for services with explicit mode targets, currently `webui-frontend`. Switching between prod and dev should not make PostgreSQL, guacd, WireGuard, Traefik, or the API image appear changed unless their own inputs changed.

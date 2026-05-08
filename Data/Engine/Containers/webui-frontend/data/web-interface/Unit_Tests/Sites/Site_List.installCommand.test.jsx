@@ -38,4 +38,21 @@ describe("site install command builder", () => {
     expect(command).toContain("| bash -s -- deploy");
     expect(command).not.toContain("sudo bash");
   });
+
+  it("builds Windows Agent.exe bootstrap commands with canonical arguments", () => {
+    const command = buildInstallCommand(
+      "windows",
+      "https://borealis.example.com",
+      "CODE-1234",
+      "feature/automatic-local-network-device-enrollment"
+    );
+
+    expect(command).toContain("Data/Agent/Bootstrap/Agent.exe");
+    expect(command).toContain("Invoke-WebRequest -UseBasicParsing");
+    expect(command).toContain('--server-url "https://borealis.example.com"');
+    expect(command).toContain('--site-enrollment-code "CODE-1234"');
+    expect(command).not.toContain("Agent.ps1");
+    expect(command).not.toContain("--serverurl");
+    expect(command).not.toContain("--enrollmentcode");
+  });
 });

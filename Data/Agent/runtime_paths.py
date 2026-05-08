@@ -25,7 +25,8 @@ def _discover_project_root(current: Path) -> Optional[Path]:
     for parent in (search_root, *search_root.parents):
         try:
             if (
-                (parent / "Agent.ps1").is_file()
+                (parent / "Agent.exe").is_file()
+                or (parent / "Agent.ps1").is_file()
                 or (parent / "Agent.sh").is_file()
                 or (parent / "Engine.sh").is_file()
                 or (parent / ".git").is_dir()

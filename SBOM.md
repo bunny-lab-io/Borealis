@@ -1,6 +1,6 @@
 # Borealis SBOM
 
-This software bill of materials is an inventory of the direct, repo-declared, bundled, container base image, or script-installed third-party software used by Borealis. It was assembled from `Agent.ps1`, `Engine.sh`, `Agent.sh`, `Data/Agent/agent-requirements.txt`, `Data/Engine/Containers/api-backend/data/engine-requirements.txt`, `Data/Engine/Containers/webui-frontend/data/web-interface/package.json`, `Data/Engine/Containers/api-backend/data/Ansible/collections.yml`, and `Data/Engine/Containers/`.
+This software bill of materials is an inventory of the direct, repo-declared, bundled, container base image, or script-installed third-party software used by Borealis. It was assembled from `Agent.exe`, `Agent.ps1`, `Engine.sh`, `Agent.sh`, `Data/Agent/agent-requirements.txt`, `Data/Engine/Containers/api-backend/data/engine-requirements.txt`, `Data/Engine/Containers/webui-frontend/data/web-interface/package.json`, `Data/Engine/Containers/api-backend/data/Ansible/collections.yml`, and `Data/Engine/Containers/`.
 
 The Python requirement files are currently unpinned, so the exact resolved version can change between installs. Where the install scripts pin a version explicitly, that version is called out below.
 
@@ -30,7 +30,7 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - curl (vendored Windows download helper) - curl license - https://curl.se/docs/copyright.html
 - 7-Zip CLI (vendored Windows archive helper) - LGPL-2.1-or-later with unRAR restriction - https://www.7-zip.org/license.txt
 - Go toolchain (native Linux build helper installs official Go into `Dependencies/Go` when missing) - BSD-3-Clause - https://go.dev/LICENSE
-- golang.org/x/sys v0.28.0 (Windows service APIs for `Agent_Service_Bootstrapper.exe`) - BSD-3-Clause - https://cs.opensource.google/go/x/sys/+/master:LICENSE
+- golang.org/x/sys v0.28.0 (Windows service APIs for `Agent.exe`) - BSD-3-Clause - https://cs.opensource.google/go/x/sys/+/master:LICENSE
 
 ## Borealis Engine Dependencies
 

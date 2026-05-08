@@ -703,17 +703,17 @@ function normalizeOnboardingProgressTask(task, status = "") {
     return "Connection Established using WinRM";
   }
   if (
-    normalizedTask.includes("transferring agent service bootstrapper") ||
+    normalizedTask.includes("transferring agent.exe") ||
     normalizedTask.includes("transferring agent installation files") ||
-    normalizedTask.includes("uploading agent service bootstrapper")
+    normalizedTask.includes("uploading agent.exe")
   ) {
-    return "Uploading Agent Service Bootstrapper to Remote Device";
+    return "Uploading Agent.exe to Remote Device";
   }
   if (normalizedTask.includes("creating windows service")) {
     if (normalizedTask.includes("using")) {
       return original;
     }
-    return "Creating Windows Service to One-Shot Bootstrap Agent using SMB Service";
+    return "Creating Windows Service to Run Agent.exe using SMB Service";
   }
   if (normalizedTask.includes("ensuring windows service")) {
     return "Ensuring Windows Service is Running";
@@ -721,7 +721,7 @@ function normalizeOnboardingProgressTask(task, status = "") {
   if (
     normalizedTask.includes("downloading agent bootstrap") ||
     normalizedTask.includes("deploying borealis agent runtime") ||
-    normalizedTask.includes("running agent service bootstrapper") ||
+    normalizedTask.includes("running agent.exe") ||
     normalizedTask.includes("syncing borealis repository") ||
     normalizedTask.includes("running agent bootstrap")
   ) {

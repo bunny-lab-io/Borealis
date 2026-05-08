@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import html
 import io
 import json
@@ -26,6 +27,7 @@ import tempfile
 import threading
 import time
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import quote as url_quote
@@ -118,7 +120,7 @@ CREDENTIAL_RESET_REQUIRED_MESSAGE = (
 JOB_KIND_AUTOMATION = "automation"
 JOB_KIND_ONBOARDING = "onboarding"
 ONBOARDING_COMPONENT_KIND = "device_onboarding"
-AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME = "Agent_Service_Bootstrapper.exe"
+AGENT_EXE_NAME = "Agent.exe"
 DEFAULT_BOREALIS_REPO_GIT_URL = "https://github.com/bunny-lab-io/Borealis.git"
 ONBOARDING_COMPONENT_NAME = "Device Onboarding"
 ONBOARDING_STATUS_PENDING = "pending"
@@ -415,7 +417,7 @@ def _windows_onboarding_reported_hostname(
 def _windows_output_is_launcher_marker_only(output: Any) -> bool:
     lines = [line.strip() for line in str(output or "").splitlines() if line.strip()]
     launch_markers = {
-        "__BOREALIS_AGENT_SERVICE_BOOTSTRAPPER_STAGED__=1",
+        "__BOREALIS_AGENT_EXE_STAGED__=1",
         "__BOREALIS_WINDOWS_ONBOARDING_STAGED__=1",
         "__BOREALIS_WINDOWS_ONBOARDING_LAUNCHER_STARTED__=1",
     }
@@ -498,10 +500,10 @@ def _onboarding_progress_task_from_output(*, stdout: Any = "", stderr: Any = "")
         return "Running Agent Bootstrap"
     if "downloading windows agent bootstrap" in combined:
         return "Running Agent Bootstrap"
-    if "__borealis_agent_service_bootstrapper_started__" in combined:
+    if "__borealis_agent_exe_started__" in combined:
         return "Running Agent Bootstrap"
-    if "__borealis_agent_service_bootstrapper_staged__" in combined:
-        return "Uploading Agent Service Bootstrapper to Remote Device"
+    if "__borealis_agent_exe_staged__" in combined:
+        return "Uploading Agent.exe to Remote Device"
     if "__borealis_onboarding_temp_cleaned__" in combined:
         return "Spinning-Up Site-Worker Container"
     if "syncing borealis ref" in combined:
@@ -585,10 +587,10 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
             return f"Connection Established using {protocol}"
     if "connecting to windows smb" in detail_lower or "connecting to ssh" in detail_lower:
         return "Establishing Connection to Remote Device"
-    if "staging borealis agent service bootstrapper" in detail_lower:
-        return "Uploading Agent Service Bootstrapper to Remote Device"
+    if "staging borealis agent.exe" in detail_lower:
+        return "Uploading Agent.exe to Remote Device"
     if "staging borealis onboarding script" in detail_lower:
-        return "Uploading Agent Service Bootstrapper to Remote Device"
+        return "Uploading Agent.exe to Remote Device"
     if "downloading agent.ps1" in detail_lower:
         return "Running Agent Bootstrap"
     if "cleaning onboarding temp" in detail_lower:
@@ -596,7 +598,7 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
     if "stale onboarding process" in detail_lower:
         return "Spinning-Up Site-Worker Container"
     if "binding to windows service control manager" in detail_lower or "creating transient borealis onboarding service" in detail_lower:
-        return "Creating Windows Service to One-Shot Bootstrap Agent using SMB Service"
+        return "Creating Windows Service to Run Agent.exe using SMB Service"
     if "starting transient borealis onboarding service" in detail_lower:
         return "Ensuring Windows Service is Running"
     if "scheduled task" in detail_lower:
@@ -5084,8 +5086,8 @@ class JobScheduler:
             smb.getFile(share_name, path, buffer.write)
         return buffer.getvalue().decode("utf-8", errors="replace")
 
-    def _windows_agent_service_bootstrapper_path(self) -> Optional[Path]:
-        override = str(os.environ.get("BOREALIS_WINDOWS_AGENT_SERVICE_BOOTSTRAPPER_EXE") or "").strip()
+    def _windows_agent_exe_path(self) -> Optional[Path]:
+        override = str(os.environ.get("BOREALIS_WINDOWS_AGENT_EXE") or "").strip()
         if override:
             candidate = Path(override).expanduser()
             if candidate.is_file():
@@ -5100,23 +5102,22 @@ class JobScheduler:
             roots.insert(0, Path(env_root).expanduser())
         for root in roots:
             for candidate in (
-                root / "Data" / "Agent" / "Bootstrapper" / AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME,
-                root / "Data" / "Agent" / "Bootstrapper" / "dist" / AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME,
-                root / "Engine" / "Services" / "api-backend" / "data" / AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME,
+                root / "Data" / "Agent" / "Bootstrap" / AGENT_EXE_NAME,
+                root / "Engine" / "Services" / "api-backend" / "data" / "Data" / "Agent" / "Bootstrap" / AGENT_EXE_NAME,
+                root / "Engine" / "Services" / "api-backend" / "data" / AGENT_EXE_NAME,
             ):
                 if candidate.is_file():
                     return candidate
         return None
 
-    def _windows_service_bootstrapper_unavailable_result(self) -> Dict[str, Any]:
+    def _windows_agent_exe_unavailable_result(self) -> Dict[str, Any]:
         return {
             "exit_code": 127,
             "stdout": "",
             "stderr": (
-                f"{AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME} unavailable. Build "
-                "Data/Agent/Bootstrapper/Agent_Service_Bootstrapper.exe or "
-                "Data/Agent/Bootstrapper/dist/Agent_Service_Bootstrapper.exe, or set "
-                "BOREALIS_WINDOWS_AGENT_SERVICE_BOOTSTRAPPER_EXE."
+                f"{AGENT_EXE_NAME} unavailable. Build "
+                "Data/Agent/Bootstrap/Agent.exe, or set "
+                "BOREALIS_WINDOWS_AGENT_EXE."
             ),
         }
 
@@ -5128,7 +5129,46 @@ class JobScheduler:
             return text
         return '"' + text.replace('"', r'\"') + '"'
 
-    def _windows_smb_stage_service_bootstrapper(
+    def _windows_create_agent_payload_bundle(self) -> Tuple[Path, str]:
+        current = Path(__file__).resolve()
+        source_root = None
+        env_root = str(os.environ.get("BOREALIS_PROJECT_ROOT") or "").strip()
+        candidates = []
+        if env_root:
+            candidates.append(Path(env_root).expanduser())
+        candidates.extend([current.parent, *current.parents])
+        for candidate in candidates:
+            probe = candidate / "Data" / "Agent"
+            if (probe / "agent.py").is_file():
+                source_root = probe
+                break
+            probe = candidate / "Data" / "Engine" / "Data" / "Agent"
+            if (probe / "agent.py").is_file():
+                source_root = probe
+                break
+        if source_root is None:
+            raise FileNotFoundError("Data/Agent/agent.py")
+        if not (source_root / "agent.py").is_file():
+            raise FileNotFoundError("Data/Agent/agent.py")
+        temp_dir = Path(tempfile.mkdtemp(prefix="borealis-agent-payload-"))
+        bundle_path = temp_dir / "agent-payload.zip"
+        excluded_dirs = {"Unit_Tests", "Bootstrap", "Logs", "__pycache__", ".pytest_cache"}
+        excluded_files = {"Package_Borealis-Agent.ps1"}
+        with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in source_root.rglob("*"):
+                rel_to_agent = path.relative_to(source_root)
+                if any(part in excluded_dirs for part in rel_to_agent.parts):
+                    continue
+                if path.name in excluded_files:
+                    continue
+                arcname = Path("Data") / "Agent" / rel_to_agent
+                if path.is_dir():
+                    continue
+                archive.write(path, arcname.as_posix())
+        digest = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+        return bundle_path, digest
+
+    def _windows_smb_stage_agent_exe(
         self,
         smb: Any,
         *,
@@ -5139,43 +5179,39 @@ class JobScheduler:
         run_id: int,
         target: str,
         timeout_seconds: float,
+        service_name: str = "",
     ) -> Tuple[str, str, str]:
-        bootstrapper_path = self._windows_agent_service_bootstrapper_path()
-        if bootstrapper_path is None:
-            raise FileNotFoundError(AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME)
+        agent_exe_path = self._windows_agent_exe_path()
+        if agent_exe_path is None:
+            raise FileNotFoundError(AGENT_EXE_NAME)
         branch_ref = str(branch or "main").strip() or "main"
-        stem = f"BorealisOnboard-{uuid.uuid4().hex}"
-        remote_root = "Temp\\BorealisOnboarding"
-        remote_dir = f"{remote_root}\\{stem}"
-        try:
-            smb.createDirectory("ADMIN$", remote_root)
-        except Exception:
-            pass
-        try:
-            smb.createDirectory("ADMIN$", remote_dir)
-        except Exception:
-            pass
-        exe_path = f"{remote_dir}\\{AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME}"
-        config_path = f"{remote_dir}\\config.json"
-        output_path = f"{remote_dir}\\stdout.log"
-        exe_abs = f"C:\\Windows\\{exe_path}"
-        config_abs = f"C:\\Windows\\{config_path}"
-        output_abs = f"C:\\Windows\\{output_path}"
+        for remote_dir in ("Borealis", "Borealis\\Temp", "Borealis\\Temp\\Onboarding"):
+            try:
+                smb.createDirectory("C$", remote_dir)
+            except Exception:
+                pass
+        exe_path = f"Borealis\\{AGENT_EXE_NAME}"
+        config_path = f"Borealis\\Temp\\Onboarding\\bootstrapper-config.json"
+        payload_path = f"Borealis\\Temp\\Onboarding\\agent-payload.zip"
+        manifest_path = f"Borealis\\Temp\\Onboarding\\agent-payload-manifest.json"
+        output_path = f"Borealis\\Temp\\Onboarding\\stdout.log"
+        exe_abs = f"C:\\{exe_path}"
+        config_abs = f"C:\\{config_path}"
+        payload_abs = f"C:\\{payload_path}"
+        manifest_abs = f"C:\\{manifest_path}"
+        output_abs = f"C:\\{output_path}"
         state_abs = "C:\\Borealis\\Temp\\Onboarding\\state.json"
         events_abs = "C:\\Borealis\\Temp\\Onboarding\\events.jsonl"
-        agent_script_abs = f"C:\\Borealis\\Temp\\Onboarding\\Agent-{int(run_id)}.ps1"
-        agent_url = (
-            "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/"
-            f"{url_quote(branch_ref, safe='/._-')}/Agent.ps1"
-        )
+        bundle_path, bundle_sha256 = self._windows_create_agent_payload_bundle()
         config = {
-            "agent_url": agent_url,
-            "agent_script_path": agent_script_abs,
             "install_dir": "C:\\Borealis",
             "repo_url": DEFAULT_BOREALIS_REPO_GIT_URL,
             "repo_ref": branch_ref,
             "server_url": str(server_url or ""),
-            "enrollment_code": str(enrollment_code or ""),
+            "site_enrollment_code": str(enrollment_code or ""),
+            "agent_bundle_path": payload_abs,
+            "agent_bundle_sha256": bundle_sha256,
+            "manifest_path": manifest_abs,
             "state_path": state_abs,
             "events_path": events_abs,
             "stdout_path": output_abs,
@@ -5184,13 +5220,30 @@ class JobScheduler:
             "job_id": int(job_id),
             "run_id": int(run_id),
             "target": str(target or "").strip(),
+            "service_name": str(service_name or "").strip(),
+            "noninteractive": True,
         }
-        with open(bootstrapper_path, "rb") as handle:
-            smb.putFile("ADMIN$", exe_path, handle.read)
-        config_bytes = io.BytesIO(json.dumps(config, separators=(",", ":")).encode("utf-8"))
-        output_bytes = io.BytesIO(b"__BOREALIS_AGENT_SERVICE_BOOTSTRAPPER_STAGED__=1\r\n")
-        smb.putFile("ADMIN$", config_path, config_bytes.read)
-        smb.putFile("ADMIN$", output_path, output_bytes.read)
+        manifest = {
+            "repo_ref": branch_ref,
+            "sha256": bundle_sha256,
+            "created_at": int(time.time()),
+        }
+        try:
+            with open(agent_exe_path, "rb") as handle:
+                smb.putFile("C$", exe_path, handle.read)
+            with open(bundle_path, "rb") as handle:
+                smb.putFile("C$", payload_path, handle.read)
+            config_bytes = io.BytesIO(json.dumps(config, separators=(",", ":")).encode("utf-8"))
+            manifest_bytes = io.BytesIO(json.dumps(manifest, separators=(",", ":")).encode("utf-8"))
+            output_bytes = io.BytesIO(b"__BOREALIS_AGENT_EXE_STAGED__=1\r\n")
+            smb.putFile("C$", config_path, config_bytes.read)
+            smb.putFile("C$", manifest_path, manifest_bytes.read)
+            smb.putFile("C$", output_path, output_bytes.read)
+        finally:
+            try:
+                shutil.rmtree(bundle_path.parent)
+            except Exception:
+                pass
         return exe_abs, config_abs, output_path
 
     def _read_windows_onboarding_state(self, smb: Any) -> Dict[str, Any]:
@@ -5299,7 +5352,7 @@ class JobScheduler:
 
         while time.monotonic() < deadline:
             try:
-                output = self._read_windows_smb_file(smb, output_path)
+                output = self._read_windows_smb_file(smb, output_path, share="C$")
                 if output:
                     last_output = output
                     last_error = ""
@@ -5458,8 +5511,8 @@ class JobScheduler:
             from impacket.dcerpc.v5 import scmr, transport  # type: ignore
         except Exception as exc:
             return {"exit_code": 127, "stdout": "", "stderr": f"impacket_scm_unavailable:{exc}"}
-        if self._windows_agent_service_bootstrapper_path() is None:
-            return self._windows_service_bootstrapper_unavailable_result()
+        if self._windows_agent_exe_path() is None:
+            return self._windows_agent_exe_unavailable_result()
         smb = None
         dce = None
         service_handle = None
@@ -5472,11 +5525,11 @@ class JobScheduler:
             smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
             if callable(status_update):
                 status_update("Windows SMB service connection established.")
-            stage = "ADMIN$ bootstrapper staging"
+            stage = "C$ Agent.exe staging"
             if callable(status_update):
-                status_update("Staging Borealis Agent service bootstrapper over ADMIN$.")
+                status_update("Staging Borealis Agent.exe over C$.")
             service_name = f"BorealisOnboarding{uuid.uuid4().hex[:12]}"
-            exe_abs, config_abs, output_path = self._windows_smb_stage_service_bootstrapper(
+            exe_abs, _config_abs, output_path = self._windows_smb_stage_agent_exe(
                 smb,
                 branch=branch,
                 server_url=server_url,
@@ -5485,12 +5538,9 @@ class JobScheduler:
                 run_id=run_id,
                 target=target,
                 timeout_seconds=timeout_seconds,
+                service_name=service_name,
             )
-            command = (
-                f"{self._windows_quote_command_arg(exe_abs)} "
-                f"--config {self._windows_quote_command_arg(config_abs)} "
-                f"--service-name {self._windows_quote_command_arg(service_name)}"
-            )
+            command = self._windows_quote_command_arg(exe_abs)
             start_warning = ""
             stage = "svcctl RPC bind"
             if callable(status_update):
@@ -5587,8 +5637,8 @@ class JobScheduler:
             from impacket.dcerpc.v5.dtypes import NULL  # type: ignore
         except Exception as exc:
             return {"exit_code": 127, "stdout": "", "stderr": f"impacket_tsch_unavailable:{exc}"}
-        if self._windows_agent_service_bootstrapper_path() is None:
-            return self._windows_service_bootstrapper_unavailable_result()
+        if self._windows_agent_exe_path() is None:
+            return self._windows_agent_exe_unavailable_result()
         smb = None
         dce = None
         task_path = f"\\BorealisOnboarding{uuid.uuid4().hex[:12]}"
@@ -5600,10 +5650,10 @@ class JobScheduler:
             smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
             if callable(status_update):
                 status_update("Windows scheduled task connection established.")
-            stage = "ADMIN$ bootstrapper staging"
+            stage = "C$ Agent.exe staging"
             if callable(status_update):
-                status_update("Staging Borealis Agent service bootstrapper over ADMIN$.")
-            exe_abs, config_abs, output_path = self._windows_smb_stage_service_bootstrapper(
+                status_update("Staging Borealis Agent.exe over C$.")
+            exe_abs, _config_abs, output_path = self._windows_smb_stage_agent_exe(
                 smb,
                 branch=branch,
                 server_url=server_url,
@@ -5614,7 +5664,7 @@ class JobScheduler:
                 timeout_seconds=timeout_seconds,
             )
             command = exe_abs
-            arguments = f"--config {self._windows_quote_command_arg(config_abs)}"
+            arguments = ""
             xml = self._windows_task_xml(task_name=task_path, command=command, arguments=arguments)
             stage = "Task Scheduler RPC bind"
             if callable(status_update):
@@ -5684,8 +5734,8 @@ class JobScheduler:
             from impacket.dcerpc.v5.dtypes import NULL  # type: ignore
         except Exception as exc:
             return {"exit_code": 127, "stdout": "", "stderr": f"impacket_wmi_unavailable:{exc}"}
-        if self._windows_agent_service_bootstrapper_path() is None:
-            return self._windows_service_bootstrapper_unavailable_result()
+        if self._windows_agent_exe_path() is None:
+            return self._windows_agent_exe_unavailable_result()
         domain, username, password = _parse_windows_credential_parts(credential)
         smb = None
         dcom = None
@@ -5698,10 +5748,10 @@ class JobScheduler:
             smb = self._open_windows_smb_connection(host=host, port=port, credential=credential)
             if callable(status_update):
                 status_update("Windows WMI/DCOM connection established.")
-            stage = "ADMIN$ bootstrapper staging"
+            stage = "C$ Agent.exe staging"
             if callable(status_update):
-                status_update("Staging Borealis Agent service bootstrapper over ADMIN$.")
-            exe_abs, config_abs, output_path = self._windows_smb_stage_service_bootstrapper(
+                status_update("Staging Borealis Agent.exe over C$.")
+            exe_abs, _config_abs, output_path = self._windows_smb_stage_agent_exe(
                 smb,
                 branch=branch,
                 server_url=server_url,
@@ -5711,10 +5761,7 @@ class JobScheduler:
                 target=target,
                 timeout_seconds=timeout_seconds,
             )
-            command = (
-                f"{self._windows_quote_command_arg(exe_abs)} "
-                f"--config {self._windows_quote_command_arg(config_abs)}"
-            )
+            command = self._windows_quote_command_arg(exe_abs)
             stage = "DCOM connect"
             if callable(status_update):
                 status_update("Connecting to Windows WMI/DCOM.")
@@ -5782,8 +5829,8 @@ class JobScheduler:
             import winrm  # type: ignore
         except Exception as exc:
             return {"exit_code": 127, "stdout": "", "stderr": f"pywinrm_unavailable:{exc}"}
-        if self._windows_agent_service_bootstrapper_path() is None:
-            return self._windows_service_bootstrapper_unavailable_result()
+        if self._windows_agent_exe_path() is None:
+            return self._windows_agent_exe_unavailable_result()
         metadata = credential.get("metadata") if isinstance(credential.get("metadata"), dict) else {}
         transport_mode = str(metadata.get("winrm_transport") or "ntlm").strip().lower() or "ntlm"
         scheme = "https" if int(port) == 5986 or transport_mode in {"ssl", "credssp"} else "http"
@@ -5791,7 +5838,7 @@ class JobScheduler:
         smb = None
         try:
             smb = self._open_windows_smb_connection(host=host, port=smb_port, credential=credential)
-            exe_abs, config_abs, _output_path = self._windows_smb_stage_service_bootstrapper(
+            exe_abs, _config_abs, _output_path = self._windows_smb_stage_agent_exe(
                 smb,
                 branch=branch,
                 server_url=server_url,
@@ -5809,7 +5856,7 @@ class JobScheduler:
                 operation_timeout_sec=max(20, min(600, int(timeout_seconds or 900))),
                 read_timeout_sec=max(30, min(660, int(timeout_seconds or 900) + 30)),
             )
-            result = session.run_cmd(exe_abs, ["--config", config_abs])
+            result = session.run_cmd(exe_abs, [])
             stdout_raw = getattr(result, "std_out", b"") or b""
             stderr_raw = getattr(result, "std_err", b"") or b""
             stdout = stdout_raw.decode("utf-8", errors="replace") if isinstance(stdout_raw, bytes) else str(stdout_raw or "")

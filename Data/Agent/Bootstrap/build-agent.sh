@@ -3,8 +3,8 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../../.." && pwd)"
-default_output_path="${script_dir}/Agent_Service_Bootstrapper.exe"
-output_path="${BOREALIS_AGENT_SERVICE_BOOTSTRAPPER_OUTPUT_PATH:-${default_output_path}}"
+default_output_path="${script_dir}/Agent.exe"
+output_path="${BOREALIS_AGENT_EXE_OUTPUT_PATH:-${default_output_path}}"
 minimum_go_major=1
 minimum_go_minor=22
 go_version="${BOREALIS_GO_VERSION:-1.22.12}"

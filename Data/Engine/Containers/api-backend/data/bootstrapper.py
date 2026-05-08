@@ -45,11 +45,11 @@ def _project_root() -> Path:
     current = Path(__file__).resolve().parent
 
     for candidate in (current, *current.parents):
-        if (candidate / "Agent.ps1").is_file():
+        if (candidate / "Agent.exe").is_file() or (candidate / "Agent.ps1").is_file():
             return candidate
 
     raise RuntimeError(
-        "Unable to locate the Borealis project root; Agent.ps1 was not found "
+        "Unable to locate the Borealis project root; Agent.exe or Agent.ps1 was not found "
         "in any parent directory."
     )
 

@@ -315,18 +315,16 @@ def test_windows_scheduled_task_xml_uses_localsystem_sid(engine_harness: EngineT
     assert "<AllowStartOnDemand>true</AllowStartOnDemand>" in xml
 
 
-def test_windows_onboarding_requires_agent_service_bootstrapper(engine_harness: EngineTestHarness) -> None:
+def test_windows_onboarding_requires_agent_exe(engine_harness: EngineTestHarness) -> None:
     _client, scheduler = _scheduled_jobs_client(engine_harness)
 
-    unavailable = scheduler._windows_service_bootstrapper_unavailable_result()
+    unavailable = scheduler._windows_agent_exe_unavailable_result()
 
     assert unavailable["exit_code"] == 127
-    assert scheduled_job_module.AGENT_SERVICE_BOOTSTRAPPER_EXE_NAME in unavailable["stderr"]
-    assert "BOREALIS_WINDOWS_AGENT_SERVICE_BOOTSTRAPPER_EXE" in unavailable["stderr"]
-    assert scheduler._windows_quote_command_arg("C:\\Windows\\Temp\\Agent_Service_Bootstrapper.exe").endswith(
-        "Agent_Service_Bootstrapper.exe"
-    )
-    assert scheduler._windows_quote_command_arg("C:\\Windows\\Temp\\Borealis Onboarding\\config.json").startswith('"')
+    assert scheduled_job_module.AGENT_EXE_NAME in unavailable["stderr"]
+    assert "BOREALIS_WINDOWS_AGENT_EXE" in unavailable["stderr"]
+    assert scheduler._windows_quote_command_arg("C:\\Borealis\\Agent.exe").endswith("Agent.exe")
+    assert scheduler._windows_quote_command_arg("C:\\Borealis\\Temp\\Onboarding\\bootstrapper-config.json").startswith('"')
 
 
 def test_windows_smb_poll_treats_sharing_violation_as_active_writer(
