@@ -231,8 +231,8 @@ func runFromConfig(ctx context.Context, configPath string) int {
 			logger("__BOREALIS_ONBOARDING_AGENT_REPAIRED__=1")
 			logger("__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1")
 			logger("__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=73")
-			writeState(cfg, "already_enrolled", 73, "Existing Borealis Agent repaired and started.")
-			writeEvent(cfg, "completed", "Successfully Repaired Agent", "Existing Borealis Agent repaired and started.", 0)
+			writeState(cfg, "already_enrolled", 73, "Existing Borealis Agent is already enrolled and active.")
+			writeEvent(cfg, "skipped", "Already Enrolled and Active", "Existing Borealis Agent is already enrolled and active.", 73)
 			return 73
 		}
 		redeployDetail := assessment.Detail

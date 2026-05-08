@@ -34,6 +34,7 @@ import {
   PlayArrow as PlayArrowIcon,
   RadioButtonUncheckedRounded as ProgressPendingIcon,
   Refresh as RefreshIcon,
+  RemoveCircleOutlineRounded as ProgressSkippedIcon,
   ScheduleRounded as ScheduleRoundedIcon,
   SettingsApplicationsRounded as SettingsApplicationsRoundedIcon,
   TravelExplore as TravelExploreIcon,
@@ -333,6 +334,9 @@ const STATUS_THEME = {
   ssh_unreachable: { label: "Unreachable", text: "#fb7185", background: "rgba(251,113,133,0.18)", border: "1px solid rgba(251,113,133,0.45)", dot: "#fb7185" },
   unreachable: { label: "Unreachable", text: "#fb7185", background: "rgba(251,113,133,0.18)", border: "1px solid rgba(251,113,133,0.45)", dot: "#fb7185" },
   skipped: { label: "Skipped", text: "#fbbf24", background: "rgba(251,191,36,0.14)", border: "1px solid rgba(251,191,36,0.32)", dot: "#f59e0b" },
+  already_enrolled: { label: "Already Enrolled", text: "#fbbf24", background: "rgba(251,191,36,0.14)", border: "1px solid rgba(251,191,36,0.32)", dot: "#f59e0b" },
+  already_pending: { label: "Already Pending", text: "#fbbf24", background: "rgba(251,191,36,0.14)", border: "1px solid rgba(251,191,36,0.32)", dot: "#f59e0b" },
+  unsupported_os: { label: "Unsupported OS", text: "#fbbf24", background: "rgba(251,191,36,0.14)", border: "1px solid rgba(251,191,36,0.32)", dot: "#f59e0b" },
   denied: { label: "Denied", text: "#9aa0a6", background: "rgba(148,163,184,0.12)", border: "1px solid rgba(148,163,184,0.25)", dot: "#94a3b8" },
   expired: { label: "Expired", text: "#9aa0a6", background: "rgba(148,163,184,0.12)", border: "1px solid rgba(148,163,184,0.25)", dot: "#94a3b8" },
 };
@@ -626,6 +630,9 @@ function normalizeOnboardingProgressTask(task, status = "") {
   if (isApprovalReady) {
     return "Agent Ready and Awaiting Approval";
   }
+  if (normalizedTask.includes("already enrolled") || normalizedTask.includes("already active")) {
+    return "Already Enrolled and Active";
+  }
   if (normalizedTask.includes("unable to repair agent") || normalizedTask.includes("re-deploying")) {
     return "Unable to Repair Agent > Re-Deploying";
   }
@@ -857,10 +864,12 @@ function ProgressStatusIcon({ status }) {
   const activeStatuses = new Set(["pending", "pending_approval", "running", "in_progress", "waiting_approval"]);
   const waitingStatuses = new Set(["pending_approval", "waiting_approval"]);
   const failedStatuses = new Set(["failed", "error", "ssh_unreachable", "unreachable", "timeout"]);
+  const skippedStatuses = new Set(["skipped", "already_enrolled", "already_pending", "unsupported_os", "denied", "expired"]);
   const isComplete = completeStatuses.has(key);
   const isActive = activeStatuses.has(key);
   const isWaiting = waitingStatuses.has(key);
   const isFailed = failedStatuses.has(key);
+  const isSkipped = skippedStatuses.has(key);
   const Icon = isComplete
     ? ProgressCompleteIcon
     : isActive
@@ -869,7 +878,9 @@ function ProgressStatusIcon({ status }) {
         ? ProgressPendingIcon
         : isFailed
           ? ProgressErrorIcon
-          : ProgressPendingIcon;
+          : isSkipped
+            ? ProgressSkippedIcon
+            : ProgressPendingIcon;
   const color = isComplete
     ? MAGIC_UI.accentC
     : isActive
@@ -878,7 +889,9 @@ function ProgressStatusIcon({ status }) {
         ? MAGIC_UI.accentB
         : isFailed
           ? MAGIC_UI.danger
-          : MAGIC_UI.textMuted;
+          : isSkipped
+            ? STATUS_THEME.skipped.dot
+            : MAGIC_UI.textMuted;
 
   return (
     <Tooltip title={label}>

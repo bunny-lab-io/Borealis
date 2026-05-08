@@ -211,14 +211,14 @@ def _windows_onboarding_skip_detail(*, stdout: Any = "", stderr: Any = "") -> st
     combined = f"{stdout or ''}\n{stderr or ''}"
     if "__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1" in combined:
         return "Another Borealis onboarding deployment is already running on this target."
+    if "__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1" in combined:
+        return "Existing Borealis Agent is already enrolled and active."
     if "__BOREALIS_ONBOARDING_AGENT_REPAIRED__=1" in combined:
         return "Existing Borealis Agent repaired and started."
     if "__BOREALIS_ONBOARDING_ALREADY_PENDING__=1" in combined:
         if re.search(r"__BOREALIS_ONBOARDING_ALREADY_PENDING__=1[^\r\n]*status=running\b", combined, re.IGNORECASE):
             return ""
         return "Previous Borealis onboarding attempt is already pending approval on this target."
-    if "__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1" in combined:
-        return "Borealis agent already appears enrolled on this target."
     return ""
 
 
@@ -447,6 +447,8 @@ def _onboarding_progress_task_from_output(*, stdout: Any = "", stderr: Any = "")
         if task:
             return task
     combined = text.lower()
+    if "__borealis_onboarding_already_enrolled__=1" in combined or "already enrolled and active" in combined:
+        return "Already Enrolled and Active"
     if "__borealis_windows_onboarding_exit_code__=0" in combined or "agent installed" in combined or "approval pending" in combined:
         return "Agent Ready and Awaiting Approval"
     if "__borealis_onboarding_agent_repaired__=1" in combined or "successfully repaired agent" in combined:
@@ -525,9 +527,11 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
         return "Remote Device Unreachable"
     if normalized_status in {"skipped", "already_enrolled", "already_pending", "denied", "expired", "unsupported_os"}:
         output_task = _onboarding_progress_task_from_output(stdout=stdout, stderr=stderr)
-        if output_task in {"Successfully Repaired Agent", "Existing Agent Detected"}:
+        if output_task in {"Already Enrolled and Active", "Successfully Repaired Agent", "Existing Agent Detected"}:
             return output_task
         skipped_detail_lower = str(detail or "").strip().lower()
+        if "already enrolled and active" in skipped_detail_lower or "already appears enrolled" in skipped_detail_lower:
+            return "Already Enrolled and Active"
         if "successfully repaired agent" in skipped_detail_lower or "agent repaired" in skipped_detail_lower:
             return "Successfully Repaired Agent"
         if "existing borealis agent" in skipped_detail_lower or "existing agent detected" in skipped_detail_lower:
@@ -5730,7 +5734,8 @@ class JobScheduler:
             skip_detail = _windows_onboarding_skip_detail(stdout=stdout, stderr=stderr)
             if skip_detail:
                 repaired = _windows_onboarding_repair_succeeded(stdout=stdout, stderr=stderr)
-                terminal_status = "completed" if repaired else ONBOARDING_STATUS_SKIPPED
+                already_enrolled = "__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1" in f"{stdout}\n{stderr}"
+                terminal_status = "already_enrolled" if already_enrolled else ("completed" if repaired else ONBOARDING_STATUS_SKIPPED)
                 self._update_onboarding_target_row(
                     row_id,
                     status=terminal_status,
