@@ -645,6 +645,155 @@ function Sync-BorealisRepository {
     }
 }
 
+function Get-BorealisRepositoryArchiveUrls {
+    param(
+        [string]$RepositoryUrl,
+        [string]$Ref
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RepositoryUrl)) {
+        throw 'Repository URL cannot be empty.'
+    }
+    if ([string]::IsNullOrWhiteSpace($Ref)) {
+        throw 'Repository ref cannot be empty.'
+    }
+
+    $normalizedRepositoryUrl = $RepositoryUrl.Trim()
+    $repositoryMatch = [regex]::Match($normalizedRepositoryUrl, 'github\.com[:/](?<owner>[^/\s]+)/(?<repo>[^/\s]+?)(?:\.git)?/?$')
+    if (-not $repositoryMatch.Success) {
+        throw "Archive fallback only supports GitHub repositories. Unsupported URL: $RepositoryUrl"
+    }
+
+    $owner = $repositoryMatch.Groups['owner'].Value
+    $repo = $repositoryMatch.Groups['repo'].Value
+    $normalizedRef = $Ref.Trim()
+    $candidateRefs = New-Object System.Collections.Generic.List[string]
+
+    if ($normalizedRef -match '^refs/(heads|tags)/') {
+        $candidateRefs.Add($normalizedRef)
+    } else {
+        $candidateRefs.Add("refs/heads/$normalizedRef")
+        $candidateRefs.Add("refs/tags/$normalizedRef")
+        $candidateRefs.Add($normalizedRef)
+    }
+
+    $urls = New-Object System.Collections.Generic.List[string]
+    foreach ($candidateRef in $candidateRefs) {
+        if ([string]::IsNullOrWhiteSpace($candidateRef)) {
+            continue
+        }
+
+        $escapedRef = (($candidateRef -split '/') | ForEach-Object {
+            [System.Uri]::EscapeDataString($_)
+        }) -join '/'
+        $url = "https://codeload.github.com/$owner/$repo/zip/$escapedRef"
+        if (-not $urls.Contains($url)) {
+            $urls.Add($url)
+        }
+    }
+
+    return $urls.ToArray()
+}
+
+function Copy-BorealisRepositoryTree {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceRoot,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationPath,
+
+        [string[]]$PreserveDirectories = @('Agent', 'Temp', 'Dependencies')
+    )
+
+    if (-not (Test-Path $SourceRoot -PathType Container)) {
+        throw "Repository archive root not found: $SourceRoot"
+    }
+    if (-not (Test-Path $DestinationPath)) {
+        New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null
+    }
+
+    Get-ChildItem -LiteralPath $DestinationPath -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($PreserveDirectories -contains $_.Name) {
+            return
+        }
+
+        $stalePath = $_.FullName
+        try {
+            Remove-Item -LiteralPath $stalePath -Recurse -Force -ErrorAction Stop
+        } catch {
+            Write-Host ("[!] Could not remove stale repository path '{0}': {1}" -f $stalePath, $_.Exception.Message) -ForegroundColor Yellow
+        }
+    }
+
+    Get-ChildItem -LiteralPath $SourceRoot -Force -ErrorAction Stop | ForEach-Object {
+        $destinationEntry = Join-Path $DestinationPath $_.Name
+        if (($PreserveDirectories -contains $_.Name) -and (Test-Path $destinationEntry)) {
+            Write-Host ("[i] Preserving existing {0} during archive repository sync." -f $_.Name)
+            return
+        }
+
+        Copy-Item -LiteralPath $_.FullName -Destination $DestinationPath -Recurse -Force -ErrorAction Stop
+    }
+}
+
+function Sync-BorealisRepositoryFromArchive {
+    param(
+        [string]$RepositoryUrl,
+        [string]$Ref,
+        [string]$DestinationPath,
+        [string[]]$PreserveDirectories = @('Agent', 'Temp', 'Dependencies')
+    )
+
+    if (-not (Test-Path $DestinationPath)) {
+        New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null
+    }
+
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("BorealisRepoArchive-{0}" -f ([System.Guid]::NewGuid().ToString('N')))
+    $archivePath = Join-Path $tempRoot 'Borealis.zip'
+    $extractPath = Join-Path $tempRoot 'Extracted'
+    New-Item -Path $tempRoot -ItemType Directory -Force | Out-Null
+
+    try {
+        $archiveUrls = Get-BorealisRepositoryArchiveUrls -RepositoryUrl $RepositoryUrl -Ref $Ref
+        $downloaded = $false
+        $downloadErrors = New-Object System.Collections.Generic.List[string]
+
+        foreach ($archiveUrl in $archiveUrls) {
+            try {
+                Write-Host "[i] Downloading Borealis source archive from $archiveUrl"
+                Invoke-WebRequestWithRetry -Uri $archiveUrl -OutFile $archivePath -InstallDirHint $DestinationPath -MaxAttempts 1
+                $downloaded = $true
+                break
+            } catch {
+                $downloadErrors.Add(("{0}: {1}" -f $archiveUrl, $_.Exception.Message))
+            }
+        }
+
+        if (-not $downloaded) {
+            throw "Failed to download Borealis source archive. $($downloadErrors -join '; ')"
+        }
+
+        Expand-ZipArchiveCompat -ArchivePath $archivePath -DestinationPath $extractPath -ClearDestination -InstallDirHint $DestinationPath
+
+        $sourceRoot = Get-ChildItem -LiteralPath $extractPath -Directory -Force -ErrorAction SilentlyContinue |
+            Where-Object { Test-Path (Join-Path $_.FullName 'Agent.ps1') -PathType Leaf } |
+            Select-Object -ExpandProperty FullName -First 1
+
+        if ([string]::IsNullOrWhiteSpace($sourceRoot)) {
+            $sourceRoot = Get-ChildItem -LiteralPath $extractPath -Directory -Force -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty FullName -First 1
+        }
+        if ([string]::IsNullOrWhiteSpace($sourceRoot)) {
+            throw 'Borealis source archive did not contain an extractable repository root.'
+        }
+
+        Copy-BorealisRepositoryTree -SourceRoot $sourceRoot -DestinationPath $DestinationPath -PreserveDirectories $PreserveDirectories
+    } finally {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Resolve-StableReleaseTag {
     param(
         [Parameter(Mandatory = $true)]
@@ -4064,11 +4213,17 @@ try {
     }
 
     Write-Host "[i] Syncing Borealis repository into $installDir"
-    Sync-BorealisRepository -GitExe $bootstrapGitExe -RepositoryUrl $repoUrl -Ref $repoRef -DestinationPath $installDir -PreserveDirectories @('Agent', 'Temp', 'Dependencies')
+    try {
+        Sync-BorealisRepository -GitExe $bootstrapGitExe -RepositoryUrl $repoUrl -Ref $repoRef -DestinationPath $installDir -PreserveDirectories @('Agent', 'Temp', 'Dependencies')
+    } catch {
+        Write-Host ("[!] Git repository sync failed: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+        Write-Host "[i] Falling back to Borealis source archive download." -ForegroundColor Yellow
+        Sync-BorealisRepositoryFromArchive -RepositoryUrl $repoUrl -Ref $repoRef -DestinationPath $installDir -PreserveDirectories @('Agent', 'Temp', 'Dependencies')
+    }
 
     $agentScript = Join-Path $installDir 'Agent.ps1'
     if (-not (Test-Path $agentScript -PathType Leaf)) {
-        throw "Agent.ps1 not found at '$agentScript' after Git checkout."
+        throw "Agent.ps1 not found at '$agentScript' after repository sync."
     }
 
     $env:BOREALIS_AGENT_LOCAL_INSTALL = '1'
