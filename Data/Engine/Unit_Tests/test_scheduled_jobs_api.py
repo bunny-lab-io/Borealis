@@ -1002,6 +1002,43 @@ def test_waiting_approval_without_approval_row_backfills_failed(
     assert "windows_onboarding_approval_callback_timeout" in updates[-1]["stderr"]
 
 
+def test_failed_callback_timeout_backfills_completed_when_device_exists(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    updates = []
+
+    monkeypatch.setattr(scheduler, "_lookup_onboarding_approval_context", lambda **_kwargs: {})
+    monkeypatch.setattr(scheduler, "_onboarding_target_already_known", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(scheduler, "_update_onboarding_target_row", lambda row_id, **kwargs: updates.append({"row_id": row_id, **kwargs}))
+    monkeypatch.setattr(scheduler, "_load_onboarding_target_event_rows", lambda row_ids: {int(row_ids[0]): []})
+
+    rows = [
+        {
+            "id": 124,
+            "job_id": 28,
+            "run_id": 89,
+            "site_id": 1,
+            "target_address": "10.0.0.49",
+            "target_hostname": "LAB-FPS-01",
+            "target_input": "10.0.0.49 # LAB-FPS-01",
+            "status": scheduled_job_module.ONBOARDING_STATUS_FAILED,
+            "detail": "Agent completed local bootstrap, but Borealis Engine did not receive an approval request.",
+            "stdout_snippet": "__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=0",
+            "stderr_snippet": "windows_onboarding_approval_callback_timeout",
+            "approval_reference": "",
+        }
+    ]
+
+    hydrated = scheduler._backfill_onboarding_target_approval_references(rows)
+
+    assert hydrated[0]["status"] == "completed"
+    assert hydrated[0]["detail"] == "Device approved and enrollment completed."
+    assert updates[-1]["status"] == "completed"
+    assert updates[-1]["approval_reference"] == ""
+
+
 def test_onboarding_target_update_records_persistent_timeline(engine_harness: EngineTestHarness) -> None:
     _client, scheduler = _scheduled_jobs_client(engine_harness)
     now = 1_700_000_200

@@ -243,6 +243,19 @@ def _windows_onboarding_repair_succeeded(*, stdout: Any = "", stderr: Any = "") 
     return "__BOREALIS_ONBOARDING_AGENT_REPAIRED__=1" in combined
 
 
+def _windows_onboarding_local_bootstrap_completed(*, stdout: Any = "", stderr: Any = "", detail: Any = "") -> bool:
+    combined = f"{stdout or ''}\n{stderr or ''}\n{detail or ''}".lower()
+    return any(
+        marker in combined
+        for marker in (
+            "__borealis_windows_onboarding_exit_code__=0",
+            "windows_onboarding_approval_callback_timeout",
+            "agent completed local bootstrap",
+            "agent installed through windows",
+        )
+    )
+
+
 def _onboarding_raw_input_map(entries: Any, *, default_port: int) -> Dict[str, str]:
     if isinstance(entries, str):
         raw_entries = [line for line in re.split(r"[\r\n]+", entries) if str(line or "").strip()]
@@ -534,6 +547,8 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
         if output_task == "Successfully Repaired Agent":
             return output_task
         completed_detail_lower = str(detail or "").strip().lower()
+        if "device approved" in completed_detail_lower or "enrollment completed" in completed_detail_lower:
+            return "Device Approved > Onboarding Complete"
         if "successfully repaired agent" in completed_detail_lower or "agent repaired" in completed_detail_lower:
             return "Successfully Repaired Agent"
         return "Onboarding Completed"
@@ -4325,6 +4340,11 @@ class JobScheduler:
             status = str(next_row.get("status") or "").strip().lower()
             detail_current = str(next_row.get("detail") or "").strip()
             approval_reference_current = str(next_row.get("approval_reference") or "").strip()
+            local_bootstrap_completed = _windows_onboarding_local_bootstrap_completed(
+                stdout=next_row.get("stdout_snippet") or "",
+                stderr=next_row.get("stderr_snippet") or "",
+                detail=detail_current,
+            )
             if _windows_onboarding_existing_task_running_without_redeploy(
                 stdout=next_row.get("stdout_snippet") or "",
                 stderr=next_row.get("stderr_snippet") or "",
@@ -4361,7 +4381,7 @@ class JobScheduler:
                 ONBOARDING_STATUS_WAITING_APPROVAL,
                 "approved",
                 "completed",
-            } or approval_reference_current:
+            } or approval_reference_current or (status == ONBOARDING_STATUS_FAILED and local_bootstrap_completed):
                 site_id = int(next_row.get("site_id")) if next_row.get("site_id") is not None else None
                 approval_context: Dict[str, Any] = {}
                 lookup_candidates = _onboarding_approval_lookup_candidates(next_row) or [""]
@@ -4375,6 +4395,37 @@ class JobScheduler:
                     )
                     if approval_context:
                         break
+                if (
+                    status == ONBOARDING_STATUS_FAILED
+                    and local_bootstrap_completed
+                    and not approval_context
+                    and not approval_reference_current
+                ):
+                    row_id = int(next_row.get("id") or 0)
+                    known_candidates = [
+                        next_row.get("target_address"),
+                        next_row.get("target_hostname"),
+                        next_row.get("target_input"),
+                    ]
+                    if any(self._onboarding_target_already_known(str(candidate or ""), site_id) for candidate in known_candidates):
+                        completed_detail = "Device approved and enrollment completed."
+                        next_row["status"] = "completed"
+                        next_row["detail"] = completed_detail
+                        next_row["approval_reference"] = ""
+                        self._update_onboarding_target_row(
+                            row_id,
+                            status="completed",
+                            detail=completed_detail,
+                            stdout=next_row.get("stdout_snippet") or "",
+                            stderr=next_row.get("stderr_snippet") or "",
+                            approval_reference="",
+                            finished=True,
+                        )
+                        timeline = self._load_onboarding_target_event_rows([row_id]).get(row_id, [])
+                        next_row["timeline"] = timeline
+                        next_row["events"] = timeline
+                        hydrated.append(next_row)
+                        continue
                 if (
                     status == ONBOARDING_STATUS_WAITING_APPROVAL
                     and not approval_context
