@@ -1,6 +1,6 @@
 # Borealis Windows Agent bootstrapper/deployer:
 # - Ensures portable Git is available
-# - Uses Git to fetch/checkout Borealis into C:\Borealis (or --install-dir)
+# - Uses Git or archive fallback to sync Borealis into C:\Borealis (or --install-dir)
 # - Deploys only the Borealis Agent runtime
 # - Re-execs installed Agent.ps1 so Windows has one agent entrypoint
 
@@ -755,6 +755,11 @@ function Copy-BorealisRepositoryTree {
     Copy-BorealisArchivePath `
         -SourcePath (Join-Path $SourceRoot 'Agent.ps1') `
         -TargetPath (Join-Path $DestinationPath 'Agent.ps1') `
+        -ClearTarget
+
+    Copy-BorealisArchivePath `
+        -SourcePath (Join-Path $SourceRoot 'Update.ps1') `
+        -TargetPath (Join-Path $DestinationPath 'Update.ps1') `
         -ClearTarget
 
     Copy-BorealisArchivePath `
@@ -3468,11 +3473,11 @@ function Ensure-AgentTasks {
     $agentPy     = Join-Path $ScriptRoot 'Agent\Borealis\agent.py'
     $svcWrapper  = Join-Path $ScriptRoot 'Agent\Borealis\launch_service.ps1'
     $updateScript= Join-Path $ScriptRoot 'Update.ps1'
-    if (-not (Test-Path $pyw))      { Write-Host "pythonw.exe not found under Agent\Scripts" -ForegroundColor Yellow; return }
-    if (-not (Test-Path $py))       { Write-Host "python.exe not found under Agent\Scripts" -ForegroundColor Yellow; return }
-    if (-not (Test-Path $agentPy))  { Write-Host "Agent script not found under Agent\Borealis" -ForegroundColor Yellow; return }
-    if (-not (Test-Path $svcWrapper)) { Write-Host "launch_service.ps1 not found under Agent\Borealis" -ForegroundColor Yellow; return }
-    if (-not (Test-Path $updateScript)) { Write-Host "Update.ps1 not found under project root" -ForegroundColor Yellow; return }
+    if (-not (Test-Path $pyw)) { throw "pythonw.exe not found under Agent\Scripts" }
+    if (-not (Test-Path $py)) { throw "python.exe not found under Agent\Scripts" }
+    if (-not (Test-Path $agentPy)) { throw "Agent script not found under Agent\Borealis" }
+    if (-not (Test-Path $svcWrapper)) { throw "launch_service.ps1 not found under Agent\Borealis" }
+    if (-not (Test-Path $updateScript)) { throw "Update.ps1 not found under project root" }
 
     $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
     $principalSystem = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
