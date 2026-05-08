@@ -3402,6 +3402,11 @@ class JobScheduler:
         observation_timeout = self._windows_onboarding_observation_timeout_seconds()
         return max(10.0, min(float(configured), float(observation_timeout)))
 
+    def _windows_onboarding_approval_wait_seconds(self) -> float:
+        configured = _env_non_negative_float("BOREALIS_WINDOWS_ONBOARDING_APPROVAL_WAIT_SECONDS", 120.0) or 120.0
+        observation_timeout = self._windows_onboarding_observation_timeout_seconds()
+        return max(5.0, min(float(configured), float(observation_timeout)))
+
     def _windows_wmi_dcom_timeout_seconds(self) -> float:
         configured = _env_non_negative_float("BOREALIS_WINDOWS_WMI_DCOM_TIMEOUT_SECONDS", 0.0)
         if configured > 0:
@@ -4370,6 +4375,35 @@ class JobScheduler:
                     )
                     if approval_context:
                         break
+                if (
+                    status == ONBOARDING_STATUS_WAITING_APPROVAL
+                    and not approval_context
+                    and not approval_reference_current
+                ):
+                    row_id = int(next_row.get("id") or 0)
+                    failure_detail = "Agent completed local bootstrap, but Borealis Engine did not receive an approval request."
+                    stderr_current = str(next_row.get("stderr_snippet") or "")
+                    if "windows_onboarding_approval_callback_timeout" not in stderr_current:
+                        stderr_current = "\n\n".join(
+                            [part for part in (stderr_current, "windows_onboarding_approval_callback_timeout") if part]
+                        )
+                    next_row["status"] = ONBOARDING_STATUS_FAILED
+                    next_row["detail"] = failure_detail
+                    next_row["approval_reference"] = ""
+                    self._update_onboarding_target_row(
+                        row_id,
+                        status=ONBOARDING_STATUS_FAILED,
+                        detail=failure_detail,
+                        stdout=next_row.get("stdout_snippet") or "",
+                        stderr=stderr_current,
+                        approval_reference="",
+                        finished=True,
+                    )
+                    timeline = self._load_onboarding_target_event_rows([row_id]).get(row_id, [])
+                    next_row["timeline"] = timeline
+                    next_row["events"] = timeline
+                    hydrated.append(next_row)
+                    continue
                 if approval_context.get("approval_reference_stale"):
                     row_id = int(next_row.get("id") or 0)
                     known_candidates = [
@@ -5150,6 +5184,68 @@ class JobScheduler:
         last_status_update = 0.0
         last_event_key = ""
         saw_output_share_lock = False
+        success_seen = False
+        success_wait_deadline = 0.0
+        success_stdout = ""
+
+        def _approval_reference() -> str:
+            if not callable(approval_check):
+                return ""
+            try:
+                return str(approval_check() or "").strip()
+            except Exception:
+                return ""
+
+        def _read_agent_log_tail(path: str, label: str) -> str:
+            try:
+                text = self._read_windows_smb_file(smb, path, share="C$")
+            except Exception:
+                return ""
+            lines = str(text or "").splitlines()
+            if not lines:
+                return ""
+            tail = "\n".join(lines[-80:])
+            if len(tail) > 12000:
+                tail = tail[-12000:]
+            return f"[{label}]\n{tail}"
+
+        def _approval_timeout_stderr() -> str:
+            parts = ["windows_onboarding_approval_callback_timeout"]
+            for path, label in (
+                ("Borealis\\Agent\\Logs\\agent.error.log", "agent.error.log"),
+                ("Borealis\\Agent\\Logs\\agent.log", "agent.log"),
+                ("Borealis\\Agent\\Logs\\service_wrapper.log", "service_wrapper.log"),
+                ("Borealis\\Agent\\Logs\\service.err.log", "service.err.log"),
+            ):
+                tail = _read_agent_log_tail(path, label)
+                if tail:
+                    parts.append(tail)
+            return "\n\n".join(parts)
+
+        def _success_timeout_result(reason: str, state: Optional[Mapping[str, Any]] = None, events: Optional[Sequence[Mapping[str, Any]]] = None) -> Dict[str, Any]:
+            stdout = success_stdout or last_output
+            if stdout:
+                stdout += "\n"
+            stdout += reason
+            return {
+                "exit_code": 1,
+                "stdout": stdout,
+                "stderr": _approval_timeout_stderr(),
+                "state": dict(state or {}),
+                "events": list(events or []),
+                "target_hostname": _windows_onboarding_reported_hostname(stdout=stdout, stderr="", state=state, events=events),
+            }
+
+        def _note_success(stdout: str, detail: str) -> None:
+            nonlocal success_seen, success_wait_deadline, success_stdout, last_status_update
+            success_seen = True
+            success_stdout = stdout or success_stdout or last_output
+            if success_wait_deadline <= 0.0:
+                success_wait_deadline = min(deadline, time.monotonic() + self._windows_onboarding_approval_wait_seconds())
+            if callable(status_update) and (time.monotonic() - last_status_update) >= 5.0:
+                status_update(detail, success_stdout, "", "")
+                last_status_update = time.monotonic()
+
         while time.monotonic() < deadline:
             try:
                 output = self._read_windows_smb_file(smb, output_path)
@@ -5161,6 +5257,17 @@ class JobScheduler:
                     if exit_code is not None:
                         if exit_code == 73 and "__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1" in output:
                             pass
+                        elif exit_code == 0 and callable(approval_check):
+                            approval_reference = _approval_reference()
+                            if approval_reference:
+                                return {
+                                    "exit_code": 0,
+                                    "stdout": output,
+                                    "stderr": "",
+                                    "approval_reference": approval_reference,
+                                    "target_hostname": _windows_onboarding_reported_hostname(stdout=output),
+                                }
+                            _note_success(output, "Agent bootstrap completed; waiting for Borealis approval callback.")
                         else:
                             return {
                                 "exit_code": exit_code,
@@ -5196,12 +5303,6 @@ class JobScheduler:
                 state_exit_code = int(state.get("exit_code")) if state.get("exit_code") is not None else None
             except Exception:
                 state_exit_code = None
-            if state_status in {"pending_approval", "completed", "success"}:
-                stdout = last_output
-                if stdout:
-                    stdout += "\n"
-                stdout += f"Borealis Windows onboarding state={state_status}."
-                return {"exit_code": 0, "stdout": stdout, "stderr": "", "state": state, "events": events, "target_hostname": reported_hostname}
             if state_status in {"already_enrolled", "already_pending"}:
                 stdout = last_output
                 if stdout:
@@ -5224,25 +5325,35 @@ class JobScheduler:
                     "events": events,
                     "target_hostname": reported_hostname,
                 }
-            if callable(approval_check):
-                try:
-                    approval_reference = str(approval_check() or "").strip()
-                except Exception:
-                    approval_reference = ""
-                if approval_reference:
-                    stdout = last_output
-                    if stdout:
-                        stdout += "\n"
-                    stdout += "Borealis approval detected before Windows remote output completed."
-                    return {
-                        "exit_code": 0,
-                        "stdout": stdout,
-                        "stderr": "",
-                        "approval_reference": approval_reference,
-                        "state": state,
-                        "events": events,
-                        "target_hostname": reported_hostname,
-                    }
+            approval_reference = _approval_reference()
+            if approval_reference:
+                stdout = last_output
+                if stdout:
+                    stdout += "\n"
+                stdout += "Borealis approval detected before Windows remote output completed."
+                return {
+                    "exit_code": 0,
+                    "stdout": stdout,
+                    "stderr": "",
+                    "approval_reference": approval_reference,
+                    "state": state,
+                    "events": events,
+                    "target_hostname": reported_hostname,
+                }
+            if state_status in {"pending_approval", "completed", "success"}:
+                stdout = last_output
+                if stdout:
+                    stdout += "\n"
+                stdout += f"Borealis Windows onboarding state={state_status}."
+                if not callable(approval_check):
+                    return {"exit_code": 0, "stdout": stdout, "stderr": "", "state": state, "events": events, "target_hostname": reported_hostname}
+                _note_success(stdout, "Agent bootstrap completed; waiting for Borealis approval callback.")
+            if success_seen and success_wait_deadline > 0.0 and time.monotonic() >= success_wait_deadline:
+                return _success_timeout_result(
+                    "Agent bootstrap completed, but Borealis Engine did not receive an enrollment approval request.",
+                    state=state,
+                    events=events,
+                )
             if not state_status and not saw_output_share_lock and (time.monotonic() - started_at) >= launch_grace_seconds and (
                 not last_output or _windows_output_is_launcher_marker_only(last_output)
             ):
@@ -5855,12 +5966,26 @@ class JobScheduler:
                         )
                         return terminal_status
                 approval_reference = str(result.get("approval_reference") or "").strip()
-                deadline = time.monotonic() + 10.0
+                deadline = time.monotonic() + self._windows_onboarding_approval_wait_seconds()
                 while time.monotonic() < deadline:
                     approval_reference = approval_reference or _approval_check()
                     if approval_reference:
                         break
                     time.sleep(1.0)
+                if not approval_reference:
+                    failure_detail = "Agent completed local bootstrap, but Borealis Engine did not receive an approval request."
+                    self._update_onboarding_target_row(
+                        row_id,
+                        status=ONBOARDING_STATUS_FAILED,
+                        detail=failure_detail,
+                        stdout=combined_stdout,
+                        stderr="\n\n".join([part for part in (combined_stderr, "windows_onboarding_approval_callback_timeout") if part]),
+                        approval_reference="",
+                        target_hostname=reported_hostname,
+                        finished=True,
+                        redactions=redactions,
+                    )
+                    return ONBOARDING_STATUS_FAILED
                 self._update_onboarding_target_row(
                     row_id,
                     status=ONBOARDING_STATUS_WAITING_APPROVAL,
@@ -5873,6 +5998,19 @@ class JobScheduler:
                     redactions=redactions,
                 )
                 return ONBOARDING_STATUS_WAITING_APPROVAL
+            if "windows_onboarding_approval_callback_timeout" in f"{stdout}\n{stderr}":
+                self._update_onboarding_target_row(
+                    row_id,
+                    status=ONBOARDING_STATUS_FAILED,
+                    detail="Agent completed local bootstrap, but Borealis Engine did not receive an approval request.",
+                    stdout="\n\n".join(stdout_parts),
+                    stderr="\n\n".join(stderr_parts),
+                    approval_reference="",
+                    target_hostname=reported_hostname,
+                    finished=True,
+                    redactions=redactions,
+                )
+                return ONBOARDING_STATUS_FAILED
             skip_detail = _windows_onboarding_skip_detail(stdout=stdout, stderr=stderr)
             if skip_detail:
                 repaired = _windows_onboarding_repair_succeeded(stdout=stdout, stderr=stderr)

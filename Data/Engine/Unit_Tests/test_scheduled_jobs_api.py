@@ -364,6 +364,39 @@ def test_windows_smb_poll_treats_sharing_violation_as_active_writer(
     assert any("output file lock" in detail for detail in updates)
 
 
+def test_windows_smb_poll_requires_approval_callback_after_success_marker(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    output = "__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=0"
+    updates = []
+
+    def fake_read(_smb, path, *, share="ADMIN$"):
+        if str(path).endswith("run.log"):
+            return output
+        raise RuntimeError("STATUS_OBJECT_NAME_NOT_FOUND")
+
+    monkeypatch.setattr(scheduler, "_read_windows_smb_file", fake_read)
+    monkeypatch.setattr(scheduler, "_read_windows_onboarding_state", lambda _smb: {"status": "pending_approval"})
+    monkeypatch.setattr(scheduler, "_read_windows_onboarding_events", lambda _smb: [])
+    monkeypatch.setattr(scheduler, "_windows_onboarding_launch_grace_seconds", lambda: 0.0)
+    monkeypatch.setattr(scheduler, "_windows_onboarding_approval_wait_seconds", lambda: 0.01)
+    monkeypatch.setattr(scheduled_job_module.time, "sleep", lambda _seconds: None)
+
+    result = scheduler._poll_windows_smb_onboarding_output(
+        smb=object(),
+        output_path="Temp\\BorealisOnboarding\\run.log",
+        timeout_seconds=1.0,
+        approval_check=lambda: "",
+        status_update=lambda *args: updates.append(args[0]),
+    )
+
+    assert result["exit_code"] == 1
+    assert result["stderr"] == "windows_onboarding_approval_callback_timeout"
+    assert "did not receive an enrollment approval request" in result["stdout"]
+
+
 def test_windows_running_state_marker_does_not_stop_fallback_chain() -> None:
     assert (
         scheduled_job_module._windows_onboarding_skip_detail(
@@ -455,6 +488,49 @@ def test_windows_onboarding_falls_back_to_winrm(engine_harness: EngineTestHarnes
     assert updates[-1]["status"] == scheduled_job_module.ONBOARDING_STATUS_WAITING_APPROVAL
     assert "WinRM" in updates[-1]["detail"]
     assert updates[-1]["approval_reference"] == "APR-WIN-1"
+
+
+def test_windows_onboarding_success_without_approval_reference_fails(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    updates = []
+    attempts = []
+
+    monkeypatch.setattr(scheduler, "_update_onboarding_target_row", lambda row_id, **kwargs: updates.append({"row_id": row_id, **kwargs}))
+    monkeypatch.setattr(scheduler, "_onboarding_target_already_known", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(scheduler, "_preflight_remote_port", lambda **_kwargs: "")
+    monkeypatch.setattr(scheduler, "_onboarding_install_timeout_seconds", lambda: 30.0)
+    monkeypatch.setattr(scheduler, "_windows_onboarding_approval_wait_seconds", lambda: 0.01)
+    monkeypatch.setattr(scheduler, "_lookup_onboarding_approval", lambda **_kwargs: "")
+    monkeypatch.setattr(scheduled_job_module.time, "sleep", lambda _seconds: None)
+
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_smb_scm_onboarding",
+        lambda **_kwargs: attempts.append("smb_scm") or {"exit_code": 0, "stdout": "__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=0", "stderr": ""},
+    )
+
+    status = scheduler._run_single_onboarding_target(
+        row={"id": 1, "target_address": "win02.lab", "target_hostname": "win02.lab", "ssh_port": 445},
+        site={"id": 1, "enrollment_code": "ENROLL"},
+        credential={"connection_type": "windows", "username": "LAB\\svc", "password": "secret"},
+        branch="main",
+        server_url="https://borealis.example",
+        job_id=10,
+        run_id=20,
+        platform="windows",
+        windows_methods=["smb_scm"],
+        winrm_port=5985,
+    )
+
+    assert attempts == ["smb_scm"]
+    assert status == scheduled_job_module.ONBOARDING_STATUS_FAILED
+    assert updates[-1]["status"] == scheduled_job_module.ONBOARDING_STATUS_FAILED
+    assert updates[-1]["approval_reference"] == ""
+    assert "approval request" in updates[-1]["detail"]
+    assert "windows_onboarding_approval_callback_timeout" in updates[-1]["stderr"]
 
 
 def test_windows_onboarding_skip_marker_stops_fallback_chain(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -887,6 +963,43 @@ def test_onboarding_approval_lookup_ignores_old_completed_fallback(engine_harnes
     assert pending_reference["approval_status"] == "pending"
     assert "approval_reference_stale" not in pending_reference
     assert scheduler._onboarding_target_already_known("10.0.0.54:445", 1)
+
+
+def test_waiting_approval_without_approval_row_backfills_failed(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    updates = []
+
+    monkeypatch.setattr(scheduler, "_lookup_onboarding_approval_context", lambda **_kwargs: {})
+    monkeypatch.setattr(scheduler, "_update_onboarding_target_row", lambda row_id, **kwargs: updates.append({"row_id": row_id, **kwargs}))
+    monkeypatch.setattr(scheduler, "_load_onboarding_target_event_rows", lambda row_ids: {int(row_ids[0]): []})
+
+    rows = [
+        {
+            "id": 123,
+            "job_id": 28,
+            "run_id": 88,
+            "site_id": 1,
+            "target_address": "10.0.0.49",
+            "target_hostname": "LAB-FPS-01",
+            "target_input": "10.0.0.49 # LAB-FPS-01",
+            "status": scheduled_job_module.ONBOARDING_STATUS_WAITING_APPROVAL,
+            "detail": "Agent installed through Windows SMB service. Device approval pending operator action.",
+            "stdout_snippet": "__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=0",
+            "stderr_snippet": "",
+            "approval_reference": "",
+        }
+    ]
+
+    hydrated = scheduler._backfill_onboarding_target_approval_references(rows)
+
+    assert hydrated[0]["status"] == scheduled_job_module.ONBOARDING_STATUS_FAILED
+    assert hydrated[0]["approval_reference"] == ""
+    assert "approval request" in hydrated[0]["detail"]
+    assert updates[-1]["status"] == scheduled_job_module.ONBOARDING_STATUS_FAILED
+    assert "windows_onboarding_approval_callback_timeout" in updates[-1]["stderr"]
 
 
 def test_onboarding_target_update_records_persistent_timeline(engine_harness: EngineTestHarness) -> None:
