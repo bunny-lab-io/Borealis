@@ -23,9 +23,10 @@ def _normalize_site_id(value: Any) -> Optional[int]:
 
 def _normalize_onboarding_scope_values(value: Any) -> List[str]:
     if isinstance(value, str):
-        return [line.strip() for line in value.replace(",", "\n").replace(";", "\n").splitlines() if line.strip()]
+        text = value.replace("\r\n", "\n").replace("\r", "\n")
+        return text.split("\n") if text else []
     if isinstance(value, (list, tuple)):
-        return [str(item).strip() for item in value if str(item).strip()]
+        return ["" if item is None else str(item) for item in value]
     return []
 
 
@@ -59,7 +60,7 @@ def normalize_targets_for_save(entries: Sequence[Any]) -> List[Any]:
             if raw_entries is None:
                 raw_entries = entry.get("scope") or entry.get("targets") or entry.get("discovery_scope")
             scope_entries = _normalize_onboarding_scope_values(raw_entries)
-            if not scope_entries:
+            if not any(str(value or "").strip() for value in scope_entries):
                 continue
             raw_exclusions = (
                 entry.get("exclusions")
@@ -69,10 +70,20 @@ def normalize_targets_for_save(entries: Sequence[Any]) -> List[Any]:
                 or []
             )
             exclusion_entries = _normalize_onboarding_scope_values(raw_exclusions)
+            deduped_scope_entries = [
+                str(value).strip().lower()
+                for value in scope_entries
+                if str(value or "").strip()
+            ]
+            deduped_exclusion_entries = [
+                str(value).strip().lower()
+                for value in exclusion_entries
+                if str(value or "").strip()
+            ]
             dedupe_key = (
                 f"onboarding:{site_id_value}:"
-                f"{'|'.join(value.lower() for value in scope_entries)}:"
-                f"{'|'.join(value.lower() for value in exclusion_entries)}"
+                f"{'|'.join(deduped_scope_entries)}:"
+                f"{'|'.join(deduped_exclusion_entries)}"
             )
             if dedupe_key in seen_onboarding_scopes:
                 continue

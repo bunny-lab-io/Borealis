@@ -3,20 +3,13 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../../.." && pwd)"
-output_dir="${script_dir}/dist"
-primary_output_path="${output_dir}/Agent_Service_Bootstrapper.exe"
-fallback_output_path="${script_dir}/Agent_Service_Bootstrapper.exe"
-output_path="${BOREALIS_AGENT_SERVICE_BOOTSTRAPPER_OUTPUT_PATH:-${fallback_output_path}}"
+default_output_path="${script_dir}/Agent_Service_Bootstrapper.exe"
+output_path="${BOREALIS_AGENT_SERVICE_BOOTSTRAPPER_OUTPUT_PATH:-${default_output_path}}"
 minimum_go_major=1
 minimum_go_minor=22
 go_version="${BOREALIS_GO_VERSION:-1.22.12}"
 go_install_root="${BOREALIS_GO_INSTALL_ROOT:-${repo_root}/Dependencies/Go/go${go_version}}"
 
-mkdir -p "${output_dir}"
-if [ "${output_path}" = "${primary_output_path}" ] && [ ! -w "${output_dir}" ]; then
-  printf 'Output directory not writable: %s\n' "${output_dir}" >&2
-  exit 1
-fi
 output_parent="$(dirname -- "${output_path}")"
 mkdir -p "${output_parent}"
 if [ ! -w "${output_parent}" ]; then

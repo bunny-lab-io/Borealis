@@ -134,8 +134,8 @@ def test_onboarding_scope_target_normalization_and_site_scope(engine_harness: En
                 "kind": "onboarding_scope",
                 "site_id": 1,
                 "site_name": "Main Lab",
-                "entries": "192.168.1.10 # LAB-AIO-01\nserver01.lab # build node",
-                "exclusions": "192.168.1.1 # gateway\nprinter01.lab # office printer",
+                "entries": "# Workstations\n192.168.1.10 # LAB-AIO-01\n\n\n# Build Nodes\nserver01.lab # build node",
+                "exclusions": "# Infrastructure\n192.168.1.1 # gateway\n\nprinter01.lab # office printer",
             }
         ]
     )
@@ -144,8 +144,15 @@ def test_onboarding_scope_target_normalization_and_site_scope(engine_harness: En
             "kind": "onboarding_scope",
             "site_id": 1,
             "site_name": "Main Lab",
-            "entries": ["192.168.1.10 # LAB-AIO-01", "server01.lab # build node"],
-            "exclusions": ["192.168.1.1 # gateway", "printer01.lab # office printer"],
+            "entries": [
+                "# Workstations",
+                "192.168.1.10 # LAB-AIO-01",
+                "",
+                "",
+                "# Build Nodes",
+                "server01.lab # build node",
+            ],
+            "exclusions": ["# Infrastructure", "192.168.1.1 # gateway", "", "printer01.lab # office printer"],
         }
     ]
 
@@ -184,6 +191,8 @@ def test_onboarding_scope_target_normalization_and_site_scope(engine_harness: En
 
     assert error is None
     assert scoped[0]["kind"] == "onboarding_scope"
+    assert scoped[0]["entries"] == normalized[0]["entries"]
+    assert scoped[0]["exclusions"] == normalized[0]["exclusions"]
     assert scoped[0]["allowed_site_ids"] == [1]
     assert manager.job_targets_fit_scope({"username": "site-user", "role": "User"}, scoped)
 
@@ -695,6 +704,78 @@ def test_onboarding_target_status_hydrates_approved_context(engine_harness: Engi
                 "192.168.3.8",
             ),
         )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_onboarding_targets (
+                run_id,
+                job_id,
+                scheduled_ts,
+                site_id,
+                target_input,
+                target_address,
+                target_hostname,
+                ssh_port,
+                status,
+                detail,
+                stdout_snippet,
+                approval_reference,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                88,
+                28,
+                1_700_000_300,
+                1,
+                "10.0.0.54 # LAB-OPERATOR-01",
+                "10.0.0.54",
+                "LAB-OPERATOR-01",
+                445,
+                "waiting_approval",
+                "Agent installed through Windows SMB service. Device approval pending operator action.",
+                "Borealis approval detected before Windows remote output completed.",
+                "OLD-APPROVAL-LAB-OPERATOR-01",
+                1_700_000_300,
+                1_700_000_300,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO device_approvals (
+                id,
+                approval_reference,
+                guid,
+                hostname_claimed,
+                ssl_key_fingerprint_claimed,
+                enrollment_code,
+                site_id,
+                status,
+                created_at,
+                updated_at,
+                approved_by_user_id,
+                onboarding_job_id,
+                onboarding_run_id,
+                onboarding_target
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "pending-approval-lab-operator-01",
+                "PENDING-APPROVAL-LAB-OPERATOR-01",
+                "pending-device-lab-operator-01",
+                "LAB-OPERATOR-01",
+                "22:33:44:55",
+                "SITE-MAIN-CODE",
+                1,
+                "pending",
+                "2026-05-07T00:10:00Z",
+                "2026-05-07T00:11:00Z",
+                "",
+                27,
+                77,
+                "10.0.0.54:445",
+            ),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -706,6 +787,106 @@ def test_onboarding_target_status_hydrates_approved_context(engine_harness: Engi
     assert hydrated[0]["approval_id"] == "approval-onboard-1"
     assert hydrated[0]["approval_status"] == "approved"
     assert hydrated[0]["detail"] == "Device approved. Agent finalizing enrollment."
+
+
+def test_onboarding_approval_lookup_ignores_old_completed_fallback(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO devices (guid, hostname, internal_ip, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "device-lab-operator-01",
+                "LAB-OPERATOR-01",
+                "10.0.0.54",
+                "Online",
+                "2026-05-07T00:00:00Z",
+                "2026-05-07T00:00:00Z",
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO device_approvals (
+                id,
+                approval_reference,
+                guid,
+                hostname_claimed,
+                ssl_key_fingerprint_claimed,
+                enrollment_code,
+                site_id,
+                status,
+                created_at,
+                updated_at,
+                approved_by_user_id,
+                onboarding_job_id,
+                onboarding_run_id,
+                onboarding_target
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "old-approval-lab-operator-01",
+                "OLD-APPROVAL-LAB-OPERATOR-01",
+                "device-lab-operator-01",
+                "LAB-OPERATOR-01",
+                "11:22:33:55",
+                "SITE-MAIN-CODE",
+                1,
+                "completed",
+                "2026-05-07T00:00:00Z",
+                "2026-05-07T00:05:00Z",
+                "admin",
+                27,
+                77,
+                "10.0.0.54:445",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    context = scheduler._lookup_onboarding_approval_context(
+        job_id=28,
+        run_id=88,
+        target="10.0.0.54",
+        site_id=1,
+    )
+
+    assert context == {}
+
+    stale_reference = scheduler._lookup_onboarding_approval_context(
+        job_id=28,
+        run_id=88,
+        target="10.0.0.54",
+        approval_reference="OLD-APPROVAL-LAB-OPERATOR-01",
+        site_id=1,
+    )
+
+    assert stale_reference["approval_reference_stale"] == "OLD-APPROVAL-LAB-OPERATOR-01"
+    assert stale_reference["approval_job_id"] == 27
+    assert stale_reference["approval_run_id"] == 77
+
+    stale_rows = scheduler._load_onboarding_target_rows(28, 1_700_000_300)
+    stale_hydrated = scheduler._backfill_onboarding_target_approval_references(stale_rows)
+    assert stale_hydrated[0]["status"] == "already_enrolled"
+    assert stale_hydrated[0]["approval_reference"] == ""
+    assert stale_hydrated[0]["detail"] == "Existing Borealis Agent is already enrolled and active."
+
+    pending_reference = scheduler._lookup_onboarding_approval_context(
+        job_id=28,
+        run_id=88,
+        target="10.0.0.54",
+        approval_reference="PENDING-APPROVAL-LAB-OPERATOR-01",
+        site_id=1,
+    )
+
+    assert pending_reference["approval_id"] == "pending-approval-lab-operator-01"
+    assert pending_reference["approval_status"] == "pending"
+    assert "approval_reference_stale" not in pending_reference
+    assert scheduler._onboarding_target_already_known("10.0.0.54:445", 1)
 
 
 def test_onboarding_target_update_records_persistent_timeline(engine_harness: EngineTestHarness) -> None:

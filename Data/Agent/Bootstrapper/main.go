@@ -566,8 +566,10 @@ func assessExistingAgent(ctx context.Context, cfg BootstrapConfig, logger func(s
 		return assessment
 	}
 
+	startAttempted := false
 	if !assessment.TaskRunning {
 		logger("__BOREALIS_AGENT_TASK_START_ATTEMPTED__=1")
+		startAttempted = true
 		if err := startAgentScheduledTask(ctx); err != nil {
 			assessment.Detail = fmt.Sprintf("Existing Borealis Agent scheduled task could not be started: %v", err)
 			return assessment
@@ -582,8 +584,7 @@ func assessExistingAgent(ctx context.Context, cfg BootstrapConfig, logger func(s
 			if stateDetail == "" {
 				stateDetail = taskInfo.Error
 			}
-			assessment.Detail = fmt.Sprintf("Existing Borealis Agent scheduled task did not enter Running state after start attempt: %s", stateDetail)
-			return assessment
+			logger("__BOREALIS_AGENT_TASK_READY_AFTER_START__=%s", stateDetail)
 		}
 	}
 
@@ -597,12 +598,18 @@ func assessExistingAgent(ctx context.Context, cfg BootstrapConfig, logger func(s
 		return assessment
 	}
 
-	if assessment.TaskRunning {
+	if assessment.TaskRunning || startAttempted {
 		assessment.RepairSucceeded = true
-		if strings.EqualFold(taskInfo.State, "Running") {
+		if assessment.TaskRunning && strings.EqualFold(taskInfo.State, "Running") {
 			assessment.Detail = "Existing Borealis Agent scheduled task is running and Engine authentication is valid."
-		} else {
+		} else if assessment.TaskRunning {
 			assessment.Detail = "Existing Borealis Agent scheduled task was started and Engine authentication is valid."
+		} else {
+			stateDetail := assessment.TaskState
+			if stateDetail == "" {
+				stateDetail = "unknown"
+			}
+			assessment.Detail = fmt.Sprintf("Existing Borealis Agent scheduled task accepted start request and Engine authentication is valid. Current task state: %s.", stateDetail)
 		}
 	}
 	return assessment

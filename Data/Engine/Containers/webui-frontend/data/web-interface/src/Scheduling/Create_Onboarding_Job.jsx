@@ -38,6 +38,7 @@ import {
   ScheduleRounded as ScheduleRoundedIcon,
   SettingsApplicationsRounded as SettingsApplicationsRoundedIcon,
   TravelExplore as TravelExploreIcon,
+  VpnKeyRounded as ProgressAuthErrorIcon,
 } from "@mui/icons-material";
 import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { DateTimePicker } from "@mui/x-date-pickers/DateTimePicker";
@@ -54,6 +55,7 @@ import {
 import { CountSliderGroup } from "../Automation/Watchdogs/shared.jsx";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import { APP_PATHS } from "../app/routes/paths.js";
+import PageBodyFrame from "../PageBodyFrame.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -111,8 +113,7 @@ const iconFontFamily = '"Quartz Regular"';
 
 const PAGE_SX = {
   m: 0,
-  p: { xs: 2, md: 3 },
-  pb: { xs: 2, md: 3 },
+  p: 0,
   flexGrow: 1,
   minWidth: 0,
   minHeight: 0,
@@ -120,7 +121,6 @@ const PAGE_SX = {
   boxSizing: "border-box",
   display: "flex",
   flexDirection: "column",
-  gap: 3,
   borderRadius: 0,
   background: "transparent",
   border: "none",
@@ -245,6 +245,13 @@ const TAB_SECTION_SX = {
   gap: 2,
   px: { xs: 1.5, md: 2 },
   py: { xs: 1.25, md: 1.75 },
+};
+
+const SCOPE_TAB_SECTION_SX = {
+  ...TAB_SECTION_SX,
+  flexGrow: 1,
+  minHeight: 0,
+  pb: { xs: 1.5, md: 2 },
 };
 
 const NAV_TAB_COLORS = {
@@ -412,9 +419,9 @@ const SCOPE_TEXT_SX = {
 
 function toScopeText(entries) {
   if (Array.isArray(entries)) {
-    return entries.map((entry) => String(entry || "").trim()).filter(Boolean).join("\n");
+    return entries.map((entry) => String(entry ?? "")).join("\n");
   }
-  return String(entries || "");
+  return String(entries ?? "");
 }
 
 function stripScopeComment(line) {
@@ -432,10 +439,8 @@ function splitScopeTargetTokens(value) {
 }
 
 function splitScopeEntries(value) {
-  return String(value || "")
-    .split(/\r?\n/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const text = String(value ?? "").replace(/\r\n?/g, "\n");
+  return text ? text.split("\n") : [];
 }
 
 function renderScopeHighlightedText(value, muted = false) {
@@ -476,7 +481,7 @@ function ScopeEditor({ label, value, onChange, example }) {
   const hasValue = String(value || "").length > 0;
   const displayValue = hasValue ? value : example;
   return (
-    <Box sx={{ flex: 1, minWidth: 0, position: "relative", pt: 0.75 }}>
+    <Box sx={{ flex: "1 1 0", minWidth: 0, minHeight: 0, position: "relative", pt: 0.75, display: "flex", flexDirection: "column" }}>
       <Typography
         component="label"
         variant="caption"
@@ -501,6 +506,7 @@ function ScopeEditor({ label, value, onChange, example }) {
           bgcolor: "rgba(5,9,18,0.85)",
           overflow: "hidden",
           minHeight: 246,
+          flexGrow: 1,
           "&:hover": {
             borderColor: MAGIC_UI.accentA,
           },
@@ -533,7 +539,7 @@ function ScopeEditor({ label, value, onChange, example }) {
             inset: 0,
             border: 0,
             outline: 0,
-            resize: "vertical",
+            resize: "none",
             minHeight: "100%",
             color: "transparent",
             WebkitTextFillColor: "transparent",
@@ -603,6 +609,34 @@ function datetimeLocalValueFromDayjs(value) {
 
 function targetOutputContent(target, mode) {
   return String(mode === "stderr" ? target?.stderr_snippet || "" : target?.stdout_snippet || "").trim();
+}
+
+function onboardingFailureKind(record) {
+  const raw = record?.raw || record || {};
+  const text = [
+    raw.detail,
+    raw.task,
+    raw.stdout_snippet,
+    raw.stderr_snippet,
+    raw.stdout,
+    raw.stderr,
+  ].map((value) => String(value || "")).join("\n").toLowerCase();
+  if (!text) return "";
+  if (
+    text.includes("status_logon_failure") ||
+    text.includes("logon failure") ||
+    text.includes("attempted logon is invalid") ||
+    text.includes("bad username") ||
+    text.includes("authentication information") ||
+    text.includes("smb login: smb_connection_failed") ||
+    text.includes("ssh authentication failed") ||
+    text.includes("permission_denied") ||
+    text.includes("ssh_password_required") ||
+    text.includes("sudo_password_required")
+  ) {
+    return "auth";
+  }
+  return "";
 }
 
 function isOnboardingApprovalReadyTask(task) {
@@ -857,9 +891,9 @@ function StatusPill({ status }) {
   );
 }
 
-function ProgressStatusIcon({ status }) {
+function ProgressStatusIcon({ status, failureKind = "" }) {
   const key = String(status || "pending").trim().toLowerCase() || "pending";
-  const label = STATUS_THEME[key]?.label || formatStatusLabel(key);
+  const requestedAuthFailure = String(failureKind || "").trim().toLowerCase() === "auth";
   const completeStatuses = new Set(["approved", "completed", "complete", "success", "succeeded"]);
   const activeStatuses = new Set(["pending", "pending_approval", "running", "in_progress", "waiting_approval"]);
   const waitingStatuses = new Set(["pending_approval", "waiting_approval"]);
@@ -870,7 +904,11 @@ function ProgressStatusIcon({ status }) {
   const isWaiting = waitingStatuses.has(key);
   const isFailed = failedStatuses.has(key);
   const isSkipped = skippedStatuses.has(key);
-  const Icon = isComplete
+  const isAuthFailure = requestedAuthFailure && isFailed;
+  const label = isAuthFailure ? "Authentication Failed" : (STATUS_THEME[key]?.label || formatStatusLabel(key));
+  const Icon = isAuthFailure
+    ? ProgressAuthErrorIcon
+    : isComplete
     ? ProgressCompleteIcon
     : isActive
       ? ProgressActiveIcon
@@ -884,9 +922,9 @@ function ProgressStatusIcon({ status }) {
   const color = isComplete
     ? MAGIC_UI.accentC
     : isActive
-      ? (isWaiting ? MAGIC_UI.accentB : MAGIC_UI.accentA)
+      ? (isWaiting ? MAGIC_UI.accentC : MAGIC_UI.accentA)
       : isWaiting
-        ? MAGIC_UI.accentB
+        ? MAGIC_UI.accentC
         : isFailed
           ? MAGIC_UI.danger
           : isSkipped
@@ -908,7 +946,7 @@ function ProgressStatusIcon({ status }) {
             borderRadius: "50%",
             ...(isActive
               ? {
-                  background: isWaiting ? "rgba(192, 132, 252, 0.12)" : "rgba(125, 201, 255, 0.12)",
+                  background: isWaiting ? "rgba(52, 211, 153, 0.12)" : "rgba(125, 201, 255, 0.12)",
                   animation: "onboardingProgressPulse 1.8s ease-out infinite",
                 }
               : null),
@@ -1249,6 +1287,7 @@ export default function CreateOnboardingJob() {
         statusBucket: targetStatusBucket(status),
         statusLabel: formatStatusLabel(status),
         detail: target.detail || "",
+        failureKind: onboardingFailureKind(target),
         approvalReference: target.approval_reference || "",
         approvalId: String(target.approval_id || target.approvalId || "").trim(),
         approvalStatus,
@@ -1308,12 +1347,17 @@ export default function CreateOnboardingJob() {
         endedAt,
         startedLabel: formatOnboardingProgressTimestamp(startedAt),
         elapsedLabel: formatElapsedDuration(startedAt, elapsedEnd),
+        failureKind: onboardingFailureKind(event),
         hasStdOut: Boolean(String(event?.stdout_snippet || "").trim()),
         hasStdErr: Boolean(String(event?.stderr_snippet || "").trim()),
         raw: event,
       };
     });
+    const selectedBucket = targetStatusBucket(selectedTargetRow.status);
     return mappedRows.reduce((acc, row) => {
+      if (selectedBucket === "skipped" && isOnboardingApprovalCompleteTask(row.task)) {
+        return acc;
+      }
       const previous = acc[acc.length - 1];
       if (isOnboardingApprovalCompleteTask(row.task)) {
         let readyIndex = -1;
@@ -1351,6 +1395,7 @@ export default function CreateOnboardingJob() {
           elapsedLabel: formatElapsedDuration(startedAt, elapsedEnd),
           hasStdOut: Boolean(String(raw.stdout_snippet || "").trim()),
           hasStdErr: Boolean(String(raw.stderr_snippet || "").trim()),
+          failureKind: onboardingFailureKind(raw),
           raw,
         };
         return acc;
@@ -1381,6 +1426,7 @@ export default function CreateOnboardingJob() {
         elapsedLabel: formatElapsedDuration(startedAt, elapsedEnd),
         hasStdOut: Boolean(String(raw.stdout_snippet || "").trim()),
         hasStdErr: Boolean(String(raw.stderr_snippet || "").trim()),
+        failureKind: onboardingFailureKind(raw),
         raw,
       };
       return acc;
@@ -1472,7 +1518,7 @@ export default function CreateOnboardingJob() {
         maxWidth: STATUS_COLUMN_SIZE,
         filter: false,
         cellClass: "auto-col-tight onboarding-progress-status-cell",
-        cellRenderer: (params) => <ProgressStatusIcon status={params.data?.status} />,
+        cellRenderer: (params) => <ProgressStatusIcon status={params.data?.status} failureKind={params.data?.failureKind} />,
       },
       {
         field: "targetLabel",
@@ -1516,11 +1562,31 @@ export default function CreateOnboardingJob() {
           const row = params.data;
           const rowStatus = String(row?.status || "").trim().toLowerCase();
           const approvalStatus = String(row?.approvalStatus || "").trim().toLowerCase();
+          const approvalTerminal = ["approved", "completed", "success", "installed", "denied", "expired"].includes(rowStatus);
           const canApprove = Boolean(row?.approvalId)
             && (approvalStatus === "pending" || !approvalStatus)
-            && !["approved", "completed", "success", "installed", "denied", "expired"].includes(rowStatus);
-          if (!canApprove) {
+            && !approvalTerminal;
+          const canOpenApprovals = !canApprove && !approvalTerminal && (
+            rowStatus === "waiting_approval" ||
+            rowStatus === "pending_approval" ||
+            Boolean(row?.approvalReference)
+          );
+          if (!canApprove && !canOpenApprovals) {
             return <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>-</Typography>;
+          }
+          if (canOpenApprovals) {
+            return (
+              <Button
+                size="small"
+                sx={{ color: MAGIC_UI.accentC, textTransform: "none", minWidth: 0, p: 0 }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  navigate(APP_PATHS.deviceApprovals);
+                }}
+              >
+                Approvals
+              </Button>
+            );
           }
           const busy = actioningApprovalId === row.approvalId;
           return (
@@ -1540,7 +1606,7 @@ export default function CreateOnboardingJob() {
         },
       },
     ],
-    [actioningApprovalId, handleApproveTarget]
+    [actioningApprovalId, handleApproveTarget, navigate]
   );
 
   const progressionGridColumnDefs = useMemo(
@@ -1553,7 +1619,7 @@ export default function CreateOnboardingJob() {
         maxWidth: STATUS_COLUMN_SIZE,
         filter: false,
         cellClass: "auto-col-tight onboarding-progress-status-cell",
-        cellRenderer: (params) => <ProgressStatusIcon status={params.data?.status} />,
+        cellRenderer: (params) => <ProgressStatusIcon status={params.data?.status} failureKind={params.data?.failureKind} />,
       },
       { field: "task", headerName: "Task", minWidth: 260, flex: 1, filter: false, cellClass: "auto-col-tight" },
       {
@@ -1893,23 +1959,28 @@ export default function CreateOnboardingJob() {
 
   if (loading) {
     return (
-      <Paper elevation={0} sx={{ p: 3, background: "transparent", color: "#e2e8f0" }}>
-        <CircularProgress size={24} sx={{ color: "#7dd3fc" }} />
+      <Paper elevation={0} sx={PAGE_SX}>
+        <PageBodyFrame variant="content_panel">
+          <CircularProgress size={24} sx={{ color: "#7dd3fc" }} />
+        </PageBodyFrame>
       </Paper>
     );
   }
 
   return (
-    <Box sx={PAGE_SX}>
-      <Stack spacing={2} sx={{ flexGrow: 1, minHeight: 0, height: "100%" }}>
-          {error ? <Alert severity="error">{error}</Alert> : null}
-          {notice ? <Alert severity="success">{notice}</Alert> : null}
-          {saving ? (
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: MAGIC_UI.textMuted }}>
-              <CircularProgress size={18} sx={{ color: MAGIC_UI.accentA }} />
-              <Typography variant="body2">{editing ? "Re-onboarding devices..." : "Onboarding devices..."}</Typography>
-            </Box>
-          ) : null}
+    <Paper elevation={0} sx={PAGE_SX}>
+      <PageBodyFrame
+        variant="grid_with_stack"
+        stack={(
+          <>
+            {error ? <Alert severity="error">{error}</Alert> : null}
+            {notice ? <Alert severity="success">{notice}</Alert> : null}
+            {saving ? (
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: MAGIC_UI.textMuted }}>
+                <CircularProgress size={18} sx={{ color: MAGIC_UI.accentA }} />
+                <Typography variant="body2">{editing ? "Re-onboarding devices..." : "Onboarding devices..."}</Typography>
+              </Box>
+            ) : null}
 
             <Tabs
               value={activeTabKey}
@@ -1938,8 +2009,23 @@ export default function CreateOnboardingJob() {
                 );
               })}
             </Tabs>
+          </>
+        )}
+      >
 
-            <Box sx={{ mt: activeTabKey === "targets" ? 1 : 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <Box
+              sx={{
+                flexGrow: 1,
+                minHeight: 0,
+                height: "100%",
+                display: "flex",
+                flexDirection: "column",
+                overflow: {
+                  xs: "auto",
+                  lg: activeTabKey === "scope" || activeTabKey === "targets" ? "hidden" : "auto",
+                },
+              }}
+            >
               {activeTabKey === "name" ? (
                 <Box sx={TAB_SECTION_SX}>
                   <SectionHeader title="Job Name" />
@@ -1957,7 +2043,7 @@ export default function CreateOnboardingJob() {
               ) : null}
 
               {activeTabKey === "scope" ? (
-                <Box sx={TAB_SECTION_SX}>
+                <Box sx={SCOPE_TAB_SECTION_SX}>
                   <SectionHeader
                     title="Scope"
                     detail="Discovery scope defines eligible targets. Exclusion scope removes blacklisted IPs, FQDNs, CIDRs, and ranges before onboarding attempts start."
@@ -1978,7 +2064,7 @@ export default function CreateOnboardingJob() {
                       ))}
                     </Select>
                   </FormControl>
-                  <Stack direction={{ xs: "column", lg: "row" }} spacing={2}>
+                  <Stack direction={{ xs: "column", lg: "row" }} spacing={2} sx={{ flexGrow: 1, minHeight: 0, alignItems: "stretch" }}>
                     <ScopeEditor
                       label="Discovery Scope"
                       value={form.scope}
@@ -2264,7 +2350,7 @@ export default function CreateOnboardingJob() {
                 </Box>
               ) : null}
             </Box>
-          </Stack>
+      </PageBodyFrame>
 
       <Dialog
         open={outputOpen}
@@ -2365,6 +2451,6 @@ export default function CreateOnboardingJob() {
           ))}
         </DialogContent>
       </Dialog>
-    </Box>
+    </Paper>
   );
 }

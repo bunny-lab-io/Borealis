@@ -222,6 +222,22 @@ def _windows_onboarding_skip_detail(*, stdout: Any = "", stderr: Any = "") -> st
     return ""
 
 
+def _windows_onboarding_existing_task_running_without_redeploy(*, stdout: Any = "", stderr: Any = "") -> bool:
+    combined = f"{stdout or ''}\n{stderr or ''}"
+    if "__BOREALIS_ONBOARDING_REDEPLOY_REQUIRED__=1" in combined:
+        return False
+    return re.search(r"__BOREALIS_AGENT_TASK_STATE__\s*=\s*Running\b", combined, re.IGNORECASE) is not None
+
+
+def _onboarding_target_without_port(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text.count(":") == 1:
+        host, port = text.rsplit(":", 1)
+        if host and port.isdigit():
+            return host.strip()
+    return text
+
+
 def _windows_onboarding_repair_succeeded(*, stdout: Any = "", stderr: Any = "") -> bool:
     combined = f"{stdout or ''}\n{stderr or ''}"
     return "__BOREALIS_ONBOARDING_AGENT_REPAIRED__=1" in combined
@@ -4089,7 +4105,7 @@ class JobScheduler:
             conn.close()
 
     def _onboarding_target_already_known(self, host: str, site_id: Optional[int]) -> bool:
-        value = str(host or "").strip().lower()
+        value = _onboarding_target_without_port(host)
         if not value:
             return False
         conn = self._conn()
@@ -4160,7 +4176,10 @@ class JobScheduler:
                            status,
                            hostname_claimed,
                            updated_at,
-                           approved_by_user_id
+                           approved_by_user_id,
+                           onboarding_job_id,
+                           onboarding_run_id,
+                           onboarding_target
                       FROM device_approvals
                      WHERE approval_reference=?
                   ORDER BY updated_at DESC
@@ -4178,7 +4197,10 @@ class JobScheduler:
                            status,
                            hostname_claimed,
                            updated_at,
-                           approved_by_user_id
+                           approved_by_user_id,
+                           onboarding_job_id,
+                           onboarding_run_id,
+                           onboarding_target
                       FROM device_approvals
                      WHERE onboarding_job_id=?
                        AND onboarding_run_id=?
@@ -4207,7 +4229,10 @@ class JobScheduler:
                            da.status,
                            da.hostname_claimed,
                            da.updated_at,
-                           da.approved_by_user_id
+                           da.approved_by_user_id,
+                           da.onboarding_job_id,
+                           da.onboarding_run_id,
+                           da.onboarding_target
                       FROM device_approvals AS da
                  LEFT JOIN devices AS d
                         ON LOWER(COALESCE(d.hostname, ''))=LOWER(COALESCE(da.hostname_claimed, ''))
@@ -4221,6 +4246,7 @@ class JobScheduler:
                             OR LOWER(COALESCE(d.external_ip, ''))=LOWER(?)
                            )
                        {fallback_site_clause}
+                       AND LOWER(COALESCE(da.status, ''))='pending'
                   ORDER BY da.updated_at DESC
                      LIMIT 1
                     """,
@@ -4229,6 +4255,26 @@ class JobScheduler:
                 row = cur.fetchone()
             if not row:
                 return {}
+            if normalized_reference:
+                try:
+                    reference_job_id = int(row[6]) if row[6] is not None else 0
+                except Exception:
+                    reference_job_id = 0
+                try:
+                    reference_run_id = int(row[7]) if row[7] is not None else 0
+                except Exception:
+                    reference_run_id = 0
+                if reference_job_id != int(job_id) or reference_run_id != int(run_id):
+                    reference_status = str(row[2] or "").strip().lower()
+                    if reference_status != "pending":
+                        return {
+                            "approval_reference_stale": normalized_reference,
+                            "approval_status": reference_status,
+                            "approval_hostname": row[3] or "",
+                            "approval_job_id": reference_job_id,
+                            "approval_run_id": reference_run_id,
+                            "approval_target": row[8] or "",
+                        }
             return {
                 "approval_id": row[0] or "",
                 "approval_reference": row[1] or "",
@@ -4236,6 +4282,9 @@ class JobScheduler:
                 "approval_hostname": row[3] or "",
                 "approval_updated_at": row[4] or "",
                 "approved_by_user_id": row[5] or "",
+                "approval_job_id": row[6] or "",
+                "approval_run_id": row[7] or "",
+                "approval_target": row[8] or "",
             }
         except Exception:
             return {}
@@ -4271,6 +4320,36 @@ class JobScheduler:
             status = str(next_row.get("status") or "").strip().lower()
             detail_current = str(next_row.get("detail") or "").strip()
             approval_reference_current = str(next_row.get("approval_reference") or "").strip()
+            if _windows_onboarding_existing_task_running_without_redeploy(
+                stdout=next_row.get("stdout_snippet") or "",
+                stderr=next_row.get("stderr_snippet") or "",
+            ):
+                site_id = int(next_row.get("site_id")) if next_row.get("site_id") is not None else None
+                known_candidates = [
+                    next_row.get("target_address"),
+                    next_row.get("target_hostname"),
+                    next_row.get("target_input"),
+                ]
+                if any(self._onboarding_target_already_known(str(candidate or ""), site_id) for candidate in known_candidates):
+                    row_id = int(next_row.get("id") or 0)
+                    skipped_detail = "Existing Borealis Agent is already enrolled and active."
+                    next_row["status"] = "already_enrolled"
+                    next_row["detail"] = skipped_detail
+                    next_row["approval_reference"] = ""
+                    self._update_onboarding_target_row(
+                        row_id,
+                        status="already_enrolled",
+                        detail=skipped_detail,
+                        stdout=next_row.get("stdout_snippet") or "",
+                        stderr=next_row.get("stderr_snippet") or "",
+                        approval_reference="",
+                        finished=True,
+                    )
+                    timeline = self._load_onboarding_target_event_rows([row_id]).get(row_id, [])
+                    next_row["timeline"] = timeline
+                    next_row["events"] = timeline
+                    hydrated.append(next_row)
+                    continue
             if status in {
                 ONBOARDING_STATUS_PENDING,
                 ONBOARDING_STATUS_RUNNING,
@@ -4291,6 +4370,51 @@ class JobScheduler:
                     )
                     if approval_context:
                         break
+                if approval_context.get("approval_reference_stale"):
+                    row_id = int(next_row.get("id") or 0)
+                    known_candidates = [
+                        next_row.get("target_address"),
+                        next_row.get("target_hostname"),
+                        next_row.get("target_input"),
+                        approval_context.get("approval_target"),
+                        approval_context.get("approval_hostname"),
+                    ]
+                    if any(self._onboarding_target_already_known(str(candidate or ""), site_id) for candidate in known_candidates):
+                        skipped_detail = "Existing Borealis Agent is already enrolled and active."
+                        next_row["status"] = "already_enrolled"
+                        next_row["detail"] = skipped_detail
+                        next_row["approval_reference"] = ""
+                        self._update_onboarding_target_row(
+                            row_id,
+                            status="already_enrolled",
+                            detail=skipped_detail,
+                            stdout=next_row.get("stdout_snippet") or "",
+                            stderr=next_row.get("stderr_snippet") or "",
+                            approval_reference="",
+                            finished=True,
+                        )
+                        timeline = self._load_onboarding_target_event_rows([row_id]).get(row_id, [])
+                        next_row["timeline"] = timeline
+                        next_row["events"] = timeline
+                    else:
+                        stale_detail = "Approval callback matched a previous onboarding run, but no active pending approval or enrolled device matches this target."
+                        next_row["status"] = ONBOARDING_STATUS_FAILED
+                        next_row["detail"] = stale_detail
+                        next_row["approval_reference"] = ""
+                        self._update_onboarding_target_row(
+                            row_id,
+                            status=ONBOARDING_STATUS_FAILED,
+                            detail=stale_detail,
+                            stdout=next_row.get("stdout_snippet") or "",
+                            stderr=next_row.get("stderr_snippet") or "",
+                            approval_reference="",
+                            finished=True,
+                        )
+                        timeline = self._load_onboarding_target_event_rows([row_id]).get(row_id, [])
+                        next_row["timeline"] = timeline
+                        next_row["events"] = timeline
+                    hydrated.append(next_row)
+                    continue
                 next_row.update(approval_context)
                 approval_reference = str(approval_context.get("approval_reference") or "").strip()
                 if approval_reference:
@@ -5712,6 +5836,24 @@ class JobScheduler:
             if stderr:
                 stderr_parts.append(f"[{label}]\n{stderr}")
             if exit_code == 0:
+                combined_stdout = "\n\n".join(stdout_parts)
+                combined_stderr = "\n\n".join(stderr_parts)
+                if _windows_onboarding_existing_task_running_without_redeploy(stdout=combined_stdout, stderr=combined_stderr):
+                    known_candidates = [host, reported_hostname]
+                    if any(self._onboarding_target_already_known(str(candidate or ""), site.get("id")) for candidate in known_candidates):
+                        terminal_status = "already_enrolled"
+                        self._update_onboarding_target_row(
+                            row_id,
+                            status=terminal_status,
+                            detail="Existing Borealis Agent is already enrolled and active.",
+                            stdout=combined_stdout,
+                            stderr=combined_stderr,
+                            approval_reference="",
+                            target_hostname=reported_hostname,
+                            finished=True,
+                            redactions=redactions,
+                        )
+                        return terminal_status
                 approval_reference = str(result.get("approval_reference") or "").strip()
                 deadline = time.monotonic() + 10.0
                 while time.monotonic() < deadline:
@@ -5723,8 +5865,8 @@ class JobScheduler:
                     row_id,
                     status=ONBOARDING_STATUS_WAITING_APPROVAL,
                     detail=f"Agent installed through Windows {label}. Device approval pending operator action.",
-                    stdout="\n\n".join(stdout_parts),
-                    stderr="\n\n".join(stderr_parts),
+                    stdout=combined_stdout,
+                    stderr=combined_stderr,
                     approval_reference=approval_reference,
                     target_hostname=reported_hostname,
                     finished=True,
