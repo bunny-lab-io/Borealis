@@ -713,6 +713,32 @@ function Copy-BorealisRepositoryTree {
         New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null
     }
 
+    function Copy-BorealisArchivePath {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$SourcePath,
+
+            [Parameter(Mandatory = $true)]
+            [string]$TargetPath,
+
+            [switch]$ClearTarget
+        )
+
+        if (-not (Test-Path -LiteralPath $SourcePath)) {
+            return
+        }
+
+        $targetParent = Split-Path -Path $TargetPath -Parent
+        if (-not [string]::IsNullOrWhiteSpace($targetParent) -and -not (Test-Path $targetParent)) {
+            New-Item -Path $targetParent -ItemType Directory -Force | Out-Null
+        }
+        if ($ClearTarget -and (Test-Path -LiteralPath $TargetPath)) {
+            Remove-Item -LiteralPath $TargetPath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        Copy-Item -LiteralPath $SourcePath -Destination $targetParent -Recurse -Force -ErrorAction Stop
+    }
+
     Get-ChildItem -LiteralPath $DestinationPath -Force -ErrorAction SilentlyContinue | ForEach-Object {
         if ($PreserveDirectories -contains $_.Name) {
             return
@@ -726,14 +752,27 @@ function Copy-BorealisRepositoryTree {
         }
     }
 
-    Get-ChildItem -LiteralPath $SourceRoot -Force -ErrorAction Stop | ForEach-Object {
-        $destinationEntry = Join-Path $DestinationPath $_.Name
-        if (($PreserveDirectories -contains $_.Name) -and (Test-Path $destinationEntry)) {
-            Write-Host ("[i] Preserving existing {0} during archive repository sync." -f $_.Name)
-            return
-        }
+    Copy-BorealisArchivePath `
+        -SourcePath (Join-Path $SourceRoot 'Agent.ps1') `
+        -TargetPath (Join-Path $DestinationPath 'Agent.ps1') `
+        -ClearTarget
 
-        Copy-Item -LiteralPath $_.FullName -Destination $DestinationPath -Recurse -Force -ErrorAction Stop
+    Copy-BorealisArchivePath `
+        -SourcePath (Join-Path $SourceRoot 'Agent.sh') `
+        -TargetPath (Join-Path $DestinationPath 'Agent.sh') `
+        -ClearTarget
+
+    Copy-BorealisArchivePath `
+        -SourcePath (Join-Path $SourceRoot 'Data\Agent') `
+        -TargetPath (Join-Path $DestinationPath 'Data\Agent') `
+        -ClearTarget
+
+    $dependencyRoot = Join-Path $SourceRoot 'Dependencies'
+    foreach ($dependencyName in @('7zip', 'curl')) {
+        Copy-BorealisArchivePath `
+            -SourcePath (Join-Path $dependencyRoot $dependencyName) `
+            -TargetPath (Join-Path (Join-Path $DestinationPath 'Dependencies') $dependencyName) `
+            -ClearTarget
     }
 }
 
@@ -749,7 +788,11 @@ function Sync-BorealisRepositoryFromArchive {
         New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null
     }
 
-    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("BorealisRepoArchive-{0}" -f ([System.Guid]::NewGuid().ToString('N')))
+    $tempParent = Join-Path $DestinationPath 'Temp'
+    if (-not (Test-Path $tempParent)) {
+        New-Item -Path $tempParent -ItemType Directory -Force | Out-Null
+    }
+    $tempRoot = Join-Path $tempParent ("Repo-{0}" -f ([System.Guid]::NewGuid().ToString('N').Substring(0, 8)))
     $archivePath = Join-Path $tempRoot 'Borealis.zip'
     $extractPath = Join-Path $tempRoot 'Extracted'
     New-Item -Path $tempRoot -ItemType Directory -Force | Out-Null
