@@ -159,7 +159,6 @@ func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error 
 	if err != nil {
 		return err
 	}
-	writeTimeline(cfg, "running", "Installing Agent Dependencies", "Installing core Agent dependencies.", 1)
 	if err := ensureAgentDependencies(cfg, logger); err != nil {
 		return err
 	}

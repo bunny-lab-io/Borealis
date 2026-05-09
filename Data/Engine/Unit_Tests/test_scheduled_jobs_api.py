@@ -327,6 +327,29 @@ def test_windows_onboarding_requires_agent_exe(engine_harness: EngineTestHarness
     assert scheduler._windows_quote_command_arg("C:\\Borealis\\Temp\\Onboarding\\bootstrapper-config.json").startswith('"')
 
 
+def test_windows_onboarding_dependency_progress_keeps_dependency_name() -> None:
+    assert (
+        scheduled_job_module._onboarding_progress_task_from_output(
+            stdout="__BOREALIS_AGENT_STEP_STARTED__=Dependency: UltraVNC Server"
+        )
+        == "Installing Agent Dependencies: UltraVNC"
+    )
+    assert (
+        scheduled_job_module._onboarding_progress_task(
+            status="running",
+            detail="Installing Agent Dependencies: WireGuard VPN Adapter",
+        )
+        == "Installing Agent Dependencies: WireGuard"
+    )
+    assert (
+        scheduled_job_module._onboarding_progress_task(
+            status="running",
+            detail="Agent.exe started.",
+        )
+        == "Running Agent Bootstrap"
+    )
+
+
 def test_windows_smb_poll_treats_sharing_violation_as_active_writer(
     engine_harness: EngineTestHarness,
     monkeypatch: pytest.MonkeyPatch,

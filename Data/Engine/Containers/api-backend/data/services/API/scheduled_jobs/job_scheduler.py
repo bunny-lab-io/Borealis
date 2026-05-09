@@ -489,7 +489,7 @@ def _onboarding_progress_task_from_output(*, stdout: Any = "", stderr: Any = "")
     if "__borealis_onboarding_existing_agent_detected__=1" in combined or "existing agent detected" in combined:
         return "Existing Agent Detected"
     if "dependency: python" in combined:
-        return "Installing Agent Dependencies"
+        return _onboarding_dependency_task_name("Python")
     if "ensuring agent dependencies exist" in combined:
         return "Installing Agent Dependencies"
     if "deploying borealis agent" in combined:
@@ -521,8 +521,31 @@ def _onboarding_agent_step_task_name(value: Any) -> str:
     text = re.sub(r"\s+started$", "", text, flags=re.IGNORECASE).strip()
     text = re.sub(r"\s+failed:.*$", "", text, flags=re.IGNORECASE).strip()
     if text.lower().startswith("dependency:"):
-        return "Installing Agent Dependencies"
+        return _onboarding_dependency_task_name(text.split(":", 1)[1])
+    if text.lower().startswith("installing agent dependencies:"):
+        return _onboarding_dependency_task_name(text.split(":", 1)[1])
     return text
+
+
+def _onboarding_dependency_task_name(value: Any) -> str:
+    label = re.sub(r"\s+", " ", str(value or "")).strip().strip(".:")
+    label = re.sub(r"^[✅❌⏳\s]+", "", label).strip()
+    label = re.sub(r"\s+-\s+(failed|completed|deferred).*$", "", label, flags=re.IGNORECASE).strip()
+    label = re.sub(r"\s+dependency\s*$", "", label, flags=re.IGNORECASE).strip()
+    lower = label.lower()
+    if not label:
+        return "Installing Agent Dependencies"
+    if "wireguard" in lower:
+        label = "WireGuard"
+    elif "ultravnc" in lower or "vnc" in lower:
+        label = "UltraVNC"
+    elif "git" in lower:
+        label = "Git"
+    elif "autohotkey" in lower or "auto hotkey" in lower:
+        label = "AutoHotKey"
+    elif "python" in lower:
+        label = "Python"
+    return f"Installing Agent Dependencies: {label}"
 
 
 def _onboarding_windows_protocol_name(value: Any) -> str:
@@ -621,9 +644,14 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
         return "Unable to Repair Agent > Re-Deploying"
     if "existing borealis agent" in detail_lower or "existing agent detected" in detail_lower:
         return "Existing Agent Detected"
-    if "running agent bootstrap" in detail_lower or "running agent.ps1" in detail_lower:
+    if "running agent bootstrap" in detail_lower or "running agent.ps1" in detail_lower or "agent.exe started" in detail_lower:
         return "Running Agent Bootstrap"
     if "installing agent dependencies" in detail_lower:
+        if ":" in detail_text:
+            return _onboarding_dependency_task_name(detail_text.split(":", 1)[1])
+        installing_match = re.search(r"installing\s+(.+?)(?:\.|$)", detail_text, re.IGNORECASE)
+        if installing_match:
+            return _onboarding_dependency_task_name(installing_match.group(1))
         return "Installing Agent Dependencies"
     if "waiting for windows" in detail_lower or "output file lock" in detail_lower:
         return _onboarding_progress_task_from_output(stdout=stdout, stderr=stderr) or "Running Agent Bootstrap"

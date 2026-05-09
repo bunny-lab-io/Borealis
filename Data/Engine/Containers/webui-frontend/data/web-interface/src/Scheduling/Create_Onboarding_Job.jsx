@@ -651,6 +651,7 @@ function normalizeOnboardingProgressTask(task, status = "") {
   const original = String(task || "").trim();
   const normalizedTask = original.toLowerCase();
   const normalizedStatus = String(status || "").trim().toLowerCase();
+  const dependencyTask = normalizeDependencyTask(original);
   const isApprovalReady = normalizedStatus === "waiting_approval" || normalizedTask.includes("awaiting approval");
   const isApprovalComplete = ["approved", "completed", "complete", "success", "succeeded", "installed"].includes(normalizedStatus);
   if (
@@ -722,15 +723,44 @@ function normalizeOnboardingProgressTask(task, status = "") {
     normalizedTask.includes("downloading agent bootstrap") ||
     normalizedTask.includes("deploying borealis agent runtime") ||
     normalizedTask.includes("running agent.exe") ||
+    normalizedTask.includes("agent.exe started") ||
     normalizedTask.includes("syncing borealis repository") ||
     normalizedTask.includes("running agent bootstrap")
   ) {
     return "Running Agent Bootstrap";
   }
+  if (dependencyTask) {
+    return dependencyTask;
+  }
   if (normalizedTask.includes("dependency") || normalizedTask.includes("ensuring agent dependencies")) {
     return "Installing Agent Dependencies";
   }
   return original || "Spinning-Up Site-Worker Container";
+}
+
+function normalizeDependencyTask(task) {
+  const text = String(task || "").trim();
+  const normalized = text.toLowerCase();
+  let label = "";
+  if (normalized.startsWith("installing agent dependencies:")) {
+    label = text.split(":").slice(1).join(":");
+  } else if (normalized.startsWith("dependency:")) {
+    label = text.split(":").slice(1).join(":");
+  } else {
+    const installingMatch = text.match(/installing\s+(.+?)(?:\.|$)/i);
+    if (installingMatch && normalized.includes("dependency")) {
+      label = installingMatch[1];
+    }
+  }
+  label = label.replace(/^[✅❌⏳\s]+/, "").replace(/\s+-\s+(failed|completed|deferred).*$/i, "").trim();
+  if (!label) return "";
+  const lower = label.toLowerCase();
+  if (lower.includes("wireguard")) label = "WireGuard";
+  else if (lower.includes("ultravnc") || lower.includes("vnc")) label = "UltraVNC";
+  else if (lower.includes("git")) label = "Git";
+  else if (lower.includes("autohotkey") || lower.includes("auto hotkey")) label = "AutoHotKey";
+  else if (lower.includes("python")) label = "Python";
+  return `Installing Agent Dependencies: ${label}`;
 }
 
 function mergeOutputSnippet(first, second) {

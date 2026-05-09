@@ -11,6 +11,7 @@ import (
 )
 
 func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	writeTimeline(cfg, "running", dependencyTaskName("Python"), "Installing Python runtime.", 1)
 	if err := ensurePythonRuntime(cfg, logger); err != nil {
 		return err
 	}
@@ -24,13 +25,18 @@ func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error
 		{"WireGuard VPN Adapter", ensureWireGuardInstaller},
 	}
 	for _, step := range optionalSteps {
-		writeTimeline(cfg, "running", "Installing Agent Dependencies", "Installing "+step.name+".", 1)
+		task := dependencyTaskName(step.name)
+		writeTimeline(cfg, "running", task, "Installing "+step.name+".", 1)
 		if err := step.fn(cfg, logger); err != nil {
 			logger.Warnf("%s dependency deferred: %v", step.name, err)
-			writeTimeline(cfg, "completed", "Installing Agent Dependencies", step.name+" dependency deferred: "+err.Error(), 0)
+			writeTimeline(cfg, "completed", task, step.name+" dependency deferred: "+err.Error(), 0)
 		}
 	}
 	return nil
+}
+
+func dependencyTaskName(name string) string {
+	return "Installing Agent Dependencies: " + name
 }
 
 func ensureAutoHotKey(cfg BootstrapConfig, logger *BootstrapLogger) error {
