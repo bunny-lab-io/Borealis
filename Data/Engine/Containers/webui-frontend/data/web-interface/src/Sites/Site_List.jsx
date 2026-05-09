@@ -769,6 +769,15 @@ export default function SiteList() {
     [navigate]
   );
 
+  const handleOpenOnboardingForSite = useCallback(
+    (site) => {
+      const siteId = site?.id;
+      if (siteId == null || siteId === "") return;
+      navigate(`${APP_PATHS.jobOnboardingNew}?site_id=${encodeURIComponent(String(siteId))}&site_locked=1&tab=scope`);
+    },
+    [navigate]
+  );
+
   const fetchInstallServerUrlFromOverview = useCallback(async () => {
     try {
       const response = await fetch("/api/server/overview", {
@@ -1245,13 +1254,15 @@ export default function SiteList() {
         tooltip: installActionTooltip,
         onClick: handleOpenInstallMenu,
       },
-      {
-        id: "onboard-site-devices",
-        label: "Onboard Devices",
-        icon: <DevicesIcon />,
-        tone: "primary",
-        onClick: () => navigate(APP_PATHS.jobOnboardingNew),
-      },
+      ...(singleSelectedSite
+        ? [{
+            id: "onboard-site-devices",
+            label: "Onboard Devices",
+            icon: <DevicesIcon />,
+            tone: "primary",
+            onClick: () => handleOpenOnboardingForSite(singleSelectedSite),
+          }]
+        : []),
       {
         id: "create-site",
         label: "Create Site",
@@ -1263,8 +1274,9 @@ export default function SiteList() {
     [
       canOpenInstallMenu,
       handleOpenInstallMenu,
+      handleOpenOnboardingForSite,
       installActionTooltip,
-      navigate,
+      singleSelectedSite,
     ]
   );
 
@@ -1302,6 +1314,19 @@ export default function SiteList() {
         onClick: () => {
           handleCloseSiteContextMenu();
           handleOpenSoftwareAuditForSite(row);
+        },
+      },
+      {
+        id: "onboard-site-devices",
+        group: "primary",
+        label: "Onboard Devices",
+        icon: DevicesIcon,
+        disabled: Boolean(unavailableReason),
+        disabledReason: unavailableReason,
+        description: "Open Automatic Device Onboarding locked to this site.",
+        onClick: () => {
+          handleCloseSiteContextMenu();
+          handleOpenOnboardingForSite(row);
         },
       },
       {
@@ -1350,6 +1375,7 @@ export default function SiteList() {
     handleCopy,
     handleOpenDeleteDialog,
     handleOpenDevicesForSite,
+    handleOpenOnboardingForSite,
     handleOpenSoftwareAuditForSite,
     openRenameDialog,
     selectedSiteRows.length,

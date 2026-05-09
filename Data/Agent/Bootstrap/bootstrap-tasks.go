@@ -31,11 +31,13 @@ func runBootstrapWindowsService(cli cliOptions) int {
 		return 1
 	}
 	defer closeLog()
+	logger.Tracef("Windows service host starting: service_name=%s", cfg.ServiceName)
 	handler := &bootstrapService{cfg: cfg, logger: logger}
 	if err := svc.Run(cfg.ServiceName, handler); err != nil {
 		logger.Errorf("Windows service runner failed: %v", err)
 		return 1
 	}
+	logger.Tracef("Windows service host stopped: exit_code=%d", handler.exitCode)
 	return handler.exitCode
 }
 
@@ -47,6 +49,7 @@ type bootstrapService struct {
 
 func (s *bootstrapService) Execute(args []string, requests <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
 	const accepted = svc.AcceptStop | svc.AcceptShutdown
+	s.logger.Tracef("Windows service Execute entered: args=%v", args)
 	changes <- svc.Status{State: svc.StartPending}
 	done := make(chan int, 1)
 	go func() {
@@ -57,9 +60,11 @@ func (s *bootstrapService) Execute(args []string, requests <-chan svc.ChangeRequ
 		select {
 		case code := <-done:
 			s.exitCode = code
+			s.logger.Tracef("Windows service bootstrap goroutine complete: exit_code=%d", code)
 			changes <- svc.Status{State: svc.StopPending}
 			return false, uint32(code)
 		case req := <-requests:
+			s.logger.Tracef("Windows service control request: cmd=%v", req.Cmd)
 			switch req.Cmd {
 			case svc.Interrogate:
 				changes <- req.CurrentStatus
@@ -102,21 +107,32 @@ func taskScheduledStateIsRunning(state string) bool {
 }
 
 func startScheduledTask(taskName string, logger *BootstrapLogger) error {
+	logger.Tracef("Scheduled task start requested: %s", taskName)
 	_, err := runCommandTimeout(logger, 20*time.Second, "schtasks.exe", "/Run", "/TN", taskName)
+	if err != nil {
+		logger.Tracef("Scheduled task start failed: %s error=%v", taskName, err)
+		return err
+	}
+	info := queryScheduledTask(taskName)
+	logger.Tracef("Scheduled task start command completed: %s exists=%t state=%s error=%s", taskName, info.Exists, info.State, info.Error)
 	return err
 }
 
 func stopScheduledTask(taskName string, logger *BootstrapLogger) {
+	logger.Tracef("Scheduled task stop requested: %s", taskName)
 	_, _ = runCommandTimeout(logger, 20*time.Second, "schtasks.exe", "/End", "/TN", taskName)
 }
 
 func deleteScheduledTask(taskName string, logger *BootstrapLogger) {
+	logger.Tracef("Scheduled task delete requested: %s", taskName)
 	_, _ = runCommandTimeout(logger, 20*time.Second, "schtasks.exe", "/Delete", "/TN", taskName, "/F")
 }
 
 func ensureAgentTasks(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	startedAt := time.Now()
 	agentExe := filepath.Join(cfg.InstallDir, "Agent.exe")
 	launchScript := filepath.Join(cfg.InstallDir, "Agent", "Borealis", "launch_service.ps1")
+	logger.Tracef("Ensuring Agent scheduled tasks: agent_exe=%s launch_script=%s launch_script_exists=%t", agentExe, launchScript, fileExists(launchScript))
 	if !fileExists(launchScript) {
 		return fmt.Errorf("launch_service.ps1 not found at %s", launchScript)
 	}
@@ -128,10 +144,15 @@ func ensureAgentTasks(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if err := createOrReplaceTask(agentUpdaterTaskName, updateAction, "HOURLY", logger); err != nil {
 		return err
 	}
-	return startScheduledTask(agentTaskName, logger)
+	if err := startScheduledTask(agentTaskName, logger); err != nil {
+		return err
+	}
+	logger.Tracef("Agent scheduled tasks ensured duration=%s.", time.Since(startedAt).Round(time.Millisecond))
+	return nil
 }
 
 func createOrReplaceTask(name string, command string, schedule string, logger *BootstrapLogger) error {
+	logger.Tracef("Creating/replacing scheduled task: name=%s schedule=%s command=%s", name, schedule, command)
 	deleteScheduledTask(name, logger)
 	args := []string{
 		"/Create",
@@ -146,6 +167,8 @@ func createOrReplaceTask(name string, command string, schedule string, logger *B
 		args = append(args, "/MO", "1")
 	}
 	_, err := runCommandTimeout(logger, 30*time.Second, "schtasks.exe", args...)
+	info := queryScheduledTask(name)
+	logger.Tracef("Scheduled task create result: name=%s err=%v exists=%t state=%s query_error=%s", name, err, info.Exists, info.State, info.Error)
 	return err
 }
 
@@ -162,11 +185,14 @@ func waitForTaskRunning(taskName string, timeout time.Duration) bool {
 }
 
 func startAgentRuntime(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	logger.Tracef("Starting Agent runtime through scheduled task.")
 	if err := startScheduledTask(agentTaskName, logger); err != nil {
 		return err
 	}
 	if !waitForTaskRunning(agentTaskName, 30*time.Second) {
 		logger.Warnf("Borealis Agent task did not report Running before timeout.")
+	} else {
+		logger.Tracef("Borealis Agent task reported Running.")
 	}
 	return nil
 }

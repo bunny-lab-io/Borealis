@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
+  Chip,
   CircularProgress,
   Dialog,
   DialogContent,
@@ -449,6 +451,35 @@ function splitScopeEntries(value) {
   return text ? text.split("\n") : [];
 }
 
+function normalizeCredentialIdList(value) {
+  const rawValues = Array.isArray(value)
+    ? value
+    : String(value || "")
+      .split(/[,\s;]+/)
+      .filter(Boolean);
+  const seen = new Set();
+  return rawValues
+    .map((item) => String(item ?? "").trim())
+    .filter((item) => {
+      if (!item || seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    });
+}
+
+function credentialDisplayLabel(credential) {
+  return String(credential?.name || credential?.username || `Credential ${credential?.id || ""}`).trim();
+}
+
+function isWindowsCredential(credential) {
+  const connectionType = String(credential?.connection_type || "").toLowerCase();
+  return connectionType === "windows" || connectionType === "winrm";
+}
+
+function isLinuxCredential(credential) {
+  return String(credential?.connection_type || "").toLowerCase() === "ssh";
+}
+
 function renderScopeHighlightedText(value, muted = false) {
   const lines = String(value || "").split(/\r?\n/);
   return lines.map((line, index) => {
@@ -659,6 +690,9 @@ function isOnboardingApprovalCompleteTask(task) {
 
 function onboardingProgressSingletonKey(task) {
   const normalized = String(task || "").trim();
+  if (normalized.startsWith("Establishing Connection to Remote Device")) {
+    return "establishing-connection-to-remote-device";
+  }
   if (normalized === "Running Agent Bootstrap") {
     return "running-agent-bootstrap";
   }
@@ -675,6 +709,12 @@ function normalizeOnboardingProgressTask(task, status = "") {
   const dependencyTask = normalizeDependencyTask(original);
   const isApprovalReady = normalizedStatus === "waiting_approval" || normalizedTask.includes("awaiting approval");
   const isApprovalComplete = ["approved", "completed", "complete", "success", "succeeded", "installed"].includes(normalizedStatus);
+  if (normalizedTask.startsWith("establishing connection to remote device")) {
+    return original || "Establishing Connection to Remote Device";
+  }
+  if (normalizedTask.startsWith("detected remote operating system")) {
+    return original;
+  }
   if (
     (isApprovalReady && isApprovalComplete) ||
     normalizedTask.includes("enrollment approved") ||
@@ -884,6 +924,54 @@ function buildDiscoveredDeviceLabel(target) {
   };
 }
 
+function inferOnboardingPlatformFromText(value) {
+  const text = String(value || "").toLowerCase();
+  if (!text) return "";
+  if (
+    text.includes("detected remote operating system: linux") ||
+    text.includes("connection established using ssh") ||
+    text.includes("linux onboarding") ||
+    text.includes("target is not windows")
+  ) {
+    return "linux";
+  }
+  if (
+    text.includes("detected remote operating system: windows") ||
+    text.includes("connection established using smb") ||
+    text.includes("connection established using winrm") ||
+    text.includes("connection established using wmi") ||
+    text.includes("windows remote") ||
+    text.includes("windows automatic")
+  ) {
+    return "windows";
+  }
+  return "";
+}
+
+function inferOnboardingPlatformFromTarget(target) {
+  const direct = inferOnboardingPlatformFromText(target?.detected_platform || target?.agent_platform || target?.platform || target?.os || target?.operating_system);
+  if (direct) return direct;
+  const events = Array.isArray(target?.timeline) ? target.timeline : (Array.isArray(target?.events) ? target.events : []);
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index] || {};
+    const inferred = inferOnboardingPlatformFromText(`${event.task || ""}\n${event.detail || ""}\n${event.stdout_snippet || ""}\n${event.stderr_snippet || ""}`);
+    if (inferred) return inferred;
+  }
+  return inferOnboardingPlatformFromText(`${target?.detail || ""}\n${target?.stdout_snippet || ""}\n${target?.stderr_snippet || ""}`);
+}
+
+function onboardingOsLabel(platform) {
+  if (platform === "windows") return "Windows";
+  if (platform === "linux") return "Linux";
+  return "";
+}
+
+function onboardingOsIconClass(platform) {
+  if (platform === "windows") return "fa-brands fa-windows";
+  if (platform === "linux") return "fa-brands fa-linux";
+  return "";
+}
+
 function statusIsActiveProgress(status) {
   const normalized = String(status || "").trim().toLowerCase();
   return ["pending", "pending_approval", "running", "in_progress", "waiting_approval"].includes(normalized);
@@ -931,6 +1019,60 @@ function SectionHeader({ title, detail, action }) {
       </Box>
       {action || null}
     </Box>
+  );
+}
+
+function CredentialStackSelector({ label, options, selectedIds, onChange }) {
+  const selected = normalizeCredentialIdList(selectedIds)
+    .map((id) => options.find((credential) => String(credential.id) === String(id)))
+    .filter(Boolean);
+  return (
+    <Autocomplete
+      multiple
+      options={options}
+      value={selected}
+      disableCloseOnSelect={false}
+      getOptionLabel={(option) => credentialDisplayLabel(option)}
+      isOptionEqualToValue={(option, value) => String(option?.id) === String(value?.id)}
+      getOptionDisabled={(option) => Boolean(option?.secret_reset_required)}
+      onChange={(_, values) => onChange(values.map((credential) => String(credential.id)))}
+      renderTags={(value, getTagProps) =>
+        value.map((option, index) => {
+          const tagProps = getTagProps({ index });
+          const { key, ...chipProps } = tagProps;
+          return (
+            <Chip
+              {...chipProps}
+              key={key || option.id}
+              label={credentialDisplayLabel(option)}
+              size="small"
+              sx={{
+                color: MAGIC_UI.textBright,
+                borderColor: "rgba(125,211,252,0.36)",
+                background: "rgba(15,23,42,0.72)",
+                "& .MuiChip-deleteIcon": {
+                  color: "rgba(125,211,252,0.78)",
+                  "&:hover": { color: MAGIC_UI.accentA },
+                },
+              }}
+            />
+          );
+        })
+      }
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          label={label}
+          placeholder={selected.length ? "" : "Select credentials"}
+          sx={FIELD_SX}
+        />
+      )}
+      sx={{
+        flex: 1,
+        minWidth: 0,
+        "& .MuiAutocomplete-tag": { m: "2px" },
+      }}
+    />
   );
 }
 
@@ -1047,8 +1189,12 @@ function ProgressStatusIcon({ status, failureKind = "" }) {
 
 function ProgressTaskCell({ value }) {
   const task = String(value || "").trim();
-  const dependencyPrefix = "Installing Agent Dependencies:";
-  if (!task.startsWith(dependencyPrefix)) {
+  const mutedSuffixPrefixes = [
+    "Installing Agent Dependencies:",
+    "Establishing Connection to Remote Device:",
+  ];
+  const matchedPrefix = mutedSuffixPrefixes.find((prefix) => task.startsWith(prefix));
+  if (!matchedPrefix) {
     return (
       <Typography
         component="span"
@@ -1064,7 +1210,7 @@ function ProgressTaskCell({ value }) {
       </Typography>
     );
   }
-  const dependency = task.slice(dependencyPrefix.length).trim();
+  const suffix = task.slice(matchedPrefix.length).trim();
   return (
     <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, gap: 0.75 }}>
       <Typography
@@ -1077,9 +1223,9 @@ function ProgressTaskCell({ value }) {
           whiteSpace: "nowrap",
         }}
       >
-        {dependencyPrefix}
+        {matchedPrefix}
       </Typography>
-      {dependency ? (
+      {suffix ? (
         <Typography
           component="span"
           variant="body2"
@@ -1088,7 +1234,7 @@ function ProgressTaskCell({ value }) {
             flexShrink: 0,
           }}
         >
-          {dependency}
+          {suffix}
         </Typography>
       ) : null}
     </Box>
@@ -1101,6 +1247,11 @@ export default function CreateOnboardingJob() {
   const params = useParams();
   const jobId = params?.jobId ? Number(params.jobId) : null;
   const editing = Number.isInteger(jobId) && jobId > 0;
+  const lockedSiteId = useMemo(() => {
+    const query = new URLSearchParams(location.search || "");
+    return String(query.get("site_id") || query.get("site") || "").trim();
+  }, [location.search]);
+  const siteScopeLocked = Boolean(!editing && lockedSiteId);
   const [sites, setSites] = useState([]);
   const [credentials, setCredentials] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1127,8 +1278,10 @@ export default function CreateOnboardingJob() {
     siteId: "",
     scope: "",
     exclusionScope: "",
-    agentPlatform: "linux",
+    agentPlatform: "auto",
     credentialId: "",
+    windowsCredentialIds: [],
+    linuxCredentialIds: [],
     branch: DEFAULT_BRANCH,
     sshPort: DEFAULT_SSH_PORT,
     windowsPort: DEFAULT_WINDOWS_PORT,
@@ -1144,23 +1297,14 @@ export default function CreateOnboardingJob() {
     [form.siteId, sites]
   );
 
-  const storedCredentials = useMemo(
-    () => credentials.filter((credential) => {
-      const connectionType = String(credential.connection_type || "").toLowerCase();
-      if (form.agentPlatform === "windows") {
-        return connectionType === "windows" || connectionType === "winrm";
-      }
-      return connectionType === "ssh";
-    }),
-    [credentials, form.agentPlatform]
+  const windowsCredentialOptions = useMemo(
+    () => credentials.filter(isWindowsCredential),
+    [credentials]
   );
-  const credentialOptions = useMemo(() => {
-    if (!form.credentialId || storedCredentials.some((credential) => String(credential.id) === String(form.credentialId))) {
-      return storedCredentials;
-    }
-    const selected = credentials.find((credential) => String(credential.id) === String(form.credentialId));
-    return selected ? [selected, ...storedCredentials] : storedCredentials;
-  }, [credentials, form.credentialId, storedCredentials]);
+  const linuxCredentialOptions = useMemo(
+    () => credentials.filter(isLinuxCredential),
+    [credentials]
+  );
 
   const branchOptions = useMemo(() => {
     const currentBranch = normalizeBranchName(form.branch);
@@ -1322,9 +1466,32 @@ export default function CreateOnboardingJob() {
             firstComponent.target_os ||
             firstComponent.platform ||
             firstComponent.os ||
-            "linux"
+            "auto"
         ).toLowerCase();
-        const agentPlatform = ["windows", "winrm", "smb", "windows_remote"].includes(componentPlatform) ? "windows" : "linux";
+        const agentPlatform = ["windows", "winrm", "smb", "windows_remote"].includes(componentPlatform)
+          ? "windows"
+          : (["linux", "linux_ssh", "ssh"].includes(componentPlatform) ? "linux" : "auto");
+        let windowsCredentialIds = normalizeCredentialIdList(
+          firstComponent.windows_credential_ids ||
+            firstComponent.stored_windows_credential_ids ||
+            firstComponent.windows_credentials ||
+            []
+        );
+        let linuxCredentialIds = normalizeCredentialIdList(
+          firstComponent.linux_credential_ids ||
+            firstComponent.stored_linux_credential_ids ||
+            firstComponent.linux_credentials ||
+            []
+        );
+        if (!windowsCredentialIds.length && !linuxCredentialIds.length && job.credential_id) {
+          const selectedCredential = (Array.isArray(credentialsData?.credentials) ? credentialsData.credentials : [])
+            .find((credential) => String(credential.id) === String(job.credential_id));
+          if (isWindowsCredential(selectedCredential) || agentPlatform === "windows") {
+            windowsCredentialIds = [String(job.credential_id)];
+          } else {
+            linuxCredentialIds = [String(job.credential_id)];
+          }
+        }
         setForm({
           name: job.name || "",
           siteId: firstTarget?.site_id ? String(firstTarget.site_id) : "",
@@ -1332,6 +1499,8 @@ export default function CreateOnboardingJob() {
           exclusionScope: toScopeText(firstTarget?.exclusions || firstTarget?.exclude_entries || []),
           agentPlatform,
           credentialId: job.credential_id ? String(job.credential_id) : "",
+          windowsCredentialIds,
+          linuxCredentialIds,
           branch: firstComponent.install_branch || firstComponent.repo_branch || firstComponent.branch || DEFAULT_BRANCH,
           sshPort: Number(firstComponent.ssh_port || firstComponent.port || DEFAULT_SSH_PORT),
           windowsPort: Number(firstComponent.windows_port || firstComponent.smb_port || firstComponent.port || DEFAULT_WINDOWS_PORT),
@@ -1358,6 +1527,12 @@ export default function CreateOnboardingJob() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (!siteScopeLocked || !lockedSiteId) return;
+    if (!sites.some((site) => String(site.id) === String(lockedSiteId))) return;
+    setForm((prev) => (String(prev.siteId) === String(lockedSiteId) ? prev : { ...prev, siteId: String(lockedSiteId) }));
+  }, [lockedSiteId, siteScopeLocked, sites]);
 
   useEffect(() => {
     fetchInstallBranches();
@@ -1407,13 +1582,21 @@ export default function CreateOnboardingJob() {
   const targetGridRows = useMemo(
     () => targetRows.map((target) => {
       const discoveredDevice = buildDiscoveredDeviceLabel(target);
-      const targetLabel = discoveredDevice.primary;
+      const detectedPlatform = inferOnboardingPlatformFromTarget(target);
+      let targetLabel = discoveredDevice.primary;
+      if (detectedPlatform === "windows" && targetLabel.endsWith(`:${DEFAULT_SSH_PORT}`)) {
+        targetLabel = `${targetLabel.slice(0, -String(DEFAULT_SSH_PORT).length)}${DEFAULT_WINDOWS_PORT}`;
+      } else if (detectedPlatform === "linux" && targetLabel.endsWith(`:${DEFAULT_WINDOWS_PORT}`)) {
+        targetLabel = `${targetLabel.slice(0, -String(DEFAULT_WINDOWS_PORT).length)}${DEFAULT_SSH_PORT}`;
+      }
       const status = String(target.status || "pending").trim().toLowerCase() || "pending";
       const approvalStatus = String(target.approval_status || "").trim().toLowerCase();
       return {
         id: target.id || `${targetLabel}-${target.run_id || ""}`,
         targetLabel,
         discoveredHostname: discoveredDevice.hostname,
+        detectedPlatform,
+        osLabel: onboardingOsLabel(detectedPlatform),
         status,
         statusBucket: targetStatusBucket(status),
         statusLabel: formatStatusLabel(status),
@@ -1483,7 +1666,7 @@ export default function CreateOnboardingJob() {
         hasStdErr: Boolean(String(event?.stderr_snippet || "").trim()),
         raw: event,
       };
-    });
+    }).filter((row) => !String(row.task || "").toLowerCase().startsWith("detected remote operating system"));
     const selectedBucket = targetStatusBucket(selectedTargetRow.status);
     return mappedRows.reduce((acc, row) => {
       if (selectedBucket === "skipped" && isOnboardingApprovalCompleteTask(row.task)) {
@@ -1621,8 +1804,25 @@ export default function CreateOnboardingJob() {
         cellClass: "auto-col-tight",
         cellRenderer: (params) => {
           const row = params.data || {};
+          const osIconClass = onboardingOsIconClass(row.detectedPlatform);
           return (
             <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, gap: 0.75 }}>
+              {osIconClass ? (
+                <Tooltip title={row.osLabel || "Detected OS"}>
+                  <Box
+                    component="i"
+                    className={osIconClass}
+                    aria-hidden="true"
+                    sx={{
+                      width: 18,
+                      textAlign: "center",
+                      color: "rgba(255,255,255,0.75)",
+                      fontSize: "0.95rem",
+                      flexShrink: 0,
+                    }}
+                  />
+                </Tooltip>
+              ) : null}
               <Typography
                 component="span"
                 variant="body2"
@@ -1926,14 +2126,18 @@ export default function CreateOnboardingJob() {
       const parsedEntries = splitScopeTargetTokens(form.scope);
       if (!form.siteId) throw new Error("Select site.");
       if (!parsedEntries.length) throw new Error("Enter at least one IP address, CIDR, range, or FQDN.");
-      if (!form.credentialId) throw new Error("Select stored credential.");
-      const agentPlatform = form.agentPlatform === "windows" ? "windows" : "linux";
+      const windowsCredentialIds = normalizeCredentialIdList(form.windowsCredentialIds);
+      const linuxCredentialIds = normalizeCredentialIdList(form.linuxCredentialIds);
+      if (!windowsCredentialIds.length && !linuxCredentialIds.length) {
+        throw new Error("Select at least one stored Windows or Linux credential.");
+      }
+      const agentPlatform = "auto";
       const sshPort = Number(form.sshPort || DEFAULT_SSH_PORT);
       const windowsPort = Number(form.windowsPort || DEFAULT_WINDOWS_PORT);
       const winrmPort = Number(form.winrmPort || DEFAULT_WINRM_PORT);
-      const primaryPort = agentPlatform === "windows" ? windowsPort : sshPort;
-      if (!Number.isInteger(primaryPort) || primaryPort < 1 || primaryPort > 65535) throw new Error("Remote port must be 1-65535.");
-      if (agentPlatform === "windows" && (!Number.isInteger(winrmPort) || winrmPort < 1 || winrmPort > 65535)) {
+      if (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) throw new Error("SSH port must be 1-65535.");
+      if (!Number.isInteger(windowsPort) || windowsPort < 1 || windowsPort > 65535) throw new Error("SMB port must be 1-65535.");
+      if (!Number.isInteger(winrmPort) || winrmPort < 1 || winrmPort > 65535) {
         throw new Error("WinRM port must be 1-65535.");
       }
       const onboardingConcurrency = Number(form.onboardingConcurrency || DEFAULT_ONBOARDING_CONCURRENCY);
@@ -1953,7 +2157,9 @@ export default function CreateOnboardingJob() {
             ssh_port: sshPort,
             windows_port: windowsPort,
             winrm_port: winrmPort,
-            onboarding_methods: agentPlatform === "windows" ? ["smb_scm", "scheduled_task", "wmi_dcom", "winrm"] : ["ssh"],
+            windows_credential_ids: windowsCredentialIds.map((id) => Number(id)).filter((id) => Number.isFinite(id)),
+            linux_credential_ids: linuxCredentialIds.map((id) => Number(id)).filter((id) => Number.isFinite(id)),
+            onboarding_methods: ["smb_scm", "scheduled_task", "wmi_dcom", "winrm"],
             onboarding_concurrency: onboardingConcurrency,
           },
         ],
@@ -1972,7 +2178,7 @@ export default function CreateOnboardingJob() {
         },
         duration: { expiration: "no_expire" },
         execution_context: "onboarding_local_network",
-        credential_id: Number(form.credentialId),
+        credential_id: Number(windowsCredentialIds[0] || linuxCredentialIds[0]),
         use_service_account: false,
         enabled: Boolean(form.enabled),
       };
@@ -2154,6 +2360,7 @@ export default function CreateOnboardingJob() {
                       labelId="onboarding-site-label"
                       label="Site"
                       value={form.siteId}
+                      disabled={siteScopeLocked}
                       onChange={(event) => setField("siteId", event.target.value)}
                       MenuProps={SELECT_MENU_PROPS}
                     >
@@ -2183,66 +2390,43 @@ export default function CreateOnboardingJob() {
 
               {activeTabKey === "context" ? (
                 <Box sx={TAB_SECTION_SX}>
-                  <SectionHeader title="Connection Method" detail="Choose a stored machine or domain credential to connect to the devices and trigger automatic enrollment." />
+                  <SectionHeader title="Connection Method" detail="Choose a stored machine or domain credential to connect to the devices and trigger automatic enrollment. Credentials are used in order from left to right." />
                   <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-                    <FormControl fullWidth sx={{ maxWidth: { md: 260 }, ...FIELD_SX }}>
-                      <InputLabel id="onboarding-platform-label">Device OS</InputLabel>
-                      <Select
-                        labelId="onboarding-platform-label"
-                        label="Device OS"
-                        value={form.agentPlatform}
-                        onChange={(event) => {
-                          setForm((prev) => ({
-                            ...prev,
-                            agentPlatform: event.target.value,
-                            credentialId: "",
-                          }));
-                        }}
-                        MenuProps={SELECT_MENU_PROPS}
-                      >
-                        <MenuItem value="linux">Linux</MenuItem>
-                        <MenuItem value="windows">Windows</MenuItem>
-                      </Select>
-                    </FormControl>
-                    <FormControl fullWidth sx={FIELD_SX}>
-                      <InputLabel id="onboarding-credential-label">Stored Credential</InputLabel>
-                      <Select
-                        labelId="onboarding-credential-label"
-                        label="Stored Credential"
-                        value={form.credentialId}
-                        onChange={(event) => setField("credentialId", event.target.value)}
-                        MenuProps={SELECT_MENU_PROPS}
-                      >
-                        {credentialOptions.map((credential) => (
-                          <MenuItem
-                            key={credential.id}
-                            value={String(credential.id)}
-                            disabled={Boolean(credential.secret_reset_required)}
-                          >
-                            {credential.name || `Credential ${credential.id}`}
-                            {credential.secret_reset_required ? " (Secret Re-Entry Required)" : ""}
-                          </MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
+                    <CredentialStackSelector
+                      label="Stored Windows Credential"
+                      options={windowsCredentialOptions}
+                      selectedIds={form.windowsCredentialIds}
+                      onChange={(nextIds) => setField("windowsCredentialIds", nextIds)}
+                    />
+                    <CredentialStackSelector
+                      label="Stored Linux Credential"
+                      options={linuxCredentialOptions}
+                      selectedIds={form.linuxCredentialIds}
+                      onChange={(nextIds) => setField("linuxCredentialIds", nextIds)}
+                    />
                   </Stack>
                   <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
                     <TextField
-                      label={form.agentPlatform === "windows" ? "SMB Port" : "SSH Port"}
+                      label="SSH Port"
                       type="number"
-                      value={form.agentPlatform === "windows" ? form.windowsPort : form.sshPort}
-                      onChange={(event) => setField(form.agentPlatform === "windows" ? "windowsPort" : "sshPort", event.target.value)}
+                      value={form.sshPort}
+                      onChange={(event) => setField("sshPort", event.target.value)}
                       sx={{ width: { xs: "100%", md: 180 }, ...FIELD_SX }}
                     />
-                    {form.agentPlatform === "windows" ? (
-                      <TextField
-                        label="WinRM Port"
-                        type="number"
-                        value={form.winrmPort}
-                        onChange={(event) => setField("winrmPort", event.target.value)}
-                        sx={{ width: { xs: "100%", md: 180 }, ...FIELD_SX }}
-                      />
-                    ) : null}
+                    <TextField
+                      label="SMB Port"
+                      type="number"
+                      value={form.windowsPort}
+                      onChange={(event) => setField("windowsPort", event.target.value)}
+                      sx={{ width: { xs: "100%", md: 180 }, ...FIELD_SX }}
+                    />
+                    <TextField
+                      label="WinRM Port"
+                      type="number"
+                      value={form.winrmPort}
+                      onChange={(event) => setField("winrmPort", event.target.value)}
+                      sx={{ width: { xs: "100%", md: 180 }, ...FIELD_SX }}
+                    />
                     <TextField
                       label="Device Onboarding Concurrency"
                       type="number"

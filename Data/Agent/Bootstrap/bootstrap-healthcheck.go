@@ -35,19 +35,25 @@ type InstallHealth struct {
 }
 
 func assessInstallHealth(cfg BootstrapConfig, logger *BootstrapLogger) InstallHealth {
+	startedAt := time.Now()
+	logger.Tracef("Assessing existing Agent install health.")
 	health := InstallHealth{Hostname: currentHostname()}
 	health.Exists = dirExists(cfg.InstallDir)
 	health.AgentPyExists = fileExists(filepath.Join(cfg.InstallDir, "Agent", "Borealis", "agent.py"))
-	health.Exists = health.Exists || health.AgentPyExists || existingAgentTokens(cfg)
+	tokenFootprint := existingAgentTokens(cfg)
+	health.Exists = health.Exists || health.AgentPyExists || tokenFootprint
+	logger.Tracef("Health filesystem: install_dir_exists=%t agent_py_exists=%t token_footprint=%t", dirExists(cfg.InstallDir), health.AgentPyExists, tokenFootprint)
 
 	task := queryScheduledTask(agentTaskName)
 	health.TaskExists = task.Exists
 	health.TaskState = task.State
 	health.TaskRunning = taskScheduledStateIsRunning(task.State)
+	logger.Tracef("Health scheduled task: name=%s exists=%t state=%s running=%t error=%s", agentTaskName, task.Exists, task.State, health.TaskRunning, task.Error)
 	if task.Exists {
 		logger.Marker("__BOREALIS_AGENT_TASK_STATE__=" + task.State)
 	}
 	if task.Exists && !health.TaskRunning {
+		logger.Tracef("Existing Agent task present but not running; start attempt beginning.")
 		logger.Marker("__BOREALIS_AGENT_TASK_START_ATTEMPTED__=1")
 		if err := startScheduledTask(agentTaskName, logger); err == nil {
 			health.TaskStarted = true
@@ -55,20 +61,24 @@ func assessInstallHealth(cfg BootstrapConfig, logger *BootstrapLogger) InstallHe
 			task = queryScheduledTask(agentTaskName)
 			health.TaskState = task.State
 			health.TaskRunning = taskScheduledStateIsRunning(task.State)
+			logger.Tracef("Existing Agent task start result: state=%s running=%t", health.TaskState, health.TaskRunning)
 		} else {
 			logger.Warnf("Existing Agent task start failed: %v", err)
 		}
 	}
+	logger.Tracef("Validating existing Agent token against Engine.")
 	valid, detail := validateExistingAgentWithEngine(cfg)
 	health.EngineValid = valid
 	health.ValidationText = detail
 	if detail != "" {
 		logger.Infof("%s", detail)
 	}
+	logger.Tracef("Health assessment complete duration=%s exists=%t agent_py=%t task_exists=%t task_running=%t task_started=%t engine_valid=%t", time.Since(startedAt).Round(time.Millisecond), health.Exists, health.AgentPyExists, health.TaskExists, health.TaskRunning, health.TaskStarted, health.EngineValid)
 	return health
 }
 
 func decideBootstrapAction(cfg BootstrapConfig, health InstallHealth, logger *BootstrapLogger) bootstrapAction {
+	logger.Tracef("Decision inputs: missing_inputs=%v agent_py=%t task_exists=%t task_running=%t task_started=%t engine_valid=%t", missingBootstrapInputs(cfg), health.AgentPyExists, health.TaskExists, health.TaskRunning, health.TaskStarted, health.EngineValid)
 	if health.Exists {
 		logger.Marker("__BOREALIS_ONBOARDING_EXISTING_AGENT_DETECTED__=1")
 		writeTimeline(cfg, "running", "Existing Agent Detected", "Existing Borealis Agent installation detected.", 1)
@@ -113,6 +123,7 @@ func validateExistingAgentWithEngine(cfg BootstrapConfig) (bool, string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
+	startedAt := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, serverURL+"/api/repo/current_hash?ttl=300", nil)
 	if err != nil {
 		return false, fmt.Sprintf("Existing Agent validation request failed: %v", err)
@@ -126,7 +137,7 @@ func validateExistingAgentWithEngine(cfg BootstrapConfig) (bool, string) {
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return true, "Existing Borealis Agent token accepted by Engine."
+		return true, fmt.Sprintf("Existing Borealis Agent token accepted by Engine in %s.", time.Since(startedAt).Round(time.Millisecond))
 	}
-	return false, fmt.Sprintf("Engine rejected existing Borealis Agent token with HTTP %d.", resp.StatusCode)
+	return false, fmt.Sprintf("Engine rejected existing Borealis Agent token with HTTP %d after %s.", resp.StatusCode, time.Since(startedAt).Round(time.Millisecond))
 }

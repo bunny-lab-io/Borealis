@@ -24,6 +24,7 @@ type updateManifest struct {
 }
 
 func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	startedAt := time.Now()
 	serverURL := strings.TrimRight(strings.TrimSpace(cfg.ServerURL), "/")
 	if serverURL == "" {
 		return fmt.Errorf("server URL missing")
@@ -33,11 +34,13 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		return fmt.Errorf("access token missing")
 	}
 	installed := strings.TrimSpace(readFirstLine(filepath.Join(agentSettingsDir(cfg.InstallDir), "Updater", "installed_build_id.txt")))
+	logger.Tracef("Agent update check start: installed_build_id=%s", installed)
 	manifest, err := fetchUpdateManifest(serverURL, token, installed)
 	if err != nil {
 		return err
 	}
 	target := strings.TrimSpace(strings.ToLower(manifest.TargetBuildID))
+	logger.Tracef("Agent update manifest: target_build_id=%s installed_build_id=%s artifact_sha256_present=%t fallback_url_present=%t download_path_present=%t effective_channel=%s target_channel=%s", target, installed, strings.TrimSpace(manifest.ArtifactSHA256) != "", strings.TrimSpace(manifest.FallbackURL) != "", strings.TrimSpace(manifest.DownloadPath) != "", manifest.EffectiveChannel, manifest.TargetChannel)
 	if target == "" {
 		return fmt.Errorf("update manifest missing target_build_id")
 	}
@@ -49,6 +52,7 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 			"last_checked_at":  time.Now().Unix(),
 			"update_available": false,
 		})
+		logger.Tracef("Agent update check complete: up_to_date duration=%s", time.Since(startedAt).Round(time.Millisecond))
 		return nil
 	}
 	downloadURL := strings.TrimSpace(manifest.DownloadPath)
@@ -64,10 +68,12 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		downloadURL = serverURL + downloadURL
 	}
 	archivePath := filepath.Join(agentSettingsDir(cfg.InstallDir), "Updater", "agent-update.zip")
+	logger.Tracef("Agent update artifact download start: url=%s authed=%t archive=%s", downloadURL, authed, archivePath)
 	if err := downloadUpdateArtifact(downloadURL, token, authed, archivePath); err != nil {
 		return err
 	}
 	if manifest.ArtifactSHA256 != "" {
+		logger.Tracef("Agent update checksum verification start: archive=%s", archivePath)
 		actual, err := sha256File(archivePath)
 		if err != nil {
 			return err
@@ -75,13 +81,15 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		if !strings.EqualFold(actual, manifest.ArtifactSHA256) {
 			return fmt.Errorf("update checksum mismatch expected=%s actual=%s", manifest.ArtifactSHA256, actual)
 		}
+		logger.Tracef("Agent update checksum verified: sha256=%s", actual)
 	}
 	extractRoot := filepath.Join(agentSettingsDir(cfg.InstallDir), "Updater", "extract")
 	_ = os.RemoveAll(extractRoot)
-	if err := unzipFile(archivePath, extractRoot); err != nil {
+	if err := unzipFileLogged(archivePath, extractRoot, logger); err != nil {
 		return err
 	}
 	sourceRoot := resolveSourceRoot(extractRoot)
+	logger.Tracef("Agent update source resolved: %s", sourceRoot)
 	stopScheduledTask(agentTaskName, logger)
 	stopBorealisProcesses(cfg, logger)
 	if err := stageAgentRuntime(cfg, sourceRoot, logger); err != nil {
@@ -101,6 +109,7 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		"update_available": false,
 	})
 	logger.Infof("Agent update applied (%s).", target)
+	logger.Tracef("Agent update check complete: applied duration=%s", time.Since(startedAt).Round(time.Millisecond))
 	return nil
 }
 

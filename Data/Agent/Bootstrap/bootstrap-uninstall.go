@@ -14,9 +14,11 @@ import (
 )
 
 func uninstallBorealis(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	startedAt := time.Now()
 	logger.Infof("Uninstall requested.")
 	finalLog := prepareUninstallLog()
 	appendUninstallLog(finalLog, "Agent.exe uninstall requested.")
+	logger.Tracef("Uninstall sequence start: install_dir=%s final_log=%s", cfg.InstallDir, finalLog)
 
 	stopScheduledTask(agentTaskName, logger)
 	stopScheduledTask(agentUpdaterTaskName, logger)
@@ -27,11 +29,13 @@ func uninstallBorealis(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	removeBorealisOwnedServices(logger)
 
 	exe, _ := os.Executable()
+	logger.Tracef("Uninstall executing from: %s", exe)
 	if strings.HasPrefix(strings.ToLower(filepath.Clean(exe)), strings.ToLower(filepath.Clean(cfg.InstallDir))) {
 		if err := launchDeferredUninstallCleanup(cfg, finalLog, logger); err != nil {
 			return err
 		}
 		logger.Infof("Deferred uninstall cleanup launched. Final log: %s", finalLog)
+		logger.Tracef("Uninstall sequence deferred duration=%s.", time.Since(startedAt).Round(time.Millisecond))
 		return nil
 	}
 
@@ -41,6 +45,7 @@ func uninstallBorealis(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		}
 		logger.Warnf("Install directory still busy; deferred cleanup launched. Final log: %s", finalLog)
 	}
+	logger.Tracef("Uninstall sequence complete duration=%s.", time.Since(startedAt).Round(time.Millisecond))
 	return nil
 }
 
@@ -64,9 +69,12 @@ func appendUninstallLog(path string, message string) {
 }
 
 func removeBorealisOwnedServices(logger *BootstrapLogger) {
+	logger.Tracef("Removing Borealis-owned services.")
 	uninstallWireGuardTunnel("Borealis", logger)
 	uninstallWireGuardTunnel("borealis-wg", logger)
-	for _, service := range borealisOwnedServiceNames(logger) {
+	services := borealisOwnedServiceNames(logger)
+	logger.Tracef("Borealis-owned service candidates: %v", services)
+	for _, service := range services {
 		stopServiceAndWait(service, 30*time.Second, logger)
 		deleteServiceAndWait(service, 30*time.Second, logger)
 	}
@@ -120,6 +128,7 @@ func queryServiceNames() []string {
 }
 
 func uninstallWireGuardTunnel(tunnelName string, logger *BootstrapLogger) {
+	logger.Tracef("WireGuard tunnel uninstall requested: %s", tunnelName)
 	for _, candidate := range []string{
 		filepath.Join(os.Getenv("ProgramFiles"), "WireGuard", "wireguard.exe"),
 		"wireguard.exe",
@@ -127,20 +136,26 @@ func uninstallWireGuardTunnel(tunnelName string, logger *BootstrapLogger) {
 		if candidate != "wireguard.exe" && !fileExists(candidate) {
 			continue
 		}
+		logger.Tracef("WireGuard tunnel uninstall command: executable=%s tunnel=%s", candidate, tunnelName)
 		_, _ = runCommandTimeout(logger, 30*time.Second, candidate, "/uninstalltunnelservice", tunnelName)
 		return
 	}
+	logger.Tracef("WireGuard executable missing; tunnel uninstall skipped: %s", tunnelName)
 }
 
 func stopServiceAndWait(name string, timeout time.Duration, logger *BootstrapLogger) {
-	if state, exists := queryServiceState(name); !exists || strings.EqualFold(state, "STOPPED") {
+	state, exists := queryServiceState(name)
+	if !exists || strings.EqualFold(state, "STOPPED") {
+		logger.Tracef("Service stop skipped: name=%s exists=%t state=%s", name, exists, state)
 		return
 	}
+	logger.Tracef("Service stop requested: name=%s state=%s", name, state)
 	_, _ = runCommandTimeout(logger, 20*time.Second, "sc.exe", "stop", name)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		state, exists := queryServiceState(name)
 		if !exists || strings.EqualFold(state, "STOPPED") {
+			logger.Tracef("Service stopped: name=%s exists=%t state=%s", name, exists, state)
 			return
 		}
 		time.Sleep(1 * time.Second)
@@ -150,13 +165,16 @@ func stopServiceAndWait(name string, timeout time.Duration, logger *BootstrapLog
 
 func deleteServiceAndWait(name string, timeout time.Duration, logger *BootstrapLogger) {
 	if _, exists := queryServiceState(name); !exists {
+		logger.Tracef("Service delete skipped; missing: name=%s", name)
 		return
 	}
+	logger.Tracef("Service delete requested: name=%s", name)
 	_, _ = runCommandTimeout(logger, 20*time.Second, "sc.exe", "delete", name)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		_, exists := queryServiceState(name)
 		if !exists {
+			logger.Tracef("Service deleted: name=%s", name)
 			return
 		}
 		time.Sleep(1 * time.Second)
@@ -189,8 +207,10 @@ func removeInstallDirWithRetries(path string, finalLog string, logger *Bootstrap
 	var lastErr error
 	for attempt := 1; attempt <= 10; attempt++ {
 		if !dirExists(path) {
+			logger.Tracef("Install directory already removed: %s", path)
 			return nil
 		}
+		logger.Tracef("Install directory removal attempt %d: %s", attempt, path)
 		if err := os.RemoveAll(path); err != nil {
 			lastErr = err
 			appendUninstallLog(finalLog, fmt.Sprintf("Remove attempt %d failed: %v", attempt, err))

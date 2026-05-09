@@ -43,6 +43,10 @@ func acquireBootstrapMutex() (func(), bool, error) {
 }
 
 func runCommand(ctx context.Context, logger *BootstrapLogger, name string, args ...string) (string, error) {
+	startedAt := time.Now()
+	if logger != nil {
+		logger.Tracef("Command start: %s %s timeout_set=%t", name, strings.Join(args, " "), ctx != nil)
+	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	output, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(output))
@@ -50,10 +54,19 @@ func runCommand(ctx context.Context, logger *BootstrapLogger, name string, args 
 		logger.Infof("%s", text)
 	}
 	if ctx.Err() != nil {
+		if logger != nil {
+			logger.Tracef("Command timeout: %s duration=%s error=%v", name, time.Since(startedAt).Round(time.Millisecond), ctx.Err())
+		}
 		return text, ctx.Err()
 	}
 	if err != nil {
+		if logger != nil {
+			logger.Tracef("Command failed: %s duration=%s error=%v", name, time.Since(startedAt).Round(time.Millisecond), err)
+		}
 		return text, fmt.Errorf("%s %s failed: %w", name, strings.Join(args, " "), err)
+	}
+	if logger != nil {
+		logger.Tracef("Command complete: %s duration=%s output_bytes=%d", name, time.Since(startedAt).Round(time.Millisecond), len(output))
 	}
 	return text, nil
 }
@@ -66,6 +79,8 @@ func runCommandTimeout(logger *BootstrapLogger, timeout time.Duration, name stri
 
 func stopBorealisProcesses(cfg BootstrapConfig, logger *BootstrapLogger) {
 	installRoot := strings.ToLower(filepath.Clean(cfg.InstallDir))
+	logger.Tracef("Scanning for stale Borealis processes under %s.", cfg.InstallDir)
+	killed := 0
 	processNames := []string{
 		"python.exe",
 		"pythonw.exe",
@@ -76,7 +91,8 @@ func stopBorealisProcesses(cfg BootstrapConfig, logger *BootstrapLogger) {
 		"wireguard.exe",
 	}
 	for _, name := range processNames {
-		_ = eachProcess(func(pid uint32, exe string, commandLine string) {
+		logger.Tracef("Process scan start: image=%s", name)
+		err := eachProcess(func(pid uint32, exe string, commandLine string) {
 			lowerCmd := strings.ToLower(commandLine + " " + exe)
 			if !strings.Contains(lowerCmd, strings.ToLower(installRoot)) {
 				return
@@ -84,10 +100,16 @@ func stopBorealisProcesses(cfg BootstrapConfig, logger *BootstrapLogger) {
 			if int(pid) == os.Getpid() {
 				return
 			}
+			logger.Tracef("Stale process matched: pid=%d exe=%s command_line=%s", pid, exe, commandLine)
 			logger.Marker("__BOREALIS_ONBOARDING_STALE_PROCESS_KILLED__=" + strconv.Itoa(int(pid)))
 			killProcessTree(int(pid))
+			killed++
 		}, name)
+		if err != nil {
+			logger.Tracef("Process scan failed: image=%s error=%v", name, err)
+		}
 	}
+	logger.Tracef("Stale process scan complete: killed=%d", killed)
 }
 
 func killProcessTree(pid int) {
@@ -171,12 +193,13 @@ func dirExists(path string) bool {
 }
 
 func ensureBootstrapDirs(cfg BootstrapConfig) error {
-	for _, path := range []string{
+	paths := []string{
 		cfg.InstallDir,
 		filepath.Join(cfg.InstallDir, "Agent", "Logs"),
 		filepath.Join(cfg.InstallDir, "Temp", "Onboarding"),
 		filepath.Join(cfg.InstallDir, "Dependencies"),
-	} {
+	}
+	for _, path := range paths {
 		if err := os.MkdirAll(path, 0755); err != nil {
 			return err
 		}
@@ -190,7 +213,9 @@ func copySelfToInstallRoot(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		return err
 	}
 	destination := filepath.Join(cfg.InstallDir, "Agent.exe")
+	logger.Tracef("Agent.exe self-stage check: source=%s destination=%s same_path=%t", exe, destination, samePath(exe, destination))
 	if samePath(exe, destination) {
+		logger.Tracef("Agent.exe already running from install root.")
 		return nil
 	}
 	if err := copyFile(exe, destination); err != nil {

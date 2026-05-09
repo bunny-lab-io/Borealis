@@ -68,6 +68,10 @@ func (l *BootstrapLogger) Infof(format string, args ...any) {
 	l.writeLine("INFO", fmt.Sprintf(format, args...))
 }
 
+func (l *BootstrapLogger) Tracef(format string, args ...any) {
+	l.writeLine("TRACE", fmt.Sprintf(format, args...))
+}
+
 func (l *BootstrapLogger) Warnf(format string, args ...any) {
 	l.writeLine("WARN", fmt.Sprintf(format, args...))
 }
@@ -110,6 +114,41 @@ func (l *BootstrapLogger) redact(value string) string {
 		text = strings.ReplaceAll(text, item, "[redacted]")
 	}
 	return text
+}
+
+func logBootstrapConfigSummary(cfg BootstrapConfig, logger *BootstrapLogger) {
+	if logger == nil {
+		return
+	}
+	enrollmentHash := ""
+	if strings.TrimSpace(cfg.SiteEnrollmentCode) != "" {
+		enrollmentHash = hashText(cfg.SiteEnrollmentCode)
+		if len(enrollmentHash) > 12 {
+			enrollmentHash = enrollmentHash[:12]
+		}
+	}
+	logger.Tracef(
+		"Bootstrap config: install_dir=%s config_path=%s repo_url=%s repo_ref=%s payload_path=%s payload_exists=%t payload_sha256_present=%t state_path=%s events_path=%s stdout_path=%s stderr_path=%s job_id=%d run_id=%d target=%s service_name=%s interactive=%t noninteractive=%t server_url_present=%t site_enrollment_code_sha256_prefix=%s",
+		cfg.InstallDir,
+		cfg.ConfigPath,
+		cfg.RepoURL,
+		cfg.RepoRef,
+		cfg.PayloadPath,
+		fileExists(cfg.PayloadPath),
+		strings.TrimSpace(cfg.PayloadSHA256) != "",
+		cfg.StatePath,
+		cfg.EventsPath,
+		cfg.StdoutPath,
+		cfg.StderrPath,
+		cfg.JobID,
+		cfg.RunID,
+		cfg.Target,
+		cfg.ServiceName,
+		cfg.Interactive,
+		cfg.NonInteractive,
+		strings.TrimSpace(cfg.ServerURL) != "",
+		enrollmentHash,
+	)
 }
 
 func samePath(a string, b string) bool {

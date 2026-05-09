@@ -18,8 +18,11 @@ import (
 )
 
 func preparePayloadSource(cfg BootstrapConfig, logger *BootstrapLogger) (string, func(), error) {
+	startedAt := time.Now()
+	logger.Tracef("Payload source resolution start: payload_path=%s exists=%t repo_url=%s repo_ref=%s", cfg.PayloadPath, fileExists(cfg.PayloadPath), cfg.RepoURL, cfg.RepoRef)
 	if fileExists(cfg.PayloadPath) {
 		if cfg.PayloadSHA256 != "" {
+			logger.Tracef("Payload checksum verification start: %s", cfg.PayloadPath)
 			actual, err := sha256File(cfg.PayloadPath)
 			if err != nil {
 				return "", nil, err
@@ -27,21 +30,24 @@ func preparePayloadSource(cfg BootstrapConfig, logger *BootstrapLogger) (string,
 			if !strings.EqualFold(actual, cfg.PayloadSHA256) {
 				return "", nil, fmt.Errorf("agent payload checksum mismatch expected=%s actual=%s", cfg.PayloadSHA256, actual)
 			}
+			logger.Tracef("Payload checksum verified: sha256=%s", actual)
 		}
 		extractRoot := filepath.Join(cfg.InstallDir, "Temp", "Payload")
 		_ = os.RemoveAll(extractRoot)
-		if err := unzipFile(cfg.PayloadPath, extractRoot); err != nil {
+		if err := unzipFileLogged(cfg.PayloadPath, extractRoot, logger); err != nil {
 			return "", nil, err
 		}
 		sourceRoot := resolveSourceRoot(extractRoot)
 		if !fileExists(filepath.Join(sourceRoot, "Data", "Agent", "agent.py")) {
 			return "", nil, fmt.Errorf("agent payload missing Data\\Agent\\agent.py")
 		}
+		logger.Tracef("Payload source resolved from staged payload: source_root=%s duration=%s", sourceRoot, time.Since(startedAt).Round(time.Millisecond))
 		return sourceRoot, func() {}, nil
 	}
 
 	if sourceRoot := discoverLocalSourceRoot(); sourceRoot != "" {
 		logger.Infof("Using local Borealis source at %s", sourceRoot)
+		logger.Tracef("Payload source resolved from local source: source_root=%s duration=%s", sourceRoot, time.Since(startedAt).Round(time.Millisecond))
 		return sourceRoot, func() {}, nil
 	}
 
@@ -51,18 +57,20 @@ func preparePayloadSource(cfg BootstrapConfig, logger *BootstrapLogger) (string,
 	if err != nil {
 		return "", nil, err
 	}
-	if err := downloadFile(context.Background(), archiveURL, archivePath, 180*time.Second); err != nil {
+	logger.Tracef("Payload source archive download start: url=%s destination=%s", archiveURL, archivePath)
+	if err := downloadFileLogged(context.Background(), archiveURL, archivePath, 180*time.Second, logger); err != nil {
 		return "", nil, err
 	}
 	extractRoot := filepath.Join(cfg.InstallDir, "Temp", "Payload")
 	_ = os.RemoveAll(extractRoot)
-	if err := unzipFile(archivePath, extractRoot); err != nil {
+	if err := unzipFileLogged(archivePath, extractRoot, logger); err != nil {
 		return "", nil, err
 	}
 	sourceRoot := resolveSourceRoot(extractRoot)
 	if !fileExists(filepath.Join(sourceRoot, "Data", "Agent", "agent.py")) {
 		return "", nil, fmt.Errorf("downloaded source archive missing Data\\Agent\\agent.py")
 	}
+	logger.Tracef("Payload source resolved from archive: source_root=%s duration=%s", sourceRoot, time.Since(startedAt).Round(time.Millisecond))
 	return sourceRoot, func() {}, nil
 }
 
@@ -100,8 +108,16 @@ func githubArchiveURL(repoURL string, ref string) (string, error) {
 }
 
 func downloadFile(ctx context.Context, rawURL string, destination string, timeout time.Duration) error {
+	return downloadFileLogged(ctx, rawURL, destination, timeout, nil)
+}
+
+func downloadFileLogged(ctx context.Context, rawURL string, destination string, timeout time.Duration, logger *BootstrapLogger) error {
 	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
 		return err
+	}
+	startedAt := time.Now()
+	if logger != nil {
+		logger.Tracef("Download start: url=%s destination=%s timeout=%s", rawURL, destination, timeout)
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -116,6 +132,9 @@ func downloadFile(ctx context.Context, rawURL string, destination string, timeou
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("download %s returned HTTP %d", rawURL, resp.StatusCode)
+	}
+	if logger != nil {
+		logger.Tracef("Download response: url=%s status=%d content_length=%d", rawURL, resp.StatusCode, resp.ContentLength)
 	}
 	tmp := destination + ".tmp"
 	out, err := os.Create(tmp)
@@ -133,10 +152,28 @@ func downloadFile(ctx context.Context, rawURL string, destination string, timeou
 		return closeErr
 	}
 	_ = os.Remove(destination)
-	return os.Rename(tmp, destination)
+	if err := os.Rename(tmp, destination); err != nil {
+		return err
+	}
+	if logger != nil {
+		size := int64(-1)
+		if info, err := os.Stat(destination); err == nil {
+			size = info.Size()
+		}
+		logger.Tracef("Download complete: destination=%s bytes=%d duration=%s", destination, size, time.Since(startedAt).Round(time.Millisecond))
+	}
+	return nil
 }
 
 func unzipFile(archivePath string, destination string) error {
+	return unzipFileLogged(archivePath, destination, nil)
+}
+
+func unzipFileLogged(archivePath string, destination string, logger *BootstrapLogger) error {
+	startedAt := time.Now()
+	if logger != nil {
+		logger.Tracef("Unzip start: archive=%s destination=%s", archivePath, destination)
+	}
 	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return err
@@ -145,6 +182,8 @@ func unzipFile(archivePath string, destination string) error {
 	if err := os.MkdirAll(destination, 0755); err != nil {
 		return err
 	}
+	files := 0
+	dirs := 0
 	for _, item := range reader.File {
 		target := filepath.Join(destination, item.Name)
 		cleanDest := filepath.Clean(destination)
@@ -153,11 +192,13 @@ func unzipFile(archivePath string, destination string) error {
 			return fmt.Errorf("zip entry escapes destination: %s", item.Name)
 		}
 		if item.FileInfo().IsDir() {
+			dirs++
 			if err := os.MkdirAll(target, item.Mode()); err != nil {
 				return err
 			}
 			continue
 		}
+		files++
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 			return err
 		}
@@ -182,6 +223,9 @@ func unzipFile(archivePath string, destination string) error {
 		if closeOutErr != nil {
 			return closeOutErr
 		}
+	}
+	if logger != nil {
+		logger.Tracef("Unzip complete: archive=%s files=%d dirs=%d duration=%s", archivePath, files, dirs, time.Since(startedAt).Round(time.Millisecond))
 	}
 	return nil
 }
@@ -248,5 +292,8 @@ func copyFile(source string, destination string) error {
 		return closeErr
 	}
 	_ = os.Remove(destination)
-	return os.Rename(tmp, destination)
+	if err := os.Rename(tmp, destination); err != nil {
+		return err
+	}
+	return nil
 }

@@ -14,17 +14,20 @@ import (
 )
 
 func ensurePythonRuntime(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	startedAt := time.Now()
 	pythonExe := bootstrapPythonExe(cfg)
 	if fileExists(pythonExe) {
+		logger.Tracef("Python runtime already installed: %s", pythonExe)
 		return nil
 	}
 	packagePath := filepath.Join(cfg.InstallDir, "Dependencies", defaultPythonNugetPackageName)
-	if err := downloadFile(context.Background(), defaultPythonNugetURL, packagePath, 240*time.Second); err != nil {
+	logger.Tracef("Python runtime download start: url=%s package=%s", defaultPythonNugetURL, packagePath)
+	if err := downloadFileLogged(context.Background(), defaultPythonNugetURL, packagePath, 240*time.Second, logger); err != nil {
 		return err
 	}
 	extractRoot := filepath.Join(cfg.InstallDir, "Temp", "PythonNuget")
 	_ = os.RemoveAll(extractRoot)
-	if err := unzipFile(packagePath, extractRoot); err != nil {
+	if err := unzipFileLogged(packagePath, extractRoot, logger); err != nil {
 		return err
 	}
 	toolsRoot := filepath.Join(extractRoot, "tools")
@@ -33,6 +36,7 @@ func ensurePythonRuntime(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	}
 	pythonRoot := filepath.Join(cfg.InstallDir, "Dependencies", "Python")
 	_ = os.RemoveAll(pythonRoot)
+	logger.Tracef("Copying Python runtime: source=%s destination=%s", toolsRoot, pythonRoot)
 	if err := copyTree(toolsRoot, pythonRoot, nil); err != nil {
 		return err
 	}
@@ -40,30 +44,42 @@ func ensurePythonRuntime(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		return fmt.Errorf("python.exe not found after NuGet extraction")
 	}
 	logger.Infof("Python runtime installed.")
+	logger.Tracef("Python runtime install complete: python=%s duration=%s", pythonExe, time.Since(startedAt).Round(time.Millisecond))
 	return nil
 }
 
 func setupPythonEnvironment(cfg BootstrapConfig, sourceRoot string, logger *BootstrapLogger) error {
+	startedAt := time.Now()
 	pythonExe := bootstrapPythonExe(cfg)
 	venvRoot := filepath.Join(cfg.InstallDir, "Agent")
+	venvPython := filepath.Join(venvRoot, "Scripts", "python.exe")
+	logger.Tracef("Python environment setup start: bootstrap_python=%s venv_root=%s venv_python_exists=%t", pythonExe, venvRoot, fileExists(venvPython))
 	if !fileExists(filepath.Join(venvRoot, "Scripts", "python.exe")) {
+		logger.Tracef("Creating Python virtual environment: %s", venvRoot)
 		if _, err := runCommandTimeout(logger, 600*time.Second, pythonExe, "-m", "venv", venvRoot); err != nil {
 			return err
 		}
+	} else {
+		logger.Tracef("Python virtual environment already exists: %s", venvRoot)
 	}
 	requirements := filepath.Join(sourceRoot, "Data", "Agent", "agent-requirements.txt")
 	if fileExists(requirements) {
-		venvPython := filepath.Join(venvRoot, "Scripts", "python.exe")
+		logger.Tracef("Installing Python requirements: requirements=%s", requirements)
 		if _, err := runCommandTimeout(logger, time.Duration(cfg.TimeoutSeconds)*time.Second, venvPython, "-m", "pip", "install", "--disable-pip-version-check", "-q", "-r", requirements); err != nil {
 			return err
 		}
+	} else {
+		logger.Tracef("Python requirements file missing; skipping pip install: %s", requirements)
 	}
+	logger.Tracef("Python environment setup complete duration=%s", time.Since(startedAt).Round(time.Millisecond))
 	return nil
 }
 
 func stageAgentRuntime(cfg BootstrapConfig, sourceRoot string, logger *BootstrapLogger) error {
+	startedAt := time.Now()
 	source := filepath.Join(sourceRoot, "Data", "Agent")
 	destination := filepath.Join(cfg.InstallDir, "Agent", "Borealis")
+	logger.Tracef("Agent runtime staging start: source=%s destination=%s", source, destination)
 	if !fileExists(filepath.Join(source, "agent.py")) {
 		return fmt.Errorf("agent source missing at %s", source)
 	}
@@ -90,11 +106,13 @@ func stageAgentRuntime(cfg BootstrapConfig, sourceRoot string, logger *Bootstrap
 	}
 	stageUltraVNCTools(cfg, logger)
 	logger.Infof("Agent runtime staged.")
+	logger.Tracef("Agent runtime staging complete duration=%s", time.Since(startedAt).Round(time.Millisecond))
 	return nil
 }
 
 func writeAgentSettings(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	settingsDir := agentSettingsDir(cfg.InstallDir)
+	logger.Tracef("Writing Agent settings: settings_dir=%s", settingsDir)
 	if err := os.MkdirAll(settingsDir, 0755); err != nil {
 		return err
 	}
@@ -113,6 +131,9 @@ func writeAgentSettings(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		merged := map[string]any{}
 		if data, err := os.ReadFile(path); err == nil {
 			_ = json.Unmarshal(data, &merged)
+			logger.Tracef("Merged existing Agent settings file: %s", path)
+		} else {
+			logger.Tracef("Creating new Agent settings file: %s", path)
 		}
 		for key, value := range defaults {
 			merged[key] = value
@@ -138,6 +159,7 @@ func writeAgentSettings(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if len(contextPayload) > 0 {
 		data, _ := json.MarshalIndent(contextPayload, "", "  ")
 		_ = os.WriteFile(filepath.Join(settingsDir, "onboarding_context.json"), data, 0644)
+		logger.Tracef("Onboarding context written: job_id=%d run_id=%d target=%s", cfg.JobID, cfg.RunID, cfg.Target)
 	}
 	logger.Infof("Agent settings written.")
 	return nil
@@ -192,11 +214,15 @@ func pruneDirectory(path string, preserve map[string]bool) error {
 func stageUltraVNCTools(cfg BootstrapConfig, logger *BootstrapLogger) {
 	payloadRoot := filepath.Join(cfg.InstallDir, "Dependencies", "UltraVNC_Server", "payload", "x64")
 	if !dirExists(payloadRoot) {
+		logger.Tracef("UltraVNC x64 payload root missing; skipping tool staging: %s", payloadRoot)
 		return
 	}
 	destination := filepath.Join(cfg.InstallDir, "Agent", "Borealis", "Tools", "UltraVNC", "Server")
+	logger.Tracef("Staging UltraVNC tools: source=%s destination=%s", payloadRoot, destination)
 	if err := copyTree(payloadRoot, destination, nil); err != nil {
 		logger.Warnf("UltraVNC payload staging failed: %v", err)
+	} else {
+		logger.Tracef("UltraVNC tools staged.")
 	}
 }
 

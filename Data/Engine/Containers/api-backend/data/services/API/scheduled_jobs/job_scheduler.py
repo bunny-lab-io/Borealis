@@ -130,6 +130,7 @@ ONBOARDING_STATUS_WAITING_APPROVAL = "waiting_approval"
 ONBOARDING_STATUS_SKIPPED = "skipped"
 ONBOARDING_STATUS_FAILED = "failed"
 ONBOARDING_STATUS_UNREACHABLE = "unreachable"
+ONBOARDING_PLATFORM_AUTO = "auto"
 ONBOARDING_PLATFORM_LINUX = "linux"
 ONBOARDING_PLATFORM_WINDOWS = "windows"
 ONBOARDING_WINDOWS_METHOD_SMB_SCM = "smb_scm"
@@ -602,6 +603,10 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
 
     detail_text = str(detail or "").strip()
     detail_lower = detail_text.lower()
+    if detail_lower.startswith("establishing connection to remote device"):
+        return detail_text
+    if detail_lower.startswith("detected remote operating system"):
+        return detail_text
     if detail_lower.startswith("dependency:"):
         task = _onboarding_agent_step_task_name(detail_text)
         if task:
@@ -3716,12 +3721,14 @@ class JobScheduler:
             or component.get("os")
             or ONBOARDING_PLATFORM_LINUX
         ).strip().lower()
-        if platform in {"linux_ssh", "ssh"}:
+        if platform in {"auto", "detect", "automatic", "autodetect", "auto_detect"}:
+            platform = ONBOARDING_PLATFORM_AUTO
+        elif platform in {"linux_ssh", "ssh"}:
             platform = ONBOARDING_PLATFORM_LINUX
         elif platform in {"windows_remote", "windows_smb", "smb", "winrm"}:
             platform = ONBOARDING_PLATFORM_WINDOWS
-        if platform not in {ONBOARDING_PLATFORM_LINUX, ONBOARDING_PLATFORM_WINDOWS}:
-            return {}, "Agent platform must be Linux or Windows."
+        if platform not in {ONBOARDING_PLATFORM_AUTO, ONBOARDING_PLATFORM_LINUX, ONBOARDING_PLATFORM_WINDOWS}:
+            return {}, "Agent platform must be Auto, Linux, or Windows."
         ssh_port = DEFAULT_ONBOARDING_SSH_PORT
         for key in ("ssh_port", "port"):
             if component.get(key) not in (None, ""):
@@ -3753,7 +3760,7 @@ class JobScheduler:
                 except Exception:
                     pass
         methods: List[str] = []
-        if platform == ONBOARDING_PLATFORM_WINDOWS:
+        if platform in {ONBOARDING_PLATFORM_AUTO, ONBOARDING_PLATFORM_WINDOWS}:
             raw_methods = component.get("onboarding_methods") or component.get("windows_methods") or []
             if isinstance(raw_methods, str):
                 method_candidates = [piece.strip().lower() for piece in re.split(r"[,;\s]+", raw_methods) if piece.strip()]
@@ -3779,6 +3786,8 @@ class JobScheduler:
                 "winrm": ONBOARDING_WINDOWS_METHOD_WINRM,
             }
             for method in method_candidates:
+                if method in {"ssh", "linux", "linux_ssh"}:
+                    continue
                 normalized_method = method_aliases.get(method, method)
                 if normalized_method not in ONBOARDING_WINDOWS_METHODS:
                     return {}, "Unsupported Windows onboarding method."
@@ -3787,7 +3796,29 @@ class JobScheduler:
             methods = _windows_onboarding_methods_with_required_fallbacks(methods)
         else:
             methods = ["ssh"]
-        transport_port = ssh_port if platform == ONBOARDING_PLATFORM_LINUX else windows_port
+        transport_port = ssh_port if platform in {ONBOARDING_PLATFORM_AUTO, ONBOARDING_PLATFORM_LINUX} else windows_port
+        def _credential_id_list(*keys: str) -> List[int]:
+            values: List[int] = []
+            for key in keys:
+                raw_value = component.get(key)
+                if raw_value in (None, ""):
+                    continue
+                if isinstance(raw_value, str):
+                    candidates = [piece.strip() for piece in re.split(r"[,;\s]+", raw_value) if piece.strip()]
+                elif isinstance(raw_value, (list, tuple, set)):
+                    candidates = list(raw_value)
+                else:
+                    candidates = [raw_value]
+                for candidate in candidates:
+                    try:
+                        parsed = int(candidate)
+                    except Exception:
+                        continue
+                    if parsed > 0 and parsed not in values:
+                        values.append(parsed)
+            return values
+        windows_credential_ids = _credential_id_list("windows_credential_ids", "stored_windows_credential_ids", "windows_credentials")
+        linux_credential_ids = _credential_id_list("linux_credential_ids", "stored_linux_credential_ids", "linux_credentials")
         concurrency = self._onboarding_concurrency()
         for key in ("onboarding_concurrency", "device_onboarding_concurrency", "concurrency", "max_concurrency"):
             if component.get(key) not in (None, ""):
@@ -3812,6 +3843,8 @@ class JobScheduler:
             "winrm_port": winrm_port,
             "transport_port": transport_port,
             "onboarding_methods": methods,
+            "windows_credential_ids": windows_credential_ids,
+            "linux_credential_ids": linux_credential_ids,
             "onboarding_concurrency": concurrency,
         }, None
 
@@ -4850,41 +4883,336 @@ class JobScheduler:
         finally:
             shutil.rmtree(str(probe_root), ignore_errors=True)
 
+    def _onboarding_credential_label(self, credential: Mapping[str, Any]) -> str:
+        name = str(credential.get("name") or "").strip()
+        if name:
+            return name
+        username = str(credential.get("username") or "").strip()
+        if username:
+            return username
+        credential_id = credential.get("id")
+        return f"Credential {credential_id}" if credential_id not in (None, "") else "Stored Credential"
+
+    def _onboarding_credential_redactions(self, credentials: Sequence[Mapping[str, Any]], *extra: Any) -> List[Any]:
+        redactions: List[Any] = [value for value in extra if value]
+        for credential in credentials or []:
+            for key in ("password", "private_key", "private_key_passphrase", "become_password"):
+                value = credential.get(key)
+                if value:
+                    redactions.append(value)
+        return redactions
+
+    def _load_onboarding_credential_lists(
+        self,
+        *,
+        config: Mapping[str, Any],
+        credential_id: Optional[int],
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        def _ids(raw_value: Any) -> List[int]:
+            values: List[int] = []
+            if isinstance(raw_value, str):
+                candidates = [piece.strip() for piece in re.split(r"[,;\s]+", raw_value) if piece.strip()]
+            elif isinstance(raw_value, (list, tuple, set)):
+                candidates = list(raw_value)
+            elif raw_value not in (None, ""):
+                candidates = [raw_value]
+            else:
+                candidates = []
+            for candidate in candidates:
+                try:
+                    parsed = int(candidate)
+                except Exception:
+                    continue
+                if parsed > 0 and parsed not in values:
+                    values.append(parsed)
+            return values
+
+        windows_ids = _ids(config.get("windows_credential_ids"))
+        linux_ids = _ids(config.get("linux_credential_ids"))
+        fallback_credential: Optional[Dict[str, Any]] = None
+        if credential_id and not windows_ids and not linux_ids:
+            fallback_credential = self._load_credential(credential_id)
+            if not fallback_credential:
+                raise RuntimeError("Selected stored credential could not be loaded.")
+            connection_type = str(fallback_credential.get("connection_type") or "").strip().lower()
+            if connection_type == "ssh":
+                linux_ids.append(int(fallback_credential.get("id") or credential_id))
+            elif connection_type in {"windows", "winrm"}:
+                windows_ids.append(int(fallback_credential.get("id") or credential_id))
+            else:
+                raise RuntimeError("Selected stored credential is not usable for onboarding.")
+
+        cache: Dict[int, Dict[str, Any]] = {}
+
+        def _load(credential_id_value: int) -> Dict[str, Any]:
+            if credential_id_value in cache:
+                return cache[credential_id_value]
+            if fallback_credential and int(fallback_credential.get("id") or 0) == int(credential_id_value):
+                credential = fallback_credential
+            else:
+                credential = self._load_credential(credential_id_value)
+            if not credential:
+                raise RuntimeError(f"Stored credential {credential_id_value} could not be loaded.")
+            if not str(credential.get("username") or "").strip():
+                raise RuntimeError(f"Stored credential {credential_id_value} has no username.")
+            cache[credential_id_value] = credential
+            return credential
+
+        windows_credentials: List[Dict[str, Any]] = []
+        for current_id in windows_ids:
+            credential = _load(current_id)
+            connection_type = str(credential.get("connection_type") or "").strip().lower()
+            if connection_type not in {"windows", "winrm"}:
+                raise RuntimeError("Stored Windows Credential list contains a non-Windows credential.")
+            if not str(credential.get("password") or "").strip():
+                raise RuntimeError("Windows onboarding requires credential passwords.")
+            windows_credentials.append(credential)
+
+        linux_credentials: List[Dict[str, Any]] = []
+        for current_id in linux_ids:
+            credential = _load(current_id)
+            connection_type = str(credential.get("connection_type") or "").strip().lower()
+            if connection_type != "ssh":
+                raise RuntimeError("Stored Linux Credential list contains a non-SSH credential.")
+            if not str(credential.get("password") or "").strip() and not str(credential.get("private_key") or "").strip():
+                raise RuntimeError("Linux onboarding requires a password or private key.")
+            linux_credentials.append(credential)
+
+        return windows_credentials, linux_credentials
+
     def _run_single_onboarding_target(
         self,
         *,
         row: Dict[str, Any],
         site: Dict[str, Any],
-        credential: Dict[str, Any],
         branch: str,
         server_url: str,
         job_id: int,
         run_id: int,
         platform: str = ONBOARDING_PLATFORM_LINUX,
+        credential: Optional[Dict[str, Any]] = None,
+        linux_credentials: Optional[Sequence[Dict[str, Any]]] = None,
+        windows_credentials: Optional[Sequence[Dict[str, Any]]] = None,
+        ssh_port: int = DEFAULT_ONBOARDING_SSH_PORT,
+        windows_port: int = DEFAULT_ONBOARDING_WINDOWS_PORT,
         windows_methods: Optional[Sequence[str]] = None,
         winrm_port: int = DEFAULT_ONBOARDING_WINRM_PORT,
     ) -> str:
         normalized_platform = str(platform or ONBOARDING_PLATFORM_LINUX).strip().lower()
+        linux_candidates = list(linux_credentials or [])
+        windows_candidates = list(windows_credentials or [])
+        if credential and not linux_candidates and not windows_candidates:
+            connection_type = str(credential.get("connection_type") or "").strip().lower()
+            if connection_type == "ssh":
+                linux_candidates = [credential]
+            elif connection_type in {"windows", "winrm"}:
+                windows_candidates = [credential]
+        all_credentials = [*linux_candidates, *windows_candidates]
+        redactions = self._onboarding_credential_redactions(all_credentials, site.get("enrollment_code"), server_url)
+        row_id = int(row["id"])
+        host = str(row.get("target_address") or row.get("target_hostname") or "").strip()
+
+        def _record_detected_platform(label: str) -> None:
+            self._update_onboarding_target_row(
+                row_id,
+                status=ONBOARDING_STATUS_RUNNING,
+                detail=f"Detected Remote Operating System: {label}",
+                redactions=redactions,
+            )
+
+        def _try_linux_candidates(*, final_on_failure: bool = True) -> str:
+            if not linux_candidates:
+                return ""
+            ssh_target_port = int(ssh_port or row.get("ssh_port") or DEFAULT_ONBOARDING_SSH_PORT)
+            tcp_error = self._preflight_remote_port(host=host, port=ssh_target_port, attempts=1, timeout_seconds=3.0)
+            if tcp_error:
+                return ONBOARDING_STATUS_UNREACHABLE
+            last_error = ""
+            for candidate in linux_candidates:
+                label = self._onboarding_credential_label(candidate)
+                self._update_onboarding_target_row(
+                    row_id,
+                    status=ONBOARDING_STATUS_RUNNING,
+                    detail=f"Establishing Connection to Remote Device: {label}",
+                    redactions=redactions,
+                )
+                username = str(candidate.get("username") or "").strip()
+                password = str(candidate.get("password") or "")
+                private_key = _normalize_ssh_private_key_text(candidate.get("private_key") or "")
+                become_method = str(candidate.get("become_method") or "").strip().lower()
+                become_user = str(candidate.get("become_username") or "root").strip() or "root"
+                become_password = str(candidate.get("become_password") or password or "")
+                session_error = self._preflight_ssh_session(
+                    host=host,
+                    port=ssh_target_port,
+                    username=username,
+                    password=password,
+                    private_key_text=private_key,
+                    timeout_seconds=_env_non_negative_float(
+                        _SSH_SESSION_TIMEOUT_ENV,
+                        _DEFAULT_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS,
+                    ),
+                    become_method="sudo" if become_method == "sudo" else "",
+                    become_user=become_user,
+                    become_password=become_password,
+                )
+                if session_error:
+                    last_error = session_error
+                    continue
+                _record_detected_platform("Linux")
+                self._update_onboarding_target_row(
+                    row_id,
+                    status=ONBOARDING_STATUS_RUNNING,
+                    detail="Connection Established using SSH",
+                    redactions=redactions,
+                )
+                row_for_linux = dict(row)
+                row_for_linux["ssh_port"] = ssh_target_port
+                return self._run_linux_onboarding_target(
+                    row=row_for_linux,
+                    site=site,
+                    credential=candidate,
+                    branch=branch,
+                    server_url=server_url,
+                    job_id=job_id,
+                    run_id=run_id,
+                    credential_label=label,
+                    skip_session_preflight=True,
+                )
+            if last_error:
+                if final_on_failure:
+                    self._update_onboarding_target_row(
+                        row_id,
+                        status=ONBOARDING_STATUS_FAILED,
+                        detail="SSH authentication failed for all stored Linux credentials.",
+                        stderr=last_error,
+                        finished=True,
+                        redactions=redactions,
+                    )
+                return ONBOARDING_STATUS_FAILED
+            return ""
+
+        def _try_windows_candidates() -> str:
+            if not windows_candidates:
+                return ""
+            smb_target_port = int(windows_port or DEFAULT_ONBOARDING_WINDOWS_PORT)
+            winrm_target_port = int(winrm_port or DEFAULT_ONBOARDING_WINRM_PORT)
+            smb_error = self._preflight_remote_port(host=host, port=smb_target_port, attempts=1, timeout_seconds=3.0)
+            winrm_error = self._preflight_remote_port(host=host, port=winrm_target_port, attempts=1, timeout_seconds=3.0)
+            if smb_error and winrm_error:
+                self._update_onboarding_target_row(
+                    row_id,
+                    status=ONBOARDING_STATUS_UNREACHABLE,
+                    detail=f"Windows remote enrollment ports unreachable: SMB {smb_target_port}={smb_error}; WinRM {winrm_target_port}={winrm_error}",
+                    finished=True,
+                    redactions=redactions,
+                )
+                return ONBOARDING_STATUS_UNREACHABLE
+            last_error = ""
+            for candidate in windows_candidates:
+                label = self._onboarding_credential_label(candidate)
+                self._update_onboarding_target_row(
+                    row_id,
+                    status=ONBOARDING_STATUS_RUNNING,
+                    detail=f"Establishing Connection to Remote Device: {label}",
+                    redactions=redactions,
+                )
+                if not smb_error:
+                    smb = None
+                    try:
+                        smb = self._open_windows_smb_connection(host=host, port=smb_target_port, credential=candidate)
+                    except Exception as exc:
+                        last_error = str(exc).strip() or exc.__class__.__name__
+                        continue
+                    finally:
+                        if smb is not None:
+                            try:
+                                smb.logoff()
+                            except Exception:
+                                pass
+                    _record_detected_platform("Windows")
+                    self._update_onboarding_target_row(
+                        row_id,
+                        status=ONBOARDING_STATUS_RUNNING,
+                        detail="Connection Established using SMB Service",
+                        redactions=redactions,
+                    )
+                else:
+                    _record_detected_platform("Windows")
+                return self._run_windows_onboarding_target(
+                    row=row,
+                    site=site,
+                    credential=candidate,
+                    branch=branch,
+                    server_url=server_url,
+                    job_id=job_id,
+                    run_id=run_id,
+                    windows_methods=windows_methods or ONBOARDING_WINDOWS_METHODS,
+                    winrm_port=winrm_target_port,
+                    smb_port=smb_target_port,
+                    credential_label=label,
+                )
+            if last_error:
+                self._update_onboarding_target_row(
+                    row_id,
+                    status=ONBOARDING_STATUS_FAILED,
+                    detail="Windows authentication failed for all stored Windows credentials.",
+                    stderr=last_error,
+                    finished=True,
+                    redactions=redactions,
+                )
+                return ONBOARDING_STATUS_FAILED
+            return ""
+
+        if normalized_platform == ONBOARDING_PLATFORM_AUTO:
+            ssh_error = self._preflight_remote_port(host=host, port=int(ssh_port or DEFAULT_ONBOARDING_SSH_PORT), attempts=1, timeout_seconds=3.0)
+            if not ssh_error:
+                linux_result = _try_linux_candidates(final_on_failure=False)
+                if linux_result and linux_result not in {ONBOARDING_STATUS_FAILED, ONBOARDING_STATUS_UNREACHABLE, ONBOARDING_STATUS_SKIPPED}:
+                    return linux_result
+                windows_result = _try_windows_candidates()
+                if windows_result:
+                    return windows_result
+                return linux_result or ONBOARDING_STATUS_FAILED
+            windows_result = _try_windows_candidates()
+            if windows_result:
+                return windows_result
+            self._update_onboarding_target_row(
+                row_id,
+                status=ONBOARDING_STATUS_UNREACHABLE,
+                detail=f"Remote ports unreachable: SSH {int(ssh_port or DEFAULT_ONBOARDING_SSH_PORT)}={ssh_error}",
+                finished=True,
+                redactions=redactions,
+            )
+            return ONBOARDING_STATUS_UNREACHABLE
+
         if normalized_platform == ONBOARDING_PLATFORM_WINDOWS:
+            if not windows_candidates:
+                raise RuntimeError("Windows onboarding requires at least one Stored Windows Credential.")
             return self._run_windows_onboarding_target(
                 row=row,
                 site=site,
-                credential=credential,
+                credential=windows_candidates[0],
                 branch=branch,
                 server_url=server_url,
                 job_id=job_id,
                 run_id=run_id,
                 windows_methods=windows_methods or ONBOARDING_WINDOWS_METHODS,
                 winrm_port=winrm_port,
+                smb_port=int(windows_port or row.get("ssh_port") or DEFAULT_ONBOARDING_WINDOWS_PORT),
+                credential_label=self._onboarding_credential_label(windows_candidates[0]),
             )
+        if not linux_candidates:
+            raise RuntimeError("Linux onboarding requires at least one Stored Linux Credential.")
         return self._run_linux_onboarding_target(
             row=row,
             site=site,
-            credential=credential,
+            credential=linux_candidates[0],
             branch=branch,
             server_url=server_url,
             job_id=job_id,
             run_id=run_id,
+            credential_label=self._onboarding_credential_label(linux_candidates[0]),
         )
 
     def _run_linux_onboarding_target(
@@ -4897,12 +5225,16 @@ class JobScheduler:
         server_url: str,
         job_id: int,
         run_id: int,
+        credential_label: str = "",
+        skip_session_preflight: bool = False,
     ) -> str:
         row_id = int(row["id"])
         host = str(row.get("target_address") or row.get("target_hostname") or "").strip()
         port = int(row.get("ssh_port") or DEFAULT_ONBOARDING_SSH_PORT)
         redactions = [site.get("enrollment_code"), server_url, credential.get("password"), credential.get("private_key")]
-        self._update_onboarding_target_row(row_id, status=ONBOARDING_STATUS_RUNNING, detail="Connecting to SSH.", redactions=redactions)
+        connection_label = str(credential_label or self._onboarding_credential_label(credential)).strip()
+        connection_detail = f"Establishing Connection to Remote Device: {connection_label}" if connection_label else "Connecting to SSH."
+        self._update_onboarding_target_row(row_id, status=ONBOARDING_STATUS_RUNNING, detail=connection_detail, redactions=redactions)
         if self._onboarding_target_already_known(host, site.get("id")):
             self._update_onboarding_target_row(
                 row_id,
@@ -4930,20 +5262,22 @@ class JobScheduler:
         become_method = str(credential.get("become_method") or "").strip().lower()
         become_user = str(credential.get("become_username") or "root").strip() or "root"
         become_password = str(credential.get("become_password") or password or "")
-        session_error = self._preflight_ssh_session(
-            host=host,
-            port=port,
-            username=username,
-            password=password,
-            private_key_text=private_key,
-            timeout_seconds=_env_non_negative_float(
-                _SSH_SESSION_TIMEOUT_ENV,
-                _DEFAULT_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS,
-            ),
-            become_method="sudo" if become_method == "sudo" else "",
-            become_user=become_user,
-            become_password=become_password,
-        )
+        session_error = ""
+        if not skip_session_preflight:
+            session_error = self._preflight_ssh_session(
+                host=host,
+                port=port,
+                username=username,
+                password=password,
+                private_key_text=private_key,
+                timeout_seconds=_env_non_negative_float(
+                    _SSH_SESSION_TIMEOUT_ENV,
+                    _DEFAULT_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS,
+                ),
+                become_method="sudo" if become_method == "sudo" else "",
+                become_user=become_user,
+                become_password=become_password,
+            )
         if session_error:
             detail = "SSH authentication failed." if session_error in {"permission_denied", "ssh_password_required"} else session_error
             self._update_onboarding_target_row(
@@ -4955,6 +5289,12 @@ class JobScheduler:
                 redactions=redactions,
             )
             return ONBOARDING_STATUS_FAILED
+        self._update_onboarding_target_row(
+            row_id,
+            status=ONBOARDING_STATUS_RUNNING,
+            detail="Connection Established using SSH",
+            redactions=redactions,
+        )
 
         command = self._remote_onboarding_command(
             branch=branch,
@@ -5985,15 +6325,18 @@ class JobScheduler:
         run_id: int,
         windows_methods: Sequence[str],
         winrm_port: int,
+        smb_port: Optional[int] = None,
+        credential_label: str = "",
     ) -> str:
         row_id = int(row["id"])
         host = str(row.get("target_address") or row.get("target_hostname") or "").strip()
-        smb_port = int(row.get("ssh_port") or DEFAULT_ONBOARDING_WINDOWS_PORT)
+        smb_port = int(smb_port or row.get("ssh_port") or DEFAULT_ONBOARDING_WINDOWS_PORT)
         redactions = [site.get("enrollment_code"), server_url, credential.get("password")]
+        connection_label = str(credential_label or self._onboarding_credential_label(credential)).strip()
         self._update_onboarding_target_row(
             row_id,
             status=ONBOARDING_STATUS_RUNNING,
-            detail="Trying Windows remote enrollment.",
+            detail=f"Establishing Connection to Remote Device: {connection_label}" if connection_label else "Trying Windows remote enrollment.",
             redactions=redactions,
         )
 
@@ -6040,7 +6383,7 @@ class JobScheduler:
             )
 
         for method in normalized_methods:
-            label = _windows_method_label(method)
+            method_label = _windows_method_label(method)
             if method == ONBOARDING_WINDOWS_METHOD_WINRM:
                 method_ports = [int(winrm_port)]
             elif method == ONBOARDING_WINDOWS_METHOD_WMI_DCOM:
@@ -6055,13 +6398,13 @@ class JobScheduler:
             if method_port_failures:
                 port_failures += 1
                 for method_port, tcp_error in method_port_failures:
-                    stderr_parts.append(f"[{label}] port {method_port} unreachable: {tcp_error}")
+                    stderr_parts.append(f"[{method_label}] port {method_port} unreachable: {tcp_error}")
                 continue
             attempted_methods += 1
             self._update_onboarding_target_row(
                 row_id,
                 status=ONBOARDING_STATUS_RUNNING,
-                detail=f"Trying Windows {label} enrollment.",
+                detail=f"Establishing Connection to Remote Device: {connection_label}" if connection_label else f"Trying Windows {method_label} enrollment.",
                 stdout="\n\n".join(stdout_parts),
                 stderr="\n\n".join(stderr_parts),
                 redactions=redactions,
@@ -6143,9 +6486,9 @@ class JobScheduler:
                 )
             )
             if stdout:
-                stdout_parts.append(f"[{label}]\n{stdout}")
+                stdout_parts.append(f"[{method_label}]\n{stdout}")
             if stderr:
-                stderr_parts.append(f"[{label}]\n{stderr}")
+                stderr_parts.append(f"[{method_label}]\n{stderr}")
             if exit_code == 0:
                 combined_stdout = "\n\n".join(stdout_parts)
                 combined_stderr = "\n\n".join(stderr_parts)
@@ -6189,7 +6532,7 @@ class JobScheduler:
                 self._update_onboarding_target_row(
                     row_id,
                     status=ONBOARDING_STATUS_WAITING_APPROVAL,
-                    detail=f"Agent installed through Windows {label}. Device approval pending operator action.",
+                    detail=f"Agent installed through Windows {method_label}. Device approval pending operator action.",
                     stdout=combined_stdout,
                     stderr=combined_stderr,
                     approval_reference=approval_reference,
@@ -6239,7 +6582,7 @@ class JobScheduler:
                     self._update_onboarding_target_row(
                         row_id,
                         status=ONBOARDING_STATUS_WAITING_APPROVAL,
-                        detail=f"Agent reached approval queue through Windows {label}; remote status channel timed out after launch.",
+                        detail=f"Agent reached approval queue through Windows {method_label}; remote status channel timed out after launch.",
                         stdout="\n\n".join(stdout_parts),
                         stderr="\n\n".join(stderr_parts),
                         approval_reference=approval_reference,
@@ -6249,7 +6592,7 @@ class JobScheduler:
                     )
                     return ONBOARDING_STATUS_WAITING_APPROVAL
             failure_hint = _onboarding_failure_hint(stdout=stdout, stderr=stderr, redactions=redactions)
-            stderr_parts.append(f"[{label}] failed with exit code {exit_code}.{(' ' + failure_hint) if failure_hint else ''}")
+            stderr_parts.append(f"[{method_label}] failed with exit code {exit_code}.{(' ' + failure_hint) if failure_hint else ''}")
 
         combined_stdout = "\n\n".join(stdout_parts)
         combined_stderr = "\n\n".join(stderr_parts)
@@ -6365,21 +6708,17 @@ class JobScheduler:
             server_url = self._public_base_url()
             if not server_url:
                 raise RuntimeError("Engine public base URL is not configured.")
-            if credential_id is None:
-                raise RuntimeError("Onboarding jobs require one stored credential.")
-            credential = self._load_credential(credential_id)
-            if not credential:
-                raise RuntimeError("Selected stored credential could not be loaded.")
             platform = str(config.get("agent_platform") or ONBOARDING_PLATFORM_LINUX).strip().lower()
-            connection_type = str(credential.get("connection_type") or "").strip().lower()
-            if platform == ONBOARDING_PLATFORM_LINUX and connection_type != "ssh":
-                raise RuntimeError("Linux onboarding requires an SSH credential.")
-            if platform == ONBOARDING_PLATFORM_WINDOWS and connection_type not in {"windows", "winrm"}:
-                raise RuntimeError("Windows onboarding requires a Windows or WinRM credential.")
-            if not str(credential.get("username") or "").strip():
-                raise RuntimeError("Selected stored credential has no username.")
-            if platform == ONBOARDING_PLATFORM_WINDOWS and not str(credential.get("password") or "").strip():
-                raise RuntimeError("Windows onboarding requires a credential password.")
+            windows_credentials, linux_credentials = self._load_onboarding_credential_lists(
+                config=config,
+                credential_id=credential_id,
+            )
+            if platform == ONBOARDING_PLATFORM_LINUX and not linux_credentials:
+                raise RuntimeError("Linux onboarding requires at least one Stored Linux Credential.")
+            if platform == ONBOARDING_PLATFORM_WINDOWS and not windows_credentials:
+                raise RuntimeError("Windows onboarding requires at least one Stored Windows Credential.")
+            if platform == ONBOARDING_PLATFORM_AUTO and not windows_credentials and not linux_credentials:
+                raise RuntimeError("Automatic onboarding requires at least one stored credential.")
 
             expanded_targets, parse_errors = parse_onboarding_scope(
                 config.get("entries") or [],
@@ -6479,12 +6818,15 @@ class JobScheduler:
                         self._run_single_onboarding_target,
                         row=row,
                         site=site,
-                        credential=credential,
                         branch=str(config.get("install_branch") or "main"),
                         server_url=server_url,
                         job_id=job_id,
                         run_id=run_row_id,
                         platform=platform,
+                        linux_credentials=linux_credentials,
+                        windows_credentials=windows_credentials,
+                        ssh_port=int(config.get("ssh_port") or DEFAULT_ONBOARDING_SSH_PORT),
+                        windows_port=int(config.get("windows_port") or DEFAULT_ONBOARDING_WINDOWS_PORT),
                         windows_methods=list(config.get("onboarding_methods") or ONBOARDING_WINDOWS_METHODS),
                         winrm_port=int(config.get("winrm_port") or DEFAULT_ONBOARDING_WINRM_PORT),
                     )
@@ -9744,8 +10086,8 @@ class JobScheduler:
                 _cfg, onboarding_error = self._onboarding_scope_config(components=components, targets=targets)
                 if onboarding_error:
                     return json.dumps({"error": onboarding_error}), 400, {"Content-Type": "application/json"}
-                if credential_id is None:
-                    return json.dumps({"error": "Onboarding jobs require one stored credential."}), 400, {"Content-Type": "application/json"}
+                if credential_id is None and not (_cfg.get("windows_credential_ids") or _cfg.get("linux_credential_ids")):
+                    return json.dumps({"error": "Onboarding jobs require at least one stored credential."}), 400, {"Content-Type": "application/json"}
             if workflow_job_error:
                 return json.dumps({"error": workflow_job_error}), 400, {"Content-Type": "application/json"}
             if not is_workflow_job:
@@ -9755,7 +10097,7 @@ class JobScheduler:
             component_error = _validate_components_for_context(components, execution_context)
             if component_error:
                 return json.dumps({"error": component_error}), 400, {"Content-Type": "application/json"}
-            credential_warning = None if is_workflow_job else self._credential_reset_warning(credential_id)
+            credential_warning = None if (is_workflow_job or credential_id is None) else self._credential_reset_warning(credential_id)
             if credential_warning and enabled:
                 enabled = 0
             now = _now_ts()
@@ -10005,8 +10347,8 @@ class JobScheduler:
                     _cfg, onboarding_error = self._onboarding_scope_config(components=next_components or [], targets=effective_targets or [])
                     if onboarding_error:
                         return json.dumps({"error": onboarding_error}), 400, {"Content-Type": "application/json"}
-                    if effective_credential_id in (None, "", "null"):
-                        return json.dumps({"error": "Onboarding jobs require one stored credential."}), 400, {"Content-Type": "application/json"}
+                    if effective_credential_id in (None, "", "null") and not (_cfg.get("windows_credential_ids") or _cfg.get("linux_credential_ids")):
+                        return json.dumps({"error": "Onboarding jobs require at least one stored credential."}), 400, {"Content-Type": "application/json"}
                     fields["execution_context"] = "onboarding_local_network"
                     fields["use_service_account"] = 0
                 else:
@@ -10014,7 +10356,7 @@ class JobScheduler:
                     if component_error:
                         return json.dumps({"error": component_error}), 400, {"Content-Type": "application/json"}
                 effective_enabled = int(fields.get("enabled", current_row[1] or 0))
-                credential_warning = None if is_workflow_job else self._credential_reset_warning(effective_credential_id)
+                credential_warning = None if (is_workflow_job or effective_credential_id in (None, "", "null")) else self._credential_reset_warning(effective_credential_id)
                 if credential_warning and effective_enabled:
                     fields["enabled"] = 0
                 sets = ", ".join([f"{k}=?" for k in fields.keys()])
