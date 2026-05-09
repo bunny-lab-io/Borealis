@@ -3,22 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_agent_ps1_stages_runtime_paths_into_agent_runtime() -> None:
-    script_path = Path(__file__).resolve().parents[3] / "Agent.ps1"
-    content = script_path.read_text(encoding="utf-8")
+def test_agent_exe_bootstrap_source_layout_exists() -> None:
+    bootstrap_root = Path(__file__).resolve().parents[3] / "Data" / "Agent" / "Bootstrap"
 
-    assert "launch_service.ps1" in content
-    assert "restart_agent_tasks.ps1" in content
-    assert "desktop_environment.py" in content
-    assert "runtime_paths.py" in content
-    assert "qt_compat.py" in content
-    assert "session_runtime.py" in content
-    assert "tray_state.py" in content
-    assert "PreserveDirectories @('Agent', 'Temp')" in content
-    assert "$cleanArgs.Add('-ffdx')" in content
-    assert '$cleanArgs.Add(("{0}/**" -f $normalizedPreserve))' in content
-    assert "[switch]$AllowFailure" in content
-    assert "Git clean could not remove one or more untracked files" in content
+    assert (bootstrap_root / "Agent.exe").is_file()
+    assert (bootstrap_root / "main.go").is_file()
+    assert (bootstrap_root / "bootstrap-config.go").is_file()
+    assert (bootstrap_root / "bootstrap-update.go").is_file()
+    assert (bootstrap_root / "bootstrap-uninstall.go").is_file()
+    assert (bootstrap_root / "bootstrap-python-environment.go").is_file()
 
 
 def test_agent_sh_stages_runtime_paths_into_agent_runtime() -> None:
@@ -77,39 +70,14 @@ def test_agent_sh_supports_noninteractive_ssh_onboarding_without_tty() -> None:
     assert "{ exec {tty_fd}< /dev/tty; } 2>/dev/null" in content
 
 
-def test_agent_ps1_hardens_tray_folder_permissions() -> None:
-    script_path = Path(__file__).resolve().parents[3] / "Agent.ps1"
-    content = script_path.read_text(encoding="utf-8")
+def test_agent_exe_owns_windows_runtime_tasks() -> None:
+    bootstrap_root = Path(__file__).resolve().parents[3] / "Data" / "Agent" / "Bootstrap"
+    task_content = (bootstrap_root / "bootstrap-tasks.go").read_text(encoding="utf-8")
+    python_content = (bootstrap_root / "bootstrap-python-environment.go").read_text(encoding="utf-8")
 
-    assert "Ensure-AgentTrayFolderPermissions" in content
-    assert "Join-Path $settingsDir 'Tray'" in content
-    assert "S-1-5-11" in content
-    assert "S-1-5-32-545" in content
-
-
-def test_agent_ps1_repairs_nested_python_msi_layout() -> None:
-    script_path = Path(__file__).resolve().parents[3] / "Agent.ps1"
-    content = script_path.read_text(encoding="utf-8")
-
-    assert "function Find-BorealisPythonExecutable" in content
-    assert "function Repair-BorealisPythonBootstrapLayout" in content
-    assert "function Invoke-BorealisInstallerProcess" in content
-    assert "function Install-BorealisPythonFromInstaller" in content
-    assert "function Install-BorealisPythonFromNuGetPackage" in content
-    assert "function Get-BorealisPythonBootstrapLayoutSummary" in content
-    assert "Get-ChildItem -LiteralPath $InstallDir -Filter 'python.exe' -File -Recurse" in content
-    assert "Normalizing MSI administrative install layout" in content
-    assert "https://www.nuget.org/api/v2/package/python/3.13.3" in content
-    assert "Python NuGet package did not contain tools\\python.exe." in content
-    assert "Installing Python from NuGet package" in content
-    assert "$lastExitCode -ne 1618" in content
-    assert "Windows Installer busy while running" in content
-    assert "Start-Sleep -Seconds $DelaySeconds" in content
-    assert "$extractExitCode -notin @(0, 3010)" in content
-    assert "Python MSI extraction failed for '$file' with exit code $extractExitCode." in content
-    assert "Falling back to full Python installer after MSI failure" in content
-    assert "python-3.13.3-amd64.exe" in content
-    assert "MSI administrative extraction did not produce python.exe" in content
-    assert "Include_pip=1" in content
-    assert "Include_test=0" in content
-    assert "Python executable not found after MSI extraction or installer fallback." in content
+    assert "Borealis Agent (AutoUpdater)" in (bootstrap_root / "bootstrap-config.go").read_text(encoding="utf-8")
+    assert "launch_service.ps1" in task_content
+    assert "Agent.exe" in task_content
+    assert "https://www.nuget.org/api/v2/package/python/3.13.3" in (bootstrap_root / "bootstrap-config.go").read_text(encoding="utf-8")
+    assert "python.exe not found after NuGet extraction" in python_content
+    assert "agent-requirements.txt" in python_content

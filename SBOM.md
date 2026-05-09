@@ -1,6 +1,6 @@
 # Borealis SBOM
 
-This software bill of materials is an inventory of the direct, repo-declared, bundled, container base image, or script-installed third-party software used by Borealis. It was assembled from `Agent.exe`, `Agent.ps1`, `Engine.sh`, `Agent.sh`, `Data/Agent/agent-requirements.txt`, `Data/Engine/Containers/api-backend/data/engine-requirements.txt`, `Data/Engine/Containers/webui-frontend/data/web-interface/package.json`, `Data/Engine/Containers/api-backend/data/Ansible/collections.yml`, and `Data/Engine/Containers/`.
+This software bill of materials is an inventory of the direct, repo-declared, bundled, container base image, or script-installed third-party software used by Borealis. It was assembled from `Agent.exe`, `Engine.sh`, `Agent.sh`, `Data/Agent/agent-requirements.txt`, `Data/Engine/Containers/api-backend/data/engine-requirements.txt`, `Data/Engine/Containers/webui-frontend/data/web-interface/package.json`, `Data/Engine/Containers/api-backend/data/Ansible/collections.yml`, and `Data/Engine/Containers/`.
 
 The Python requirement files are currently unpinned, so the exact resolved version can change between installs. Where the install scripts pin a version explicitly, that version is called out below.
 
@@ -22,7 +22,6 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - numpy - BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 - https://github.com/numpy/numpy/blob/main/LICENSE.txt
 - pywin32 (Windows only) - PSF License - https://github.com/mhammond/pywin32/blob/main/LICENSE.txt
 - psutil - BSD-3-Clause - https://spdx.org/licenses/BSD-3-Clause.html
-- PyInstaller (used by `Data/Agent/Package_Borealis-Agent.ps1`) - GPL-2.0-or-later with PyInstaller exception - https://pyinstaller.org/en/stable/license.html
 - WireGuard (Windows client 0.5.3 and Linux `wireguard-tools`) - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
 - UltraVNC Server 1.6.4.0 - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
 - UltraVNC `createpassword.exe` helper - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html

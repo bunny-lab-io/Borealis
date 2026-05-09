@@ -612,8 +612,7 @@ def _find_project_root():
     cur = current
     for _ in range(8):
         if (
-            os.path.exists(os.path.join(cur, "Agent.ps1"))
-            or os.path.exists(os.path.join(cur, "Agent.exe"))
+            os.path.exists(os.path.join(cur, "Agent.exe"))
             or os.path.exists(os.path.join(cur, "Agent.sh"))
             or os.path.exists(os.path.join(cur, "Engine.sh"))
             or os.path.isdir(os.path.join(cur, ".git"))

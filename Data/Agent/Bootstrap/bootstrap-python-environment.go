@@ -83,10 +83,6 @@ func stageAgentRuntime(cfg BootstrapConfig, sourceRoot string, logger *Bootstrap
 				return false
 			}
 		}
-		switch name {
-		case "Package_Borealis-Agent.ps1":
-			return false
-		}
 		return true
 	}
 	if err := copyTree(source, destination, filter); err != nil {

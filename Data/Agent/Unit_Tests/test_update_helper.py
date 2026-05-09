@@ -10,7 +10,7 @@ def test_update_helper_recovers_legacy_auth_material(tmp_path, monkeypatch) -> N
 
     canonical_settings.mkdir(parents=True, exist_ok=True)
     legacy_settings.mkdir(parents=True, exist_ok=True)
-    (repo_root / "Agent.ps1").write_text("", encoding="utf-8")
+    (repo_root / "Agent.exe").write_text("", encoding="utf-8")
 
     (legacy_settings / "server_url.txt").write_text("borealis.example.com\n", encoding="utf-8")
     (legacy_settings / "agent_GUID").write_text("ABC-123\n", encoding="utf-8")

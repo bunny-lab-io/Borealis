@@ -80,7 +80,6 @@ class RoleManager:
                 try:
                     if (
                         (candidate_root / "Agent.exe").is_file()
-                        or (candidate_root / "Agent.ps1").is_file()
                         or (candidate_root / "Agent.sh").is_file()
                         or (candidate_root / "Engine.sh").is_file()
                         or (candidate_root / ".git").is_dir()

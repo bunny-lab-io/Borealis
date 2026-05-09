@@ -75,7 +75,6 @@ def _resolve_project_root(start: Optional[Path] = None) -> Path:
     for candidate in (current, *current.parents):
         if (
             (candidate / "Agent.exe").is_file()
-            or (candidate / "Agent.ps1").is_file()
             or (candidate / "Agent.sh").is_file()
             or (candidate / "Engine.sh").is_file()
         ):

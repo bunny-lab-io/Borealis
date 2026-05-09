@@ -5153,7 +5153,7 @@ class JobScheduler:
         temp_dir = Path(tempfile.mkdtemp(prefix="borealis-agent-payload-"))
         bundle_path = temp_dir / "agent-payload.zip"
         excluded_dirs = {"Unit_Tests", "Bootstrap", "Logs", "__pycache__", ".pytest_cache"}
-        excluded_files = {"Package_Borealis-Agent.ps1"}
+        excluded_files: set[str] = set()
         with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for path in source_root.rglob("*"):
                 rel_to_agent = path.relative_to(source_root)

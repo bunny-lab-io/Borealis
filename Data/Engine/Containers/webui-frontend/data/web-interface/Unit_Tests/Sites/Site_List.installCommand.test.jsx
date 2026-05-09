@@ -51,7 +51,7 @@ describe("site install command builder", () => {
     expect(command).toContain("Invoke-WebRequest -UseBasicParsing");
     expect(command).toContain('--server-url "https://borealis.example.com"');
     expect(command).toContain('--site-enrollment-code "CODE-1234"');
-    expect(command).not.toContain("Agent.ps1");
+    expect(command).not.toContain(".ps1");
     expect(command).not.toContain("--serverurl");
     expect(command).not.toContain("--enrollmentcode");
   });
