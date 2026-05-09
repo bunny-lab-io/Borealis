@@ -5011,6 +5011,8 @@ class JobScheduler:
         redactions = self._onboarding_credential_redactions(all_credentials, site.get("enrollment_code"), server_url)
         row_id = int(row["id"])
         host = str(row.get("target_address") or row.get("target_hostname") or "").strip()
+        linux_session_established = False
+        linux_last_error = ""
 
         def _record_detected_platform(label: str) -> None:
             self._update_onboarding_target_row(
@@ -5020,14 +5022,59 @@ class JobScheduler:
                 redactions=redactions,
             )
 
+        def _remote_port_status_detail(
+            *,
+            ssh_error: str = "",
+            smb_error: str = "",
+            winrm_error: str = "",
+            linux_auth_error: str = "",
+        ) -> str:
+            segments: List[str] = []
+            ssh_target_port = int(ssh_port or row.get("ssh_port") or DEFAULT_ONBOARDING_SSH_PORT)
+            smb_target_port = int(windows_port or DEFAULT_ONBOARDING_WINDOWS_PORT)
+            winrm_target_port = int(winrm_port or DEFAULT_ONBOARDING_WINRM_PORT)
+            if ssh_error:
+                segments.append(f"SSH {ssh_target_port}={ssh_error}")
+            elif linux_auth_error:
+                segments.append(f"SSH {ssh_target_port}=authentication failed")
+            if smb_error:
+                segments.append(f"SMB {smb_target_port}={smb_error}")
+            if winrm_error:
+                segments.append(f"WinRM {winrm_target_port}={winrm_error}")
+            if not segments:
+                return "Remote device unreachable."
+            return f"Remote device unreachable: {'; '.join(segments)}"
+
+        def _mark_remote_unreachable(
+            *,
+            ssh_error: str = "",
+            smb_error: str = "",
+            winrm_error: str = "",
+            linux_auth_error: str = "",
+        ) -> str:
+            self._update_onboarding_target_row(
+                row_id,
+                status=ONBOARDING_STATUS_UNREACHABLE,
+                detail=_remote_port_status_detail(
+                    ssh_error=ssh_error,
+                    smb_error=smb_error,
+                    winrm_error=winrm_error,
+                    linux_auth_error=linux_auth_error,
+                ),
+                finished=True,
+                redactions=redactions,
+            )
+            return ONBOARDING_STATUS_UNREACHABLE
+
         def _try_linux_candidates(*, final_on_failure: bool = True) -> str:
+            nonlocal linux_last_error, linux_session_established
             if not linux_candidates:
                 return ""
             ssh_target_port = int(ssh_port or row.get("ssh_port") or DEFAULT_ONBOARDING_SSH_PORT)
             tcp_error = self._preflight_remote_port(host=host, port=ssh_target_port, attempts=1, timeout_seconds=3.0)
             if tcp_error:
+                linux_last_error = tcp_error
                 return ONBOARDING_STATUS_UNREACHABLE
-            last_error = ""
             for candidate in linux_candidates:
                 label = self._onboarding_credential_label(candidate)
                 self._update_onboarding_target_row(
@@ -5057,8 +5104,9 @@ class JobScheduler:
                     become_password=become_password,
                 )
                 if session_error:
-                    last_error = session_error
+                    linux_last_error = session_error
                     continue
+                linux_session_established = True
                 _record_detected_platform("Linux")
                 self._update_onboarding_target_row(
                     row_id,
@@ -5079,34 +5127,48 @@ class JobScheduler:
                     credential_label=label,
                     skip_session_preflight=True,
                 )
-            if last_error:
+            if linux_last_error:
                 if final_on_failure:
                     self._update_onboarding_target_row(
                         row_id,
                         status=ONBOARDING_STATUS_FAILED,
                         detail="SSH authentication failed for all stored Linux credentials.",
-                        stderr=last_error,
+                        stderr=linux_last_error,
                         finished=True,
                         redactions=redactions,
                     )
                 return ONBOARDING_STATUS_FAILED
             return ""
 
-        def _try_windows_candidates() -> str:
+        def _try_windows_candidates(
+            *,
+            mark_unreachable: bool = True,
+            smb_error_override: Optional[str] = None,
+            winrm_error_override: Optional[str] = None,
+        ) -> str:
             if not windows_candidates:
                 return ""
             smb_target_port = int(windows_port or DEFAULT_ONBOARDING_WINDOWS_PORT)
             winrm_target_port = int(winrm_port or DEFAULT_ONBOARDING_WINRM_PORT)
-            smb_error = self._preflight_remote_port(host=host, port=smb_target_port, attempts=1, timeout_seconds=3.0)
-            winrm_error = self._preflight_remote_port(host=host, port=winrm_target_port, attempts=1, timeout_seconds=3.0)
+            smb_error = (
+                smb_error_override
+                if smb_error_override is not None
+                else self._preflight_remote_port(host=host, port=smb_target_port, attempts=1, timeout_seconds=3.0)
+            )
+            winrm_error = (
+                winrm_error_override
+                if winrm_error_override is not None
+                else self._preflight_remote_port(host=host, port=winrm_target_port, attempts=1, timeout_seconds=3.0)
+            )
             if smb_error and winrm_error:
-                self._update_onboarding_target_row(
-                    row_id,
-                    status=ONBOARDING_STATUS_UNREACHABLE,
-                    detail=f"Windows remote enrollment ports unreachable: SMB {smb_target_port}={smb_error}; WinRM {winrm_target_port}={winrm_error}",
-                    finished=True,
-                    redactions=redactions,
-                )
+                if mark_unreachable:
+                    self._update_onboarding_target_row(
+                        row_id,
+                        status=ONBOARDING_STATUS_UNREACHABLE,
+                        detail=f"Windows remote enrollment ports unreachable: SMB {smb_target_port}={smb_error}; WinRM {winrm_target_port}={winrm_error}",
+                        finished=True,
+                        redactions=redactions,
+                    )
                 return ONBOARDING_STATUS_UNREACHABLE
             last_error = ""
             for candidate in windows_candidates:
@@ -5137,8 +5199,6 @@ class JobScheduler:
                         detail="Connection Established using SMB Service",
                         redactions=redactions,
                     )
-                else:
-                    _record_detected_platform("Windows")
                 return self._run_windows_onboarding_target(
                     row=row,
                     site=site,
@@ -5165,26 +5225,59 @@ class JobScheduler:
             return ""
 
         if normalized_platform == ONBOARDING_PLATFORM_AUTO:
-            ssh_error = self._preflight_remote_port(host=host, port=int(ssh_port or DEFAULT_ONBOARDING_SSH_PORT), attempts=1, timeout_seconds=3.0)
+            ssh_target_port = int(ssh_port or DEFAULT_ONBOARDING_SSH_PORT)
+            smb_target_port = int(windows_port or DEFAULT_ONBOARDING_WINDOWS_PORT)
+            winrm_target_port = int(winrm_port or DEFAULT_ONBOARDING_WINRM_PORT)
+            ssh_error = self._preflight_remote_port(host=host, port=ssh_target_port, attempts=1, timeout_seconds=3.0)
             if not ssh_error:
                 linux_result = _try_linux_candidates(final_on_failure=False)
-                if linux_result and linux_result not in {ONBOARDING_STATUS_FAILED, ONBOARDING_STATUS_UNREACHABLE, ONBOARDING_STATUS_SKIPPED}:
+                if linux_result and linux_session_established:
                     return linux_result
-                windows_result = _try_windows_candidates()
-                if windows_result:
-                    return windows_result
-                return linux_result or ONBOARDING_STATUS_FAILED
-            windows_result = _try_windows_candidates()
+                smb_error = self._preflight_remote_port(host=host, port=smb_target_port, attempts=1, timeout_seconds=3.0)
+                winrm_error = self._preflight_remote_port(host=host, port=winrm_target_port, attempts=1, timeout_seconds=3.0)
+                if not (smb_error and winrm_error):
+                    windows_result = _try_windows_candidates(
+                        mark_unreachable=False,
+                        smb_error_override=smb_error,
+                        winrm_error_override=winrm_error,
+                    )
+                    if windows_result and windows_result != ONBOARDING_STATUS_UNREACHABLE:
+                        return windows_result
+                if linux_result == ONBOARDING_STATUS_FAILED:
+                    self._update_onboarding_target_row(
+                        row_id,
+                        status=ONBOARDING_STATUS_FAILED,
+                        detail="SSH authentication failed for all stored Linux credentials.",
+                        stderr=linux_last_error,
+                        finished=True,
+                        redactions=redactions,
+                    )
+                    return ONBOARDING_STATUS_FAILED
+                if linux_result == ONBOARDING_STATUS_UNREACHABLE:
+                    return _mark_remote_unreachable(
+                        ssh_error=linux_last_error or "unreachable",
+                        smb_error=smb_error,
+                        winrm_error=winrm_error,
+                    )
+                return _mark_remote_unreachable(
+                    smb_error=smb_error,
+                    winrm_error=winrm_error,
+                    linux_auth_error=linux_last_error,
+                )
+            smb_error = self._preflight_remote_port(host=host, port=smb_target_port, attempts=1, timeout_seconds=3.0)
+            winrm_error = self._preflight_remote_port(host=host, port=winrm_target_port, attempts=1, timeout_seconds=3.0)
+            windows_result = _try_windows_candidates(
+                mark_unreachable=False,
+                smb_error_override=smb_error,
+                winrm_error_override=winrm_error,
+            )
+            if windows_result and windows_result != ONBOARDING_STATUS_UNREACHABLE:
+                return windows_result
+            if windows_result == ONBOARDING_STATUS_UNREACHABLE:
+                return _mark_remote_unreachable(ssh_error=ssh_error, smb_error=smb_error, winrm_error=winrm_error)
             if windows_result:
                 return windows_result
-            self._update_onboarding_target_row(
-                row_id,
-                status=ONBOARDING_STATUS_UNREACHABLE,
-                detail=f"Remote ports unreachable: SSH {int(ssh_port or DEFAULT_ONBOARDING_SSH_PORT)}={ssh_error}",
-                finished=True,
-                redactions=redactions,
-            )
-            return ONBOARDING_STATUS_UNREACHABLE
+            return _mark_remote_unreachable(ssh_error=ssh_error, smb_error=smb_error, winrm_error=winrm_error)
 
         if normalized_platform == ONBOARDING_PLATFORM_WINDOWS:
             if not windows_candidates:
@@ -5234,7 +5327,8 @@ class JobScheduler:
         redactions = [site.get("enrollment_code"), server_url, credential.get("password"), credential.get("private_key")]
         connection_label = str(credential_label or self._onboarding_credential_label(credential)).strip()
         connection_detail = f"Establishing Connection to Remote Device: {connection_label}" if connection_label else "Connecting to SSH."
-        self._update_onboarding_target_row(row_id, status=ONBOARDING_STATUS_RUNNING, detail=connection_detail, redactions=redactions)
+        if not skip_session_preflight:
+            self._update_onboarding_target_row(row_id, status=ONBOARDING_STATUS_RUNNING, detail=connection_detail, redactions=redactions)
         if self._onboarding_target_already_known(host, site.get("id")):
             self._update_onboarding_target_row(
                 row_id,
@@ -5289,12 +5383,13 @@ class JobScheduler:
                 redactions=redactions,
             )
             return ONBOARDING_STATUS_FAILED
-        self._update_onboarding_target_row(
-            row_id,
-            status=ONBOARDING_STATUS_RUNNING,
-            detail="Connection Established using SSH",
-            redactions=redactions,
-        )
+        if not skip_session_preflight:
+            self._update_onboarding_target_row(
+                row_id,
+                status=ONBOARDING_STATUS_RUNNING,
+                detail="Connection Established using SSH",
+                redactions=redactions,
+            )
 
         command = self._remote_onboarding_command(
             branch=branch,

@@ -940,8 +940,8 @@ function inferOnboardingPlatformFromText(value) {
     text.includes("connection established using smb") ||
     text.includes("connection established using winrm") ||
     text.includes("connection established using wmi") ||
-    text.includes("windows remote") ||
-    text.includes("windows automatic")
+    text.includes("__borealis_agent_exe_started__=1") ||
+    text.includes("__borealis_agent_service_bootstrapper_started__=1")
   ) {
     return "windows";
   }
