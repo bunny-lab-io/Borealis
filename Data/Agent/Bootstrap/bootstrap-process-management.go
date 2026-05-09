@@ -66,7 +66,15 @@ func runCommandTimeout(logger *BootstrapLogger, timeout time.Duration, name stri
 
 func stopBorealisProcesses(cfg BootstrapConfig, logger *BootstrapLogger) {
 	installRoot := strings.ToLower(filepath.Clean(cfg.InstallDir))
-	processNames := []string{"python.exe", "pythonw.exe", "powershell.exe"}
+	processNames := []string{
+		"python.exe",
+		"pythonw.exe",
+		"powershell.exe",
+		"Agent.exe",
+		"winvnc.exe",
+		"winvnc64.exe",
+		"wireguard.exe",
+	}
 	for _, name := range processNames {
 		_ = eachProcess(func(pid uint32, exe string, commandLine string) {
 			lowerCmd := strings.ToLower(commandLine + " " + exe)
