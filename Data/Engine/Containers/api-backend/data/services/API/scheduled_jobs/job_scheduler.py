@@ -4238,14 +4238,103 @@ class JobScheduler:
         finally:
             conn.close()
 
-    def _onboarding_target_already_known(self, host: str, site_id: Optional[int]) -> bool:
-        value = _onboarding_target_without_port(host)
-        if not value:
-            return False
+    def _set_onboarding_target_hostname(self, row_id: int, target_hostname: Any) -> None:
+        clean_target_hostname = _clean_onboarding_reported_hostname(target_hostname)
+        if not clean_target_hostname:
+            return
         conn = self._conn()
         try:
             cur = conn.cursor()
-            params: List[Any] = [value, value, value]
+            cur.execute(
+                """
+                UPDATE scheduled_job_onboarding_targets
+                   SET target_hostname=?,
+                       updated_at=?
+                 WHERE id=?
+                """,
+                (clean_target_hostname, _now_ts(), int(row_id)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _lookup_known_onboarding_target_hostname(self, host: str, site_id: Optional[int]) -> str:
+        value = _onboarding_target_without_port(host)
+        if not value:
+            return ""
+        lookup_value = value.lower()
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            params: List[Any] = [lookup_value, lookup_value, lookup_value]
+            sql = """
+                SELECT d.hostname
+                  FROM devices d
+             LEFT JOIN device_sites ds
+                    ON ds.device_hostname = d.hostname
+                 WHERE (
+                        LOWER(COALESCE(d.hostname, '')) = ?
+                        OR LOWER(COALESCE(d.internal_ip, '')) = ?
+                        OR LOWER(COALESCE(d.external_ip, '')) = ?
+                       )
+                   AND TRIM(COALESCE(d.hostname, '')) != ''
+            """
+            if site_id is not None:
+                sql += " AND (ds.site_id = ? OR ds.site_id IS NULL)"
+                params.append(int(site_id))
+            sql += " ORDER BY CASE WHEN LOWER(COALESCE(d.internal_ip, '')) = ? THEN 0 ELSE 1 END LIMIT 1"
+            params.append(lookup_value)
+            cur.execute(sql, tuple(params))
+            row = cur.fetchone()
+            hostname = _clean_onboarding_reported_hostname(row[0] if row else "")
+            if hostname:
+                return hostname
+
+            approval_params: List[Any] = [lookup_value, lookup_value]
+            approval_sql = """
+                SELECT hostname_claimed
+                  FROM device_approvals
+                 WHERE LOWER(COALESCE(status, '')) = 'pending'
+                   AND (
+                        LOWER(COALESCE(hostname_claimed, '')) = ?
+                        OR LOWER(COALESCE(onboarding_target, '')) = ?
+                   )
+                   AND TRIM(COALESCE(hostname_claimed, '')) != ''
+            """
+            if site_id is not None:
+                approval_sql += " AND (site_id = ? OR site_id IS NULL)"
+                approval_params.append(int(site_id))
+            approval_sql += " ORDER BY updated_at DESC, created_at DESC LIMIT 1"
+            cur.execute(approval_sql, tuple(approval_params))
+            row = cur.fetchone()
+            return _clean_onboarding_reported_hostname(row[0] if row else "")
+        except Exception:
+            return ""
+        finally:
+            conn.close()
+
+    def _lookup_known_onboarding_target_hostname_from_candidates(
+        self,
+        candidates: Sequence[Any],
+        site_id: Optional[int],
+    ) -> str:
+        for candidate in candidates:
+            hostname = self._lookup_known_onboarding_target_hostname(str(candidate or ""), site_id)
+            if hostname:
+                return hostname
+        return ""
+
+    def _onboarding_target_already_known(self, host: str, site_id: Optional[int]) -> bool:
+        if self._lookup_known_onboarding_target_hostname(host, site_id):
+            return True
+        value = _onboarding_target_without_port(host)
+        if not value:
+            return False
+        lookup_value = value.lower()
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            params: List[Any] = [lookup_value, lookup_value, lookup_value]
             sql = """
                 SELECT 1
                   FROM devices d
@@ -4264,7 +4353,7 @@ class JobScheduler:
             cur.execute(sql, tuple(params))
             if cur.fetchone() is not None:
                 return True
-            approval_params: List[Any] = [value, value]
+            approval_params: List[Any] = [lookup_value, lookup_value]
             approval_sql = """
                 SELECT 1
                   FROM device_approvals
@@ -4454,6 +4543,20 @@ class JobScheduler:
             status = str(next_row.get("status") or "").strip().lower()
             detail_current = str(next_row.get("detail") or "").strip()
             approval_reference_current = str(next_row.get("approval_reference") or "").strip()
+            site_id = int(next_row.get("site_id")) if next_row.get("site_id") is not None else None
+            existing_target_hostname = _clean_onboarding_reported_hostname(next_row.get("target_hostname"))
+            if not existing_target_hostname:
+                known_hostname = self._lookup_known_onboarding_target_hostname_from_candidates(
+                    [
+                        next_row.get("target_address"),
+                        next_row.get("target_hostname"),
+                        next_row.get("target_input"),
+                    ],
+                    site_id,
+                )
+                if known_hostname:
+                    next_row["target_hostname"] = known_hostname
+                    self._set_onboarding_target_hostname(int(next_row.get("id") or 0), known_hostname)
             local_bootstrap_completed = _windows_onboarding_local_bootstrap_completed(
                 stdout=next_row.get("stdout_snippet") or "",
                 stderr=next_row.get("stderr_snippet") or "",
@@ -4463,18 +4566,20 @@ class JobScheduler:
                 stdout=next_row.get("stdout_snippet") or "",
                 stderr=next_row.get("stderr_snippet") or "",
             ):
-                site_id = int(next_row.get("site_id")) if next_row.get("site_id") is not None else None
                 known_candidates = [
                     next_row.get("target_address"),
                     next_row.get("target_hostname"),
                     next_row.get("target_input"),
                 ]
-                if any(self._onboarding_target_already_known(str(candidate or ""), site_id) for candidate in known_candidates):
+                known_hostname = self._lookup_known_onboarding_target_hostname_from_candidates(known_candidates, site_id)
+                if known_hostname or any(self._onboarding_target_already_known(str(candidate or ""), site_id) for candidate in known_candidates):
                     row_id = int(next_row.get("id") or 0)
                     skipped_detail = "Existing Borealis Agent is already enrolled and active."
                     next_row["status"] = "already_enrolled"
                     next_row["detail"] = skipped_detail
                     next_row["approval_reference"] = ""
+                    if known_hostname:
+                        next_row["target_hostname"] = known_hostname
                     self._update_onboarding_target_row(
                         row_id,
                         status="already_enrolled",
@@ -4482,6 +4587,7 @@ class JobScheduler:
                         stdout=next_row.get("stdout_snippet") or "",
                         stderr=next_row.get("stderr_snippet") or "",
                         approval_reference="",
+                        target_hostname=known_hostname,
                         finished=True,
                     )
                     timeline = self._load_onboarding_target_event_rows([row_id]).get(row_id, [])
@@ -4496,7 +4602,6 @@ class JobScheduler:
                 "approved",
                 "completed",
             } or approval_reference_current or (status == ONBOARDING_STATUS_FAILED and local_bootstrap_completed):
-                site_id = int(next_row.get("site_id")) if next_row.get("site_id") is not None else None
                 approval_context: Dict[str, Any] = {}
                 lookup_candidates = _onboarding_approval_lookup_candidates(next_row) or [""]
                 for target in lookup_candidates:
@@ -4521,11 +4626,14 @@ class JobScheduler:
                         next_row.get("target_hostname"),
                         next_row.get("target_input"),
                     ]
-                    if any(self._onboarding_target_already_known(str(candidate or ""), site_id) for candidate in known_candidates):
+                    known_hostname = self._lookup_known_onboarding_target_hostname_from_candidates(known_candidates, site_id)
+                    if known_hostname or any(self._onboarding_target_already_known(str(candidate or ""), site_id) for candidate in known_candidates):
                         completed_detail = "Device approved and enrollment completed."
                         next_row["status"] = "completed"
                         next_row["detail"] = completed_detail
                         next_row["approval_reference"] = ""
+                        if known_hostname:
+                            next_row["target_hostname"] = known_hostname
                         self._update_onboarding_target_row(
                             row_id,
                             status="completed",
@@ -4533,6 +4641,7 @@ class JobScheduler:
                             stdout=next_row.get("stdout_snippet") or "",
                             stderr=next_row.get("stderr_snippet") or "",
                             approval_reference="",
+                            target_hostname=known_hostname,
                             finished=True,
                         )
                         timeline = self._load_onboarding_target_event_rows([row_id]).get(row_id, [])
@@ -4578,11 +4687,14 @@ class JobScheduler:
                         approval_context.get("approval_target"),
                         approval_context.get("approval_hostname"),
                     ]
-                    if any(self._onboarding_target_already_known(str(candidate or ""), site_id) for candidate in known_candidates):
+                    known_hostname = self._lookup_known_onboarding_target_hostname_from_candidates(known_candidates, site_id)
+                    if known_hostname or any(self._onboarding_target_already_known(str(candidate or ""), site_id) for candidate in known_candidates):
                         skipped_detail = "Existing Borealis Agent is already enrolled and active."
                         next_row["status"] = "already_enrolled"
                         next_row["detail"] = skipped_detail
                         next_row["approval_reference"] = ""
+                        if known_hostname:
+                            next_row["target_hostname"] = known_hostname
                         self._update_onboarding_target_row(
                             row_id,
                             status="already_enrolled",
@@ -4590,6 +4702,7 @@ class JobScheduler:
                             stdout=next_row.get("stdout_snippet") or "",
                             stderr=next_row.get("stderr_snippet") or "",
                             approval_reference="",
+                            target_hostname=known_hostname,
                             finished=True,
                         )
                         timeline = self._load_onboarding_target_event_rows([row_id]).get(row_id, [])
@@ -4615,6 +4728,10 @@ class JobScheduler:
                     hydrated.append(next_row)
                     continue
                 next_row.update(approval_context)
+                approval_hostname = _clean_onboarding_reported_hostname(approval_context.get("approval_hostname"))
+                if approval_hostname and not _clean_onboarding_reported_hostname(next_row.get("target_hostname")):
+                    next_row["target_hostname"] = approval_hostname
+                    self._set_onboarding_target_hostname(int(next_row.get("id") or 0), approval_hostname)
                 approval_reference = str(approval_context.get("approval_reference") or "").strip()
                 if approval_reference:
                     next_row["approval_reference"] = approval_reference
@@ -4653,6 +4770,7 @@ class JobScheduler:
                             stdout=next_row.get("stdout_snippet") or "",
                             stderr=next_row.get("stderr_snippet") or "",
                             approval_reference=approval_reference or str(next_row.get("approval_reference") or ""),
+                            target_hostname=approval_hostname,
                             finished=approval_status in {"pending", "approved", "completed", "denied", "expired"},
                         )
                         timeline = self._load_onboarding_target_event_rows([row_id]).get(row_id, [])
@@ -5011,6 +5129,13 @@ class JobScheduler:
         redactions = self._onboarding_credential_redactions(all_credentials, site.get("enrollment_code"), server_url)
         row_id = int(row["id"])
         host = str(row.get("target_address") or row.get("target_hostname") or "").strip()
+        site_id = int(site.get("id")) if site.get("id") is not None else None
+        known_target_hostname = self._lookup_known_onboarding_target_hostname_from_candidates(
+            [row.get("target_address"), row.get("target_hostname"), row.get("target_input"), host],
+            site_id,
+        )
+        if known_target_hostname:
+            self._set_onboarding_target_hostname(row_id, known_target_hostname)
         linux_session_established = False
         linux_last_error = ""
 
@@ -5329,11 +5454,13 @@ class JobScheduler:
         connection_detail = f"Establishing Connection to Remote Device: {connection_label}" if connection_label else "Connecting to SSH."
         if not skip_session_preflight:
             self._update_onboarding_target_row(row_id, status=ONBOARDING_STATUS_RUNNING, detail=connection_detail, redactions=redactions)
-        if self._onboarding_target_already_known(host, site.get("id")):
+        known_hostname = self._lookup_known_onboarding_target_hostname(host, site.get("id"))
+        if known_hostname or self._onboarding_target_already_known(host, site.get("id")):
             self._update_onboarding_target_row(
                 row_id,
                 status=ONBOARDING_STATUS_SKIPPED,
                 detail="Target already appears enrolled for this site.",
+                target_hostname=known_hostname,
                 finished=True,
                 redactions=redactions,
             )
@@ -6589,8 +6716,10 @@ class JobScheduler:
                 combined_stderr = "\n\n".join(stderr_parts)
                 if _windows_onboarding_existing_task_running_without_redeploy(stdout=combined_stdout, stderr=combined_stderr):
                     known_candidates = [host, reported_hostname]
-                    if any(self._onboarding_target_already_known(str(candidate or ""), site.get("id")) for candidate in known_candidates):
+                    known_hostname = self._lookup_known_onboarding_target_hostname_from_candidates(known_candidates, site.get("id"))
+                    if known_hostname or any(self._onboarding_target_already_known(str(candidate or ""), site.get("id")) for candidate in known_candidates):
                         terminal_status = "already_enrolled"
+                        reported_hostname = reported_hostname or known_hostname
                         self._update_onboarding_target_row(
                             row_id,
                             status=terminal_status,
