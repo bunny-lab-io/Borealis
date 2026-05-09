@@ -54,6 +54,17 @@ def test_ensure_firewall_failure_still_logs(monkeypatch) -> None:
     assert logs == ["Failed to ensure VNC firewall rule: boom"]
 
 
+def test_ensure_ultravnc_ini_enables_loopback_health_probe(tmp_path) -> None:
+    config_path = tmp_path / "ultravnc.ini"
+
+    assert vnc_role._ensure_ultravnc_ini(config_path, 5900)
+
+    raw = config_path.read_text(encoding="utf-8")
+    assert "SocketConnect=1" in raw
+    assert "AllowLoopback=1" in raw
+    assert "LoopbackOnly=0" in raw
+
+
 def test_sanitize_state_removes_legacy_password_fields(monkeypatch) -> None:
     saved_states: list[dict] = []
     role = vnc_role.Role.__new__(vnc_role.Role)

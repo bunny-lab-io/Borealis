@@ -343,10 +343,31 @@ def test_windows_onboarding_dependency_progress_keeps_dependency_name() -> None:
     )
     assert (
         scheduled_job_module._onboarding_progress_task(
+            status="completed",
+            detail="Installing Agent Dependencies: UltraVNC Server",
+        )
+        == "Installing Agent Dependencies: UltraVNC"
+    )
+    assert (
+        scheduled_job_module._onboarding_progress_task(
             status="running",
             detail="Agent.exe started.",
         )
         == "Running Agent Bootstrap"
+    )
+    assert (
+        scheduled_job_module._onboarding_progress_task(
+            status="completed",
+            detail="Device approved by operator.",
+        )
+        == "Device Enrollment Approved"
+    )
+    assert (
+        scheduled_job_module._onboarding_progress_task(
+            status="running",
+            detail="Agent bootstrap completed; waiting for Borealis approval callback.",
+        )
+        == "Agent Ready and Awaiting Approval"
     )
 
 

@@ -786,6 +786,8 @@ def _ensure_ultravnc_ini(
         "PortNumber": str(port),
         "AutoPortSelect": "0",
         "SocketConnect": "1",
+        "AllowLoopback": "1",
+        "LoopbackOnly": "0",
         "HTTPConnect": "0",
         "AllowShutdown": "1",
         "DisableTrayIcon": "1",

@@ -15,6 +15,7 @@ func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error
 	if err := ensurePythonRuntime(cfg, logger); err != nil {
 		return err
 	}
+	writeTimeline(cfg, "completed", dependencyTaskName("Python"), "Python dependency ready.", 0)
 	optionalSteps := []struct {
 		name string
 		fn   func(BootstrapConfig, *BootstrapLogger) error
@@ -30,7 +31,9 @@ func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error
 		if err := step.fn(cfg, logger); err != nil {
 			logger.Warnf("%s dependency deferred: %v", step.name, err)
 			writeTimeline(cfg, "completed", task, step.name+" dependency deferred: "+err.Error(), 0)
+			continue
 		}
+		writeTimeline(cfg, "completed", task, step.name+" dependency ready.", 0)
 	}
 	return nil
 }

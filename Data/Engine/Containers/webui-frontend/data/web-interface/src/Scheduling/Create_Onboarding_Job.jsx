@@ -130,8 +130,11 @@ const PAGE_SX = {
 
 const GRID_PANEL_SX = {
   width: "100%",
+  maxWidth: "100%",
   height: "100%",
   minHeight: 0,
+  minWidth: 0,
+  boxSizing: "border-box",
   fontFamily: gridFontFamily,
   "--ag-font-family": gridFontFamily,
   "--ag-icon-font-family": iconFontFamily,
@@ -152,8 +155,11 @@ const GRID_PANEL_SX = {
   boxShadow: "none",
   overflow: "hidden",
   "& .ag-root-wrapper": {
+    width: "100%",
+    maxWidth: "100%",
     minHeight: "100%",
     height: "100%",
+    boxSizing: "border-box",
     border: "none",
     borderRadius: "8px !important",
     background: "transparent",
@@ -644,7 +650,22 @@ function isOnboardingApprovalReadyTask(task) {
 }
 
 function isOnboardingApprovalCompleteTask(task) {
-  return String(task || "").trim() === "Device Approved > Onboarding Complete";
+  return [
+    "Device Enrollment Approved",
+    "Device Approved > Onboarding Complete",
+    "Onboarding Completed",
+  ].includes(String(task || "").trim());
+}
+
+function onboardingProgressSingletonKey(task) {
+  const normalized = String(task || "").trim();
+  if (normalized === "Running Agent Bootstrap") {
+    return "running-agent-bootstrap";
+  }
+  if (normalized.startsWith("Connection Established using ")) {
+    return normalized.toLowerCase();
+  }
+  return "";
 }
 
 function normalizeOnboardingProgressTask(task, status = "") {
@@ -660,7 +681,7 @@ function normalizeOnboardingProgressTask(task, status = "") {
     normalizedTask.includes("onboarding completed") ||
     normalizedTask.includes("device approved")
   ) {
-    return "Device Approved > Onboarding Complete";
+    return "Device Enrollment Approved";
   }
   if (isApprovalReady) {
     return "Agent Ready and Awaiting Approval";
@@ -771,6 +792,36 @@ function mergeOutputSnippet(first, second) {
   if (left.includes(right)) return left;
   if (right.includes(left)) return right;
   return `${left}\n\n${right}`;
+}
+
+function mergeOnboardingProgressRows(previous, row, progressionClock, taskOverride = "", options = {}) {
+  const preserveTiming = Boolean(options?.preserveTiming);
+  const startedAt = preserveTiming ? previous.startedAt : (previous.startedAt || row.startedAt);
+  const endedAt = preserveTiming ? previous.endedAt : (row.endedAt || previous.endedAt);
+  const status = preserveTiming && !statusIsActiveProgress(previous.status) ? previous.status : (row.status || previous.status);
+  const raw = {
+    ...(previous.raw || {}),
+    ...(row.raw || {}),
+    stdout_snippet: mergeOutputSnippet(previous.raw?.stdout_snippet, row.raw?.stdout_snippet),
+    stderr_snippet: mergeOutputSnippet(previous.raw?.stderr_snippet, row.raw?.stderr_snippet),
+  };
+  const elapsedEnd = endedAt || (statusIsActiveProgress(status) ? progressionClock : startedAt);
+  return {
+    ...previous,
+    ...row,
+    id: previous.id,
+    task: taskOverride || row.task || previous.task,
+    status,
+    statusLabel: formatStatusLabel(status),
+    startedAt,
+    endedAt,
+    startedLabel: formatOnboardingProgressTimestamp(startedAt),
+    elapsedLabel: formatElapsedDuration(startedAt, elapsedEnd),
+    hasStdOut: Boolean(String(raw.stdout_snippet || "").trim()),
+    hasStdErr: Boolean(String(raw.stderr_snippet || "").trim()),
+    failureKind: onboardingFailureKind(raw),
+    raw,
+  };
 }
 
 function epochToMs(value) {
@@ -991,6 +1042,56 @@ function ProgressStatusIcon({ status, failureKind = "" }) {
         </Box>
       </Box>
     </Tooltip>
+  );
+}
+
+function ProgressTaskCell({ value }) {
+  const task = String(value || "").trim();
+  const dependencyPrefix = "Installing Agent Dependencies:";
+  if (!task.startsWith(dependencyPrefix)) {
+    return (
+      <Typography
+        component="span"
+        variant="body2"
+        sx={{
+          color: MAGIC_UI.textBright,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {task}
+      </Typography>
+    );
+  }
+  const dependency = task.slice(dependencyPrefix.length).trim();
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, gap: 0.75 }}>
+      <Typography
+        component="span"
+        variant="body2"
+        sx={{
+          color: MAGIC_UI.textBright,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {dependencyPrefix}
+      </Typography>
+      {dependency ? (
+        <Typography
+          component="span"
+          variant="body2"
+          sx={{
+            color: "rgba(148, 163, 184, 0.78)",
+            flexShrink: 0,
+          }}
+        >
+          {dependency}
+        </Typography>
+      ) : null}
+    </Box>
   );
 }
 
@@ -1402,63 +1503,24 @@ export default function CreateOnboardingJob() {
           return acc;
         }
         const previous = acc[readyIndex];
-        const startedAt = previous.startedAt || row.startedAt;
-        const endedAt = row.endedAt || row.startedAt || previous.endedAt;
-        const status = row.status || "completed";
-        const raw = {
-          ...(previous.raw || {}),
-          ...(row.raw || {}),
-          stdout_snippet: mergeOutputSnippet(previous.raw?.stdout_snippet, row.raw?.stdout_snippet),
-          stderr_snippet: mergeOutputSnippet(previous.raw?.stderr_snippet, row.raw?.stderr_snippet),
-        };
-        const elapsedEnd = endedAt || (statusIsActiveProgress(status) ? progressionClock : startedAt);
-        acc[readyIndex] = {
-          ...previous,
-          ...row,
-          id: previous.id,
-          task: row.task,
-          status,
-          statusLabel: formatStatusLabel(status),
-          startedAt,
-          endedAt,
-          startedLabel: formatOnboardingProgressTimestamp(startedAt),
-          elapsedLabel: formatElapsedDuration(startedAt, elapsedEnd),
-          hasStdOut: Boolean(String(raw.stdout_snippet || "").trim()),
-          hasStdErr: Boolean(String(raw.stderr_snippet || "").trim()),
-          failureKind: onboardingFailureKind(raw),
-          raw,
-        };
+        acc[readyIndex] = mergeOnboardingProgressRows(previous, row, progressionClock, row.task);
         return acc;
+      }
+      const singletonKey = onboardingProgressSingletonKey(row.task);
+      if (singletonKey) {
+        const singletonIndex = acc.findIndex((existing) => onboardingProgressSingletonKey(existing?.task) === singletonKey);
+        if (singletonIndex >= 0) {
+          acc[singletonIndex] = mergeOnboardingProgressRows(acc[singletonIndex], row, progressionClock, row.task, {
+            preserveTiming: Boolean(acc[singletonIndex]?.endedAt),
+          });
+          return acc;
+        }
       }
       if (!previous || previous.task !== row.task) {
         acc.push(row);
         return acc;
       }
-      const startedAt = previous.startedAt || row.startedAt;
-      const endedAt = row.endedAt || previous.endedAt;
-      const status = row.status || previous.status;
-      const raw = {
-        ...(previous.raw || {}),
-        ...(row.raw || {}),
-        stdout_snippet: mergeOutputSnippet(previous.raw?.stdout_snippet, row.raw?.stdout_snippet),
-        stderr_snippet: mergeOutputSnippet(previous.raw?.stderr_snippet, row.raw?.stderr_snippet),
-      };
-      const elapsedEnd = endedAt || (statusIsActiveProgress(status) ? progressionClock : startedAt);
-      acc[acc.length - 1] = {
-        ...previous,
-        ...row,
-        id: previous.id,
-        status,
-        statusLabel: formatStatusLabel(status),
-        startedAt,
-        endedAt,
-        startedLabel: formatOnboardingProgressTimestamp(startedAt),
-        elapsedLabel: formatElapsedDuration(startedAt, elapsedEnd),
-        hasStdOut: Boolean(String(raw.stdout_snippet || "").trim()),
-        hasStdErr: Boolean(String(raw.stderr_snippet || "").trim()),
-        failureKind: onboardingFailureKind(raw),
-        raw,
-      };
+      acc[acc.length - 1] = mergeOnboardingProgressRows(previous, row, progressionClock, row.task);
       return acc;
     }, []);
   }, [progressionClock, selectedTargetId, selectedTargetRow]);
@@ -1651,7 +1713,15 @@ export default function CreateOnboardingJob() {
         cellClass: "auto-col-tight onboarding-progress-status-cell",
         cellRenderer: (params) => <ProgressStatusIcon status={params.data?.status} failureKind={params.data?.failureKind} />,
       },
-      { field: "task", headerName: "Task", minWidth: 260, flex: 1, filter: false, cellClass: "auto-col-tight" },
+      {
+        field: "task",
+        headerName: "Task",
+        minWidth: 260,
+        flex: 1,
+        filter: false,
+        cellClass: "auto-col-tight",
+        cellRenderer: (params) => <ProgressTaskCell value={params.value} />,
+      },
       {
         field: "output",
         headerName: "StdOut / StdErr",
@@ -2274,7 +2344,17 @@ export default function CreateOnboardingJob() {
               ) : null}
 
               {activeTabKey === "targets" ? (
-                <Box sx={{ ...TAB_SECTION_SX, flexGrow: 1, minHeight: 0, px: 0, pt: { xs: 0.75, md: 1 }, pb: 0 }}>
+                <Box
+                  sx={{
+                    ...TAB_SECTION_SX,
+                    flexGrow: 1,
+                    minHeight: 0,
+                    overflow: { xs: "visible", lg: "hidden" },
+                    px: { xs: 1.5, md: 2 },
+                    pt: { xs: 1, md: 1.25 },
+                    pb: { xs: 1.25, md: 1.75 },
+                  }}
+                >
                   <Box
                     sx={{
                       display: "flex",
@@ -2282,6 +2362,8 @@ export default function CreateOnboardingJob() {
                       justifyContent: "space-between",
                       flexWrap: "wrap",
                       gap: 2,
+                      minWidth: 0,
+                      flexShrink: 0,
                     }}
                   >
                     <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "8px" }}>
@@ -2306,9 +2388,12 @@ export default function CreateOnboardingJob() {
                       gap: 1.5,
                       flexGrow: 1,
                       minHeight: { xs: 940, xl: 0 },
+                      minWidth: 0,
+                      overflow: { xs: "visible", xl: "hidden" },
+                      boxSizing: "border-box",
                     }}
                   >
-                    <Box sx={{ display: "flex", flexDirection: "column", gap: 1, minHeight: { xs: 460, xl: 0 }, minWidth: 0 }}>
+                    <Box sx={{ display: "flex", flexDirection: "column", gap: 1, minHeight: { xs: 460, xl: 0 }, minWidth: 0, overflow: "hidden" }}>
                       <Box sx={{ minHeight: 24, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, flexWrap: "wrap" }}>
                         <Typography variant="body2" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
                           Onboarding Summary
@@ -2345,7 +2430,7 @@ export default function CreateOnboardingJob() {
                         />
                       </Box>
                     </Box>
-                    <Box sx={{ display: "flex", flexDirection: "column", gap: 1, minHeight: { xs: 460, xl: 0 }, minWidth: 0 }}>
+                    <Box sx={{ display: "flex", flexDirection: "column", gap: 1, minHeight: { xs: 460, xl: 0 }, minWidth: 0, overflow: "hidden" }}>
                       <Box sx={{ minHeight: 24, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, flexWrap: "wrap" }}>
                         <Typography variant="body2" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
                           Detailed Breakdown

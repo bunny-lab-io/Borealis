@@ -28,6 +28,7 @@ import threading
 import time
 import uuid
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import quote as url_quote
@@ -569,14 +570,19 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
         return "Agent Ready and Awaiting Approval"
     if normalized_status in {"approved", "completed", "success", "installed"}:
         output_task = _onboarding_progress_task_from_output(stdout=stdout, stderr=stderr)
-        if output_task == "Successfully Repaired Agent":
-            return output_task
+        detail_text = str(detail or "").strip()
         completed_detail_lower = str(detail or "").strip().lower()
         if "device approved" in completed_detail_lower or "enrollment completed" in completed_detail_lower:
-            return "Device Approved > Onboarding Complete"
+            return "Device Enrollment Approved"
         if "successfully repaired agent" in completed_detail_lower or "agent repaired" in completed_detail_lower:
             return "Successfully Repaired Agent"
-        return "Onboarding Completed"
+        if detail_text:
+            detail_task = _onboarding_progress_task(status=ONBOARDING_STATUS_RUNNING, detail=detail_text)
+            if detail_task:
+                return detail_task
+        if output_task == "Successfully Repaired Agent":
+            return output_task
+        return "Device Enrollment Approved"
     if normalized_status in {"failed", "failure", "error"}:
         return "Onboarding Failed"
     if normalized_status in {"unreachable", "ssh_unreachable"}:
@@ -634,10 +640,16 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
         return "Connection Established using WMI/DCOM"
     if "winrm" in detail_lower:
         return "Connection Established using WinRM"
-    if "agent installed through" in detail_lower or "approval pending" in detail_lower or "approval queue" in detail_lower:
+    if (
+        "agent installed through" in detail_lower
+        or "approval pending" in detail_lower
+        or "approval queue" in detail_lower
+        or "approval callback" in detail_lower
+        or "waiting for borealis approval" in detail_lower
+    ):
         return "Agent Ready and Awaiting Approval"
     if "device approved" in detail_lower or "enrollment completed" in detail_lower:
-        return "Onboarding Completed"
+        return "Device Enrollment Approved"
     if "successfully repaired agent" in detail_lower or "agent repaired" in detail_lower:
         return "Successfully Repaired Agent"
     if "unable to repair agent" in detail_lower or "re-deploying" in detail_lower:
@@ -682,7 +694,14 @@ def _set_impacket_timeout(obj: Any, timeout_seconds: float) -> None:
 
 
 def _windows_onboarding_child_entry(result_queue: Any, method: Callable[..., Dict[str, Any]], kwargs: Dict[str, Any]) -> None:
-    def _status_update(detail: str, stdout: str = "", stderr: str = "", target_hostname: str = "") -> None:
+    def _status_update(
+        detail: str,
+        stdout: str = "",
+        stderr: str = "",
+        target_hostname: str = "",
+        event_timestamp: Optional[int] = None,
+        event_status: str = "",
+    ) -> None:
         try:
             result_queue.put(
                 {
@@ -691,6 +710,8 @@ def _windows_onboarding_child_entry(result_queue: Any, method: Callable[..., Dic
                     "stdout": str(stdout or ""),
                     "stderr": str(stderr or ""),
                     "target_hostname": str(target_hostname or ""),
+                    "event_timestamp": event_timestamp,
+                    "event_status": str(event_status or ""),
                 },
                 block=False,
             )
@@ -718,6 +739,24 @@ def _windows_onboarding_child_entry(result_queue: Any, method: Callable[..., Dic
 
 def _now_ts() -> int:
     return int(time.time())
+
+
+def _parse_onboarding_event_timestamp(value: Any) -> Optional[int]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    try:
+        return int(parsed.timestamp())
+    except Exception:
+        return None
 
 
 def _env_string(value: Any) -> str:
@@ -3501,6 +3540,8 @@ class JobScheduler:
                         str(message.get("stdout") or ""),
                         str(message.get("stderr") or ""),
                         str(message.get("target_hostname") or ""),
+                        message.get("event_timestamp"),
+                        str(message.get("event_status") or ""),
                     )
                 elif message.get("type") == "result":
                     payload = message.get("result")
@@ -4081,8 +4122,18 @@ class JobScheduler:
         target_hostname: Optional[str] = None,
         finished: bool = False,
         redactions: Optional[Sequence[Any]] = None,
+        event_timestamp: Optional[int] = None,
+        event_status: Optional[str] = None,
     ) -> None:
         now = _now_ts()
+        event_now = now
+        if event_timestamp is not None:
+            try:
+                parsed_event_now = int(event_timestamp)
+                if parsed_event_now > 0:
+                    event_now = parsed_event_now
+            except Exception:
+                event_now = now
         clean_detail = sanitize_output(detail, redactions=redactions, limit=500)
         clean_stdout = sanitize_output(stdout, redactions=redactions)
         clean_stderr = sanitize_output(stderr, redactions=redactions)
@@ -4143,11 +4194,11 @@ class JobScheduler:
             self._record_onboarding_target_event(
                 cur,
                 row_id=int(row_id),
-                status=str(status or ""),
+                status=str(event_status or status or ""),
                 detail=clean_detail,
                 stdout=clean_stdout,
                 stderr=clean_stderr,
-                now=now,
+                now=event_now,
                 finished=finished,
             )
             conn.commit()
@@ -5314,11 +5365,12 @@ class JobScheduler:
         last_output = ""
         last_error = ""
         last_status_update = 0.0
-        last_event_key = ""
+        seen_event_keys = set()
         saw_output_share_lock = False
         success_seen = False
         success_wait_deadline = 0.0
         success_stdout = ""
+        timeline_seen = False
 
         def _approval_reference() -> str:
             if not callable(approval_check):
@@ -5418,18 +5470,31 @@ class JobScheduler:
             state_detail = str(state.get("detail") or "").strip()
             events = self._read_windows_onboarding_events(smb)
             reported_hostname = _windows_onboarding_reported_hostname(stdout=last_output, stderr=last_error, state=state, events=events)
-            latest_event = events[-1] if events else {}
-            if latest_event and callable(status_update):
-                try:
-                    event_key = json.dumps(latest_event, sort_keys=True)
-                except Exception:
-                    event_key = str(latest_event)
-                if event_key != last_event_key:
-                    event_task = str(latest_event.get("task") or "").strip()
-                    event_detail = str(latest_event.get("detail") or "").strip()
-                    status_update(event_task or event_detail or state_detail or "Running Agent Bootstrap", last_output, last_error, reported_hostname)
+            if events and callable(status_update):
+                for event in events:
+                    try:
+                        event_key = json.dumps(event, sort_keys=True)
+                    except Exception:
+                        event_key = str(event)
+                    if event_key in seen_event_keys:
+                        continue
+                    seen_event_keys.add(event_key)
+                    event_task = str(event.get("task") or "").strip()
+                    event_detail = str(event.get("detail") or "").strip()
+                    event_status = str(event.get("status") or "").strip()
+                    event_timestamp = _parse_onboarding_event_timestamp(
+                        event.get("created_at") or event.get("createdAt")
+                    )
+                    status_update(
+                        event_task or event_detail or state_detail or "Running Agent Bootstrap",
+                        last_output,
+                        last_error,
+                        reported_hostname,
+                        event_timestamp,
+                        event_status,
+                    )
                     last_status_update = time.monotonic()
-                    last_event_key = event_key
+                    timeline_seen = True
             state_exit_code: Optional[int] = None
             try:
                 state_exit_code = int(state.get("exit_code")) if state.get("exit_code") is not None else None
@@ -5499,7 +5564,7 @@ class JobScheduler:
                     "stdout": last_output,
                     "stderr": f"windows_onboarding_child_launch_timeout{': ' + last_error if last_error else ''}",
                 }
-            if callable(status_update) and (time.monotonic() - last_status_update) >= 5.0:
+            if callable(status_update) and not timeline_seen and (time.monotonic() - last_status_update) >= 5.0:
                 detail = "Waiting for Windows SMB service enrollment output or approval callback."
                 if state_status == "running" and state_detail:
                     detail = state_detail
@@ -5948,7 +6013,14 @@ class JobScheduler:
         def _approval_check() -> str:
             return self._lookup_onboarding_approval(job_id=job_id, run_id=run_id, target=host)
 
-        def _status_update(detail: str, stdout: str = "", stderr: str = "", target_hostname: str = "") -> None:
+        def _status_update(
+            detail: str,
+            stdout: str = "",
+            stderr: str = "",
+            target_hostname: str = "",
+            event_timestamp: Optional[int] = None,
+            event_status: str = "",
+        ) -> None:
             merged_stdout = "\n\n".join([part for part in [*stdout_parts, str(stdout or "")] if part])
             merged_stderr = "\n\n".join([part for part in [*stderr_parts, str(stderr or "")] if part])
             reported_hostname = _windows_onboarding_reported_hostname(
@@ -5963,6 +6035,8 @@ class JobScheduler:
                 stderr=merged_stderr,
                 target_hostname=reported_hostname,
                 redactions=redactions,
+                event_timestamp=event_timestamp,
+                event_status=event_status,
             )
 
         for method in normalized_methods:
