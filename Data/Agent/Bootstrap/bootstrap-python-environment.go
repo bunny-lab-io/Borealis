@@ -156,6 +156,12 @@ func writeAgentSettings(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if cfg.Target != "" {
 		contextPayload["target"] = cfg.Target
 	}
+	if cfg.StatePath != "" {
+		contextPayload["state_path"] = cfg.StatePath
+	}
+	if cfg.EventsPath != "" {
+		contextPayload["events_path"] = cfg.EventsPath
+	}
 	if len(contextPayload) > 0 {
 		data, _ := json.MarshalIndent(contextPayload, "", "  ")
 		_ = os.WriteFile(filepath.Join(settingsDir, "onboarding_context.json"), data, 0644)

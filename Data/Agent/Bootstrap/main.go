@@ -170,7 +170,6 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	startedAt := time.Now()
 	logger.Tracef("Install/redeploy sequence start.")
-	writeTimeline(cfg, "running", "Running Agent Bootstrap", "Preparing Borealis Agent install.", 1)
 	if err := copySelfToInstallRoot(cfg, logger); err != nil {
 		return err
 	}

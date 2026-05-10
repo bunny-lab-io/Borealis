@@ -165,6 +165,7 @@ export function CountSliderGroup({ options, activeKey, counts, onChange }) {
     >
       {entries.map((option) => {
         const active = activeKey === option.key;
+        const Icon = option.icon || null;
         return (
           <Box
             key={option.key}
@@ -190,6 +191,14 @@ export function CountSliderGroup({ options, activeKey, counts, onChange }) {
               transition: "all 0.2s ease",
             }}
           >
+            {Icon ? (
+              <Icon
+                sx={{
+                  fontSize: 16,
+                  color: option.iconColor || (active ? "#041224" : "#fb7185"),
+                }}
+              />
+            ) : null}
             <Box component="span" sx={{ userSelect: "none" }}>
               {option.label}
             </Box>

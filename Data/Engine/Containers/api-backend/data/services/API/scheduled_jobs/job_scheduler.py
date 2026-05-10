@@ -129,6 +129,7 @@ ONBOARDING_STATUS_RUNNING = "running"
 ONBOARDING_STATUS_WAITING_APPROVAL = "waiting_approval"
 ONBOARDING_STATUS_SKIPPED = "skipped"
 ONBOARDING_STATUS_FAILED = "failed"
+ONBOARDING_STATUS_UNSUPPORTED_OS = "unsupported_os"
 ONBOARDING_STATUS_UNREACHABLE = "unreachable"
 ONBOARDING_PLATFORM_AUTO = "auto"
 ONBOARDING_PLATFORM_LINUX = "linux"
@@ -441,6 +442,79 @@ def _windows_smb_invalid_parameter_error(error: Any) -> bool:
     return "status_invalid_parameter" in normalized or "0xc000000d" in normalized
 
 
+def _ssh_banner_is_windows(banner: Any) -> bool:
+    normalized = str(banner or "").strip().lower()
+    return "openssh_for_windows" in normalized or "windows" in normalized
+
+
+def _ssh_banner_is_unix_like(banner: Any) -> bool:
+    normalized = str(banner or "").strip().lower()
+    if not normalized.startswith("ssh-") or _ssh_banner_is_windows(normalized):
+        return False
+    return any(token in normalized for token in ("openssh", "dropbear", "libssh"))
+
+
+def _ssh_banner_is_management_endpoint(banner: Any) -> bool:
+    normalized = str(banner or "").strip().lower()
+    return any(token in normalized for token in ("mpssh", "ilo", "integrated lights-out"))
+
+
+def _ssh_error_is_unsupported_endpoint(error: Any, *, banner: Any = "") -> bool:
+    normalized = str(error or "").strip().lower()
+    if not normalized:
+        return False
+    if _ssh_banner_is_management_endpoint(banner):
+        return True
+    unsupported_tokens = (
+        "no matching key exchange method",
+        "no matching host key type",
+        "unable to negotiate",
+        "invalid_ssh_banner",
+        "protocol major versions differ",
+        "kex_exchange_identification",
+    )
+    if any(token in normalized for token in unsupported_tokens):
+        return True
+    if normalized == "ssh_session_timeout" and _ssh_banner_is_unix_like(banner):
+        return True
+    return False
+
+
+def _ssh_unsupported_endpoint_detail(error: Any, *, banner: Any = "") -> str:
+    banner_text = str(banner or "").strip()
+    error_text = str(error or "").strip()
+    if _ssh_banner_is_management_endpoint(banner_text):
+        return "Unsupported OS: SSH endpoint looks like an iLO or network management interface, not an agent-capable operating system."
+    if error_text == "ssh_session_timeout" and _ssh_banner_is_unix_like(banner_text):
+        return "Unsupported OS: SSH endpoint did not complete noninteractive agent preflight; target may be an appliance or restricted shell."
+    return "Unsupported OS: SSH endpoint is not compatible with Borealis agent onboarding."
+
+
+def _ssh_preflight_failure_detail(error: Any) -> str:
+    normalized = str(error or "").strip().lower()
+    if normalized in {"sudo_password_required"}:
+        return "SSH connection succeeded, but sudo password is required or rejected."
+    if normalized in {"sudo_unavailable"}:
+        return "SSH connection succeeded, but sudo is unavailable on the target."
+    if normalized in {"permission_denied", "ssh_password_required"}:
+        return "SSH authentication failed for all stored Linux credentials."
+    if normalized == "ssh_session_timeout":
+        return "SSH session timed out before Borealis could verify agent-capable shell access."
+    if normalized.startswith("ssh_session_failed:"):
+        return "SSH authentication failed for all stored Linux credentials."
+    return "SSH connection failed for all stored Linux credentials."
+
+
+def _linux_onboarding_privilege_probe(username: Any, become_method: Any) -> Tuple[str, str]:
+    normalized_username = str(username or "").strip().lower()
+    if normalized_username == "root":
+        return "", "root"
+    normalized_method = str(become_method or "").strip().lower()
+    if normalized_method == "sudo":
+        return "sudo", "root"
+    return "", "root"
+
+
 def _onboarding_progress_status(status: Any) -> str:
     normalized = str(status or "pending").strip().lower()
     if normalized in {"ssh_unreachable", "unreachable"}:
@@ -585,6 +659,10 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
             return output_task
         return "Device Enrollment Approved"
     if normalized_status in {"failed", "failure", "error"}:
+        failed_detail_lower = str(detail or "").strip().lower()
+        failed_output_lower = f"{stdout or ''}\n{stderr or ''}".lower()
+        if "unsupported os" in failed_detail_lower or "__borealis_unsupported_os__" in failed_output_lower:
+            return "Unsupported OS"
         return "Onboarding Failed"
     if normalized_status in {"unreachable", "ssh_unreachable"}:
         return "Remote Device Unreachable"
@@ -592,7 +670,12 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
         output_task = _onboarding_progress_task_from_output(stdout=stdout, stderr=stderr)
         if output_task in {"Already Enrolled and Active", "Successfully Repaired Agent", "Existing Agent Detected"}:
             return output_task
-        skipped_detail_lower = str(detail or "").strip().lower()
+        detail_text = str(detail or "").strip()
+        skipped_detail_lower = detail_text.lower()
+        if "unsupported os" in skipped_detail_lower:
+            return detail_text or "Unsupported OS"
+        if "network management interface" in skipped_detail_lower or "agent-capable operating system" in skipped_detail_lower:
+            return "Unsupported OS: SSH endpoint looks like an iLO or network management interface."
         if "already enrolled and active" in skipped_detail_lower or "already appears enrolled" in skipped_detail_lower:
             return "Already Enrolled and Active"
         if "successfully repaired agent" in skipped_detail_lower or "agent repaired" in skipped_detail_lower:
@@ -603,6 +686,8 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
 
     detail_text = str(detail or "").strip()
     detail_lower = detail_text.lower()
+    if detail_lower.startswith("auto-detecting remote os"):
+        return "Auto-Detecting Remote OS"
     if detail_lower.startswith("establishing connection to remote device"):
         return detail_text
     if detail_lower.startswith("detected remote operating system"):
@@ -616,6 +701,8 @@ def _onboarding_progress_task(*, status: Any = "", detail: Any = "", stdout: Any
     if detail_lower.startswith("trying windows") and "enrollment" in detail_lower:
         return "Establishing Connection to Remote Device"
     if "connection established" in detail_lower:
+        if detail_lower.startswith("connection established using") and ":" in detail_text:
+            return detail_text
         protocol = _onboarding_windows_protocol_name(detail_lower)
         if protocol:
             return f"Connection Established using {protocol}"
@@ -3200,6 +3287,12 @@ class JobScheduler:
         return last_error or "connection_failed"
 
     def _preflight_ssh_banner(self, sock: socket.socket, *, timeout_seconds: float) -> str:
+        banner, error = self._read_ssh_banner_from_socket(sock, timeout_seconds=timeout_seconds)
+        if banner:
+            return ""
+        return error or "ssh_banner_timeout"
+
+    def _read_ssh_banner_from_socket(self, sock: socket.socket, *, timeout_seconds: float) -> Tuple[str, str]:
         deadline = time.monotonic() + max(0.1, float(timeout_seconds or 0.0))
         received = b""
         while len(received) < 255:
@@ -3212,18 +3305,140 @@ class JobScheduler:
             except socket.timeout:
                 break
             except Exception as exc:
-                return str(exc).strip() or exc.__class__.__name__
+                return "", str(exc).strip() or exc.__class__.__name__
             if not chunk:
                 break
             received += chunk
             for raw_line in received.splitlines():
                 if raw_line.startswith(b"SSH-"):
-                    return ""
+                    banner = raw_line.decode("utf-8", errors="replace").strip()
+                    return banner[:255], ""
         if received:
             compact = received.decode("utf-8", errors="replace").replace("\r", "\\r").replace("\n", "\\n").strip()
             if compact:
-                return f"invalid_ssh_banner:{compact[:80]}"
-        return "ssh_banner_timeout"
+                return "", f"invalid_ssh_banner:{compact[:80]}"
+        return "", "ssh_banner_timeout"
+
+    def _read_ssh_banner(self, *, host: str, port: int, timeout_seconds: float = 3.0) -> Tuple[str, str]:
+        normalized_host = str(host or "").strip()
+        if not normalized_host:
+            return "", "missing_host"
+        sock = None
+        try:
+            sock = socket.create_connection((normalized_host, int(port)), timeout=max(0.1, float(timeout_seconds or 0.0)))
+            return self._read_ssh_banner_from_socket(sock, timeout_seconds=timeout_seconds)
+        except Exception as exc:
+            return "", str(exc).strip() or exc.__class__.__name__
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+    def _score_remote_onboarding_protocols(
+        self,
+        *,
+        host: str,
+        ssh_port: int,
+        smb_port: int,
+        winrm_port: int,
+    ) -> Dict[str, Any]:
+        scores = {"windows": 0, "linux": 0, "unsupported": 0}
+        signals: List[str] = []
+        errors: Dict[str, str] = {}
+        unsupported_detail = ""
+        normalized_host = str(host or "").strip()
+        if not normalized_host:
+            return {
+                "scores": scores,
+                "signals": ["missing host"],
+                "detail": "Auto-Detecting Remote OS: missing host",
+                "classification": "unknown",
+                "unsupported_detail": "",
+                "errors": errors,
+            }
+
+        ssh_error = self._preflight_remote_port(host=normalized_host, port=int(ssh_port), attempts=1, timeout_seconds=2.5)
+        errors["ssh"] = ssh_error
+        if ssh_error:
+            signals.append(f"SSH {int(ssh_port)} closed ({ssh_error})")
+        else:
+            scores["linux"] += 20
+            signals.append(f"SSH {int(ssh_port)} open (+20 Linux)")
+            banner, banner_error = self._read_ssh_banner(
+                host=normalized_host,
+                port=int(ssh_port),
+                timeout_seconds=_env_non_negative_float(_SSH_BANNER_TIMEOUT_ENV, 4.0),
+            )
+            errors["ssh_banner"] = banner_error
+            if banner:
+                safe_banner = banner.replace(";", ",")[:80]
+                signals.append(f"SSH banner '{safe_banner}'")
+                if _ssh_banner_is_management_endpoint(banner):
+                    scores["unsupported"] += 100
+                    unsupported_detail = _ssh_unsupported_endpoint_detail("", banner=banner)
+                    signals.append("management SSH banner (+100 Unsupported)")
+                elif _ssh_banner_is_windows(banner):
+                    scores["windows"] += 35
+                    signals.append("Windows SSH banner (+35 Windows)")
+                elif _ssh_banner_is_unix_like(banner):
+                    scores["linux"] += 45
+                    signals.append("Unix-like SSH banner (+45 Linux)")
+            elif banner_error:
+                signals.append(f"SSH banner unavailable ({banner_error})")
+                if _ssh_error_is_unsupported_endpoint(banner_error):
+                    scores["unsupported"] += 90
+                    unsupported_detail = _ssh_unsupported_endpoint_detail(banner_error)
+                    signals.append("unsupported SSH endpoint response (+90 Unsupported)")
+
+        smb_error = self._preflight_remote_port(host=normalized_host, port=int(smb_port), attempts=1, timeout_seconds=2.5)
+        errors["smb"] = smb_error
+        if smb_error:
+            signals.append(f"SMB {int(smb_port)} closed ({smb_error})")
+        else:
+            scores["windows"] += 45
+            signals.append(f"SMB {int(smb_port)} open (+45 Windows)")
+
+        winrm_error = self._preflight_remote_port(host=normalized_host, port=int(winrm_port), attempts=1, timeout_seconds=2.5)
+        errors["winrm"] = winrm_error
+        if winrm_error:
+            signals.append(f"WinRM {int(winrm_port)} closed ({winrm_error})")
+        else:
+            scores["windows"] += 35
+            signals.append(f"WinRM {int(winrm_port)} open (+35 Windows)")
+
+        rpc_error = self._preflight_remote_port(host=normalized_host, port=135, attempts=1, timeout_seconds=2.5)
+        errors["rpc"] = rpc_error
+        if not rpc_error:
+            scores["windows"] += 20
+            signals.append("RPC 135 open (+20 Windows)")
+
+        classification = "windows" if scores["windows"] >= scores["linux"] else "linux"
+        if scores[classification] <= 0:
+            classification = "unknown"
+        if (
+            scores["unsupported"] >= 90
+            and scores["unsupported"] >= max(scores["windows"], scores["linux"])
+            and (
+                "management interface" in unsupported_detail.lower()
+                or (scores["windows"] <= 0 and scores["linux"] <= 20)
+            )
+        ):
+            classification = "unsupported"
+        detail = (
+            "Auto-Detecting Remote OS: "
+            f"Windows={scores['windows']} Linux={scores['linux']} Unsupported={scores['unsupported']} | "
+            + "; ".join(signals)
+        )
+        return {
+            "scores": scores,
+            "signals": signals,
+            "detail": detail,
+            "classification": classification,
+            "unsupported_detail": unsupported_detail,
+            "errors": errors,
+        }
 
     def _preflight_ssh_session(
         self,
@@ -3266,7 +3481,7 @@ class JobScheduler:
         if normalized_become_method == "sudo":
             target_user = str(become_user or "root").strip() or "root"
             remote_steps.append(
-                "sudo -S -p {prompt} -u {user} /bin/sh -lc {command}".format(
+                "sudo -S -p {prompt} -u {user} /bin/sh -c {command}".format(
                     prompt=shlex.quote(sudo_prompt_marker),
                     user=shlex.quote(target_user),
                     command=shlex.quote("true"),
@@ -3337,6 +3552,19 @@ class JobScheduler:
                             "KbdInteractiveAuthentication=no",
                         ]
                     )
+            elif password:
+                args.extend(
+                    [
+                        "-o",
+                        "PreferredAuthentications=password,keyboard-interactive",
+                        "-o",
+                        "PubkeyAuthentication=no",
+                        "-o",
+                        "IdentitiesOnly=yes",
+                        "-o",
+                        "IdentityAgent=none",
+                    ]
+                )
             args.append(f"{normalized_username}@{normalized_host}")
             args.append(remote_command)
 
@@ -3414,8 +3642,22 @@ class JobScheduler:
 
             transcript = " ".join(part.strip() for part in transcript_parts if str(part).strip())
             compact = transcript.replace("\r", " ").replace("\n", " ").strip()
+            if not login_seen and ssh_password_sent:
+                return "permission_denied"
+            if login_seen and re.search(r"(?i)(sudo: not found|sudo: command not found|/sudo: no such file)", compact):
+                return "sudo_unavailable"
+            if login_seen and re.search(r"(?i)(sudo.*incorrect password|sorry, try again|authentication failure)", compact):
+                return "sudo_password_required"
             if compact:
-                return f"ssh_session_failed:{compact[:80]}"
+                suffix = ""
+                try:
+                    if child.exitstatus is not None:
+                        suffix = f" exit={int(child.exitstatus)}"
+                    elif child.signalstatus is not None:
+                        suffix = f" signal={int(child.signalstatus)}"
+                except Exception:
+                    suffix = ""
+                return f"ssh_session_failed:{compact[:240]}{suffix}"
             return "ssh_session_failed"
         finally:
             shutil.rmtree(str(probe_root), ignore_errors=True)
@@ -3435,38 +3677,38 @@ class JobScheduler:
             _SSH_SESSION_TIMEOUT_ENV,
             _DEFAULT_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS,
         )
-        key_probe_result = self._preflight_ssh_session(
+        password_probe_result = self._preflight_ssh_session(
             host=host,
             port=port,
             username=username,
-            password="",
-            private_key_text=private_key_text,
+            password=password,
+            private_key_text="",
             timeout_seconds=probe_timeout,
         )
-        password_probe_result = ""
-        if not key_probe_result:
-            mode = "key"
+        key_probe_result = ""
+        if not password_probe_result:
+            mode = "password"
         else:
-            mode = "key"
-            password_probe_result = self._preflight_ssh_session(
+            mode = "password"
+            key_probe_result = self._preflight_ssh_session(
                 host=host,
                 port=port,
                 username=username,
-                password=password,
-                private_key_text="",
+                password="",
+                private_key_text=private_key_text,
                 timeout_seconds=probe_timeout,
             )
-            if not password_probe_result:
-                mode = "password"
+            if not key_probe_result:
+                mode = "key"
         self._log_event(
             "mixed ssh credential auth probe selected mode",
             host=host,
             extra={
                 "port": int(port),
                 "auth_mode": mode,
-                "probe_result": key_probe_result or "key_accepted",
-                "key_probe_result": key_probe_result or "key_accepted",
-                "password_probe_result": password_probe_result or ("not_run" if mode == "key" else "password_accepted"),
+                "probe_result": password_probe_result or "password_accepted",
+                "password_probe_result": password_probe_result or "password_accepted",
+                "key_probe_result": key_probe_result or ("not_run" if mode == "password" else "key_accepted"),
             },
         )
         return mode
@@ -3492,7 +3734,7 @@ class JobScheduler:
         return max(10.0, min(float(configured), float(observation_timeout)))
 
     def _windows_onboarding_approval_wait_seconds(self) -> float:
-        configured = _env_non_negative_float("BOREALIS_WINDOWS_ONBOARDING_APPROVAL_WAIT_SECONDS", 120.0) or 120.0
+        configured = _env_non_negative_float("BOREALIS_WINDOWS_ONBOARDING_APPROVAL_WAIT_SECONDS", 300.0) or 300.0
         observation_timeout = self._windows_onboarding_observation_timeout_seconds()
         return max(5.0, min(float(configured), float(observation_timeout)))
 
@@ -4258,6 +4500,154 @@ class JobScheduler:
         finally:
             conn.close()
 
+    def _set_onboarding_target_hostnames(self, hostnames_by_row_id: Mapping[int, Any]) -> None:
+        cleaned: Dict[int, str] = {}
+        for row_id, target_hostname in dict(hostnames_by_row_id or {}).items():
+            clean_target_hostname = _clean_onboarding_reported_hostname(target_hostname)
+            if not clean_target_hostname:
+                continue
+            try:
+                clean_row_id = int(row_id)
+            except Exception:
+                continue
+            if clean_row_id > 0:
+                cleaned[clean_row_id] = clean_target_hostname
+        if not cleaned:
+            return
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            now = _now_ts()
+            for row_id, target_hostname in cleaned.items():
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_onboarding_targets
+                       SET target_hostname=?,
+                           updated_at=?
+                     WHERE id=?
+                       AND (
+                            COALESCE(target_hostname, '')=''
+                            OR LOWER(COALESCE(target_hostname, ''))=LOWER(COALESCE(target_address, ''))
+                            OR LOWER(COALESCE(target_hostname, ''))=LOWER(COALESCE(target_input, ''))
+                       )
+                    """,
+                    (target_hostname, now, int(row_id)),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _bulk_lookup_known_onboarding_target_hostnames(self, rows: Sequence[Mapping[str, Any]]) -> Dict[int, str]:
+        row_site_ids: Dict[int, Optional[int]] = {}
+        value_to_row_ids: Dict[str, List[int]] = {}
+        for row in rows or []:
+            try:
+                row_id = int(row.get("id") or 0)
+            except Exception:
+                continue
+            if row_id <= 0:
+                continue
+            try:
+                row_site_ids[row_id] = int(row.get("site_id")) if row.get("site_id") is not None else None
+            except Exception:
+                row_site_ids[row_id] = None
+            seen_values: set[str] = set()
+            for field in ("target_address", "target_hostname", "target_input"):
+                value = _onboarding_target_without_port(row.get(field))
+                if not value:
+                    continue
+                key = value.strip().lower()
+                if not key or key in seen_values:
+                    continue
+                seen_values.add(key)
+                value_to_row_ids.setdefault(key, []).append(row_id)
+        if not value_to_row_ids:
+            return {}
+
+        resolved: Dict[int, str] = {}
+
+        def _site_matches(row_id: int, found_site_id: Any) -> bool:
+            desired_site_id = row_site_ids.get(int(row_id))
+            if desired_site_id is None or found_site_id is None:
+                return True
+            try:
+                return int(desired_site_id) == int(found_site_id)
+            except Exception:
+                return True
+
+        def _assign(key: Any, hostname: Any, found_site_id: Any = None) -> None:
+            lookup_key = str(key or "").strip().lower()
+            clean_hostname = _clean_onboarding_reported_hostname(hostname)
+            if not lookup_key or not clean_hostname:
+                return
+            for row_id in value_to_row_ids.get(lookup_key, []):
+                if row_id in resolved:
+                    continue
+                if not _site_matches(row_id, found_site_id):
+                    continue
+                resolved[row_id] = clean_hostname
+
+        values = list(value_to_row_ids.keys())
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            chunk_size = 300
+            for start in range(0, len(values), chunk_size):
+                chunk = values[start : start + chunk_size]
+                placeholders = ",".join(["?"] * len(chunk))
+                cur.execute(
+                    f"""
+                    SELECT d.hostname,
+                           d.internal_ip,
+                           d.external_ip,
+                           ds.site_id
+                      FROM devices d
+                 LEFT JOIN device_sites ds
+                        ON ds.device_hostname = d.hostname
+                     WHERE LOWER(COALESCE(d.hostname, '')) IN ({placeholders})
+                        OR LOWER(COALESCE(d.internal_ip, '')) IN ({placeholders})
+                        OR LOWER(COALESCE(d.external_ip, '')) IN ({placeholders})
+                    """,
+                    tuple([*chunk, *chunk, *chunk]),
+                )
+                for hostname, internal_ip, external_ip, found_site_id in cur.fetchall():
+                    for key in (internal_ip, external_ip, hostname):
+                        _assign(key, hostname, found_site_id)
+            unresolved_values = [
+                value
+                for value, row_ids in value_to_row_ids.items()
+                if any(row_id not in resolved for row_id in row_ids)
+            ]
+            for start in range(0, len(unresolved_values), chunk_size):
+                chunk = unresolved_values[start : start + chunk_size]
+                if not chunk:
+                    continue
+                placeholders = ",".join(["?"] * len(chunk))
+                cur.execute(
+                    f"""
+                    SELECT hostname_claimed,
+                           onboarding_target,
+                           site_id
+                      FROM device_approvals
+                     WHERE LOWER(COALESCE(status, '')) = 'pending'
+                       AND TRIM(COALESCE(hostname_claimed, '')) != ''
+                       AND (
+                            LOWER(COALESCE(hostname_claimed, '')) IN ({placeholders})
+                            OR LOWER(COALESCE(onboarding_target, '')) IN ({placeholders})
+                       )
+                     ORDER BY updated_at DESC, created_at DESC
+                    """,
+                    tuple([*chunk, *chunk]),
+                )
+                for hostname, onboarding_target, found_site_id in cur.fetchall():
+                    for key in (onboarding_target, hostname):
+                        _assign(key, hostname, found_site_id)
+        except Exception:
+            return resolved
+        finally:
+            conn.close()
+        return resolved
+
     def _lookup_known_onboarding_target_hostname(self, host: str, site_id: Optional[int]) -> str:
         value = _onboarding_target_without_port(host)
         if not value:
@@ -4320,6 +4710,53 @@ class JobScheduler:
     ) -> str:
         for candidate in candidates:
             hostname = self._lookup_known_onboarding_target_hostname(str(candidate or ""), site_id)
+            if hostname:
+                return hostname
+        return ""
+
+    def _lookup_active_onboarding_target_hostname(self, host: str, site_id: Optional[int]) -> str:
+        value = _onboarding_target_without_port(host)
+        if not value:
+            return ""
+        lookup_value = value.lower()
+        active_cutoff = _now_ts() - (24 * 60 * 60)
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            params: List[Any] = [lookup_value, lookup_value, lookup_value, active_cutoff]
+            sql = """
+                SELECT d.hostname
+                  FROM devices d
+             LEFT JOIN device_sites ds
+                    ON ds.device_hostname = d.hostname
+                 WHERE (
+                        LOWER(COALESCE(d.hostname, '')) = ?
+                        OR LOWER(COALESCE(d.internal_ip, '')) = ?
+                        OR LOWER(COALESCE(d.external_ip, '')) = ?
+                       )
+                   AND TRIM(COALESCE(d.hostname, '')) != ''
+                   AND LOWER(COALESCE(d.status, '')) IN ('active', 'online', 'running', 'connected')
+                   AND COALESCE(d.last_seen, 0) >= ?
+            """
+            if site_id is not None:
+                sql += " AND (ds.site_id = ? OR ds.site_id IS NULL)"
+                params.append(int(site_id))
+            sql += " ORDER BY COALESCE(d.last_seen, 0) DESC LIMIT 1"
+            cur.execute(sql, tuple(params))
+            row = cur.fetchone()
+            return _clean_onboarding_reported_hostname(row[0] if row else "")
+        except Exception:
+            return ""
+        finally:
+            conn.close()
+
+    def _lookup_active_onboarding_target_hostname_from_candidates(
+        self,
+        candidates: Sequence[Any],
+        site_id: Optional[int],
+    ) -> str:
+        for candidate in candidates:
+            hostname = self._lookup_active_onboarding_target_hostname(str(candidate or ""), site_id)
             if hostname:
                 return hostname
         return ""
@@ -4538,25 +4975,34 @@ class JobScheduler:
 
     def _backfill_onboarding_target_approval_references(self, rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
         hydrated: List[Dict[str, Any]] = []
+        known_hostnames_by_row_id = self._bulk_lookup_known_onboarding_target_hostnames(rows)
+        hostname_updates: Dict[int, str] = {}
+        for row in rows or []:
+            try:
+                row_id = int(row.get("id") or 0)
+            except Exception:
+                continue
+            if row_id <= 0:
+                continue
+            if _clean_onboarding_reported_hostname(row.get("target_hostname")):
+                continue
+            known_hostname = known_hostnames_by_row_id.get(row_id, "")
+            if known_hostname:
+                hostname_updates[row_id] = known_hostname
+        if hostname_updates:
+            self._set_onboarding_target_hostnames(hostname_updates)
         for row in rows:
             next_row = dict(row)
+            row_id = int(next_row.get("id") or 0)
             status = str(next_row.get("status") or "").strip().lower()
             detail_current = str(next_row.get("detail") or "").strip()
             approval_reference_current = str(next_row.get("approval_reference") or "").strip()
             site_id = int(next_row.get("site_id")) if next_row.get("site_id") is not None else None
             existing_target_hostname = _clean_onboarding_reported_hostname(next_row.get("target_hostname"))
             if not existing_target_hostname:
-                known_hostname = self._lookup_known_onboarding_target_hostname_from_candidates(
-                    [
-                        next_row.get("target_address"),
-                        next_row.get("target_hostname"),
-                        next_row.get("target_input"),
-                    ],
-                    site_id,
-                )
+                known_hostname = known_hostnames_by_row_id.get(row_id, "")
                 if known_hostname:
                     next_row["target_hostname"] = known_hostname
-                    self._set_onboarding_target_hostname(int(next_row.get("id") or 0), known_hostname)
             local_bootstrap_completed = _windows_onboarding_local_bootstrap_completed(
                 stdout=next_row.get("stdout_snippet") or "",
                 stderr=next_row.get("stderr_snippet") or "",
@@ -4571,9 +5017,8 @@ class JobScheduler:
                     next_row.get("target_hostname"),
                     next_row.get("target_input"),
                 ]
-                known_hostname = self._lookup_known_onboarding_target_hostname_from_candidates(known_candidates, site_id)
+                known_hostname = _clean_onboarding_reported_hostname(next_row.get("target_hostname")) or known_hostnames_by_row_id.get(row_id, "")
                 if known_hostname or any(self._onboarding_target_already_known(str(candidate or ""), site_id) for candidate in known_candidates):
-                    row_id = int(next_row.get("id") or 0)
                     skipped_detail = "Existing Borealis Agent is already enrolled and active."
                     next_row["status"] = "already_enrolled"
                     next_row["detail"] = skipped_detail
@@ -4626,7 +5071,7 @@ class JobScheduler:
                         next_row.get("target_hostname"),
                         next_row.get("target_input"),
                     ]
-                    known_hostname = self._lookup_known_onboarding_target_hostname_from_candidates(known_candidates, site_id)
+                    known_hostname = _clean_onboarding_reported_hostname(next_row.get("target_hostname")) or known_hostnames_by_row_id.get(row_id, "")
                     if known_hostname or any(self._onboarding_target_already_known(str(candidate or ""), site_id) for candidate in known_candidates):
                         completed_detail = "Device approved and enrollment completed."
                         next_row["status"] = "completed"
@@ -4655,6 +5100,33 @@ class JobScheduler:
                     and not approval_reference_current
                 ):
                     row_id = int(next_row.get("id") or 0)
+                    known_candidates = [
+                        next_row.get("target_address"),
+                        next_row.get("target_hostname"),
+                        next_row.get("target_input"),
+                    ]
+                    active_hostname = self._lookup_active_onboarding_target_hostname_from_candidates(known_candidates, site_id)
+                    if active_hostname:
+                        skipped_detail = "Existing Borealis Agent is already enrolled and active."
+                        next_row["status"] = "already_enrolled"
+                        next_row["detail"] = skipped_detail
+                        next_row["approval_reference"] = ""
+                        next_row["target_hostname"] = active_hostname
+                        self._update_onboarding_target_row(
+                            row_id,
+                            status="already_enrolled",
+                            detail=skipped_detail,
+                            stdout=next_row.get("stdout_snippet") or "",
+                            stderr=next_row.get("stderr_snippet") or "",
+                            approval_reference="",
+                            target_hostname=active_hostname,
+                            finished=True,
+                        )
+                        timeline = self._load_onboarding_target_event_rows([row_id]).get(row_id, [])
+                        next_row["timeline"] = timeline
+                        next_row["events"] = timeline
+                        hydrated.append(next_row)
+                        continue
                     failure_detail = "Agent completed local bootstrap, but Borealis Engine did not receive an approval request."
                     stderr_current = str(next_row.get("stderr_snippet") or "")
                     if "windows_onboarding_approval_callback_timeout" not in stderr_current:
@@ -4687,7 +5159,11 @@ class JobScheduler:
                         approval_context.get("approval_target"),
                         approval_context.get("approval_hostname"),
                     ]
-                    known_hostname = self._lookup_known_onboarding_target_hostname_from_candidates(known_candidates, site_id)
+                    known_hostname = (
+                        _clean_onboarding_reported_hostname(next_row.get("target_hostname"))
+                        or _clean_onboarding_reported_hostname(approval_context.get("approval_hostname"))
+                        or known_hostnames_by_row_id.get(row_id, "")
+                    )
                     if known_hostname or any(self._onboarding_target_already_known(str(candidate or ""), site_id) for candidate in known_candidates):
                         skipped_detail = "Existing Borealis Agent is already enrolled and active."
                         next_row["status"] = "already_enrolled"
@@ -4814,7 +5290,8 @@ class JobScheduler:
         return "\n".join(
             [
                 "set -eu",
-                "if [ \"$(uname -s 2>/dev/null || true)\" != \"Linux\" ]; then echo '__BOREALIS_UNSUPPORTED_OS__' >&2; exit 42; fi",
+                "detected_os=\"$(uname -s 2>/dev/null || true)\"",
+                "if [ \"$detected_os\" != \"Linux\" ]; then echo \"__BOREALIS_UNSUPPORTED_OS__=${detected_os:-unknown}\" >&2; exit 42; fi",
                 "tmp_file=\"$(mktemp /tmp/borealis-agent.XXXXXX)\"",
                 "cleanup() { rm -f \"$tmp_file\"; }",
                 "trap cleanup EXIT",
@@ -4853,7 +5330,7 @@ class JobScheduler:
         connect_timeout = max(1, min(60, int(math.ceil(normalized_timeout))))
         login_marker = "__BOREALIS_ONBOARDING_LOGIN__"
         sudo_marker = "__BOREALIS_ONBOARDING_SUDO_PROMPT__"
-        remote_command = f"printf '%s\\n' {shlex.quote(login_marker)} && /bin/sh -lc {shlex.quote(command)}"
+        remote_command = f"printf '%s\\n' {shlex.quote(login_marker)} && /bin/sh -c {shlex.quote(command)}"
 
         probe_root = Path(tempfile.mkdtemp(prefix="borealis-onboarding-ssh-"))
         known_hosts_path = probe_root / "known_hosts"
@@ -4903,6 +5380,19 @@ class JobScheduler:
                 except Exception:
                     pass
                 args.extend(["-o", f"IdentityFile={key_path}", "-o", "IdentitiesOnly=yes"])
+            elif password:
+                args.extend(
+                    [
+                        "-o",
+                        "PreferredAuthentications=password,keyboard-interactive",
+                        "-o",
+                        "PubkeyAuthentication=no",
+                        "-o",
+                        "IdentitiesOnly=yes",
+                        "-o",
+                        "IdentityAgent=none",
+                    ]
+                )
             args.append(f"{username}@{host}")
             args.append(remote_command)
 
@@ -5000,6 +5490,73 @@ class JobScheduler:
             }
         finally:
             shutil.rmtree(str(probe_root), ignore_errors=True)
+
+    def _detect_ssh_operating_system(
+        self,
+        *,
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        private_key_text: str,
+        private_key_passphrase: str,
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        command = "\n".join(
+            [
+                "set +e",
+                "uname_value=\"$(uname -s 2>/dev/null || true)\"",
+                "pretty_value=\"\"",
+                "if command -v hostnamectl >/dev/null 2>&1; then "
+                "pretty_value=\"$(hostnamectl 2>/dev/null | awk -F: '/Operating System/ { sub(/^[ \t]+/, \"\", $2); print $2; exit }')\"; "
+                "fi",
+                "if [ -z \"$pretty_value\" ] && [ -r /etc/os-release ]; then "
+                "pretty_value=\"$(. /etc/os-release 2>/dev/null; printf '%s' \"${PRETTY_NAME:-${NAME:-${ID:-}}}\")\"; "
+                "fi",
+                "if [ -z \"$pretty_value\" ] && command -v freebsd-version >/dev/null 2>&1; then "
+                "pretty_value=\"FreeBSD $(freebsd-version 2>/dev/null || true)\"; "
+                "fi",
+                "if [ -z \"$pretty_value\" ]; then pretty_value=\"$uname_value\"; fi",
+                "printf '__BOREALIS_REMOTE_UNAME__=%s\\n' \"$uname_value\"",
+                "printf '__BOREALIS_REMOTE_OS__=%s\\n' \"$pretty_value\"",
+                "exit 0",
+            ]
+        )
+        result = self._execute_onboarding_ssh_command(
+            host=host,
+            port=port,
+            username=username,
+            password=password,
+            private_key_text=private_key_text,
+            private_key_passphrase=private_key_passphrase,
+            command=command,
+            timeout_seconds=timeout_seconds,
+        )
+        stdout = str(result.get("stdout") or "")
+        stderr = str(result.get("stderr") or "")
+
+        def _marker(name: str) -> str:
+            match = re.search(rf"^{re.escape(name)}=(.*)$", stdout, re.MULTILINE)
+            return str(match.group(1) if match else "").strip()
+
+        uname_value = _marker("__BOREALIS_REMOTE_UNAME__")
+        pretty_value = _marker("__BOREALIS_REMOTE_OS__")
+        display_value = pretty_value or uname_value
+        normalized_uname = uname_value.strip().lower()
+        normalized_display = display_value.strip().lower()
+        unsupported_tokens = ("freebsd", "truenas", "pfsense", "opnsense", "openbsd", "netbsd", "darwin")
+        unsupported = bool(normalized_uname and normalized_uname != "linux") or any(
+            token in normalized_display for token in unsupported_tokens
+        )
+        return {
+            "exit_code": int(result.get("exit_code") or 0),
+            "stdout": stdout,
+            "stderr": stderr,
+            "uname": uname_value,
+            "pretty": pretty_value,
+            "display": display_value,
+            "unsupported": unsupported,
+        }
 
     def _onboarding_credential_label(self, credential: Mapping[str, Any]) -> str:
         name = str(credential.get("name") or "").strip()
@@ -5136,8 +5693,53 @@ class JobScheduler:
         )
         if known_target_hostname:
             self._set_onboarding_target_hostname(row_id, known_target_hostname)
+        active_target_hostname = self._lookup_active_onboarding_target_hostname_from_candidates(
+            [row.get("target_address"), row.get("target_hostname"), row.get("target_input"), host],
+            site_id,
+        )
+        if active_target_hostname:
+            self._update_onboarding_target_row(
+                row_id,
+                status="already_enrolled",
+                detail="Existing Borealis Agent is already enrolled and active.",
+                target_hostname=active_target_hostname,
+                finished=True,
+                redactions=redactions,
+            )
+            return "already_enrolled"
+
+        ssh_target_port = int(ssh_port or row.get("ssh_port") or DEFAULT_ONBOARDING_SSH_PORT)
+        smb_target_port = int(windows_port or DEFAULT_ONBOARDING_WINDOWS_PORT)
+        winrm_target_port = int(winrm_port or DEFAULT_ONBOARDING_WINRM_PORT)
+        protocol_score = self._score_remote_onboarding_protocols(
+            host=host,
+            ssh_port=ssh_target_port,
+            smb_port=smb_target_port,
+            winrm_port=winrm_target_port,
+        )
+        self._update_onboarding_target_row(
+            row_id,
+            status=ONBOARDING_STATUS_RUNNING,
+            detail=str(protocol_score.get("detail") or "Auto-Detecting Remote OS"),
+            redactions=redactions,
+        )
+        protocol_unsupported_detail = str(protocol_score.get("unsupported_detail") or "").strip()
+        if str(protocol_score.get("classification") or "").strip().lower() == "unsupported" and protocol_unsupported_detail:
+            self._update_onboarding_target_row(
+                row_id,
+                status=ONBOARDING_STATUS_UNSUPPORTED_OS,
+                detail=protocol_unsupported_detail,
+                stderr="\n".join(str(item) for item in protocol_score.get("signals") or []),
+                finished=True,
+                redactions=redactions,
+            )
+            return ONBOARDING_STATUS_SKIPPED
+
         linux_session_established = False
         linux_last_error = ""
+        linux_ssh_banner = ""
+        linux_definitive_unix = False
+        linux_unsupported_detail = ""
 
         def _record_detected_platform(label: str) -> None:
             self._update_onboarding_target_row(
@@ -5192,51 +5794,98 @@ class JobScheduler:
             return ONBOARDING_STATUS_UNREACHABLE
 
         def _try_linux_candidates(*, final_on_failure: bool = True) -> str:
-            nonlocal linux_last_error, linux_session_established
+            nonlocal linux_last_error, linux_session_established, linux_ssh_banner, linux_definitive_unix, linux_unsupported_detail
             if not linux_candidates:
                 return ""
-            ssh_target_port = int(ssh_port or row.get("ssh_port") or DEFAULT_ONBOARDING_SSH_PORT)
             tcp_error = self._preflight_remote_port(host=host, port=ssh_target_port, attempts=1, timeout_seconds=3.0)
             if tcp_error:
                 linux_last_error = tcp_error
                 return ONBOARDING_STATUS_UNREACHABLE
-            for candidate in linux_candidates:
+            banner, banner_error = self._read_ssh_banner(
+                host=host,
+                port=ssh_target_port,
+                timeout_seconds=_env_non_negative_float(
+                    _SSH_BANNER_TIMEOUT_ENV,
+                    min(5.0, _DEFAULT_SHARED_ANSIBLE_SSH_BANNER_TIMEOUT_SECONDS),
+                ),
+            )
+            linux_ssh_banner = banner or linux_ssh_banner
+            linux_definitive_unix = bool(banner and _ssh_banner_is_unix_like(banner))
+            if _ssh_banner_is_management_endpoint(banner) or _ssh_error_is_unsupported_endpoint(banner_error, banner=banner):
+                linux_last_error = banner_error or banner
+                linux_unsupported_detail = _ssh_unsupported_endpoint_detail(linux_last_error, banner=banner)
+                if final_on_failure:
+                    self._update_onboarding_target_row(
+                        row_id,
+                        status=ONBOARDING_STATUS_UNSUPPORTED_OS,
+                        detail=linux_unsupported_detail,
+                        stderr=linux_last_error,
+                        finished=True,
+                        redactions=redactions,
+                    )
+                return ONBOARDING_STATUS_SKIPPED
+            linux_total = max(1, len(linux_candidates))
+            for credential_index, candidate in enumerate(linux_candidates, start=1):
                 label = self._onboarding_credential_label(candidate)
+                attempt_label = f"Credential {credential_index}/{linux_total} Attempted: {label}"
                 self._update_onboarding_target_row(
                     row_id,
                     status=ONBOARDING_STATUS_RUNNING,
-                    detail=f"Establishing Connection to Remote Device: {label}",
+                    detail=f"Establishing Connection to Remote Device: {attempt_label}",
                     redactions=redactions,
                 )
                 username = str(candidate.get("username") or "").strip()
                 password = str(candidate.get("password") or "")
                 private_key = _normalize_ssh_private_key_text(candidate.get("private_key") or "")
                 become_method = str(candidate.get("become_method") or "").strip().lower()
-                become_user = str(candidate.get("become_username") or "root").strip() or "root"
+                probe_become_method, probe_become_user = _linux_onboarding_privilege_probe(username, become_method)
                 become_password = str(candidate.get("become_password") or password or "")
+                auth_private_key = private_key
+                if private_key and password:
+                    auth_mode = self._resolve_mixed_ssh_auth_mode(
+                        host=host,
+                        port=ssh_target_port,
+                        username=username,
+                        password=password,
+                        private_key_text=private_key,
+                    )
+                    if auth_mode == "password":
+                        auth_private_key = ""
                 session_error = self._preflight_ssh_session(
                     host=host,
                     port=ssh_target_port,
                     username=username,
                     password=password,
-                    private_key_text=private_key,
+                    private_key_text=auth_private_key,
                     timeout_seconds=_env_non_negative_float(
                         _SSH_SESSION_TIMEOUT_ENV,
                         _DEFAULT_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS,
                     ),
-                    become_method="sudo" if become_method == "sudo" else "",
-                    become_user=become_user,
+                    become_method=probe_become_method,
+                    become_user=probe_become_user,
                     become_password=become_password,
                 )
                 if session_error:
                     linux_last_error = session_error
+                    if _ssh_error_is_unsupported_endpoint(session_error, banner=linux_ssh_banner):
+                        linux_unsupported_detail = _ssh_unsupported_endpoint_detail(session_error, banner=linux_ssh_banner)
+                        if final_on_failure:
+                            self._update_onboarding_target_row(
+                                row_id,
+                                status=ONBOARDING_STATUS_UNSUPPORTED_OS,
+                                detail=linux_unsupported_detail,
+                                stderr=linux_last_error,
+                                finished=True,
+                                redactions=redactions,
+                            )
+                        return ONBOARDING_STATUS_SKIPPED
                     continue
                 linux_session_established = True
                 _record_detected_platform("Linux")
                 self._update_onboarding_target_row(
                     row_id,
                     status=ONBOARDING_STATUS_RUNNING,
-                    detail="Connection Established using SSH",
+                    detail=f"Connection Established using SSH: Credential {credential_index}/{linux_total} {label}",
                     redactions=redactions,
                 )
                 row_for_linux = dict(row)
@@ -5252,12 +5901,23 @@ class JobScheduler:
                     credential_label=label,
                     skip_session_preflight=True,
                 )
+            if linux_unsupported_detail:
+                if final_on_failure:
+                    self._update_onboarding_target_row(
+                        row_id,
+                        status=ONBOARDING_STATUS_UNSUPPORTED_OS,
+                        detail=linux_unsupported_detail,
+                        stderr=linux_last_error,
+                        finished=True,
+                        redactions=redactions,
+                    )
+                return ONBOARDING_STATUS_SKIPPED
             if linux_last_error:
                 if final_on_failure:
                     self._update_onboarding_target_row(
                         row_id,
                         status=ONBOARDING_STATUS_FAILED,
-                        detail="SSH authentication failed for all stored Linux credentials.",
+                        detail=f"Establishing Connection to Remote Device: Credential {len(linux_candidates)}/{len(linux_candidates)} Failed",
                         stderr=linux_last_error,
                         finished=True,
                         redactions=redactions,
@@ -5273,8 +5933,6 @@ class JobScheduler:
         ) -> str:
             if not windows_candidates:
                 return ""
-            smb_target_port = int(windows_port or DEFAULT_ONBOARDING_WINDOWS_PORT)
-            winrm_target_port = int(winrm_port or DEFAULT_ONBOARDING_WINRM_PORT)
             smb_error = (
                 smb_error_override
                 if smb_error_override is not None
@@ -5296,18 +5954,41 @@ class JobScheduler:
                     )
                 return ONBOARDING_STATUS_UNREACHABLE
             last_error = ""
-            for candidate in windows_candidates:
+            windows_total = max(1, len(windows_candidates))
+            for credential_index, candidate in enumerate(windows_candidates, start=1):
                 label = self._onboarding_credential_label(candidate)
+                attempt_label = f"Credential {credential_index}/{windows_total} Attempted: {label}"
                 self._update_onboarding_target_row(
                     row_id,
                     status=ONBOARDING_STATUS_RUNNING,
-                    detail=f"Establishing Connection to Remote Device: {label}",
+                    detail=f"Establishing Connection to Remote Device: {attempt_label}",
                     redactions=redactions,
                 )
                 if not smb_error:
                     smb = None
                     try:
                         smb = self._open_windows_smb_connection(host=host, port=smb_target_port, credential=candidate)
+                        remote_hostname = ""
+                        try:
+                            remote_hostname = _clean_onboarding_reported_hostname(smb.getServerName())
+                        except Exception:
+                            remote_hostname = ""
+                        if remote_hostname:
+                            self._set_onboarding_target_hostname(row_id, remote_hostname)
+                            active_hostname = self._lookup_active_onboarding_target_hostname_from_candidates(
+                                [host, remote_hostname, row.get("target_address"), row.get("target_hostname"), row.get("target_input")],
+                                site_id,
+                            )
+                            if active_hostname:
+                                self._update_onboarding_target_row(
+                                    row_id,
+                                    status="already_enrolled",
+                                    detail="Existing Borealis Agent is already enrolled and active.",
+                                    target_hostname=active_hostname,
+                                    finished=True,
+                                    redactions=redactions,
+                                )
+                                return "already_enrolled"
                     except Exception as exc:
                         last_error = str(exc).strip() or exc.__class__.__name__
                         continue
@@ -5318,12 +5999,6 @@ class JobScheduler:
                             except Exception:
                                 pass
                     _record_detected_platform("Windows")
-                    self._update_onboarding_target_row(
-                        row_id,
-                        status=ONBOARDING_STATUS_RUNNING,
-                        detail="Connection Established using SMB Service",
-                        redactions=redactions,
-                    )
                 return self._run_windows_onboarding_target(
                     row=row,
                     site=site,
@@ -5335,13 +6010,13 @@ class JobScheduler:
                     windows_methods=windows_methods or ONBOARDING_WINDOWS_METHODS,
                     winrm_port=winrm_target_port,
                     smb_port=smb_target_port,
-                    credential_label=label,
+                    credential_label=f"Credential {credential_index}/{windows_total} {label}",
                 )
             if last_error:
                 self._update_onboarding_target_row(
                     row_id,
                     status=ONBOARDING_STATUS_FAILED,
-                    detail="Windows authentication failed for all stored Windows credentials.",
+                    detail=f"Establishing Connection to Remote Device: Credential {len(windows_candidates)}/{len(windows_candidates)} Failed",
                     stderr=last_error,
                     finished=True,
                     redactions=redactions,
@@ -5350,14 +6025,21 @@ class JobScheduler:
             return ""
 
         if normalized_platform == ONBOARDING_PLATFORM_AUTO:
-            ssh_target_port = int(ssh_port or DEFAULT_ONBOARDING_SSH_PORT)
-            smb_target_port = int(windows_port or DEFAULT_ONBOARDING_WINDOWS_PORT)
-            winrm_target_port = int(winrm_port or DEFAULT_ONBOARDING_WINRM_PORT)
             ssh_error = self._preflight_remote_port(host=host, port=ssh_target_port, attempts=1, timeout_seconds=3.0)
             if not ssh_error:
                 linux_result = _try_linux_candidates(final_on_failure=False)
                 if linux_result and linux_session_established:
                     return linux_result
+                if linux_result == ONBOARDING_STATUS_FAILED and linux_definitive_unix:
+                    self._update_onboarding_target_row(
+                        row_id,
+                        status=ONBOARDING_STATUS_FAILED,
+                        detail=_ssh_preflight_failure_detail(linux_last_error),
+                        stderr=linux_last_error,
+                        finished=True,
+                        redactions=redactions,
+                    )
+                    return ONBOARDING_STATUS_FAILED
                 smb_error = self._preflight_remote_port(host=host, port=smb_target_port, attempts=1, timeout_seconds=3.0)
                 winrm_error = self._preflight_remote_port(host=host, port=winrm_target_port, attempts=1, timeout_seconds=3.0)
                 if not (smb_error and winrm_error):
@@ -5368,11 +6050,21 @@ class JobScheduler:
                     )
                     if windows_result and windows_result != ONBOARDING_STATUS_UNREACHABLE:
                         return windows_result
+                if linux_result == ONBOARDING_STATUS_SKIPPED:
+                    self._update_onboarding_target_row(
+                        row_id,
+                        status=ONBOARDING_STATUS_SKIPPED,
+                        detail=linux_unsupported_detail or "SSH endpoint is not compatible with Borealis agent onboarding.",
+                        stderr=linux_last_error,
+                        finished=True,
+                        redactions=redactions,
+                    )
+                    return ONBOARDING_STATUS_SKIPPED
                 if linux_result == ONBOARDING_STATUS_FAILED:
                     self._update_onboarding_target_row(
                         row_id,
                         status=ONBOARDING_STATUS_FAILED,
-                        detail="SSH authentication failed for all stored Linux credentials.",
+                        detail=_ssh_preflight_failure_detail(linux_last_error),
                         stderr=linux_last_error,
                         finished=True,
                         redactions=redactions,
@@ -5391,6 +6083,7 @@ class JobScheduler:
                 )
             smb_error = self._preflight_remote_port(host=host, port=smb_target_port, attempts=1, timeout_seconds=3.0)
             winrm_error = self._preflight_remote_port(host=host, port=winrm_target_port, attempts=1, timeout_seconds=3.0)
+            rpc_error = self._preflight_remote_port(host=host, port=135, attempts=1, timeout_seconds=3.0)
             windows_result = _try_windows_candidates(
                 mark_unreachable=False,
                 smb_error_override=smb_error,
@@ -5399,9 +6092,33 @@ class JobScheduler:
             if windows_result and windows_result != ONBOARDING_STATUS_UNREACHABLE:
                 return windows_result
             if windows_result == ONBOARDING_STATUS_UNREACHABLE:
+                if not rpc_error and smb_error and winrm_error:
+                    self._update_onboarding_target_row(
+                        row_id,
+                        status=ONBOARDING_STATUS_UNREACHABLE,
+                        detail=(
+                            "Windows RPC endpoint reachable, but SMB C$ and WinRM are unavailable; "
+                            "remote onboarding cannot stage Agent.exe."
+                        ),
+                        finished=True,
+                        redactions=redactions,
+                    )
+                    return ONBOARDING_STATUS_UNREACHABLE
                 return _mark_remote_unreachable(ssh_error=ssh_error, smb_error=smb_error, winrm_error=winrm_error)
             if windows_result:
                 return windows_result
+            if not rpc_error and smb_error and winrm_error:
+                self._update_onboarding_target_row(
+                    row_id,
+                    status=ONBOARDING_STATUS_UNREACHABLE,
+                    detail=(
+                        "Windows RPC endpoint reachable, but SMB C$ and WinRM are unavailable; "
+                        "remote onboarding cannot stage Agent.exe."
+                    ),
+                    finished=True,
+                    redactions=redactions,
+                )
+                return ONBOARDING_STATUS_UNREACHABLE
             return _mark_remote_unreachable(ssh_error=ssh_error, smb_error=smb_error, winrm_error=winrm_error)
 
         if normalized_platform == ONBOARDING_PLATFORM_WINDOWS:
@@ -5480,8 +6197,19 @@ class JobScheduler:
         username = str(credential.get("username") or "").strip()
         password = str(credential.get("password") or "")
         private_key = _normalize_ssh_private_key_text(credential.get("private_key") or "")
+        auth_private_key = private_key
+        if private_key and password:
+            auth_mode = self._resolve_mixed_ssh_auth_mode(
+                host=host,
+                port=port,
+                username=username,
+                password=password,
+                private_key_text=private_key,
+            )
+            if auth_mode == "password":
+                auth_private_key = ""
         become_method = str(credential.get("become_method") or "").strip().lower()
-        become_user = str(credential.get("become_username") or "root").strip() or "root"
+        probe_become_method, probe_become_user = _linux_onboarding_privilege_probe(username, become_method)
         become_password = str(credential.get("become_password") or password or "")
         session_error = ""
         if not skip_session_preflight:
@@ -5490,13 +6218,13 @@ class JobScheduler:
                 port=port,
                 username=username,
                 password=password,
-                private_key_text=private_key,
+                private_key_text=auth_private_key,
                 timeout_seconds=_env_non_negative_float(
                     _SSH_SESSION_TIMEOUT_ENV,
                     _DEFAULT_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS,
                 ),
-                become_method="sudo" if become_method == "sudo" else "",
-                become_user=become_user,
+                become_method=probe_become_method,
+                become_user=probe_become_user,
                 become_password=become_password,
             )
         if session_error:
@@ -5518,6 +6246,41 @@ class JobScheduler:
                 redactions=redactions,
             )
 
+        os_probe = self._detect_ssh_operating_system(
+            host=host,
+            port=port,
+            username=username,
+            password=password,
+            private_key_text=auth_private_key,
+            private_key_passphrase=str(credential.get("private_key_passphrase") or ""),
+            timeout_seconds=min(30.0, self._onboarding_install_timeout_seconds()),
+        )
+        detected_os = str(os_probe.get("display") or os_probe.get("uname") or "").strip()
+        if detected_os:
+            self._update_onboarding_target_row(
+                row_id,
+                status=ONBOARDING_STATUS_RUNNING,
+                detail=f"Detected Remote Operating System: {detected_os}",
+                stdout=os_probe.get("stdout") or "",
+                stderr=os_probe.get("stderr") or "",
+                redactions=redactions,
+            )
+        if os_probe.get("unsupported"):
+            unsupported_detail = "Unsupported OS"
+            unsupported_stderr = f"Detected remote operating system is unsupported: {detected_os or 'unknown'}"
+            if os_probe.get("stderr"):
+                unsupported_stderr = f"{unsupported_stderr}\n{os_probe.get('stderr')}"
+            self._update_onboarding_target_row(
+                row_id,
+                status=ONBOARDING_STATUS_FAILED,
+                detail=unsupported_detail,
+                stdout=os_probe.get("stdout") or "",
+                stderr=unsupported_stderr,
+                finished=True,
+                redactions=redactions,
+            )
+            return ONBOARDING_STATUS_FAILED
+
         command = self._remote_onboarding_command(
             branch=branch,
             server_url=server_url,
@@ -5531,7 +6294,7 @@ class JobScheduler:
             port=port,
             username=username,
             password=password,
-            private_key_text=private_key,
+            private_key_text=auth_private_key,
             private_key_passphrase=str(credential.get("private_key_passphrase") or ""),
             command=command,
             timeout_seconds=self._onboarding_install_timeout_seconds(),
@@ -5541,16 +6304,18 @@ class JobScheduler:
         stdout = result.get("stdout") or ""
         stderr = result.get("stderr") or ""
         if exit_code == 42:
+            unsupported_match = re.search(r"__BOREALIS_UNSUPPORTED_OS__=([^\r\n]+)", str(stderr or stdout or ""), re.IGNORECASE)
+            detected_unsupported_os = str(unsupported_match.group(1) if unsupported_match else "").strip()
             self._update_onboarding_target_row(
                 row_id,
-                status=ONBOARDING_STATUS_SKIPPED,
-                detail="Target is not Linux.",
+                status=ONBOARDING_STATUS_FAILED,
+                detail="Unsupported OS",
                 stdout=stdout,
-                stderr=stderr,
+                stderr=stderr or (f"Detected remote operating system is unsupported: {detected_unsupported_os}" if detected_unsupported_os else ""),
                 finished=True,
                 redactions=redactions,
             )
-            return ONBOARDING_STATUS_SKIPPED
+            return ONBOARDING_STATUS_FAILED
         if exit_code != 0:
             detail = f"Agent install failed with exit code {exit_code}."
             if exit_code == 43:
@@ -5955,13 +6720,17 @@ class JobScheduler:
                 tail = tail[-12000:]
             return f"[{label}]\n{tail}"
 
-        def _approval_timeout_stderr() -> str:
-            parts = ["windows_onboarding_approval_callback_timeout"]
+        def _windows_diagnostic_bundle(reason: str) -> str:
+            parts = [reason]
             for path, label in (
+                ("Borealis\\Agent\\Logs\\bootstrap.log", "bootstrap.log"),
                 ("Borealis\\Agent\\Logs\\agent.error.log", "agent.error.log"),
                 ("Borealis\\Agent\\Logs\\agent.log", "agent.log"),
                 ("Borealis\\Agent\\Logs\\service_wrapper.log", "service_wrapper.log"),
+                ("Borealis\\Agent\\Logs\\service.out.log", "service.out.log"),
                 ("Borealis\\Agent\\Logs\\service.err.log", "service.err.log"),
+                ("Borealis\\Temp\\Onboarding\\state.json", "onboarding state.json"),
+                ("Borealis\\Temp\\Onboarding\\events.jsonl", "onboarding events.jsonl"),
             ):
                 tail = _read_agent_log_tail(path, label)
                 if tail:
@@ -5976,7 +6745,7 @@ class JobScheduler:
             return {
                 "exit_code": 1,
                 "stdout": stdout,
-                "stderr": _approval_timeout_stderr(),
+                "stderr": _windows_diagnostic_bundle("windows_onboarding_approval_callback_timeout"),
                 "state": dict(state or {}),
                 "events": list(events or []),
                 "target_hostname": _windows_onboarding_reported_hostname(stdout=stdout, stderr="", state=state, events=events),
@@ -6079,7 +6848,7 @@ class JobScheduler:
                 return {
                     "exit_code": state_exit_code if state_exit_code is not None else 1,
                     "stdout": stdout,
-                    "stderr": "",
+                    "stderr": _windows_diagnostic_bundle("windows_onboarding_state_failed"),
                     "state": state,
                     "events": events,
                     "target_hostname": reported_hostname,
@@ -6124,7 +6893,9 @@ class JobScheduler:
                 return {
                     "exit_code": 124,
                     "stdout": last_output,
-                    "stderr": f"windows_onboarding_child_launch_timeout{': ' + last_error if last_error else ''}",
+                    "stderr": _windows_diagnostic_bundle(
+                        f"windows_onboarding_child_launch_timeout{': ' + last_error if last_error else ''}"
+                    ),
                 }
             if callable(status_update) and not timeline_seen and (time.monotonic() - last_status_update) >= 5.0:
                 detail = "Waiting for Windows SMB service enrollment output or approval callback."
@@ -6142,7 +6913,7 @@ class JobScheduler:
         return {
             "exit_code": 124,
             "stdout": last_output,
-            "stderr": f"windows_onboarding_timeout{': ' + last_error if last_error else ''}",
+            "stderr": _windows_diagnostic_bundle(f"windows_onboarding_timeout{': ' + last_error if last_error else ''}"),
             "target_hostname": _windows_onboarding_reported_hostname(stdout=last_output, stderr=last_error),
         }
 
@@ -6586,6 +7357,12 @@ class JobScheduler:
             event_timestamp: Optional[int] = None,
             event_status: str = "",
         ) -> None:
+            clean_update_detail = str(detail or "")
+            update_detail_lower = clean_update_detail.strip().lower()
+            if "connection established" in update_detail_lower and connection_label and ":" not in clean_update_detail:
+                protocol = _onboarding_windows_protocol_name(update_detail_lower)
+                if protocol:
+                    clean_update_detail = f"Connection Established using {protocol}: {connection_label}"
             merged_stdout = "\n\n".join([part for part in [*stdout_parts, str(stdout or "")] if part])
             merged_stderr = "\n\n".join([part for part in [*stderr_parts, str(stderr or "")] if part])
             reported_hostname = _windows_onboarding_reported_hostname(
@@ -6595,7 +7372,7 @@ class JobScheduler:
             self._update_onboarding_target_row(
                 row_id,
                 status=ONBOARDING_STATUS_RUNNING,
-                detail=detail,
+                detail=clean_update_detail,
                 stdout=merged_stdout,
                 stderr=merged_stderr,
                 target_hostname=reported_hostname,
@@ -6603,6 +7380,30 @@ class JobScheduler:
                 event_timestamp=event_timestamp,
                 event_status=event_status,
             )
+
+        def _mark_already_enrolled_if_active(combined_stdout: str, combined_stderr: str, reported_hostname: str = "") -> bool:
+            known_candidates = [
+                host,
+                reported_hostname,
+                row.get("target_address"),
+                row.get("target_hostname"),
+                row.get("target_input"),
+            ]
+            active_hostname = self._lookup_active_onboarding_target_hostname_from_candidates(known_candidates, site.get("id"))
+            if not active_hostname:
+                return False
+            self._update_onboarding_target_row(
+                row_id,
+                status="already_enrolled",
+                detail="Existing Borealis Agent is already enrolled and active.",
+                stdout=combined_stdout,
+                stderr=combined_stderr,
+                approval_reference="",
+                target_hostname=active_hostname,
+                finished=True,
+                redactions=redactions,
+            )
+            return True
 
         for method in normalized_methods:
             method_label = _windows_method_label(method)
@@ -6734,12 +7535,19 @@ class JobScheduler:
                         return terminal_status
                 approval_reference = str(result.get("approval_reference") or "").strip()
                 deadline = time.monotonic() + self._windows_onboarding_approval_wait_seconds()
+                last_active_check = 0.0
                 while time.monotonic() < deadline:
                     approval_reference = approval_reference or _approval_check()
                     if approval_reference:
                         break
+                    if (time.monotonic() - last_active_check) >= 5.0:
+                        last_active_check = time.monotonic()
+                        if _mark_already_enrolled_if_active(combined_stdout, combined_stderr, reported_hostname):
+                            return "already_enrolled"
                     time.sleep(1.0)
                 if not approval_reference:
+                    if _mark_already_enrolled_if_active(combined_stdout, combined_stderr, reported_hostname):
+                        return "already_enrolled"
                     failure_detail = "Agent completed local bootstrap, but Borealis Engine did not receive an approval request."
                     self._update_onboarding_target_row(
                         row_id,
@@ -6766,6 +7574,8 @@ class JobScheduler:
                 )
                 return ONBOARDING_STATUS_WAITING_APPROVAL
             if "windows_onboarding_approval_callback_timeout" in f"{stdout}\n{stderr}":
+                if _mark_already_enrolled_if_active("\n\n".join(stdout_parts), "\n\n".join(stderr_parts), reported_hostname):
+                    return "already_enrolled"
                 self._update_onboarding_target_row(
                     row_id,
                     status=ONBOARDING_STATUS_FAILED,

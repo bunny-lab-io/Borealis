@@ -1347,7 +1347,7 @@ def _load_installer_code_from_file(path: str) -> str:
     return ""
 
 
-def _load_onboarding_context() -> Dict[str, Any]:
+def _load_onboarding_context_raw() -> Dict[str, Any]:
     try:
         path = os.path.join(_settings_dir(), "onboarding_context.json")
         with open(path, "r", encoding="utf-8") as fh:
@@ -1355,6 +1355,13 @@ def _load_onboarding_context() -> Dict[str, Any]:
     except Exception:
         return {}
     if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def _load_onboarding_context() -> Dict[str, Any]:
+    data = _load_onboarding_context_raw()
+    if not data:
         return {}
     context: Dict[str, Any] = {}
     for key in ("job_id", "run_id"):
@@ -1368,6 +1375,68 @@ def _load_onboarding_context() -> Dict[str, Any]:
     if target:
         context["target"] = target[:253]
     return context
+
+
+def _onboarding_runtime_paths() -> Tuple[str, str]:
+    data = _load_onboarding_context_raw()
+    events_path = str(data.get("events_path") or "").strip()
+    state_path = str(data.get("state_path") or "").strip()
+    if events_path or state_path:
+        return events_path, state_path
+    try:
+        onboarding_dir = os.path.join(_find_project_root(), "Temp", "Onboarding")
+        if os.path.isdir(onboarding_dir):
+            return (
+                os.path.join(onboarding_dir, "events.jsonl"),
+                os.path.join(onboarding_dir, "state.json"),
+            )
+    except Exception:
+        pass
+    return "", ""
+
+
+def _write_onboarding_runtime_event(status: str, task: str, detail: str = "", exit_code: int = 0) -> None:
+    events_path, _state_path = _onboarding_runtime_paths()
+    if not events_path:
+        return
+    try:
+        os.makedirs(os.path.dirname(events_path), exist_ok=True)
+        payload = {
+            "status": str(status or "").strip() or "running",
+            "task": str(task or "").strip() or "Agent Runtime",
+            "detail": str(detail or "").strip(),
+            "exit_code": int(exit_code or 0),
+            "hostname": socket.gethostname(),
+            "created_at": datetime.datetime.utcnow().isoformat(timespec="milliseconds") + "Z",
+        }
+        with open(events_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+
+
+def _write_onboarding_runtime_state(status: str, detail: str, exit_code: int = 0) -> None:
+    _events_path, state_path = _onboarding_runtime_paths()
+    if not state_path:
+        return
+    try:
+        os.makedirs(os.path.dirname(state_path), exist_ok=True)
+        payload = {
+            "status": str(status or "").strip() or "running",
+            "exit_code": int(exit_code or 0),
+            "detail": str(detail or "").strip(),
+            "hostname": socket.gethostname(),
+            "updated_at": datetime.datetime.utcnow().isoformat(timespec="milliseconds") + "Z",
+        }
+        tmp = state_path + ".agent.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+        try:
+            os.replace(tmp, state_path)
+        except Exception:
+            shutil.move(tmp, state_path)
+    except Exception:
+        pass
 
 
 def _clear_installer_code_from_file(path: str, rejected_code: str) -> bool:
@@ -1765,6 +1834,18 @@ class AgentHttpClient:
                 f"Enrollment waiting for shared lock scope={SERVICE_MODE} attempt={wait_state['count']}",
                 fname="agent.log",
             )
+            if wait_state["count"] == 1 or wait_state["count"] % 6 == 0:
+                _write_onboarding_runtime_event(
+                    "running",
+                    "Waiting For Enrollment Lock",
+                    "Another Borealis Agent process is already handling enrollment.",
+                    0,
+                )
+                _write_onboarding_runtime_state(
+                    "running",
+                    "Waiting for another Borealis Agent enrollment process to finish.",
+                    0,
+                )
             if not wait_state["tokens_seen"]:
                 self._reload_tokens_from_disk()
                 if self.guid and self.refresh_token:
@@ -1805,6 +1886,17 @@ class AgentHttpClient:
                     payload["onboarding_context"] = onboarding_context
                 request_url = f"{self.base_url}/api/agent/enroll/request"
                 request_attempt = 1
+                _write_onboarding_runtime_event(
+                    "running",
+                    "Submitting Enrollment Approval Request",
+                    f"Submitting Borealis enrollment request to {request_url}.",
+                    0,
+                )
+                _write_onboarding_runtime_state(
+                    "running",
+                    "Submitting Borealis enrollment approval request.",
+                    0,
+                )
                 while True:
                     _log_agent(
                         "Starting enrollment request... "
@@ -1812,7 +1904,18 @@ class AgentHttpClient:
                         f" attempt={request_attempt}",
                         fname="agent.log",
                     )
-                    resp = self.session.post(request_url, json=payload, timeout=30)
+                    try:
+                        resp = self.session.post(request_url, json=payload, timeout=30)
+                    except Exception as exc:
+                        detail = f"Enrollment request transport failed: {exc}"
+                        _write_onboarding_runtime_event(
+                            "failed",
+                            "Enrollment Approval Request Failed",
+                            detail,
+                            1,
+                        )
+                        _write_onboarding_runtime_state("failed", detail, 1)
+                        raise
                     _log_agent(
                         f"Enrollment request HTTP status={resp.status_code} retry_after={resp.headers.get('Retry-After')}"
                         f" body_len={len(resp.content)} attempt={request_attempt}",
@@ -1834,6 +1937,12 @@ class AgentHttpClient:
                                 "Enrollment request rate limited; honoring Retry-After "
                                 f"delay={delay:.1f}s attempt={request_attempt}",
                                 fname="agent.log",
+                            )
+                            _write_onboarding_runtime_event(
+                                "running",
+                                "Enrollment Request Rate Limited",
+                                f"Engine asked Agent to retry enrollment in {delay:.1f}s.",
+                                0,
                             )
                             time.sleep(delay)
                             self._reload_tokens_from_disk()
@@ -1864,6 +1973,17 @@ class AgentHttpClient:
                                     f"Enrollment code rejected by Engine ({error_code}); cleared persisted code. "
                                     "Provide a fresh enrollment code to retry."
                                 )
+                        _write_onboarding_runtime_event(
+                            "failed",
+                            "Enrollment Approval Request Failed",
+                            f"Engine rejected enrollment request with HTTP {resp.status_code}.",
+                            1,
+                        )
+                        _write_onboarding_runtime_state(
+                            "failed",
+                            f"Engine rejected enrollment request with HTTP {resp.status_code}.",
+                            1,
+                        )
                         raise
                 data = resp.json()
                 _log_agent(
@@ -1872,6 +1992,17 @@ class AgentHttpClient:
                     f"poll_after_ms={data.get('poll_after_ms')}"
                     f" signing_key={'yes' if data.get('signing_key') else 'no'}",
                     fname="agent.log",
+                )
+                _write_onboarding_runtime_event(
+                    "waiting_approval",
+                    "Agent Ready and Awaiting Approval",
+                    "Borealis Engine accepted enrollment request; waiting for operator approval.",
+                    0,
+                )
+                _write_onboarding_runtime_state(
+                    "pending_approval",
+                    "Borealis Engine accepted enrollment request; waiting for operator approval.",
+                    0,
                 )
                 signing_key = data.get("signing_key")
                 if signing_key:

@@ -37,6 +37,7 @@ type InstallHealth struct {
 func assessInstallHealth(cfg BootstrapConfig, logger *BootstrapLogger) InstallHealth {
 	startedAt := time.Now()
 	logger.Tracef("Assessing existing Agent install health.")
+	writeTimeline(cfg, "running", "Inspecting Existing Agent", "Checking local Borealis Agent footprint, scheduled tasks, and Engine token validity.", 1)
 	health := InstallHealth{Hostname: currentHostname()}
 	health.Exists = dirExists(cfg.InstallDir)
 	health.AgentPyExists = fileExists(filepath.Join(cfg.InstallDir, "Agent", "Borealis", "agent.py"))
@@ -55,6 +56,7 @@ func assessInstallHealth(cfg BootstrapConfig, logger *BootstrapLogger) InstallHe
 	if task.Exists && !health.TaskRunning {
 		logger.Tracef("Existing Agent task present but not running; start attempt beginning.")
 		logger.Marker("__BOREALIS_AGENT_TASK_START_ATTEMPTED__=1")
+		writeTimeline(cfg, "running", "Repairing Existing Agent Task", "Existing Borealis Agent task is present but not running; attempting task start.", 1)
 		if err := startScheduledTask(agentTaskName, logger); err == nil {
 			health.TaskStarted = true
 			time.Sleep(3 * time.Second)
@@ -72,6 +74,8 @@ func assessInstallHealth(cfg BootstrapConfig, logger *BootstrapLogger) InstallHe
 	health.ValidationText = detail
 	if detail != "" {
 		logger.Infof("%s", detail)
+		eventStatus := "completed"
+		writeTimeline(cfg, eventStatus, "Validating Existing Agent Token", detail, 0)
 	}
 	logger.Tracef("Health assessment complete duration=%s exists=%t agent_py=%t task_exists=%t task_running=%t task_started=%t engine_valid=%t", time.Since(startedAt).Round(time.Millisecond), health.Exists, health.AgentPyExists, health.TaskExists, health.TaskRunning, health.TaskStarted, health.EngineValid)
 	return health

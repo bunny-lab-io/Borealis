@@ -26,6 +26,7 @@ import {
 import {
   ArrowBack as ArrowBackIcon,
   AutorenewRounded as ProgressActiveIcon,
+  BlockRounded as ProgressUnsupportedIcon,
   Check as CheckIcon,
   CheckCircleRounded as ProgressCompleteIcon,
   ContentCopy as ContentCopyIcon,
@@ -33,6 +34,7 @@ import {
   DevicesRounded as DevicesRoundedIcon,
   DriveFileRenameOutline as DriveFileRenameOutlineIcon,
   ErrorOutlineRounded as ProgressErrorIcon,
+  InfoOutlined as InfoOutlinedIcon,
   PlayArrow as PlayArrowIcon,
   RadioButtonUncheckedRounded as ProgressPendingIcon,
   Refresh as RefreshIcon,
@@ -197,6 +199,14 @@ const GRID_PANEL_SX = {
     backgroundColor: "rgba(125,211,252,0.16) !important",
     boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.38)",
   },
+  "& .ag-row.onboarding-progress-group-row": {
+    backgroundColor: "rgba(3,7,18,0.72) !important",
+    boxShadow: "inset 0 -1px 0 rgba(148,163,184,0.18)",
+  },
+  "& .ag-row.onboarding-progress-group-row .ag-cell": {
+    paddingTop: "6px",
+    paddingBottom: "6px",
+  },
   "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
     display: "flex",
     alignItems: "center",
@@ -338,6 +348,8 @@ const PRIMARY_BUTTON_SX = {
   },
 };
 
+const DISCOVERED_HOSTNAME_COLOR = "rgba(148, 163, 184, 0.78)";
+
 const STATUS_THEME = {
   pending: { label: "Pending", text: "#fbbf24", background: "rgba(251,191,36,0.18)", border: "1px solid rgba(251,191,36,0.35)", dot: "#f59e0b" },
   pending_approval: { label: "Pending Approval", text: "#d8b4fe", background: "rgba(192,132,252,0.18)", border: "1px solid rgba(192,132,252,0.4)", dot: "#c084fc" },
@@ -351,7 +363,7 @@ const STATUS_THEME = {
   skipped: { label: "Skipped", text: "#fbbf24", background: "rgba(251,191,36,0.14)", border: "1px solid rgba(251,191,36,0.32)", dot: "#f59e0b" },
   already_enrolled: { label: "Already Enrolled", text: "#fbbf24", background: "rgba(251,191,36,0.14)", border: "1px solid rgba(251,191,36,0.32)", dot: "#f59e0b" },
   already_pending: { label: "Already Pending", text: "#fbbf24", background: "rgba(251,191,36,0.14)", border: "1px solid rgba(251,191,36,0.32)", dot: "#f59e0b" },
-  unsupported_os: { label: "Unsupported OS", text: "#fbbf24", background: "rgba(251,191,36,0.14)", border: "1px solid rgba(251,191,36,0.32)", dot: "#f59e0b" },
+  unsupported_os: { label: "Unsupported OS", text: DISCOVERED_HOSTNAME_COLOR, background: "rgba(148,163,184,0.12)", border: "1px solid rgba(148,163,184,0.28)", dot: DISCOVERED_HOSTNAME_COLOR },
   denied: { label: "Denied", text: "#9aa0a6", background: "rgba(148,163,184,0.12)", border: "1px solid rgba(148,163,184,0.25)", dot: "#94a3b8" },
   expired: { label: "Expired", text: "#9aa0a6", background: "rgba(148,163,184,0.12)", border: "1px solid rgba(148,163,184,0.25)", dot: "#94a3b8" },
 };
@@ -377,6 +389,7 @@ const TARGET_STATUS_FILTER_OPTIONS = [
   { key: "pending_approval", label: "Pending Approval" },
   { key: "skipped", label: "Skipped" },
   { key: "failed", label: "Failed" },
+  { key: "unsupported_os", label: "Unsupported OS" },
   { key: "completed", label: "Completed" },
   { key: "unreachable", label: "Unreachable" },
 ];
@@ -597,17 +610,18 @@ function formatStatusLabel(status) {
   return STATUS_THEME[key]?.label || key.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()) || "Pending";
 }
 
-function targetStatusBucket(status) {
+function targetStatusBucket(status, record = null) {
   const key = String(status || "pending").trim().toLowerCase();
+  if (key === "unsupported_os" || onboardingFailureKind(record) === "unsupported_os") return "unsupported_os";
   if (key === "ssh_unreachable" || key === "unreachable") return "unreachable";
   if (["completed", "approved", "success", "installed"].includes(key)) return "completed";
-  if (["skipped", "denied", "expired", "already_enrolled", "already_pending", "unsupported_os"].includes(key)) return "skipped";
+  if (["skipped", "denied", "expired", "already_enrolled", "already_pending"].includes(key)) return "skipped";
   if (["failed", "failure", "error"].includes(key)) return "failed";
   return "pending_approval";
 }
 
 function targetVisibleForStatusFilter(row, activeFilter) {
-  const bucket = targetStatusBucket(row?.status);
+  const bucket = row?.statusBucket || targetStatusBucket(row?.status, row);
   if (activeFilter) {
     return bucket === activeFilter;
   }
@@ -660,6 +674,20 @@ function onboardingFailureKind(record) {
   ].map((value) => String(value || "")).join("\n").toLowerCase();
   if (!text) return "";
   if (
+    text.includes("unsupported os") ||
+    text.includes("__borealis_unsupported_os__") ||
+    text.includes("__borealis_unsupported_os") ||
+    text.includes("not supported") ||
+    text.includes("target is not linux") ||
+    text.includes("network management interface") ||
+    text.includes("agent-capable operating system") ||
+    text.includes("integrated lights-out") ||
+    text.includes("mpssh") ||
+    /\bilo\b/.test(text)
+  ) {
+    return "unsupported_os";
+  }
+  if (
     text.includes("status_logon_failure") ||
     text.includes("logon failure") ||
     text.includes("attempted logon is invalid") ||
@@ -690,6 +718,9 @@ function isOnboardingApprovalCompleteTask(task) {
 
 function onboardingProgressSingletonKey(task) {
   const normalized = String(task || "").trim();
+  if (normalized === "Auto-Detecting Remote OS") {
+    return "auto-detecting-remote-os";
+  }
   if (normalized.startsWith("Establishing Connection to Remote Device")) {
     return "establishing-connection-to-remote-device";
   }
@@ -709,11 +740,20 @@ function normalizeOnboardingProgressTask(task, status = "") {
   const dependencyTask = normalizeDependencyTask(original);
   const isApprovalReady = normalizedStatus === "waiting_approval" || normalizedTask.includes("awaiting approval");
   const isApprovalComplete = ["approved", "completed", "complete", "success", "succeeded", "installed"].includes(normalizedStatus);
+  if (normalizedTask.startsWith("auto-detecting remote os")) {
+    return "Auto-Detecting Remote OS";
+  }
   if (normalizedTask.startsWith("establishing connection to remote device")) {
     return original || "Establishing Connection to Remote Device";
   }
   if (normalizedTask.startsWith("detected remote operating system")) {
     return original;
+  }
+  if (normalizedTask.includes("unsupported os") || normalizedTask.includes("__borealis_unsupported_os")) {
+    return original || "Unsupported OS";
+  }
+  if (normalizedTask.includes("network management interface") || normalizedTask.includes("agent-capable operating system") || normalizedTask.includes("integrated lights-out") || normalizedTask.includes("mpssh") || /\bilo\b/.test(normalizedTask)) {
+    return "Unsupported OS: iLO or network management interface";
   }
   if (
     (isApprovalReady && isApprovalComplete) ||
@@ -728,6 +768,13 @@ function normalizeOnboardingProgressTask(task, status = "") {
   }
   if (normalizedTask.includes("already enrolled") || normalizedTask.includes("already active")) {
     return "Already Enrolled and Active";
+  }
+  if (
+    normalizedTask.startsWith("inspecting existing agent") ||
+    normalizedTask.startsWith("repairing existing agent") ||
+    normalizedTask.startsWith("validating existing agent token")
+  ) {
+    return original;
   }
   if (normalizedTask.includes("unable to repair agent") || normalizedTask.includes("re-deploying")) {
     return "Unable to Repair Agent > Re-Deploying";
@@ -749,7 +796,13 @@ function normalizeOnboardingProgressTask(task, status = "") {
   if (normalizedTask.includes("establishing connection") || normalizedTask.includes("trying windows smb service")) {
     return "Establishing Connection to Remote Device";
   }
+  if (normalizedTask.startsWith("connection established using ssh")) {
+    return original.includes(":") ? original : "Connection Established using SSH";
+  }
   if (normalizedTask.includes("using smb service") || normalizedTask.includes("smb service connection established")) {
+    if (normalizedTask.startsWith("connection established using") && original.includes(":")) {
+      return original;
+    }
     return "Connection Established using SMB Service";
   }
   if (
@@ -822,6 +875,86 @@ function normalizeDependencyTask(task) {
   else if (lower.includes("autohotkey") || lower.includes("auto hotkey")) label = "AutoHotKey";
   else if (lower.includes("python")) label = "Python";
   return `Installing Agent Dependencies: ${label}`;
+}
+
+function onboardingProgressSessionGroup(rowOrTask) {
+  const row = typeof rowOrTask === "object" && rowOrTask !== null ? rowOrTask : null;
+  const phase = String(row?.raw?.phase || row?.phase || "").trim().toLowerCase();
+  if (phase) {
+    if (phase === "os_detection") return "Discovery";
+    if (phase === "existing_agent_preflight" || phase === "repair" || phase === "bootstrap") return "Bootstrap";
+    if (phase === "dependencies") return "Dependencies";
+    if (phase === "runtime_configuration") return "Runtime";
+    if (phase === "approval_wait" || phase === "already_enrolled") return "Enrollment";
+    if (phase === "failed") return "Failure";
+  }
+  const task = row ? row.task : rowOrTask;
+  const normalized = String(task || "").trim().toLowerCase();
+  if (!normalized) return "Session";
+  if (
+    normalized.includes("spinning-up") ||
+    normalized.includes("auto-detecting") ||
+    normalized.includes("unsupported os")
+  ) {
+    return "Discovery";
+  }
+  if (
+    normalized.includes("establishing connection") ||
+    normalized.includes("connection established")
+  ) {
+    return "Connection";
+  }
+  if (
+    normalized.includes("uploading agent.exe") ||
+    normalized.includes("creating windows service") ||
+    normalized.includes("ensuring windows service")
+  ) {
+    return "Remote Launch";
+  }
+  if (
+    normalized.includes("existing agent") ||
+    normalized.includes("repair") ||
+    normalized.includes("running agent bootstrap") ||
+    normalized.includes("validating existing agent")
+  ) {
+    return "Bootstrap";
+  }
+  if (normalized.includes("installing agent dependencies")) {
+    return "Dependencies";
+  }
+  if (
+    normalized.includes("configuring agent runtime") ||
+    normalized.includes("awaiting approval") ||
+    normalized.includes("enrollment approved") ||
+    normalized.includes("already enrolled")
+  ) {
+    return "Enrollment";
+  }
+  return "Session";
+}
+
+function injectOnboardingProgressGroups(rows) {
+  const grouped = [];
+  let currentGroup = "";
+  rows.forEach((row, index) => {
+    const nextGroup = onboardingProgressSessionGroup(row);
+    if (nextGroup && nextGroup !== currentGroup) {
+      currentGroup = nextGroup;
+      grouped.push({
+        id: `${row?.id || "progress"}-group-${index}-${nextGroup}`,
+        isGroupHeader: true,
+        status: "group",
+        task: nextGroup,
+        startedLabel: "",
+        elapsedLabel: "",
+        hasStdOut: false,
+        hasStdErr: false,
+        raw: {},
+      });
+    }
+    grouped.push(row);
+  });
+  return grouped;
 }
 
 function mergeOutputSnippet(first, second) {
@@ -1117,19 +1250,22 @@ function StatusPill({ status }) {
 function ProgressStatusIcon({ status, failureKind = "" }) {
   const key = String(status || "pending").trim().toLowerCase() || "pending";
   const requestedAuthFailure = String(failureKind || "").trim().toLowerCase() === "auth";
+  const requestedUnsupported = String(failureKind || "").trim().toLowerCase() === "unsupported_os" || key === "unsupported_os";
   const completeStatuses = new Set(["approved", "completed", "complete", "success", "succeeded"]);
   const activeStatuses = new Set(["pending", "pending_approval", "running", "in_progress", "waiting_approval"]);
   const waitingStatuses = new Set(["pending_approval", "waiting_approval"]);
   const failedStatuses = new Set(["failed", "error", "ssh_unreachable", "unreachable", "timeout"]);
-  const skippedStatuses = new Set(["skipped", "already_enrolled", "already_pending", "unsupported_os", "denied", "expired"]);
+  const skippedStatuses = new Set(["skipped", "already_enrolled", "already_pending", "denied", "expired"]);
   const isComplete = completeStatuses.has(key);
   const isActive = activeStatuses.has(key);
   const isWaiting = waitingStatuses.has(key);
   const isFailed = failedStatuses.has(key);
   const isSkipped = skippedStatuses.has(key);
   const isAuthFailure = requestedAuthFailure && isFailed;
-  const label = isAuthFailure ? "Authentication Failed" : (STATUS_THEME[key]?.label || formatStatusLabel(key));
-  const Icon = isAuthFailure
+  const label = requestedUnsupported ? "Unsupported OS" : (isAuthFailure ? "Authentication Failed" : (STATUS_THEME[key]?.label || formatStatusLabel(key)));
+  const Icon = requestedUnsupported
+    ? ProgressUnsupportedIcon
+    : isAuthFailure
     ? ProgressAuthErrorIcon
     : isComplete
     ? ProgressCompleteIcon
@@ -1142,7 +1278,9 @@ function ProgressStatusIcon({ status, failureKind = "" }) {
           : isSkipped
             ? ProgressSkippedIcon
             : ProgressPendingIcon;
-  const color = isComplete
+  const color = requestedUnsupported
+    ? DISCOVERED_HOSTNAME_COLOR
+    : isComplete
     ? MAGIC_UI.accentC
     : isActive
       ? (isWaiting ? MAGIC_UI.accentC : MAGIC_UI.accentA)
@@ -1187,11 +1325,56 @@ function ProgressStatusIcon({ status, failureKind = "" }) {
   );
 }
 
-function ProgressTaskCell({ value }) {
+function ProgressTaskCell({ value, row }) {
   const task = String(value || "").trim();
+  if (row?.isGroupHeader) {
+    return (
+      <Typography
+        component="span"
+        variant="caption"
+        sx={{
+          color: DISCOVERED_HOSTNAME_COLOR,
+          fontWeight: 800,
+          letterSpacing: 0,
+          textTransform: "uppercase",
+        }}
+      >
+        {task}
+      </Typography>
+    );
+  }
+  if (task === "Auto-Detecting Remote OS") {
+    const detail = String(row?.raw?.detail || "").trim();
+    return (
+      <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, gap: 0.75 }}>
+        <Typography
+          component="span"
+          variant="body2"
+          sx={{
+            color: MAGIC_UI.textBright,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {task}
+        </Typography>
+        {detail ? (
+          <Tooltip title={detail}>
+            <InfoOutlinedIcon sx={{ color: MAGIC_UI.accentA, fontSize: 17, flexShrink: 0 }} />
+          </Tooltip>
+        ) : null}
+      </Box>
+    );
+  }
   const mutedSuffixPrefixes = [
     "Installing Agent Dependencies:",
     "Establishing Connection to Remote Device:",
+    "Connection Established using SSH:",
+    "Connection Established using SMB Service:",
+    "Connection Established using Scheduled Task:",
+    "Connection Established using WMI/DCOM:",
+    "Connection Established using WinRM:",
   ];
   const matchedPrefix = mutedSuffixPrefixes.find((prefix) => task.startsWith(prefix));
   if (!matchedPrefix) {
@@ -1273,6 +1456,7 @@ export default function CreateOnboardingJob() {
   const [progressionClock, setProgressionClock] = useState(() => Date.now());
   const targetGridApiRef = useRef(null);
   const progressionGridApiRef = useRef(null);
+  const targetsLoadingRef = useRef(false);
   const [form, setForm] = useState({
     name: "",
     siteId: "",
@@ -1544,6 +1728,8 @@ export default function CreateOnboardingJob() {
 
   const loadTargets = useCallback(async () => {
     if (!editing || !jobId) return;
+    if (targetsLoadingRef.current) return;
+    targetsLoadingRef.current = true;
     try {
       const resp = await fetch(`/api/onboarding/jobs/${jobId}/targets`, { credentials: "include" });
       const data = await resp.json().catch(() => ({}));
@@ -1552,6 +1738,8 @@ export default function CreateOnboardingJob() {
       }
     } catch {
       /* status refresh is best effort */
+    } finally {
+      targetsLoadingRef.current = false;
     }
   }, [editing, jobId]);
 
@@ -1598,7 +1786,7 @@ export default function CreateOnboardingJob() {
         detectedPlatform,
         osLabel: onboardingOsLabel(detectedPlatform),
         status,
-        statusBucket: targetStatusBucket(status),
+        statusBucket: targetStatusBucket(status, target),
         statusLabel: formatStatusLabel(status),
         detail: target.detail || "",
         failureKind: onboardingFailureKind(target),
@@ -1651,10 +1839,15 @@ export default function CreateOnboardingJob() {
       const endedAt = epochToMs(event?.finished_at ?? event?.finishedAt) || null;
       const status = String(event?.status || "pending").trim().toLowerCase() || "pending";
       const elapsedEnd = endedAt || (statusIsActiveProgress(status) ? progressionClock : startedAt);
-      const task = normalizeOnboardingProgressTask(event?.task || "Spinning-Up Site-Worker Container", status);
+      const detailText = String(event?.detail || "").trim();
+      const taskSource = onboardingFailureKind(event) === "unsupported_os" && detailText
+        ? detailText
+        : event?.task || "Spinning-Up Site-Worker Container";
+      const task = normalizeOnboardingProgressTask(taskSource, status);
       return {
         id: event?.id || `${selectedTargetRow.id || selectedTargetId}-${index}`,
         status,
+        phase: String(event?.phase || "").trim(),
         statusLabel: formatStatusLabel(status),
         task,
         startedAt,
@@ -1667,8 +1860,8 @@ export default function CreateOnboardingJob() {
         raw: event,
       };
     }).filter((row) => !String(row.task || "").toLowerCase().startsWith("detected remote operating system"));
-    const selectedBucket = targetStatusBucket(selectedTargetRow.status);
-    return mappedRows.reduce((acc, row) => {
+    const selectedBucket = targetStatusBucket(selectedTargetRow.status, selectedTargetRow);
+    const reducedRows = mappedRows.reduce((acc, row) => {
       if (selectedBucket === "skipped" && isOnboardingApprovalCompleteTask(row.task)) {
         return acc;
       }
@@ -1706,6 +1899,7 @@ export default function CreateOnboardingJob() {
       acc[acc.length - 1] = mergeOnboardingProgressRows(previous, row, progressionClock, row.task);
       return acc;
     }, []);
+    return injectOnboardingProgressGroups(reducedRows);
   }, [progressionClock, selectedTargetId, selectedTargetRow]);
 
   const handleCopyOutputSection = useCallback(async (section) => {
@@ -1793,7 +1987,7 @@ export default function CreateOnboardingJob() {
         maxWidth: STATUS_COLUMN_SIZE,
         filter: false,
         cellClass: "auto-col-tight onboarding-progress-status-cell",
-        cellRenderer: (params) => <ProgressStatusIcon status={params.data?.status} failureKind={params.data?.failureKind} />,
+        cellRenderer: (params) => params.data?.isGroupHeader ? null : <ProgressStatusIcon status={params.data?.status} failureKind={params.data?.failureKind} />,
       },
       {
         field: "targetLabel",
@@ -1837,7 +2031,7 @@ export default function CreateOnboardingJob() {
                 {row.targetLabel || ""}
               </Typography>
               {row.discoveredHostname ? (
-                <Typography component="span" variant="body2" sx={{ color: "rgba(148, 163, 184, 0.78)", flexShrink: 0 }}>
+                <Typography component="span" variant="body2" sx={{ color: DISCOVERED_HOSTNAME_COLOR, flexShrink: 0 }}>
                   ({row.discoveredHostname})
                 </Typography>
               ) : null}
@@ -1920,7 +2114,7 @@ export default function CreateOnboardingJob() {
         flex: 1,
         filter: false,
         cellClass: "auto-col-tight",
-        cellRenderer: (params) => <ProgressTaskCell value={params.value} />,
+        cellRenderer: (params) => <ProgressTaskCell value={params.value} row={params.data} />,
       },
       {
         field: "output",
@@ -1933,6 +2127,7 @@ export default function CreateOnboardingJob() {
         cellRenderer: (params) => {
           const row = params.data;
           if (!row) return null;
+          if (row.isGroupHeader) return null;
           return (
             <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flexWrap: "wrap" }}>
               {row.hasStdOut ? (
@@ -2640,6 +2835,7 @@ export default function CreateOnboardingJob() {
                           rowHeight={AG_GRID_STANDARD_ROW_HEIGHT}
                           overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No progression recorded.</span>"
                           getRowId={(params) => String(params.data?.id || params.rowIndex)}
+                          getRowClass={(params) => params.data?.isGroupHeader ? "onboarding-progress-group-row" : ""}
                           onGridReady={handleProgressionGridReady}
                           theme={gridTheme}
                         />

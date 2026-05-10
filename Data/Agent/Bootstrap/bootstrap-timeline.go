@@ -21,6 +21,7 @@ type StatePayload struct {
 	ServerURL            string `json:"server_url,omitempty"`
 	EnrollmentCodeSHA256 string `json:"enrollment_code_sha256,omitempty"`
 	Status               string `json:"status"`
+	Phase                string `json:"phase,omitempty"`
 	ExitCode             int    `json:"exit_code"`
 	Detail               string `json:"detail"`
 	UpdatedAt            string `json:"updated_at"`
@@ -28,6 +29,7 @@ type StatePayload struct {
 
 type EventPayload struct {
 	Status    string `json:"status"`
+	Phase     string `json:"phase,omitempty"`
 	Task      string `json:"task"`
 	Detail    string `json:"detail,omitempty"`
 	ExitCode  int    `json:"exit_code,omitempty"`
@@ -49,6 +51,7 @@ func writeState(cfg BootstrapConfig, status string, exitCode int, detail string)
 		ServerURL:            cfg.ServerURL,
 		EnrollmentCodeSHA256: hashText(cfg.SiteEnrollmentCode),
 		Status:               status,
+		Phase:                timelinePhaseForTask(detail, status),
 		ExitCode:             exitCode,
 		Detail:               detail,
 		UpdatedAt:            time.Now().UTC().Format(time.RFC3339Nano),
@@ -72,6 +75,7 @@ func writeTimeline(cfg BootstrapConfig, status string, task string, detail strin
 	_ = os.MkdirAll(filepath.Dir(cfg.EventsPath), 0755)
 	payload := EventPayload{
 		Status:    status,
+		Phase:     timelinePhaseForTask(task+" "+detail, status),
 		Task:      task,
 		Detail:    detail,
 		ExitCode:  exitCode,
@@ -88,6 +92,32 @@ func writeTimeline(cfg BootstrapConfig, status string, task string, detail strin
 	}
 	defer file.Close()
 	_, _ = file.Write(append(data, '\n'))
+}
+
+func timelinePhaseForTask(value string, status string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value + " " + status))
+	switch {
+	case strings.Contains(normalized, "auto-detecting remote os"):
+		return "os_detection"
+	case strings.Contains(normalized, "repair"):
+		return "repair"
+	case strings.Contains(normalized, "existing agent"):
+		return "existing_agent_preflight"
+	case strings.Contains(normalized, "dependency") || strings.Contains(normalized, "python") || strings.Contains(normalized, "git") || strings.Contains(normalized, "ultravnc") || strings.Contains(normalized, "wireguard") || strings.Contains(normalized, "autohotkey"):
+		return "dependencies"
+	case strings.Contains(normalized, "configuring agent runtime") || strings.Contains(normalized, "settings") || strings.Contains(normalized, "scheduled task"):
+		return "runtime_configuration"
+	case strings.Contains(normalized, "awaiting approval") || strings.Contains(normalized, "pending_approval"):
+		return "approval_wait"
+	case strings.Contains(normalized, "already enrolled") || strings.Contains(normalized, "active"):
+		return "already_enrolled"
+	case strings.Contains(normalized, "uninstall"):
+		return "uninstall"
+	case strings.Contains(normalized, "failed"):
+		return "failed"
+	default:
+		return "bootstrap"
+	}
 }
 
 func hashText(value string) string {
