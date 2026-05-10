@@ -666,6 +666,17 @@ def _ssh_preflight_failure_detail(error: Any) -> str:
     return "SSH connection failed for all stored Linux credentials."
 
 
+def _infer_onboarding_platform_from_inventory(operating_system: Any = "", connection_type: Any = "") -> str:
+    combined = f"{operating_system or ''} {connection_type or ''}".strip().lower()
+    if not combined:
+        return ""
+    if any(token in combined for token in ("windows", "winrm", "smb")):
+        return "windows"
+    if any(token in combined for token in ("linux", "ubuntu", "debian", "rocky", "red hat", "rhel", "centos", "alma", "fedora", "ssh")):
+        return "linux"
+    return ""
+
+
 def _linux_onboarding_privilege_probe(username: Any, become_method: Any) -> Tuple[str, str]:
     normalized_username = str(username or "").strip().lower()
     if normalized_username == "root":
@@ -1808,8 +1819,20 @@ class OnboardingSchedulerMixin:
             ]
         finally:
             conn.close()
+        known_metadata_by_row_id = self._bulk_lookup_known_onboarding_target_metadata(rows)
         timelines = self._load_onboarding_target_event_rows([int(row["id"]) for row in rows])
         for row in rows:
+            known_metadata = known_metadata_by_row_id.get(int(row["id"]), {})
+            known_hostname = _clean_onboarding_reported_hostname(known_metadata.get("hostname") if isinstance(known_metadata, Mapping) else "")
+            if known_hostname and not _clean_onboarding_reported_hostname(row.get("target_hostname")):
+                row["target_hostname"] = known_hostname
+            if isinstance(known_metadata, Mapping):
+                detected_platform = str(known_metadata.get("detected_platform") or "").strip().lower()
+                operating_system = str(known_metadata.get("operating_system") or "").strip()
+                if detected_platform:
+                    row["detected_platform"] = detected_platform
+                if operating_system:
+                    row["operating_system"] = operating_system
             timeline = timelines.get(int(row["id"]), [])
             created_at = int(row.get("created_at") or 0)
             if created_at > 0:
@@ -2139,7 +2162,7 @@ class OnboardingSchedulerMixin:
         finally:
             conn.close()
 
-    def _bulk_lookup_known_onboarding_target_hostnames(self, rows: Sequence[Mapping[str, Any]]) -> Dict[int, str]:
+    def _bulk_lookup_known_onboarding_target_metadata(self, rows: Sequence[Mapping[str, Any]]) -> Dict[int, Dict[str, str]]:
         row_site_ids: Dict[int, Optional[int]] = {}
         value_to_row_ids: Dict[str, List[int]] = {}
         for row in rows or []:
@@ -2166,7 +2189,7 @@ class OnboardingSchedulerMixin:
         if not value_to_row_ids:
             return {}
 
-        resolved: Dict[int, str] = {}
+        resolved: Dict[int, Dict[str, str]] = {}
 
         def _site_matches(row_id: int, found_site_id: Any) -> bool:
             desired_site_id = row_site_ids.get(int(row_id))
@@ -2177,17 +2200,28 @@ class OnboardingSchedulerMixin:
             except Exception:
                 return True
 
-        def _assign(key: Any, hostname: Any, found_site_id: Any = None) -> None:
+        def _assign(
+            key: Any,
+            hostname: Any,
+            found_site_id: Any = None,
+            operating_system: Any = "",
+            connection_type: Any = "",
+        ) -> None:
             lookup_key = str(key or "").strip().lower()
             clean_hostname = _clean_onboarding_reported_hostname(hostname)
-            if not lookup_key or not clean_hostname:
+            detected_platform = _infer_onboarding_platform_from_inventory(operating_system, connection_type)
+            if not lookup_key or (not clean_hostname and not detected_platform):
                 return
             for row_id in value_to_row_ids.get(lookup_key, []):
                 if row_id in resolved:
                     continue
                 if not _site_matches(row_id, found_site_id):
                     continue
-                resolved[row_id] = clean_hostname
+                resolved[row_id] = {
+                    "hostname": clean_hostname,
+                    "operating_system": str(operating_system or "").strip(),
+                    "detected_platform": detected_platform,
+                }
 
         values = list(value_to_row_ids.keys())
         conn = self._conn()
@@ -2202,6 +2236,8 @@ class OnboardingSchedulerMixin:
                     SELECT d.hostname,
                            d.internal_ip,
                            d.external_ip,
+                           d.operating_system,
+                           d.connection_type,
                            ds.site_id
                       FROM devices d
                  LEFT JOIN device_sites ds
@@ -2212,9 +2248,9 @@ class OnboardingSchedulerMixin:
                     """,
                     tuple([*chunk, *chunk, *chunk]),
                 )
-                for hostname, internal_ip, external_ip, found_site_id in cur.fetchall():
+                for hostname, internal_ip, external_ip, operating_system, connection_type, found_site_id in cur.fetchall():
                     for key in (internal_ip, external_ip, hostname):
-                        _assign(key, hostname, found_site_id)
+                        _assign(key, hostname, found_site_id, operating_system, connection_type)
             unresolved_values = [
                 value
                 for value, row_ids in value_to_row_ids.items()
@@ -2249,6 +2285,14 @@ class OnboardingSchedulerMixin:
         finally:
             conn.close()
         return resolved
+
+    def _bulk_lookup_known_onboarding_target_hostnames(self, rows: Sequence[Mapping[str, Any]]) -> Dict[int, str]:
+        metadata = self._bulk_lookup_known_onboarding_target_metadata(rows)
+        return {
+            int(row_id): _clean_onboarding_reported_hostname(value.get("hostname") if isinstance(value, Mapping) else "")
+            for row_id, value in metadata.items()
+            if _clean_onboarding_reported_hostname(value.get("hostname") if isinstance(value, Mapping) else "")
+        }
 
     def _lookup_known_onboarding_target_hostname(self, host: str, site_id: Optional[int]) -> str:
         value = _onboarding_target_without_port(host)
@@ -3556,6 +3600,24 @@ class OnboardingSchedulerMixin:
                     )
                 return ONBOARDING_STATUS_UNREACHABLE
             last_error = ""
+            if not smb_error:
+                remote_hostname = self._probe_windows_smb_server_name(host=host, port=smb_target_port)
+                if remote_hostname:
+                    self._set_onboarding_target_hostname(row_id, remote_hostname)
+                    active_hostname = self._lookup_active_onboarding_target_hostname_from_candidates(
+                        [host, remote_hostname, row.get("target_address"), row.get("target_hostname"), row.get("target_input")],
+                        site_id,
+                    )
+                    if active_hostname:
+                        self._update_onboarding_target_row(
+                            row_id,
+                            status="already_enrolled",
+                            detail="Existing Borealis Agent is already enrolled and active.",
+                            target_hostname=active_hostname,
+                            finished=True,
+                            redactions=redactions,
+                        )
+                        return "already_enrolled"
             windows_total = max(1, len(windows_candidates))
             for credential_index, candidate in enumerate(windows_candidates, start=1):
                 label = self._onboarding_credential_label(candidate)
@@ -3730,19 +3792,7 @@ class OnboardingSchedulerMixin:
         if normalized_platform == ONBOARDING_PLATFORM_WINDOWS:
             if not windows_candidates:
                 raise RuntimeError("Windows onboarding requires at least one Stored Windows Credential.")
-            return self._run_windows_onboarding_target(
-                row=row,
-                site=site,
-                credential=windows_candidates[0],
-                branch=branch,
-                server_url=server_url,
-                job_id=job_id,
-                run_id=run_id,
-                windows_methods=windows_methods or ONBOARDING_WINDOWS_METHODS,
-                winrm_port=winrm_port,
-                smb_port=int(windows_port or row.get("ssh_port") or DEFAULT_ONBOARDING_WINDOWS_PORT),
-                credential_label=self._onboarding_credential_label(windows_candidates[0]),
-            )
+            return _try_windows_candidates(mark_unreachable=True)
         if not linux_candidates:
             raise RuntimeError("Linux onboarding requires at least one Stored Linux Credential.")
         return self._run_linux_onboarding_target(
@@ -4033,9 +4083,32 @@ class OnboardingSchedulerMixin:
                             smb.close()
                         except Exception:
                             pass
-                    if attempt < login_attempts - 1:
-                        time.sleep(1.0)
+                if attempt < login_attempts - 1:
+                    time.sleep(1.0)
         raise RuntimeError(f"smb_connection_failed:{last_error or 'connection_failed'}")
+
+    def _probe_windows_smb_server_name(self, *, host: str, port: int) -> str:
+        try:
+            from impacket.smbconnection import SMBConnection  # type: ignore
+        except Exception:
+            return ""
+        connect_timeout = max(3, min(30, int(_env_non_negative_float("BOREALIS_WINDOWS_SMB_TIMEOUT_SECONDS", 8.0) or 8.0)))
+        for remote_name in ("*SMBSERVER", str(host or "").strip()):
+            smb = None
+            try:
+                smb = SMBConnection(remote_name, host, sess_port=int(port), timeout=connect_timeout)
+                hostname = _clean_onboarding_reported_hostname(smb.getServerName())
+                if hostname:
+                    return hostname
+            except Exception:
+                continue
+            finally:
+                if smb is not None:
+                    try:
+                        smb.close()
+                    except Exception:
+                        pass
+        return ""
 
     def _read_windows_smb_file(self, smb: Any, path: str, *, share: str = "ADMIN$") -> str:
         def _read_with_open_file() -> Optional[bytes]:
@@ -4854,7 +4927,13 @@ class OnboardingSchedulerMixin:
                     pass
 
     def _winrm_run_ps_checked(self, session: Any, script: str, *, stage: str) -> None:
-        result = session.run_ps(script)
+        quiet_script = (
+            "$ProgressPreference='SilentlyContinue';"
+            "$VerbosePreference='SilentlyContinue';"
+            "$InformationPreference='SilentlyContinue';"
+            f"{script}"
+        )
+        result = session.run_ps(quiet_script)
         stdout_raw = getattr(result, "std_out", b"") or b""
         stderr_raw = getattr(result, "std_err", b"") or b""
         stdout = stdout_raw.decode("utf-8", errors="replace") if isinstance(stdout_raw, bytes) else str(stdout_raw or "")
@@ -5362,7 +5441,7 @@ class OnboardingSchedulerMixin:
             return ONBOARDING_STATUS_UNREACHABLE
 
         auth_failure = _windows_onboarding_auth_failure(stdout=combined_stdout, stderr=combined_stderr)
-        if auth_failure and not final_on_failure:
+        if not final_on_failure:
             self._update_onboarding_target_row(
                 row_id,
                 status=ONBOARDING_STATUS_RUNNING,
