@@ -337,14 +337,15 @@ async def _read_instruction(
     parser: GuacamoleProtocolParser,
     *,
     timeout_seconds: float,
-) -> Tuple[str, List[str]]:
+) -> Tuple[str, List[str], List[Tuple[str, List[str]]]]:
     while True:
         data = await asyncio.wait_for(reader.read(8192), timeout=timeout_seconds)
         if not data:
             raise RuntimeError("guacd_closed")
         instructions = parser.feed(data)
         if instructions:
-            return instructions[0]
+            opcode, args = instructions[0]
+            return opcode, args, instructions[1:]
 
 
 async def _write_instruction(writer: Any, opcode: Any, *args: Any) -> None:
@@ -367,10 +368,10 @@ async def _handshake_guacd(
     reader: Any,
     writer: Any,
     session: GuacamoleVncSession,
-) -> str:
+) -> Tuple[str, List[Tuple[str, List[str]]]]:
     parser = GuacamoleProtocolParser()
     await _write_instruction(writer, "select", "vnc")
-    opcode, args = await _read_instruction(
+    opcode, args, _extra = await _read_instruction(
         reader,
         parser,
         timeout_seconds=_GUACD_HANDSHAKE_TIMEOUT_SECONDS,
@@ -386,7 +387,7 @@ async def _handshake_guacd(
     await _write_instruction(writer, "name", f"Borealis VNC {session.agent_id}")
     await _write_instruction(writer, "connect", *guacamole_connect_arguments(session, args))
 
-    opcode, ready_args = await _read_instruction(
+    opcode, ready_args, pending = await _read_instruction(
         reader,
         parser,
         timeout_seconds=_GUACD_HANDSHAKE_TIMEOUT_SECONDS,
@@ -395,7 +396,7 @@ async def _handshake_guacd(
         raise RuntimeError(ready_args[0] if ready_args else "guacd_error")
     if opcode != "ready":
         raise RuntimeError(f"guacd_unexpected_{opcode or 'empty'}")
-    return ready_args[0] if ready_args else uuid.uuid4().hex
+    return ready_args[0] if ready_args else uuid.uuid4().hex, pending
 
 
 async def _open_ready_guacd(
@@ -404,7 +405,7 @@ async def _open_ready_guacd(
     logger: logging.Logger,
     guacd_host: str,
     guacd_port: int,
-) -> Tuple[Any, Any, str]:
+) -> Tuple[Any, Any, str, List[Tuple[str, List[str]]]]:
     last_error: Optional[BaseException] = None
     for attempt in range(1, _GUACD_READY_ATTEMPTS + 1):
         reader: Any = None
@@ -414,7 +415,7 @@ async def _open_ready_guacd(
                 asyncio.open_connection(guacd_host, int(guacd_port)),
                 timeout=_GUACD_CONNECT_TIMEOUT_SECONDS,
             )
-            uuid_value = await _handshake_guacd(reader=reader, writer=writer, session=session)
+            uuid_value, pending = await _handshake_guacd(reader=reader, writer=writer, session=session)
             if attempt > 1:
                 logger.info(
                     "Guacamole VNC backend became ready after retry agent_id=%s session_id=%s attempt=%s",
@@ -422,7 +423,7 @@ async def _open_ready_guacd(
                     session.session_id or "-",
                     attempt,
                 )
-            return reader, writer, uuid_value
+            return reader, writer, uuid_value, pending
         except Exception as exc:
             last_error = exc
             await _close_writer(writer)
@@ -459,7 +460,7 @@ async def proxy_guacamole_vnc_session(
     server_message_count = 0
     server_byte_count = 0
     try:
-        reader, writer, uuid_value = await _open_ready_guacd(
+        reader, writer, uuid_value, pending_instructions = await _open_ready_guacd(
             session=session,
             logger=logger,
             guacd_host=guacd_host,
@@ -471,6 +472,21 @@ async def proxy_guacamole_vnc_session(
             except Exception:
                 logger.debug("Failed to confirm Guacamole VNC transport agent_id=%s", session.agent_id, exc_info=True)
         await websocket.send(encode_instruction("", uuid_value))
+        if pending_instructions:
+            pending_payload = "".join(
+                encode_instruction(opcode, *args) for opcode, args in pending_instructions
+            )
+            server_instruction_count += len(pending_instructions)
+            server_message_count += 1
+            server_byte_count += len(pending_payload.encode("utf-8"))
+            for opcode, args in pending_instructions[:3]:
+                logger.info(
+                    "Guacamole VNC backend initial instruction agent_id=%s session_id=%s %s",
+                    session.agent_id,
+                    session.session_id or "-",
+                    _guacd_instruction_summary(opcode, args),
+                )
+            await websocket.send(pending_payload)
         if callable(session.on_open):
             try:
                 session.on_open()

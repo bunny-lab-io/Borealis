@@ -245,3 +245,52 @@ def test_guacamole_proxy_retries_until_backend_ready(monkeypatch: pytest.MonkeyP
         "5900",
         "secretpw",
     ]
+
+
+def test_guacamole_proxy_forwards_ready_coalesced_display_instructions(monkeypatch: pytest.MonkeyPatch) -> None:
+    reader = _FakeReader(
+        [
+            encode_instruction(
+                "args",
+                guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
+                "hostname",
+                "port",
+                "password",
+            ).encode("utf-8"),
+            (
+                encode_instruction("ready", "uuid-1")
+                + encode_instruction("size", "0", "1024", "768")
+                + encode_instruction("sync", "1234")
+            ).encode("utf-8"),
+        ]
+    )
+    writer = _FakeWriter()
+
+    async def _fake_open_connection(_host: str, _port: int):
+        return reader, writer
+
+    monkeypatch.setattr(guacamole_proxy.asyncio, "open_connection", _fake_open_connection)
+    session = GuacamoleVncSession(
+        token="token",
+        agent_id="agent-1",
+        host="10.255.0.4",
+        port=5900,
+        password="secretpw",
+        created_at=0,
+        expires_at=120,
+        session_id="session-1",
+    )
+    websocket = _FakeWebSocket([encode_instruction("disconnect")])
+
+    asyncio.run(
+        guacamole_proxy.proxy_guacamole_vnc_session(
+            websocket=websocket,
+            session=session,
+            logger=logging.getLogger("test.guacamole.proxy"),
+            guacd_host="127.0.0.1",
+            guacd_port=4822,
+        )
+    )
+
+    assert websocket.sent[0] == encode_instruction("", "uuid-1")
+    assert websocket.sent[1] == encode_instruction("size", "0", "1024", "768") + encode_instruction("sync", "1234")
