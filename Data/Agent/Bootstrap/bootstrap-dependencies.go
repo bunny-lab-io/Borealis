@@ -118,7 +118,8 @@ func ensureUltraVNCServer(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if err != nil {
 		return err
 	}
-	return ensureUltraVNCServiceRegistration(exePath, configPath, logger)
+	serviceConfigPath := mirrorUltraVNCBootstrapConfigToServiceDir(exePath, configPath, logger)
+	return ensureUltraVNCServiceRegistration(exePath, serviceConfigPath, logger)
 }
 
 func resolveUltraVNCBootstrapExe(cfg BootstrapConfig) (string, error) {
@@ -167,6 +168,39 @@ func ensureUltraVNCBootstrapConfig(cfg BootstrapConfig, logger *BootstrapLogger)
 	}
 	logger.Tracef("UltraVNC bootstrap config written at %s", configPath)
 	return configPath, nil
+}
+
+func mirrorUltraVNCBootstrapConfigToServiceDir(exePath string, configPath string, logger *BootstrapLogger) string {
+	if strings.TrimSpace(exePath) == "" || strings.TrimSpace(configPath) == "" {
+		return configPath
+	}
+	targetPath := filepath.Join(filepath.Dir(exePath), "ultravnc.ini")
+	if samePath(configPath, targetPath) {
+		return targetPath
+	}
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		if logger != nil {
+			logger.Warnf("UltraVNC bootstrap config mirror skipped: read %s failed: %v", configPath, err)
+		}
+		return configPath
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+		if logger != nil {
+			logger.Warnf("UltraVNC bootstrap config mirror skipped: mkdir %s failed: %v", filepath.Dir(targetPath), err)
+		}
+		return configPath
+	}
+	if err := os.WriteFile(targetPath, content, 0644); err != nil {
+		if logger != nil {
+			logger.Warnf("UltraVNC bootstrap config mirror skipped: write %s failed: %v", targetPath, err)
+		}
+		return configPath
+	}
+	if logger != nil {
+		logger.Tracef("UltraVNC bootstrap config mirrored to %s", targetPath)
+	}
+	return targetPath
 }
 
 func ensureUltraVNCServiceRegistration(exePath string, configPath string, logger *BootstrapLogger) error {
@@ -224,7 +258,8 @@ func reconcileUltraVNCServiceAfterRuntimeStage(cfg BootstrapConfig, logger *Boot
 		logger.Warnf("UltraVNC final service config skipped: %v", err)
 		return
 	}
-	if err := ensureUltraVNCServiceRegistration(exePath, configPath, logger); err != nil {
+	serviceConfigPath := mirrorUltraVNCBootstrapConfigToServiceDir(exePath, configPath, logger)
+	if err := ensureUltraVNCServiceRegistration(exePath, serviceConfigPath, logger); err != nil {
 		logger.Warnf("UltraVNC final service reconciliation failed: %v", err)
 		return
 	}
@@ -239,7 +274,7 @@ func startUltraVNCServiceForVerification(logger *BootstrapLogger) {
 		return
 	}
 	if strings.EqualFold(state, "RUNNING") {
-		logger.Tracef("UltraVNC service verification complete: state=RUNNING")
+		verifyUltraVNCServiceStable(logger)
 		return
 	}
 	output, err := runCommandTimeout(logger, 30*time.Second, "sc.exe", "start", ultraVNCServiceName)
@@ -258,12 +293,22 @@ func startUltraVNCServiceForVerification(logger *BootstrapLogger) {
 			return
 		}
 		if strings.EqualFold(state, "RUNNING") {
-			logger.Tracef("UltraVNC service verification complete: state=RUNNING")
+			verifyUltraVNCServiceStable(logger)
 			return
 		}
 		time.Sleep(1 * time.Second)
 	}
 	logger.Warnf("UltraVNC service did not reach RUNNING during verification: state=%s", state)
+}
+
+func verifyUltraVNCServiceStable(logger *BootstrapLogger) {
+	time.Sleep(2 * time.Second)
+	state, exists := queryServiceState(ultraVNCServiceName)
+	if exists && strings.EqualFold(state, "RUNNING") {
+		logger.Tracef("UltraVNC service verification complete: state=RUNNING stable=true")
+		return
+	}
+	logger.Warnf("UltraVNC service did not stay RUNNING during verification: exists=%t state=%s", exists, state)
 }
 
 func configureUltraVNCServiceRecovery(logger *BootstrapLogger) {
