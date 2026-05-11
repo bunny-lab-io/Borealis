@@ -563,7 +563,35 @@ func installWireGuardMSI(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		return fmt.Errorf("prepare WireGuard MSI log directory: %w", err)
 	}
 	_ = os.Remove(logPath)
-	_, err = runCommandTimeout(
+	err = runWireGuardMSIInstall(logger, msiPath, logPath)
+	if isWindowsInstallerSoftSuccess(err) {
+		logger.Warnf("WireGuard MSI install returned reboot-needed success; continuing: %v. MSI log: %s", err, logPath)
+		return nil
+	}
+	if err != nil {
+		if clientExe := resolveWireGuardClientExe(); clientExe != "" {
+			logger.Warnf("WireGuard MSI install returned error, but system client executable exists at %s. Continuing without extraction fallback. MSI log: %s error=%v", clientExe, logPath, err)
+			return nil
+		}
+		logger.Warnf("WireGuard MSI install failed and no system client executable was found; attempting clean MSI uninstall/reinstall. MSI log: %s error=%v", logPath, err)
+		if repairErr := repairWireGuardMSIInstall(cfg, msiPath, logger); repairErr == nil {
+			return nil
+		} else {
+			logger.Warnf("WireGuard MSI clean reinstall failed: %v", repairErr)
+		}
+		if tail := tailTextFile(logPath, 12000); tail != "" {
+			logger.Warnf("WireGuard MSI verbose log tail (%s):\n%s", logPath, tail)
+		} else {
+			logger.Warnf("WireGuard MSI verbose log unavailable or empty: %s", logPath)
+		}
+		return fmt.Errorf("%w (verbose log: %s)", err, logPath)
+	}
+	logger.Tracef("WireGuard MSI install command complete. MSI log: %s", logPath)
+	return err
+}
+
+func runWireGuardMSIInstall(logger *BootstrapLogger, msiPath string, logPath string) error {
+	_, err := runCommandTimeout(
 		logger,
 		300*time.Second,
 		"msiexec.exe",
@@ -575,24 +603,68 @@ func installWireGuardMSI(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		"/l*v",
 		logPath,
 	)
+	return err
+}
+
+func repairWireGuardMSIInstall(cfg BootstrapConfig, msiPath string, logger *BootstrapLogger) error {
+	if err := uninstallWireGuardMSIProduct(cfg, msiPath, logger); err != nil {
+		return err
+	}
+	retryLogPath := filepath.Join(cfg.InstallDir, "Agent", "Logs", "wireguard-msi-install-retry.log")
+	if err := os.MkdirAll(filepath.Dir(retryLogPath), 0755); err != nil {
+		return err
+	}
+	_ = os.Remove(retryLogPath)
+	err := runWireGuardMSIInstall(logger, msiPath, retryLogPath)
 	if isWindowsInstallerSoftSuccess(err) {
-		logger.Warnf("WireGuard MSI install returned reboot-needed success; continuing: %v. MSI log: %s", err, logPath)
+		logger.Warnf("WireGuard MSI reinstall returned reboot-needed success; continuing: %v. MSI log: %s", err, retryLogPath)
 		return nil
 	}
 	if err != nil {
 		if clientExe := resolveWireGuardClientExe(); clientExe != "" {
-			logger.Warnf("WireGuard MSI install returned error, but system client executable exists at %s. Continuing without extraction fallback. MSI log: %s error=%v", clientExe, logPath, err)
+			logger.Warnf("WireGuard MSI reinstall returned error, but system client executable exists at %s. Continuing. MSI log: %s error=%v", clientExe, retryLogPath, err)
 			return nil
 		}
+		if tail := tailTextFile(retryLogPath, 12000); tail != "" {
+			logger.Warnf("WireGuard MSI reinstall log tail (%s):\n%s", retryLogPath, tail)
+		}
+		return fmt.Errorf("%w (verbose log: %s)", err, retryLogPath)
+	}
+	logger.Tracef("WireGuard MSI clean reinstall complete. MSI log: %s", retryLogPath)
+	return nil
+}
+
+func uninstallWireGuardMSIProduct(cfg BootstrapConfig, msiPath string, logger *BootstrapLogger) error {
+	prepareWireGuardMSIInstall(logger)
+	logPath := filepath.Join(cfg.InstallDir, "Agent", "Logs", "wireguard-msi-uninstall.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		return err
+	}
+	_ = os.Remove(logPath)
+	logger.Tracef("WireGuard MSI uninstall command starting: msi=%s", msiPath)
+	_, err := runCommandTimeout(
+		logger,
+		180*time.Second,
+		"msiexec.exe",
+		"/x",
+		msiPath,
+		"/qn",
+		"/norestart",
+		"/l*v",
+		logPath,
+	)
+	if isWindowsInstallerSoftSuccess(err) || isWindowsInstallerBenignUninstall(err) {
+		logger.Warnf("WireGuard MSI uninstall returned benign installer status; continuing: %v. MSI log: %s", err, logPath)
+		return nil
+	}
+	if err != nil {
 		if tail := tailTextFile(logPath, 12000); tail != "" {
-			logger.Warnf("WireGuard MSI verbose log tail (%s):\n%s", logPath, tail)
-		} else {
-			logger.Warnf("WireGuard MSI verbose log unavailable or empty: %s", logPath)
+			logger.Warnf("WireGuard MSI uninstall log tail (%s):\n%s", logPath, tail)
 		}
 		return fmt.Errorf("%w (verbose log: %s)", err, logPath)
 	}
-	logger.Tracef("WireGuard MSI install command complete. MSI log: %s", logPath)
-	return err
+	logger.Tracef("WireGuard MSI uninstall command complete. MSI log: %s", logPath)
+	return nil
 }
 
 func prepareWireGuardMSIInstall(logger *BootstrapLogger) {
@@ -671,6 +743,22 @@ func isWindowsInstallerSoftSuccess(err error) bool {
 	}
 	switch exitErr.ExitCode() {
 	case 1641, 3010:
+		return true
+	default:
+		return false
+	}
+}
+
+func isWindowsInstallerBenignUninstall(err error) bool {
+	if err == nil {
+		return false
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	switch exitErr.ExitCode() {
+	case 1605, 1614:
 		return true
 	default:
 		return false
