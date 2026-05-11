@@ -311,6 +311,7 @@ class WireGuardClient:
         self._client_keys = _generate_client_keys(self.cert_root)
         self._wg_exe = self._resolve_wireguard_exe()
         self._last_install_already_present = False
+        self._last_service_error = ""
         try:
             self._remove_stale_engine_listener_services()
             self._ensure_idle_service()
@@ -577,16 +578,22 @@ class WireGuardClient:
         target_path = config_path or self.conf_path
         code, out, err = self._run([self._wg_exe, "/installtunnelservice", str(target_path)])
         self._last_install_already_present = False
+        detail = (err or out or "").strip()
+        detail_lower = detail.lower()
         if code != 0:
-            if "already installed and running" in err.lower():
+            if "already installed and running" in detail_lower or "already exists" in detail_lower:
                 self._last_install_already_present = True
+                self._last_service_error = ""
                 _write_log("WireGuard tunnel service already installed; skipping install.")
                 return True
-            if "access is denied" in err.lower():
+            if "access is denied" in detail_lower:
+                self._last_service_error = "access denied while installing WireGuard tunnel service"
                 _write_log("Failed to install WireGuard tunnel service: access denied; ensure agent runs elevated.")
                 return False
-            _write_log(f"Failed to install WireGuard tunnel service: code={code} err={err}")
+            self._last_service_error = detail or f"wireguard installtunnelservice exit code {code}"
+            _write_log(f"Failed to install WireGuard tunnel service: code={code} err={detail}")
             return False
+        self._last_service_error = ""
         return True
 
     def _path_text(self, path: Optional[Path]) -> str:
@@ -627,11 +634,21 @@ class WireGuardClient:
         detail = (err or out or "").strip()
         if code != 0 and "not installed" not in detail.lower():
             _write_log(f"WireGuard tunnel service uninstall returned code={code} err={detail}")
+        if self._service_exists():
+            service_id = self._service_id()
+            _write_log(f"WireGuard tunnel service still present after uninstall command; deleting {service_id}.")
+            self._run(["sc.exe", "stop", service_id])
+            time.sleep(1)
+            self._run(["sc.exe", "delete", service_id])
         for _ in range(10):
             if not self._service_exists():
+                self._last_service_error = ""
                 return True
             time.sleep(0.5)
-        return not self._service_exists()
+        removed = not self._service_exists()
+        if not removed:
+            self._last_service_error = "WireGuard tunnel service could not be removed"
+        return removed
 
     def _reinstall_service(self) -> bool:
         _write_log(f"Repairing WireGuard tunnel service binding using config {self.conf_path}.")
@@ -641,15 +658,18 @@ class WireGuardClient:
             pass
         time.sleep(1)
         if not self._uninstall_service():
+            self._last_service_error = "WireGuard tunnel service removal failed during repair"
             _write_log("Failed to remove existing WireGuard tunnel service during repair.")
             return False
         if not self._install_service(config_path=self.conf_path):
             return False
         if not self._service_exists() and not self._last_install_already_present:
+            self._last_service_error = "WireGuard tunnel service missing after repair install"
             _write_log("WireGuard tunnel service still missing after repair install attempt.")
             return False
         service_config_path = self._service_config_path()
         if self._service_binding_needs_repair(service_config_path):
+            self._last_service_error = "WireGuard tunnel service still bound to stale config path"
             _write_log("WireGuard tunnel service binding repair did not converge on the runtime config path.")
             return False
         return True
@@ -660,9 +680,13 @@ class WireGuardClient:
         if stop_code != 0 and stop_err:
             _write_log(f"WireGuard stop service returned code={stop_code} err={stop_err}")
         time.sleep(1)
-        start_code, _, start_err = self._run(["sc.exe", "start", service_id])
-        if start_code != 0 and start_err:
-            _write_log(f"WireGuard start service returned code={start_code} err={start_err}")
+        start_code, start_out, start_err = self._run(["sc.exe", "start", service_id])
+        start_detail = (start_err or start_out or "").strip()
+        if start_code != 0:
+            self._last_service_error = start_detail or f"sc start {service_id} exit code {start_code}"
+            _write_log(f"WireGuard start service returned code={start_code} err={self._last_service_error}")
+            return False
+        self._last_service_error = ""
         return start_code == 0
 
     def _ensure_adapter_name(self) -> None:
@@ -930,6 +954,7 @@ class WireGuardClient:
                 _write_log("WireGuard tunnel service presence inferred from install response.")
                 service_present = True
             if not service_present:
+                self._last_service_error = "WireGuard tunnel service missing after install attempt"
                 _write_log("WireGuard tunnel service still missing after install attempt.")
                 if recovery_reason:
                     self._log_recovery_event(
@@ -956,6 +981,8 @@ class WireGuardClient:
             self._restart_service()
             current_state = self._wait_for_service_state()
             if current_state not in ("RUNNING", "START_PENDING"):
+                if not self._last_service_error:
+                    self._last_service_error = f"WireGuard tunnel service state after restart: {current_state or 'unknown'}"
                 _write_log("WireGuard tunnel service unhealthy after restart; attempting service repair.")
                 if not self._reinstall_service():
                     if recovery_reason:
@@ -970,6 +997,8 @@ class WireGuardClient:
                 self._restart_service()
                 current_state = self._wait_for_service_state()
                 if current_state not in ("RUNNING", "START_PENDING"):
+                    if not self._last_service_error:
+                        self._last_service_error = f"WireGuard tunnel service state after repair: {current_state or 'unknown'}"
                     _write_log("WireGuard tunnel service failed to reach RUNNING after repair attempt.")
                     if recovery_reason:
                         self._log_recovery_event(
@@ -987,6 +1016,7 @@ class WireGuardClient:
 
             self.session = session
             self.idle_deadline = None
+            self._last_service_error = ""
             if recovery_reason:
                 self._log_recovery_event(
                     "success",
@@ -1647,6 +1677,8 @@ class Role:
         thread_alive = bool(self._ensure_thread and self._ensure_thread.is_alive())
         peer_ip_display = peer_ip.split("/", 1)[0] if peer_ip else ""
         detail_suffix = f" tunnel_id={tunnel_id}" if tunnel_id else ""
+        service_error = str(getattr(self.client, "_last_service_error", "") or "").strip()
+        service_error_suffix = f" Last service error: {service_error}" if service_error else ""
         live_config_active = bool(live_config_snapshot.get("active_config"))
         details = {
             "running_status": str(service_state or "Stopped"),
@@ -1654,6 +1686,8 @@ class Role:
             "tunnel_id": tunnel_id,
             "endpoint": endpoint,
         }
+        if service_error:
+            details["last_service_error"] = service_error
         if service_state in ("RUNNING", "START_PENDING") and session is not None and peer_ip_display:
             return {
                 "status": "healthy",
@@ -1675,14 +1709,17 @@ class Role:
             return {
                 "status": "recovering",
                 "role_label": self.role_health_label,
-                "detail": f"Tunnel service is {service_state or 'RUNNING'} but no peer IP is assigned yet.{detail_suffix}",
+                "detail": (
+                    f"Tunnel service is {service_state or 'RUNNING'} but no peer IP is assigned yet."
+                    f"{detail_suffix}{service_error_suffix}"
+                ),
                 "details": details,
             }
         if not thread_alive:
             return {
                 "status": "unhealthy",
                 "role_label": self.role_health_label,
-                "detail": "Persistent ensure loop stopped.",
+                "detail": f"Persistent ensure loop stopped.{service_error_suffix}",
                 "details": details,
             }
         if session is not None or live_config_active or tunnel_id or peer_ip_display:
@@ -1694,7 +1731,10 @@ class Role:
             return {
                 "status": "recovering",
                 "role_label": self.role_health_label,
-                "detail": f"Tunnel expected but service state is {service_state or 'stopped'}.{detail_suffix}",
+                "detail": (
+                    f"Tunnel expected but service state is {service_state or 'stopped'}."
+                    f"{detail_suffix}{service_error_suffix}"
+                ),
                 "details": details,
             }
         return {

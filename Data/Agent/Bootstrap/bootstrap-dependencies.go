@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,7 +47,7 @@ func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error
 		writeTimeline(cfg, "running", task, "Installing "+step.name+".", 1)
 		if err := step.fn(cfg, logger); err != nil {
 			logger.Warnf("%s dependency deferred: %v", step.name, err)
-			writeTimeline(cfg, "completed", task, step.name+" dependency deferred: "+err.Error(), 0)
+			writeTimeline(cfg, "failed", task, step.name+" dependency deferred: "+err.Error(), 1)
 			logger.Tracef("Dependency step deferred: %s duration=%s error=%v", step.name, time.Since(stepStartedAt).Round(time.Millisecond), err)
 			continue
 		}
@@ -357,12 +358,203 @@ func installWireGuardMSI(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		logger.Tracef("WireGuard MSI already present at %s", msiPath)
 	}
 	logger.Tracef("WireGuard MSI install command starting.")
-	_, err = runCommandTimeout(logger, 180*time.Second, "msiexec.exe", "/i", msiPath, "/qn", "/norestart", "DO_NOT_LAUNCH=1")
+	prepareWireGuardMSIInstall(logger)
+	logPath := wireGuardMSILogPath(cfg)
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		return fmt.Errorf("prepare WireGuard MSI log directory: %w", err)
+	}
+	_ = os.Remove(logPath)
+	_, err = runCommandTimeout(
+		logger,
+		300*time.Second,
+		"msiexec.exe",
+		"/i",
+		msiPath,
+		"/qn",
+		"/norestart",
+		"DO_NOT_LAUNCH=1",
+		"/l*v",
+		logPath,
+	)
 	if isWindowsInstallerSoftSuccess(err) {
-		logger.Warnf("WireGuard MSI install returned reboot-needed success; continuing: %v", err)
+		logger.Warnf("WireGuard MSI install returned reboot-needed success; continuing: %v. MSI log: %s", err, logPath)
 		return nil
 	}
+	if err != nil {
+		if clientExe := resolveWireGuardClientExe(); clientExe != "" {
+			logger.Warnf("WireGuard MSI install returned error, but client executable exists at %s. Continuing. MSI log: %s error=%v", clientExe, logPath, err)
+			return nil
+		}
+		if extractErr := extractWireGuardClientFromMSI(cfg, msiPath, logger); extractErr == nil {
+			logger.Warnf("WireGuard MSI install returned error, but client files were extracted successfully. MSI log: %s error=%v", logPath, err)
+			return nil
+		} else {
+			logger.Warnf("WireGuard MSI administrative extraction fallback failed: %v", extractErr)
+		}
+		if tail := tailTextFile(logPath, 12000); tail != "" {
+			logger.Warnf("WireGuard MSI verbose log tail (%s):\n%s", logPath, tail)
+		} else {
+			logger.Warnf("WireGuard MSI verbose log unavailable or empty: %s", logPath)
+		}
+		return fmt.Errorf("%w (verbose log: %s)", err, logPath)
+	}
+	logger.Tracef("WireGuard MSI install command complete. MSI log: %s", logPath)
 	return err
+}
+
+func extractWireGuardClientFromMSI(cfg BootstrapConfig, msiPath string, logger *BootstrapLogger) error {
+	extractRoot := filepath.Join(cfg.InstallDir, "Dependencies", "VPN_Tunnel_Adapter", "msi-extract")
+	adminLog := filepath.Join(cfg.InstallDir, "Agent", "Logs", "wireguard-msi-admin-extract.log")
+	_ = os.RemoveAll(extractRoot)
+	if err := os.MkdirAll(extractRoot, 0755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(adminLog), 0755); err != nil {
+		return err
+	}
+	_ = os.Remove(adminLog)
+	logger.Tracef("WireGuard MSI administrative extraction fallback starting: target=%s", extractRoot)
+	_, err := runCommandTimeout(
+		logger,
+		180*time.Second,
+		"msiexec.exe",
+		"/a",
+		msiPath,
+		"/qn",
+		"TARGETDIR="+extractRoot,
+		"/l*v",
+		adminLog,
+	)
+	if isWindowsInstallerSoftSuccess(err) {
+		logger.Warnf("WireGuard MSI administrative extraction returned reboot-needed success; continuing: %v. MSI log: %s", err, adminLog)
+		err = nil
+	}
+	if err != nil {
+		if tail := tailTextFile(adminLog, 12000); tail != "" {
+			logger.Warnf("WireGuard MSI administrative extraction log tail (%s):\n%s", adminLog, tail)
+		}
+		return fmt.Errorf("%w (verbose log: %s)", err, adminLog)
+	}
+	sourceExe, err := findFileByName(extractRoot, "wireguard.exe")
+	if err != nil {
+		return err
+	}
+	if sourceExe == "" {
+		return fmt.Errorf("wireguard.exe not found after administrative extraction")
+	}
+	targetDir := filepath.Join(programFilesRoot(), "WireGuard")
+	if err := copyDirectoryContents(filepath.Dir(sourceExe), targetDir); err != nil {
+		return err
+	}
+	if clientExe := resolveWireGuardClientExe(); clientExe != "" {
+		logger.Infof("WireGuard client files extracted to %s.", targetDir)
+		return nil
+	}
+	return fmt.Errorf("WireGuard client executable still missing after extraction to %s", targetDir)
+}
+
+func programFilesRoot() string {
+	root := strings.TrimSpace(os.Getenv("ProgramFiles"))
+	if root == "" {
+		root = `C:\Program Files`
+	}
+	return root
+}
+
+func findFileByName(root string, fileName string) (string, error) {
+	var found string
+	errFound := errors.New("file found")
+	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info == nil || info.IsDir() {
+			return nil
+		}
+		if strings.EqualFold(info.Name(), fileName) {
+			found = path
+			return errFound
+		}
+		return nil
+	})
+	if errors.Is(err, errFound) {
+		return found, nil
+	}
+	if err != nil && found == "" {
+		return "", err
+	}
+	return found, nil
+}
+
+func copyDirectoryContents(sourceDir string, targetDir string) error {
+	sourceDir = filepath.Clean(sourceDir)
+	targetDir = filepath.Clean(targetDir)
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return err
+	}
+	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info == nil {
+			return nil
+		}
+		rel, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		target := filepath.Join(targetDir, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, 0755)
+		}
+		return copyFile(path, target)
+	})
+}
+
+func prepareWireGuardMSIInstall(logger *BootstrapLogger) {
+	for _, service := range []string{"WireGuardTunnel$Borealis", "WireGuardTunnel$borealis-wg"} {
+		stopServiceAndWait(service, 20*time.Second, logger)
+		deleteServiceAndWait(service, 20*time.Second, logger)
+	}
+	stopServiceAndWait(wireGuardManagerServiceName, 20*time.Second, logger)
+}
+
+func wireGuardMSILogPath(cfg BootstrapConfig) string {
+	return filepath.Join(cfg.InstallDir, "Agent", "Logs", "wireguard-msi-install.log")
+}
+
+func tailTextFile(path string, maxBytes int64) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	handle, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer handle.Close()
+	info, err := handle.Stat()
+	if err != nil {
+		return ""
+	}
+	start := int64(0)
+	if info.Size() > maxBytes {
+		start = info.Size() - maxBytes
+	}
+	if _, err := handle.Seek(start, io.SeekStart); err != nil {
+		return ""
+	}
+	bytes, err := io.ReadAll(handle)
+	if err != nil {
+		return ""
+	}
+	text := strings.TrimSpace(string(bytes))
+	if start > 0 && text != "" {
+		text = "... " + text
+	}
+	return text
 }
 
 func isWindowsInstallerSoftSuccess(err error) bool {
