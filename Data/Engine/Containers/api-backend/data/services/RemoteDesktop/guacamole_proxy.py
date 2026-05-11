@@ -548,9 +548,11 @@ async def proxy_guacamole_vnc_session(
                     continue
                 server_instruction_count += len(instructions)
                 server_message_count += 1
+                backend_error: Optional[Tuple[str, str]] = None
                 for _raw_instruction, opcode, args in instructions:
                     if opcode == "error":
                         message, status = _guacd_error_detail(args)
+                        backend_error = (message, status)
                         logger.warning(
                             "Guacamole VNC backend error agent_id=%s session_id=%s guacd_status=%s guacd_message=%s",
                             session.agent_id,
@@ -579,6 +581,9 @@ async def proxy_guacamole_vnc_session(
                             _guacd_instruction_summary(opcode, args),
                         )
                 await websocket.send("".join(raw_instruction for raw_instruction, _opcode, _args in instructions))
+                if backend_error is not None:
+                    message, status = backend_error
+                    raise RuntimeError(f"guacd_backend_error status={status} message={message}")
             logger.info(
                 "Guacamole VNC backend stream closed agent_id=%s session_id=%s server_messages=%s server_instructions=%s server_bytes=%s",
                 session.agent_id,

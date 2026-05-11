@@ -705,6 +705,15 @@ def _resolve_vnc_port(value: Any = None) -> int:
     return port
 
 
+def _should_force_ultravnc_reload(reason: Any) -> bool:
+    normalized = str(reason or "").strip().lower()
+    return normalized in {
+        "vnc_auth_retry",
+        "credential_rotation",
+        "engine_credential_refresh",
+    }
+
+
 def _resolve_vnc_password_tool(root: Optional[Path]) -> Optional[str]:
     override = os.environ.get("BOREALIS_VNC_PASSWORD_TOOL")
     if override:
@@ -1902,11 +1911,15 @@ class VncManager:
                 return
             service_name = self._resolve_service_name(refresh=True) or service_name
 
+            force_service_reload = _should_force_ultravnc_reload(reason)
             if service_was_running and (
-                self._last_port != port_value
+                force_service_reload
+                or self._last_port != port_value
                 or self._last_controller_password != applied_controller_password
                 or self._last_view_only_password != applied_view_only_password
             ):
+                if force_service_reload:
+                    _write_log(f"UltraVNC service reload requested reason={reason}.")
                 self._restart_service()
             self._last_port = port_value
             self._last_controller_password = applied_controller_password
@@ -1930,12 +1943,13 @@ class VncManager:
                 )
             _write_log(
                 "vnc_trace step=AM02 port={0} listener_ready={1} service_name={2} service_state={3} "
-                "service_was_running={4} reason={5}".format(
+                "service_was_running={4} force_reload={5} reason={6}".format(
                     port_value,
                     "true" if listener_ready else "false",
                     service_name or "-",
                     self._service_state_by_name(service_name) if service_name else "-",
                     "true" if service_was_running else "false",
+                    "true" if force_service_reload else "false",
                     str(reason or "-").strip() or "-",
                 )
             )

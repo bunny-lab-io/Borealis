@@ -30,6 +30,11 @@ def _guacd_ready(monkeypatch):
             "port": 4822,
         },
     )
+    monkeypatch.setattr(
+        vnc_api,
+        "_wait_for_backend_auth_ready",
+        lambda *args, **kwargs: vnc_api._VncAuthProbeResult(True, True, "auth_ok"),
+    )
 
 
 def _client_with_admin_session(harness: EngineTestHarness):
@@ -218,6 +223,67 @@ class _FakeProxy:
         self.disconnect_participant_calls.append((session_id, participant_id, str(reason or "")))
 
 
+class _FakeRfbSocket:
+    def __init__(self, payload: bytes) -> None:
+        self.payload = bytearray(payload)
+        self.sent: list[bytes] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def settimeout(self, _timeout: float) -> None:
+        return None
+
+    def recv(self, byte_count: int) -> bytes:
+        if not self.payload:
+            return b""
+        chunk = bytes(self.payload[:byte_count])
+        del self.payload[:byte_count]
+        return chunk
+
+    def sendall(self, payload: bytes) -> None:
+        self.sent.append(bytes(payload))
+
+
+def test_vnc_rfb_auth_probe_accepts_valid_password(monkeypatch) -> None:
+    challenge = b"0123456789abcdef"
+    fake_socket = _FakeRfbSocket(
+        b"RFB 003.008\n"
+        + b"\x01\x02"
+        + challenge
+        + b"\x00\x00\x00\x00"
+        + b"\x04\x00\x03\x00"
+        + (b"\x00" * 20)
+    )
+
+    monkeypatch.setattr(vnc_api.socket, "create_connection", lambda *_args, **_kwargs: fake_socket)
+    monkeypatch.setattr(vnc_api, "_vnc_auth_challenge_response", lambda password, challenge: b"x" * 16)
+
+    result = vnc_api._probe_vnc_auth("10.255.0.2", 5900, "bootpass", 1.0)
+
+    assert result == vnc_api._VncAuthProbeResult(True, True, "server_init_ok")
+    assert fake_socket.sent == [b"RFB 003.008\n", b"\x02", b"x" * 16, b"\x01"]
+
+
+def test_vnc_rfb_auth_probe_reports_bad_password(monkeypatch) -> None:
+    fake_socket = _FakeRfbSocket(
+        b"RFB 003.008\n"
+        + b"\x01\x02"
+        + b"0123456789abcdef"
+        + b"\x00\x00\x00\x01"
+    )
+
+    monkeypatch.setattr(vnc_api.socket, "create_connection", lambda *_args, **_kwargs: fake_socket)
+    monkeypatch.setattr(vnc_api, "_vnc_auth_challenge_response", lambda password, challenge: b"x" * 16)
+
+    result = vnc_api._probe_vnc_auth("10.255.0.2", 5900, "wrongpass", 1.0)
+
+    assert result == vnc_api._VncAuthProbeResult(True, False, "auth_failed")
+
+
 def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestHarness, monkeypatch) -> None:
     client = _client_with_admin_session(engine_harness)
     fake_tunnel = _FakeTunnelService()
@@ -309,6 +375,73 @@ def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestH
     assert fake_tunnel.transport_confirms == [
         ("test-device-agent", "vnc_backend_ready"),
         ("test-device-agent", "vnc_backend_connect"),
+    ]
+
+
+def test_vnc_establish_reloads_agent_when_auth_probe_fails(engine_harness: EngineTestHarness, monkeypatch) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    fake_registry = _FakeRegistry()
+    emitted_events: list[tuple[str, str, dict[str, Any]]] = []
+    manager = vnc_api.ensure_vnc_collaboration_manager(engine_harness.context, logger=engine_harness.context.logger)
+    auth_results = [
+        vnc_api._VncAuthProbeResult(True, False, "auth_failed"),
+        vnc_api._VncAuthProbeResult(True, True, "auth_ok"),
+    ]
+    _register_agent_credential(engine_harness)
+
+    def _emit(agent_id, event, payload):
+        emitted_events.append((agent_id, event, dict(payload)))
+        if event == "vnc_refresh":
+            manager.upsert_agent_credential(
+                agent_id=agent_id,
+                controller_password="freshpw",
+                credential_revision=43,
+            )
+        return True
+
+    engine_harness.context.emit_agent_event = _emit
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: fake_registry)
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        vnc_api,
+        "_wait_for_backend_auth_ready",
+        lambda *args, **kwargs: auth_results.pop(0),
+    )
+    monkeypatch.setattr(vnc_api.time, "sleep", lambda _seconds: None)
+
+    response = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "remove_wallpaper": True},
+    )
+
+    assert response.status_code == 200
+    assert fake_registry.created[0]["password"] == "freshpw"
+    assert fake_tunnel.transport_marks == [("test-device-agent", "vnc_auth_retry")]
+    assert fake_tunnel.start_calls == [("test-device-agent", False, "vnc_auth_retry")]
+    assert emitted_events == [
+        (
+            "test-device-agent",
+            "vnc_refresh",
+            {"agent_id": "test-device-agent", "reason": "vnc_auth_retry"},
+        ),
+        (
+            "test-device-agent",
+            "vnc_start",
+            {
+                "agent_id": "test-device-agent",
+                "session_id": response.get_json()["session_id"],
+                "controller_password": "freshpw",
+                "view_only_password": "",
+                "port": 5900,
+                "allowed_ips": "10.255.0.1/32",
+                "remove_wallpaper": True,
+                "credential_revision": 43,
+                "reason": "vnc_auth_retry",
+            },
+        )
     ]
 
 
