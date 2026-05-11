@@ -12,8 +12,10 @@ import (
 )
 
 const (
-	ultraVNCServiceName        = "BorealisAgentUltraVNC"
-	ultraVNCServiceDisplayName = "Borealis Agent - UltraVNC"
+	ultraVNCServiceName         = "BorealisAgentUltraVNC"
+	ultraVNCServiceDisplayName  = "Borealis Agent - UltraVNC"
+	wireGuardManagerServiceName = "WireGuardManager"
+	wireGuardManagerDisplayName = "Borealis Agent - WireGuard Manager"
 )
 
 func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error {
@@ -252,6 +254,22 @@ func ensureWireGuardInstaller(cfg BootstrapConfig, logger *BootstrapLogger) erro
 	if err != nil {
 		return err
 	}
+	ensureWireGuardManagerServiceDisplayName(logger)
 	logger.Infof("WireGuard manager service installed.")
 	return nil
+}
+
+func ensureWireGuardManagerServiceDisplayName(logger *BootstrapLogger) {
+	_, err := runCommandTimeout(
+		logger,
+		30*time.Second,
+		"sc.exe",
+		"config",
+		wireGuardManagerServiceName,
+		"DisplayName=",
+		wireGuardManagerDisplayName,
+	)
+	if err != nil {
+		logger.Tracef("WireGuard manager display-name update skipped: %v", err)
+	}
 }

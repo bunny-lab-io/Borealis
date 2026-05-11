@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -42,7 +43,17 @@ func runBootstrapConsole(cli cliOptions) int {
 		return 1
 	}
 	defer closeLog()
-	return runBootstrap(cfg, logger)
+	exitCode := runBootstrap(cfg, logger)
+	pauseInteractiveConsole(cfg)
+	return exitCode
+}
+
+func pauseInteractiveConsole(cfg BootstrapConfig) {
+	if !cfg.Interactive || cfg.NonInteractive || cfg.Uninstall {
+		return
+	}
+	_, _ = fmt.Fprint(os.Stdout, "\nAgent bootstrap complete. Press Enter to exit...")
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 }
 
 func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {

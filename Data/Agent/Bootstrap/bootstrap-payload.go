@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,9 @@ func preparePayloadSource(cfg BootstrapConfig, logger *BootstrapLogger) (string,
 	startedAt := time.Now()
 	logger.Tracef("Payload source resolution start: payload_path=%s exists=%t repo_url=%s repo_ref=%s", cfg.PayloadPath, fileExists(cfg.PayloadPath), cfg.RepoURL, cfg.RepoRef)
 	if fileExists(cfg.PayloadPath) {
+		if err := validateStagedPayloadManifest(cfg, logger); err != nil {
+			return "", nil, err
+		}
 		if cfg.PayloadSHA256 != "" {
 			logger.Tracef("Payload checksum verification start: %s", cfg.PayloadPath)
 			actual, err := sha256File(cfg.PayloadPath)
@@ -46,6 +50,9 @@ func preparePayloadSource(cfg BootstrapConfig, logger *BootstrapLogger) (string,
 	}
 
 	if sourceRoot := discoverLocalSourceRoot(); sourceRoot != "" {
+		if err := validateLocalSourceRef(sourceRoot, cfg.RepoRef); err != nil {
+			return "", nil, err
+		}
 		logger.Infof("Using local Borealis source at %s", sourceRoot)
 		logger.Tracef("Payload source resolved from local source: source_root=%s duration=%s", sourceRoot, time.Since(startedAt).Round(time.Millisecond))
 		return sourceRoot, func() {}, nil
@@ -59,7 +66,7 @@ func preparePayloadSource(cfg BootstrapConfig, logger *BootstrapLogger) (string,
 	}
 	logger.Tracef("Payload source archive download start: url=%s destination=%s", archiveURL, archivePath)
 	if err := downloadFileLogged(context.Background(), archiveURL, archivePath, 180*time.Second, logger); err != nil {
-		return "", nil, err
+		return "", nil, fmt.Errorf("failed to download Borealis source archive for repo_ref %q; refusing branch fallback: %w", cfg.RepoRef, err)
 	}
 	extractRoot := filepath.Join(cfg.InstallDir, "Temp", "Payload")
 	_ = os.RemoveAll(extractRoot)
@@ -72,6 +79,59 @@ func preparePayloadSource(cfg BootstrapConfig, logger *BootstrapLogger) (string,
 	}
 	logger.Tracef("Payload source resolved from archive: source_root=%s duration=%s", sourceRoot, time.Since(startedAt).Round(time.Millisecond))
 	return sourceRoot, func() {}, nil
+}
+
+func validateStagedPayloadManifest(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	manifestPath := strings.TrimSpace(cfg.ManifestPath)
+	if manifestPath == "" || !fileExists(manifestPath) {
+		return fmt.Errorf("staged agent payload manifest missing for repo_ref %q; refusing unknown branch payload", cfg.RepoRef)
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return fmt.Errorf("read staged agent payload manifest: %w", err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return fmt.Errorf("parse staged agent payload manifest: %w", err)
+	}
+	manifestRef := strings.TrimSpace(fmt.Sprint(manifest["repo_ref"]))
+	if manifestRef == "" || manifestRef == "<nil>" {
+		return fmt.Errorf("staged agent payload manifest missing repo_ref; refusing unknown branch payload")
+	}
+	if !strings.EqualFold(manifestRef, strings.TrimSpace(cfg.RepoRef)) {
+		return fmt.Errorf("staged agent payload repo_ref %q does not match requested repo_ref %q; refusing branch fallback", manifestRef, cfg.RepoRef)
+	}
+	logger.Tracef("Payload manifest verified: repo_ref=%s", manifestRef)
+	return nil
+}
+
+func validateLocalSourceRef(sourceRoot string, expectedRef string) error {
+	expected := strings.TrimSpace(expectedRef)
+	if expected == "" {
+		return nil
+	}
+	actual := localGitBranch(sourceRoot)
+	if actual == "" {
+		return fmt.Errorf("local Borealis source at %s has no verifiable Git branch; refusing branch fallback for repo_ref %q", sourceRoot, expected)
+	}
+	if !strings.EqualFold(actual, expected) {
+		return fmt.Errorf("local Borealis source branch %q does not match requested repo_ref %q; refusing branch fallback", actual, expected)
+	}
+	return nil
+}
+
+func localGitBranch(sourceRoot string) string {
+	headPath := filepath.Join(sourceRoot, ".git", "HEAD")
+	data, err := os.ReadFile(headPath)
+	if err == nil {
+		text := strings.TrimSpace(string(data))
+		const prefix = "ref: refs/heads/"
+		if strings.HasPrefix(text, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(text, prefix))
+		}
+		return ""
+	}
+	return ""
 }
 
 func discoverLocalSourceRoot() string {

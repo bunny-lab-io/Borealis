@@ -15,7 +15,6 @@ import (
 const (
 	defaultInstallDir             = `C:\Borealis`
 	defaultRepoURL                = "https://github.com/bunny-lab-io/Borealis.git"
-	defaultRepoRef                = "main"
 	defaultTimeoutSeconds         = 1800
 	agentTaskName                 = "Borealis Agent"
 	agentUpdaterTaskName          = "Borealis Agent (AutoUpdater)"
@@ -29,6 +28,8 @@ const (
 	defaultPythonNugetURL         = "https://www.nuget.org/api/v2/package/python/3.13.3"
 	defaultPythonNugetPackageName = "python-3.13.3.nupkg"
 )
+
+var defaultRepoRef = "main"
 
 type cliOptions struct {
 	ServerURL          string

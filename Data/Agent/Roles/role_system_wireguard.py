@@ -696,6 +696,11 @@ class WireGuardClient:
 
     def _ensure_idle_service(self) -> None:
         if self._service_exists():
+            service_config_path = self._service_config_path()
+            if self._service_binding_needs_repair(service_config_path):
+                idle_config = self._render_idle_config()
+                if self._write_config(idle_config):
+                    self._reinstall_service()
             self._ensure_service_display_name()
             return
         if not Path(self._wg_exe).is_file():

@@ -325,6 +325,21 @@ def test_windows_client_repairs_stale_service_binding() -> None:
     assert client.session is session
 
 
+def test_windows_client_repairs_stale_idle_service_binding() -> None:
+    client = _build_windows_client()
+    calls: list[str] = []
+
+    client._service_exists = lambda: True
+    client._service_config_path = lambda: Path("D:/Github/Borealis/Agent/Agent/Borealis/Settings/WireGuard/Borealis.conf")
+    client._write_config = lambda text: calls.append("write_idle") or True
+    client._reinstall_service = lambda: calls.append("reinstall") or True
+    client._ensure_service_display_name = lambda: calls.append("display")
+
+    client._ensure_idle_service()
+
+    assert calls == ["write_idle", "reinstall", "display"]
+
+
 def test_windows_client_does_not_mirror_config_to_stale_service_path() -> None:
     client = _build_windows_client()
     paths = iter(

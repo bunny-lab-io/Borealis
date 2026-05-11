@@ -608,6 +608,20 @@ def _user_config_default_path():
 def _find_project_root():
     """Locate the Borealis project root for the running agent tree."""
     current = os.path.abspath(os.path.dirname(__file__))
+    installed_root = None
+    cur = current
+    for _ in range(8):
+        if (
+            os.path.basename(cur).lower() == "borealis"
+            and os.path.basename(os.path.dirname(cur)).lower() == "agent"
+        ):
+            installed_root = os.path.abspath(os.path.join(cur, "..", ".."))
+            break
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+
     discovered = None
     cur = current
     for _ in range(8):
@@ -636,6 +650,9 @@ def _find_project_root():
             common_path = ""
         if common_path and common_path == override_abs:
             return override_abs
+
+    if installed_root:
+        return installed_root
 
     if discovered:
         return discovered

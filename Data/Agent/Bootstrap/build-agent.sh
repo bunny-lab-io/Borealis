@@ -90,12 +90,19 @@ else
 fi
 
 go_cmd="$(command -v go)"
+default_repo_ref="${BOREALIS_AGENT_DEFAULT_REPO_REF:-}"
+if [ -z "${default_repo_ref}" ]; then
+  default_repo_ref="$(git -C "${repo_root}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+fi
+if [ -z "${default_repo_ref}" ] || [ "${default_repo_ref}" = "HEAD" ]; then
+  default_repo_ref="main"
+fi
 
 (
   cd "${script_dir}"
   GOOS=windows GOARCH=amd64 CGO_ENABLED=0 "${go_cmd}" mod tidy
   rm -f "${output_path}"
-  GOOS=windows GOARCH=amd64 CGO_ENABLED=0 "${go_cmd}" build -trimpath -ldflags='-s -w' -o "${output_path}" .
+  GOOS=windows GOARCH=amd64 CGO_ENABLED=0 "${go_cmd}" build -trimpath -ldflags="-s -w -X main.defaultRepoRef=${default_repo_ref}" -o "${output_path}" .
 )
 
-printf 'Built %s\n' "${output_path}"
+printf 'Built %s (default repo ref: %s)\n' "${output_path}" "${default_repo_ref}"
