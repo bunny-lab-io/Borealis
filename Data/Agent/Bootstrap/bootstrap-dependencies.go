@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -325,15 +326,42 @@ func ensureWireGuardInstaller(cfg BootstrapConfig, logger *BootstrapLogger) erro
 	if err != nil {
 		return err
 	}
+	clientExe := resolveWireGuardClientExe()
+	if clientExe == "" {
+		return fmt.Errorf("WireGuard client executable missing after manager installer completed")
+	}
 	state, exists := queryServiceState(wireGuardManagerServiceName)
 	if !exists {
-		logger.Warnf("WireGuard manager service not present after installer completed; tunnel service may still install on demand.")
+		logger.Infof("WireGuard client ready at %s; manager service not present, tunnel service will install on demand.", clientExe)
 		return nil
 	}
 	ensureWireGuardManagerServiceDisplayName(logger)
 	logger.Infof("WireGuard manager service installed.")
-	logger.Tracef("WireGuard manager service verified: name=%s state=%s", wireGuardManagerServiceName, state)
+	logger.Tracef("WireGuard manager service verified: name=%s state=%s client=%s", wireGuardManagerServiceName, state, clientExe)
 	return nil
+}
+
+func resolveWireGuardClientExe() string {
+	programFiles := os.Getenv("ProgramFiles")
+	if programFiles == "" {
+		programFiles = `C:\Program Files`
+	}
+	programFilesX86 := os.Getenv("ProgramFiles(x86)")
+	if programFilesX86 == "" {
+		programFilesX86 = `C:\Program Files (x86)`
+	}
+	for _, candidate := range []string{
+		filepath.Join(programFiles, "WireGuard", "wireguard.exe"),
+		filepath.Join(programFilesX86, "WireGuard", "wireguard.exe"),
+	} {
+		if fileExists(candidate) {
+			return candidate
+		}
+	}
+	if path, err := exec.LookPath("wireguard.exe"); err == nil {
+		return path
+	}
+	return ""
 }
 
 func ensureWireGuardManagerServiceDisplayName(logger *BootstrapLogger) {

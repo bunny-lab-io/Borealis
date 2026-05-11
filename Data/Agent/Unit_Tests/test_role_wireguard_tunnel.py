@@ -573,6 +573,33 @@ def test_role_notify_engine_ready_requires_running_service() -> None:
     assert posted == []
 
 
+def test_role_health_report_requests_recovery_when_expected_tunnel_is_stopped(monkeypatch) -> None:
+    role = Role.__new__(Role)
+    recovery_reasons: list[str] = []
+    session = _build_session()
+
+    class _Client:
+        @staticmethod
+        def _service_state() -> str:
+            return "STOPPED"
+
+    _Client.session = session
+    role.client = _Client()
+    role.role_health_label = "WireGuard Service"
+    role._ensure_thread = type("Thread", (), {"is_alive": lambda self: True})()
+    role._last_tunnel_snapshot = {}
+    role._read_live_config_snapshot = lambda: {}
+    role._last_health_recover_at = 0.0
+    role.request_immediate_ensure = lambda *, reason: recovery_reasons.append(reason)
+    monkeypatch.setattr(wireguard_role.time, "time", lambda: 100.0)
+
+    report = role.health_report()
+
+    assert report["status"] == "recovering"
+    assert report["details"]["running_status"] == "STOPPED"
+    assert recovery_reasons == ["health_report_recover"]
+
+
 def test_role_run_ensure_cycle_safe_logs_exceptions() -> None:
     role = Role.__new__(Role)
     captured: list[tuple[str, bool]] = []

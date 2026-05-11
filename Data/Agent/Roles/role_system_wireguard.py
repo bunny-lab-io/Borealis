@@ -1368,6 +1368,7 @@ class Role:
         self._ensure_thread: Optional[threading.Thread] = None
         self._last_ready_notification_key: Optional[tuple[str, str]] = None
         self._last_ready_notification_at = 0.0
+        self._last_health_recover_at = 0.0
         try:
             self._log(
                 "WireGuard role initialized runtime_root={0} config_path={1}".format(
@@ -1685,6 +1686,11 @@ class Role:
                 "details": details,
             }
         if session is not None or live_config_active or tunnel_id or peer_ip_display:
+            if thread_alive and service_state not in ("RUNNING", "START_PENDING"):
+                now = time.time()
+                if now - float(getattr(self, "_last_health_recover_at", 0.0) or 0.0) >= 15.0:
+                    self._last_health_recover_at = now
+                    self.request_immediate_ensure(reason="health_report_recover")
             return {
                 "status": "recovering",
                 "role_label": self.role_health_label,
