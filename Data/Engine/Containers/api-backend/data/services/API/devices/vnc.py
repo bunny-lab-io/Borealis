@@ -211,6 +211,8 @@ def _wait_for_agent_credential(
         if remaining <= 0:
             break
         time.sleep(min(max(0.05, poll_interval_seconds), remaining))
+    if previous_revision is not None or previous_password is not None:
+        return None
     return last_credential
 
 
@@ -968,6 +970,8 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 os.environ.get("BOREALIS_VNC_AUTH_REFRESH_WAIT_SECONDS"),
                 10.0,
             )
+            auth_retry_previous_revision = collaboration_session.credential_revision
+            auth_retry_previous_password = collaboration_session.controller_password
             refresh_emitted = _context_emit_agent_event(
                 adapters.context,
                 agent_id,
@@ -987,8 +991,8 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                     manager,
                     agent_id,
                     timeout_seconds=refresh_wait_seconds,
-                    previous_revision=collaboration_session.credential_revision,
-                    previous_password=collaboration_session.controller_password,
+                    previous_revision=auth_retry_previous_revision,
+                    previous_password=auth_retry_previous_password,
                 )
                 if refreshed_credential is not None and _normalize_text(
                     getattr(refreshed_credential, "controller_password", "")
@@ -1010,6 +1014,19 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                     credential_revision=collaboration_session.credential_revision,
                     credential_refreshed=refreshed_credential is not None,
                 )
+                if refreshed_credential is None:
+                    manager.record_error(collaboration_session.session_id, "backend_auth_refresh_failed")
+                    _service_log_event(
+                        "vnc_backend_auth_refresh_failed agent_id={0} session_id={1} reason=credential_unchanged".format(
+                            agent_id,
+                            collaboration_session.session_id,
+                        ),
+                        level="WARNING",
+                    )
+                    return {
+                        "error": "vnc_backend_auth_refresh_failed",
+                        "detail": "credential_unchanged",
+                    }, 503
             retry_wait_seconds = _coerce_timeout(
                 os.environ.get("BOREALIS_VNC_AUTH_RETRY_WAIT_SECONDS"),
                 max(20.0, float(wait_profile["retry_wait_seconds"])),

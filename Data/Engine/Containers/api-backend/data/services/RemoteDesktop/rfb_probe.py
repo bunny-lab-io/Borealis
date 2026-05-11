@@ -82,21 +82,30 @@ def _vnc_auth_challenge_response(password: str, challenge: bytes) -> Optional[by
         return None
     try:
         des_algorithm = None
+        triple_des_algorithm = None
         try:
             from cryptography.hazmat.decrepit.ciphers import algorithms as decrepit_algorithms
 
             des_algorithm = getattr(decrepit_algorithms, "DES", None)
+            triple_des_algorithm = getattr(decrepit_algorithms, "TripleDES", None)
         except Exception:
             pass
-        if des_algorithm is None:
+        if des_algorithm is None or triple_des_algorithm is None:
             from cryptography.hazmat.primitives.ciphers import algorithms
 
-            des_algorithm = getattr(algorithms, "DES", None)
-        if des_algorithm is None:
-            return None
+            if des_algorithm is None:
+                des_algorithm = getattr(algorithms, "DES", None)
+            if triple_des_algorithm is None:
+                triple_des_algorithm = getattr(algorithms, "TripleDES", None)
         raw_key = str(password or "").encode("latin-1", errors="ignore")[:8].ljust(8, b"\x00")
         key = bytes(_reverse_byte_bits(byte) for byte in raw_key)
-        encryptor = Cipher(des_algorithm(key), modes.ECB()).encryptor()
+        if des_algorithm is not None:
+            algorithm = des_algorithm(key)
+        elif triple_des_algorithm is not None:
+            algorithm = triple_des_algorithm(key * 3)
+        else:
+            return None
+        encryptor = Cipher(algorithm, modes.ECB()).encryptor()
         return encryptor.update(challenge) + encryptor.finalize()
     except Exception:
         return None

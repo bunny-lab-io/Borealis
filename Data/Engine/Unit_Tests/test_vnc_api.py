@@ -286,6 +286,13 @@ def test_vnc_rfb_auth_probe_reports_bad_password(monkeypatch) -> None:
     assert result == rfb_probe.VncAuthProbeResult(True, False, "auth_failed")
 
 
+def test_vnc_rfb_auth_response_available_without_des_algorithm() -> None:
+    response = rfb_probe._vnc_auth_challenge_response("bootpass", b"0123456789abcdef")
+
+    assert response is not None
+    assert len(response) == 16
+
+
 def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestHarness, monkeypatch) -> None:
     client = _client_with_admin_session(engine_harness)
     fake_tunnel = _FakeTunnelService()
@@ -421,6 +428,52 @@ def test_vnc_establish_reloads_agent_when_auth_probe_fails(engine_harness: Engin
 
     assert response.status_code == 200
     assert fake_registry.created[0]["password"] == "freshpw"
+    assert fake_tunnel.transport_marks == []
+    assert fake_tunnel.start_calls == []
+    assert emitted_events == [
+        (
+            "test-device-agent",
+            "vnc_refresh",
+            {"agent_id": "test-device-agent", "reason": "vnc_auth_retry"},
+        )
+    ]
+
+
+def test_vnc_establish_fails_when_auth_retry_credential_does_not_rotate(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    emitted_events: list[tuple[str, str, dict[str, Any]]] = []
+    _register_agent_credential(engine_harness)
+
+    def _emit(agent_id, event, payload):
+        emitted_events.append((agent_id, event, dict(payload)))
+        return True
+
+    engine_harness.context.emit_agent_event = _emit
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        vnc_api,
+        "_wait_for_backend_auth_ready",
+        lambda *args, **kwargs: rfb_probe.VncAuthProbeResult(True, False, "auth_failed"),
+    )
+    monkeypatch.setattr(vnc_api, "_wait_for_agent_credential", lambda *args, **kwargs: None)
+
+    response = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "remove_wallpaper": True},
+    )
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "error": "vnc_backend_auth_refresh_failed",
+        "detail": "credential_unchanged",
+    }
     assert fake_tunnel.transport_marks == []
     assert fake_tunnel.start_calls == []
     assert emitted_events == [
