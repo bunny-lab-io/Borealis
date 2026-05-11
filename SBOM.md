@@ -22,7 +22,7 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - numpy - BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 - https://github.com/numpy/numpy/blob/main/LICENSE.txt
 - pywin32 (Windows only) - PSF License - https://github.com/mhammond/pywin32/blob/main/LICENSE.txt
 - psutil - BSD-3-Clause - https://spdx.org/licenses/BSD-3-Clause.html
-- WireGuard (Windows client 0.5.3 and Linux `wireguard-tools`) - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
+- WireGuard (Windows MSI package 1.1 / client 0.5.3 and Linux `wireguard-tools`) - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
 - UltraVNC Server 1.8.2.1 - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
 - MinGit 2.47.1 (Windows bootstrap only) - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
 - curl (vendored Windows download helper) - curl license - https://curl.se/docs/copyright.html

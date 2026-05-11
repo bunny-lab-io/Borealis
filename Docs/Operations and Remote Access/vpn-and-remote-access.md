@@ -207,7 +207,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 #### 4) Agent components
 - Tunnel lifecycle: `Data/Agent/Roles/role_system_wireguard.py`
   - Validates orchestration tokens, starts WireGuard client service, keeps the tunnel persistent, and retries same-session service recovery when the watchdog finds the Windows WireGuard service stopped.
-  - `Agent.exe` stages the WireGuard client headlessly and does not install `WireGuardManager` by default; the tunnel role installs `WireGuardTunnel$Borealis` on demand. Set `BOREALIS_WIREGUARD_INSTALL_MANAGER_SERVICE=1` only when explicitly testing manager-service behavior.
+  - `Agent.exe` installs the official WireGuard Windows MSI system-wide, verifies the MSI checksum, and removes `WireGuardManager` by default so bootstrap stays headless. The tunnel role installs and controls `WireGuardTunnel$Borealis` on demand using the system `wireguard.exe`. Set `BOREALIS_WIREGUARD_INSTALL_MANAGER_SERVICE=1` only when explicitly testing manager-service behavior.
 - Shell server: `Data/Agent/Roles/role_system_remote_shell.py`
 - TCP PowerShell server bound to `0.0.0.0:47002`, restricted to VPN subnet (10.255.x.x).
 - Logging: `Agent/Logs/VPN_Tunnel/tunnel.log` (tunnel lifecycle) and `Agent/Logs/VPN_Tunnel/remote_shell.log` (shell I/O).
