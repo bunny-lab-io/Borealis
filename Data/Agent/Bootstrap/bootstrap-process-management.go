@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +17,12 @@ import (
 )
 
 const waitAbandoned = 0x00000080
+
+type windowsProcessInfo struct {
+	ProcessID      uint32 `json:"ProcessId"`
+	ExecutablePath string `json:"ExecutablePath"`
+	CommandLine    string `json:"CommandLine"`
+}
 
 func acquireBootstrapMutex() (func(), bool, error) {
 	name, err := windows.UTF16PtrFromString(`Global\BorealisAgentBootstrap`)
@@ -122,6 +129,55 @@ func killProcessTree(pid int) {
 }
 
 func eachProcess(callback func(pid uint32, exe string, commandLine string), imageName string) error {
+	if err := eachProcessPowerShell(callback, imageName); err == nil {
+		return nil
+	} else {
+		wmicErr := eachProcessWMIC(callback, imageName)
+		if wmicErr == nil {
+			return nil
+		}
+		return fmt.Errorf("powershell process query failed: %v; wmic process query failed: %w", err, wmicErr)
+	}
+}
+
+func eachProcessPowerShell(callback func(pid uint32, exe string, commandLine string), imageName string) error {
+	escapedName := strings.ReplaceAll(imageName, "'", "''")
+	script := fmt.Sprintf(
+		`$ErrorActionPreference='Stop'; $items = @(Get-CimInstance Win32_Process -Filter "Name='%s'" | Select-Object ProcessId,ExecutablePath,CommandLine); if ($items.Count -gt 0) { ConvertTo-Json -InputObject $items -Compress -Depth 3 }`,
+		escapedName,
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, powershellPath(), "-NoProfile", "-NonInteractive", "-Command", script)
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	raw := strings.TrimSpace(string(output))
+	if raw == "" || raw == "null" {
+		return nil
+	}
+	var processes []windowsProcessInfo
+	if err := json.Unmarshal([]byte(raw), &processes); err != nil {
+		var process windowsProcessInfo
+		if singleErr := json.Unmarshal([]byte(raw), &process); singleErr != nil {
+			return err
+		}
+		processes = []windowsProcessInfo{process}
+	}
+	for _, process := range processes {
+		if process.ProcessID == 0 {
+			continue
+		}
+		callback(process.ProcessID, process.ExecutablePath, process.CommandLine)
+	}
+	return nil
+}
+
+func eachProcessWMIC(callback func(pid uint32, exe string, commandLine string), imageName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "wmic.exe", "process", "where", fmt.Sprintf("name='%s'", imageName), "get", "ProcessId,ExecutablePath,CommandLine", "/FORMAT:CSV")

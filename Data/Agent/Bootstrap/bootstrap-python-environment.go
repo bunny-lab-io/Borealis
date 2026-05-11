@@ -35,7 +35,16 @@ func ensurePythonRuntime(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		return fmt.Errorf("Python NuGet package missing tools\\python.exe")
 	}
 	pythonRoot := filepath.Join(cfg.InstallDir, "Dependencies", "Python")
-	_ = os.RemoveAll(pythonRoot)
+	if dirExists(pythonRoot) {
+		logger.Tracef("Removing existing or partial Python runtime: %s", pythonRoot)
+		if err := removePathWithRetries(pythonRoot, 5, 2*time.Second, logger); err != nil {
+			logger.Warnf("Python runtime removal blocked; retrying after stale process cleanup: %v", err)
+			stopBorealisProcesses(cfg, logger)
+			if retryErr := removePathWithRetries(pythonRoot, 5, 2*time.Second, logger); retryErr != nil {
+				return fmt.Errorf("remove stale Python runtime %s: %w", pythonRoot, retryErr)
+			}
+		}
+	}
 	logger.Tracef("Copying Python runtime: source=%s destination=%s", toolsRoot, pythonRoot)
 	if err := copyTree(toolsRoot, pythonRoot, nil); err != nil {
 		return err
@@ -173,6 +182,38 @@ func writeAgentSettings(cfg BootstrapConfig, logger *BootstrapLogger) error {
 
 func bootstrapPythonExe(cfg BootstrapConfig) string {
 	return filepath.Join(cfg.InstallDir, "Dependencies", "Python", "python.exe")
+}
+
+func removePathWithRetries(path string, attempts int, delay time.Duration, logger *BootstrapLogger) error {
+	var lastErr error
+	if attempts < 1 {
+		attempts = 1
+	}
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if !dirExists(path) && !fileExists(path) {
+			return nil
+		}
+		if err := os.RemoveAll(path); err != nil {
+			lastErr = err
+			if logger != nil {
+				logger.Warnf("Remove attempt %d/%d failed for %s: %v", attempt, attempts, path, err)
+			}
+		} else if !dirExists(path) && !fileExists(path) {
+			return nil
+		} else {
+			lastErr = fmt.Errorf("path still exists after remove attempt %d", attempt)
+			if logger != nil {
+				logger.Warnf("Remove attempt %d/%d left path behind: %s", attempt, attempts, path)
+			}
+		}
+		if attempt < attempts {
+			time.Sleep(delay)
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("path still exists: %s", path)
+	}
+	return lastErr
 }
 
 func copyTree(source string, destination string, include func(string, os.FileInfo) bool) error {
