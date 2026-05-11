@@ -95,6 +95,7 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if err := stageAgentRuntime(cfg, sourceRoot, logger); err != nil {
 		return err
 	}
+	reconcileUltraVNCServiceAfterRuntimeStage(cfg, logger)
 	if err := setupPythonEnvironment(cfg, sourceRoot, logger); err != nil {
 		return err
 	}

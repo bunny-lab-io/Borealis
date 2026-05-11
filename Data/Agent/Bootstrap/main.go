@@ -207,6 +207,7 @@ func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error 
 		return err
 	}
 	logger.Tracef("Agent runtime files ready.")
+	reconcileUltraVNCServiceAfterRuntimeStage(cfg, logger)
 	if err := writeAgentSettings(cfg, logger); err != nil {
 		return err
 	}

@@ -207,6 +207,59 @@ func ensureUltraVNCServiceRegistration(exePath string, configPath string, logger
 	return nil
 }
 
+func reconcileUltraVNCServiceAfterRuntimeStage(cfg BootstrapConfig, logger *BootstrapLogger) {
+	exePath, err := resolveUltraVNCBootstrapExe(cfg)
+	if err != nil {
+		logger.Warnf("UltraVNC final service reconciliation skipped: %v", err)
+		return
+	}
+	configPath, err := ensureUltraVNCBootstrapConfig(cfg, logger)
+	if err != nil {
+		logger.Warnf("UltraVNC final service config skipped: %v", err)
+		return
+	}
+	if err := ensureUltraVNCServiceRegistration(exePath, configPath, logger); err != nil {
+		logger.Warnf("UltraVNC final service reconciliation failed: %v", err)
+		return
+	}
+	startUltraVNCServiceForVerification(logger)
+}
+
+func startUltraVNCServiceForVerification(logger *BootstrapLogger) {
+	state, exists := queryServiceState(ultraVNCServiceName)
+	logger.Tracef("UltraVNC service verification start: exists=%t state=%s", exists, state)
+	if !exists {
+		logger.Warnf("UltraVNC service verification failed: service missing after registration.")
+		return
+	}
+	if strings.EqualFold(state, "RUNNING") {
+		logger.Tracef("UltraVNC service verification complete: state=RUNNING")
+		return
+	}
+	output, err := runCommandTimeout(logger, 30*time.Second, "sc.exe", "start", ultraVNCServiceName)
+	if err != nil {
+		lowerOutput := strings.ToLower(output)
+		if !strings.Contains(lowerOutput, "already running") && !strings.Contains(lowerOutput, "1056") {
+			logger.Warnf("UltraVNC service start verification failed: %v", err)
+			return
+		}
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		state, exists = queryServiceState(ultraVNCServiceName)
+		if !exists {
+			logger.Warnf("UltraVNC service disappeared during verification.")
+			return
+		}
+		if strings.EqualFold(state, "RUNNING") {
+			logger.Tracef("UltraVNC service verification complete: state=RUNNING")
+			return
+		}
+		time.Sleep(1 * time.Second)
+	}
+	logger.Warnf("UltraVNC service did not reach RUNNING during verification: state=%s", state)
+}
+
 func configureUltraVNCServiceRecovery(logger *BootstrapLogger) {
 	_, err := runCommandTimeout(
 		logger,
