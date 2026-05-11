@@ -1013,6 +1013,23 @@ def _write_ultravnc_password_file(
         return
 
 
+def _mirror_ultravnc_config_to_service_dir(config_path: Path, vnc_exe: Optional[str]) -> Optional[Path]:
+    if not vnc_exe:
+        return None
+    try:
+        source = Path(config_path)
+        target = Path(vnc_exe).parent / "ultravnc.ini"
+        if _same_path(source, target):
+            return target
+        raw = source.read_text(encoding="ascii", errors="ignore")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(raw, encoding="ascii")
+        return target
+    except Exception as exc:
+        _write_log(f"Failed to mirror UltraVNC config beside service binary: {exc}")
+        return None
+
+
 def _parse_allowed_ips(value: Any) -> Optional[str]:
     if isinstance(value, list):
         if not value:
@@ -1035,6 +1052,7 @@ class VncManager:
         self._password_tool_logged = False
         self._service_name: Optional[str] = None
         self._last_service_error = ""
+        self._last_listener_recovery_at = 0.0
         self._remove_legacy_services()
 
     def _service_state_by_name(self, service_name: str) -> Optional[str]:
@@ -1073,6 +1091,31 @@ class VncManager:
                 return True
         except Exception:
             return False
+
+    def _wait_for_listener(self, port: int, timeout: float = 8.0) -> bool:
+        deadline = time.time() + max(0.5, timeout)
+        while time.time() < deadline:
+            if self.is_listener_ready(port):
+                return True
+            time.sleep(0.5)
+        return self.is_listener_ready(port)
+
+    def _recover_listener(self, port: int, service_name: Optional[str], reason: str) -> bool:
+        if not service_name:
+            return False
+        state = self._service_state_by_name(service_name)
+        if state not in {"RUNNING", "START_PENDING"}:
+            return False
+        now = time.time()
+        if now - float(self._last_listener_recovery_at or 0.0) < 15.0:
+            return self._wait_for_listener(port, timeout=1.0)
+        self._last_listener_recovery_at = now
+        _write_log(
+            "UltraVNC listener not ready; restarting service for recovery "
+            f"(service={service_name}, port={port}, reason={reason})."
+        )
+        self._restart_service()
+        return self._wait_for_listener(port, timeout=10.0)
 
     def ensure_firewall(self, allowed_ips: Optional[str], port: int) -> None:
         self._ensure_firewall(allowed_ips, port)
@@ -1643,6 +1686,9 @@ class VncManager:
             )
             if not applied_controller_password:
                 return
+            mirrored_config = _mirror_ultravnc_config_to_service_dir(config_path, self._vnc_exe)
+            if mirrored_config:
+                _write_log(f"UltraVNC service config mirrored to {mirrored_config}.")
 
             service_name = self._resolve_service_name()
             service_was_running = False
@@ -1652,6 +1698,7 @@ class VncManager:
             if not self._ensure_service_running(config_path=config_path):
                 _write_log("Failed to start UltraVNC service.")
                 return
+            service_name = self._resolve_service_name(refresh=True) or service_name
 
             if service_was_running and (
                 self._last_port != port_value
@@ -1662,7 +1709,13 @@ class VncManager:
             self._last_port = port_value
             self._last_controller_password = applied_controller_password
             self._last_view_only_password = applied_view_only_password
-            listener_ready = self.is_listener_ready(port_value)
+            listener_ready = self._wait_for_listener(port_value, timeout=8.0)
+            if not listener_ready:
+                listener_ready = self._recover_listener(port_value, service_name, reason)
+            if listener_ready:
+                self._clear_service_error()
+            else:
+                self._set_service_error(f"VNC listener not ready on port {port_value}")
             _write_log(
                 "vnc_trace step=AM02 port={0} listener_ready={1} service_name={2} service_state={3} "
                 "service_was_running={4} reason={5}".format(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -361,6 +362,81 @@ def test_read_ultravnc_password_hash_uses_temp_scratch_not_live_config(monkeypat
     assert hash_value == "NEWHASH"
     assert secure_value is None
     assert live_config.read_text(encoding="ascii") == "[UltraVNC]\npasswd=LIVEHASH\n"
+
+
+def test_mirror_ultravnc_config_to_service_dir_copies_full_config(tmp_path) -> None:
+    config_dir = tmp_path / "settings"
+    config_dir.mkdir()
+    source = config_dir / "ultravnc.ini"
+    source.write_text("[UltraVNC]\nSocketConnect=1\nPortNumber=5900\npasswd=HASH\n", encoding="ascii")
+    exe_dir = tmp_path / "server"
+    exe_dir.mkdir()
+    exe_path = exe_dir / "winvnc.exe"
+    exe_path.write_text("stub", encoding="ascii")
+
+    mirrored = vnc_role._mirror_ultravnc_config_to_service_dir(source, str(exe_path))
+
+    assert mirrored == exe_dir / "ultravnc.ini"
+    assert mirrored.read_text(encoding="ascii") == source.read_text(encoding="ascii")
+
+
+def test_vnc_start_recovers_running_service_when_listener_missing(monkeypatch, tmp_path) -> None:
+    restarts: list[str] = []
+    waits: list[float] = []
+    logs: list[str] = []
+    config_dir = tmp_path / "settings"
+    exe_dir = tmp_path / "server"
+    config_dir.mkdir()
+    exe_dir.mkdir()
+    exe_path = exe_dir / "winvnc.exe"
+    exe_path.write_text("stub", encoding="ascii")
+
+    manager = vnc_role.VncManager.__new__(vnc_role.VncManager)
+    manager._lock = threading.RLock()
+    manager._last_port = 5900
+    manager._last_controller_password = "bootpass"
+    manager._last_view_only_password = None
+    manager._vnc_exe = str(exe_path)
+    manager._vnc_root = exe_dir
+    manager._password_tool = None
+    manager._password_tool_logged = False
+    manager._service_name = "BorealisAgentUltraVNC"
+    manager._last_service_error = ""
+    manager._last_listener_recovery_at = 0.0
+    manager._ensure_firewall = lambda _allowed_ips, _port: None
+    manager._resolve_service_name = lambda refresh=False: "BorealisAgentUltraVNC"
+    manager._service_state_by_name = lambda _service_name: "RUNNING"
+    manager._ensure_service_running = lambda config_path=None: True
+    manager._restart_service = lambda: restarts.append("restart")
+    manager._apply_passwords = lambda _config_dir, _config_path, _controller, _view_only: (
+        "bootpass",
+        None,
+    )
+
+    def _fake_wait_for_listener(_port, timeout=8.0):
+        waits.append(float(timeout))
+        return len(waits) >= 2
+
+    manager._wait_for_listener = _fake_wait_for_listener
+    monkeypatch.setattr(vnc_role.os, "name", "nt", raising=False)
+    monkeypatch.setattr(vnc_role, "_resolve_vnc_config_dir", lambda: config_dir)
+    monkeypatch.setattr(vnc_role, "_write_log", lambda message: logs.append(message))
+    monkeypatch.setattr(vnc_role.time, "time", lambda: 100.0)
+    monkeypatch.setattr(vnc_role.time, "sleep", lambda _seconds: None)
+
+    manager.start(
+        port=5900,
+        allowed_ips="10.255.0.1/32",
+        controller_password="bootpass",
+        view_only_password=None,
+        reason="health_report_recover",
+    )
+
+    assert restarts == ["restart"]
+    assert waits == [8.0, 10.0]
+    assert manager._last_service_error == ""
+    assert "SocketConnect=1" in (exe_dir / "ultravnc.ini").read_text(encoding="ascii")
+    assert any("listener not ready" in entry for entry in logs)
 
 
 def _role_for_disconnect_grace() -> vnc_role.Role:
