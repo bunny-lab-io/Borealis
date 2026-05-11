@@ -364,9 +364,9 @@ def test_read_ultravnc_password_hash_uses_temp_scratch_not_live_config(monkeypat
     assert live_config.read_text(encoding="ascii") == "[UltraVNC]\npasswd=LIVEHASH\n"
 
 
-def test_compute_ultravnc_password_hash_uses_vnc_des_format() -> None:
-    assert vnc_role._compute_ultravnc_password_hash("password") == "FF97502E9422F08900"
-    assert vnc_role._compute_ultravnc_password_hash("bootpass") == "167E9F5D8AECCF0000"
+def test_compute_ultravnc_password_hash_uses_stored_vnc_des_format() -> None:
+    assert vnc_role._compute_ultravnc_password_hash("password") == "33483FD570CF869B00"
+    assert vnc_role._compute_ultravnc_password_hash("bootpass") == "2FEAEE5C3DA6B27C00"
 
 
 def test_normalize_ultravnc_password_hash_adds_checksum_byte() -> None:
@@ -395,7 +395,7 @@ def test_apply_passwords_uses_internal_hash_when_tool_missing(monkeypatch, tmp_p
     assert manager._apply_passwords(config_dir, config_path, "bootpass", None) == ("bootpass", None)
 
     raw = config_path.read_text(encoding="ascii")
-    assert "passwd=167E9F5D8AECCF0000" in raw
+    assert "passwd=2FEAEE5C3DA6B27C00" in raw
     assert "passwd2=" in raw
     assert manager._last_service_error == ""
     assert any("internal hash generator" in entry for entry in logs)

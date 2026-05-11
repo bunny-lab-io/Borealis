@@ -86,6 +86,7 @@ ULTRAVNC_SERVICE_START_MODE = _normalize_service_start_mode(
 )
 VNC_REQUIRE_ENGINE_READY = _env_bool(os.environ.get("BOREALIS_VNC_REQUIRE_ENGINE_READY"), True)
 VNC_ALWAYS_ON_INTERVAL_SECONDS = 30
+ULTRAVNC_STORED_PASSWORD_KEY = bytes([23, 82, 107, 6, 35, 78, 88, 7])
 
 
 def _log_path() -> Path:
@@ -852,10 +853,6 @@ def _read_ultravnc_password_hash(
         return None, None
 
 
-def _reverse_bits(value: int) -> int:
-    return int(f"{int(value) & 0xFF:08b}"[::-1], 2)
-
-
 def _normalize_ultravnc_password_hash(hash_value: Optional[str]) -> Optional[str]:
     normalized = re.sub(r"[^0-9A-Fa-f]", "", str(hash_value or "")).upper()
     if len(normalized) == 16:
@@ -885,9 +882,8 @@ def _compute_ultravnc_password_hash(password: str) -> Optional[str]:
             _write_log("VNC password hash fallback unavailable: TripleDES cipher missing.")
             return None
         raw_password = str(password or "").encode("latin-1", errors="ignore")[:8].ljust(8, b"\x00")
-        des_key = bytes(_reverse_bits(byte) for byte in raw_password)
-        encryptor = Cipher(triple_des(des_key * 3), modes.ECB()).encryptor()
-        encrypted = encryptor.update(b"\x00" * 8) + encryptor.finalize()
+        encryptor = Cipher(triple_des(ULTRAVNC_STORED_PASSWORD_KEY * 3), modes.ECB()).encryptor()
+        encrypted = encryptor.update(raw_password) + encryptor.finalize()
         return _normalize_ultravnc_password_hash(encrypted.hex())
     except Exception as exc:
         _write_log(f"VNC password hash fallback failed: {exc}")
