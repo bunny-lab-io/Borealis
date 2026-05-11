@@ -292,6 +292,14 @@ func pruneDirectory(path string, preserve map[string]bool) error {
 }
 
 func stageUltraVNCTools(cfg BootstrapConfig, logger *BootstrapLogger) {
+	if exePath := resolveUltraVNCInstalledExe(); exePath != "" {
+		destination := filepath.Join(cfg.InstallDir, "Agent", "Borealis", "Tools", "UltraVNC", "Server")
+		if err := os.RemoveAll(destination); err != nil {
+			logger.Warnf("UltraVNC runtime tool cleanup failed: %v", err)
+		}
+		logger.Tracef("UltraVNC tool staging skipped; using system install at %s", exePath)
+		return
+	}
 	payloadRoot := filepath.Join(cfg.InstallDir, "Dependencies", "UltraVNC_Server", "payload", "x64")
 	if !dirExists(payloadRoot) {
 		logger.Tracef("UltraVNC x64 payload root missing; skipping tool staging: %s", payloadRoot)

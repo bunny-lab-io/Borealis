@@ -492,6 +492,13 @@ def _resolve_vnc_root() -> Optional[Path]:
             pass
     root = _find_project_root()
     candidates: list[Path] = []
+    if os.name == "nt":
+        for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+            base = os.environ.get(env_name)
+            if not base:
+                continue
+            candidates.append(Path(base) / "uvnc bvba" / "UltraVNC")
+            candidates.append(Path(base) / "UltraVNC")
     if root:
         candidates.append(root / "Agent" / "Borealis" / "Tools" / "UltraVNC" / "Server")
         candidates.append(root / "Agent" / "Borealis" / "Tools" / "UltraVNC")
@@ -536,6 +543,9 @@ def _resolve_vnc_config_dir() -> Optional[Path]:
                 return override_path
         except Exception:
             pass
+    if os.name == "nt":
+        program_data = os.environ.get("ProgramData") or r"C:\ProgramData"
+        return Path(program_data) / "UltraVNC"
     root = _find_project_root()
     if root:
         settings_config = root / "Agent" / "Borealis" / "Settings" / "UltraVNC"
@@ -1083,6 +1093,30 @@ def _mirror_ultravnc_config_to_service_dir(config_path: Path, vnc_exe: Optional[
         return None
 
 
+def _should_use_ultravnc_config_arg(vnc_exe: Optional[str]) -> bool:
+    if os.name != "nt":
+        return True
+    exe_text = str(vnc_exe or "").strip()
+    if not exe_text:
+        return True
+    exe_norm = os.path.normcase(os.path.abspath(exe_text)).rstrip("\\/")
+    for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+        value = os.environ.get(env_name)
+        if not value:
+            continue
+        base_norm = os.path.normcase(os.path.abspath(value)).rstrip("\\/")
+        if exe_norm == base_norm or exe_norm.startswith(base_norm + os.sep):
+            return False
+    return True
+
+
+def _ultravnc_service_binpath(vnc_exe: str, config_path: Optional[Path] = None) -> str:
+    base = f"\"{vnc_exe}\" -service"
+    if config_path:
+        return f"{base} -config \"{config_path}\""
+    return base
+
+
 def _parse_allowed_ips(value: Any) -> Optional[str]:
     if isinstance(value, list):
         if not value:
@@ -1367,13 +1401,11 @@ class VncManager:
     def _ensure_service_binpath(self, service_name: str, config_path: Optional[Path]) -> bool:
         if os.name != "nt":
             return False
-        if not config_path:
-            return False
         if not self._vnc_exe:
             return False
-        desired = f"\"{self._vnc_exe}\" -service -config \"{config_path}\""
+        desired = _ultravnc_service_binpath(self._vnc_exe, config_path)
         current = self._service_binpath(service_name)
-        if current and "-config" in current:
+        if current:
             normalized = current.replace("'", "").replace('"', "").lower()
             desired_norm = desired.replace("'", "").replace('"', "").lower()
             if normalized == desired_norm:
@@ -1395,7 +1427,7 @@ class VncManager:
                     )
                 )
                 return False
-            _write_log(f"UltraVNC service binPath updated for config {config_path}.")
+            _write_log(f"UltraVNC service binPath updated: {desired}.")
             return True
         except Exception as exc:
             self._set_service_error(str(exc))
@@ -1542,7 +1574,7 @@ class VncManager:
         try:
             if state is None:
                 service_name = ULTRAVNC_SERVICE_NAME
-                desired = f"\"{self._vnc_exe}\" -service -config \"{config_path}\""
+                desired = _ultravnc_service_binpath(self._vnc_exe, config_path)
                 create_args = [
                     "sc.exe",
                     "create",
@@ -1821,10 +1853,14 @@ class VncManager:
             )
             if not applied_controller_password:
                 return
-            mirrored_config = _mirror_ultravnc_config_to_service_dir(config_path, self._vnc_exe)
-            if mirrored_config:
-                _write_log(f"UltraVNC service config mirrored to {mirrored_config}.")
-            service_config_path = mirrored_config or config_path
+            service_config_path: Optional[Path] = None
+            if _should_use_ultravnc_config_arg(self._vnc_exe):
+                mirrored_config = _mirror_ultravnc_config_to_service_dir(config_path, self._vnc_exe)
+                if mirrored_config:
+                    _write_log(f"UltraVNC service config mirrored to {mirrored_config}.")
+                service_config_path = mirrored_config or config_path
+            else:
+                _write_log(f"UltraVNC service using default config path {config_path}.")
 
             service_name = self._resolve_service_name()
             service_was_running = False

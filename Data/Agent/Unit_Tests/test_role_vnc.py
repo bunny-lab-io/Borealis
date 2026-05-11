@@ -478,6 +478,58 @@ def test_vnc_start_recovers_running_service_when_listener_missing(monkeypatch, t
     assert any("listener not ready" in entry for entry in logs)
 
 
+def test_vnc_start_uses_programdata_config_for_system_install(monkeypatch, tmp_path) -> None:
+    service_config_paths: list[Path | None] = []
+    logs: list[str] = []
+    program_files = tmp_path / "Program Files"
+    exe_dir = program_files / "uvnc bvba" / "UltraVNC"
+    config_dir = tmp_path / "ProgramData" / "UltraVNC"
+    exe_dir.mkdir(parents=True)
+    config_dir.mkdir(parents=True)
+    exe_path = exe_dir / "winvnc.exe"
+    exe_path.write_text("stub", encoding="ascii")
+
+    manager = vnc_role.VncManager.__new__(vnc_role.VncManager)
+    manager._lock = threading.RLock()
+    manager._last_port = 5900
+    manager._last_controller_password = "bootpass"
+    manager._last_view_only_password = None
+    manager._vnc_exe = str(exe_path)
+    manager._vnc_root = exe_dir
+    manager._password_tool = None
+    manager._password_tool_logged = False
+    manager._service_name = "BorealisAgentUltraVNC"
+    manager._last_service_error = ""
+    manager._last_listener_recovery_at = 0.0
+    manager._ensure_firewall = lambda _allowed_ips, _port: None
+    manager._resolve_service_name = lambda refresh=False: "BorealisAgentUltraVNC"
+    manager._service_state_by_name = lambda _service_name: "RUNNING"
+    manager._ensure_service_running = lambda config_path=None: service_config_paths.append(config_path) or True
+    manager._restart_service = lambda: None
+    manager._wait_for_listener = lambda _port, timeout=8.0: True
+    manager._apply_passwords = lambda _config_dir, _config_path, _controller, _view_only: (
+        "bootpass",
+        None,
+    )
+
+    monkeypatch.setattr(vnc_role.os, "name", "nt", raising=False)
+    monkeypatch.setenv("ProgramFiles", str(program_files))
+    monkeypatch.setattr(vnc_role, "_resolve_vnc_config_dir", lambda: config_dir)
+    monkeypatch.setattr(vnc_role, "_write_log", lambda message: logs.append(message))
+
+    manager.start(
+        port=5900,
+        allowed_ips="10.255.0.1/32",
+        controller_password="bootpass",
+        view_only_password=None,
+        reason="always_on_check",
+    )
+
+    assert service_config_paths == [None]
+    assert not (exe_dir / "ultravnc.ini").exists()
+    assert any("default config path" in entry for entry in logs)
+
+
 def test_recover_listener_starts_stopped_service(monkeypatch, tmp_path) -> None:
     starts: list[Path] = []
     waits: list[float] = []

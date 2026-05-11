@@ -23,7 +23,7 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - pywin32 (Windows only) - PSF License - https://github.com/mhammond/pywin32/blob/main/LICENSE.txt
 - psutil - BSD-3-Clause - https://spdx.org/licenses/BSD-3-Clause.html
 - WireGuard (Windows client 0.5.3 and Linux `wireguard-tools`) - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
-- UltraVNC Server 1.6.4.0 - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
+- UltraVNC Server 1.8.2.1 - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
 - MinGit 2.47.1 (Windows bootstrap only) - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
 - curl (vendored Windows download helper) - curl license - https://curl.se/docs/copyright.html
 - 7-Zip CLI (vendored Windows archive helper) - LGPL-2.1-or-later with unRAR restriction - https://www.7-zip.org/license.txt

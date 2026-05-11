@@ -4,6 +4,9 @@ package main
 
 import (
 	"context"
+	"crypto/des"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +21,10 @@ import (
 const (
 	ultraVNCServiceName                  = "BorealisAgentUltraVNC"
 	ultraVNCServiceDisplayName           = "Borealis Agent - UltraVNC"
+	ultraVNCVersion                      = "1.8.2.1"
+	ultraVNCMSIName                      = "UltraVNC_1821_x64_Setup.msi"
+	ultraVNCMSIURL                       = "https://uvnc.eu/download/1800/UltraVNC_1821_x64_Setup.msi"
+	ultraVNCMSISHA256                    = "cc7a41d546523dc5e33324b12a23d2fbb2d0a9b0b9f7c08b0e242ebe5da3c2b9"
 	wireGuardManagerServiceName          = "WireGuardManager"
 	wireGuardManagerDisplayName          = "Borealis Agent - WireGuard Manager"
 	wireGuardInstallManagerServiceEnvVar = "BOREALIS_WIREGUARD_INSTALL_MANAGER_SERVICE"
@@ -87,6 +94,103 @@ func ensureGitCLI(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	return nil
 }
 
+func ultraVNCProgramDataConfigPath() string {
+	programData := strings.TrimSpace(os.Getenv("ProgramData"))
+	if programData == "" {
+		programData = `C:\ProgramData`
+	}
+	return filepath.Join(programData, "UltraVNC", "ultravnc.ini")
+}
+
+func resolveUltraVNCInstalledExe() string {
+	candidates := []string{
+		filepath.Join(os.Getenv("ProgramFiles"), "uvnc bvba", "UltraVNC", "winvnc.exe"),
+		filepath.Join(os.Getenv("ProgramFiles"), "UltraVNC", "winvnc.exe"),
+		filepath.Join(os.Getenv("ProgramFiles"), "uvnc bvba", "UltraVNC", "winvnc64.exe"),
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), "uvnc bvba", "UltraVNC", "winvnc.exe"),
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), "UltraVNC", "winvnc.exe"),
+	}
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate) == "" {
+			continue
+		}
+		if fileExists(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func ensureUltraVNCSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	root := filepath.Join(cfg.InstallDir, "Dependencies", "UltraVNC_Server")
+	versionPath := filepath.Join(root, "installed_version.txt")
+	exePath := resolveUltraVNCInstalledExe()
+	installedVersion := strings.TrimSpace(readFirstLine(versionPath))
+	if exePath != "" && installedVersion == ultraVNCVersion {
+		logger.Tracef("UltraVNC %s already installed at %s", ultraVNCVersion, exePath)
+		return nil
+	}
+	if err := os.MkdirAll(root, 0755); err != nil {
+		return err
+	}
+	msiPath := filepath.Join(root, ultraVNCMSIName)
+	if !fileExists(msiPath) {
+		logger.Tracef("UltraVNC MSI missing; downloading to %s", msiPath)
+		if err := downloadFileLogged(context.Background(), ultraVNCMSIURL, msiPath, 240*time.Second, logger); err != nil {
+			return err
+		}
+	}
+	actual, err := sha256File(msiPath)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(actual, ultraVNCMSISHA256) {
+		_ = os.Remove(msiPath)
+		logger.Warnf("UltraVNC MSI checksum mismatch expected=%s actual=%s; redownloading.", ultraVNCMSISHA256, actual)
+		if err := downloadFileLogged(context.Background(), ultraVNCMSIURL, msiPath, 240*time.Second, logger); err != nil {
+			return err
+		}
+		actual, err = sha256File(msiPath)
+		if err != nil {
+			return err
+		}
+		if !strings.EqualFold(actual, ultraVNCMSISHA256) {
+			return fmt.Errorf("UltraVNC MSI checksum mismatch expected=%s actual=%s", ultraVNCMSISHA256, actual)
+		}
+	}
+	if _, err := ensureUltraVNCBootstrapConfig(cfg, logger); err != nil {
+		return err
+	}
+	logPath := filepath.Join(cfg.InstallDir, "Agent", "Logs", "ultravnc-msi-install.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		return err
+	}
+	logger.Tracef("UltraVNC MSI install command starting: version=%s msi=%s", ultraVNCVersion, msiPath)
+	if _, err := runCommandTimeout(
+		logger,
+		4*time.Minute,
+		"msiexec.exe",
+		"/i",
+		msiPath,
+		"/qn",
+		"/norestart",
+		"DO_NOT_LAUNCH=1",
+		"/l*v",
+		logPath,
+	); err != nil {
+		return fmt.Errorf("UltraVNC MSI install failed: %w", err)
+	}
+	exePath = resolveUltraVNCInstalledExe()
+	if exePath == "" {
+		return fmt.Errorf("UltraVNC winvnc.exe not found after MSI install")
+	}
+	if err := os.WriteFile(versionPath, []byte(ultraVNCVersion+"\n"), 0644); err != nil {
+		logger.Warnf("UltraVNC version marker write failed: %v", err)
+	}
+	logger.Infof("UltraVNC %s installed at %s.", ultraVNCVersion, exePath)
+	return nil
+}
+
 func ensureUltraVNCPayload(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	root := filepath.Join(cfg.InstallDir, "Dependencies", "UltraVNC_Server")
 	if fileExists(filepath.Join(root, "payload", "x64", "winvnc.exe")) || fileExists(filepath.Join(root, "payload", "x86", "winvnc.exe")) {
@@ -108,7 +212,7 @@ func ensureUltraVNCPayload(cfg BootstrapConfig, logger *BootstrapLogger) error {
 }
 
 func ensureUltraVNCServer(cfg BootstrapConfig, logger *BootstrapLogger) error {
-	if err := ensureUltraVNCPayload(cfg, logger); err != nil {
+	if err := ensureUltraVNCSystemInstall(cfg, logger); err != nil {
 		return err
 	}
 	exePath, err := resolveUltraVNCBootstrapExe(cfg)
@@ -119,11 +223,13 @@ func ensureUltraVNCServer(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if err != nil {
 		return err
 	}
-	serviceConfigPath := mirrorUltraVNCBootstrapConfigToServiceDir(exePath, configPath, logger)
-	return ensureUltraVNCServiceRegistration(exePath, serviceConfigPath, logger)
+	return ensureUltraVNCServiceRegistration(exePath, configPath, logger)
 }
 
 func resolveUltraVNCBootstrapExe(cfg BootstrapConfig) (string, error) {
+	if exePath := resolveUltraVNCInstalledExe(); exePath != "" {
+		return exePath, nil
+	}
 	candidates := []string{
 		filepath.Join(cfg.InstallDir, "Agent", "Borealis", "Tools", "UltraVNC", "Server", "winvnc.exe"),
 		filepath.Join(cfg.InstallDir, "Agent", "Borealis", "Tools", "UltraVNC", "Server", "winvnc64.exe"),
@@ -140,14 +246,14 @@ func resolveUltraVNCBootstrapExe(cfg BootstrapConfig) (string, error) {
 }
 
 func ensureUltraVNCBootstrapConfig(cfg BootstrapConfig, logger *BootstrapLogger) (string, error) {
-	configDir := filepath.Join(cfg.InstallDir, "Agent", "Borealis", "Settings", "UltraVNC")
+	configDir := filepath.Dir(ultraVNCProgramDataConfigPath())
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return "", err
 	}
 	configPath := filepath.Join(configDir, "ultravnc.ini")
-	if fileExists(configPath) {
-		logger.Tracef("UltraVNC config already present at %s", configPath)
-		return configPath, nil
+	placeholderHash, err := generateUltraVNCStoredPasswordHash()
+	if err != nil {
+		return "", err
 	}
 	content := "[UltraVNC]\n" +
 		"UseRegistry=0\n" +
@@ -163,12 +269,28 @@ func ensureUltraVNCBootstrapConfig(cfg BootstrapConfig, logger *BootstrapLogger)
 		"AllowShutdown=1\n" +
 		"DisableTrayIcon=1\n" +
 		"EnableFileTransfer=0\n" +
-		"RemoveWallpaper=1\n"
+		"RemoveWallpaper=1\n" +
+		"passwd=" + placeholderHash + "\n" +
+		"passwd2=\n"
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		return "", err
 	}
 	logger.Tracef("UltraVNC bootstrap config written at %s", configPath)
 	return configPath, nil
+}
+
+func generateUltraVNCStoredPasswordHash() (string, error) {
+	password := make([]byte, 8)
+	if _, err := rand.Read(password); err != nil {
+		return "", err
+	}
+	block, err := des.NewCipher([]byte{23, 82, 107, 6, 35, 78, 88, 7})
+	if err != nil {
+		return "", err
+	}
+	encrypted := make([]byte, 8)
+	block.Encrypt(encrypted, password)
+	return strings.ToUpper(hex.EncodeToString(encrypted)) + "00", nil
 }
 
 func mirrorUltraVNCBootstrapConfigToServiceDir(exePath string, configPath string, logger *BootstrapLogger) string {
@@ -206,7 +328,7 @@ func mirrorUltraVNCBootstrapConfigToServiceDir(exePath string, configPath string
 
 func ensureUltraVNCServiceRegistration(exePath string, configPath string, logger *BootstrapLogger) error {
 	removeLegacyUltraVNCServices(logger)
-	desiredBinPath := fmt.Sprintf(`"%s" -service -config "%s"`, exePath, configPath)
+	desiredBinPath := fmt.Sprintf(`"%s" -service`, exePath)
 	if _, err := runCommandTimeout(logger, 20*time.Second, "sc.exe", "query", ultraVNCServiceName); err != nil {
 		if _, createErr := runCommandTimeout(
 			logger,
@@ -259,8 +381,7 @@ func reconcileUltraVNCServiceAfterRuntimeStage(cfg BootstrapConfig, logger *Boot
 		logger.Warnf("UltraVNC final service config skipped: %v", err)
 		return
 	}
-	serviceConfigPath := mirrorUltraVNCBootstrapConfigToServiceDir(exePath, configPath, logger)
-	if err := ensureUltraVNCServiceRegistration(exePath, serviceConfigPath, logger); err != nil {
+	if err := ensureUltraVNCServiceRegistration(exePath, configPath, logger); err != nil {
 		logger.Warnf("UltraVNC final service reconciliation failed: %v", err)
 		return
 	}
@@ -299,13 +420,30 @@ func removeLegacyUltraVNCServices(logger *BootstrapLogger) {
 			continue
 		}
 		binPath := queryServiceBinPath(service, logger)
-		if binPath == "" || !strings.Contains(strings.ToLower(binPath), `\borealis\`) {
+		if binPath == "" || !isRemovableUltraVNCServiceBinPath(binPath) {
 			continue
 		}
-		logger.Tracef("Removing legacy Borealis UltraVNC service: name=%s bin_path=%s", service, binPath)
+		logger.Tracef("Removing conflicting UltraVNC service: name=%s bin_path=%s", service, binPath)
 		stopServiceAndWait(service, 30*time.Second, logger)
 		deleteServiceAndWait(service, 30*time.Second, logger)
 	}
+}
+
+func isRemovableUltraVNCServiceBinPath(binPath string) bool {
+	lower := strings.ToLower(strings.ReplaceAll(binPath, "/", `\`))
+	if !strings.Contains(lower, "winvnc") {
+		return false
+	}
+	if strings.Contains(lower, `\borealis\`) {
+		return true
+	}
+	if strings.Contains(lower, `\uvnc bvba\ultravnc\`) {
+		return true
+	}
+	if strings.Contains(lower, `\program files\ultravnc\`) {
+		return true
+	}
+	return false
 }
 
 func queryServiceBinPath(service string, logger *BootstrapLogger) string {
