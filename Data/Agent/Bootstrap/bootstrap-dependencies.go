@@ -325,8 +325,14 @@ func ensureWireGuardInstaller(cfg BootstrapConfig, logger *BootstrapLogger) erro
 	if err != nil {
 		return err
 	}
+	state, exists := queryServiceState(wireGuardManagerServiceName)
+	if !exists {
+		logger.Warnf("WireGuard manager service not present after installer completed; tunnel service may still install on demand.")
+		return nil
+	}
 	ensureWireGuardManagerServiceDisplayName(logger)
 	logger.Infof("WireGuard manager service installed.")
+	logger.Tracef("WireGuard manager service verified: name=%s state=%s", wireGuardManagerServiceName, state)
 	return nil
 }
 
