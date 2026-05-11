@@ -71,6 +71,9 @@ func setupPythonEnvironment(cfg BootstrapConfig, sourceRoot string, logger *Boot
 	} else {
 		logger.Tracef("Python virtual environment already exists: %s", venvRoot)
 	}
+	if err := ensureVenvPip(cfg, venvRoot, venvPython, logger); err != nil {
+		return err
+	}
 	requirements := filepath.Join(sourceRoot, "Data", "Agent", "agent-requirements.txt")
 	if fileExists(requirements) {
 		logger.Tracef("Installing Python requirements: requirements=%s", requirements)
@@ -81,6 +84,36 @@ func setupPythonEnvironment(cfg BootstrapConfig, sourceRoot string, logger *Boot
 		logger.Tracef("Python requirements file missing; skipping pip install: %s", requirements)
 	}
 	logger.Tracef("Python environment setup complete duration=%s", time.Since(startedAt).Round(time.Millisecond))
+	return nil
+}
+
+func ensureVenvPip(cfg BootstrapConfig, venvRoot string, venvPython string, logger *BootstrapLogger) error {
+	if !fileExists(venvPython) {
+		return fmt.Errorf("Python virtual environment executable missing: %s", venvPython)
+	}
+	if _, err := runCommandTimeout(logger, 30*time.Second, venvPython, "-m", "pip", "--version"); err == nil {
+		logger.Tracef("Python virtual environment pip ready.")
+		return nil
+	} else {
+		logger.Warnf("Python virtual environment pip missing or unhealthy; repairing with ensurepip: %v", err)
+	}
+	_, ensureErr := runCommandTimeout(logger, 180*time.Second, venvPython, "-m", "ensurepip", "--upgrade")
+	if ensureErr == nil {
+		if _, verifyErr := runCommandTimeout(logger, 30*time.Second, venvPython, "-m", "pip", "--version"); verifyErr == nil {
+			logger.Tracef("Python virtual environment pip repaired with ensurepip.")
+			return nil
+		} else {
+			ensureErr = verifyErr
+		}
+	}
+	logger.Warnf("Python virtual environment ensurepip repair failed; rebuilding venv in place: %v", ensureErr)
+	if _, rebuildErr := runCommandTimeout(logger, 300*time.Second, bootstrapPythonExe(cfg), "-m", "venv", venvRoot); rebuildErr != nil {
+		return fmt.Errorf("repair Python virtual environment pip: ensurepip failed: %v; venv repair failed: %w", ensureErr, rebuildErr)
+	}
+	if _, verifyErr := runCommandTimeout(logger, 30*time.Second, venvPython, "-m", "pip", "--version"); verifyErr != nil {
+		return fmt.Errorf("Python virtual environment pip unavailable after repair: %w", verifyErr)
+	}
+	logger.Tracef("Python virtual environment pip repaired by venv rebuild.")
 	return nil
 }
 
