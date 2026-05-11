@@ -82,7 +82,7 @@ ULTRAVNC_SERVICE_DISPLAY_NAME = os.environ.get(
 ULTRAVNC_LEGACY_SERVICE_NAMES = ("uvnc_service", "uvnc_service_64", "UltraVNC", "WinVNC")
 ULTRAVNC_SERVICE_START_MODE = _normalize_service_start_mode(
     os.environ.get("BOREALIS_ULTRAVNC_START_TYPE"),
-    default="demand",
+    default="auto",
 )
 VNC_REQUIRE_ENGINE_READY = _env_bool(os.environ.get("BOREALIS_VNC_REQUIRE_ENGINE_READY"), True)
 VNC_ALWAYS_ON_INTERVAL_SECONDS = 30
@@ -1185,6 +1185,34 @@ class VncManager:
         except Exception as exc:
             _write_log(f"UltraVNC service start-type config failed: {exc}")
 
+    def _configure_service_recovery(self, service_name: str) -> None:
+        if os.name != "nt":
+            return
+        try:
+            result = subprocess.run(
+                [
+                    "sc.exe",
+                    "failure",
+                    service_name,
+                    "reset=",
+                    "86400",
+                    "actions=",
+                    "restart/5000/restart/15000/restart/30000",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                _write_log(
+                    "UltraVNC service recovery config failed: {0}".format(
+                        detail or f"exit {result.returncode}"
+                    )
+                )
+        except Exception as exc:
+            _write_log(f"UltraVNC service recovery config failed: {exc}")
+
     def _ensure_service_binpath(self, service_name: str, config_path: Optional[Path]) -> bool:
         if os.name != "nt":
             return False
@@ -1312,6 +1340,7 @@ class VncManager:
         if service_name and state is not None:
             self._configure_service_display_name(service_name)
             self._configure_service_start_mode(service_name, desired_start)
+            self._configure_service_recovery(service_name)
         if state == "STOP_PENDING" and service_name:
             if not self._wait_for_service_stopped(service_name, timeout=8.0):
                 _write_log(
@@ -1368,11 +1397,13 @@ class VncManager:
                     )
                 service_name = self._resolve_service_name(refresh=True) or service_name
                 self._configure_service_display_name(service_name)
+                self._configure_service_recovery(service_name)
                 updated_binpath = self._ensure_service_binpath(service_name, config_path)
             if not service_name:
                 service_name = ULTRAVNC_SERVICE_NAME
             self._configure_service_display_name(service_name)
             self._configure_service_start_mode(service_name, desired_start)
+            self._configure_service_recovery(service_name)
             start_result = subprocess.run(
                 ["sc.exe", "start", service_name],
                 capture_output=True,
@@ -2266,6 +2297,48 @@ class Role:
                 ),
                 "details": details,
             }
+        if (
+            loop_alive
+            and self._engine_ready_for_vnc
+            and self._controller_password()
+            and allowed_ips
+            and not (service_state in {"RUNNING", "START_PENDING"} and listener_ready)
+        ):
+            self._trace(
+                "A50",
+                event="health_report_recover",
+                service_state=service_state or "-",
+                listener_ready=listener_ready,
+                allowed_ips=allowed_ips or "-",
+                port=port_value,
+            )
+            self._ensure_always_on(reason="health_report_recover")
+            service_name = self.vnc._resolve_service_name()
+            service_state = self.vnc._service_state_by_name(service_name) if service_name else None
+            listener_ready = self.vnc.is_listener_ready(port_value)
+            details["running_status"] = str(service_state or "Stopped")
+            details["service_state"] = str(service_state or "Stopped")
+            details["listener_state"] = "listening" if listener_ready else "not_listening"
+            details["listener_ready"] = "true" if listener_ready else "false"
+            details["ready"] = (
+                "true"
+                if listener_ready and service_state in {"RUNNING", "START_PENDING"}
+                else "false"
+            )
+            details["last_service_error"] = str(getattr(self.vnc, "_last_service_error", "") or "")
+            if listener_ready:
+                self._last_ready_at = max(self._last_ready_at, int(time.time()))
+                details["last_ready_at"] = str(int(self._last_ready_at or 0))
+                return {
+                    "status": "healthy",
+                    "role_label": self.role_health_label,
+                    "detail": (
+                        f"{service_name or ULTRAVNC_SERVICE_NAME} listener is ready for session {active_session_id}."
+                        if active_session_id
+                        else f"{service_name or ULTRAVNC_SERVICE_NAME} listener is ready for always-on access."
+                    ),
+                    "details": details,
+                }
         if not loop_alive:
             return {
                 "status": "unhealthy",
@@ -2343,7 +2416,7 @@ class Role:
             self._log(f"VNC stop requested (reason={reason}).")
             self._clear_disconnect_grace()
             self._release_session_busy()
-            self.vnc.stop(reason=str(reason))
+            self._ensure_always_on(reason=f"vpn_tunnel_stop:{reason}")
 
         @sio.on("vnc_start")
         async def _vnc_start(payload):

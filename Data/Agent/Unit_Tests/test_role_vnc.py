@@ -241,6 +241,53 @@ def test_health_report_is_healthy_without_active_session_when_listener_is_ready(
     assert "\"width\": 1920" in report["details"]["display_virtual_bounds_json"]
 
 
+def test_health_report_triggers_recovery_when_service_stopped(monkeypatch) -> None:
+    recovery_calls: list[str] = []
+    role = vnc_role.Role.__new__(vnc_role.Role)
+    role.role_health_label = "UltraVNC Service"
+    role._always_on_thread = SimpleNamespace(is_alive=lambda: True)
+    role._engine_ready_for_vnc = True
+    role._state = {"allowed_ips": "10.255.0.1/32", "port": 5900, "remove_wallpaper": True}
+    role._last_allowed_ips = "10.255.0.1/32"
+    role._agent_runtime_credentials = {
+        "controller_password": "bootpass",
+        "credential_revision": 88,
+    }
+    role._runtime_session = {
+        "session_id": "",
+        "controller_password": "bootpass",
+        "view_only_password": None,
+        "credential_revision": 88,
+        "remove_wallpaper": True,
+    }
+    role._disconnect_grace = {
+        "deadline": 0.0,
+        "controller_password": None,
+        "view_only_password": None,
+        "allowed_ips": None,
+        "port": 5900,
+        "remove_wallpaper": True,
+        "reason": "",
+    }
+    role._last_ready_at = 0
+    role._trace = lambda *_args, **_kwargs: None
+    role._ensure_always_on = lambda *, reason: recovery_calls.append(reason)
+    role.vnc = SimpleNamespace(
+        _resolve_service_name=lambda: "BorealisAgentUltraVNC",
+        _service_state_by_name=lambda _service_name: "STOPPED",
+        is_listener_ready=lambda _port: False,
+        _last_service_error="",
+    )
+    monkeypatch.setattr(vnc_role.os, "name", "nt", raising=False)
+    monkeypatch.setattr(vnc_role, "_collect_windows_display_topology", lambda: [])
+
+    report = role.health_report()
+
+    assert recovery_calls == ["health_report_recover"]
+    assert report["status"] == "recovering"
+    assert report["details"]["service_state"] == "STOPPED"
+
+
 def test_write_ultravnc_config_preserves_both_password_keys_in_ultravnc_section(tmp_path) -> None:
     config_path = tmp_path / "ultravnc.ini"
 

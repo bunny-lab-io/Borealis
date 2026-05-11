@@ -176,7 +176,7 @@ func ensureUltraVNCServiceRegistration(exePath string, configPath string, logger
 			"binPath=",
 			desiredBinPath,
 			"start=",
-			"demand",
+			"auto",
 			"type=",
 			"own",
 			"DisplayName=",
@@ -195,15 +195,33 @@ func ensureUltraVNCServiceRegistration(exePath string, configPath string, logger
 		"binPath=",
 		desiredBinPath,
 		"start=",
-		"demand",
+		"auto",
 		"DisplayName=",
 		ultraVNCServiceDisplayName,
 	)
 	if err != nil {
 		return err
 	}
+	configureUltraVNCServiceRecovery(logger)
 	logger.Tracef("UltraVNC service registration verified: service=%s bin_path=%s", ultraVNCServiceName, desiredBinPath)
 	return nil
+}
+
+func configureUltraVNCServiceRecovery(logger *BootstrapLogger) {
+	_, err := runCommandTimeout(
+		logger,
+		20*time.Second,
+		"sc.exe",
+		"failure",
+		ultraVNCServiceName,
+		"reset=",
+		"86400",
+		"actions=",
+		"restart/5000/restart/15000/restart/30000",
+	)
+	if err != nil && logger != nil {
+		logger.Warnf("UltraVNC service recovery config failed: %v", err)
+	}
 }
 
 func removeLegacyUltraVNCServices(logger *BootstrapLogger) {
