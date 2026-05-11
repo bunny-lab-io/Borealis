@@ -856,6 +856,13 @@ def _reverse_bits(value: int) -> int:
     return int(f"{int(value) & 0xFF:08b}"[::-1], 2)
 
 
+def _normalize_ultravnc_password_hash(hash_value: Optional[str]) -> Optional[str]:
+    normalized = re.sub(r"[^0-9A-Fa-f]", "", str(hash_value or "")).upper()
+    if len(normalized) == 16:
+        return normalized + "00"
+    return normalized or None
+
+
 def _compute_ultravnc_password_hash(password: str) -> Optional[str]:
     try:
         from cryptography.hazmat.primitives.ciphers import Cipher, modes
@@ -881,7 +888,7 @@ def _compute_ultravnc_password_hash(password: str) -> Optional[str]:
         des_key = bytes(_reverse_bits(byte) for byte in raw_password)
         encryptor = Cipher(triple_des(des_key * 3), modes.ECB()).encryptor()
         encrypted = encryptor.update(b"\x00" * 8) + encryptor.finalize()
-        return encrypted.hex().upper()
+        return _normalize_ultravnc_password_hash(encrypted.hex())
     except Exception as exc:
         _write_log(f"VNC password hash fallback failed: {exc}")
         return None
@@ -895,7 +902,7 @@ def _generate_ultravnc_password_hash(
     if password_tool:
         hash_value, secure_value = _read_ultravnc_password_hash(password_tool, password, config_dir)
         if hash_value:
-            return hash_value, secure_value
+            return _normalize_ultravnc_password_hash(hash_value), secure_value
         _write_log("VNC password tool failed; falling back to internal hash generator.")
     else:
         _write_log("VNC password tool not found; using internal hash generator.")
