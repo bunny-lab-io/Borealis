@@ -2265,21 +2265,28 @@ class OnboardingSchedulerMixin:
                     f"""
                     SELECT hostname_claimed,
                            onboarding_target,
-                           site_id
-                      FROM device_approvals
-                     WHERE LOWER(COALESCE(status, '')) = 'pending'
-                       AND TRIM(COALESCE(hostname_claimed, '')) != ''
-                       AND (
-                            LOWER(COALESCE(hostname_claimed, '')) IN ({placeholders})
-                            OR LOWER(COALESCE(onboarding_target, '')) IN ({placeholders})
+                           da.site_id,
+                           d.operating_system,
+                           d.connection_type
+                      FROM device_approvals da
+                 LEFT JOIN devices d
+                        ON LOWER(COALESCE(d.hostname, ''))=LOWER(COALESCE(da.hostname_claimed, ''))
+                     WHERE (
+                            LOWER(COALESCE(da.status, '')) = 'pending'
+                            OR TRIM(COALESCE(d.hostname, '')) != ''
                        )
-                     ORDER BY updated_at DESC, created_at DESC
+                       AND TRIM(COALESCE(da.hostname_claimed, '')) != ''
+                       AND (
+                            LOWER(COALESCE(da.hostname_claimed, '')) IN ({placeholders})
+                            OR LOWER(COALESCE(da.onboarding_target, '')) IN ({placeholders})
+                       )
+                     ORDER BY da.updated_at DESC, da.created_at DESC
                     """,
                     tuple([*chunk, *chunk]),
                 )
-                for hostname, onboarding_target, found_site_id in cur.fetchall():
+                for hostname, onboarding_target, found_site_id, operating_system, connection_type in cur.fetchall():
                     for key in (onboarding_target, hostname):
-                        _assign(key, hostname, found_site_id)
+                        _assign(key, hostname, found_site_id, operating_system, connection_type)
         except Exception:
             return resolved
         finally:
@@ -2328,19 +2335,24 @@ class OnboardingSchedulerMixin:
 
             approval_params: List[Any] = [lookup_value, lookup_value]
             approval_sql = """
-                SELECT hostname_claimed
-                  FROM device_approvals
-                 WHERE LOWER(COALESCE(status, '')) = 'pending'
-                   AND (
-                        LOWER(COALESCE(hostname_claimed, '')) = ?
-                        OR LOWER(COALESCE(onboarding_target, '')) = ?
+                SELECT da.hostname_claimed
+                  FROM device_approvals da
+             LEFT JOIN devices d
+                    ON LOWER(COALESCE(d.hostname, ''))=LOWER(COALESCE(da.hostname_claimed, ''))
+                 WHERE (
+                        LOWER(COALESCE(da.status, '')) = 'pending'
+                        OR TRIM(COALESCE(d.hostname, '')) != ''
                    )
-                   AND TRIM(COALESCE(hostname_claimed, '')) != ''
+                   AND (
+                        LOWER(COALESCE(da.hostname_claimed, '')) = ?
+                        OR LOWER(COALESCE(da.onboarding_target, '')) = ?
+                   )
+                   AND TRIM(COALESCE(da.hostname_claimed, '')) != ''
             """
             if site_id is not None:
-                approval_sql += " AND (site_id = ? OR site_id IS NULL)"
+                approval_sql += " AND (da.site_id = ? OR da.site_id IS NULL)"
                 approval_params.append(int(site_id))
-            approval_sql += " ORDER BY updated_at DESC, created_at DESC LIMIT 1"
+            approval_sql += " ORDER BY da.updated_at DESC, da.created_at DESC LIMIT 1"
             cur.execute(approval_sql, tuple(approval_params))
             row = cur.fetchone()
             return _clean_onboarding_reported_hostname(row[0] if row else "")
@@ -3340,7 +3352,7 @@ class OnboardingSchedulerMixin:
         if known_target_hostname:
             self._set_onboarding_target_hostname(row_id, known_target_hostname)
         active_target_hostname = self._lookup_active_onboarding_target_hostname_from_candidates(
-            [row.get("target_address"), row.get("target_hostname"), row.get("target_input"), host],
+            [row.get("target_address"), known_target_hostname, row.get("target_hostname"), row.get("target_input"), host],
             site_id,
         )
         if active_target_hostname:
@@ -4214,6 +4226,16 @@ class OnboardingSchedulerMixin:
             return text
         return '"' + text.replace('"', r'\"') + '"'
 
+    def _windows_agent_prelaunch_cmd_args(self, exe_abs: str) -> Tuple[str, str]:
+        quoted_exe = self._windows_quote_command_arg(exe_abs)
+        prelaunch = (
+            'schtasks.exe /End /TN "Borealis Agent" >NUL 2>&1 & '
+            'schtasks.exe /End /TN "Borealis Agent (AutoUpdater)" >NUL 2>&1 & '
+            "taskkill.exe /F /IM Agent.exe /T >NUL 2>&1 & "
+            f"{quoted_exe}"
+        )
+        return "cmd.exe", f"/C {prelaunch}"
+
     def _windows_create_agent_payload_bundle(self) -> Tuple[Path, str]:
         current = Path(__file__).resolve()
         source_root = None
@@ -4275,7 +4297,7 @@ class OnboardingSchedulerMixin:
                 smb.createDirectory("C$", remote_dir)
             except Exception:
                 pass
-        exe_path = f"Borealis\\{AGENT_EXE_NAME}"
+        exe_path = f"Borealis\\Temp\\Onboarding\\Agent-{int(run_id)}-{uuid.uuid4().hex[:8]}.exe"
         config_path = f"Borealis\\Temp\\Onboarding\\bootstrapper-config.json"
         payload_path = f"Borealis\\Temp\\Onboarding\\agent-payload.zip"
         manifest_path = f"Borealis\\Temp\\Onboarding\\agent-payload-manifest.json"
@@ -4656,7 +4678,6 @@ class OnboardingSchedulerMixin:
                 timeout_seconds=timeout_seconds,
                 service_name=service_name,
             )
-            command = self._windows_quote_command_arg(exe_abs)
             start_warning = ""
             stage = "svcctl RPC bind"
             if callable(status_update):
@@ -4677,7 +4698,7 @@ class OnboardingSchedulerMixin:
                 scm_handle,
                 service_name,
                 service_name,
-                lpBinaryPathName=command,
+                lpBinaryPathName=self._windows_quote_command_arg(exe_abs),
                 dwStartType=scmr.SERVICE_DEMAND_START,
             )
             service_handle = service_resp["lpServiceHandle"]
@@ -4779,8 +4800,7 @@ class OnboardingSchedulerMixin:
                 target=target,
                 timeout_seconds=timeout_seconds,
             )
-            command = exe_abs
-            arguments = ""
+            command, arguments = self._windows_agent_prelaunch_cmd_args(exe_abs)
             xml = self._windows_task_xml(task_name=task_path, command=command, arguments=arguments)
             stage = "Task Scheduler RPC bind"
             if callable(status_update):
@@ -4877,7 +4897,8 @@ class OnboardingSchedulerMixin:
                 target=target,
                 timeout_seconds=timeout_seconds,
             )
-            command = self._windows_quote_command_arg(exe_abs)
+            command, arguments = self._windows_agent_prelaunch_cmd_args(exe_abs)
+            command = f"{command} {arguments}"
             stage = "DCOM connect"
             if callable(status_update):
                 status_update("Connecting to Windows WMI/DCOM.")
@@ -5017,7 +5038,7 @@ class OnboardingSchedulerMixin:
             if callable(status_update):
                 status_update("Windows WinRM connection established.")
             branch_ref = str(branch or "main").strip() or "main"
-            exe_abs = "C:\\Borealis\\Agent.exe"
+            exe_abs = f"C:\\Borealis\\Temp\\Onboarding\\Agent-{int(run_id)}-{uuid.uuid4().hex[:8]}.exe"
             config_abs = "C:\\Borealis\\Temp\\Onboarding\\bootstrapper-config.json"
             payload_abs = "C:\\Borealis\\Temp\\Onboarding\\agent-payload.zip"
             manifest_abs = "C:\\Borealis\\Temp\\Onboarding\\agent-payload-manifest.json"
@@ -5075,7 +5096,8 @@ class OnboardingSchedulerMixin:
             )
             if callable(status_update):
                 status_update("Running Agent Bootstrap")
-            result = session.run_cmd(exe_abs, [])
+            command, arguments = self._windows_agent_prelaunch_cmd_args(exe_abs)
+            result = session.run_cmd(command, [arguments])
             stdout_raw = getattr(result, "std_out", b"") or b""
             stderr_raw = getattr(result, "std_err", b"") or b""
             stdout = stdout_raw.decode("utf-8", errors="replace") if isinstance(stdout_raw, bytes) else str(stdout_raw or "")

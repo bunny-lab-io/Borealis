@@ -38,7 +38,6 @@ import {
   PlayArrow as PlayArrowIcon,
   RadioButtonUncheckedRounded as ProgressPendingIcon,
   Refresh as RefreshIcon,
-  RemoveCircleOutlineRounded as ProgressSkippedIcon,
   ScheduleRounded as ScheduleRoundedIcon,
   SettingsApplicationsRounded as SettingsApplicationsRoundedIcon,
   TravelExplore as TravelExploreIcon,
@@ -353,6 +352,7 @@ const DISCOVERED_HOSTNAME_COLOR = "rgba(148, 163, 184, 0.78)";
 const STATUS_THEME = {
   pending: { label: "Pending", text: "#fbbf24", background: "rgba(251,191,36,0.18)", border: "1px solid rgba(251,191,36,0.35)", dot: "#f59e0b" },
   pending_approval: { label: "Pending Approval", text: "#d8b4fe", background: "rgba(192,132,252,0.18)", border: "1px solid rgba(192,132,252,0.4)", dot: "#c084fc" },
+  in_progress: { label: "In-Progress", text: "#7dd3fc", background: "rgba(125,211,252,0.18)", border: "1px solid rgba(125,211,252,0.4)", dot: "#38bdf8" },
   running: { label: "Running", text: "#7dd3fc", background: "rgba(125,211,252,0.18)", border: "1px solid rgba(125,211,252,0.4)", dot: "#38bdf8" },
   waiting_approval: { label: "Waiting Approval", text: "#d8b4fe", background: "rgba(192,132,252,0.18)", border: "1px solid rgba(192,132,252,0.4)", dot: "#c084fc" },
   approved: { label: "Approved", text: "#60a5fa", background: "rgba(96,165,250,0.16)", border: "1px solid rgba(96,165,250,0.4)", dot: "#60a5fa" },
@@ -360,9 +360,9 @@ const STATUS_THEME = {
   failed: { label: "Failed", text: "#fb7185", background: "rgba(251,113,133,0.18)", border: "1px solid rgba(251,113,133,0.45)", dot: "#fb7185" },
   ssh_unreachable: { label: "Unreachable", text: "#fb7185", background: "rgba(251,113,133,0.18)", border: "1px solid rgba(251,113,133,0.45)", dot: "#fb7185" },
   unreachable: { label: "Unreachable", text: "#fb7185", background: "rgba(251,113,133,0.18)", border: "1px solid rgba(251,113,133,0.45)", dot: "#fb7185" },
-  skipped: { label: "Skipped", text: "#fbbf24", background: "rgba(251,191,36,0.14)", border: "1px solid rgba(251,191,36,0.32)", dot: "#f59e0b" },
-  already_enrolled: { label: "Already Enrolled", text: "#fbbf24", background: "rgba(251,191,36,0.14)", border: "1px solid rgba(251,191,36,0.32)", dot: "#f59e0b" },
-  already_pending: { label: "Already Pending", text: "#fbbf24", background: "rgba(251,191,36,0.14)", border: "1px solid rgba(251,191,36,0.32)", dot: "#f59e0b" },
+  skipped: { label: "Skipped", text: "#34d399", background: "rgba(52,211,153,0.18)", border: "1px solid rgba(52,211,153,0.42)", dot: "#34d399" },
+  already_enrolled: { label: "Already Enrolled", text: "#34d399", background: "rgba(52,211,153,0.18)", border: "1px solid rgba(52,211,153,0.42)", dot: "#34d399" },
+  already_pending: { label: "Already Pending", text: "#7dd3fc", background: "rgba(125,211,252,0.18)", border: "1px solid rgba(125,211,252,0.4)", dot: "#38bdf8" },
   unsupported_os: { label: "Unsupported OS", text: DISCOVERED_HOSTNAME_COLOR, background: "rgba(148,163,184,0.12)", border: "1px solid rgba(148,163,184,0.28)", dot: DISCOVERED_HOSTNAME_COLOR },
   denied: { label: "Denied", text: "#9aa0a6", background: "rgba(148,163,184,0.12)", border: "1px solid rgba(148,163,184,0.25)", dot: "#94a3b8" },
   expired: { label: "Expired", text: "#9aa0a6", background: "rgba(148,163,184,0.12)", border: "1px solid rgba(148,163,184,0.25)", dot: "#94a3b8" },
@@ -386,6 +386,7 @@ const STATUS_ICON_BOX_SIZE = 34;
 const STATUS_ICON_SIZE = 26;
 const STATUS_COLUMN_SIZE = AG_GRID_STANDARD_ROW_HEIGHT;
 const TARGET_STATUS_FILTER_OPTIONS = [
+  { key: "in_progress", label: "In-Progress" },
   { key: "pending_approval", label: "Pending Approval" },
   { key: "skipped", label: "Skipped" },
   { key: "failed", label: "Failed" },
@@ -615,9 +616,11 @@ function targetStatusBucket(status, record = null) {
   if (key === "unsupported_os" || onboardingFailureKind(record) === "unsupported_os") return "unsupported_os";
   if (key === "ssh_unreachable" || key === "unreachable") return "unreachable";
   if (["completed", "approved", "success", "installed"].includes(key)) return "completed";
-  if (["skipped", "denied", "expired", "already_enrolled", "already_pending"].includes(key)) return "skipped";
+  if (["skipped", "denied", "expired", "already_enrolled"].includes(key)) return "skipped";
   if (["failed", "failure", "error"].includes(key)) return "failed";
-  return "pending_approval";
+  if (["waiting_approval", "pending_approval"].includes(key)) return "pending_approval";
+  if (["pending", "running", "in_progress", "already_pending"].includes(key)) return "in_progress";
+  return "in_progress";
 }
 
 function targetVisibleForStatusFilter(row, activeFilter) {
@@ -1045,14 +1048,13 @@ function buildDiscoveredDeviceLabel(target) {
   const address = String(target?.target_address || target?.hostname || target?.target_input || "").trim();
   const hostname = String(target?.target_hostname || target?.discovered_hostname || "").trim();
   const base = address || hostname || "Target";
-  const port = target?.ssh_port ? `:${target.ssh_port}` : "";
   const showHostname = Boolean(
     hostname &&
       normalizeDiscoveredDeviceName(hostname) !== normalizeDiscoveredDeviceName(address) &&
       normalizeDiscoveredDeviceName(hostname) !== normalizeDiscoveredDeviceName(base)
   );
   return {
-    primary: `${base}${port}`,
+    primary: base,
     hostname: showHostname ? hostname : "",
   };
 }
@@ -1060,8 +1062,23 @@ function buildDiscoveredDeviceLabel(target) {
 function inferOnboardingPlatformFromText(value) {
   const text = String(value || "").toLowerCase();
   if (!text) return "";
+  if (["windows", "win32", "winrm", "smb"].includes(text)) return "windows";
+  if (["linux", "ssh"].includes(text)) return "linux";
+  const scoreMatch = text.match(/auto-detecting remote os:\s*windows=(\d+)\s+linux=(\d+)/i);
+  if (scoreMatch) {
+    const windowsScore = Number(scoreMatch[1] || 0);
+    const linuxScore = Number(scoreMatch[2] || 0);
+    if (windowsScore > linuxScore && windowsScore > 0) return "windows";
+    if (linuxScore > windowsScore && linuxScore > 0) return "linux";
+  }
   if (
     text.includes("detected remote operating system: linux") ||
+    text.includes("ubuntu") ||
+    text.includes("debian") ||
+    text.includes("rocky linux") ||
+    text.includes("red hat") ||
+    text.includes("rhel") ||
+    text.includes("centos") ||
     text.includes("connection established using ssh") ||
     text.includes("linux onboarding") ||
     text.includes("target is not windows")
@@ -1070,6 +1087,9 @@ function inferOnboardingPlatformFromText(value) {
   }
   if (
     text.includes("detected remote operating system: windows") ||
+    text.includes("windows 10") ||
+    text.includes("windows 11") ||
+    text.includes("windows server") ||
     text.includes("connection established using smb") ||
     text.includes("connection established using winrm") ||
     text.includes("connection established using wmi") ||
@@ -1107,7 +1127,7 @@ function onboardingOsIconClass(platform) {
 
 function statusIsActiveProgress(status) {
   const normalized = String(status || "").trim().toLowerCase();
-  return ["pending", "pending_approval", "running", "in_progress", "waiting_approval"].includes(normalized);
+  return ["pending", "pending_approval", "running", "in_progress", "waiting_approval", "already_pending"].includes(normalized);
 }
 
 function normalizeBranchName(value) {
@@ -1252,10 +1272,10 @@ function ProgressStatusIcon({ status, failureKind = "" }) {
   const requestedAuthFailure = String(failureKind || "").trim().toLowerCase() === "auth";
   const requestedUnsupported = String(failureKind || "").trim().toLowerCase() === "unsupported_os" || key === "unsupported_os";
   const completeStatuses = new Set(["approved", "completed", "complete", "success", "succeeded"]);
-  const activeStatuses = new Set(["pending", "pending_approval", "running", "in_progress", "waiting_approval"]);
+  const activeStatuses = new Set(["pending", "pending_approval", "running", "in_progress", "waiting_approval", "already_pending"]);
   const waitingStatuses = new Set(["pending_approval", "waiting_approval"]);
   const failedStatuses = new Set(["failed", "error", "ssh_unreachable", "unreachable", "timeout"]);
-  const skippedStatuses = new Set(["skipped", "already_enrolled", "already_pending", "denied", "expired"]);
+  const skippedStatuses = new Set(["skipped", "already_enrolled", "denied", "expired"]);
   const isComplete = completeStatuses.has(key);
   const isActive = activeStatuses.has(key);
   const isWaiting = waitingStatuses.has(key);
@@ -1269,28 +1289,28 @@ function ProgressStatusIcon({ status, failureKind = "" }) {
     ? ProgressAuthErrorIcon
     : isComplete
     ? ProgressCompleteIcon
+    : isSkipped
+      ? ProgressCompleteIcon
     : isActive
       ? ProgressActiveIcon
       : isWaiting
         ? ProgressPendingIcon
         : isFailed
           ? ProgressErrorIcon
-          : isSkipped
-            ? ProgressSkippedIcon
-            : ProgressPendingIcon;
+          : ProgressPendingIcon;
   const color = requestedUnsupported
     ? DISCOVERED_HOSTNAME_COLOR
     : isComplete
     ? MAGIC_UI.accentC
+    : isSkipped
+      ? MAGIC_UI.accentC
     : isActive
       ? (isWaiting ? MAGIC_UI.accentC : MAGIC_UI.accentA)
       : isWaiting
         ? MAGIC_UI.accentC
         : isFailed
           ? MAGIC_UI.danger
-          : isSkipped
-            ? STATUS_THEME.skipped.dot
-            : MAGIC_UI.textMuted;
+          : MAGIC_UI.textMuted;
 
   return (
     <Tooltip title={label}>
@@ -1771,12 +1791,7 @@ export default function CreateOnboardingJob() {
     () => targetRows.map((target) => {
       const discoveredDevice = buildDiscoveredDeviceLabel(target);
       const detectedPlatform = inferOnboardingPlatformFromTarget(target);
-      let targetLabel = discoveredDevice.primary;
-      if (detectedPlatform === "windows" && targetLabel.endsWith(`:${DEFAULT_SSH_PORT}`)) {
-        targetLabel = `${targetLabel.slice(0, -String(DEFAULT_SSH_PORT).length)}${DEFAULT_WINDOWS_PORT}`;
-      } else if (detectedPlatform === "linux" && targetLabel.endsWith(`:${DEFAULT_WINDOWS_PORT}`)) {
-        targetLabel = `${targetLabel.slice(0, -String(DEFAULT_WINDOWS_PORT).length)}${DEFAULT_SSH_PORT}`;
-      }
+      const targetLabel = discoveredDevice.primary;
       const status = String(target.status || "pending").trim().toLowerCase() || "pending";
       const approvalStatus = String(target.approval_status || "").trim().toLowerCase();
       return {

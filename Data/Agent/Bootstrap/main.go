@@ -170,11 +170,11 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	startedAt := time.Now()
 	logger.Tracef("Install/redeploy sequence start.")
+	logger.Tracef("Stopping stale Borealis-owned processes before staging runtime.")
+	stopBorealisProcesses(cfg, logger)
 	if err := copySelfToInstallRoot(cfg, logger); err != nil {
 		return err
 	}
-	logger.Tracef("Stopping stale Borealis-owned processes before staging runtime.")
-	stopBorealisProcesses(cfg, logger)
 	sourceRoot, cleanup, err := preparePayloadSource(cfg, logger)
 	if cleanup != nil {
 		defer cleanup()
