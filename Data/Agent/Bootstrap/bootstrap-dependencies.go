@@ -4,10 +4,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -17,6 +19,8 @@ const (
 	ultraVNCServiceDisplayName  = "Borealis Agent - UltraVNC"
 	wireGuardManagerServiceName = "WireGuardManager"
 	wireGuardManagerDisplayName = "Borealis Agent - WireGuard Manager"
+	wireGuardDownloadBaseURL    = "https://download.wireguard.com/windows-client"
+	wireGuardMSIVersion         = "1.1"
 )
 
 func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error {
@@ -311,24 +315,21 @@ func queryServiceBinPath(service string, logger *BootstrapLogger) string {
 }
 
 func ensureWireGuardInstaller(cfg BootstrapConfig, logger *BootstrapLogger) error {
-	root := filepath.Join(cfg.InstallDir, "Dependencies", "VPN_Tunnel_Adapter")
-	installer := filepath.Join(root, "wireguard-installer.exe")
-	if !fileExists(installer) {
-		logger.Tracef("WireGuard installer missing; downloading to %s", installer)
-		if err := downloadFileLogged(context.Background(), "https://download.wireguard.com/windows-client/wireguard-installer.exe", installer, 240*time.Second, logger); err != nil {
-			return err
-		}
-	} else {
-		logger.Tracef("WireGuard installer already present at %s", installer)
-	}
-	logger.Tracef("WireGuard manager service install command starting.")
-	_, err := runCommandTimeout(logger, 180*time.Second, installer, "/installmanagerservice")
-	if err != nil {
-		return err
-	}
 	clientExe := resolveWireGuardClientExe()
 	if clientExe == "" {
-		return fmt.Errorf("WireGuard client executable missing after manager installer completed")
+		if err := installWireGuardMSI(cfg, logger); err != nil {
+			return fmt.Errorf("WireGuard MSI install failed: %w", err)
+		}
+		clientExe = waitForWireGuardClientExe(60*time.Second, logger)
+		if clientExe == "" {
+			return fmt.Errorf("WireGuard client executable missing after installer completed")
+		}
+	} else {
+		logger.Tracef("WireGuard client already installed at %s", clientExe)
+	}
+	logger.Tracef("WireGuard manager service install command starting: %s", clientExe)
+	if _, err := runCommandTimeout(logger, 90*time.Second, clientExe, "/installmanagerservice"); err != nil {
+		logger.Tracef("WireGuard manager service install skipped: %v", err)
 	}
 	state, exists := queryServiceState(wireGuardManagerServiceName)
 	if !exists {
@@ -339,6 +340,76 @@ func ensureWireGuardInstaller(cfg BootstrapConfig, logger *BootstrapLogger) erro
 	logger.Infof("WireGuard manager service installed.")
 	logger.Tracef("WireGuard manager service verified: name=%s state=%s client=%s", wireGuardManagerServiceName, state, clientExe)
 	return nil
+}
+
+func installWireGuardMSI(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	msiName, msiURL, err := wireGuardMSIArtifact()
+	if err != nil {
+		return err
+	}
+	msiPath := filepath.Join(cfg.InstallDir, "Dependencies", "VPN_Tunnel_Adapter", msiName)
+	if !fileExists(msiPath) {
+		logger.Tracef("WireGuard MSI missing; downloading to %s", msiPath)
+		if err := downloadFileLogged(context.Background(), msiURL, msiPath, 240*time.Second, logger); err != nil {
+			return err
+		}
+	} else {
+		logger.Tracef("WireGuard MSI already present at %s", msiPath)
+	}
+	logger.Tracef("WireGuard MSI install command starting.")
+	_, err = runCommandTimeout(logger, 180*time.Second, "msiexec.exe", "/i", msiPath, "/qn", "/norestart", "DO_NOT_LAUNCH=1")
+	if isWindowsInstallerSoftSuccess(err) {
+		logger.Warnf("WireGuard MSI install returned reboot-needed success; continuing: %v", err)
+		return nil
+	}
+	return err
+}
+
+func isWindowsInstallerSoftSuccess(err error) bool {
+	if err == nil {
+		return false
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	switch exitErr.ExitCode() {
+	case 1641, 3010:
+		return true
+	default:
+		return false
+	}
+}
+
+func wireGuardMSIArtifact() (string, string, error) {
+	arch := runtime.GOARCH
+	var suffix string
+	switch arch {
+	case "amd64":
+		suffix = "amd64"
+	case "arm64":
+		suffix = "arm64"
+	case "386":
+		suffix = "x86"
+	default:
+		return "", "", fmt.Errorf("unsupported WireGuard Windows MSI architecture: %s", arch)
+	}
+	name := fmt.Sprintf("wireguard-%s-%s.msi", suffix, wireGuardMSIVersion)
+	return name, wireGuardDownloadBaseURL + "/" + name, nil
+}
+
+func waitForWireGuardClientExe(timeout time.Duration, logger *BootstrapLogger) string {
+	deadline := time.Now().Add(timeout)
+	for {
+		if clientExe := resolveWireGuardClientExe(); clientExe != "" {
+			logger.Tracef("WireGuard client executable detected: %s", clientExe)
+			return clientExe
+		}
+		if time.Now().After(deadline) {
+			return ""
+		}
+		time.Sleep(1 * time.Second)
+	}
 }
 
 func resolveWireGuardClientExe() string {
