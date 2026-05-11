@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,13 +21,15 @@ func uninstallBorealis(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	appendUninstallLog(finalLog, "Agent.exe uninstall requested.")
 	logger.Tracef("Uninstall sequence start: install_dir=%s final_log=%s", cfg.InstallDir, finalLog)
 
-	stopScheduledTask(agentTaskName, logger)
-	stopScheduledTask(agentUpdaterTaskName, logger)
-	deleteScheduledTask(agentTaskName, logger)
-	deleteScheduledTask(agentUpdaterTaskName, logger)
+	removeBorealisScheduledTasks(logger)
+	uninstallWireGuardManagerService(logger)
 	removeBorealisOwnedServices(logger)
+	stopBorealisDependencyProcesses(cfg, logger)
 	stopBorealisProcesses(cfg, logger)
+	uninstallWireGuardManagerService(logger)
 	removeBorealisOwnedServices(logger)
+	removeDependencyInstallRoots(logger)
+	relaxInstallDirAcl(cfg.InstallDir, logger)
 
 	exe, _ := os.Executable()
 	logger.Tracef("Uninstall executing from: %s", exe)
@@ -72,7 +75,7 @@ func removeBorealisOwnedServices(logger *BootstrapLogger) {
 	logger.Tracef("Removing Borealis-owned services.")
 	uninstallWireGuardTunnel("Borealis", logger)
 	uninstallWireGuardTunnel("borealis-wg", logger)
-	services := borealisOwnedServiceNames(logger)
+	services := removableServiceNames(logger)
 	logger.Tracef("Borealis-owned service candidates: %v", services)
 	for _, service := range services {
 		stopServiceAndWait(service, 30*time.Second, logger)
@@ -80,24 +83,41 @@ func removeBorealisOwnedServices(logger *BootstrapLogger) {
 	}
 }
 
-func borealisOwnedServiceNames(logger *BootstrapLogger) []string {
+type windowsServiceInfo struct {
+	Name        string `json:"Name"`
+	DisplayName string `json:"DisplayName"`
+	PathName    string `json:"PathName"`
+	State       string `json:"State"`
+}
+
+func removableServiceNames(logger *BootstrapLogger) []string {
 	names := map[string]bool{
-		"BorealisOnboarding":          true,
-		"BorealisAgentBootstrap":      true,
-		"BorealisAgentBootstrapper":   true,
-		"BorealisAgentUltraVNC":       true,
-		"BorealisWireGuardTunnel":     true,
-		"WireGuardTunnel$Borealis":    true,
-		"WireGuardTunnel$borealis-wg": true,
-		"uvnc_service":                true,
-		"uvnc_service_64":             true,
-		"UltraVNC":                    true,
-		"WinVNC":                      true,
+		"Borealis Agent - Bootstrapper": true,
+		"Borealis Agent - UltraVNC":     true,
+		"Borealis Agent - WireGuard":    true,
+		"BorealisOnboarding":            true,
+		"BorealisAgentBootstrap":        true,
+		"BorealisAgentBootstrapper":     true,
+		"BorealisAgentUltraVNC":         true,
+		"BorealisWireGuardTunnel":       true,
+		"uvnc_service":                  true,
+		"uvnc_service_64":               true,
+		"UltraVNC":                      true,
+		"WinVNC":                        true,
+		"WireGuardManager":              true,
+		"WireGuardTunnel$Borealis":      true,
+		"WireGuardTunnel$borealis-wg":   true,
 	}
-	for _, service := range queryServiceNames() {
-		normalized := strings.ToLower(service)
-		if strings.Contains(normalized, "borealis") || strings.Contains(normalized, "wireguardtunnel$borealis") || strings.Contains(normalized, "uvnc") {
-			names[service] = true
+	for _, service := range queryServiceInfos(logger) {
+		blob := strings.ToLower(strings.Join([]string{service.Name, service.DisplayName, service.PathName}, " "))
+		if strings.Contains(blob, "borealis") ||
+			strings.Contains(blob, "ultravnc") ||
+			strings.Contains(blob, "uvnc") ||
+			strings.Contains(blob, "wireguard") {
+			name := strings.TrimSpace(service.Name)
+			if name != "" {
+				names[name] = true
+			}
 		}
 	}
 	result := make([]string, 0, len(names))
@@ -108,14 +128,51 @@ func borealisOwnedServiceNames(logger *BootstrapLogger) []string {
 	return result
 }
 
-func queryServiceNames() []string {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+func queryServiceInfos(logger *BootstrapLogger) []windowsServiceInfo {
+	services, err := queryServiceInfosPowerShell()
+	if err == nil {
+		return services
+	}
+	if logger != nil {
+		logger.Tracef("PowerShell service inventory failed: %v", err)
+	}
+	return queryServiceInfosSC()
+}
+
+func queryServiceInfosPowerShell() ([]windowsServiceInfo, error) {
+	script := `$ErrorActionPreference='Stop'; Get-CimInstance Win32_Service | Select-Object Name,DisplayName,PathName,State | ConvertTo-Json -Compress -Depth 3`
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, powershellPath(), "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	raw := strings.TrimSpace(string(output))
+	if raw == "" || raw == "null" {
+		return nil, nil
+	}
+	var services []windowsServiceInfo
+	if err := json.Unmarshal([]byte(raw), &services); err != nil {
+		var service windowsServiceInfo
+		if singleErr := json.Unmarshal([]byte(raw), &service); singleErr != nil {
+			return nil, err
+		}
+		services = []windowsServiceInfo{service}
+	}
+	return services, nil
+}
+
+func queryServiceInfosSC() []windowsServiceInfo {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	output, err := exec.CommandContext(ctx, "sc.exe", "queryex", "type=", "service", "state=", "all").CombinedOutput()
 	if err != nil {
 		return nil
 	}
-	names := []string{}
+	names := []windowsServiceInfo{}
 	for _, line := range strings.Split(string(output), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(strings.ToUpper(line), "SERVICE_NAME:") {
@@ -123,7 +180,7 @@ func queryServiceNames() []string {
 		}
 		name := strings.TrimSpace(strings.TrimPrefix(line, "SERVICE_NAME:"))
 		if name != "" {
-			names = append(names, name)
+			names = append(names, windowsServiceInfo{Name: name})
 		}
 	}
 	return names
@@ -131,10 +188,7 @@ func queryServiceNames() []string {
 
 func uninstallWireGuardTunnel(tunnelName string, logger *BootstrapLogger) {
 	logger.Tracef("WireGuard tunnel uninstall requested: %s", tunnelName)
-	for _, candidate := range []string{
-		filepath.Join(os.Getenv("ProgramFiles"), "WireGuard", "wireguard.exe"),
-		"wireguard.exe",
-	} {
+	for _, candidate := range wireGuardExeCandidates() {
 		if candidate != "wireguard.exe" && !fileExists(candidate) {
 			continue
 		}
@@ -143,6 +197,40 @@ func uninstallWireGuardTunnel(tunnelName string, logger *BootstrapLogger) {
 		return
 	}
 	logger.Tracef("WireGuard executable missing; tunnel uninstall skipped: %s", tunnelName)
+}
+
+func uninstallWireGuardManagerService(logger *BootstrapLogger) {
+	logger.Tracef("WireGuard manager service uninstall requested.")
+	for _, candidate := range wireGuardExeCandidates() {
+		if candidate != "wireguard.exe" && !fileExists(candidate) {
+			continue
+		}
+		logger.Tracef("WireGuard manager uninstall command: executable=%s", candidate)
+		_, _ = runCommandTimeout(logger, 30*time.Second, candidate, "/uninstallmanagerservice")
+		return
+	}
+	logger.Tracef("WireGuard executable missing; manager uninstall skipped.")
+}
+
+func wireGuardExeCandidates() []string {
+	programFiles := os.Getenv("ProgramFiles")
+	programFilesX86 := os.Getenv("ProgramFiles(x86)")
+	candidates := []string{
+		filepath.Join(programFiles, "WireGuard", "wireguard.exe"),
+		filepath.Join(programFilesX86, "WireGuard", "wireguard.exe"),
+		"wireguard.exe",
+	}
+	seen := map[string]bool{}
+	result := []string{}
+	for _, candidate := range candidates {
+		cleaned := strings.TrimSpace(candidate)
+		if cleaned == "" || seen[strings.ToLower(cleaned)] {
+			continue
+		}
+		seen[strings.ToLower(cleaned)] = true
+		result = append(result, cleaned)
+	}
+	return result
 }
 
 func stopServiceAndWait(name string, timeout time.Duration, logger *BootstrapLogger) {
@@ -205,12 +293,132 @@ func queryServiceState(name string) (string, bool) {
 	return "", err == nil
 }
 
+func removeBorealisScheduledTasks(logger *BootstrapLogger) {
+	logger.Tracef("Removing Borealis scheduled tasks.")
+	taskNames := map[string]bool{
+		agentTaskName:        true,
+		agentUpdaterTaskName: true,
+	}
+	for _, taskName := range queryBorealisScheduledTasks(logger) {
+		if strings.TrimSpace(taskName) != "" {
+			taskNames[taskName] = true
+		}
+	}
+	names := make([]string, 0, len(taskNames))
+	for name := range taskNames {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		stopScheduledTask(name, logger)
+		deleteScheduledTask(name, logger)
+	}
+}
+
+func queryBorealisScheduledTasks(logger *BootstrapLogger) []string {
+	script := `$ErrorActionPreference='Stop'; Get-ScheduledTask | Where-Object { $_.TaskName -like '*Borealis*' -or $_.TaskPath -like '*Borealis*' } | ForEach-Object { ($_.TaskPath.TrimEnd('\') + '\' + $_.TaskName).TrimStart('\') }`
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, powershellPath(), "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
+	if err != nil || ctx.Err() != nil {
+		if logger != nil {
+			logger.Tracef("Scheduled task inventory failed: err=%v output=%s", err, strings.TrimSpace(string(output)))
+		}
+		return nil
+	}
+	names := []string{}
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			names = append(names, line)
+		}
+	}
+	return names
+}
+
+func stopBorealisDependencyProcesses(cfg BootstrapConfig, logger *BootstrapLogger) {
+	logger.Tracef("Stopping Borealis dependency processes.")
+	for _, name := range []string{"winvnc.exe", "winvnc64.exe", "uvnc_service.exe", "wireguard.exe"} {
+		err := eachProcess(func(pid uint32, exe string, commandLine string) {
+			lower := strings.ToLower(commandLine + " " + exe)
+			if !strings.Contains(lower, "borealis") &&
+				!strings.Contains(lower, "ultravnc") &&
+				!strings.Contains(lower, "uvnc") &&
+				!strings.Contains(lower, "wireguard") {
+				return
+			}
+			if int(pid) == os.Getpid() {
+				return
+			}
+			logger.Tracef("Dependency process matched for uninstall: pid=%d exe=%s command_line=%s", pid, exe, commandLine)
+			killProcessTree(int(pid))
+		}, name)
+		if err != nil {
+			logger.Tracef("Dependency process scan failed: image=%s error=%v", name, err)
+		}
+	}
+}
+
+func removeDependencyInstallRoots(logger *BootstrapLogger) {
+	for _, root := range dependencyInstallRoots() {
+		if !dirExists(root) {
+			continue
+		}
+		logger.Tracef("Removing dependency install root: %s", root)
+		relaxInstallDirAcl(root, logger)
+		if err := removePathWithRetries(root, 5, 2*time.Second, logger); err != nil {
+			logger.Warnf("Dependency install root removal failed: path=%s error=%v", root, err)
+		}
+	}
+}
+
+func dependencyInstallRoots() []string {
+	candidates := []string{}
+	for _, base := range []string{os.Getenv("ProgramFiles"), os.Getenv("ProgramFiles(x86)")} {
+		base = strings.TrimSpace(base)
+		if base == "" {
+			continue
+		}
+		candidates = append(
+			candidates,
+			filepath.Join(base, "WireGuard"),
+			filepath.Join(base, "UltraVNC"),
+			filepath.Join(base, "uvnc bvba", "UltraVNC"),
+		)
+	}
+	seen := map[string]bool{}
+	roots := []string{}
+	for _, candidate := range candidates {
+		cleaned := strings.TrimSpace(filepath.Clean(candidate))
+		lower := strings.ToLower(cleaned)
+		if cleaned == "." || cleaned == `\` || cleaned == `/` || seen[lower] {
+			continue
+		}
+		seen[lower] = true
+		roots = append(roots, cleaned)
+	}
+	return roots
+}
+
+func relaxInstallDirAcl(path string, logger *BootstrapLogger) {
+	if !dirExists(path) {
+		return
+	}
+	logger.Tracef("Relaxing install directory ACLs before removal: %s", path)
+	_, _ = runCommandTimeout(logger, 60*time.Second, "takeown.exe", "/F", path, "/R", "/D", "Y")
+	_, _ = runCommandTimeout(logger, 120*time.Second, "icacls.exe", path, "/grant", "*S-1-5-18:F", "*S-1-5-32-544:F", "/T", "/C", "/Q")
+	_, _ = runCommandTimeout(logger, 60*time.Second, "attrib.exe", "-R", "-S", "-H", filepath.Join(path, "*"), "/S", "/D")
+}
+
 func removeInstallDirWithRetries(path string, finalLog string, logger *BootstrapLogger) error {
 	var lastErr error
-	for attempt := 1; attempt <= 10; attempt++ {
+	for attempt := 1; attempt <= 15; attempt++ {
 		if !dirExists(path) {
 			logger.Tracef("Install directory already removed: %s", path)
 			return nil
+		}
+		if attempt == 1 || attempt%3 == 0 {
+			relaxInstallDirAcl(path, logger)
 		}
 		logger.Tracef("Install directory removal attempt %d: %s", attempt, path)
 		if err := os.RemoveAll(path); err != nil {
@@ -233,12 +441,12 @@ func removeInstallDirWithRetries(path string, finalLog string, logger *Bootstrap
 }
 
 func launchDeferredUninstallCleanup(cfg BootstrapConfig, finalLog string, logger *BootstrapLogger) error {
-	cleanupPath := filepath.Join(filepath.Dir(finalLog), "finish-uninstall.cmd")
+	cleanupPath := filepath.Join(filepath.Dir(finalLog), "finish-uninstall.ps1")
 	script := buildDeferredUninstallScript(cfg.InstallDir, finalLog)
 	if err := os.WriteFile(cleanupPath, []byte(script), 0644); err != nil {
 		return err
 	}
-	cmd := exec.Command("cmd.exe", "/C", cleanupPath)
+	cmd := exec.Command(powershellPath(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", cleanupPath)
 	cmd.Dir = filepath.Dir(finalLog)
 	if err := cmd.Start(); err != nil {
 		return err
@@ -248,40 +456,119 @@ func launchDeferredUninstallCleanup(cfg BootstrapConfig, finalLog string, logger
 }
 
 func buildDeferredUninstallScript(installDir string, finalLog string) string {
-	install := escapeCmdSetValue(installDir)
-	logPath := escapeCmdSetValue(finalLog)
-	return fmt.Sprintf(`@echo off
-setlocal EnableExtensions
-set "INSTALL_DIR=%s"
-set "LOG_FILE=%s"
-echo [%%DATE%% %%TIME%%] Deferred Borealis cleanup started.>>"%%LOG_FILE%%"
-cd /d %%SystemRoot%%
-timeout /t 3 /nobreak >nul
-for /l %%%%I in (1,1,6) do (
-  schtasks.exe /End /TN "Borealis Agent" >nul 2>&1
-  schtasks.exe /End /TN "Borealis Agent (AutoUpdater)" >nul 2>&1
-  schtasks.exe /Delete /TN "Borealis Agent" /F >nul 2>&1
-  schtasks.exe /Delete /TN "Borealis Agent (AutoUpdater)" /F >nul 2>&1
-  for %%%%S in ("BorealisOnboarding" "BorealisAgentBootstrap" "BorealisAgentBootstrapper" "BorealisAgentUltraVNC" "BorealisWireGuardTunnel" "WireGuardTunnel$Borealis" "WireGuardTunnel$borealis-wg" "uvnc_service" "uvnc_service_64" "UltraVNC" "WinVNC") do (
-    sc.exe stop %%%%~S >nul 2>&1
-    sc.exe delete %%%%~S >nul 2>&1
+	install := escapePowerShellSingleQuotedString(installDir)
+	logPath := escapePowerShellSingleQuotedString(finalLog)
+	return fmt.Sprintf(`$ErrorActionPreference = 'SilentlyContinue'
+$InstallDir = '%s'
+$LogFile = '%s'
+function Write-UninstallLog([string]$Message) {
+  $stamp = Get-Date -Format o
+  Add-Content -LiteralPath $LogFile -Value "[$stamp] $Message"
+}
+function Remove-BorealisTasks {
+  schtasks.exe /End /TN "Borealis Agent" *> $null
+  schtasks.exe /End /TN "Borealis Agent (AutoUpdater)" *> $null
+  schtasks.exe /Delete /TN "Borealis Agent" /F *> $null
+  schtasks.exe /Delete /TN "Borealis Agent (AutoUpdater)" /F *> $null
+  Get-ScheduledTask | Where-Object { $_.TaskName -like '*Borealis*' -or $_.TaskPath -like '*Borealis*' } | ForEach-Object {
+    $fullName = ($_.TaskPath.TrimEnd('\') + '\' + $_.TaskName).TrimStart('\')
+    schtasks.exe /End /TN $fullName *> $null
+    schtasks.exe /Delete /TN $fullName /F *> $null
+  }
+}
+function Remove-BorealisServices {
+  foreach ($wg in @(
+    "$env:ProgramFiles\WireGuard\wireguard.exe",
+    "${env:ProgramFiles(x86)}\WireGuard\wireguard.exe"
+  )) {
+    if (Test-Path -LiteralPath $wg) {
+      & $wg /uninstalltunnelservice Borealis *> $null
+      & $wg /uninstalltunnelservice borealis-wg *> $null
+      & $wg /uninstallmanagerservice *> $null
+    }
+  }
+  $static = @(
+    'BorealisOnboarding',
+    'BorealisAgentBootstrap',
+    'BorealisAgentBootstrapper',
+    'BorealisAgentUltraVNC',
+    'BorealisWireGuardTunnel',
+    'WireGuardManager',
+    'WireGuardTunnel$Borealis',
+    'WireGuardTunnel$borealis-wg',
+    'uvnc_service',
+    'uvnc_service_64',
+    'UltraVNC',
+    'WinVNC'
   )
-  wmic.exe process where "ExecutablePath like '%%INSTALL_DIR%%\\%%%%' or CommandLine like '%%%%%%INSTALL_DIR%%%%%%'" call terminate >nul 2>&1
-  timeout /t 2 /nobreak >nul
-  rmdir /s /q "%%INSTALL_DIR%%" >nul 2>&1
-  if not exist "%%INSTALL_DIR%%" (
-    echo [%%DATE%% %%TIME%%] Removed %%INSTALL_DIR%%.>>"%%LOG_FILE%%"
-    del "%%~f0" >nul 2>&1
-    exit /b 0
-  )
-)
-echo [%%DATE%% %%TIME%%] Failed to remove %%INSTALL_DIR%%.>>"%%LOG_FILE%%"
-exit /b 1
+  foreach ($name in $static) {
+    sc.exe stop $name *> $null
+    sc.exe delete $name *> $null
+  }
+  Get-CimInstance Win32_Service | Where-Object {
+    $blob = "$($_.Name) $($_.DisplayName) $($_.PathName)".ToLowerInvariant()
+    $blob.Contains('borealis') -or $blob.Contains('ultravnc') -or $blob.Contains('uvnc') -or $blob.Contains('wireguard')
+  } | ForEach-Object {
+    sc.exe stop $_.Name *> $null
+    sc.exe delete $_.Name *> $null
+  }
+}
+function Stop-BorealisProcesses {
+  Get-CimInstance Win32_Process | Where-Object {
+    $name = [string]$_.Name
+    $blob = "$($_.ExecutablePath) $($_.CommandLine)".ToLowerInvariant()
+    (($blob.Contains($InstallDir.ToLowerInvariant()) -or $blob.Contains('borealis')) -and $_.ProcessId -ne $PID) -or
+    ($name -in @('winvnc.exe','winvnc64.exe','uvnc_service.exe','wireguard.exe'))
+  } | ForEach-Object {
+    taskkill.exe /PID $_.ProcessId /T /F *> $null
+  }
+}
+function Remove-DependencyRoots {
+  $roots = @()
+  foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+    if ([string]::IsNullOrWhiteSpace($base)) {
+      continue
+    }
+    $roots += Join-Path $base 'WireGuard'
+    $roots += Join-Path $base 'UltraVNC'
+    $roots += Join-Path (Join-Path $base 'uvnc bvba') 'UltraVNC'
+  }
+  foreach ($root in $roots) {
+    if (-not $root -or -not (Test-Path -LiteralPath $root)) {
+      continue
+    }
+    takeown.exe /F $root /R /D Y *> $null
+    icacls.exe $root /grant '*S-1-5-18:F' '*S-1-5-32-544:F' /T /C /Q *> $null
+    attrib.exe -R -S -H (Join-Path $root '*') /S /D *> $null
+    Remove-Item -LiteralPath $root -Recurse -Force *> $null
+  }
+}
+Write-UninstallLog 'Deferred Borealis cleanup started.'
+Start-Sleep -Seconds 3
+for ($attempt = 1; $attempt -le 12; $attempt++) {
+  Remove-BorealisTasks
+  Remove-BorealisServices
+  Stop-BorealisProcesses
+  Remove-DependencyRoots
+  if (Test-Path -LiteralPath $InstallDir) {
+    takeown.exe /F $InstallDir /R /D Y *> $null
+    icacls.exe $InstallDir /grant '*S-1-5-18:F' '*S-1-5-32-544:F' /T /C /Q *> $null
+    attrib.exe -R -S -H (Join-Path $InstallDir '*') /S /D *> $null
+    Remove-Item -LiteralPath $InstallDir -Recurse -Force *> $null
+  }
+  if (-not (Test-Path -LiteralPath $InstallDir)) {
+    Write-UninstallLog "Removed $InstallDir."
+    Remove-Item -LiteralPath $PSCommandPath -Force *> $null
+    exit 0
+  }
+  Start-Sleep -Seconds 3
+}
+Write-UninstallLog "Failed to remove $InstallDir."
+exit 1
 `, install, logPath)
 }
 
-func escapeCmdSetValue(value string) string {
-	escaped := strings.ReplaceAll(value, `"`, `""`)
-	escaped = strings.ReplaceAll(escaped, `%`, `%%`)
+func escapePowerShellSingleQuotedString(value string) string {
+	escaped := strings.ReplaceAll(value, `'`, `''`)
 	return escaped
 }

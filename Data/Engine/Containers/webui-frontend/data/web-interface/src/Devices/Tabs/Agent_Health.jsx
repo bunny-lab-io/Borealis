@@ -23,13 +23,13 @@ const AGENT_HEALTH_PRESENTATION_BY_KEY = Object.freeze({
   scriptexecsystem: { label: "Script Execution - SYSTEM", kind: AGENT_HEALTH_KIND.role },
   processmanagement: { label: "Process Management", kind: AGENT_HEALTH_KIND.role },
   filemanagement: { label: "File Management", kind: AGENT_HEALTH_KIND.role },
-  vnc: { label: "UltraVNC", kind: AGENT_HEALTH_KIND.service },
-  ultravnc: { label: "UltraVNC", kind: AGENT_HEALTH_KIND.service },
-  ultravncservice: { label: "UltraVNC", kind: AGENT_HEALTH_KIND.service },
-  wireguard: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
-  wireguardtunnel: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
-  wireguardservice: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
-  wireguardvpn: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
+  vnc: { label: "Borealis Agent - UltraVNC", kind: AGENT_HEALTH_KIND.service },
+  ultravnc: { label: "Borealis Agent - UltraVNC", kind: AGENT_HEALTH_KIND.service },
+  ultravncservice: { label: "Borealis Agent - UltraVNC", kind: AGENT_HEALTH_KIND.service },
+  wireguard: { label: "Borealis Agent - WireGuard", kind: AGENT_HEALTH_KIND.service },
+  wireguardtunnel: { label: "Borealis Agent - WireGuard", kind: AGENT_HEALTH_KIND.service },
+  wireguardservice: { label: "Borealis Agent - WireGuard", kind: AGENT_HEALTH_KIND.service },
+  wireguardvpn: { label: "Borealis Agent - WireGuard", kind: AGENT_HEALTH_KIND.service },
 });
 
 const HIDDEN_AGENT_HEALTH_KEYS = Object.freeze(
@@ -71,6 +71,32 @@ function resolveAgentHealthPresentation(item, index = 0) {
     label: presentation?.label || rawRoleLabel || rawRoleName || `Role ${index + 1}`,
     kind: presentation?.kind || AGENT_HEALTH_KIND.role,
   };
+}
+
+function normalizeAgentHealthServiceDetails(details) {
+  if (!details || typeof details !== "object") return {};
+  const normalized = { ...details };
+  const serviceName = String(normalized.service_name || "").trim().toLowerCase();
+  if (["uvnc_service", "uvnc_service_64", "ultravnc", "winvnc"].includes(serviceName)) {
+    normalized.service_name = "BorealisAgentUltraVNC";
+  }
+  if (serviceName === "wireguardtunnel$borealis" || serviceName === "wireguardtunnel$borealis-wg") {
+    normalized.service_name = "Borealis Agent - WireGuard";
+  }
+  return normalized;
+}
+
+function normalizeAgentHealthDetailText(value) {
+  let text = String(value || "")
+    .trim()
+    .replace(/\buvnc_service(?:_64)?\b/gi, "BorealisAgentUltraVNC");
+  if (!text.includes("Borealis Agent - UltraVNC")) {
+    text = text.replace(/\bUltraVNC\b/g, "Borealis Agent - UltraVNC");
+  }
+  if (!text.includes("Borealis Agent - WireGuard")) {
+    text = text.replace(/\bWireGuard VPN\b/g, "Borealis Agent - WireGuard");
+  }
+  return text;
 }
 
 function parseJsonArray(value) {
@@ -129,6 +155,7 @@ export default function AgentHealthTab({
       const rawRoleName = String(item?.role_name || item?.role || "").trim();
       const rawRoleLabel = String(item?.role_label || item?.label || "").trim();
       const presentation = resolveAgentHealthPresentation(item, index);
+      const detailsMap = normalizeAgentHealthServiceDetails(item?.details);
       return {
         id: item?.role_id || `${presentation.kind}-${presentation.label}-${index}`,
         baseLabel: presentation.label,
@@ -141,8 +168,8 @@ export default function AgentHealthTab({
         statusCode: String(item?.status_code || item?.status || "unknown").trim().toLowerCase(),
         lastCheckedAt: item?.last_checked_at ?? null,
         lastCheckedText: formatTimestamp(item?.last_checked_at),
-        detail: String(item?.detail || "").trim(),
-        detailsMap: item?.details && typeof item.details === "object" ? item.details : {},
+        detail: normalizeAgentHealthDetailText(item?.detail),
+        detailsMap,
       };
     });
     const noDesktopEnvironmentActive = normalizedItems.some((item) => {

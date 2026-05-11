@@ -752,23 +752,21 @@ def _resolve_vnc_password_tool(root: Optional[Path]) -> Optional[str]:
 def _discover_ultravnc_service_name() -> Optional[str]:
     if os.name != "nt":
         return None
-    for candidate in (ULTRAVNC_SERVICE_NAME, *ULTRAVNC_LEGACY_SERVICE_NAMES):
-        if not candidate:
-            continue
+    if ULTRAVNC_SERVICE_NAME:
         try:
             result = subprocess.run(
-                ["sc.exe", "query", candidate],
+                ["sc.exe", "query", ULTRAVNC_SERVICE_NAME],
                 capture_output=True,
                 text=True,
                 check=False,
             )
             if result.returncode == 0:
-                return candidate
+                return ULTRAVNC_SERVICE_NAME
         except Exception:
             pass
     command = (
         "Get-Service -ErrorAction SilentlyContinue | "
-        "Where-Object { $_.Name -like '*Borealis*UltraVNC*' -or $_.DisplayName -like 'Borealis Agent - UltraVNC' -or $_.Name -like '*uvnc*' -or $_.DisplayName -like '*UltraVNC*' } | "
+        "Where-Object { $_.Name -like '*Borealis*UltraVNC*' -or $_.DisplayName -like 'Borealis Agent - UltraVNC' } | "
         "Select-Object -First 1 -ExpandProperty Name"
     )
     try:
