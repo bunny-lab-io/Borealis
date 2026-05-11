@@ -40,6 +40,7 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - Engine collaboration state reuses the currently advertised agent password across VNC sessions until the agent restarts, reboots, or the next agent-side daily credential rotation publishes a new revision.
 - Agent runs UltraVNC as a Windows service; once the agent has its current controller credential and Engine /32 firewall scope, Borealis keeps the VNC listener running continuously instead of standing it down between sessions, and `/api/vnc/disconnect` now makes the caller leave the collaboration session or closes it entirely when requested.
 - `Agent.exe` and the Windows VNC role mirror `ultravnc.ini` beside the active `winvnc.exe` and point the service `binPath` at that mirrored file, because UltraVNC service startup is sensitive to config locality after runtime staging.
+- `Agent.exe` registers UltraVNC but does not start it during bootstrap; the VNC role starts it only after the current password, firewall scope, and display metadata are ready, which keeps deployment headless and avoids UltraVNC settings dialogs on fresh installs.
 - `POST /api/vnc/handoff` remains available only to reassign the session owner metadata; it no longer forces reconnects or changes who can interact. `GET /api/vnc/sessions` exposes active-session inventory for the WebUI and admin/server overview.
 - `POST /api/agent/vnc/ensure` now returns readiness detail (`ready`, `service_state`, `listener_state`, `last_ready_at`, and session metadata) so the Engine can wait for the listener before minting browser bootstrap data.
 - Before the proxy connects, the Engine prewarms the cached WireGuard path for registered agents, then fast-probes the agent's advertised UltraVNC listener; prewarmed fast probes use a slightly longer window (`BOREALIS_VNC_PREWARM_FAST_READY_WAIT_SECONDS`, default 2.0 seconds) so the Agent path-prime acknowledgement can land before the Engine falls back to `reason=vnc_bootstrap`.
@@ -205,6 +206,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 #### 4) Agent components
 - Tunnel lifecycle: `Data/Agent/Roles/role_system_wireguard.py`
   - Validates orchestration tokens, starts WireGuard client service, keeps the tunnel persistent, and retries same-session service recovery when the watchdog finds the Windows WireGuard service stopped.
+  - `Agent.exe` stages the WireGuard client headlessly and does not install `WireGuardManager` by default; the tunnel role installs `WireGuardTunnel$Borealis` on demand. Set `BOREALIS_WIREGUARD_INSTALL_MANAGER_SERVICE=1` only when explicitly testing manager-service behavior.
 - Shell server: `Data/Agent/Roles/role_system_remote_shell.py`
 - TCP PowerShell server bound to `0.0.0.0:47002`, restricted to VPN subnet (10.255.x.x).
 - Logging: `Agent/Logs/VPN_Tunnel/tunnel.log` (tunnel lifecycle) and `Agent/Logs/VPN_Tunnel/remote_shell.log` (shell I/O).

@@ -16,12 +16,13 @@ import (
 )
 
 const (
-	ultraVNCServiceName         = "BorealisAgentUltraVNC"
-	ultraVNCServiceDisplayName  = "Borealis Agent - UltraVNC"
-	wireGuardManagerServiceName = "WireGuardManager"
-	wireGuardManagerDisplayName = "Borealis Agent - WireGuard Manager"
-	wireGuardDownloadBaseURL    = "https://download.wireguard.com/windows-client"
-	wireGuardMSIVersion         = "1.1"
+	ultraVNCServiceName                  = "BorealisAgentUltraVNC"
+	ultraVNCServiceDisplayName           = "Borealis Agent - UltraVNC"
+	wireGuardManagerServiceName          = "WireGuardManager"
+	wireGuardManagerDisplayName          = "Borealis Agent - WireGuard Manager"
+	wireGuardInstallManagerServiceEnvVar = "BOREALIS_WIREGUARD_INSTALL_MANAGER_SERVICE"
+	wireGuardDownloadBaseURL             = "https://download.wireguard.com/windows-client"
+	wireGuardMSIVersion                  = "1.1"
 )
 
 func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error {
@@ -263,52 +264,16 @@ func reconcileUltraVNCServiceAfterRuntimeStage(cfg BootstrapConfig, logger *Boot
 		logger.Warnf("UltraVNC final service reconciliation failed: %v", err)
 		return
 	}
-	startUltraVNCServiceForVerification(logger)
+	verifyUltraVNCServiceRegistered(logger)
 }
 
-func startUltraVNCServiceForVerification(logger *BootstrapLogger) {
+func verifyUltraVNCServiceRegistered(logger *BootstrapLogger) {
 	state, exists := queryServiceState(ultraVNCServiceName)
-	logger.Tracef("UltraVNC service verification start: exists=%t state=%s", exists, state)
 	if !exists {
 		logger.Warnf("UltraVNC service verification failed: service missing after registration.")
 		return
 	}
-	if strings.EqualFold(state, "RUNNING") {
-		verifyUltraVNCServiceStable(logger)
-		return
-	}
-	output, err := runCommandTimeout(logger, 30*time.Second, "sc.exe", "start", ultraVNCServiceName)
-	if err != nil {
-		lowerOutput := strings.ToLower(output)
-		if !strings.Contains(lowerOutput, "already running") && !strings.Contains(lowerOutput, "1056") {
-			logger.Warnf("UltraVNC service start verification failed: %v", err)
-			return
-		}
-	}
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		state, exists = queryServiceState(ultraVNCServiceName)
-		if !exists {
-			logger.Warnf("UltraVNC service disappeared during verification.")
-			return
-		}
-		if strings.EqualFold(state, "RUNNING") {
-			verifyUltraVNCServiceStable(logger)
-			return
-		}
-		time.Sleep(1 * time.Second)
-	}
-	logger.Warnf("UltraVNC service did not reach RUNNING during verification: state=%s", state)
-}
-
-func verifyUltraVNCServiceStable(logger *BootstrapLogger) {
-	time.Sleep(2 * time.Second)
-	state, exists := queryServiceState(ultraVNCServiceName)
-	if exists && strings.EqualFold(state, "RUNNING") {
-		logger.Tracef("UltraVNC service verification complete: state=RUNNING stable=true")
-		return
-	}
-	logger.Warnf("UltraVNC service did not stay RUNNING during verification: exists=%t state=%s", exists, state)
+	logger.Tracef("UltraVNC service registration ready: exists=%t state=%s startup=deferred_until_agent_credentials", exists, state)
 }
 
 func configureUltraVNCServiceRecovery(logger *BootstrapLogger) {
@@ -373,6 +338,16 @@ func ensureWireGuardInstaller(cfg BootstrapConfig, logger *BootstrapLogger) erro
 	} else {
 		logger.Tracef("WireGuard client already installed at %s", clientExe)
 	}
+	if !shouldInstallWireGuardManagerService() {
+		state, exists := queryServiceState(wireGuardManagerServiceName)
+		if exists {
+			ensureWireGuardManagerServiceDisplayName(logger)
+			logger.Tracef("WireGuard manager service already present: name=%s state=%s client=%s", wireGuardManagerServiceName, state, clientExe)
+			return nil
+		}
+		logger.Infof("WireGuard client ready at %s; manager service install deferred to keep bootstrap headless. Tunnel service will install on demand.", clientExe)
+		return nil
+	}
 	logger.Tracef("WireGuard manager service install command starting: %s", clientExe)
 	if _, err := runCommandTimeout(logger, 90*time.Second, clientExe, "/installmanagerservice"); err != nil {
 		logger.Tracef("WireGuard manager service install skipped: %v", err)
@@ -386,6 +361,16 @@ func ensureWireGuardInstaller(cfg BootstrapConfig, logger *BootstrapLogger) erro
 	logger.Infof("WireGuard manager service installed.")
 	logger.Tracef("WireGuard manager service verified: name=%s state=%s client=%s", wireGuardManagerServiceName, state, clientExe)
 	return nil
+}
+
+func shouldInstallWireGuardManagerService() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(wireGuardInstallManagerServiceEnvVar)))
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func installWireGuardMSI(cfg BootstrapConfig, logger *BootstrapLogger) error {
