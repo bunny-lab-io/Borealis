@@ -25,7 +25,7 @@ type windowsProcessInfo struct {
 }
 
 func acquireBootstrapMutex() (func(), bool, error) {
-	name, err := windows.UTF16PtrFromString(`Global\BorealisAgentBootstrap`)
+	name, err := windows.UTF16PtrFromString(`Global\BorealisAgentBootstrapper`)
 	if err != nil {
 		return func() {}, false, err
 	}

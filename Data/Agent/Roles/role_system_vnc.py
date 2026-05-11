@@ -75,10 +75,11 @@ ROLE_CONTEXTS = ["system"]
 
 VNC_FIREWALL_RULE_NAME = "Borealis - VNC - UltraVNC"
 DEFAULT_VNC_PORT = 5900
-ULTRAVNC_SERVICE_NAME = os.environ.get("BOREALIS_ULTRAVNC_SERVICE") or "uvnc_service"
+ULTRAVNC_SERVICE_NAME = os.environ.get("BOREALIS_ULTRAVNC_SERVICE") or "BorealisAgentUltraVNC"
 ULTRAVNC_SERVICE_DISPLAY_NAME = os.environ.get(
     "BOREALIS_ULTRAVNC_DISPLAY_NAME"
-) or "Borealis - UltraVNC"
+) or "Borealis Agent - UltraVNC"
+ULTRAVNC_LEGACY_SERVICE_NAMES = ("uvnc_service", "uvnc_service_64", "UltraVNC", "WinVNC")
 ULTRAVNC_SERVICE_START_MODE = _normalize_service_start_mode(
     os.environ.get("BOREALIS_ULTRAVNC_START_TYPE"),
     default="demand",
@@ -751,9 +752,23 @@ def _resolve_vnc_password_tool(root: Optional[Path]) -> Optional[str]:
 def _discover_ultravnc_service_name() -> Optional[str]:
     if os.name != "nt":
         return None
+    for candidate in (ULTRAVNC_SERVICE_NAME, *ULTRAVNC_LEGACY_SERVICE_NAMES):
+        if not candidate:
+            continue
+        try:
+            result = subprocess.run(
+                ["sc.exe", "query", candidate],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                return candidate
+        except Exception:
+            pass
     command = (
         "Get-Service -ErrorAction SilentlyContinue | "
-        "Where-Object { $_.Name -like '*uvnc*' -or $_.DisplayName -like '*UltraVNC*' } | "
+        "Where-Object { $_.Name -like '*Borealis*UltraVNC*' -or $_.DisplayName -like 'Borealis Agent - UltraVNC' -or $_.Name -like '*uvnc*' -or $_.DisplayName -like '*UltraVNC*' } | "
         "Select-Object -First 1 -ExpandProperty Name"
     )
     try:
@@ -1022,6 +1037,7 @@ class VncManager:
         self._password_tool_logged = False
         self._service_name: Optional[str] = None
         self._last_service_error = ""
+        self._remove_legacy_services()
 
     def _service_state_by_name(self, service_name: str) -> Optional[str]:
         if os.name != "nt":
@@ -1101,6 +1117,23 @@ class VncManager:
         except Exception:
             return None
         return None
+
+    def _remove_legacy_services(self) -> None:
+        if os.name != "nt":
+            return
+        for legacy_name in ULTRAVNC_LEGACY_SERVICE_NAMES:
+            if not legacy_name or legacy_name == ULTRAVNC_SERVICE_NAME:
+                continue
+            bin_path = self._service_binpath(legacy_name)
+            if not bin_path or "\\borealis\\" not in bin_path.replace("/", "\\").lower():
+                continue
+            _write_log(f"Removing legacy Borealis UltraVNC service {legacy_name}.")
+            try:
+                subprocess.run(["sc.exe", "stop", legacy_name], capture_output=True, text=True, check=False)
+                self._wait_for_service_stopped(legacy_name, timeout=8.0)
+                subprocess.run(["sc.exe", "delete", legacy_name], capture_output=True, text=True, check=False)
+            except Exception as exc:
+                _write_log(f"Failed to remove legacy UltraVNC service {legacy_name}: {exc}")
 
     def _set_service_error(self, message: str) -> None:
         self._last_service_error = str(message or "").strip()
@@ -1306,7 +1339,7 @@ class VncManager:
             self._vnc_root = _resolve_vnc_root()
         try:
             if state is None:
-                service_name = ULTRAVNC_SERVICE_NAME or "uvnc_service"
+                service_name = ULTRAVNC_SERVICE_NAME
                 desired = f"\"{self._vnc_exe}\" -service -config \"{config_path}\""
                 create_args = [
                     "sc.exe",

@@ -61,10 +61,10 @@ ROLE_NAME = "wireguard"
 ROLE_CONTEXTS = ["system"]
 TUNNEL_NAME = "Borealis"
 TUNNEL_DISPLAY_NAME = "Borealis"
-SERVICE_DISPLAY_NAME = "Borealis - WireGuard - Agent"
+SERVICE_DISPLAY_NAME = "Borealis Agent - WireGuard"
 STALE_ENGINE_TUNNEL_NAMES = ("borealis-wg",)
 TUNNEL_IDLE_ADDRESS = "169.254.255.254/32"
-FIREWALL_RULE_NAME = "Borealis - WireGuard - Agent"
+FIREWALL_RULE_NAME = "Borealis Agent - WireGuard"
 DEFAULT_VNC_PORT = 5900
 DEFAULT_SSH_PORT = 22
 
@@ -696,6 +696,7 @@ class WireGuardClient:
 
     def _ensure_idle_service(self) -> None:
         if self._service_exists():
+            self._ensure_service_display_name()
             return
         if not Path(self._wg_exe).is_file():
             return

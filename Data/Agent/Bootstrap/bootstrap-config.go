@@ -256,7 +256,7 @@ func normalizeBootstrapConfig(cfg *BootstrapConfig) {
 	}
 	cfg.ServiceName = strings.TrimSpace(cfg.ServiceName)
 	if cfg.ServiceName == "" {
-		cfg.ServiceName = "BorealisAgentBootstrap"
+		cfg.ServiceName = "BorealisAgentBootstrapper"
 	}
 	if cfg.NonInteractive {
 		cfg.Interactive = false

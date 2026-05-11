@@ -84,6 +84,8 @@ func borealisOwnedServiceNames(logger *BootstrapLogger) []string {
 	names := map[string]bool{
 		"BorealisOnboarding":          true,
 		"BorealisAgentBootstrap":      true,
+		"BorealisAgentBootstrapper":   true,
+		"BorealisAgentUltraVNC":       true,
 		"BorealisWireGuardTunnel":     true,
 		"WireGuardTunnel$Borealis":    true,
 		"WireGuardTunnel$borealis-wg": true,
@@ -260,7 +262,7 @@ for /l %%%%I in (1,1,6) do (
   schtasks.exe /End /TN "Borealis Agent (AutoUpdater)" >nul 2>&1
   schtasks.exe /Delete /TN "Borealis Agent" /F >nul 2>&1
   schtasks.exe /Delete /TN "Borealis Agent (AutoUpdater)" /F >nul 2>&1
-  for %%%%S in ("BorealisOnboarding" "BorealisAgentBootstrap" "BorealisWireGuardTunnel" "WireGuardTunnel$Borealis" "WireGuardTunnel$borealis-wg" "uvnc_service" "uvnc_service_64" "UltraVNC" "WinVNC") do (
+  for %%%%S in ("BorealisOnboarding" "BorealisAgentBootstrap" "BorealisAgentBootstrapper" "BorealisAgentUltraVNC" "BorealisWireGuardTunnel" "WireGuardTunnel$Borealis" "WireGuardTunnel$borealis-wg" "uvnc_service" "uvnc_service_64" "UltraVNC" "WinVNC") do (
     sc.exe stop %%%%~S >nul 2>&1
     sc.exe delete %%%%~S >nul 2>&1
   )

@@ -158,7 +158,7 @@ def test_health_report_requires_listener_readiness_for_healthy_status(monkeypatc
     }
     role._last_ready_at = 0
     role.vnc = SimpleNamespace(
-        _resolve_service_name=lambda: "uvnc_service",
+        _resolve_service_name=lambda: "BorealisAgentUltraVNC",
         _service_state_by_name=lambda _service_name: "RUNNING",
         is_listener_ready=lambda _port: False,
     )
@@ -200,7 +200,7 @@ def test_health_report_is_healthy_without_active_session_when_listener_is_ready(
         "reason": "",
     }
     role.vnc = SimpleNamespace(
-        _resolve_service_name=lambda: "uvnc_service",
+        _resolve_service_name=lambda: "BorealisAgentUltraVNC",
         _service_state_by_name=lambda _service_name: "RUNNING",
         is_listener_ready=lambda _port: True,
     )
@@ -236,7 +236,7 @@ def test_health_report_is_healthy_without_active_session_when_listener_is_ready(
     assert report["status"] == "healthy"
     assert report["details"]["listener_state"] == "listening"
     assert report["details"]["ready"] == "true"
-    assert report["detail"] == "uvnc_service listener is ready for always-on access."
+    assert report["detail"] == "BorealisAgentUltraVNC listener is ready for always-on access."
     assert "\"display_index\": 1" in report["details"]["display_topology_json"]
     assert "\"width\": 1920" in report["details"]["display_virtual_bounds_json"]
 

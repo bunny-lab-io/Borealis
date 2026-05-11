@@ -4664,7 +4664,8 @@ class OnboardingSchedulerMixin:
             stage = "C$ Agent.exe staging"
             if callable(status_update):
                 status_update("Staging Borealis Agent.exe over C$.")
-            service_name = f"BorealisOnboarding{uuid.uuid4().hex[:12]}"
+            service_name = f"BorealisAgentBootstrapper{uuid.uuid4().hex[:12]}"
+            service_display_name = "Borealis Agent - Bootstrapper"
             exe_abs, _config_abs, output_path = self._windows_smb_stage_agent_exe(
                 smb,
                 branch=branch,
@@ -4695,7 +4696,7 @@ class OnboardingSchedulerMixin:
                 dce,
                 scm_handle,
                 service_name,
-                service_name,
+                service_display_name,
                 lpBinaryPathName=self._windows_quote_command_arg(exe_abs),
                 dwStartType=scmr.SERVICE_DEMAND_START,
             )
@@ -4776,7 +4777,7 @@ class OnboardingSchedulerMixin:
             return self._windows_agent_exe_unavailable_result()
         smb = None
         dce = None
-        task_path = f"\\BorealisOnboarding{uuid.uuid4().hex[:12]}"
+        task_path = f"\\BorealisAgentBootstrapper{uuid.uuid4().hex[:12]}"
         stage = "SMB login"
         rpc_timeout = _env_non_negative_float("BOREALIS_WINDOWS_RPC_TIMEOUT_SECONDS", 10.0) or 10.0
         try:

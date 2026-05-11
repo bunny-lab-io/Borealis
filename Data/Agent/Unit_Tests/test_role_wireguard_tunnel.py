@@ -261,7 +261,7 @@ def _build_windows_client() -> WireGuardClient:
     client._last_install_already_present = False
     client.service_name = "Borealis"
     client.display_name = "Borealis"
-    client.service_display_name = "Borealis - WireGuard - Agent"
+    client.service_display_name = "Borealis Agent - WireGuard"
     client.conf_path = Path("/tmp/Borealis.conf")
     client.session = None
     client.idle_deadline = None

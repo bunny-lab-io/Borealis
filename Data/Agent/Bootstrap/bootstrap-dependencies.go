@@ -7,12 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 const (
-	ultraVNCServiceName        = "uvnc_service"
-	ultraVNCServiceDisplayName = "Borealis - UltraVNC"
+	ultraVNCServiceName        = "BorealisAgentUltraVNC"
+	ultraVNCServiceDisplayName = "Borealis Agent - UltraVNC"
 )
 
 func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error {
@@ -161,6 +162,7 @@ func ensureUltraVNCBootstrapConfig(cfg BootstrapConfig, logger *BootstrapLogger)
 }
 
 func ensureUltraVNCServiceRegistration(exePath string, configPath string, logger *BootstrapLogger) error {
+	removeLegacyUltraVNCServices(logger)
 	desiredBinPath := fmt.Sprintf(`"%s" -service -config "%s"`, exePath, configPath)
 	if _, err := runCommandTimeout(logger, 20*time.Second, "sc.exe", "query", ultraVNCServiceName); err != nil {
 		if _, createErr := runCommandTimeout(
@@ -200,6 +202,38 @@ func ensureUltraVNCServiceRegistration(exePath string, configPath string, logger
 	}
 	logger.Tracef("UltraVNC service registration verified: service=%s bin_path=%s", ultraVNCServiceName, desiredBinPath)
 	return nil
+}
+
+func removeLegacyUltraVNCServices(logger *BootstrapLogger) {
+	for _, service := range []string{"uvnc_service", "uvnc_service_64", "UltraVNC", "WinVNC"} {
+		if service == ultraVNCServiceName {
+			continue
+		}
+		binPath := queryServiceBinPath(service, logger)
+		if binPath == "" || !strings.Contains(strings.ToLower(binPath), `\borealis\`) {
+			continue
+		}
+		logger.Tracef("Removing legacy Borealis UltraVNC service: name=%s bin_path=%s", service, binPath)
+		stopServiceAndWait(service, 30*time.Second, logger)
+		deleteServiceAndWait(service, 30*time.Second, logger)
+	}
+}
+
+func queryServiceBinPath(service string, logger *BootstrapLogger) string {
+	output, err := runCommandTimeout(logger, 20*time.Second, "sc.exe", "qc", service)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.Contains(strings.ToUpper(line), "BINARY_PATH_NAME") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) == 2 {
+			return strings.TrimSpace(parts[1])
+		}
+	}
+	return ""
 }
 
 func ensureWireGuardInstaller(cfg BootstrapConfig, logger *BootstrapLogger) error {
