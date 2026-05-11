@@ -25,6 +25,9 @@ type updateManifest struct {
 
 func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	startedAt := time.Now()
+	if err := copySelfToInstallRoot(cfg, logger); err != nil {
+		logger.Warnf("Agent.exe self-stage before update skipped: %v", err)
+	}
 	serverURL := strings.TrimRight(strings.TrimSpace(cfg.ServerURL), "/")
 	if serverURL == "" {
 		return fmt.Errorf("server URL missing")
@@ -35,6 +38,9 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	}
 	installed := strings.TrimSpace(readFirstLine(filepath.Join(agentSettingsDir(cfg.InstallDir), "Updater", "installed_build_id.txt")))
 	logger.Tracef("Agent update check start: installed_build_id=%s", installed)
+	if shouldUseRepoRefUpdate(cfg) {
+		return runRepoRefUpdateCheck(cfg, logger, installed, startedAt)
+	}
 	manifest, err := fetchUpdateManifest(serverURL, token, installed)
 	if err != nil {
 		return err
@@ -112,6 +118,120 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	logger.Infof("Agent update applied (%s).", target)
 	logger.Tracef("Agent update check complete: applied duration=%s", time.Since(startedAt).Round(time.Millisecond))
 	return nil
+}
+
+func shouldUseRepoRefUpdate(cfg BootstrapConfig) bool {
+	ref := strings.TrimSpace(cfg.RepoRef)
+	return ref != "" && !strings.EqualFold(ref, "main")
+}
+
+func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, installed string, startedAt time.Time) error {
+	ref := strings.TrimSpace(cfg.RepoRef)
+	target, err := resolveGithubRefSHA(cfg.RepoURL, ref)
+	if err != nil {
+		return fmt.Errorf("resolve repo_ref %q update target; refusing manifest fallback: %w", ref, err)
+	}
+	target = strings.TrimSpace(strings.ToLower(target))
+	logger.Tracef("Agent repo_ref update target: repo_ref=%s target_build_id=%s installed_build_id=%s", ref, target, installed)
+	if target == "" {
+		return fmt.Errorf("repo_ref %q resolved empty target build id", ref)
+	}
+	if installed != "" && strings.EqualFold(installed, target) {
+		logger.Infof("Agent repo_ref update check: up to date (%s).", target)
+		writeUpdateStatus(cfg, map[string]any{
+			"state":            "up_to_date",
+			"repo_ref":         ref,
+			"target_build_id":  target,
+			"last_checked_at":  time.Now().Unix(),
+			"update_available": false,
+		})
+		logger.Tracef("Agent update check complete: repo_ref_up_to_date duration=%s", time.Since(startedAt).Round(time.Millisecond))
+		return nil
+	}
+	sourceRoot, err := downloadRepoRefUpdateSource(cfg, logger, ref)
+	if err != nil {
+		return err
+	}
+	stopScheduledTask(agentTaskName, logger)
+	stopBorealisProcesses(cfg, logger)
+	if err := stageAgentRuntime(cfg, sourceRoot, logger); err != nil {
+		return err
+	}
+	reconcileUltraVNCServiceAfterRuntimeStage(cfg, logger)
+	if err := setupPythonEnvironment(cfg, sourceRoot, logger); err != nil {
+		return err
+	}
+	if err := ensureAgentTasks(cfg, logger); err != nil {
+		return err
+	}
+	writeInstalledBuildID(cfg, target)
+	writeUpdateStatus(cfg, map[string]any{
+		"state":            "applied",
+		"repo_ref":         ref,
+		"target_build_id":  target,
+		"last_checked_at":  time.Now().Unix(),
+		"update_available": false,
+	})
+	logger.Infof("Agent repo_ref update applied (%s @ %s).", ref, target)
+	logger.Tracef("Agent update check complete: repo_ref_applied duration=%s", time.Since(startedAt).Round(time.Millisecond))
+	return nil
+}
+
+func downloadRepoRefUpdateSource(cfg BootstrapConfig, logger *BootstrapLogger, ref string) (string, error) {
+	archiveURL, err := githubArchiveURL(cfg.RepoURL, ref)
+	if err != nil {
+		return "", err
+	}
+	archivePath := filepath.Join(agentSettingsDir(cfg.InstallDir), "Updater", "repo-ref-update.zip")
+	logger.Tracef("Agent repo_ref update archive download start: repo_ref=%s url=%s archive=%s", ref, archiveURL, archivePath)
+	if err := downloadFileLogged(context.Background(), archiveURL, archivePath, 180*time.Second, logger); err != nil {
+		return "", fmt.Errorf("download repo_ref %q update archive; refusing manifest fallback: %w", ref, err)
+	}
+	extractRoot := filepath.Join(agentSettingsDir(cfg.InstallDir), "Updater", "repo-ref-extract")
+	_ = os.RemoveAll(extractRoot)
+	if err := unzipFileLogged(archivePath, extractRoot, logger); err != nil {
+		return "", err
+	}
+	sourceRoot := resolveSourceRoot(extractRoot)
+	if !fileExists(filepath.Join(sourceRoot, "Data", "Agent", "agent.py")) {
+		return "", fmt.Errorf("repo_ref %q update archive missing Data\\Agent\\agent.py", ref)
+	}
+	logger.Tracef("Agent repo_ref update source resolved: %s", sourceRoot)
+	return sourceRoot, nil
+}
+
+func resolveGithubRefSHA(repoURL string, ref string) (string, error) {
+	owner, repo, err := githubRepoParts(repoURL)
+	if err != nil {
+		return "", err
+	}
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s", owner, repo, url.PathEscape(ref))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("GitHub commit API HTTP %d", resp.StatusCode)
+	}
+	var payload struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", err
+	}
+	sha := strings.TrimSpace(payload.SHA)
+	if sha == "" {
+		return "", fmt.Errorf("GitHub commit API returned empty sha")
+	}
+	return sha, nil
 }
 
 func fetchUpdateManifest(serverURL string, token string, installedBuildID string) (updateManifest, error) {

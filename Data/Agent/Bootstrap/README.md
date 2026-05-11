@@ -1,6 +1,7 @@
 # Agent.exe Bootstrap
 
 `Agent.exe` is the native Windows bootstrap entrypoint for Borealis Agent setup, repair, update, remote onboarding, and uninstall.
+When built with a non-`main` `repo_ref`, update checks are pinned to that GitHub branch head and refuse the Engine update manifest path so feature-branch Agents cannot drift back to a different runtime build.
 
 Target path:
 

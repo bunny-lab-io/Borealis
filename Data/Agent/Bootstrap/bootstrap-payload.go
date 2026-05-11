@@ -154,17 +154,25 @@ func discoverLocalSourceRoot() string {
 }
 
 func githubArchiveURL(repoURL string, ref string) (string, error) {
+	owner, repo, err := githubRepoParts(repoURL)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("https://codeload.github.com/%s/%s/zip/refs/heads/%s", owner, repo, url.PathEscape(ref)), nil
+}
+
+func githubRepoParts(repoURL string) (string, string, error) {
 	normalized := strings.TrimSuffix(strings.TrimSpace(repoURL), ".git")
 	parts := strings.Split(normalized, "github.com/")
 	if len(parts) != 2 {
-		return "", fmt.Errorf("source archive fallback only supports GitHub repository URLs")
+		return "", "", fmt.Errorf("source archive fallback only supports GitHub repository URLs")
 	}
-	repo := strings.Trim(parts[1], "/")
-	items := strings.Split(repo, "/")
+	repoPath := strings.Trim(parts[1], "/")
+	items := strings.Split(repoPath, "/")
 	if len(items) != 2 {
-		return "", fmt.Errorf("invalid GitHub repository URL: %s", repoURL)
+		return "", "", fmt.Errorf("invalid GitHub repository URL: %s", repoURL)
 	}
-	return fmt.Sprintf("https://codeload.github.com/%s/%s/zip/refs/heads/%s", items[0], items[1], url.PathEscape(ref)), nil
+	return items[0], items[1], nil
 }
 
 func downloadFile(ctx context.Context, rawURL string, destination string, timeout time.Duration) error {
