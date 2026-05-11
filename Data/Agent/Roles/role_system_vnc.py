@@ -852,6 +852,56 @@ def _read_ultravnc_password_hash(
         return None, None
 
 
+def _reverse_bits(value: int) -> int:
+    return int(f"{int(value) & 0xFF:08b}"[::-1], 2)
+
+
+def _compute_ultravnc_password_hash(password: str) -> Optional[str]:
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, modes
+    except Exception as exc:
+        _write_log(f"VNC password hash fallback unavailable: {exc}")
+        return None
+    try:
+        triple_des = None
+        try:
+            from cryptography.hazmat.decrepit.ciphers import algorithms as decrepit_algorithms
+
+            triple_des = getattr(decrepit_algorithms, "TripleDES", None)
+        except Exception:
+            pass
+        if triple_des is None:
+            from cryptography.hazmat.primitives.ciphers import algorithms
+
+            triple_des = getattr(algorithms, "TripleDES", None)
+        if triple_des is None:
+            _write_log("VNC password hash fallback unavailable: TripleDES cipher missing.")
+            return None
+        raw_password = str(password or "").encode("latin-1", errors="ignore")[:8].ljust(8, b"\x00")
+        des_key = bytes(_reverse_bits(byte) for byte in raw_password)
+        encryptor = Cipher(triple_des(des_key * 3), modes.ECB()).encryptor()
+        encrypted = encryptor.update(b"\x00" * 8) + encryptor.finalize()
+        return encrypted.hex().upper()
+    except Exception as exc:
+        _write_log(f"VNC password hash fallback failed: {exc}")
+        return None
+
+
+def _generate_ultravnc_password_hash(
+    password_tool: Optional[str],
+    password: str,
+    config_dir: Path,
+) -> tuple[Optional[str], Optional[str]]:
+    if password_tool:
+        hash_value, secure_value = _read_ultravnc_password_hash(password_tool, password, config_dir)
+        if hash_value:
+            return hash_value, secure_value
+        _write_log("VNC password tool failed; falling back to internal hash generator.")
+    else:
+        _write_log("VNC password tool not found; using internal hash generator.")
+    return _compute_ultravnc_password_hash(password), None
+
+
 def _apply_ultravnc_password_hash(config_path: Path, password_hash: str, *, key: str = "passwd") -> bool:
     normalized_key = str(key or "").strip().lower()
     if normalized_key not in {"passwd", "passwd2"}:
@@ -1017,8 +1067,8 @@ def _mirror_ultravnc_config_to_service_dir(config_path: Path, vnc_exe: Optional[
     if not vnc_exe:
         return None
     try:
-        source = Path(config_path)
-        target = Path(vnc_exe).parent / "ultravnc.ini"
+        source = config_path if isinstance(config_path, Path) else Path(config_path)
+        target = type(source)(vnc_exe).parent / "ultravnc.ini"
         if _same_path(source, target):
             return target
         raw = source.read_text(encoding="ascii", errors="ignore")
@@ -1669,29 +1719,27 @@ class VncManager:
             if self._password_tool and not self._password_tool_logged:
                 self._password_tool_logged = True
                 _write_log(f"Using VNC password tool: {self._password_tool}")
-        if not self._password_tool:
-            _write_log(
-                "VNC password tool not found; expected createpassword.exe under "
-                "Agent/Borealis/Tools/UltraVNC or Dependencies/UltraVNC_Server/tools."
-            )
-            return None, None
-        controller_hash, secure_value = _read_ultravnc_password_hash(
+        controller_hash, secure_value = _generate_ultravnc_password_hash(
             self._password_tool, trimmed_controller, config_dir
         )
         if not controller_hash:
+            self._set_service_error("unable to generate UltraVNC controller password hash")
             return None, None
         if not _apply_ultravnc_password_hash(config_path, controller_hash, key="passwd"):
+            self._set_service_error("unable to apply UltraVNC controller password hash")
             return None, None
         password_hashes = {"passwd": controller_hash}
         if trimmed_view_only:
-            view_only_hash, secondary_secure_value = _read_ultravnc_password_hash(
+            view_only_hash, secondary_secure_value = _generate_ultravnc_password_hash(
                 self._password_tool,
                 trimmed_view_only,
                 config_dir,
             )
             if not view_only_hash:
+                self._set_service_error("unable to generate UltraVNC view-only password hash")
                 return None, None
             if not _apply_ultravnc_password_hash(config_path, view_only_hash, key="passwd2"):
+                self._set_service_error("unable to apply UltraVNC view-only password hash")
                 return None, None
             password_hashes["passwd2"] = view_only_hash
             if secure_value is None:
@@ -2086,7 +2134,7 @@ class Role:
             "deadline": deadline,
             "controller_password": str(controller_password),
             "view_only_password": grace_state.get("view_only_password"),
-            "allowed_ips": grace_state.get("allowed_ips") or self._last_allowed_ips,
+            "allowed_ips": grace_state.get("allowed_ips") or getattr(self, "_last_allowed_ips", None),
             "port": _resolve_vnc_port(grace_state.get("port")),
             "remove_wallpaper": bool(grace_state.get("remove_wallpaper", True)),
             "reason": str(grace_state.get("reason") or "").strip(),
@@ -2105,7 +2153,7 @@ class Role:
             self._clear_disconnect_grace()
             return False
         controller_password = self._controller_password()
-        allowed_ips = self._last_allowed_ips or _parse_allowed_ips(self._state.get("allowed_ips"))
+        allowed_ips = getattr(self, "_last_allowed_ips", None) or _parse_allowed_ips(self._state.get("allowed_ips"))
         if not controller_password or not allowed_ips:
             self._clear_disconnect_grace()
             return False
@@ -2309,7 +2357,7 @@ class Role:
         allowed_ips = (
             str(grace_snapshot.get("allowed_ips") or "").strip()
             if grace_snapshot
-            else (self._last_allowed_ips or _parse_allowed_ips(self._state.get("allowed_ips")))
+            else (getattr(self, "_last_allowed_ips", None) or _parse_allowed_ips(self._state.get("allowed_ips")))
         )
         if not allowed_ips:
             if not self._engine_wait_logged:
@@ -2366,7 +2414,7 @@ class Role:
             try:
                 rotated = self._ensure_runtime_credential_fresh(reason="scheduled_rotation")
                 has_allowed_ips = bool(
-                    self._last_allowed_ips
+                    getattr(self, "_last_allowed_ips", None)
                     or (self._disconnect_grace_snapshot() or {}).get("allowed_ips")
                 )
                 listener_ready = self.vnc.is_listener_ready(self._state_port())
@@ -2410,7 +2458,7 @@ class Role:
         active_session_id = self._active_session_id()
         listener_ready = self.vnc.is_listener_ready(port_value)
         grace_snapshot = self._disconnect_grace_snapshot()
-        allowed_ips = self._last_allowed_ips or _parse_allowed_ips(self._state.get("allowed_ips"))
+        allowed_ips = getattr(self, "_last_allowed_ips", None) or _parse_allowed_ips(self._state.get("allowed_ips"))
         display_topology = _collect_windows_display_topology()
         display_virtual_bounds = _display_virtual_bounds(display_topology)
         if listener_ready:
@@ -2582,7 +2630,7 @@ class Role:
                 if target_agent and str(target_agent).strip() != str(self.ctx.agent_id).strip():
                     return
                 port = payload.get("port")
-                allowed_ips = payload.get("allowed_ips") or self._last_allowed_ips
+                allowed_ips = payload.get("allowed_ips") or getattr(self, "_last_allowed_ips", None)
                 controller_password = (
                     payload.get("controller_password")
                     or payload.get("vnc_password")
@@ -2596,7 +2644,7 @@ class Role:
                 reason = payload.get("reason") or "vnc_session_start"
             else:
                 port = None
-                allowed_ips = self._last_allowed_ips
+                allowed_ips = getattr(self, "_last_allowed_ips", None)
                 controller_password = ""
                 view_only_password = ""
                 remove_wallpaper = None

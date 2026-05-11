@@ -364,6 +364,35 @@ def test_read_ultravnc_password_hash_uses_temp_scratch_not_live_config(monkeypat
     assert live_config.read_text(encoding="ascii") == "[UltraVNC]\npasswd=LIVEHASH\n"
 
 
+def test_compute_ultravnc_password_hash_uses_vnc_des_format() -> None:
+    assert vnc_role._compute_ultravnc_password_hash("password") == "FF97502E9422F089"
+    assert vnc_role._compute_ultravnc_password_hash("bootpass") == "167E9F5D8AECCF00"
+
+
+def test_apply_passwords_uses_internal_hash_when_tool_missing(monkeypatch, tmp_path) -> None:
+    config_dir = tmp_path / "settings"
+    config_dir.mkdir()
+    config_path = config_dir / "ultravnc.ini"
+    config_path.write_text("[UltraVNC]\nAuthRequired=1\n", encoding="ascii")
+    logs: list[str] = []
+
+    manager = vnc_role.VncManager.__new__(vnc_role.VncManager)
+    manager._password_tool = None
+    manager._password_tool_logged = False
+    manager._last_service_error = ""
+
+    monkeypatch.setattr(vnc_role, "_resolve_vnc_password_tool", lambda _config_dir: None)
+    monkeypatch.setattr(vnc_role, "_write_log", lambda message: logs.append(message))
+
+    assert manager._apply_passwords(config_dir, config_path, "bootpass", None) == ("bootpass", None)
+
+    raw = config_path.read_text(encoding="ascii")
+    assert "passwd=167E9F5D8AECCF00" in raw
+    assert "passwd2=" in raw
+    assert manager._last_service_error == ""
+    assert any("internal hash generator" in entry for entry in logs)
+
+
 def test_mirror_ultravnc_config_to_service_dir_copies_full_config(tmp_path) -> None:
     config_dir = tmp_path / "settings"
     config_dir.mkdir()
