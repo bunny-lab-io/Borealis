@@ -7,12 +7,14 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from Data.Engine.services.API.devices import vnc as vnc_api
+from Data.Engine.services.RemoteDesktop import rfb_probe
 
 from .conftest import EngineTestHarness
 
@@ -33,7 +35,7 @@ def _guacd_ready(monkeypatch):
     monkeypatch.setattr(
         vnc_api,
         "_wait_for_backend_auth_ready",
-        lambda *args, **kwargs: vnc_api._VncAuthProbeResult(True, True, "auth_ok"),
+        lambda *args, **kwargs: rfb_probe.VncAuthProbeResult(True, True, "auth_ok"),
     )
 
 
@@ -259,12 +261,12 @@ def test_vnc_rfb_auth_probe_accepts_valid_password(monkeypatch) -> None:
         + (b"\x00" * 20)
     )
 
-    monkeypatch.setattr(vnc_api.socket, "create_connection", lambda *_args, **_kwargs: fake_socket)
-    monkeypatch.setattr(vnc_api, "_vnc_auth_challenge_response", lambda password, challenge: b"x" * 16)
+    monkeypatch.setattr(rfb_probe.socket, "create_connection", lambda *_args, **_kwargs: fake_socket)
+    monkeypatch.setattr(rfb_probe, "_vnc_auth_challenge_response", lambda password, challenge: b"x" * 16)
 
-    result = vnc_api._probe_vnc_auth("10.255.0.2", 5900, "bootpass", 1.0)
+    result = rfb_probe.probe_vnc_auth("10.255.0.2", 5900, "bootpass", 1.0)
 
-    assert result == vnc_api._VncAuthProbeResult(True, True, "server_init_ok")
+    assert result == rfb_probe.VncAuthProbeResult(True, True, "server_init_ok")
     assert fake_socket.sent == [b"RFB 003.008\n", b"\x02", b"x" * 16, b"\x01"]
 
 
@@ -276,12 +278,12 @@ def test_vnc_rfb_auth_probe_reports_bad_password(monkeypatch) -> None:
         + b"\x00\x00\x00\x01"
     )
 
-    monkeypatch.setattr(vnc_api.socket, "create_connection", lambda *_args, **_kwargs: fake_socket)
-    monkeypatch.setattr(vnc_api, "_vnc_auth_challenge_response", lambda password, challenge: b"x" * 16)
+    monkeypatch.setattr(rfb_probe.socket, "create_connection", lambda *_args, **_kwargs: fake_socket)
+    monkeypatch.setattr(rfb_probe, "_vnc_auth_challenge_response", lambda password, challenge: b"x" * 16)
 
-    result = vnc_api._probe_vnc_auth("10.255.0.2", 5900, "wrongpass", 1.0)
+    result = rfb_probe.probe_vnc_auth("10.255.0.2", 5900, "wrongpass", 1.0)
 
-    assert result == vnc_api._VncAuthProbeResult(True, False, "auth_failed")
+    assert result == rfb_probe.VncAuthProbeResult(True, False, "auth_failed")
 
 
 def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestHarness, monkeypatch) -> None:
@@ -385,8 +387,8 @@ def test_vnc_establish_reloads_agent_when_auth_probe_fails(engine_harness: Engin
     emitted_events: list[tuple[str, str, dict[str, Any]]] = []
     manager = vnc_api.ensure_vnc_collaboration_manager(engine_harness.context, logger=engine_harness.context.logger)
     auth_results = [
-        vnc_api._VncAuthProbeResult(True, False, "auth_failed"),
-        vnc_api._VncAuthProbeResult(True, True, "auth_ok"),
+        rfb_probe.VncAuthProbeResult(True, False, "auth_failed"),
+        rfb_probe.VncAuthProbeResult(True, True, "auth_ok"),
     ]
     _register_agent_credential(engine_harness)
 
@@ -872,7 +874,14 @@ def test_vnc_establish_skips_bootstrap_settle_when_fast_probe_succeeds(
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
     monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
     monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
-    monkeypatch.setattr(vnc_api.time, "sleep", lambda seconds: sleep_calls.append(float(seconds)))
+
+    def _record_vnc_sleep(seconds: float) -> None:
+        for frame in inspect.stack()[1:6]:
+            if frame.filename.replace("\\", "/").endswith("/services/API/devices/vnc.py"):
+                sleep_calls.append(float(seconds))
+                break
+
+    monkeypatch.setattr(vnc_api.time, "sleep", _record_vnc_sleep)
 
     controller_response = admin_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
     peer_response = peer_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
