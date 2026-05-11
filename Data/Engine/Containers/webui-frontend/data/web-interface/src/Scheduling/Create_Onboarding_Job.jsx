@@ -55,7 +55,6 @@ import {
   DIALOG_TITLE_SX,
   DialogHeaderBlock,
 } from "../DialogStyles.jsx";
-import { CountSliderGroup } from "../Automation/Watchdogs/shared.jsx";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import { APP_PATHS } from "../app/routes/paths.js";
 import PageBodyFrame from "../PageBodyFrame.jsx";
@@ -63,7 +62,7 @@ import PageBodyFrame from "../PageBodyFrame.jsx";
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const PAGE_TITLE = "Automatic Device Onboarding";
-const PAGE_SUBTITLE = "Enroll remote devices automatically as long as they are reachable by the Borealis Engine using stored machine or domain credentials.";
+const PAGE_SUBTITLE = "Enroll remote devices automatically as long as they are reachable by the Borealis Engine using stored machine or domain credentials. Required Ports: Windows: TCP:445 (SMB) | Linux: TCP:22 (SSH)";
 const DEFAULT_BRANCH = "main";
 const DEFAULT_SSH_PORT = 22;
 const DEFAULT_WINDOWS_PORT = 445;
@@ -197,14 +196,6 @@ const GRID_PANEL_SX = {
   "& .ag-row.onboarding-target-row-selected": {
     backgroundColor: "rgba(125,211,252,0.16) !important",
     boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.38)",
-  },
-  "& .ag-row.onboarding-progress-group-row": {
-    backgroundColor: "rgba(3,7,18,0.72) !important",
-    boxShadow: "inset 0 -1px 0 rgba(148,163,184,0.18)",
-  },
-  "& .ag-row.onboarding-progress-group-row .ag-cell": {
-    paddingTop: "6px",
-    paddingBottom: "6px",
   },
   "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
     display: "flex",
@@ -385,24 +376,6 @@ const AG_GRID_STANDARD_HEADER_HEIGHT = 44;
 const STATUS_ICON_BOX_SIZE = 34;
 const STATUS_ICON_SIZE = 26;
 const STATUS_COLUMN_SIZE = AG_GRID_STANDARD_ROW_HEIGHT;
-const TARGET_STATUS_FILTER_OPTIONS = [
-  { key: "in_progress", label: "In-Progress" },
-  { key: "pending_approval", label: "Pending Approval" },
-  { key: "skipped", label: "Skipped" },
-  { key: "failed", label: "Failed" },
-  { key: "unsupported_os", label: "Unsupported OS" },
-  { key: "completed", label: "Completed" },
-  { key: "unreachable", label: "Unreachable" },
-];
-
-const FILTER_LABEL_SX = {
-  color: "#58a6ff",
-  fontSize: 11,
-  fontWeight: 600,
-  lineHeight: 1.1,
-  pl: 1,
-};
-
 const SCOPE_DISCOVERY_EXAMPLE = `# Core Linux Servers
 192.168.3.10
 192.168.3.20-192.168.3.30 # application nodes
@@ -623,12 +596,46 @@ function targetStatusBucket(status, record = null) {
   return "in_progress";
 }
 
-function targetVisibleForStatusFilter(row, activeFilter) {
+function targetStatusSortPriority(row) {
   const bucket = row?.statusBucket || targetStatusBucket(row?.status, row);
-  if (activeFilter) {
-    return bucket === activeFilter;
+  if (bucket === "pending_approval") return 0;
+  if (bucket === "in_progress") return 1;
+  if (bucket === "completed") return 2;
+  if (bucket === "skipped") return 3;
+  if (bucket === "failed") return 4;
+  if (bucket === "unsupported_os") return 5;
+  if (bucket === "unreachable") return 6;
+  return 7;
+}
+
+function ipv4SortParts(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/(?:^|[^\d])(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?(?:$|[^\d])/);
+  const ipText = match ? match[1] : (text.match(/^\d{1,3}(?:\.\d{1,3}){3}$/) ? text : "");
+  if (!ipText) return null;
+  const parts = ipText.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return null;
+  return parts;
+}
+
+function compareIpv4Parts(left, right) {
+  if (left && right) {
+    for (let index = 0; index < 4; index += 1) {
+      if (left[index] !== right[index]) return left[index] - right[index];
+    }
+    return 0;
   }
-  return bucket !== "unreachable";
+  if (left) return -1;
+  if (right) return 1;
+  return 0;
+}
+
+function compareOnboardingTargets(left, right) {
+  const priorityDelta = targetStatusSortPriority(left) - targetStatusSortPriority(right);
+  if (priorityDelta !== 0) return priorityDelta;
+  const ipDelta = compareIpv4Parts(left?.ipSortParts, right?.ipSortParts);
+  if (ipDelta !== 0) return ipDelta;
+  return String(left?.targetLabel || "").localeCompare(String(right?.targetLabel || ""), undefined, { numeric: true, sensitivity: "base" });
 }
 
 function datetimeLocalValue(epochSeconds) {
@@ -878,86 +885,6 @@ function normalizeDependencyTask(task) {
   else if (lower.includes("autohotkey") || lower.includes("auto hotkey")) label = "AutoHotKey";
   else if (lower.includes("python")) label = "Python";
   return `Installing Agent Dependencies: ${label}`;
-}
-
-function onboardingProgressSessionGroup(rowOrTask) {
-  const row = typeof rowOrTask === "object" && rowOrTask !== null ? rowOrTask : null;
-  const phase = String(row?.raw?.phase || row?.phase || "").trim().toLowerCase();
-  if (phase) {
-    if (phase === "os_detection") return "Discovery";
-    if (phase === "existing_agent_preflight" || phase === "repair" || phase === "bootstrap") return "Bootstrap";
-    if (phase === "dependencies") return "Dependencies";
-    if (phase === "runtime_configuration") return "Runtime";
-    if (phase === "approval_wait" || phase === "already_enrolled") return "Enrollment";
-    if (phase === "failed") return "Failure";
-  }
-  const task = row ? row.task : rowOrTask;
-  const normalized = String(task || "").trim().toLowerCase();
-  if (!normalized) return "Session";
-  if (
-    normalized.includes("spinning-up") ||
-    normalized.includes("auto-detecting") ||
-    normalized.includes("unsupported os")
-  ) {
-    return "Discovery";
-  }
-  if (
-    normalized.includes("establishing connection") ||
-    normalized.includes("connection established")
-  ) {
-    return "Connection";
-  }
-  if (
-    normalized.includes("uploading agent.exe") ||
-    normalized.includes("creating windows service") ||
-    normalized.includes("ensuring windows service")
-  ) {
-    return "Remote Launch";
-  }
-  if (
-    normalized.includes("existing agent") ||
-    normalized.includes("repair") ||
-    normalized.includes("running agent bootstrap") ||
-    normalized.includes("validating existing agent")
-  ) {
-    return "Bootstrap";
-  }
-  if (normalized.includes("installing agent dependencies")) {
-    return "Dependencies";
-  }
-  if (
-    normalized.includes("configuring agent runtime") ||
-    normalized.includes("awaiting approval") ||
-    normalized.includes("enrollment approved") ||
-    normalized.includes("already enrolled")
-  ) {
-    return "Enrollment";
-  }
-  return "Session";
-}
-
-function injectOnboardingProgressGroups(rows) {
-  const grouped = [];
-  let currentGroup = "";
-  rows.forEach((row, index) => {
-    const nextGroup = onboardingProgressSessionGroup(row);
-    if (nextGroup && nextGroup !== currentGroup) {
-      currentGroup = nextGroup;
-      grouped.push({
-        id: `${row?.id || "progress"}-group-${index}-${nextGroup}`,
-        isGroupHeader: true,
-        status: "group",
-        task: nextGroup,
-        startedLabel: "",
-        elapsedLabel: "",
-        hasStdOut: false,
-        hasStdErr: false,
-        raw: {},
-      });
-    }
-    grouped.push(row);
-  });
-  return grouped;
 }
 
 function mergeOutputSnippet(first, second) {
@@ -1347,22 +1274,6 @@ function ProgressStatusIcon({ status, failureKind = "" }) {
 
 function ProgressTaskCell({ value, row }) {
   const task = String(value || "").trim();
-  if (row?.isGroupHeader) {
-    return (
-      <Typography
-        component="span"
-        variant="caption"
-        sx={{
-          color: DISCOVERED_HOSTNAME_COLOR,
-          fontWeight: 800,
-          letterSpacing: 0,
-          textTransform: "uppercase",
-        }}
-      >
-        {task}
-      </Typography>
-    );
-  }
   if (task === "Auto-Detecting Remote OS") {
     const detail = String(row?.raw?.detail || "").trim();
     return (
@@ -1471,7 +1382,6 @@ export default function CreateOnboardingJob() {
   const [outputSections, setOutputSections] = useState([]);
   const [copiedOutputKey, setCopiedOutputKey] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
-  const [targetStatusFilter, setTargetStatusFilter] = useState("");
   const [selectedTargetId, setSelectedTargetId] = useState("");
   const [progressionClock, setProgressionClock] = useState(() => Date.now());
   const targetGridApiRef = useRef(null);
@@ -1803,6 +1713,7 @@ export default function CreateOnboardingJob() {
         status,
         statusBucket: targetStatusBucket(status, target),
         statusLabel: formatStatusLabel(status),
+        ipSortParts: ipv4SortParts(target.target_address || target.hostname || target.target_input || targetLabel),
         detail: target.detail || "",
         failureKind: onboardingFailureKind(target),
         approvalReference: target.approval_reference || "",
@@ -1814,18 +1725,9 @@ export default function CreateOnboardingJob() {
     [targetRows]
   );
 
-  const targetStatusCounts = useMemo(
-    () => targetGridRows.reduce((acc, row) => {
-      const bucket = row.statusBucket || targetStatusBucket(row.status);
-      acc[bucket] = (acc[bucket] || 0) + 1;
-      return acc;
-    }, {}),
+  const sortedTargetGridRows = useMemo(
+    () => [...targetGridRows].sort(compareOnboardingTargets),
     [targetGridRows]
-  );
-
-  const visibleTargetGridRows = useMemo(
-    () => targetGridRows.filter((row) => targetVisibleForStatusFilter(row, targetStatusFilter)),
-    [targetGridRows, targetStatusFilter]
   );
 
   const selectedTargetRow = useMemo(
@@ -1914,7 +1816,7 @@ export default function CreateOnboardingJob() {
       acc[acc.length - 1] = mergeOnboardingProgressRows(previous, row, progressionClock, row.task);
       return acc;
     }, []);
-    return injectOnboardingProgressGroups(reducedRows);
+    return reducedRows;
   }, [progressionClock, selectedTargetId, selectedTargetRow]);
 
   const handleCopyOutputSection = useCallback(async (section) => {
@@ -2002,7 +1904,7 @@ export default function CreateOnboardingJob() {
         maxWidth: STATUS_COLUMN_SIZE,
         filter: false,
         cellClass: "auto-col-tight onboarding-progress-status-cell",
-        cellRenderer: (params) => params.data?.isGroupHeader ? null : <ProgressStatusIcon status={params.data?.status} failureKind={params.data?.failureKind} />,
+        cellRenderer: (params) => <ProgressStatusIcon status={params.data?.status} failureKind={params.data?.failureKind} />,
       },
       {
         field: "targetLabel",
@@ -2142,7 +2044,6 @@ export default function CreateOnboardingJob() {
         cellRenderer: (params) => {
           const row = params.data;
           if (!row) return null;
-          if (row.isGroupHeader) return null;
           return (
             <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flexWrap: "wrap" }}>
               {row.hasStdOut ? (
@@ -2196,9 +2097,10 @@ export default function CreateOnboardingJob() {
 
   const targetGridDefaultColDef = useMemo(
     () => ({
-      sortable: true,
+      sortable: false,
       resizable: true,
       filter: true,
+      suppressMovable: true,
     }),
     []
   );
@@ -2232,7 +2134,7 @@ export default function CreateOnboardingJob() {
 
   const autoSizeTargetGrid = useCallback(() => {
     const api = targetGridApiRef.current;
-    if (!api || !visibleTargetGridRows.length) return;
+    if (!api || !sortedTargetGridRows.length) return;
     const run = () => {
       try {
         if (TARGET_AUTO_SIZE_COLUMNS.length && typeof api.autoSizeColumns === "function") {
@@ -2247,7 +2149,7 @@ export default function CreateOnboardingJob() {
     } else {
       setTimeout(run, 0);
     }
-  }, [visibleTargetGridRows.length]);
+  }, [sortedTargetGridRows.length]);
 
   const handleTargetGridReady = useCallback((params) => {
     targetGridApiRef.current = params.api;
@@ -2308,7 +2210,7 @@ export default function CreateOnboardingJob() {
       }
     });
     api.redrawRows?.();
-  }, [selectedTargetId, visibleTargetGridRows]);
+  }, [selectedTargetId, sortedTargetGridRows]);
 
   useEffect(() => {
     autoSizeTargetGrid();
@@ -2751,32 +2653,6 @@ export default function CreateOnboardingJob() {
                 >
                   <Box
                     sx={{
-                      display: "flex",
-                      alignItems: { xs: "flex-start", md: "flex-end" },
-                      justifyContent: "space-between",
-                      flexWrap: "wrap",
-                      gap: 2,
-                      minWidth: 0,
-                      flexShrink: 0,
-                    }}
-                  >
-                    <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "8px" }}>
-                      <Typography component="span" sx={FILTER_LABEL_SX}>
-                        Status
-                      </Typography>
-                      <CountSliderGroup
-                        options={TARGET_STATUS_FILTER_OPTIONS}
-                        activeKey={targetStatusFilter}
-                        counts={targetStatusCounts}
-                        onChange={setTargetStatusFilter}
-                      />
-                    </Box>
-                    <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
-                      Showing {visibleTargetGridRows.length.toLocaleString()} of {targetGridRows.length.toLocaleString()} devices
-                    </Typography>
-                  </Box>
-                  <Box
-                    sx={{
                       display: "grid",
                       gridTemplateColumns: { xs: "1fr", xl: "minmax(320px, 1fr) minmax(0, 2fr)" },
                       gap: 1.5,
@@ -2802,10 +2678,11 @@ export default function CreateOnboardingJob() {
                         }}
                       >
                         <AgGridReact
-                          rowData={visibleTargetGridRows}
+                          rowData={sortedTargetGridRows}
                           columnDefs={targetGridColumnDefs}
                           defaultColDef={targetGridDefaultColDef}
                           suppressCellFocus
+                          animateRows
                           headerHeight={AG_GRID_STANDARD_HEADER_HEIGHT}
                           rowHeight={AG_GRID_STANDARD_ROW_HEIGHT}
                           pagination
@@ -2850,7 +2727,6 @@ export default function CreateOnboardingJob() {
                           rowHeight={AG_GRID_STANDARD_ROW_HEIGHT}
                           overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No progression recorded.</span>"
                           getRowId={(params) => String(params.data?.id || params.rowIndex)}
-                          getRowClass={(params) => params.data?.isGroupHeader ? "onboarding-progress-group-row" : ""}
                           onGridReady={handleProgressionGridReady}
                           theme={gridTheme}
                         />
