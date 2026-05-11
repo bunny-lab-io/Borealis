@@ -558,6 +558,24 @@ def _resolve_vnc_config_dir() -> Optional[Path]:
         return None
 
 
+def _ultravnc_config_name_for_service(service_name: Optional[str] = None) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9_.-]", "", str(service_name or "").strip())
+    if not normalized:
+        normalized = ULTRAVNC_SERVICE_NAME
+    return f"{normalized}.ini" if normalized else "ultravnc.ini"
+
+
+def _resolve_ultravnc_config_path(
+    config_dir: Path,
+    *,
+    service_name: Optional[str] = None,
+    vnc_exe: Optional[str] = None,
+) -> Path:
+    if os.name == "nt" and not _should_use_ultravnc_config_arg(vnc_exe):
+        return config_dir / _ultravnc_config_name_for_service(service_name)
+    return config_dir / "ultravnc.ini"
+
+
 def _resolve_vnc_exe() -> Optional[str]:
     override = os.environ.get("BOREALIS_VNC_SERVER_BIN")
     if override:
@@ -819,6 +837,14 @@ def _ensure_ultravnc_ini(
     }
     if not _write_ultravnc_config(config_path, base_settings):
         return None
+    if os.name == "nt" and config_path.name.lower() != "ultravnc.ini":
+        legacy_path = config_path.parent / "ultravnc.ini"
+        try:
+            if not _same_path(config_path, legacy_path):
+                raw = config_path.read_text(encoding="ascii", errors="ignore")
+                legacy_path.write_text(raw, encoding="ascii")
+        except Exception:
+            pass
     return config_path
 
 
@@ -1836,7 +1862,12 @@ class VncManager:
             if not config_dir:
                 _write_log("Unable to resolve UltraVNC config directory.")
                 return
-            config_path = config_dir / "ultravnc.ini"
+            service_name = self._resolve_service_name()
+            config_path = _resolve_ultravnc_config_path(
+                config_dir,
+                service_name=service_name or ULTRAVNC_SERVICE_NAME,
+                vnc_exe=self._vnc_exe,
+            )
             remove_wallpaper_value = True if remove_wallpaper is None else bool(remove_wallpaper)
             ini_path = _ensure_ultravnc_ini(
                 config_path,
@@ -1862,7 +1893,6 @@ class VncManager:
             else:
                 _write_log(f"UltraVNC service using default config path {config_path}.")
 
-            service_name = self._resolve_service_name()
             service_was_running = False
             if service_name:
                 state = self._service_state_by_name(service_name)
@@ -1975,7 +2005,14 @@ class Role:
         try:
             config_dir = _resolve_vnc_config_dir()
             if config_dir:
-                _ensure_ultravnc_ini(config_dir / "ultravnc.ini", DEFAULT_VNC_PORT, remove_wallpaper=True)
+                vnc_exe = _resolve_vnc_exe()
+                service_name = _discover_ultravnc_service_name() or ULTRAVNC_SERVICE_NAME
+                config_path = _resolve_ultravnc_config_path(
+                    config_dir,
+                    service_name=service_name,
+                    vnc_exe=vnc_exe,
+                )
+                _ensure_ultravnc_ini(config_path, DEFAULT_VNC_PORT, remove_wallpaper=True)
         except Exception:
             self._log("Failed to ensure UltraVNC config present.", error=True)
         self._trace(

@@ -527,6 +527,9 @@ def test_vnc_start_uses_programdata_config_for_system_install(monkeypatch, tmp_p
 
     assert service_config_paths == [None]
     assert not (exe_dir / "ultravnc.ini").exists()
+    service_config = config_dir / "BorealisAgentUltraVNC.ini"
+    assert service_config.exists()
+    assert "SocketConnect=1" in service_config.read_text(encoding="ascii")
     assert any("default config path" in entry for entry in logs)
 
 

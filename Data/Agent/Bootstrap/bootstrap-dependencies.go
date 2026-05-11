@@ -102,6 +102,14 @@ func ultraVNCProgramDataConfigPath() string {
 	if programData == "" {
 		programData = `C:\ProgramData`
 	}
+	return filepath.Join(programData, "UltraVNC", ultraVNCServiceName+".ini")
+}
+
+func ultraVNCLegacyProgramDataConfigPath() string {
+	programData := strings.TrimSpace(os.Getenv("ProgramData"))
+	if programData == "" {
+		programData = `C:\ProgramData`
+	}
 	return filepath.Join(programData, "UltraVNC", "ultravnc.ini")
 }
 
@@ -253,7 +261,7 @@ func ensureUltraVNCBootstrapConfig(cfg BootstrapConfig, logger *BootstrapLogger)
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return "", err
 	}
-	configPath := filepath.Join(configDir, "ultravnc.ini")
+	configPath := ultraVNCProgramDataConfigPath()
 	placeholderHash, err := generateUltraVNCStoredPasswordHash()
 	if err != nil {
 		return "", err
@@ -277,6 +285,12 @@ func ensureUltraVNCBootstrapConfig(cfg BootstrapConfig, logger *BootstrapLogger)
 		"passwd2=\n"
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		return "", err
+	}
+	legacyConfigPath := ultraVNCLegacyProgramDataConfigPath()
+	if !strings.EqualFold(filepath.Clean(legacyConfigPath), filepath.Clean(configPath)) {
+		if err := os.WriteFile(legacyConfigPath, []byte(content), 0644); err != nil {
+			logger.Warnf("UltraVNC legacy config mirror write failed at %s: %v", legacyConfigPath, err)
+		}
 	}
 	logger.Tracef("UltraVNC bootstrap config written at %s", configPath)
 	return configPath, nil
