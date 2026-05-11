@@ -27,7 +27,6 @@ func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error
 		name string
 		fn   func(BootstrapConfig, *BootstrapLogger) error
 	}{
-		{"AutoHotKey", ensureAutoHotKey},
 		{"Git CLI", ensureGitCLI},
 		{"UltraVNC Server", ensureUltraVNCServer},
 		{"WireGuard VPN Adapter", ensureWireGuardInstaller},
@@ -52,30 +51,6 @@ func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error
 
 func dependencyTaskName(name string) string {
 	return "Installing Agent Dependencies: " + name
-}
-
-func ensureAutoHotKey(cfg BootstrapConfig, logger *BootstrapLogger) error {
-	installDir := filepath.Join(cfg.InstallDir, "Dependencies", "AutoHotKey")
-	exePath := filepath.Join(installDir, "AutoHotkey64.exe")
-	if fileExists(exePath) {
-		logger.Tracef("AutoHotKey already installed at %s", exePath)
-		return nil
-	}
-	zipPath := filepath.Join(cfg.InstallDir, "Dependencies", "AutoHotkey_2.0.19.zip")
-	logger.Tracef("AutoHotKey download/stage start: zip=%s install_dir=%s", zipPath, installDir)
-	if err := downloadFileLogged(context.Background(), "https://github.com/AutoHotkey/AutoHotkey/releases/download/v2.0.19/AutoHotkey_2.0.19.zip", zipPath, 180*time.Second, logger); err != nil {
-		return err
-	}
-	_ = os.RemoveAll(installDir)
-	if err := unzipFileLogged(zipPath, installDir, logger); err != nil {
-		return err
-	}
-	_ = os.Remove(zipPath)
-	if !fileExists(exePath) {
-		return fmt.Errorf("AutoHotkey64.exe not found after extraction")
-	}
-	logger.Infof("AutoHotKey installed.")
-	return nil
 }
 
 func ensureGitCLI(cfg BootstrapConfig, logger *BootstrapLogger) error {

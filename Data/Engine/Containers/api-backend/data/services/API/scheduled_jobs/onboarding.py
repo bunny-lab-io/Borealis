@@ -789,8 +789,6 @@ def _onboarding_dependency_task_name(value: Any) -> str:
         label = "UltraVNC"
     elif "git" in lower:
         label = "Git"
-    elif "autohotkey" in lower or "auto hotkey" in lower:
-        label = "AutoHotKey"
     elif "python" in lower:
         label = "Python"
     return f"Installing Agent Dependencies: {label}"

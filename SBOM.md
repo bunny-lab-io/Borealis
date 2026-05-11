@@ -30,6 +30,7 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - 7-Zip CLI (vendored Windows archive helper) - LGPL-2.1-or-later with unRAR restriction - https://www.7-zip.org/license.txt
 - Go toolchain (native Linux build helper installs official Go into `Dependencies/Go` when missing) - BSD-3-Clause - https://go.dev/LICENSE
 - golang.org/x/sys v0.28.0 (Windows service APIs for `Agent.exe`) - BSD-3-Clause - https://cs.opensource.google/go/x/sys/+/master:LICENSE
+- github.com/akavel/rsrc v0.10.2 (Windows PE resource generator used to embed `Borealis.ico` into `Agent.exe`) - MIT - https://github.com/akavel/rsrc/blob/master/LICENSE.txt
 
 ## Borealis Engine Dependencies
 

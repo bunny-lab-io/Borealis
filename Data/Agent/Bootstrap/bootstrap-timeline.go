@@ -103,7 +103,7 @@ func timelinePhaseForTask(value string, status string) string {
 		return "repair"
 	case strings.Contains(normalized, "existing agent"):
 		return "existing_agent_preflight"
-	case strings.Contains(normalized, "dependency") || strings.Contains(normalized, "python") || strings.Contains(normalized, "git") || strings.Contains(normalized, "ultravnc") || strings.Contains(normalized, "wireguard") || strings.Contains(normalized, "autohotkey"):
+	case strings.Contains(normalized, "dependency") || strings.Contains(normalized, "python") || strings.Contains(normalized, "git") || strings.Contains(normalized, "ultravnc") || strings.Contains(normalized, "wireguard"):
 		return "dependencies"
 	case strings.Contains(normalized, "configuring agent runtime") || strings.Contains(normalized, "settings") || strings.Contains(normalized, "scheduled task"):
 		return "runtime_configuration"

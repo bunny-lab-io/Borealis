@@ -882,7 +882,6 @@ function normalizeDependencyTask(task) {
   if (lower.includes("wireguard")) label = "WireGuard";
   else if (lower.includes("ultravnc") || lower.includes("vnc")) label = "UltraVNC";
   else if (lower.includes("git")) label = "Git";
-  else if (lower.includes("autohotkey") || lower.includes("auto hotkey")) label = "AutoHotKey";
   else if (lower.includes("python")) label = "Python";
   return `Installing Agent Dependencies: ${label}`;
 }
