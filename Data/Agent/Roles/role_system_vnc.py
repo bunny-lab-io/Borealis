@@ -708,10 +708,14 @@ def _resolve_vnc_port(value: Any = None) -> int:
 def _should_force_ultravnc_reload(reason: Any) -> bool:
     normalized = str(reason or "").strip().lower()
     return normalized in {
-        "vnc_auth_retry",
         "credential_rotation",
         "engine_credential_refresh",
     }
+
+
+def _should_rotate_runtime_credential_for_refresh(reason: Any) -> bool:
+    normalized = str(reason or "").strip().lower()
+    return normalized in {"vnc_auth_retry"}
 
 
 def _resolve_vnc_password_tool(root: Optional[Path]) -> Optional[str]:
@@ -2780,6 +2784,8 @@ class Role:
                 reason = payload.get("reason") or reason
             self._log(f"VNC credential refresh requested (reason={reason}).")
             self._trace("A42", event="vnc_refresh", reason=reason or "-")
+            if _should_rotate_runtime_credential_for_refresh(reason):
+                self._rotate_runtime_credential(reason=str(reason))
             bootstrap_payload = self._request_vnc_bootstrap(str(reason))
             if bootstrap_payload:
                 self._apply_bootstrap_payload(bootstrap_payload)

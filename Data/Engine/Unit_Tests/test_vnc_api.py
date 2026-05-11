@@ -421,28 +421,13 @@ def test_vnc_establish_reloads_agent_when_auth_probe_fails(engine_harness: Engin
 
     assert response.status_code == 200
     assert fake_registry.created[0]["password"] == "freshpw"
-    assert fake_tunnel.transport_marks == [("test-device-agent", "vnc_auth_retry")]
-    assert fake_tunnel.start_calls == [("test-device-agent", False, "vnc_auth_retry")]
+    assert fake_tunnel.transport_marks == []
+    assert fake_tunnel.start_calls == []
     assert emitted_events == [
         (
             "test-device-agent",
             "vnc_refresh",
             {"agent_id": "test-device-agent", "reason": "vnc_auth_retry"},
-        ),
-        (
-            "test-device-agent",
-            "vnc_start",
-            {
-                "agent_id": "test-device-agent",
-                "session_id": response.get_json()["session_id"],
-                "controller_password": "freshpw",
-                "view_only_password": "",
-                "port": 5900,
-                "allowed_ips": "10.255.0.1/32",
-                "remove_wallpaper": True,
-                "credential_revision": 43,
-                "reason": "vnc_auth_retry",
-            },
         )
     ]
 

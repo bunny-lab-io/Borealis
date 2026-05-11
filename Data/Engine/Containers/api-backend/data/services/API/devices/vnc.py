@@ -966,7 +966,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         if auth_probe.checked and not auth_probe.ok:
             refresh_wait_seconds = _coerce_nonnegative_timeout(
                 os.environ.get("BOREALIS_VNC_AUTH_REFRESH_WAIT_SECONDS"),
-                4.0,
+                10.0,
             )
             refresh_emitted = _context_emit_agent_event(
                 adapters.context,
@@ -1012,22 +1012,50 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 )
             retry_wait_seconds = _coerce_timeout(
                 os.environ.get("BOREALIS_VNC_AUTH_RETRY_WAIT_SECONDS"),
-                max(4.0, float(wait_profile["retry_wait_seconds"])),
+                max(20.0, float(wait_profile["retry_wait_seconds"])),
             )
             retry_poll_seconds = _coerce_timeout(
                 os.environ.get("BOREALIS_VNC_AUTH_RETRY_POLL_INTERVAL_SECONDS"),
                 auth_probe_poll_seconds,
             )
-            try:
-                _trace(
-                    "E16R",
-                    agent_id=agent_id,
-                    session_id=collaboration_session.session_id,
-                    reason="vnc_auth_retry",
-                    auth_reason=auth_probe.reason,
-                )
-                _restart_tunnel("vnc_auth_retry")
-                emitted = _emit_vnc_start("vnc_auth_retry")
+            if not refresh_emitted:
+                try:
+                    _trace(
+                        "E16R",
+                        agent_id=agent_id,
+                        session_id=collaboration_session.session_id,
+                        reason="vnc_auth_retry",
+                        auth_reason=auth_probe.reason,
+                    )
+                    emitted = _emit_vnc_start("vnc_auth_retry")
+                    _trace(
+                        "E16S",
+                        agent_id=agent_id,
+                        session_id=collaboration_session.session_id,
+                        reason="vnc_auth_retry",
+                        emit_ok=emitted,
+                        wait_seconds=retry_wait_seconds,
+                    )
+                    if not emitted:
+                        _service_log_event(
+                            "vnc_backend_auth_retry_blocked agent_id={0} session_id={1} reason=agent_socket_missing".format(
+                                agent_id,
+                                collaboration_session.session_id,
+                            ),
+                            level="WARNING",
+                        )
+                        _trace(
+                            "E16SF",
+                            agent_id=agent_id,
+                            session_id=collaboration_session.session_id,
+                            result="agent_socket_missing",
+                            level="WARNING",
+                        )
+                        return {"error": "agent_socket_missing"}, 409
+                except Exception:
+                    logger.debug("Failed to request VNC auth retry agent_id=%s", agent_id, exc_info=True)
+            else:
+                emitted = True
                 _trace(
                     "E16S",
                     agent_id=agent_id,
@@ -1035,25 +1063,8 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                     reason="vnc_auth_retry",
                     emit_ok=emitted,
                     wait_seconds=retry_wait_seconds,
+                    refresh_only=True,
                 )
-                if not emitted:
-                    _service_log_event(
-                        "vnc_backend_auth_retry_blocked agent_id={0} session_id={1} reason=agent_socket_missing".format(
-                            agent_id,
-                            collaboration_session.session_id,
-                        ),
-                        level="WARNING",
-                    )
-                    _trace(
-                        "E16SF",
-                        agent_id=agent_id,
-                        session_id=collaboration_session.session_id,
-                        result="agent_socket_missing",
-                        level="WARNING",
-                    )
-                    return {"error": "agent_socket_missing"}, 409
-            except Exception:
-                logger.debug("Failed to request VNC auth retry agent_id=%s", agent_id, exc_info=True)
             auth_probe = _wait_for_backend_auth_ready(
                 host,
                 vnc_port,
