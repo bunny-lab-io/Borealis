@@ -1076,6 +1076,42 @@ class VncManager:
             return None
         return None
 
+    def _service_status_summary(self, service_name: Optional[str]) -> str:
+        if os.name != "nt" or not service_name:
+            return ""
+        try:
+            result = subprocess.run(
+                ["sc.exe", "queryex", service_name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except Exception as exc:
+            return f"query_error={exc}"
+        output = (result.stdout or "") + (result.stderr or "")
+        if result.returncode != 0:
+            detail = " ".join(output.split())
+            return detail or f"query_exit={result.returncode}"
+        fields: dict[str, str] = {}
+        for line in output.splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            normalized = key.strip().lower().replace(" ", "_")
+            value = " ".join(value.strip().split())
+            if normalized in {"state", "win32_exit_code", "service_exit_code", "pid"}:
+                fields[normalized] = value
+        parts: list[str] = []
+        if fields.get("state"):
+            parts.append(f"state={fields['state']}")
+        if fields.get("win32_exit_code"):
+            parts.append(f"win32_exit={fields['win32_exit_code']}")
+        if fields.get("service_exit_code"):
+            parts.append(f"service_exit={fields['service_exit_code']}")
+        if fields.get("pid"):
+            parts.append(f"pid={fields['pid']}")
+        return " ".join(parts)
+
     def is_running(self) -> bool:
         service_name = self._resolve_service_name()
         if not service_name:
@@ -1100,10 +1136,29 @@ class VncManager:
             time.sleep(0.5)
         return self.is_listener_ready(port)
 
-    def _recover_listener(self, port: int, service_name: Optional[str], reason: str) -> bool:
+    def _recover_listener(
+        self,
+        port: int,
+        service_name: Optional[str],
+        reason: str,
+        *,
+        config_path: Optional[Path] = None,
+    ) -> bool:
         if not service_name:
             return False
         state = self._service_state_by_name(service_name)
+        if state in {"STOPPED", None}:
+            now = time.time()
+            if now - float(self._last_listener_recovery_at or 0.0) < 15.0:
+                return self._wait_for_listener(port, timeout=1.0)
+            self._last_listener_recovery_at = now
+            _write_log(
+                "UltraVNC listener not ready; service stopped; starting for recovery "
+                f"(service={service_name}, port={port}, reason={reason}, status={self._service_status_summary(service_name)})."
+            )
+            if self._ensure_service_running(config_path=config_path):
+                return self._wait_for_listener(port, timeout=10.0)
+            return False
         if state not in {"RUNNING", "START_PENDING"}:
             return False
         now = time.time()
@@ -1314,6 +1369,24 @@ class VncManager:
             time.sleep(0.5)
         return False
 
+    def _verify_service_still_running(self, service_name: str, *, context: str) -> bool:
+        time.sleep(1)
+        state = self._service_state_by_name(service_name)
+        if state == "RUNNING":
+            return True
+        detail = self._service_status_summary(service_name)
+        self._set_service_error(
+            f"service {service_name} stopped after {context} ({detail or state or 'unknown state'})"
+        )
+        _write_log(
+            "UltraVNC service stopped after {0} (service={1}, status={2}).".format(
+                context,
+                service_name,
+                detail or state or "unknown",
+            )
+        )
+        return False
+
     def _kill_winvnc_processes(self) -> None:
         if os.name != "nt":
             return
@@ -1366,12 +1439,16 @@ class VncManager:
             )
             if start_result.returncode != 0:
                 detail = (start_result.stderr or start_result.stdout or "").strip()
+                self._set_service_error(detail or f"service restart exit {start_result.returncode}")
                 _write_log(
                     "UltraVNC service restart failed: {0}".format(detail or f"exit {start_result.returncode}")
                 )
             if not self._wait_for_service(service_name, timeout=12.0):
-                _write_log(f"UltraVNC service restart timed out (service={service_name}).")
+                detail = self._service_status_summary(service_name)
+                self._set_service_error(f"service restart timed out ({detail})")
+                _write_log(f"UltraVNC service restart timed out (service={service_name}, status={detail}).")
         except Exception as exc:
+            self._set_service_error(str(exc))
             _write_log(f"Failed to restart UltraVNC service: {exc}")
 
     def _ensure_service_running(self, config_path: Optional[Path] = None) -> bool:
@@ -1397,6 +1474,8 @@ class VncManager:
         if state == "RUNNING":
             if updated_binpath:
                 self._restart_service()
+                if not self._verify_service_still_running(service_name, context="binPath restart"):
+                    return False
             self._clear_service_error()
             return True
         if state == "START_PENDING" and service_name:
@@ -1476,11 +1555,16 @@ class VncManager:
             _write_log(f"Failed to ensure UltraVNC service running: {exc}")
             return False
         if self._wait_for_service(service_name, timeout=10.0):
+            if not self._verify_service_still_running(service_name, context="start"):
+                return False
             if updated_binpath:
                 self._restart_service()
+                if not self._verify_service_still_running(service_name, context="binPath restart"):
+                    return False
             self._clear_service_error()
             return True
-        self._set_service_error(f"service {service_name} did not reach RUNNING")
+        detail = self._service_status_summary(service_name)
+        self._set_service_error(f"service {service_name} did not reach RUNNING ({detail})")
         return False
 
     def ensure_standby(self, *, reason: str = "standby") -> None:
@@ -1689,13 +1773,14 @@ class VncManager:
             mirrored_config = _mirror_ultravnc_config_to_service_dir(config_path, self._vnc_exe)
             if mirrored_config:
                 _write_log(f"UltraVNC service config mirrored to {mirrored_config}.")
+            service_config_path = mirrored_config or config_path
 
             service_name = self._resolve_service_name()
             service_was_running = False
             if service_name:
                 state = self._service_state_by_name(service_name)
                 service_was_running = state == "RUNNING"
-            if not self._ensure_service_running(config_path=config_path):
+            if not self._ensure_service_running(config_path=service_config_path):
                 _write_log("Failed to start UltraVNC service.")
                 return
             service_name = self._resolve_service_name(refresh=True) or service_name
@@ -1711,11 +1796,21 @@ class VncManager:
             self._last_view_only_password = applied_view_only_password
             listener_ready = self._wait_for_listener(port_value, timeout=8.0)
             if not listener_ready:
-                listener_ready = self._recover_listener(port_value, service_name, reason)
+                listener_ready = self._recover_listener(
+                    port_value,
+                    service_name,
+                    reason,
+                    config_path=service_config_path,
+                )
             if listener_ready:
                 self._clear_service_error()
             else:
-                self._set_service_error(f"VNC listener not ready on port {port_value}")
+                self._set_service_error(
+                    "VNC listener not ready on port {0} ({1})".format(
+                        port_value,
+                        self._service_status_summary(service_name),
+                    )
+                )
             _write_log(
                 "vnc_trace step=AM02 port={0} listener_ready={1} service_name={2} service_state={3} "
                 "service_was_running={4} reason={5}".format(
@@ -1727,7 +1822,16 @@ class VncManager:
                     str(reason or "-").strip() or "-",
                 )
             )
-            _write_log(f"VNC service running port={port_value} reason={reason}.")
+            if listener_ready:
+                _write_log(f"VNC service running port={port_value} reason={reason}.")
+            else:
+                _write_log(
+                    "VNC service not ready port={0} reason={1} status={2}.".format(
+                        port_value,
+                        reason,
+                        self._service_status_summary(service_name),
+                    )
+                )
 
     def stop(self, *, reason: str = "stop") -> None:
         self.ensure_standby(reason=reason)

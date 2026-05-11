@@ -384,6 +384,7 @@ def test_vnc_start_recovers_running_service_when_listener_missing(monkeypatch, t
     restarts: list[str] = []
     waits: list[float] = []
     logs: list[str] = []
+    service_config_paths: list[Path] = []
     config_dir = tmp_path / "settings"
     exe_dir = tmp_path / "server"
     config_dir.mkdir()
@@ -406,7 +407,7 @@ def test_vnc_start_recovers_running_service_when_listener_missing(monkeypatch, t
     manager._ensure_firewall = lambda _allowed_ips, _port: None
     manager._resolve_service_name = lambda refresh=False: "BorealisAgentUltraVNC"
     manager._service_state_by_name = lambda _service_name: "RUNNING"
-    manager._ensure_service_running = lambda config_path=None: True
+    manager._ensure_service_running = lambda config_path=None: service_config_paths.append(config_path) or True
     manager._restart_service = lambda: restarts.append("restart")
     manager._apply_passwords = lambda _config_dir, _config_path, _controller, _view_only: (
         "bootpass",
@@ -434,9 +435,40 @@ def test_vnc_start_recovers_running_service_when_listener_missing(monkeypatch, t
 
     assert restarts == ["restart"]
     assert waits == [8.0, 10.0]
+    assert service_config_paths == [exe_dir / "ultravnc.ini"]
     assert manager._last_service_error == ""
     assert "SocketConnect=1" in (exe_dir / "ultravnc.ini").read_text(encoding="ascii")
     assert any("listener not ready" in entry for entry in logs)
+
+
+def test_recover_listener_starts_stopped_service(monkeypatch, tmp_path) -> None:
+    starts: list[Path] = []
+    waits: list[float] = []
+    logs: list[str] = []
+    config_path = tmp_path / "server" / "ultravnc.ini"
+
+    manager = vnc_role.VncManager.__new__(vnc_role.VncManager)
+    manager._last_listener_recovery_at = 0.0
+    manager._service_state_by_name = lambda _service_name: "STOPPED"
+    manager._ensure_service_running = lambda config_path=None: starts.append(config_path) or True
+    manager._wait_for_listener = lambda _port, timeout=8.0: waits.append(float(timeout)) or True
+    manager._service_status_summary = lambda _service_name: "state=1 STOPPED win32_exit=1077"
+
+    monkeypatch.setattr(vnc_role.os, "name", "nt", raising=False)
+    monkeypatch.setattr(vnc_role.time, "time", lambda: 100.0)
+    monkeypatch.setattr(vnc_role, "_write_log", lambda message: logs.append(message))
+
+    recovered = manager._recover_listener(
+        5900,
+        "BorealisAgentUltraVNC",
+        "health_report_recover",
+        config_path=config_path,
+    )
+
+    assert recovered is True
+    assert starts == [config_path]
+    assert waits == [10.0]
+    assert any("service stopped" in entry for entry in logs)
 
 
 def _role_for_disconnect_grace() -> vnc_role.Role:
