@@ -10,6 +10,11 @@ import (
 	"time"
 )
 
+const (
+	ultraVNCServiceName        = "uvnc_service"
+	ultraVNCServiceDisplayName = "Borealis - UltraVNC"
+)
+
 func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	startedAt := time.Now()
 	logger.Tracef("Dependency coordinator start.")
@@ -24,7 +29,7 @@ func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error
 	}{
 		{"AutoHotKey", ensureAutoHotKey},
 		{"Git CLI", ensureGitCLI},
-		{"UltraVNC Server", ensureUltraVNCPayload},
+		{"UltraVNC Server", ensureUltraVNCServer},
 		{"WireGuard VPN Adapter", ensureWireGuardInstaller},
 	}
 	for _, step := range optionalSteps {
@@ -114,6 +119,111 @@ func ensureUltraVNCPayload(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		return err
 	}
 	logger.Infof("UltraVNC payload staged.")
+	return nil
+}
+
+func ensureUltraVNCServer(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	if err := ensureUltraVNCPayload(cfg, logger); err != nil {
+		return err
+	}
+	exePath, err := resolveUltraVNCBootstrapExe(cfg)
+	if err != nil {
+		return err
+	}
+	configPath, err := ensureUltraVNCBootstrapConfig(cfg, logger)
+	if err != nil {
+		return err
+	}
+	return ensureUltraVNCServiceRegistration(exePath, configPath, logger)
+}
+
+func resolveUltraVNCBootstrapExe(cfg BootstrapConfig) (string, error) {
+	candidates := []string{
+		filepath.Join(cfg.InstallDir, "Agent", "Borealis", "Tools", "UltraVNC", "Server", "winvnc.exe"),
+		filepath.Join(cfg.InstallDir, "Agent", "Borealis", "Tools", "UltraVNC", "Server", "winvnc64.exe"),
+		filepath.Join(cfg.InstallDir, "Dependencies", "UltraVNC_Server", "payload", "x64", "winvnc.exe"),
+		filepath.Join(cfg.InstallDir, "Dependencies", "UltraVNC_Server", "payload", "x64", "winvnc64.exe"),
+		filepath.Join(cfg.InstallDir, "Dependencies", "UltraVNC_Server", "payload", "x86", "winvnc.exe"),
+	}
+	for _, candidate := range candidates {
+		if fileExists(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("UltraVNC winvnc.exe not found after payload staging")
+}
+
+func ensureUltraVNCBootstrapConfig(cfg BootstrapConfig, logger *BootstrapLogger) (string, error) {
+	configDir := filepath.Join(cfg.InstallDir, "Agent", "Borealis", "Settings", "UltraVNC")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return "", err
+	}
+	configPath := filepath.Join(configDir, "ultravnc.ini")
+	if fileExists(configPath) {
+		logger.Tracef("UltraVNC config already present at %s", configPath)
+		return configPath, nil
+	}
+	content := "[UltraVNC]\n" +
+		"UseRegistry=0\n" +
+		"AuthRequired=1\n" +
+		"MSLogonRequired=0\n" +
+		"NewMSLogon=0\n" +
+		"PortNumber=5900\n" +
+		"AutoPortSelect=0\n" +
+		"SocketConnect=1\n" +
+		"AllowLoopback=1\n" +
+		"LoopbackOnly=0\n" +
+		"HTTPConnect=0\n" +
+		"AllowShutdown=1\n" +
+		"DisableTrayIcon=1\n" +
+		"EnableFileTransfer=0\n" +
+		"RemoveWallpaper=1\n"
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		return "", err
+	}
+	logger.Tracef("UltraVNC bootstrap config written at %s", configPath)
+	return configPath, nil
+}
+
+func ensureUltraVNCServiceRegistration(exePath string, configPath string, logger *BootstrapLogger) error {
+	desiredBinPath := fmt.Sprintf(`"%s" -service -config "%s"`, exePath, configPath)
+	if _, err := runCommandTimeout(logger, 20*time.Second, "sc.exe", "query", ultraVNCServiceName); err != nil {
+		if _, createErr := runCommandTimeout(
+			logger,
+			30*time.Second,
+			"sc.exe",
+			"create",
+			ultraVNCServiceName,
+			"binPath=",
+			desiredBinPath,
+			"start=",
+			"demand",
+			"type=",
+			"own",
+			"DisplayName=",
+			ultraVNCServiceDisplayName,
+		); createErr != nil {
+			return createErr
+		}
+		logger.Infof("UltraVNC service registered.")
+	}
+	_, err := runCommandTimeout(
+		logger,
+		30*time.Second,
+		"sc.exe",
+		"config",
+		ultraVNCServiceName,
+		"binPath=",
+		desiredBinPath,
+		"start=",
+		"demand",
+		"DisplayName=",
+		ultraVNCServiceDisplayName,
+	)
+	if err != nil {
+		return err
+	}
+	logger.Tracef("UltraVNC service registration verified: service=%s bin_path=%s", ultraVNCServiceName, desiredBinPath)
 	return nil
 }
 

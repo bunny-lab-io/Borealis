@@ -76,6 +76,9 @@ ROLE_CONTEXTS = ["system"]
 VNC_FIREWALL_RULE_NAME = "Borealis - VNC - UltraVNC"
 DEFAULT_VNC_PORT = 5900
 ULTRAVNC_SERVICE_NAME = os.environ.get("BOREALIS_ULTRAVNC_SERVICE") or "uvnc_service"
+ULTRAVNC_SERVICE_DISPLAY_NAME = os.environ.get(
+    "BOREALIS_ULTRAVNC_DISPLAY_NAME"
+) or "Borealis - UltraVNC"
 ULTRAVNC_SERVICE_START_MODE = _normalize_service_start_mode(
     os.environ.get("BOREALIS_ULTRAVNC_START_TYPE"),
     default="demand",
@@ -533,16 +536,12 @@ def _resolve_vnc_config_dir() -> Optional[Path]:
             pass
     root = _find_project_root()
     if root:
-        tools_config = root / "Agent" / "Borealis" / "Tools" / "UltraVNC" / "Server"
-        if tools_config.is_dir():
-            return tools_config
-        return root / "Agent" / "Borealis" / "Settings" / "UltraVNC"
+        settings_config = root / "Agent" / "Borealis" / "Settings" / "UltraVNC"
+        return settings_config
     try:
         base = agent_borealis_root(__file__).parent
-        tools_config = base / "Borealis" / "Tools" / "UltraVNC" / "Server"
-        if tools_config.is_dir():
-            return tools_config
-        return base / "Borealis" / "Settings" / "UltraVNC"
+        settings_config = base / "Borealis" / "Settings" / "UltraVNC"
+        return settings_config
     except Exception:
         return None
 
@@ -1022,6 +1021,7 @@ class VncManager:
         self._password_tool: Optional[str] = None
         self._password_tool_logged = False
         self._service_name: Optional[str] = None
+        self._last_service_error = ""
 
     def _service_state_by_name(self, service_name: str) -> Optional[str]:
         if os.name != "nt":
@@ -1102,6 +1102,38 @@ class VncManager:
             return None
         return None
 
+    def _set_service_error(self, message: str) -> None:
+        self._last_service_error = str(message or "").strip()
+
+    def _clear_service_error(self) -> None:
+        self._last_service_error = ""
+
+    def _configure_service_display_name(self, service_name: str) -> None:
+        if os.name != "nt":
+            return
+        try:
+            result = subprocess.run(
+                [
+                    "sc.exe",
+                    "config",
+                    service_name,
+                    "DisplayName=",
+                    ULTRAVNC_SERVICE_DISPLAY_NAME,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                _write_log(
+                    "UltraVNC service display-name config failed: {0}".format(
+                        detail or f"exit {result.returncode}"
+                    )
+                )
+        except Exception as exc:
+            _write_log(f"UltraVNC service display-name config failed: {exc}")
+
     def _configure_service_start_mode(self, service_name: str, start_mode: str) -> None:
         if os.name != "nt":
             return
@@ -1146,6 +1178,7 @@ class VncManager:
             )
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout or "").strip()
+                self._set_service_error(detail or f"binPath update exit {result.returncode}")
                 _write_log(
                     "UltraVNC service binPath update failed: {0}".format(
                         detail or f"exit {result.returncode}"
@@ -1155,6 +1188,7 @@ class VncManager:
             _write_log(f"UltraVNC service binPath updated for config {config_path}.")
             return True
         except Exception as exc:
+            self._set_service_error(str(exc))
             _write_log(f"UltraVNC service binPath update failed: {exc}")
             return False
 
@@ -1245,6 +1279,7 @@ class VncManager:
         service_name = self._resolve_service_name()
         state = self._service_state_by_name(service_name) if service_name else None
         if service_name and state is not None:
+            self._configure_service_display_name(service_name)
             self._configure_service_start_mode(service_name, desired_start)
         if state == "STOP_PENDING" and service_name:
             if not self._wait_for_service_stopped(service_name, timeout=8.0):
@@ -1259,6 +1294,7 @@ class VncManager:
         if state == "RUNNING":
             if updated_binpath:
                 self._restart_service()
+            self._clear_service_error()
             return True
         if state == "START_PENDING" and service_name:
             return self._wait_for_service(service_name, timeout=10.0)
@@ -1283,7 +1319,7 @@ class VncManager:
                     "type=",
                     "own",
                     "DisplayName=",
-                    service_name,
+                    ULTRAVNC_SERVICE_DISPLAY_NAME,
                 ]
                 create_result = subprocess.run(
                     create_args,
@@ -1293,15 +1329,18 @@ class VncManager:
                 )
                 if create_result.returncode != 0:
                     detail = (create_result.stderr or create_result.stdout or "").strip()
+                    self._set_service_error(detail or f"service create exit {create_result.returncode}")
                     _write_log(
                         "UltraVNC service create failed: {0}".format(
                             detail or f"exit {create_result.returncode}"
                         )
                     )
                 service_name = self._resolve_service_name(refresh=True) or service_name
+                self._configure_service_display_name(service_name)
                 updated_binpath = self._ensure_service_binpath(service_name, config_path)
             if not service_name:
                 service_name = ULTRAVNC_SERVICE_NAME
+            self._configure_service_display_name(service_name)
             self._configure_service_start_mode(service_name, desired_start)
             start_result = subprocess.run(
                 ["sc.exe", "start", service_name],
@@ -1317,21 +1356,26 @@ class VncManager:
             ):
                 if updated_binpath:
                     self._restart_service()
+                self._clear_service_error()
                 return True
             if start_result.returncode != 0:
                 detail = start_output.strip()
+                self._set_service_error(detail or f"service start exit {start_result.returncode}")
                 _write_log(
                     "UltraVNC service start failed: {0}".format(
                         detail or f"exit {start_result.returncode}"
                     )
                 )
         except Exception as exc:
+            self._set_service_error(str(exc))
             _write_log(f"Failed to ensure UltraVNC service running: {exc}")
             return False
         if self._wait_for_service(service_name, timeout=10.0):
             if updated_binpath:
                 self._restart_service()
+            self._clear_service_error()
             return True
+        self._set_service_error(f"service {service_name} did not reach RUNNING")
         return False
 
     def ensure_standby(self, *, reason: str = "standby") -> None:
@@ -2147,6 +2191,7 @@ class Role:
         active_session_id = self._active_session_id()
         listener_ready = self.vnc.is_listener_ready(port_value)
         grace_snapshot = self._disconnect_grace_snapshot()
+        allowed_ips = self._last_allowed_ips or _parse_allowed_ips(self._state.get("allowed_ips"))
         display_topology = _collect_windows_display_topology()
         display_virtual_bounds = _display_virtual_bounds(display_topology)
         if listener_ready:
@@ -2157,6 +2202,8 @@ class Role:
             "listener_ip": "0.0.0.0",
             "listener_port": str(port_value),
             "service_name": service_name or ULTRAVNC_SERVICE_NAME,
+            "allowed_ips": str(allowed_ips or ""),
+            "last_service_error": str(getattr(self.vnc, "_last_service_error", "") or ""),
             "listener_state": (
                 "listening"
                 if listener_ready
@@ -2223,10 +2270,14 @@ class Role:
                 "detail": "UltraVNC service is running but the VNC listener is not ready yet.",
                 "details": details,
             }
+        service_error = str(getattr(self.vnc, "_last_service_error", "") or "").strip()
+        detail = f"{service_name or ULTRAVNC_SERVICE_NAME} is {service_state or 'stopped'}; restart will be retried."
+        if service_error:
+            detail = f"{detail} Last error: {service_error}"
         return {
             "status": "recovering",
             "role_label": self.role_health_label,
-            "detail": f"{service_name or ULTRAVNC_SERVICE_NAME} is {service_state or 'stopped'}; restart will be retried.",
+            "detail": detail,
             "details": details,
         }
 
