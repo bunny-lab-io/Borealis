@@ -87,6 +87,8 @@ ULTRAVNC_SERVICE_START_MODE = _normalize_service_start_mode(
 )
 VNC_REQUIRE_ENGINE_READY = _env_bool(os.environ.get("BOREALIS_VNC_REQUIRE_ENGINE_READY"), True)
 VNC_ALWAYS_ON_INTERVAL_SECONDS = 30
+VNC_HEALTH_RECENT_READY_GRACE_SECONDS = 20
+VNC_HEALTH_RECOVER_MIN_INTERVAL_SECONDS = 30
 ULTRAVNC_STORED_PASSWORD_KEY = bytes([23, 82, 107, 6, 35, 78, 88, 7])
 
 
@@ -2179,6 +2181,7 @@ class Role:
         self._engine_ready_for_vnc = not VNC_REQUIRE_ENGINE_READY
         self._engine_wait_logged = False
         self._last_ready_at = 0
+        self._last_health_recover_at = 0
         self._state = _load_vnc_state()
         self._sanitize_state()
         self._last_allowed_ips = _parse_allowed_ips(self._state.get("allowed_ips"))
@@ -2748,6 +2751,13 @@ class Role:
         display_virtual_bounds = _display_virtual_bounds(display_topology)
         if listener_ready:
             self._last_ready_at = max(self._last_ready_at, int(time.time()))
+        now = int(time.time())
+        recent_ready = (
+            service_state in {"RUNNING", "START_PENDING"}
+            and not listener_ready
+            and int(self._last_ready_at or 0) > 0
+            and now - int(self._last_ready_at or 0) <= VNC_HEALTH_RECENT_READY_GRACE_SECONDS
+        )
         details = {
             "running_status": str(service_state or "Stopped"),
             "service_state": str(service_state or "Stopped"),
@@ -2759,12 +2769,14 @@ class Role:
             "listener_state": (
                 "listening"
                 if listener_ready
+                else "recently_listening"
+                if recent_ready
                 else "not_listening"
             ),
             "listener_ready": "true" if listener_ready else "false",
             "ready": (
                 "true"
-                if listener_ready and service_state in {"RUNNING", "START_PENDING"}
+                if (listener_ready or recent_ready) and service_state in {"RUNNING", "START_PENDING"}
                 else "false"
             ),
             "last_ready_at": str(int(self._last_ready_at or 0)),
@@ -2776,6 +2788,17 @@ class Role:
             "display_virtual_bounds_json": json.dumps(display_virtual_bounds, ensure_ascii=True, sort_keys=True),
             "display_count": str(len(display_topology)),
         }
+        if recent_ready:
+            return {
+                "status": "healthy",
+                "role_label": self.role_health_label,
+                "detail": (
+                    f"{service_name or ULTRAVNC_SERVICE_NAME} listener was recently ready for session {active_session_id}."
+                    if active_session_id
+                    else f"{service_name or ULTRAVNC_SERVICE_NAME} listener was recently ready for always-on access."
+                ),
+                "details": details,
+            }
         if service_state in {"RUNNING", "START_PENDING"} and listener_ready:
             return {
                 "status": "healthy",
@@ -2793,7 +2816,10 @@ class Role:
             and self._controller_password()
             and allowed_ips
             and not (service_state in {"RUNNING", "START_PENDING"} and listener_ready)
+            and now - int(getattr(self, "_last_health_recover_at", 0) or 0)
+            >= VNC_HEALTH_RECOVER_MIN_INTERVAL_SECONDS
         ):
+            self._last_health_recover_at = now
             self._trace(
                 "A50",
                 event="health_report_recover",
