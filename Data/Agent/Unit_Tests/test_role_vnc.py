@@ -1084,6 +1084,86 @@ def test_request_vnc_bootstrap_advertises_runtime_credential(monkeypatch) -> Non
     ]
 
 
+def _role_for_verified_live_credential() -> tuple[vnc_role.Role, list[str], list[tuple[tuple, dict]]]:
+    ensure_calls: list[str] = []
+    traces: list[tuple[tuple, dict]] = []
+    role = vnc_role.Role.__new__(vnc_role.Role)
+    role.ctx = SimpleNamespace(agent_id="agent-1")
+    role._credential_revision = lambda: 12345
+    role._ensure_always_on = lambda *, reason: ensure_calls.append(reason)
+    role._trace = lambda *args, **kwargs: traces.append((args, kwargs))
+    role._live_credential_payload = lambda **_kwargs: {
+        "status": "ok",
+        "agent_id": "agent-1",
+        "request_id": "request-1",
+        "reason": "vnc_establish",
+        "controller_password": "bootpass",
+        "credential_revision": 12345,
+        "display_topology": [],
+        "display_virtual_bounds": {},
+        "ready": True,
+        "service_state": "RUNNING",
+        "listener_state": "listening",
+        "port": 5900,
+    }
+    return role, ensure_calls, traces
+
+
+def test_verified_live_credential_returns_password_on_probe_timeout_without_reload() -> None:
+    role, ensure_calls, traces = _role_for_verified_live_credential()
+    role._wait_for_local_vnc_auth = lambda **_kwargs: vnc_role._VncAuthProbeResult(True, False, "timed out")
+
+    payload = role._verified_live_credential_payload(reason="vnc_establish", request_id="request-1")
+
+    assert payload["status"] == "ok"
+    assert payload["controller_password"] == "bootpass"
+    assert payload["auth_verified"] is False
+    assert payload["auth_verify_reason"] == "timed out"
+    assert payload["auth_verify_warning"] == "local_probe_transient"
+    assert ensure_calls == ["vnc_establish"]
+    assert not any(kwargs.get("retry") == "force_reload" for _args, kwargs in traces)
+
+
+def test_verified_live_credential_force_reloads_on_explicit_auth_failure() -> None:
+    role, ensure_calls, traces = _role_for_verified_live_credential()
+    results = iter(
+        [
+            vnc_role._VncAuthProbeResult(True, False, "auth_failed"),
+            vnc_role._VncAuthProbeResult(True, True, "server_init_ok"),
+        ]
+    )
+    role._wait_for_local_vnc_auth = lambda **_kwargs: next(results)
+
+    payload = role._verified_live_credential_payload(reason="vnc_establish", request_id="request-1")
+
+    assert payload["status"] == "ok"
+    assert payload["controller_password"] == "bootpass"
+    assert payload["auth_verified"] is True
+    assert payload["auth_verify_reason"] == "server_init_ok"
+    assert ensure_calls == ["vnc_establish", "vnc_credential_verify"]
+    assert any(args == ("A46",) and kwargs.get("retry") == "force_reload" for args, kwargs in traces)
+
+
+def test_verified_live_credential_withholds_password_on_persistent_auth_failure() -> None:
+    role, ensure_calls, traces = _role_for_verified_live_credential()
+    results = iter(
+        [
+            vnc_role._VncAuthProbeResult(True, False, "auth_failed"),
+            vnc_role._VncAuthProbeResult(True, False, "auth_failed"),
+        ]
+    )
+    role._wait_for_local_vnc_auth = lambda **_kwargs: next(results)
+
+    payload = role._verified_live_credential_payload(reason="vnc_establish", request_id="request-1")
+
+    assert payload["status"] == "not_ready"
+    assert "controller_password" not in payload
+    assert payload["auth_verified"] is False
+    assert payload["auth_verify_reason"] == "auth_failed"
+    assert ensure_calls == ["vnc_establish", "vnc_credential_verify"]
+    assert any(args == ("A47",) and kwargs.get("result") == "auth_failed" for args, kwargs in traces)
+
+
 def test_runtime_credential_due_after_rotation_window(monkeypatch) -> None:
     role = vnc_role.Role.__new__(vnc_role.Role)
     role._agent_runtime_credentials = {

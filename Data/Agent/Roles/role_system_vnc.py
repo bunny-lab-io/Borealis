@@ -956,6 +956,32 @@ class _VncAuthProbeResult(NamedTuple):
     reason: str
 
 
+def _vnc_auth_probe_explicit_auth_failure(result: _VncAuthProbeResult) -> bool:
+    if not result.checked or result.ok:
+        return False
+    reason = str(result.reason or "").strip().lower()
+    return reason.startswith(("auth_failed", "too_many_auth_failures"))
+
+
+def _vnc_auth_probe_transient_failure(result: _VncAuthProbeResult) -> bool:
+    if not result.checked or result.ok:
+        return False
+    reason = str(result.reason or "").replace("_", " ").lower()
+    if reason.startswith("server init failed"):
+        return True
+    return any(
+        marker in reason
+        for marker in {
+            "connect failed",
+            "connection refused",
+            "connection reset",
+            "socket closed",
+            "timed out",
+            "timeout",
+        }
+    )
+
+
 def _read_socket_exact(sock: socket.socket, byte_count: int) -> bytes:
     chunks: list[bytes] = []
     remaining = int(byte_count)
@@ -3003,7 +3029,7 @@ class Role:
         password = str(payload.get("controller_password") or "")[:8]
         port_value = _coerce_int(payload.get("port"), DEFAULT_VNC_PORT, min_value=1, max_value=65535)
         auth_result = self._wait_for_local_vnc_auth(port=port_value, password=password)
-        if not auth_result.ok and auth_result.checked:
+        if _vnc_auth_probe_explicit_auth_failure(auth_result):
             self._trace(
                 "A46",
                 event="vnc_credential_verify",
@@ -3032,6 +3058,11 @@ class Role:
         if auth_result.ok:
             payload["auth_verified"] = True
             payload["auth_verify_reason"] = auth_result.reason
+            return payload
+        if not _vnc_auth_probe_explicit_auth_failure(auth_result) and _vnc_auth_probe_transient_failure(auth_result):
+            payload["auth_verified"] = False
+            payload["auth_verify_reason"] = auth_result.reason
+            payload["auth_verify_warning"] = "local_probe_transient"
             return payload
         return {
             "status": "not_ready",
