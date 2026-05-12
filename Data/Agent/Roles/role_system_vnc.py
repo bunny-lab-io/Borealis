@@ -837,11 +837,44 @@ def _discover_ultravnc_service_name() -> Optional[str]:
     return None
 
 
+def _ultravnc_capture_settings(vnc_exe: Optional[str] = None) -> dict[str, str]:
+    helper_root: Optional[Path] = None
+    try:
+        if vnc_exe:
+            exe_path = Path(vnc_exe)
+            if exe_path.is_file():
+                helper_root = exe_path.parent
+    except Exception:
+        helper_root = None
+    driver_present = False
+    hook_present = False
+    if helper_root:
+        try:
+            driver_present = (helper_root / "ddengine64.dll").is_file() or (helper_root / "ddengine.dll").is_file()
+            hook_present = (helper_root / "vnchooks.dll").is_file()
+        except Exception:
+            driver_present = False
+            hook_present = False
+    return {
+        "TurboMode": "1",
+        "PollUnderCursor": "0",
+        "PollForeground": "0",
+        "PollFullScreen": "1",
+        "OnlyPollConsole": "0",
+        "OnlyPollOnEvent": "0",
+        "EnableDriver": "1" if driver_present else "0",
+        "EnableHook": "1" if hook_present else "0",
+        "EnableVirtual": "0",
+        "SingleWindow": "0",
+    }
+
+
 def _ensure_ultravnc_ini(
     config_path: Path,
     port: int,
     *,
     remove_wallpaper: bool = True,
+    vnc_exe: Optional[str] = None,
 ) -> Optional[Path]:
     base_settings = {
         "UseRegistry": "0",
@@ -859,6 +892,7 @@ def _ensure_ultravnc_ini(
         "EnableFileTransfer": "0",
         "RemoveWallpaper": "1" if remove_wallpaper else "0",
     }
+    base_settings.update(_ultravnc_capture_settings(vnc_exe))
     if not _write_ultravnc_config(config_path, base_settings):
         return None
     if os.name == "nt" and config_path.name.lower() != "ultravnc.ini":
@@ -915,8 +949,10 @@ def _read_ultravnc_password_hash(
 
 def _normalize_ultravnc_password_hash(hash_value: Optional[str]) -> Optional[str]:
     normalized = re.sub(r"[^0-9A-Fa-f]", "", str(hash_value or "")).upper()
-    if len(normalized) >= 16:
-        return normalized[:16]
+    if len(normalized) >= 18:
+        return normalized[:18]
+    if len(normalized) == 16:
+        return f"{normalized}00"
     return normalized or None
 
 
@@ -2103,6 +2139,7 @@ class VncManager:
                 config_path,
                 port_value,
                 remove_wallpaper=remove_wallpaper_value,
+                vnc_exe=self._vnc_exe,
             )
             if not ini_path:
                 return
@@ -2276,7 +2313,7 @@ class Role:
                     service_name=service_name,
                     vnc_exe=vnc_exe,
                 )
-                _ensure_ultravnc_ini(config_path, DEFAULT_VNC_PORT, remove_wallpaper=True)
+                _ensure_ultravnc_ini(config_path, DEFAULT_VNC_PORT, remove_wallpaper=True, vnc_exe=vnc_exe)
         except Exception:
             self._log("Failed to ensure UltraVNC config present.", error=True)
         self._trace(

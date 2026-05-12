@@ -64,6 +64,30 @@ def test_ensure_ultravnc_ini_enables_loopback_health_probe(tmp_path) -> None:
     assert "SocketConnect=1" in raw
     assert "AllowLoopback=1" in raw
     assert "LoopbackOnly=0" in raw
+    assert "TurboMode=1" in raw
+    assert "EnableDriver=0" in raw
+    assert "EnableHook=0" in raw
+
+
+def test_ensure_ultravnc_ini_enables_capture_helpers_when_present(tmp_path) -> None:
+    config_path = tmp_path / "ultravnc.ini"
+    exe_dir = tmp_path / "UltraVNC"
+    exe_dir.mkdir()
+    vnc_exe = exe_dir / "winvnc.exe"
+    vnc_exe.write_text("stub", encoding="ascii")
+    (exe_dir / "ddengine64.dll").write_text("stub", encoding="ascii")
+    (exe_dir / "vnchooks.dll").write_text("stub", encoding="ascii")
+
+    assert vnc_role._ensure_ultravnc_ini(config_path, 5900, vnc_exe=str(vnc_exe))
+
+    raw = config_path.read_text(encoding="utf-8")
+    assert "TurboMode=1" in raw
+    assert "PollFullScreen=1" in raw
+    assert "OnlyPollConsole=0" in raw
+    assert "OnlyPollOnEvent=0" in raw
+    assert "EnableDriver=1" in raw
+    assert "EnableHook=1" in raw
+    assert "EnableVirtual=0" in raw
 
 
 def test_sanitize_state_removes_legacy_password_fields(monkeypatch) -> None:
@@ -464,16 +488,16 @@ def test_read_ultravnc_password_hash_uses_temp_scratch_not_live_config(monkeypat
 
 
 def test_compute_ultravnc_password_hash_uses_stored_vnc_des_format() -> None:
-    assert vnc_role._compute_ultravnc_password_hash("password") == "33483FD570CF869B"
-    assert vnc_role._compute_ultravnc_password_hash("bootpass") == "2FEAEE5C3DA6B27C"
+    assert vnc_role._compute_ultravnc_password_hash("password") == "33483FD570CF869B00"
+    assert vnc_role._compute_ultravnc_password_hash("bootpass") == "2FEAEE5C3DA6B27C00"
 
 
-def test_normalize_ultravnc_password_hash_uses_eight_byte_blob() -> None:
+def test_normalize_ultravnc_password_hash_uses_ultravnc_nine_byte_field() -> None:
     assert (
         vnc_role._normalize_ultravnc_password_hash("ff 97 50 2e 94 22 f0 89")
-        == "FF97502E9422F089"
+        == "FF97502E9422F08900"
     )
-    assert vnc_role._normalize_ultravnc_password_hash("FF97502E9422F089AA") == "FF97502E9422F089"
+    assert vnc_role._normalize_ultravnc_password_hash("FF97502E9422F089AA") == "FF97502E9422F089AA"
 
 
 def test_apply_passwords_uses_internal_hash_when_tool_missing(monkeypatch, tmp_path) -> None:
@@ -494,7 +518,7 @@ def test_apply_passwords_uses_internal_hash_when_tool_missing(monkeypatch, tmp_p
     assert manager._apply_passwords(config_dir, config_path, "bootpass", None) == ("bootpass", None)
 
     raw = config_path.read_text(encoding="ascii")
-    assert "passwd=2FEAEE5C3DA6B27C" in raw
+    assert "passwd=2FEAEE5C3DA6B27C00" in raw
     assert "passwd2=" in raw
     assert manager._last_service_error == ""
     assert any("internal hash generator" in entry for entry in logs)
@@ -684,7 +708,7 @@ def test_vnc_start_syncs_programdata_named_and_legacy_passwords(monkeypatch, tmp
     service_raw = service_config.read_text(encoding="ascii")
     legacy_raw = legacy_config.read_text(encoding="ascii")
 
-    assert "passwd=2FEAEE5C3DA6B27C" in service_raw
+    assert "passwd=2FEAEE5C3DA6B27C00" in service_raw
     assert service_raw == legacy_raw
     assert not (exe_dir / "ultravnc.ini").exists()
 
@@ -701,7 +725,7 @@ def test_vnc_start_skips_password_rewrite_when_steady_state(monkeypatch, tmp_pat
     exe_path.write_text("stub", encoding="ascii")
     service_config = config_dir / "BorealisAgentUltraVNC.ini"
     service_config.write_text(
-        "[UltraVNC]\nUseRegistry=0\nAuthRequired=1\nPortNumber=5900\npasswd=2FEAEE5C3DA6B27C\npasswd2=\n",
+        "[UltraVNC]\nUseRegistry=0\nAuthRequired=1\nPortNumber=5900\npasswd=2FEAEE5C3DA6B27C00\npasswd2=\n",
         encoding="ascii",
     )
     legacy_config = config_dir / "ultravnc.ini"

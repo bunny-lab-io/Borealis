@@ -266,6 +266,7 @@ func ensureUltraVNCBootstrapConfig(cfg BootstrapConfig, logger *BootstrapLogger)
 	if err != nil {
 		return "", err
 	}
+	captureSettings := ultraVNCCaptureSettings()
 	content := "[UltraVNC]\n" +
 		"UseRegistry=0\n" +
 		"AuthRequired=1\n" +
@@ -281,6 +282,16 @@ func ensureUltraVNCBootstrapConfig(cfg BootstrapConfig, logger *BootstrapLogger)
 		"DisableTrayIcon=1\n" +
 		"EnableFileTransfer=0\n" +
 		"RemoveWallpaper=1\n" +
+		"TurboMode=1\n" +
+		"PollUnderCursor=0\n" +
+		"PollForeground=0\n" +
+		"PollFullScreen=1\n" +
+		"OnlyPollConsole=0\n" +
+		"OnlyPollOnEvent=0\n" +
+		"EnableDriver=" + captureSettings.enableDriver + "\n" +
+		"EnableHook=" + captureSettings.enableHook + "\n" +
+		"EnableVirtual=0\n" +
+		"SingleWindow=0\n" +
 		"passwd=" + placeholderHash + "\n" +
 		"passwd2=\n"
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
@@ -296,6 +307,27 @@ func ensureUltraVNCBootstrapConfig(cfg BootstrapConfig, logger *BootstrapLogger)
 	return configPath, nil
 }
 
+type ultraVNCCaptureConfig struct {
+	enableDriver string
+	enableHook   string
+}
+
+func ultraVNCCaptureSettings() ultraVNCCaptureConfig {
+	settings := ultraVNCCaptureConfig{enableDriver: "0", enableHook: "0"}
+	exePath := resolveUltraVNCInstalledExe()
+	if strings.TrimSpace(exePath) == "" {
+		return settings
+	}
+	root := filepath.Dir(exePath)
+	if fileExists(filepath.Join(root, "ddengine64.dll")) || fileExists(filepath.Join(root, "ddengine.dll")) {
+		settings.enableDriver = "1"
+	}
+	if fileExists(filepath.Join(root, "vnchooks.dll")) {
+		settings.enableHook = "1"
+	}
+	return settings
+}
+
 func generateUltraVNCStoredPasswordHash() (string, error) {
 	password := make([]byte, 8)
 	if _, err := rand.Read(password); err != nil {
@@ -307,7 +339,7 @@ func generateUltraVNCStoredPasswordHash() (string, error) {
 	}
 	encrypted := make([]byte, 8)
 	block.Encrypt(encrypted, password)
-	return strings.ToUpper(hex.EncodeToString(encrypted)), nil
+	return strings.ToUpper(hex.EncodeToString(encrypted)) + "00", nil
 }
 
 func mirrorUltraVNCBootstrapConfigToServiceDir(exePath string, configPath string, logger *BootstrapLogger) string {
