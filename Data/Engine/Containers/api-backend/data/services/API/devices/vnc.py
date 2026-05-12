@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import socket
+import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -36,6 +37,10 @@ from .tunnel import _get_tunnel_service, _resolve_requested_agent_id
 
 if False:  # pragma: no cover - hint for type checkers
     from .. import EngineServiceAdapters
+
+
+_VNC_AUTH_RATE_LIMIT_LOCK = threading.Lock()
+_VNC_AUTH_RATE_LIMITS: dict[str, tuple[float, str]] = {}
 
 
 def _current_user(app) -> Optional[Dict[str, str]]:
@@ -169,6 +174,44 @@ def _is_vnc_auth_rate_limited(reason: Any) -> bool:
     return ("too many" in normalized or "to many" in normalized) and (
         "attempt" in normalized or "auth" in normalized
     )
+
+
+def _clear_vnc_auth_rate_limits() -> None:
+    with _VNC_AUTH_RATE_LIMIT_LOCK:
+        _VNC_AUTH_RATE_LIMITS.clear()
+
+
+def _remember_vnc_auth_rate_limit(agent_id: Any, *, retry_after_seconds: float, reason: Any) -> float:
+    key = _normalize_text(agent_id)
+    retry_after = max(0.0, float(retry_after_seconds or 0.0))
+    if not key or retry_after <= 0:
+        return retry_after
+    with _VNC_AUTH_RATE_LIMIT_LOCK:
+        _VNC_AUTH_RATE_LIMITS[key] = (
+            time.monotonic() + retry_after,
+            _normalize_text(reason) or "vnc_auth_rate_limited",
+        )
+    return retry_after
+
+
+def _cached_vnc_auth_rate_limit(agent_id: Any) -> Optional[dict[str, Any]]:
+    key = _normalize_text(agent_id)
+    if not key:
+        return None
+    now = time.monotonic()
+    with _VNC_AUTH_RATE_LIMIT_LOCK:
+        entry = _VNC_AUTH_RATE_LIMITS.get(key)
+        if entry is None:
+            return None
+        retry_at, reason = entry
+        remaining = retry_at - now
+        if remaining <= 0:
+            _VNC_AUTH_RATE_LIMITS.pop(key, None)
+            return None
+    return {
+        "reason": reason or "vnc_auth_rate_limited",
+        "retry_after_seconds": max(0.0, remaining),
+    }
 
 
 def _probe_tcp_listener(host: str, port: int, timeout_seconds: float) -> bool:
@@ -948,6 +991,36 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             )
             return {"error": "vnc_backend_unavailable"}, 503
 
+        cached_auth_rate_limit = _cached_vnc_auth_rate_limit(agent_id)
+        if cached_auth_rate_limit is not None:
+            retry_after_seconds = float(cached_auth_rate_limit["retry_after_seconds"])
+            reason = _normalize_text(cached_auth_rate_limit["reason"]) or "vnc_auth_rate_limited"
+            manager.record_error(collaboration_session.session_id, "backend_auth_rate_limited")
+            _trace(
+                "E16L",
+                agent_id=agent_id,
+                session_id=collaboration_session.session_id,
+                result="vnc_backend_auth_rate_limited",
+                cached=True,
+                retry_after_seconds=round(retry_after_seconds, 3),
+                auth_reason=reason,
+                level="WARNING",
+            )
+            _service_log_event(
+                "vnc_backend_auth_rate_limited_cached agent_id={0} session_id={1} retry_after_seconds={2} reason={3}".format(
+                    agent_id,
+                    collaboration_session.session_id,
+                    round(retry_after_seconds, 3),
+                    reason,
+                ),
+                level="WARNING",
+            )
+            return {
+                "error": "vnc_backend_auth_rate_limited",
+                "detail": reason,
+                "retry_after_seconds": retry_after_seconds,
+            }, 503
+
         auth_probe_wait_seconds = _coerce_timeout(
             os.environ.get("BOREALIS_VNC_AUTH_PROBE_WAIT_SECONDS"),
             3.0,
@@ -977,6 +1050,11 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 retry_after_seconds = _coerce_nonnegative_timeout(
                     os.environ.get("BOREALIS_VNC_AUTH_RATE_LIMIT_RETRY_SECONDS"),
                     120.0,
+                )
+                _remember_vnc_auth_rate_limit(
+                    agent_id,
+                    retry_after_seconds=retry_after_seconds,
+                    reason=auth_probe.reason,
                 )
                 manager.record_error(collaboration_session.session_id, "backend_auth_rate_limited")
                 _service_log_event(
@@ -1130,6 +1208,11 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                     retry_after_seconds = _coerce_nonnegative_timeout(
                         os.environ.get("BOREALIS_VNC_AUTH_RATE_LIMIT_RETRY_SECONDS"),
                         120.0,
+                    )
+                    _remember_vnc_auth_rate_limit(
+                        agent_id,
+                        retry_after_seconds=retry_after_seconds,
+                        reason=auth_probe.reason,
                     )
                     manager.record_error(collaboration_session.session_id, "backend_auth_rate_limited")
                     _service_log_event(

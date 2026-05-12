@@ -21,6 +21,7 @@ from .conftest import EngineTestHarness
 
 @pytest.fixture(autouse=True)
 def _guacd_ready(monkeypatch):
+    vnc_api._clear_vnc_auth_rate_limits()
     monkeypatch.setattr(
         vnc_api,
         "guacd_health",
@@ -37,6 +38,8 @@ def _guacd_ready(monkeypatch):
         "_wait_for_backend_auth_ready",
         lambda *args, **kwargs: rfb_probe.VncAuthProbeResult(True, True, "auth_ok"),
     )
+    yield
+    vnc_api._clear_vnc_auth_rate_limits()
 
 
 def _client_with_admin_session(harness: EngineTestHarness):
@@ -523,6 +526,62 @@ def test_vnc_establish_stops_when_backend_auth_is_rate_limited(
         "detail": "Your connection has been rejected to many attempts.",
         "retry_after_seconds": 90.0,
     }
+    assert emitted_events == []
+    assert fake_tunnel.transport_marks == []
+    assert fake_tunnel.start_calls == []
+
+
+def test_vnc_establish_caches_backend_auth_rate_limit(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    emitted_events: list[tuple[str, str, dict[str, Any]]] = []
+    auth_probe_calls = 0
+    _register_agent_credential(engine_harness)
+
+    engine_harness.context.emit_agent_event = lambda agent_id, event, payload: emitted_events.append(
+        (agent_id, event, dict(payload))
+    ) or True
+
+    monkeypatch.setenv("BOREALIS_VNC_AUTH_RATE_LIMIT_RETRY_SECONDS", "90")
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+
+    def _rate_limited_probe(*_args, **_kwargs):
+        nonlocal auth_probe_calls
+        auth_probe_calls += 1
+        return rfb_probe.VncAuthProbeResult(
+            True,
+            False,
+            "Your connection has been rejected to many attempts.",
+        )
+
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_auth_ready", _rate_limited_probe)
+
+    first = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "remove_wallpaper": True},
+    )
+    assert first.status_code == 503
+    assert first.get_json()["error"] == "vnc_backend_auth_rate_limited"
+
+    def _unexpected_probe(*_args, **_kwargs):
+        raise AssertionError("cached auth lockout should skip RFB probe")
+
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_auth_ready", _unexpected_probe)
+
+    second = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "remove_wallpaper": True},
+    )
+
+    assert second.status_code == 503
+    assert second.get_json()["error"] == "vnc_backend_auth_rate_limited"
+    assert second.get_json()["retry_after_seconds"] <= 90.0
+    assert auth_probe_calls == 1
     assert emitted_events == []
     assert fake_tunnel.transport_marks == []
     assert fake_tunnel.start_calls == []
