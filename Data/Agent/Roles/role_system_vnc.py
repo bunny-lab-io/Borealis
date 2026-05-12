@@ -690,7 +690,13 @@ def _write_ultravnc_config(path: Path, updates: dict[str, str]) -> bool:
         lines.extend(["", "[admin]", f"Secure={secure_value}"])
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("\n".join(lines) + "\n", encoding="ascii")
+        content = "\n".join(lines) + "\n"
+        try:
+            previous = path.read_text(encoding="ascii", errors="ignore")
+        except Exception:
+            previous = ""
+        if previous != content:
+            path.write_text(content, encoding="ascii")
         return True
     except Exception as exc:
         _write_log(f"Failed to write UltraVNC config at {path}: {exc}")
@@ -2074,30 +2080,51 @@ class VncManager:
             )
             if not ini_path:
                 return
-            applied_controller_password, applied_view_only_password = self._apply_passwords(
-                config_dir,
-                config_path,
-                controller_password or "",
-                view_only_password,
+            force_service_reload = _should_force_ultravnc_reload(reason)
+            requested_controller_password = str(controller_password or "")[:8]
+            requested_view_only_password = str(view_only_password or "")[:8] if view_only_password else None
+            credentials_already_applied = (
+                requested_controller_password
+                and self._last_port == port_value
+                and self._last_controller_password == requested_controller_password
+                and self._last_view_only_password == requested_view_only_password
             )
-            if not applied_controller_password:
-                return
+            should_apply_passwords = force_service_reload or not credentials_already_applied
+            if should_apply_passwords:
+                applied_controller_password, applied_view_only_password = self._apply_passwords(
+                    config_dir,
+                    config_path,
+                    controller_password or "",
+                    view_only_password,
+                )
+                if not applied_controller_password:
+                    return
+            else:
+                applied_controller_password = requested_controller_password
+                applied_view_only_password = requested_view_only_password
             peer_config_path: Optional[Path] = None
-            if os.name == "nt":
+            if os.name == "nt" and should_apply_passwords:
                 peer_config_path = _sync_ultravnc_programdata_peer_config(config_path, config_dir)
             service_config_path: Optional[Path] = None
             if _should_use_ultravnc_config_arg(self._vnc_exe):
-                mirrored_config = _mirror_ultravnc_config_to_service_dir(config_path, self._vnc_exe)
-                if mirrored_config:
+                mirror_target = type(config_path)(self._vnc_exe).parent / "ultravnc.ini"
+                mirror_missing = not mirror_target.exists()
+                mirrored_config = (
+                    _mirror_ultravnc_config_to_service_dir(config_path, self._vnc_exe)
+                    if should_apply_passwords or mirror_missing
+                    else mirror_target
+                )
+                if mirrored_config and (should_apply_passwords or mirror_missing):
                     _write_log(f"UltraVNC service config mirrored to {mirrored_config}.")
                 service_config_path = mirrored_config or config_path
             else:
-                _write_log(
-                    "UltraVNC service using ProgramData config paths primary={0} legacy={1}.".format(
-                        config_path,
-                        peer_config_path or "-",
+                if should_apply_passwords:
+                    _write_log(
+                        "UltraVNC service using ProgramData config paths primary={0} legacy={1}.".format(
+                            config_path,
+                            peer_config_path or "-",
+                        )
                     )
-                )
 
             service_was_running = False
             if service_name:
@@ -2108,7 +2135,6 @@ class VncManager:
                 return
             service_name = self._resolve_service_name(refresh=True) or service_name
 
-            force_service_reload = _should_force_ultravnc_reload(reason)
             if service_was_running and (
                 force_service_reload
                 or self._last_port != port_value

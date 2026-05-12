@@ -591,7 +591,7 @@ def test_vnc_start_uses_programdata_config_for_system_install(monkeypatch, tmp_p
     manager = vnc_role.VncManager.__new__(vnc_role.VncManager)
     manager._lock = threading.RLock()
     manager._last_port = 5900
-    manager._last_controller_password = "bootpass"
+    manager._last_controller_password = "oldpass"
     manager._last_view_only_password = None
     manager._vnc_exe = str(exe_path)
     manager._vnc_root = exe_dir
@@ -650,7 +650,7 @@ def test_vnc_start_syncs_programdata_named_and_legacy_passwords(monkeypatch, tmp
     manager = vnc_role.VncManager.__new__(vnc_role.VncManager)
     manager._lock = threading.RLock()
     manager._last_port = 5900
-    manager._last_controller_password = "bootpass"
+    manager._last_controller_password = "oldpass"
     manager._last_view_only_password = None
     manager._vnc_exe = str(exe_path)
     manager._vnc_root = exe_dir
@@ -687,6 +687,67 @@ def test_vnc_start_syncs_programdata_named_and_legacy_passwords(monkeypatch, tmp
     assert "passwd=2FEAEE5C3DA6B27C" in service_raw
     assert service_raw == legacy_raw
     assert not (exe_dir / "ultravnc.ini").exists()
+
+
+def test_vnc_start_skips_password_rewrite_when_steady_state(monkeypatch, tmp_path) -> None:
+    service_config_paths: list[Path | None] = []
+    logs: list[str] = []
+    program_files = tmp_path / "Program Files"
+    exe_dir = program_files / "uvnc bvba" / "UltraVNC"
+    config_dir = tmp_path / "ProgramData" / "UltraVNC"
+    exe_dir.mkdir(parents=True)
+    config_dir.mkdir(parents=True)
+    exe_path = exe_dir / "winvnc.exe"
+    exe_path.write_text("stub", encoding="ascii")
+    service_config = config_dir / "BorealisAgentUltraVNC.ini"
+    service_config.write_text(
+        "[UltraVNC]\nUseRegistry=0\nAuthRequired=1\nPortNumber=5900\npasswd=2FEAEE5C3DA6B27C\npasswd2=\n",
+        encoding="ascii",
+    )
+    legacy_config = config_dir / "ultravnc.ini"
+    legacy_config.write_text(service_config.read_text(encoding="ascii"), encoding="ascii")
+
+    manager = vnc_role.VncManager.__new__(vnc_role.VncManager)
+    manager._lock = threading.RLock()
+    manager._last_port = 5900
+    manager._last_controller_password = "bootpass"
+    manager._last_view_only_password = None
+    manager._vnc_exe = str(exe_path)
+    manager._vnc_root = exe_dir
+    manager._password_tool = None
+    manager._password_tool_logged = False
+    manager._service_name = "BorealisAgentUltraVNC"
+    manager._last_service_error = ""
+    manager._last_listener_recovery_at = 0.0
+    manager._ensure_firewall = lambda _allowed_ips, _port: None
+    manager._resolve_service_name = lambda refresh=False: "BorealisAgentUltraVNC"
+    manager._service_state_by_name = lambda _service_name: "RUNNING"
+    manager._ensure_service_running = lambda config_path=None: service_config_paths.append(config_path) or True
+    manager._restart_service = lambda: None
+    manager._wait_for_listener = lambda _port, timeout=8.0: True
+
+    def _fail_apply_passwords(*_args, **_kwargs):
+        raise AssertionError("steady-state start should not rewrite VNC passwords")
+
+    manager._apply_passwords = _fail_apply_passwords
+
+    monkeypatch.setattr(vnc_role.os, "name", "nt", raising=False)
+    monkeypatch.setenv("ProgramFiles", str(program_files))
+    monkeypatch.setattr(vnc_role, "_resolve_vnc_config_dir", lambda: config_dir)
+    monkeypatch.setattr(vnc_role, "_write_log", lambda message: logs.append(message))
+
+    manager.start(
+        port=5900,
+        allowed_ips="10.255.0.1/32",
+        controller_password="bootpass",
+        view_only_password=None,
+        reason="always_on_check",
+    )
+
+    assert service_config_paths == [None]
+    assert not any("password hash missing" in entry for entry in logs)
+    assert not any("ProgramData peer config synchronized" in entry for entry in logs)
+    assert service_config.read_text(encoding="ascii") == legacy_config.read_text(encoding="ascii")
 
 
 def test_vnc_auth_retry_reloads_running_service_when_password_changes(monkeypatch, tmp_path) -> None:
