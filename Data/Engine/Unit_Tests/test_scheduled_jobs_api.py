@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import socket
 import sys
+import zipfile
 from types import SimpleNamespace
 
 import pytest
@@ -1311,6 +1312,36 @@ def test_onboarding_remote_command_marks_agent_noninteractive(engine_harness: En
     assert "BOREALIS_AGENT_NONINTERACTIVE=1" in command
     assert "BOREALIS_AGENT_NO_TTY=1" in command
     assert "BOREALIS_ONBOARDING_TARGET=192.168.3.8" in command
+
+
+def test_windows_agent_payload_bundle_uses_selected_non_main_branch(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    source_root = tmp_path / "branch-source" / "Data" / "Agent"
+    source_root.mkdir(parents=True)
+    (source_root / "agent.py").write_text("print('branch payload')\n", encoding="utf-8")
+    (source_root / "branch-marker.txt").write_text("feature/test\n", encoding="utf-8")
+    calls = []
+
+    monkeypatch.setattr(scheduler, "_local_project_branch", lambda _project_root: "main")
+
+    def fake_download(branch: str):
+        calls.append(branch)
+        return source_root
+
+    monkeypatch.setattr(scheduler, "_download_windows_agent_payload_source", fake_download)
+
+    bundle_path, digest = scheduler._windows_create_agent_payload_bundle("feature/test")
+
+    assert calls == ["feature/test"]
+    assert digest
+    with zipfile.ZipFile(bundle_path, "r") as archive:
+        names = set(archive.namelist())
+    assert "Data/Agent/agent.py" in names
+    assert "Data/Agent/branch-marker.txt" in names
 
 
 def test_onboarding_failure_hint_prefers_actionable_output() -> None:

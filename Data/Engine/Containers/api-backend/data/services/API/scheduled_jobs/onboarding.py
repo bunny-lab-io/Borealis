@@ -26,6 +26,8 @@ import socket
 import tempfile
 import threading
 import time
+import urllib.parse
+import urllib.request
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -4234,9 +4236,11 @@ class OnboardingSchedulerMixin:
         )
         return "cmd.exe", f"/C {prelaunch}"
 
-    def _windows_create_agent_payload_bundle(self) -> Tuple[Path, str]:
+    def _windows_create_agent_payload_bundle(self, branch: str = "main") -> Tuple[Path, str]:
+        branch_ref = str(branch or "main").strip() or "main"
         current = Path(__file__).resolve()
         source_root = None
+        project_root = None
         env_root = str(os.environ.get("BOREALIS_PROJECT_ROOT") or "").strip()
         candidates = []
         if env_root:
@@ -4246,15 +4250,23 @@ class OnboardingSchedulerMixin:
             probe = candidate / "Data" / "Agent"
             if (probe / "agent.py").is_file():
                 source_root = probe
+                project_root = candidate
                 break
             probe = candidate / "Data" / "Engine" / "Data" / "Agent"
             if (probe / "agent.py").is_file():
                 source_root = probe
+                project_root = candidate
                 break
         if source_root is None:
             raise FileNotFoundError("Data/Agent/agent.py")
         if not (source_root / "agent.py").is_file():
             raise FileNotFoundError("Data/Agent/agent.py")
+        local_branch = self._local_project_branch(project_root)
+        if branch_ref and (
+            (local_branch and local_branch.lower() != branch_ref.lower())
+            or (not local_branch and branch_ref.lower() != "main")
+        ):
+            source_root = self._download_windows_agent_payload_source(branch_ref)
         temp_dir = Path(tempfile.mkdtemp(prefix="borealis-agent-payload-"))
         bundle_path = temp_dir / "agent-payload.zip"
         excluded_dirs = {"Unit_Tests", "Bootstrap", "Logs", "__pycache__", ".pytest_cache"}
@@ -4272,6 +4284,38 @@ class OnboardingSchedulerMixin:
                 archive.write(path, arcname.as_posix())
         digest = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
         return bundle_path, digest
+
+    def _local_project_branch(self, project_root: Optional[Path]) -> str:
+        if project_root is None:
+            return ""
+        head_path = project_root / ".git" / "HEAD"
+        try:
+            text = head_path.read_text(encoding="utf-8", errors="ignore").strip()
+        except Exception:
+            return ""
+        prefix = "ref: refs/heads/"
+        if text.startswith(prefix):
+            return text[len(prefix) :].strip()
+        return ""
+
+    def _download_windows_agent_payload_source(self, branch: str) -> Path:
+        branch_ref = str(branch or "main").strip() or "main"
+        encoded_branch = urllib.parse.quote(branch_ref, safe="")
+        archive_url = f"https://codeload.github.com/bunny-lab-io/Borealis/zip/refs/heads/{encoded_branch}"
+        temp_dir = Path(tempfile.mkdtemp(prefix="borealis-agent-branch-"))
+        archive_path = temp_dir / "borealis-source.zip"
+        with urllib.request.urlopen(archive_url, timeout=180) as response:
+            if getattr(response, "status", 200) < 200 or getattr(response, "status", 200) >= 300:
+                raise RuntimeError(f"GitHub branch archive download failed for {branch_ref}: HTTP {getattr(response, 'status', 'unknown')}")
+            archive_path.write_bytes(response.read())
+        extract_root = temp_dir / "extract"
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            archive.extractall(extract_root)
+        for child in extract_root.iterdir():
+            candidate = child / "Data" / "Agent"
+            if (candidate / "agent.py").is_file():
+                return candidate
+        raise FileNotFoundError(f"Data/Agent/agent.py missing from branch {branch_ref}")
 
     def _windows_smb_stage_agent_exe(
         self,
@@ -4307,7 +4351,7 @@ class OnboardingSchedulerMixin:
         output_abs = f"C:\\{output_path}"
         state_abs = "C:\\Borealis\\Temp\\Onboarding\\state.json"
         events_abs = "C:\\Borealis\\Temp\\Onboarding\\events.jsonl"
-        bundle_path, bundle_sha256 = self._windows_create_agent_payload_bundle()
+        bundle_path, bundle_sha256 = self._windows_create_agent_payload_bundle(branch_ref)
         config = {
             "install_dir": "C:\\Borealis",
             "repo_url": DEFAULT_BOREALIS_REPO_GIT_URL,
@@ -5044,7 +5088,7 @@ class OnboardingSchedulerMixin:
             output_abs = "C:\\Borealis\\Temp\\Onboarding\\stdout.log"
             state_abs = "C:\\Borealis\\Temp\\Onboarding\\state.json"
             events_abs = "C:\\Borealis\\Temp\\Onboarding\\events.jsonl"
-            bundle_path, bundle_sha256 = self._windows_create_agent_payload_bundle()
+            bundle_path, bundle_sha256 = self._windows_create_agent_payload_bundle(branch_ref)
             config = {
                 "install_dir": "C:\\Borealis",
                 "repo_url": DEFAULT_BOREALIS_REPO_GIT_URL,
