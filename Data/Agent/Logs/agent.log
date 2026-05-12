@@ -1,1 +1,0 @@
-[2026-05-11 21:32:37] [CONTEXT-SYSTEM] agent.py loaded; SYSTEM_SERVICE_MODE=True; SESSION_HELPER_MODE=False; argv=['/tmp/borealis-test-venv/lib/python3.12/site-packages/pytest/__main__.py', '-q', 'Data/Agent/Unit_Tests', '--junitxml', '/opt/Borealis/Unit_Test_Results/agent-20260512T033234Z/agent-pytest.xml']
