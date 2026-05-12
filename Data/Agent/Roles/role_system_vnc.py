@@ -995,8 +995,13 @@ class _VncAuthProbeResult(NamedTuple):
 def _vnc_auth_probe_explicit_auth_failure(result: _VncAuthProbeResult) -> bool:
     if not result.checked or result.ok:
         return False
-    reason = str(result.reason or "").strip().lower()
-    return reason.startswith(("auth_failed", "too_many_auth_failures"))
+    reason = str(result.reason or "").strip().replace("_", " ").lower()
+    return (
+        reason.startswith(("auth failed", "too many auth failures"))
+        or "authentication rejected" in reason
+        or "too many attempts" in reason
+        or "to many attempts" in reason
+    )
 
 
 def _vnc_auth_probe_transient_failure(result: _VncAuthProbeResult) -> bool:
@@ -1016,6 +1021,11 @@ def _vnc_auth_probe_transient_failure(result: _VncAuthProbeResult) -> bool:
             "timeout",
         }
     )
+
+
+def _local_vnc_auth_verify_enabled() -> bool:
+    value = str(os.environ.get("BOREALIS_VNC_LOCAL_AUTH_VERIFY", "") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 def _read_socket_exact(sock: socket.socket, byte_count: int) -> bytes:
@@ -3063,6 +3073,18 @@ class Role:
             request_id=request_id,
             rotate_if_requested=False,
         )
+        if not _local_vnc_auth_verify_enabled():
+            payload["auth_verified"] = False
+            payload["auth_verify_reason"] = "local_probe_disabled"
+            self._trace(
+                "A47",
+                event="vnc_credential_verify",
+                reason=reason or "-",
+                request_id=request_id or "-",
+                ready=False,
+                result="local_probe_disabled",
+            )
+            return payload
         password = str(payload.get("controller_password") or "")[:8]
         port_value = _coerce_int(payload.get("port"), DEFAULT_VNC_PORT, min_value=1, max_value=65535)
         auth_result = self._wait_for_local_vnc_auth(port=port_value, password=password)

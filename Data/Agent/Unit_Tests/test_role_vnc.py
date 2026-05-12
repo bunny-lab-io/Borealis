@@ -1133,9 +1133,28 @@ def _role_for_verified_live_credential() -> tuple[vnc_role.Role, list[str], list
     return role, ensure_calls, traces
 
 
-def test_verified_live_credential_returns_password_on_probe_timeout_without_reload() -> None:
+def test_verified_live_credential_returns_password_without_local_probe_by_default() -> None:
+    role, ensure_calls, traces = _role_for_verified_live_credential()
+
+    def _unexpected_probe(**_kwargs):
+        raise AssertionError("local VNC auth probe should be disabled by default")
+
+    role._wait_for_local_vnc_auth = _unexpected_probe
+
+    payload = role._verified_live_credential_payload(reason="vnc_establish", request_id="request-1")
+
+    assert payload["status"] == "ok"
+    assert payload["controller_password"] == "bootpass"
+    assert payload["auth_verified"] is False
+    assert payload["auth_verify_reason"] == "local_probe_disabled"
+    assert ensure_calls == ["vnc_establish"]
+    assert not any(kwargs.get("retry") == "force_reload" for _args, kwargs in traces)
+
+
+def test_verified_live_credential_returns_password_on_probe_timeout_without_reload(monkeypatch) -> None:
     role, ensure_calls, traces = _role_for_verified_live_credential()
     role._wait_for_local_vnc_auth = lambda **_kwargs: vnc_role._VncAuthProbeResult(True, False, "timed out")
+    monkeypatch.setenv("BOREALIS_VNC_LOCAL_AUTH_VERIFY", "1")
 
     payload = role._verified_live_credential_payload(reason="vnc_establish", request_id="request-1")
 
@@ -1148,7 +1167,7 @@ def test_verified_live_credential_returns_password_on_probe_timeout_without_relo
     assert not any(kwargs.get("retry") == "force_reload" for _args, kwargs in traces)
 
 
-def test_verified_live_credential_force_reloads_on_explicit_auth_failure() -> None:
+def test_verified_live_credential_force_reloads_on_explicit_auth_failure(monkeypatch) -> None:
     role, ensure_calls, traces = _role_for_verified_live_credential()
     results = iter(
         [
@@ -1157,6 +1176,7 @@ def test_verified_live_credential_force_reloads_on_explicit_auth_failure() -> No
         ]
     )
     role._wait_for_local_vnc_auth = lambda **_kwargs: next(results)
+    monkeypatch.setenv("BOREALIS_VNC_LOCAL_AUTH_VERIFY", "1")
 
     payload = role._verified_live_credential_payload(reason="vnc_establish", request_id="request-1")
 
@@ -1168,7 +1188,7 @@ def test_verified_live_credential_force_reloads_on_explicit_auth_failure() -> No
     assert any(args == ("A46",) and kwargs.get("retry") == "force_reload" for args, kwargs in traces)
 
 
-def test_verified_live_credential_withholds_password_on_persistent_auth_failure() -> None:
+def test_verified_live_credential_withholds_password_on_persistent_auth_failure(monkeypatch) -> None:
     role, ensure_calls, traces = _role_for_verified_live_credential()
     results = iter(
         [
@@ -1177,6 +1197,7 @@ def test_verified_live_credential_withholds_password_on_persistent_auth_failure(
         ]
     )
     role._wait_for_local_vnc_auth = lambda **_kwargs: next(results)
+    monkeypatch.setenv("BOREALIS_VNC_LOCAL_AUTH_VERIFY", "1")
 
     payload = role._verified_live_credential_payload(reason="vnc_establish", request_id="request-1")
 
