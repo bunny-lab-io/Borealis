@@ -581,11 +581,11 @@ def test_vnc_auth_retry_reloads_running_service_when_password_changes(monkeypatc
     )
 
     assert restarts == ["restart"]
-    assert not any("reload requested reason=vnc_auth_retry" in entry for entry in logs)
-    assert any("force_reload=false" in entry for entry in logs)
+    assert any("reload requested reason=vnc_auth_retry" in entry for entry in logs)
+    assert any("force_reload=true" in entry for entry in logs)
 
 
-def test_vnc_auth_retry_does_not_duplicate_reload_for_same_password(monkeypatch, tmp_path) -> None:
+def test_vnc_auth_retry_reloads_running_service_for_same_password(monkeypatch, tmp_path) -> None:
     restarts: list[str] = []
     program_files = tmp_path / "Program Files"
     exe_dir = program_files / "uvnc bvba" / "UltraVNC"
@@ -631,7 +631,7 @@ def test_vnc_auth_retry_does_not_duplicate_reload_for_same_password(monkeypatch,
         reason="vnc_auth_retry",
     )
 
-    assert restarts == []
+    assert restarts == ["restart"]
 
 
 def test_recover_listener_starts_stopped_service(monkeypatch, tmp_path) -> None:

@@ -14,6 +14,7 @@ import os
 import secrets
 import shutil
 import socket
+import struct
 import subprocess
 import tempfile
 import threading
@@ -21,7 +22,7 @@ import time
 import ctypes
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 try:
     from ctypes import wintypes
@@ -710,6 +711,8 @@ def _should_force_ultravnc_reload(reason: Any) -> bool:
     return normalized in {
         "credential_rotation",
         "engine_credential_refresh",
+        "vnc_auth_retry",
+        "vnc_credential_verify",
     }
 
 
@@ -937,6 +940,164 @@ def _compute_ultravnc_password_hash(password: str) -> Optional[str]:
     except Exception as exc:
         _write_log(f"VNC password hash fallback failed: {exc}")
         return None
+
+
+class _VncAuthProbeResult(NamedTuple):
+    checked: bool
+    ok: bool
+    reason: str
+
+
+def _read_socket_exact(sock: socket.socket, byte_count: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = int(byte_count)
+    while remaining > 0:
+        chunk = sock.recv(remaining)
+        if not chunk:
+            raise RuntimeError("socket_closed")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _read_rfb_failure_reason(sock: socket.socket) -> str:
+    try:
+        raw_length = _read_socket_exact(sock, 4)
+        length = struct.unpack(">I", raw_length)[0]
+        if length <= 0 or length > 4096:
+            return ""
+        return _read_socket_exact(sock, length).decode("utf-8", errors="replace").strip()
+    except Exception:
+        return ""
+
+
+def _reverse_byte_bits(value: int) -> int:
+    result = 0
+    for _index in range(8):
+        result = (result << 1) | (value & 1)
+        value >>= 1
+    return result
+
+
+def _vnc_auth_challenge_response(password: str, challenge: bytes) -> Optional[bytes]:
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, modes
+    except Exception:
+        return None
+    try:
+        des_algorithm = None
+        triple_des_algorithm = None
+        try:
+            from cryptography.hazmat.decrepit.ciphers import algorithms as decrepit_algorithms
+
+            des_algorithm = getattr(decrepit_algorithms, "DES", None)
+            triple_des_algorithm = getattr(decrepit_algorithms, "TripleDES", None)
+        except Exception:
+            pass
+        if des_algorithm is None or triple_des_algorithm is None:
+            from cryptography.hazmat.primitives.ciphers import algorithms
+
+            if des_algorithm is None:
+                des_algorithm = getattr(algorithms, "DES", None)
+            if triple_des_algorithm is None:
+                triple_des_algorithm = getattr(algorithms, "TripleDES", None)
+        raw_key = str(password or "").encode("latin-1", errors="ignore")[:8].ljust(8, b"\x00")
+        key = bytes(_reverse_byte_bits(byte) for byte in raw_key)
+        if des_algorithm is not None:
+            algorithm = des_algorithm(key)
+        elif triple_des_algorithm is not None:
+            algorithm = triple_des_algorithm(key * 3)
+        else:
+            return None
+        encryptor = Cipher(algorithm, modes.ECB()).encryptor()
+        return encryptor.update(challenge) + encryptor.finalize()
+    except Exception:
+        return None
+
+
+def _complete_rfb_client_init(sock: socket.socket) -> _VncAuthProbeResult:
+    try:
+        sock.sendall(b"\x01")
+        server_init = _read_socket_exact(sock, 24)
+        width, height = struct.unpack(">HH", server_init[:4])
+        if width <= 0 or height <= 0:
+            return _VncAuthProbeResult(True, False, "server_init_invalid_display")
+        name_length = struct.unpack(">I", server_init[20:24])[0]
+        if name_length < 0 or name_length > 4096:
+            return _VncAuthProbeResult(True, False, "server_init_invalid_name")
+        if name_length:
+            _read_socket_exact(sock, name_length)
+        return _VncAuthProbeResult(True, True, "server_init_ok")
+    except Exception as exc:
+        return _VncAuthProbeResult(True, False, f"server_init_failed:{str(exc)[:120]}")
+
+
+def _probe_local_vnc_auth(port: int, password: str, timeout_seconds: float = 1.5) -> _VncAuthProbeResult:
+    try:
+        port_value = int(port)
+    except Exception:
+        return _VncAuthProbeResult(True, False, "invalid_port")
+    if port_value < 1 or port_value > 65535:
+        return _VncAuthProbeResult(True, False, "invalid_port")
+    if not str(password or "").strip():
+        return _VncAuthProbeResult(True, False, "missing_password")
+    try:
+        with socket.create_connection(("127.0.0.1", port_value), timeout=max(0.25, timeout_seconds)) as sock:
+            sock.settimeout(max(0.25, timeout_seconds))
+            server_version = _read_socket_exact(sock, 12)
+            if not server_version.startswith(b"RFB "):
+                return _VncAuthProbeResult(True, False, "invalid_rfb_banner")
+            try:
+                major = int(server_version[4:7])
+                minor = int(server_version[8:11])
+            except Exception:
+                major = 3
+                minor = 8
+            client_version = b"RFB 003.008\n" if major > 3 or minor >= 8 else server_version
+            sock.sendall(client_version)
+            security_type = 0
+            if major == 3 and minor <= 3:
+                security_type = struct.unpack(">I", _read_socket_exact(sock, 4))[0]
+                if security_type == 0:
+                    detail = _read_rfb_failure_reason(sock)
+                    return _VncAuthProbeResult(True, False, detail or "security_type_rejected")
+                if security_type == 1:
+                    return _VncAuthProbeResult(True, True, "none_auth")
+                if security_type != 2:
+                    return _VncAuthProbeResult(True, False, f"unsupported_security_type_{security_type}")
+            else:
+                security_type_count = _read_socket_exact(sock, 1)[0]
+                if security_type_count <= 0:
+                    detail = _read_rfb_failure_reason(sock)
+                    return _VncAuthProbeResult(True, False, detail or "security_type_rejected")
+                security_types = _read_socket_exact(sock, security_type_count)
+                if 2 in security_types:
+                    security_type = 2
+                    sock.sendall(b"\x02")
+                elif 1 in security_types:
+                    sock.sendall(b"\x01")
+                    return _VncAuthProbeResult(True, True, "none_auth")
+                else:
+                    offered = ".".join(str(item) for item in security_types)
+                    return _VncAuthProbeResult(True, False, f"unsupported_security_types_{offered}")
+            if security_type != 2:
+                return _VncAuthProbeResult(True, False, "vnc_auth_unavailable")
+            challenge = _read_socket_exact(sock, 16)
+            response = _vnc_auth_challenge_response(password, challenge)
+            if response is None or len(response) != 16:
+                return _VncAuthProbeResult(False, True, "auth_probe_crypto_unavailable")
+            sock.sendall(response)
+            result = struct.unpack(">I", _read_socket_exact(sock, 4))[0]
+            if result == 0:
+                return _complete_rfb_client_init(sock)
+            detail = _read_rfb_failure_reason(sock)
+            if result == 1:
+                return _VncAuthProbeResult(True, False, detail or "auth_failed")
+            if result == 2:
+                return _VncAuthProbeResult(True, False, detail or "too_many_auth_failures")
+            return _VncAuthProbeResult(True, False, f"auth_result_{result}")
+    except Exception as exc:
+        return _VncAuthProbeResult(True, False, (str(exc) or "connect_failed")[:160])
 
 
 def _generate_ultravnc_password_hash(
@@ -2723,6 +2884,85 @@ class Role:
             "port": port_value,
         }
 
+    def _wait_for_local_vnc_auth(self, *, port: int, password: str, timeout_seconds: float = 5.0) -> _VncAuthProbeResult:
+        deadline = time.monotonic() + max(0.25, float(timeout_seconds or 0.0))
+        last_result = _VncAuthProbeResult(True, False, "not_checked")
+        while time.monotonic() < deadline:
+            last_result = _probe_local_vnc_auth(port, password, timeout_seconds=1.5)
+            if last_result.ok:
+                return last_result
+            reason = str(last_result.reason or "").replace("_", " ").lower()
+            retry = any(
+                marker in reason
+                for marker in {
+                    "connect failed",
+                    "connection refused",
+                    "connection reset",
+                    "socket closed",
+                    "timed out",
+                    "timeout",
+                }
+            ) or reason.startswith("server init failed")
+            if not retry:
+                return last_result
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.25, remaining))
+        return last_result
+
+    def _verified_live_credential_payload(self, *, reason: str, request_id: str = "") -> dict[str, Any]:
+        self._ensure_always_on(reason=str(reason or "vnc_establish"))
+        payload = self._live_credential_payload(
+            reason=str(reason or "vnc_establish"),
+            request_id=request_id,
+            rotate_if_requested=False,
+        )
+        password = str(payload.get("controller_password") or "")[:8]
+        port_value = _coerce_int(payload.get("port"), DEFAULT_VNC_PORT, min_value=1, max_value=65535)
+        auth_result = self._wait_for_local_vnc_auth(port=port_value, password=password)
+        if not auth_result.ok and auth_result.checked:
+            self._trace(
+                "A46",
+                event="vnc_credential_verify",
+                reason=reason or "-",
+                request_id=request_id or "-",
+                result=auth_result.reason or "-",
+                retry="force_reload",
+            )
+            self._ensure_always_on(reason="vnc_credential_verify")
+            payload = self._live_credential_payload(
+                reason=str(reason or "vnc_establish"),
+                request_id=request_id,
+                rotate_if_requested=False,
+            )
+            password = str(payload.get("controller_password") or "")[:8]
+            port_value = _coerce_int(payload.get("port"), DEFAULT_VNC_PORT, min_value=1, max_value=65535)
+            auth_result = self._wait_for_local_vnc_auth(port=port_value, password=password)
+        self._trace(
+            "A47",
+            event="vnc_credential_verify",
+            reason=reason or "-",
+            request_id=request_id or "-",
+            ready=auth_result.ok,
+            result=auth_result.reason or "-",
+        )
+        if auth_result.ok:
+            payload["auth_verified"] = True
+            payload["auth_verify_reason"] = auth_result.reason
+            return payload
+        return {
+            "status": "not_ready",
+            "agent_id": self.ctx.agent_id,
+            "request_id": request_id,
+            "reason": reason,
+            "ready": False,
+            "auth_verified": False,
+            "auth_verify_reason": auth_result.reason,
+            "credential_revision": self._credential_revision(),
+            "port": port_value,
+        }
+
     def register_events(self) -> None:
         sio = self.ctx.sio
 
@@ -2850,13 +3090,7 @@ class Role:
             if str(reason or "").strip().lower() == "vnc_auth_retry":
                 if _should_rotate_runtime_credential_for_refresh(reason):
                     self._rotate_runtime_credential(reason=str(reason))
-                self._ensure_always_on(reason=str(reason))
-                return self._live_credential_payload(
-                    reason=str(reason),
-                    request_id=request_id,
-                    rotate_if_requested=False,
-                )
-            return self._live_credential_payload(reason=str(reason), request_id=request_id)
+            return self._verified_live_credential_payload(reason=str(reason), request_id=request_id)
 
         @sio.on("vnc_stop")
         async def _vnc_stop(payload):

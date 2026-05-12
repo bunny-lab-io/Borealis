@@ -640,7 +640,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         )
         credential_wait_seconds = _coerce_nonnegative_timeout(
             os.environ.get("BOREALIS_VNC_LIVE_CREDENTIAL_WAIT_SECONDS"),
-            8.0,
+            20.0,
         )
         agent_credential = _request_live_agent_vnc_credential(
             adapters.context,
@@ -1153,7 +1153,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 }, 503
             refresh_wait_seconds = _coerce_nonnegative_timeout(
                 os.environ.get("BOREALIS_VNC_AUTH_REFRESH_WAIT_SECONDS"),
-                10.0,
+                25.0,
             )
             refreshed_credential = _request_live_agent_vnc_credential(
                 adapters.context,
