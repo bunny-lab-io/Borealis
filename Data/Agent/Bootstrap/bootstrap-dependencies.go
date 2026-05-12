@@ -333,7 +333,8 @@ func generateUltraVNCStoredPasswordHash() (string, error) {
 	if _, err := rand.Read(password); err != nil {
 		return "", err
 	}
-	block, err := des.NewCipher([]byte{23, 82, 107, 6, 35, 78, 88, 7})
+	// UltraVNC's D3DES reverses key bit order internally; Go DES does not.
+	block, err := des.NewCipher([]byte{0xE8, 0x4A, 0xD6, 0x60, 0xC4, 0x72, 0x1A, 0xE0})
 	if err != nil {
 		return "", err
 	}

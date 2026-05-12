@@ -978,7 +978,9 @@ def _compute_ultravnc_password_hash(password: str) -> Optional[str]:
             _write_log("VNC password hash fallback unavailable: TripleDES cipher missing.")
             return None
         raw_password = str(password or "").encode("latin-1", errors="ignore")[:8].ljust(8, b"\x00")
-        encryptor = Cipher(triple_des(ULTRAVNC_STORED_PASSWORD_KEY * 3), modes.ECB()).encryptor()
+        # UltraVNC's D3DES reverses key bit order internally; cryptography DES does not.
+        stored_key = bytes(_reverse_byte_bits(byte) for byte in ULTRAVNC_STORED_PASSWORD_KEY)
+        encryptor = Cipher(triple_des(stored_key * 3), modes.ECB()).encryptor()
         encrypted = encryptor.update(raw_password) + encryptor.finalize()
         return _normalize_ultravnc_password_hash(encrypted.hex())
     except Exception as exc:

@@ -488,8 +488,8 @@ def test_read_ultravnc_password_hash_uses_temp_scratch_not_live_config(monkeypat
 
 
 def test_compute_ultravnc_password_hash_uses_stored_vnc_des_format() -> None:
-    assert vnc_role._compute_ultravnc_password_hash("password") == "33483FD570CF869B00"
-    assert vnc_role._compute_ultravnc_password_hash("bootpass") == "2FEAEE5C3DA6B27C00"
+    assert vnc_role._compute_ultravnc_password_hash("password") == "DBD83CFD727A145800"
+    assert vnc_role._compute_ultravnc_password_hash("bootpass") == "E82E982EF7C0723800"
 
 
 def test_normalize_ultravnc_password_hash_uses_ultravnc_nine_byte_field() -> None:
@@ -518,7 +518,7 @@ def test_apply_passwords_uses_internal_hash_when_tool_missing(monkeypatch, tmp_p
     assert manager._apply_passwords(config_dir, config_path, "bootpass", None) == ("bootpass", None)
 
     raw = config_path.read_text(encoding="ascii")
-    assert "passwd=2FEAEE5C3DA6B27C00" in raw
+    assert "passwd=E82E982EF7C0723800" in raw
     assert "passwd2=" in raw
     assert manager._last_service_error == ""
     assert any("internal hash generator" in entry for entry in logs)
@@ -708,7 +708,7 @@ def test_vnc_start_syncs_programdata_named_and_legacy_passwords(monkeypatch, tmp
     service_raw = service_config.read_text(encoding="ascii")
     legacy_raw = legacy_config.read_text(encoding="ascii")
 
-    assert "passwd=2FEAEE5C3DA6B27C00" in service_raw
+    assert "passwd=E82E982EF7C0723800" in service_raw
     assert service_raw == legacy_raw
     assert not (exe_dir / "ultravnc.ini").exists()
 
@@ -725,7 +725,7 @@ def test_vnc_start_skips_password_rewrite_when_steady_state(monkeypatch, tmp_pat
     exe_path.write_text("stub", encoding="ascii")
     service_config = config_dir / "BorealisAgentUltraVNC.ini"
     service_config.write_text(
-        "[UltraVNC]\nUseRegistry=0\nAuthRequired=1\nPortNumber=5900\npasswd=2FEAEE5C3DA6B27C00\npasswd2=\n",
+        "[UltraVNC]\nUseRegistry=0\nAuthRequired=1\nPortNumber=5900\npasswd=E82E982EF7C0723800\npasswd2=\n",
         encoding="ascii",
     )
     legacy_config = config_dir / "ultravnc.ini"
