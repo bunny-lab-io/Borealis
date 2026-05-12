@@ -41,6 +41,8 @@ if False:  # pragma: no cover - hint for type checkers
 
 _VNC_AUTH_RATE_LIMIT_LOCK = threading.Lock()
 _VNC_AUTH_RATE_LIMITS: dict[str, tuple[float, str]] = {}
+_VNC_AUTH_REFRESH_BACKOFF_LOCK = threading.Lock()
+_VNC_AUTH_REFRESH_BACKOFFS: dict[str, tuple[float, str]] = {}
 
 
 def _current_user(app) -> Optional[Dict[str, str]]:
@@ -179,6 +181,8 @@ def _is_vnc_auth_rate_limited(reason: Any) -> bool:
 def _clear_vnc_auth_rate_limits() -> None:
     with _VNC_AUTH_RATE_LIMIT_LOCK:
         _VNC_AUTH_RATE_LIMITS.clear()
+    with _VNC_AUTH_REFRESH_BACKOFF_LOCK:
+        _VNC_AUTH_REFRESH_BACKOFFS.clear()
 
 
 def _remember_vnc_auth_rate_limit(agent_id: Any, *, retry_after_seconds: float, reason: Any) -> float:
@@ -210,6 +214,39 @@ def _cached_vnc_auth_rate_limit(agent_id: Any) -> Optional[dict[str, Any]]:
             return None
     return {
         "reason": reason or "vnc_auth_rate_limited",
+        "retry_after_seconds": max(0.0, remaining),
+    }
+
+
+def _remember_vnc_auth_refresh_backoff(agent_id: Any, *, retry_after_seconds: float, reason: Any) -> float:
+    key = _normalize_text(agent_id)
+    retry_after = max(0.0, float(retry_after_seconds or 0.0))
+    if not key or retry_after <= 0:
+        return retry_after
+    with _VNC_AUTH_REFRESH_BACKOFF_LOCK:
+        _VNC_AUTH_REFRESH_BACKOFFS[key] = (
+            time.monotonic() + retry_after,
+            _normalize_text(reason) or "vnc_backend_auth_refresh_pending",
+        )
+    return retry_after
+
+
+def _cached_vnc_auth_refresh_backoff(agent_id: Any) -> Optional[dict[str, Any]]:
+    key = _normalize_text(agent_id)
+    if not key:
+        return None
+    now = time.monotonic()
+    with _VNC_AUTH_REFRESH_BACKOFF_LOCK:
+        entry = _VNC_AUTH_REFRESH_BACKOFFS.get(key)
+        if entry is None:
+            return None
+        retry_at, reason = entry
+        remaining = retry_at - now
+        if remaining <= 0:
+            _VNC_AUTH_REFRESH_BACKOFFS.pop(key, None)
+            return None
+    return {
+        "reason": reason or "vnc_backend_auth_refresh_pending",
         "retry_after_seconds": max(0.0, remaining),
     }
 
@@ -1021,6 +1058,36 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 "retry_after_seconds": retry_after_seconds,
             }, 503
 
+        cached_auth_refresh_backoff = _cached_vnc_auth_refresh_backoff(agent_id)
+        if cached_auth_refresh_backoff is not None:
+            retry_after_seconds = float(cached_auth_refresh_backoff["retry_after_seconds"])
+            reason = _normalize_text(cached_auth_refresh_backoff["reason"]) or "vnc_backend_auth_refresh_pending"
+            manager.record_error(collaboration_session.session_id, "backend_auth_refresh_pending")
+            _trace(
+                "E16B",
+                agent_id=agent_id,
+                session_id=collaboration_session.session_id,
+                result="vnc_backend_auth_refresh_pending",
+                cached=True,
+                retry_after_seconds=round(retry_after_seconds, 3),
+                auth_reason=reason,
+                level="WARNING",
+            )
+            _service_log_event(
+                "vnc_backend_auth_refresh_pending_cached agent_id={0} session_id={1} retry_after_seconds={2} reason={3}".format(
+                    agent_id,
+                    collaboration_session.session_id,
+                    round(retry_after_seconds, 3),
+                    reason,
+                ),
+                level="WARNING",
+            )
+            return {
+                "error": "vnc_backend_auth_refresh_pending",
+                "detail": reason,
+                "retry_after_seconds": retry_after_seconds,
+            }, 503
+
         auth_probe_wait_seconds = _coerce_timeout(
             os.environ.get("BOREALIS_VNC_AUTH_PROBE_WAIT_SECONDS"),
             3.0,
@@ -1132,6 +1199,41 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                         "error": "vnc_backend_auth_refresh_failed",
                         "detail": "credential_unchanged",
                     }, 503
+                refresh_backoff_seconds = _coerce_nonnegative_timeout(
+                    os.environ.get("BOREALIS_VNC_AUTH_REFRESH_BACKOFF_SECONDS"),
+                    20.0,
+                )
+                refresh_backoff_seconds = _remember_vnc_auth_refresh_backoff(
+                    agent_id,
+                    retry_after_seconds=refresh_backoff_seconds,
+                    reason=auth_probe.reason,
+                )
+                manager.record_error(collaboration_session.session_id, "backend_auth_refresh_pending")
+                _trace(
+                    "E16B",
+                    agent_id=agent_id,
+                    session_id=collaboration_session.session_id,
+                    result="vnc_backend_auth_refresh_pending",
+                    cached=False,
+                    retry_after_seconds=round(refresh_backoff_seconds, 3),
+                    auth_reason=auth_probe.reason,
+                    credential_revision=collaboration_session.credential_revision,
+                    level="WARNING",
+                )
+                _service_log_event(
+                    "vnc_backend_auth_refresh_pending agent_id={0} session_id={1} retry_after_seconds={2} reason={3}".format(
+                        agent_id,
+                        collaboration_session.session_id,
+                        refresh_backoff_seconds,
+                        auth_probe.reason,
+                    ),
+                    level="WARNING",
+                )
+                return {
+                    "error": "vnc_backend_auth_refresh_pending",
+                    "detail": auth_probe.reason,
+                    "retry_after_seconds": refresh_backoff_seconds,
+                }, 503
             retry_wait_seconds = _coerce_timeout(
                 os.environ.get("BOREALIS_VNC_AUTH_RETRY_WAIT_SECONDS"),
                 max(20.0, float(wait_profile["retry_wait_seconds"])),
