@@ -2684,6 +2684,45 @@ class Role:
             "details": details,
         }
 
+    def _live_credential_payload(self, *, reason: str, request_id: str = "", rotate_if_requested: bool = True) -> dict[str, Any]:
+        if rotate_if_requested and _should_rotate_runtime_credential_for_refresh(reason):
+            self._rotate_runtime_credential(reason=str(reason))
+        else:
+            self._ensure_runtime_credential_fresh(reason=str(reason))
+            self._sync_runtime_session_credentials()
+        display_topology = _collect_windows_display_topology()
+        display_virtual_bounds = _display_virtual_bounds(display_topology)
+        port_value = self._state_port()
+        service_name = self.vnc._resolve_service_name() if hasattr(self.vnc, "_resolve_service_name") else None
+        service_state_lookup = getattr(self.vnc, "_service_state_by_name", None)
+        service_state = service_state_lookup(service_name) if callable(service_state_lookup) else ""
+        listener_ready = self.vnc.is_listener_ready(port_value)
+        controller_password = self._controller_password() or ""
+        self._trace(
+            "A45",
+            event="vnc_credential_request",
+            reason=reason or "-",
+            request_id=request_id or "-",
+            credential_revision=self._credential_revision(),
+            password_present=bool(controller_password),
+            listener_ready=listener_ready,
+            display_count=len(display_topology),
+        )
+        return {
+            "status": "ok",
+            "agent_id": self.ctx.agent_id,
+            "request_id": request_id,
+            "reason": reason,
+            "controller_password": controller_password,
+            "credential_revision": self._credential_revision(),
+            "display_topology": display_topology,
+            "display_virtual_bounds": display_virtual_bounds,
+            "ready": bool(listener_ready),
+            "service_state": str(service_state or "").strip(),
+            "listener_state": "listening" if listener_ready else "not_listening",
+            "port": port_value,
+        }
+
     def register_events(self) -> None:
         sio = self.ctx.sio
 
@@ -2793,6 +2832,31 @@ class Role:
                 self._ensure_always_on(reason=str(reason))
             else:
                 self._trace("A43", event="vnc_refresh", reason=reason or "-", result="bootstrap_payload_missing")
+
+        @sio.on("vnc_credential_request")
+        async def _vnc_credential_request(payload):
+            reason = "vnc_establish"
+            request_id = ""
+            if isinstance(payload, dict):
+                target_agent = payload.get("agent_id")
+                if target_agent and str(target_agent).strip() != str(self.ctx.agent_id).strip():
+                    return {
+                        "status": "ignored",
+                        "agent_id": self.ctx.agent_id,
+                    }
+                reason = str(payload.get("reason") or reason)
+                request_id = str(payload.get("request_id") or "")
+            self._mark_engine_ready("vnc_credential_request")
+            if str(reason or "").strip().lower() == "vnc_auth_retry":
+                if _should_rotate_runtime_credential_for_refresh(reason):
+                    self._rotate_runtime_credential(reason=str(reason))
+                self._ensure_always_on(reason=str(reason))
+                return self._live_credential_payload(
+                    reason=str(reason),
+                    request_id=request_id,
+                    rotate_if_requested=False,
+                )
+            return self._live_credential_payload(reason=str(reason), request_id=request_id)
 
         @sio.on("vnc_stop")
         async def _vnc_stop(payload):

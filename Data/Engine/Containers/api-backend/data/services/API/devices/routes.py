@@ -9,7 +9,7 @@
 # - GET /api/agent/software-management/overrides (Device Authenticated) - Returns file-backed software-management override hints for agent-side inventory/icon collection.
 # - POST /api/agent/vpn/ensure (Device Authenticated) - Ensures persistent WireGuard tunnel material.
 # - POST /api/agent/vpn/ready (Device Authenticated) - Records agent-side WireGuard readiness for the active tunnel.
-# - POST /api/agent/vnc/ensure (Device Authenticated) - Ensures VNC readiness and refreshes the Engine's cached agent VNC credential.
+# - POST /api/agent/vnc/ensure (Device Authenticated) - Ensures VNC readiness and reports listener/session metadata.
 # ======================================================
 
 """Device-affiliated agent endpoints for the Borealis Engine runtime."""
@@ -353,8 +353,6 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             "session_id": session.session_id,
             "session_state": session.state,
             "controller_operator_id": session.controller_operator_id or "",
-            "controller_password": session.controller_password,
-            "view_only_password": "",
             "credential_revision": int(session.credential_revision or 0),
             "remove_wallpaper": bool(session.remove_wallpaper),
             "session": manager.session_snapshot(session),
@@ -859,16 +857,8 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         active_vnc_session = _active_vnc_session_payload(resolved_agent)
         response_payload = dict(payload)
         response_payload["vnc_port"] = vnc_port
-        response_payload["vnc_password"] = (
-            str(active_vnc_session.get("controller_password") or "").strip()
-            if isinstance(active_vnc_session, dict)
-            else ""
-        )
-        response_payload["view_only_password"] = (
-            str(active_vnc_session.get("view_only_password") or "").strip()
-            if isinstance(active_vnc_session, dict)
-            else ""
-        )
+        response_payload["vnc_password"] = ""
+        response_payload["view_only_password"] = ""
         response_payload["vnc_session_id"] = (
             str(active_vnc_session.get("session_id") or "").strip()
             if isinstance(active_vnc_session, dict)
@@ -1046,51 +1036,24 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             vnc_port=vnc_port,
         )
 
-        manager = ensure_vnc_collaboration_manager(adapters.context)
         if advertised_password:
-            try:
-                stored_credential = manager.upsert_agent_credential(
-                    agent_id=resolved_agent,
-                    controller_password=advertised_password,
-                    credential_revision=advertised_revision,
-                    display_topology=advertised_display_topology,
-                )
-                _vnc_trace(
-                    "R03",
-                    context_hint,
-                    resolved_agent=resolved_agent,
-                    credential_revision=stored_credential.credential_revision,
-                    display_count=len(stored_credential.display_topology or []),
-                    virtual_width=(stored_credential.display_virtual_bounds or {}).get("width", 0),
-                    virtual_height=(stored_credential.display_virtual_bounds or {}).get("height", 0),
-                )
-            except ValueError:
-                log(
-                    "VNC",
-                    "vnc_agent_ensure_rejected_credential agent_id={0}".format(resolved_agent),
-                    context_hint,
-                    level="WARNING",
-                )
-                _vnc_trace(
-                    "R03F",
-                    context_hint,
-                    level="WARNING",
-                    resolved_agent=resolved_agent,
-                    result="credential_rejected",
-                )
+            _vnc_trace(
+                "R03",
+                context_hint,
+                resolved_agent=resolved_agent,
+                credential_revision=advertised_revision or 0,
+                display_count=len(advertised_display_topology or []),
+                credential_stored=False,
+            )
 
         active_session = _active_vnc_session_payload(resolved_agent)
         role_health = _load_agent_vnc_health(resolved_agent)
-        agent_credential = manager.get_agent_credential(resolved_agent)
         if isinstance(active_session, dict):
             active_session_payload = dict(active_session)
         else:
             active_session_payload = {}
         display_topology = []
         display_virtual_bounds: Dict[str, Any] = {}
-        if agent_credential is not None:
-            display_topology = [dict(item) for item in agent_credential.display_topology]
-            display_virtual_bounds = dict(agent_credential.display_virtual_bounds)
         if not display_topology:
             display_topology = list(role_health.get("display_topology") or [])
         if not display_virtual_bounds:
@@ -1099,7 +1062,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             "R04",
             context_hint,
             resolved_agent=resolved_agent,
-            cached_credential=agent_credential is not None,
+            cached_credential=False,
             active_session=bool(active_session_payload),
             ready=bool(role_health.get("ready")),
             service_state=role_health.get("service_state") or "-",
@@ -1140,9 +1103,9 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                     "session_id": str(active_session_payload.get("session_id") or "").strip(),
                     "session_state": str(active_session_payload.get("session_state") or "").strip(),
                     "controller_operator_id": str(active_session_payload.get("controller_operator_id") or "").strip(),
-                    "controller_password": str(active_session_payload.get("controller_password") or "").strip(),
-                    "view_only_password": str(active_session_payload.get("view_only_password") or "").strip(),
-                    "vnc_password": str(active_session_payload.get("controller_password") or "").strip(),
+                    "controller_password": "",
+                    "view_only_password": "",
+                    "vnc_password": "",
                     "credential_revision": int(active_session_payload.get("credential_revision") or 0),
                     "remove_wallpaper": bool(active_session_payload.get("remove_wallpaper")),
                     "display_topology": display_topology,
