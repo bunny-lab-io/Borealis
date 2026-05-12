@@ -10,19 +10,28 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import html
+import io
 import json
 import logging
 import math
+import multiprocessing
 import os
+import queue as queue_module
 import re
 import shlex
 import shutil
 import socket
 import tempfile
+import threading
 import time
 import uuid
+import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from urllib.parse import quote as url_quote
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
@@ -41,6 +50,14 @@ from ...auth.secrets import require_app_secret
 from ...filters.matcher import DeviceFilterMatcher
 from ...activity_history import insert_activity_history_row, update_activity_history_row
 from ..devices.session_dispatch import build_currentuser_dispatch_fields
+from .onboarding import (
+    DEFAULT_ONBOARDING_SSH_PORT,
+    JOB_KIND_ONBOARDING,
+    ONBOARDING_COMPONENT_KIND,
+    ONBOARDING_STATUS_PENDING,
+    OnboardingSchedulerMixin,
+    _onboarding_status_bucket,
+)
 from .targets import normalize_targets_for_save
 
 _WINRM_USERNAME_VAR = "__borealis_winrm_username"
@@ -100,6 +117,7 @@ CREDENTIAL_RESET_REQUIRED_MESSAGE = (
     "The credential associated with this scheduled job can no longer be decrypted due to the "
     "Aegis Cipher being reset, please update the credential with the data it is missing."
 )
+JOB_KIND_AUTOMATION = "automation"
 
 
 def _now_ts() -> int:
@@ -163,6 +181,13 @@ def _normalize_ansible_transport(run_mode: Any) -> str:
     if normalized == "local":
         return "local"
     return normalized
+
+
+def _normalize_job_kind(value: Any) -> str:
+    normalized = str(value or JOB_KIND_AUTOMATION).strip().lower()
+    if normalized in {"device_onboarding", "automatic_onboarding", "ssh_onboarding", JOB_KIND_ONBOARDING}:
+        return JOB_KIND_ONBOARDING
+    return JOB_KIND_AUTOMATION
 
 
 def _is_individual_ansible_context(run_mode: Any) -> bool:
@@ -747,7 +772,7 @@ def _wireguard_session_allows_remote_attempt(session: Mapping[str, Any], wiregua
     return True
 
 
-class JobScheduler:
+class JobScheduler(OnboardingSchedulerMixin):
     def __init__(
         self,
         app,
@@ -757,6 +782,7 @@ class JobScheduler:
         script_signer=None,
         service_logger: Optional[Callable[[str, str, Optional[str]], None]] = None,
         assembly_runtime: Optional[AssemblyRuntimeService] = None,
+        register_routes: bool = True,
     ):
         self.app = app
         self.socketio = socketio
@@ -785,6 +811,8 @@ class JobScheduler:
         self._server_ansible_runner: Optional[Callable[..., str]] = None
         # Optional callback to fetch stored credentials (with decrypted secrets)
         self._credential_fetcher: Optional[Callable[[int], Optional[Dict[str, Any]]]] = None
+        # Optional callback to resolve the Engine URL agents should enroll against.
+        self._public_base_url_lookup: Optional[Callable[[], str]] = None
         # Optional callback to fetch active WireGuard sessions keyed by agent_id.
         self._vpn_session_lookup: Optional[Callable[[], Dict[str, Dict[str, Any]]]] = None
         # Optional callback to re-prime existing WireGuard sessions for selected agents.
@@ -795,12 +823,17 @@ class JobScheduler:
         self._workflow_run_launcher: Optional[Callable[..., Dict[str, Any]]] = None
         # Optional callback to validate a saved workflow document before jobs reference it.
         self._workflow_document_validator: Optional[Callable[..., List[str]]] = None
+        # Optional callback that moves onboarding execution into job-scheduler/site-workers.
+        self._onboarding_run_dispatcher: Optional[Callable[..., Any]] = None
+        self._onboarding_dispatch_lock = threading.Lock()
+        self._onboarding_running_runs: set[int] = set()
 
         # Ensure run-history table exists
         self._init_tables()
 
         # Bind routes
-        self._register_routes()
+        if register_routes:
+            self._register_routes()
         self._log_event(
             "scheduler initialised",
             extra={
@@ -2052,6 +2085,9 @@ class JobScheduler:
     def set_credential_fetcher(self, fn: Optional[Callable[[int], Optional[Dict[str, Any]]]]):
         self._credential_fetcher = fn
 
+    def set_public_base_url_lookup(self, fn: Optional[Callable[[], str]]):
+        self._public_base_url_lookup = fn
+
     def set_vpn_session_lookup(self, fn: Optional[Callable[[], Dict[str, Dict[str, Any]]]]):
         self._vpn_session_lookup = fn
 
@@ -2063,6 +2099,9 @@ class JobScheduler:
 
     def set_workflow_run_launcher(self, fn: Optional[Callable[..., Dict[str, Any]]]):
         self._workflow_run_launcher = fn
+
+    def set_onboarding_run_dispatcher(self, fn: Optional[Callable[..., Any]]):
+        self._onboarding_run_dispatcher = fn
 
     def _init_tables(self):
         conn = self._conn()
@@ -2135,6 +2174,61 @@ class JobScheduler:
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_run_activity_run ON scheduled_job_run_activity(run_id)")
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_run_activity_activity ON scheduled_job_run_activity(activity_id)")
+        except Exception:
+            pass
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scheduled_job_onboarding_targets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER NOT NULL,
+                    job_id INTEGER NOT NULL,
+                    scheduled_ts INTEGER NOT NULL,
+                    site_id INTEGER,
+                    target_input TEXT NOT NULL,
+                    target_address TEXT,
+                    target_hostname TEXT,
+                    ssh_port INTEGER NOT NULL DEFAULT 22,
+                    status TEXT NOT NULL,
+                    detail TEXT,
+                    stdout_snippet TEXT,
+                    stderr_snippet TEXT,
+                    approval_reference TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    finished_at INTEGER,
+                    FOREIGN KEY(run_id) REFERENCES scheduled_job_runs(id) ON DELETE CASCADE,
+                    FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
+                )
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_onboarding_targets_run ON scheduled_job_onboarding_targets(run_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_onboarding_targets_job ON scheduled_job_onboarding_targets(job_id, scheduled_ts)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_onboarding_targets_status ON scheduled_job_onboarding_targets(status)")
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scheduled_job_onboarding_target_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    target_row_id INTEGER NOT NULL,
+                    run_id INTEGER NOT NULL,
+                    job_id INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    task TEXT NOT NULL,
+                    detail TEXT,
+                    stdout_snippet TEXT,
+                    stderr_snippet TEXT,
+                    started_at INTEGER NOT NULL,
+                    finished_at INTEGER,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    FOREIGN KEY(target_row_id) REFERENCES scheduled_job_onboarding_targets(id) ON DELETE CASCADE,
+                    FOREIGN KEY(run_id) REFERENCES scheduled_job_runs(id) ON DELETE CASCADE,
+                    FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
+                )
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_onboarding_target_events_target ON scheduled_job_onboarding_target_events(target_row_id, started_at)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_onboarding_target_events_run ON scheduled_job_onboarding_target_events(run_id)")
         except Exception:
             pass
         try:
@@ -2453,6 +2547,12 @@ class JobScheduler:
         return last_error or "connection_failed"
 
     def _preflight_ssh_banner(self, sock: socket.socket, *, timeout_seconds: float) -> str:
+        banner, error = self._read_ssh_banner_from_socket(sock, timeout_seconds=timeout_seconds)
+        if banner:
+            return ""
+        return error or "ssh_banner_timeout"
+
+    def _read_ssh_banner_from_socket(self, sock: socket.socket, *, timeout_seconds: float) -> Tuple[str, str]:
         deadline = time.monotonic() + max(0.1, float(timeout_seconds or 0.0))
         received = b""
         while len(received) < 255:
@@ -2465,18 +2565,36 @@ class JobScheduler:
             except socket.timeout:
                 break
             except Exception as exc:
-                return str(exc).strip() or exc.__class__.__name__
+                return "", str(exc).strip() or exc.__class__.__name__
             if not chunk:
                 break
             received += chunk
             for raw_line in received.splitlines():
                 if raw_line.startswith(b"SSH-"):
-                    return ""
+                    banner = raw_line.decode("utf-8", errors="replace").strip()
+                    return banner[:255], ""
         if received:
             compact = received.decode("utf-8", errors="replace").replace("\r", "\\r").replace("\n", "\\n").strip()
             if compact:
-                return f"invalid_ssh_banner:{compact[:80]}"
-        return "ssh_banner_timeout"
+                return "", f"invalid_ssh_banner:{compact[:80]}"
+        return "", "ssh_banner_timeout"
+
+    def _read_ssh_banner(self, *, host: str, port: int, timeout_seconds: float = 3.0) -> Tuple[str, str]:
+        normalized_host = str(host or "").strip()
+        if not normalized_host:
+            return "", "missing_host"
+        sock = None
+        try:
+            sock = socket.create_connection((normalized_host, int(port)), timeout=max(0.1, float(timeout_seconds or 0.0)))
+            return self._read_ssh_banner_from_socket(sock, timeout_seconds=timeout_seconds)
+        except Exception as exc:
+            return "", str(exc).strip() or exc.__class__.__name__
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
 
     def _preflight_ssh_session(
         self,
@@ -2519,7 +2637,7 @@ class JobScheduler:
         if normalized_become_method == "sudo":
             target_user = str(become_user or "root").strip() or "root"
             remote_steps.append(
-                "sudo -S -p {prompt} -u {user} /bin/sh -lc {command}".format(
+                "sudo -S -p {prompt} -u {user} /bin/sh -c {command}".format(
                     prompt=shlex.quote(sudo_prompt_marker),
                     user=shlex.quote(target_user),
                     command=shlex.quote("true"),
@@ -2590,6 +2708,19 @@ class JobScheduler:
                             "KbdInteractiveAuthentication=no",
                         ]
                     )
+            elif password:
+                args.extend(
+                    [
+                        "-o",
+                        "PreferredAuthentications=password,keyboard-interactive",
+                        "-o",
+                        "PubkeyAuthentication=no",
+                        "-o",
+                        "IdentitiesOnly=yes",
+                        "-o",
+                        "IdentityAgent=none",
+                    ]
+                )
             args.append(f"{normalized_username}@{normalized_host}")
             args.append(remote_command)
 
@@ -2667,8 +2798,22 @@ class JobScheduler:
 
             transcript = " ".join(part.strip() for part in transcript_parts if str(part).strip())
             compact = transcript.replace("\r", " ").replace("\n", " ").strip()
+            if not login_seen and ssh_password_sent:
+                return "permission_denied"
+            if login_seen and re.search(r"(?i)(sudo: not found|sudo: command not found|/sudo: no such file)", compact):
+                return "sudo_unavailable"
+            if login_seen and re.search(r"(?i)(sudo.*incorrect password|sorry, try again|authentication failure)", compact):
+                return "sudo_password_required"
             if compact:
-                return f"ssh_session_failed:{compact[:80]}"
+                suffix = ""
+                try:
+                    if child.exitstatus is not None:
+                        suffix = f" exit={int(child.exitstatus)}"
+                    elif child.signalstatus is not None:
+                        suffix = f" signal={int(child.signalstatus)}"
+                except Exception:
+                    suffix = ""
+                return f"ssh_session_failed:{compact[:240]}{suffix}"
             return "ssh_session_failed"
         finally:
             shutil.rmtree(str(probe_root), ignore_errors=True)
@@ -2688,41 +2833,80 @@ class JobScheduler:
             _SSH_SESSION_TIMEOUT_ENV,
             _DEFAULT_SHARED_ANSIBLE_SSH_SESSION_TIMEOUT_SECONDS,
         )
-        key_probe_result = self._preflight_ssh_session(
+        password_probe_result = self._preflight_ssh_session(
             host=host,
             port=port,
             username=username,
-            password="",
-            private_key_text=private_key_text,
+            password=password,
+            private_key_text="",
             timeout_seconds=probe_timeout,
         )
-        password_probe_result = ""
-        if not key_probe_result:
-            mode = "key"
+        key_probe_result = ""
+        if not password_probe_result:
+            mode = "password"
         else:
-            mode = "key"
-            password_probe_result = self._preflight_ssh_session(
+            mode = "password"
+            key_probe_result = self._preflight_ssh_session(
                 host=host,
                 port=port,
                 username=username,
-                password=password,
-                private_key_text="",
+                password="",
+                private_key_text=private_key_text,
                 timeout_seconds=probe_timeout,
             )
-            if not password_probe_result:
-                mode = "password"
+            if not key_probe_result:
+                mode = "key"
         self._log_event(
             "mixed ssh credential auth probe selected mode",
             host=host,
             extra={
                 "port": int(port),
                 "auth_mode": mode,
-                "probe_result": key_probe_result or "key_accepted",
-                "key_probe_result": key_probe_result or "key_accepted",
-                "password_probe_result": password_probe_result or ("not_run" if mode == "key" else "password_accepted"),
+                "probe_result": password_probe_result or "password_accepted",
+                "password_probe_result": password_probe_result or "password_accepted",
+                "key_probe_result": key_probe_result or ("not_run" if mode == "password" else "key_accepted"),
             },
         )
         return mode
+
+    def _public_base_url(self) -> str:
+        if callable(self._public_base_url_lookup):
+            try:
+                value = str(self._public_base_url_lookup() or "").strip()
+                if value:
+                    return value.rstrip("/")
+            except Exception as exc:
+                self._log_event(
+                    "public base url lookup failed",
+                    level="WARNING",
+                    extra={"error": str(exc)},
+                )
+        for env_name in ("BOREALIS_AGENT_PUBLIC_BASE_URL", "BOREALIS_PUBLIC_BASE_URL", "BOREALIS_SERVER_URL"):
+            value = str(os.getenv(env_name, "") or "").strip()
+            if value:
+                return value.rstrip("/")
+        return ""
+
+    def _clear_scheduled_job_run_history(self, job_id: int) -> int:
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM scheduled_job_runs WHERE job_id=?", (int(job_id),))
+            run_ids = [int(row[0]) for row in cur.fetchall()]
+            if not run_ids:
+                return 0
+            placeholders = ",".join(["?"] * len(run_ids))
+            params = tuple(run_ids)
+            cur.execute(f"DELETE FROM scheduled_job_run_activity WHERE run_id IN ({placeholders})", params)
+            cur.execute(f"DELETE FROM scheduled_job_run_targets WHERE run_id IN ({placeholders})", params)
+            cur.execute(f"DELETE FROM scheduled_job_onboarding_target_events WHERE run_id IN ({placeholders})", params)
+            cur.execute(f"DELETE FROM scheduled_job_onboarding_targets WHERE run_id IN ({placeholders})", params)
+            cur.execute(f"DELETE FROM scheduled_job_runs WHERE id IN ({placeholders})", params)
+            cleared = int(cur.rowcount or 0)
+            conn.commit()
+            return cleared
+        finally:
+            conn.close()
 
     def _resolved_targets_from_meta(self, resolution_meta: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
         entries = []
@@ -4978,6 +5162,8 @@ class JobScheduler:
                 placeholders = ",".join("?" for _ in stale_run_ids)
                 cur.execute(f"DELETE FROM scheduled_job_run_activity WHERE run_id IN ({placeholders})", tuple(stale_run_ids))
                 cur.execute(f"DELETE FROM scheduled_job_run_targets WHERE run_id IN ({placeholders})", tuple(stale_run_ids))
+                cur.execute(f"DELETE FROM scheduled_job_onboarding_target_events WHERE run_id IN ({placeholders})", tuple(stale_run_ids))
+                cur.execute(f"DELETE FROM scheduled_job_onboarding_targets WHERE run_id IN ({placeholders})", tuple(stale_run_ids))
                 cur.execute(f"DELETE FROM scheduled_job_runs WHERE id IN ({placeholders})", tuple(stale_run_ids))
                 conn.commit()
         except Exception as exc:
@@ -4991,7 +5177,7 @@ class JobScheduler:
             cur.execute(
                 """
                 SELECT id, components_json, targets_json, schedule_type, start_ts, expiration,
-                       execution_context, credential_id, use_service_account, created_at
+                       execution_context, credential_id, use_service_account, created_at, job_kind
                   FROM scheduled_jobs
                  WHERE enabled=1
               ORDER BY id ASC
@@ -5039,6 +5225,7 @@ class JobScheduler:
             credential_id,
             use_service_account_flag,
             created_at,
+            job_kind,
         ) in jobs:
             try:
                 try:
@@ -5049,6 +5236,43 @@ class JobScheduler:
                     components = json.loads(components_json or "[]")
                 except Exception:
                     components = []
+
+                normalized_job_kind = _normalize_job_kind(job_kind)
+                if normalized_job_kind == JOB_KIND_ONBOARDING:
+                    occurrence_ts = self._resolve_occurrence_for_tick(
+                        job_id=int(job_id),
+                        schedule_type=str(schedule_type or ""),
+                        start_ts=start_ts,
+                        created_at=created_at,
+                        now_min=now_min,
+                    )
+                    if occurrence_ts is None:
+                        continue
+                    occurrence_runs = self._load_occurrence_runs(int(job_id), int(occurrence_ts))
+                    if not occurrence_runs:
+                        self._record_onboarding_occurrence_snapshot(
+                            job_id=int(job_id),
+                            scheduled_ts=int(occurrence_ts),
+                            created_at=now,
+                        )
+                        occurrence_runs = self._load_occurrence_runs(int(job_id), int(occurrence_ts))
+                    try:
+                        job_credential_id = int(credential_id) if credential_id is not None else None
+                    except Exception:
+                        job_credential_id = None
+                    for run in occurrence_runs:
+                        status = str(run.get("status") or "").strip()
+                        if self._is_terminal_run_status(status) or status == RUN_STATUS_RUNNING:
+                            continue
+                        self._dispatch_onboarding_run(
+                            job_id=int(job_id),
+                            run_row_id=int(run["id"]),
+                            scheduled_ts=int(occurrence_ts),
+                            components=components,
+                            targets=raw_targets,
+                            credential_id=job_credential_id,
+                        )
+                    continue
 
                 workflow_components: List[Dict[str, Any]] = []
                 script_components: List[Dict[str, Any]] = []
@@ -5357,6 +5581,7 @@ class JobScheduler:
                 "enabled": bool(r[11] or 0),
                 "created_at": r[12] or 0,
                 "updated_at": r[13] or 0,
+                "job_kind": _normalize_job_kind(r[14] if len(r) > 14 else JOB_KIND_AUTOMATION),
             }
             # Attach computed status summary for latest occurrence
             try:
@@ -5425,6 +5650,59 @@ class JobScheduler:
                         }
                         for row in c.fetchall()
                     ]
+                    if base.get("job_kind") == JOB_KIND_ONBOARDING:
+                        onboarding_rows = self._load_onboarding_target_rows(base["id"], int(max_occ))
+                        result_counts = {
+                            "pending": 0,
+                            "running": 0,
+                            "success": 0,
+                            "warning": 0,
+                            "failed": 0,
+                            "expired": 0,
+                            "timed_out": 0,
+                            "skipped": 0,
+                            "total_targets": len(onboarding_rows),
+                        }
+                        for target_row in onboarding_rows:
+                            bucket = _onboarding_status_bucket(target_row.get("status"))
+                            if bucket in result_counts:
+                                result_counts[bucket] += 1
+                        if not onboarding_rows:
+                            for occurrence_row in occurrence_rows:
+                                bucket = _status_bucket_for_run(occurrence_row.get("status"))
+                                if bucket and bucket in result_counts:
+                                    result_counts[bucket] += 1
+                            result_counts["total_targets"] = max(1, len(occurrence_rows))
+                        if result_counts["running"]:
+                            summary_status = RUN_STATUS_RUNNING
+                        elif result_counts["failed"]:
+                            summary_status = RUN_STATUS_FAILED
+                        elif result_counts["warning"]:
+                            summary_status = RUN_STATUS_WARNING
+                        elif result_counts["pending"]:
+                            summary_status = RUN_STATUS_PENDING
+                        elif result_counts["success"]:
+                            summary_status = RUN_STATUS_SUCCESS
+                        elif result_counts["skipped"]:
+                            summary_status = RUN_STATUS_SKIPPED
+                        else:
+                            summary_status = occurrence_rows[0].get("status") if occurrence_rows else None
+                        last_run_ts = int(max_occ)
+                        conn.close()
+                        base["last_run_ts"] = last_run_ts
+                        base["last_status"] = summary_status or ("Scheduled" if base.get("start_ts") else "")
+                        base["latest_occurrence"] = last_run_ts
+                        base["result_counts"] = result_counts
+                        try:
+                            base["next_run_ts"] = self._compute_next_run(
+                                base["schedule_type"], base.get("start_ts"), base.get("last_run_ts"), _now_ts()
+                            )
+                        except Exception:
+                            base["next_run_ts"] = None
+                        warning = self._credential_reset_warning(base.get("credential_id"))
+                        base["warning_code"] = (warning or {}).get("warning_code") or ""
+                        base["warning_message"] = (warning or {}).get("warning_message") or ""
+                        return base
                     occurrence_target_rows = self._load_occurrence_target_rows(base["id"], int(max_occ))
                     workflow_occurrence_rows = [
                         row for row in occurrence_rows if str(row.get("component_kind") or "").strip().lower() == "workflow"
@@ -5746,7 +6024,7 @@ class JobScheduler:
                         """
                         SELECT id, name, components_json, targets_json, schedule_type, start_ts,
                                duration_stop_enabled, expiration, execution_context, credential_id,
-                               use_service_account, enabled, created_at, updated_at
+                               use_service_account, enabled, created_at, updated_at, job_kind
                         FROM scheduled_jobs
                         ORDER BY created_at DESC
                         """
@@ -5784,6 +6062,9 @@ class JobScheduler:
             data = self._json_body()
             name = (data.get("name") or "").strip()
             components = data.get("components") or []
+            job_kind = _normalize_job_kind(data.get("job_kind") or data.get("kind"))
+            if job_kind == JOB_KIND_ONBOARDING and not components:
+                components = [{"kind": ONBOARDING_COMPONENT_KIND, "install_branch": "main"}]
             targets = _normalize_targets_for_save(data.get("targets") or [])
             scoped_targets, scope_error = self._site_access.scope_job_targets_for_persistence(user, targets)
             if scope_error:
@@ -5799,6 +6080,8 @@ class JobScheduler:
             duration_stop_enabled = int(bool((data.get("duration") or {}).get("stopAfterEnabled") or data.get("duration_stop_enabled")))
             expiration = (data.get("duration") or {}).get("expiration") or data.get("expiration") or "no_expire"
             execution_context = (data.get("execution_context") or "system").strip().lower()
+            if job_kind == JOB_KIND_ONBOARDING:
+                execution_context = "onboarding_local_network"
             credential_id = data.get("credential_id")
             try:
                 credential_id = int(credential_id) if credential_id is not None else None
@@ -5806,20 +6089,31 @@ class JobScheduler:
                 credential_id = None
             use_service_account_raw = data.get("use_service_account")
             use_service_account = 1 if (_normalize_ansible_transport(execution_context) == "winrm" and (use_service_account_raw is None or bool(use_service_account_raw))) else 0
+            if job_kind == JOB_KIND_ONBOARDING:
+                use_service_account = 0
             enabled = int(bool(data.get("enabled", True)))
             credential_warning = None
-            workflow_job_error = _validate_workflow_job_configuration(
-                components,
-                targets,
-                execution_context,
-                credential_id,
-                bool(use_service_account),
-            )
-            is_workflow_job = workflow_job_error is None and bool(_workflow_components(components))
+            workflow_job_error = None
+            is_workflow_job = False
+            if job_kind != JOB_KIND_ONBOARDING:
+                workflow_job_error = _validate_workflow_job_configuration(
+                    components,
+                    targets,
+                    execution_context,
+                    credential_id,
+                    bool(use_service_account),
+                )
+                is_workflow_job = workflow_job_error is None and bool(_workflow_components(components))
             if not name or not components:
                 return json.dumps({"error": "name and components are required"}), 400, {"Content-Type": "application/json"}
             if not is_workflow_job and not targets:
                 return json.dumps({"error": "targets required"}), 400, {"Content-Type": "application/json"}
+            if job_kind == JOB_KIND_ONBOARDING:
+                _cfg, onboarding_error = self._onboarding_scope_config(components=components, targets=targets)
+                if onboarding_error:
+                    return json.dumps({"error": onboarding_error}), 400, {"Content-Type": "application/json"}
+                if credential_id is None and not (_cfg.get("windows_credential_ids") or _cfg.get("linux_credential_ids")):
+                    return json.dumps({"error": "Onboarding jobs require at least one stored credential."}), 400, {"Content-Type": "application/json"}
             if workflow_job_error:
                 return json.dumps({"error": workflow_job_error}), 400, {"Content-Type": "application/json"}
             if not is_workflow_job:
@@ -5829,7 +6123,7 @@ class JobScheduler:
             component_error = _validate_components_for_context(components, execution_context)
             if component_error:
                 return json.dumps({"error": component_error}), 400, {"Content-Type": "application/json"}
-            credential_warning = None if is_workflow_job else self._credential_reset_warning(credential_id)
+            credential_warning = None if (is_workflow_job or credential_id is None) else self._credential_reset_warning(credential_id)
             if credential_warning and enabled:
                 enabled = 0
             now = _now_ts()
@@ -5841,8 +6135,8 @@ class JobScheduler:
                 cur.execute(
                     """
                     INSERT INTO scheduled_jobs
-                    (name, components_json, targets_json, schedule_type, start_ts, duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    (name, components_json, targets_json, schedule_type, start_ts, duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, job_kind, enabled, created_at, updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         name,
@@ -5855,6 +6149,7 @@ class JobScheduler:
                         execution_context,
                         credential_id,
                         use_service_account,
+                        job_kind,
                         enabled,
                         now,
                         now,
@@ -5867,7 +6162,7 @@ class JobScheduler:
                     cur.execute(
                         """
                         SELECT id, name, components_json, targets_json, schedule_type, start_ts,
-                               duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at
+                               duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at, job_kind
                         FROM scheduled_jobs WHERE id=?
                         """,
                         (job_id,),
@@ -5884,6 +6179,7 @@ class JobScheduler:
                         "expiration=?",
                         "execution_context=?",
                         "use_service_account=?",
+                        "job_kind=?",
                         "enabled=?",
                         "created_at=?",
                         "updated_at=?",
@@ -5897,6 +6193,7 @@ class JobScheduler:
                         expiration,
                         execution_context,
                         use_service_account,
+                        job_kind,
                         enabled,
                         now,
                         now,
@@ -5914,7 +6211,7 @@ class JobScheduler:
                     cur.execute(
                         f"""
                         SELECT id, name, components_json, targets_json, schedule_type, start_ts,
-                               duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at
+                               duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at, job_kind
                           FROM scheduled_jobs
                          WHERE {" AND ".join(where_clauses)}
                          ORDER BY id DESC
@@ -5949,7 +6246,7 @@ class JobScheduler:
                 cur.execute(
                     """
                     SELECT id, name, components_json, targets_json, schedule_type, start_ts,
-                           duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at
+                           duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at, job_kind
                     FROM scheduled_jobs WHERE id=?
                     """,
                     (job_id,),
@@ -6020,6 +6317,8 @@ class JobScheduler:
                 fields["use_service_account"] = 1 if bool(data.get("use_service_account")) else 0
             if "enabled" in data:
                 fields["enabled"] = int(bool(data.get("enabled")))
+            if "job_kind" in data or "kind" in data:
+                fields["job_kind"] = _normalize_job_kind(data.get("job_kind") or data.get("kind"))
             if not fields:
                 return json.dumps({"error": "no fields to update"}), 400, {"Content-Type": "application/json"}
             try:
@@ -6028,7 +6327,7 @@ class JobScheduler:
                     cur = conn.cursor()
                     cur.execute(
                         """
-                        SELECT credential_id, enabled, components_json, execution_context, targets_json
+                        SELECT credential_id, enabled, components_json, execution_context, targets_json, job_kind
                           FROM scheduled_jobs
                          WHERE id=?
                         """,
@@ -6054,23 +6353,36 @@ class JobScheduler:
                 effective_context = fields.get("execution_context") or current_row[3] or "system"
                 effective_credential_id = fields.get("credential_id", current_row[0])
                 effective_use_service_account = fields.get("use_service_account", 0)
-                workflow_job_error = _validate_workflow_job_configuration(
-                    next_components or [],
-                    effective_targets or [],
-                    effective_context,
-                    effective_credential_id,
-                    bool(effective_use_service_account),
-                )
-                is_workflow_job = workflow_job_error is None and bool(_workflow_components(next_components or []))
+                effective_job_kind = _normalize_job_kind(fields.get("job_kind", current_row[5] if len(current_row) > 5 else JOB_KIND_AUTOMATION))
+                workflow_job_error = None
+                is_workflow_job = False
+                if effective_job_kind != JOB_KIND_ONBOARDING:
+                    workflow_job_error = _validate_workflow_job_configuration(
+                        next_components or [],
+                        effective_targets or [],
+                        effective_context,
+                        effective_credential_id,
+                        bool(effective_use_service_account),
+                    )
+                    is_workflow_job = workflow_job_error is None and bool(_workflow_components(next_components or []))
                 if workflow_job_error:
                     return json.dumps({"error": workflow_job_error}), 400, {"Content-Type": "application/json"}
                 if not is_workflow_job and not effective_targets:
                     return json.dumps({"error": "targets required"}), 400, {"Content-Type": "application/json"}
-                component_error = _validate_components_for_context(next_components or [], str(effective_context))
-                if component_error:
-                    return json.dumps({"error": component_error}), 400, {"Content-Type": "application/json"}
+                if effective_job_kind == JOB_KIND_ONBOARDING:
+                    _cfg, onboarding_error = self._onboarding_scope_config(components=next_components or [], targets=effective_targets or [])
+                    if onboarding_error:
+                        return json.dumps({"error": onboarding_error}), 400, {"Content-Type": "application/json"}
+                    if effective_credential_id in (None, "", "null") and not (_cfg.get("windows_credential_ids") or _cfg.get("linux_credential_ids")):
+                        return json.dumps({"error": "Onboarding jobs require at least one stored credential."}), 400, {"Content-Type": "application/json"}
+                    fields["execution_context"] = "onboarding_local_network"
+                    fields["use_service_account"] = 0
+                else:
+                    component_error = _validate_components_for_context(next_components or [], str(effective_context))
+                    if component_error:
+                        return json.dumps({"error": component_error}), 400, {"Content-Type": "application/json"}
                 effective_enabled = int(fields.get("enabled", current_row[1] or 0))
-                credential_warning = None if is_workflow_job else self._credential_reset_warning(effective_credential_id)
+                credential_warning = None if (is_workflow_job or effective_credential_id in (None, "", "null")) else self._credential_reset_warning(effective_credential_id)
                 if credential_warning and effective_enabled:
                     fields["enabled"] = 0
                 sets = ", ".join([f"{k}=?" for k in fields.keys()])
@@ -6085,7 +6397,7 @@ class JobScheduler:
                     cur.execute(
                         """
                         SELECT id, name, components_json, targets_json, schedule_type, start_ts,
-                               duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at
+                               duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at, job_kind
                         FROM scheduled_jobs WHERE id=?
                         """,
                         (job_id,),
@@ -6150,7 +6462,7 @@ class JobScheduler:
                     return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
                 conn.commit()
                 cur.execute(
-                    "SELECT id, name, components_json, targets_json, schedule_type, start_ts, duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at FROM scheduled_jobs WHERE id=?",
+                    "SELECT id, name, components_json, targets_json, schedule_type, start_ts, duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at, job_kind FROM scheduled_jobs WHERE id=?",
                     (job_id,),
                 )
                 row = cur.fetchone()
@@ -6274,7 +6586,7 @@ class JobScheduler:
                 try:
                     cur = conn.cursor()
                     cur.execute(
-                        "SELECT targets_json, execution_context FROM scheduled_jobs WHERE id=?",
+                        "SELECT targets_json, execution_context, job_kind FROM scheduled_jobs WHERE id=?",
                         (job_id,)
                     )
                     row = cur.fetchone()
@@ -6293,6 +6605,36 @@ class JobScheduler:
                 except Exception:
                     raw_targets = []
                 execution_context_value = str(row[1] or "").strip().lower()
+                job_kind_value = _normalize_job_kind(row[2] if len(row) > 2 else JOB_KIND_AUTOMATION)
+                if job_kind_value == JOB_KIND_ONBOARDING:
+                    onboarding_rows = self._load_onboarding_target_rows(int(job_id), int(occ)) if occ is not None else []
+                    out = [
+                        {
+                            "hostname": target_row.get("target_hostname") or target_row.get("target_address") or "",
+                            "online": False,
+                            "site_id": target_row.get("site_id"),
+                            "site_name": "",
+                            "site": "",
+                            "inventory_hostname": target_row.get("target_hostname") or "",
+                            "wireguard_peer_ip": "",
+                            "resolved_connection": "local_network_onboarding",
+                            "resolution_status": target_row.get("status") or "",
+                            "resolution_reason": target_row.get("detail") or "",
+                            "ran_on": target_row.get("finished_at") or target_row.get("updated_at"),
+                            "job_status": target_row.get("status") or ONBOARDING_STATUS_PENDING,
+                            "has_stdout": bool(target_row.get("stdout_snippet")),
+                            "has_stderr": bool(target_row.get("stderr_snippet")),
+                            "target_input": target_row.get("target_input") or "",
+                            "ssh_port": target_row.get("ssh_port") or DEFAULT_ONBOARDING_SSH_PORT,
+                            "detail": target_row.get("detail") or "",
+                            "stdout_snippet": target_row.get("stdout_snippet") or "",
+                            "stderr_snippet": target_row.get("stderr_snippet") or "",
+                            "approval_reference": target_row.get("approval_reference") or "",
+                            "activities": [],
+                        }
+                        for target_row in onboarding_rows
+                    ]
+                    return json.dumps({"occurrence": occ, "devices": out, "job_kind": JOB_KIND_ONBOARDING}), 200, {"Content-Type": "application/json"}
                 include_filters = self._targets_include_filters(raw_targets)
                 device_inventory_cache = None
                 if include_filters:
@@ -6521,6 +6863,8 @@ class JobScheduler:
                     placeholders = ",".join(["?"] * len(old_run_ids))
                     cur.execute(f"DELETE FROM scheduled_job_run_activity WHERE run_id IN ({placeholders})", tuple(old_run_ids))
                     cur.execute(f"DELETE FROM scheduled_job_run_targets WHERE run_id IN ({placeholders})", tuple(old_run_ids))
+                    cur.execute(f"DELETE FROM scheduled_job_onboarding_target_events WHERE run_id IN ({placeholders})", tuple(old_run_ids))
+                    cur.execute(f"DELETE FROM scheduled_job_onboarding_targets WHERE run_id IN ({placeholders})", tuple(old_run_ids))
                     cur.execute(f"DELETE FROM scheduled_job_runs WHERE id IN ({placeholders})", tuple(old_run_ids))
                     cleared = cur.rowcount or 0
                 else:
@@ -6530,6 +6874,8 @@ class JobScheduler:
                 return json.dumps({"status": "ok", "cleared": int(cleared), "kept_occurrence": latest}), 200, {"Content-Type": "application/json"}
             except Exception as e:
                 return json.dumps({"error": str(e)}), 500, {"Content-Type": "application/json"}
+
+        self._register_onboarding_routes(app)
 
     # ---------- Request helpers ----------
     def _json_body(self) -> Dict[str, Any]:
@@ -6548,6 +6894,7 @@ def register(
     script_signer=None,
     service_logger: Optional[Callable[[str, str, Optional[str]], None]] = None,
     assembly_runtime: Optional[AssemblyRuntimeService] = None,
+    register_routes: bool = True,
 ) -> JobScheduler:
     """Factory to create and return a JobScheduler instance."""
     return JobScheduler(
@@ -6557,6 +6904,7 @@ def register(
         script_signer=script_signer,
         service_logger=service_logger,
         assembly_runtime=assembly_runtime,
+        register_routes=register_routes,
     )
 
 
@@ -6576,6 +6924,10 @@ def set_credential_fetcher(scheduler: JobScheduler, fn: Callable[[int], Optional
     scheduler._credential_fetcher = fn
 
 
+def set_public_base_url_lookup(scheduler: JobScheduler, fn: Callable[[], str]):
+    scheduler._public_base_url_lookup = fn
+
+
 def set_vpn_session_lookup(scheduler: JobScheduler, fn: Callable[[], Dict[str, Dict[str, Any]]]):
     scheduler._vpn_session_lookup = fn
 
@@ -6593,3 +6945,7 @@ def set_workflow_run_launcher(scheduler: JobScheduler, fn: Callable[..., Dict[st
 
 def set_workflow_document_validator(scheduler: JobScheduler, fn: Callable[..., List[str]]):
     scheduler._workflow_document_validator = fn
+
+
+def set_onboarding_run_dispatcher(scheduler: JobScheduler, fn: Callable[..., Any]):
+    scheduler._onboarding_run_dispatcher = fn

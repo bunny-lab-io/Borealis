@@ -14,6 +14,9 @@ from types import SimpleNamespace
 import pytest
 
 from Data.Engine.services.API.scheduled_jobs import job_scheduler as scheduled_job_module
+from Data.Engine.services.API.scheduled_jobs.onboarding import parse_onboarding_scope
+from Data.Engine.services.API.scheduled_jobs.targets import normalize_targets_for_save
+from Data.Engine.services.auth import UserSiteAccessManager
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.server import create_app
 
@@ -104,6 +107,1225 @@ class _FakePreflightSocket:
 
     def close(self) -> None:
         self.closed = True
+
+
+def test_onboarding_scope_parser_expands_supported_targets() -> None:
+    targets, errors = parse_onboarding_scope(
+        ["# primary lab", "192.168.10.5 # database", "192.168.10.10-12", "10.0.0.0/30", "server01.lab"],
+        max_targets=16,
+    )
+
+    assert errors == []
+    assert [target["host"] for target in targets] == [
+        "192.168.10.5",
+        "192.168.10.10",
+        "192.168.10.11",
+        "192.168.10.12",
+        "10.0.0.1",
+        "10.0.0.2",
+        "server01.lab",
+    ]
+
+
+def test_onboarding_scope_target_normalization_and_site_scope(engine_harness: EngineTestHarness) -> None:
+    normalized = normalize_targets_for_save(
+        [
+            {
+                "kind": "onboarding_scope",
+                "site_id": 1,
+                "site_name": "Main Lab",
+                "entries": "# Workstations\n192.168.1.10 # LAB-AIO-01\n\n\n# Build Nodes\nserver01.lab # build node",
+                "exclusions": "# Infrastructure\n192.168.1.1 # gateway\n\nprinter01.lab # office printer",
+            }
+        ]
+    )
+    assert normalized == [
+        {
+            "kind": "onboarding_scope",
+            "site_id": 1,
+            "site_name": "Main Lab",
+            "entries": [
+                "# Workstations",
+                "192.168.1.10 # LAB-AIO-01",
+                "",
+                "",
+                "# Build Nodes",
+                "server01.lab # build node",
+            ],
+            "exclusions": ["# Infrastructure", "192.168.1.1 # gateway", "", "printer01.lab # office printer"],
+        }
+    ]
+
+    expanded, parse_errors = parse_onboarding_scope(normalized[0]["entries"])
+    assert parse_errors == []
+    assert [target["host"] for target in expanded] == ["192.168.1.10", "server01.lab"]
+    raw_input_by_target = scheduled_job_module._onboarding_raw_input_map(normalized[0]["entries"], default_port=22)
+    assert raw_input_by_target["192.168.1.10:22"] == "192.168.1.10 # LAB-AIO-01"
+    assert "LAB-AIO-01" in scheduled_job_module._onboarding_approval_lookup_candidates(
+        {"target_input": raw_input_by_target["192.168.1.10:22"]}
+    )
+
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (id, username, display_name, password_sha512, role, last_login, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "site-user", "Site User", "test", "User", 0, 0, 0),
+        )
+        cur.execute(
+            "INSERT INTO user_site_assignments (user_id, site_id, assigned_at) VALUES (?, ?, ?)",
+            (2, 1, 1_700_000_000),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    manager = UserSiteAccessManager(lambda: sqlite3.connect(engine_harness.db_path))
+    scoped, error = manager.scope_job_targets_for_persistence(
+        {"username": "site-user", "role": "User"},
+        normalized,
+    )
+
+    assert error is None
+    assert scoped[0]["kind"] == "onboarding_scope"
+    assert scoped[0]["entries"] == normalized[0]["entries"]
+    assert scoped[0]["exclusions"] == normalized[0]["exclusions"]
+    assert scoped[0]["allowed_site_ids"] == [1]
+    assert manager.job_targets_fit_scope({"username": "site-user", "role": "User"}, scoped)
+
+
+def test_scheduled_jobs_api_creates_onboarding_job(engine_harness: EngineTestHarness) -> None:
+    client, _scheduler = _scheduled_jobs_client(engine_harness)
+
+    response = client.post(
+        "/api/scheduled_jobs",
+        json={
+            "job_kind": "onboarding",
+            "name": "Automatic Device Onboarding Main Lab",
+            "targets": [
+                {
+                    "kind": "onboarding_scope",
+                    "site_id": 1,
+                    "site_name": "Main Lab",
+                    "entries": ["192.168.10.5", "server01.lab"],
+                    "exclusions": ["192.168.10.99"],
+                }
+            ],
+            "components": [
+                {
+                    "kind": "device_onboarding",
+                    "install_branch": "main",
+                    "ssh_port": 22,
+                    "onboarding_concurrency": 5,
+                }
+            ],
+            "credential_id": 77,
+            "execution_context": "onboarding_local_network",
+            "schedule": {"type": "immediately"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    job = payload["job"]
+    assert job["job_kind"] == "onboarding"
+    assert job["execution_context"] == "onboarding_local_network"
+    assert job["components"][0]["kind"] == "device_onboarding"
+    assert job["components"][0]["onboarding_concurrency"] == 5
+    assert job["targets"][0]["kind"] == "onboarding_scope"
+    assert job["targets"][0]["exclusions"] == ["192.168.10.99"]
+
+
+def test_onboarding_scope_config_parses_concurrency(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    config, error = scheduler._onboarding_scope_config(
+        components=[
+            {
+                "kind": "device_onboarding",
+                "install_branch": "main",
+                "ssh_port": 22,
+                "onboarding_concurrency": "5",
+            }
+        ],
+        targets=[
+            {
+                "kind": "onboarding_scope",
+                "site_id": 1,
+                "entries": ["192.168.10.5"],
+            }
+        ],
+    )
+
+    assert error is None
+    assert config["onboarding_concurrency"] == 5
+
+
+def test_onboarding_scope_config_parses_windows_platform(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    config, error = scheduler._onboarding_scope_config(
+        components=[
+            {
+                "kind": "device_onboarding",
+                "install_branch": "main",
+                "agent_platform": "windows",
+                "windows_port": "445",
+                "winrm_port": "5986",
+                "onboarding_methods": ["smb", "task", "winrm"],
+                "onboarding_concurrency": "5",
+            }
+        ],
+        targets=[
+            {
+                "kind": "onboarding_scope",
+                "site_id": 1,
+                "entries": ["192.168.10.5"],
+            }
+        ],
+    )
+
+    assert error is None
+    assert config["agent_platform"] == "windows"
+    assert config["transport_port"] == 445
+    assert config["winrm_port"] == 5986
+    assert config["onboarding_methods"] == ["smb_scm", "scheduled_task", "wmi_dcom", "winrm"]
+
+
+def test_windows_smb_remote_names_include_wildcard_fallback() -> None:
+    names = scheduled_job_module._windows_smb_remote_names(
+        "192.168.10.25",
+        {"metadata": {"netbios_name": "LABDOCS01"}},
+    )
+
+    assert names == ["LABDOCS01", "*SMBSERVER", "192.168.10.25"]
+
+
+def test_windows_scheduled_task_xml_uses_localsystem_sid(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    xml = scheduler._windows_task_xml(task_name="\\BorealisTest", command="cmd.exe", arguments="/C whoami")
+
+    assert "<Principal id=\"LocalSystem\">" in xml
+    assert "<UserId>S-1-5-18</UserId>" in xml
+    assert "<Actions Context=\"LocalSystem\">" in xml
+    assert "<AllowStartOnDemand>true</AllowStartOnDemand>" in xml
+
+
+def test_windows_onboarding_requires_agent_exe(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    unavailable = scheduler._windows_agent_exe_unavailable_result()
+
+    assert unavailable["exit_code"] == 127
+    assert scheduled_job_module.AGENT_EXE_NAME in unavailable["stderr"]
+    assert "BOREALIS_WINDOWS_AGENT_EXE" in unavailable["stderr"]
+    assert scheduler._windows_quote_command_arg("C:\\Borealis\\Agent.exe").endswith("Agent.exe")
+    assert scheduler._windows_quote_command_arg("C:\\Borealis\\Temp\\Onboarding\\bootstrapper-config.json").startswith('"')
+
+
+def test_windows_onboarding_dependency_progress_keeps_dependency_name() -> None:
+    assert (
+        scheduled_job_module._onboarding_progress_task_from_output(
+            stdout="__BOREALIS_AGENT_STEP_STARTED__=Dependency: UltraVNC Server"
+        )
+        == "Installing Agent Dependencies: UltraVNC"
+    )
+    assert (
+        scheduled_job_module._onboarding_progress_task(
+            status="running",
+            detail="Installing Agent Dependencies: WireGuard VPN Adapter",
+        )
+        == "Installing Agent Dependencies: WireGuard"
+    )
+    assert (
+        scheduled_job_module._onboarding_progress_task(
+            status="completed",
+            detail="Installing Agent Dependencies: UltraVNC Server",
+        )
+        == "Installing Agent Dependencies: UltraVNC"
+    )
+    assert (
+        scheduled_job_module._onboarding_progress_task(
+            status="running",
+            detail="Agent.exe started.",
+        )
+        == "Running Agent Bootstrap"
+    )
+    assert (
+        scheduled_job_module._onboarding_progress_task(
+            status="completed",
+            detail="Device approved by operator.",
+        )
+        == "Device Enrollment Approved"
+    )
+    assert (
+        scheduled_job_module._onboarding_progress_task(
+            status="running",
+            detail="Agent bootstrap completed; waiting for Borealis approval callback.",
+        )
+        == "Agent Ready and Awaiting Approval"
+    )
+
+
+def test_windows_smb_poll_treats_sharing_violation_as_active_writer(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    reads = [
+        RuntimeError("SMB SessionError: code: 0xc0000043 - STATUS_SHARING_VIOLATION"),
+        RuntimeError("SMB SessionError: code: 0xc0000043 - STATUS_SHARING_VIOLATION"),
+        "__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=0",
+    ]
+    updates = []
+
+    def fake_read(_smb, _path, *, share="ADMIN$"):
+        value = reads.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    monkeypatch.setattr(scheduler, "_read_windows_smb_file", fake_read)
+    monkeypatch.setattr(scheduler, "_read_windows_onboarding_state", lambda _smb: {})
+    monkeypatch.setattr(scheduler, "_windows_onboarding_launch_grace_seconds", lambda: 0.0)
+    monkeypatch.setattr(scheduled_job_module.time, "sleep", lambda _seconds: None)
+
+    result = scheduler._poll_windows_smb_onboarding_output(
+        smb=object(),
+        output_path="Temp\\BorealisOnboarding\\run.log",
+        timeout_seconds=1.0,
+        status_update=lambda detail, stdout="", stderr="": updates.append(detail),
+    )
+
+    assert result["exit_code"] == 0
+    assert "STATUS_SHARING_VIOLATION" not in str(result.get("stderr") or "")
+    assert any("output file lock" in detail for detail in updates)
+
+
+def test_windows_smb_poll_requires_approval_callback_after_success_marker(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    output = "__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=0"
+    updates = []
+
+    def fake_read(_smb, path, *, share="ADMIN$"):
+        if str(path).endswith("run.log"):
+            return output
+        raise RuntimeError("STATUS_OBJECT_NAME_NOT_FOUND")
+
+    monkeypatch.setattr(scheduler, "_read_windows_smb_file", fake_read)
+    monkeypatch.setattr(scheduler, "_read_windows_onboarding_state", lambda _smb: {"status": "pending_approval"})
+    monkeypatch.setattr(scheduler, "_read_windows_onboarding_events", lambda _smb: [])
+    monkeypatch.setattr(scheduler, "_windows_onboarding_launch_grace_seconds", lambda: 0.0)
+    monkeypatch.setattr(scheduler, "_windows_onboarding_approval_wait_seconds", lambda: 0.01)
+    monkeypatch.setattr(scheduled_job_module.time, "sleep", lambda _seconds: None)
+
+    result = scheduler._poll_windows_smb_onboarding_output(
+        smb=object(),
+        output_path="Temp\\BorealisOnboarding\\run.log",
+        timeout_seconds=1.0,
+        approval_check=lambda: "",
+        status_update=lambda *args: updates.append(args[0]),
+    )
+
+    assert result["exit_code"] == 1
+    assert result["stderr"] == "windows_onboarding_approval_callback_timeout"
+    assert "did not receive an enrollment approval request" in result["stdout"]
+
+
+def test_windows_running_state_marker_does_not_stop_fallback_chain() -> None:
+    assert (
+        scheduled_job_module._windows_onboarding_skip_detail(
+            stdout="__BOREALIS_ONBOARDING_ALREADY_PENDING__=1 status=running"
+        )
+        == ""
+    )
+    assert "pending approval" in scheduled_job_module._windows_onboarding_skip_detail(
+        stdout="__BOREALIS_ONBOARDING_ALREADY_PENDING__=1 status=pending_approval"
+    )
+
+
+def test_windows_onboarding_observation_uses_install_timeout_by_default(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    monkeypatch.setenv("BOREALIS_ONBOARDING_INSTALL_TIMEOUT_SECONDS", "900")
+    monkeypatch.delenv("BOREALIS_WINDOWS_ONBOARDING_OBSERVATION_TIMEOUT_SECONDS", raising=False)
+
+    assert scheduler._windows_onboarding_observation_timeout_seconds() == 900
+
+
+def test_windows_onboarding_observation_timeout_can_override_install_timeout(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    monkeypatch.setenv("BOREALIS_ONBOARDING_INSTALL_TIMEOUT_SECONDS", "900")
+    monkeypatch.setenv("BOREALIS_WINDOWS_ONBOARDING_OBSERVATION_TIMEOUT_SECONDS", "420")
+
+    assert scheduler._windows_onboarding_observation_timeout_seconds() == 420
+
+
+def test_windows_onboarding_falls_back_to_winrm(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    updates = []
+    attempts = []
+    method_kwargs = []
+
+    monkeypatch.setattr(scheduler, "_update_onboarding_target_row", lambda row_id, **kwargs: updates.append({"row_id": row_id, **kwargs}))
+    monkeypatch.setattr(scheduler, "_onboarding_target_already_known", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(scheduler, "_preflight_remote_port", lambda **_kwargs: "")
+    monkeypatch.setattr(scheduler, "_onboarding_install_timeout_seconds", lambda: 30.0)
+    monkeypatch.setattr(scheduler, "_lookup_onboarding_approval", lambda **_kwargs: "APR-WIN-1")
+
+    def fail_smb(**_kwargs):
+        method_kwargs.append(dict(_kwargs))
+        attempts.append("smb_scm")
+        return {"exit_code": 1, "stdout": "", "stderr": "service blocked"}
+
+    def fail_task(**_kwargs):
+        attempts.append("scheduled_task")
+        return {"exit_code": 1, "stdout": "", "stderr": "task blocked"}
+
+    def pass_winrm(**_kwargs):
+        attempts.append("winrm")
+        return {"exit_code": 0, "stdout": "__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=0", "stderr": ""}
+
+    monkeypatch.setattr(scheduler, "_execute_windows_smb_scm_onboarding", fail_smb)
+    monkeypatch.setattr(scheduler, "_execute_windows_scheduled_task_onboarding", fail_task)
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_wmi_dcom_onboarding",
+        lambda **_kwargs: (attempts.append("wmi_dcom") or {"exit_code": 1, "stdout": "", "stderr": "wmi blocked"}),
+    )
+    monkeypatch.setattr(scheduler, "_execute_windows_winrm_onboarding", pass_winrm)
+
+    status = scheduler._run_single_onboarding_target(
+        row={"id": 1, "target_address": "win01.lab", "target_hostname": "win01.lab", "ssh_port": 445},
+        site={"id": 1, "enrollment_code": "ENROLL"},
+        credential={"connection_type": "windows", "username": "LAB\\svc", "password": "secret"},
+        branch="main",
+        server_url="https://borealis.example",
+        job_id=10,
+        run_id=20,
+        platform="windows",
+        windows_methods=["smb_scm", "scheduled_task", "winrm"],
+        winrm_port=5985,
+    )
+
+    assert attempts == ["smb_scm", "scheduled_task", "wmi_dcom", "winrm"]
+    assert method_kwargs
+    assert "script" not in method_kwargs[0]
+    assert method_kwargs[0]["branch"] == "main"
+    assert method_kwargs[0]["server_url"] == "https://borealis.example"
+    assert method_kwargs[0]["enrollment_code"] == "ENROLL"
+    assert status == scheduled_job_module.ONBOARDING_STATUS_WAITING_APPROVAL
+    assert updates[-1]["status"] == scheduled_job_module.ONBOARDING_STATUS_WAITING_APPROVAL
+    assert "WinRM" in updates[-1]["detail"]
+    assert updates[-1]["approval_reference"] == "APR-WIN-1"
+
+
+def test_windows_onboarding_success_without_approval_reference_fails(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    updates = []
+    attempts = []
+
+    monkeypatch.setattr(scheduler, "_update_onboarding_target_row", lambda row_id, **kwargs: updates.append({"row_id": row_id, **kwargs}))
+    monkeypatch.setattr(scheduler, "_onboarding_target_already_known", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(scheduler, "_preflight_remote_port", lambda **_kwargs: "")
+    monkeypatch.setattr(scheduler, "_onboarding_install_timeout_seconds", lambda: 30.0)
+    monkeypatch.setattr(scheduler, "_windows_onboarding_approval_wait_seconds", lambda: 0.01)
+    monkeypatch.setattr(scheduler, "_lookup_onboarding_approval", lambda **_kwargs: "")
+    monkeypatch.setattr(scheduled_job_module.time, "sleep", lambda _seconds: None)
+
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_smb_scm_onboarding",
+        lambda **_kwargs: attempts.append("smb_scm") or {"exit_code": 0, "stdout": "__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=0", "stderr": ""},
+    )
+
+    status = scheduler._run_single_onboarding_target(
+        row={"id": 1, "target_address": "win02.lab", "target_hostname": "win02.lab", "ssh_port": 445},
+        site={"id": 1, "enrollment_code": "ENROLL"},
+        credential={"connection_type": "windows", "username": "LAB\\svc", "password": "secret"},
+        branch="main",
+        server_url="https://borealis.example",
+        job_id=10,
+        run_id=20,
+        platform="windows",
+        windows_methods=["smb_scm"],
+        winrm_port=5985,
+    )
+
+    assert attempts == ["smb_scm"]
+    assert status == scheduled_job_module.ONBOARDING_STATUS_FAILED
+    assert updates[-1]["status"] == scheduled_job_module.ONBOARDING_STATUS_FAILED
+    assert updates[-1]["approval_reference"] == ""
+    assert "approval request" in updates[-1]["detail"]
+    assert "windows_onboarding_approval_callback_timeout" in updates[-1]["stderr"]
+
+
+def test_windows_onboarding_skip_marker_stops_fallback_chain(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    updates = []
+    attempts = []
+
+    monkeypatch.setattr(scheduler, "_update_onboarding_target_row", lambda row_id, **kwargs: updates.append({"row_id": row_id, **kwargs}))
+    monkeypatch.setattr(scheduler, "_onboarding_target_already_known", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(scheduler, "_preflight_remote_port", lambda **_kwargs: "")
+    monkeypatch.setattr(scheduler, "_onboarding_install_timeout_seconds", lambda: 30.0)
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_smb_scm_onboarding",
+        lambda **_kwargs: (
+            attempts.append("smb_scm")
+            or {"exit_code": 73, "stdout": "__BOREALIS_ONBOARDING_ALREADY_PENDING__=1", "stderr": ""}
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_scheduled_task_onboarding",
+        lambda **_kwargs: attempts.append("scheduled_task") or {"exit_code": 1, "stdout": "", "stderr": "task blocked"},
+    )
+
+    status = scheduler._run_single_onboarding_target(
+        row={"id": 1, "target_address": "win03.lab", "target_hostname": "win03.lab", "ssh_port": 445},
+        site={"id": 1, "enrollment_code": "ENROLL"},
+        credential={"connection_type": "windows", "username": "LAB\\svc", "password": "secret"},
+        branch="main",
+        server_url="https://borealis.example",
+        job_id=10,
+        run_id=20,
+        platform="windows",
+        windows_methods=["smb_scm", "scheduled_task", "winrm"],
+        winrm_port=5985,
+    )
+
+    assert attempts == ["smb_scm"]
+    assert status == scheduled_job_module.ONBOARDING_STATUS_SKIPPED
+    assert updates[-1]["status"] == scheduled_job_module.ONBOARDING_STATUS_SKIPPED
+    assert "pending approval" in updates[-1]["detail"]
+
+
+def test_windows_service_start_timeout_can_poll_or_accept_approval(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    updates = []
+    attempts = []
+
+    assert scheduled_job_module._windows_service_start_error_allows_output_poll(
+        "The NETBIOS connection with the remote host timed out."
+    )
+    assert scheduled_job_module._windows_onboarding_result_may_have_created_approval(
+        method="smb_scm",
+        stderr="service start: The NETBIOS connection with the remote host timed out.",
+    )
+
+    monkeypatch.setattr(scheduler, "_update_onboarding_target_row", lambda row_id, **kwargs: updates.append({"row_id": row_id, **kwargs}))
+    monkeypatch.setattr(scheduler, "_onboarding_target_already_known", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(scheduler, "_preflight_remote_port", lambda **_kwargs: "")
+    monkeypatch.setattr(scheduler, "_onboarding_install_timeout_seconds", lambda: 30.0)
+    monkeypatch.setattr(scheduler, "_lookup_onboarding_approval", lambda **_kwargs: "APR-WIN-TIMEOUT")
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_smb_scm_onboarding",
+        lambda **_kwargs: (
+            attempts.append("smb_scm")
+            or {
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "service start: The NETBIOS connection with the remote host timed out.",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_scheduled_task_onboarding",
+        lambda **_kwargs: attempts.append("scheduled_task") or {"exit_code": 1, "stdout": "", "stderr": "task blocked"},
+    )
+
+    status = scheduler._run_single_onboarding_target(
+        row={"id": 1, "target_address": "win04.lab", "target_hostname": "win04.lab", "ssh_port": 445},
+        site={"id": 1, "enrollment_code": "ENROLL"},
+        credential={"connection_type": "windows", "username": "LAB\\svc", "password": "secret"},
+        branch="main",
+        server_url="https://borealis.example",
+        job_id=10,
+        run_id=20,
+        platform="windows",
+        windows_methods=["smb_scm", "scheduled_task", "winrm"],
+        winrm_port=5985,
+    )
+
+    assert attempts == ["smb_scm"]
+    assert status == scheduled_job_module.ONBOARDING_STATUS_WAITING_APPROVAL
+    assert updates[-1]["status"] == scheduled_job_module.ONBOARDING_STATUS_WAITING_APPROVAL
+    assert updates[-1]["approval_reference"] == "APR-WIN-TIMEOUT"
+    assert "status channel timed out" in updates[-1]["detail"]
+
+
+def test_windows_onboarding_reports_manual_install_after_all_methods_fail(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    updates = []
+
+    monkeypatch.setattr(scheduler, "_update_onboarding_target_row", lambda row_id, **kwargs: updates.append({"row_id": row_id, **kwargs}))
+    monkeypatch.setattr(scheduler, "_onboarding_target_already_known", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(scheduler, "_preflight_remote_port", lambda **_kwargs: "")
+    monkeypatch.setattr(scheduler, "_onboarding_install_timeout_seconds", lambda: 30.0)
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_smb_scm_onboarding",
+        lambda **_kwargs: {"exit_code": 1, "stdout": "", "stderr": "service blocked"},
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_scheduled_task_onboarding",
+        lambda **_kwargs: {"exit_code": 1, "stdout": "", "stderr": "task blocked"},
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_wmi_dcom_onboarding",
+        lambda **_kwargs: {"exit_code": 1, "stdout": "", "stderr": "wmi blocked"},
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_execute_windows_winrm_onboarding",
+        lambda **_kwargs: {"exit_code": 1, "stdout": "", "stderr": "winrm blocked"},
+    )
+
+    status = scheduler._run_single_onboarding_target(
+        row={"id": 1, "target_address": "win02.lab", "target_hostname": "win02.lab", "ssh_port": 445},
+        site={"id": 1, "enrollment_code": "ENROLL"},
+        credential={"connection_type": "windows", "username": "LAB\\svc", "password": "secret"},
+        branch="main",
+        server_url="https://borealis.example",
+        job_id=10,
+        run_id=20,
+        platform="windows",
+        windows_methods=["smb_scm", "scheduled_task", "winrm"],
+        winrm_port=5985,
+    )
+
+    assert status == scheduled_job_module.ONBOARDING_STATUS_FAILED
+    assert updates[-1]["status"] == scheduled_job_module.ONBOARDING_STATUS_FAILED
+    assert "Manual agent installation required" in updates[-1]["detail"]
+
+
+def test_onboarding_scope_config_rejects_invalid_concurrency(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    config, error = scheduler._onboarding_scope_config(
+        components=[
+            {
+                "kind": "device_onboarding",
+                "install_branch": "main",
+                "ssh_port": 22,
+                "onboarding_concurrency": 0,
+            }
+        ],
+        targets=[
+            {
+                "kind": "onboarding_scope",
+                "site_id": 1,
+                "entries": ["192.168.10.5"],
+            }
+        ],
+    )
+
+    assert config == {}
+    assert error == "Device onboarding concurrency must be 1-100."
+
+
+def test_onboarding_target_status_hydrates_approved_context(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    now = 1_700_000_100
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_onboarding_targets (
+                run_id,
+                job_id,
+                scheduled_ts,
+                site_id,
+                target_input,
+                target_address,
+                target_hostname,
+                ssh_port,
+                status,
+                detail,
+                approval_reference,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                55,
+                44,
+                now,
+                1,
+                "192.168.3.8",
+                "192.168.3.8",
+                "192.168.3.8",
+                22,
+                "waiting_approval",
+                "Agent installed. Device approval pending operator action.",
+                "APP-ONBOARD-1",
+                now,
+                now,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO device_approvals (
+                id,
+                approval_reference,
+                hostname_claimed,
+                ssl_key_fingerprint_claimed,
+                enrollment_code,
+                site_id,
+                status,
+                created_at,
+                updated_at,
+                approved_by_user_id,
+                onboarding_job_id,
+                onboarding_run_id,
+                onboarding_target
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "approval-onboard-1",
+                "APP-ONBOARD-1",
+                "lab-docs-01",
+                "11:22:33:44",
+                "SITE-MAIN-CODE",
+                1,
+                "approved",
+                "2026-05-05T03:00:00Z",
+                "2026-05-05T03:05:00Z",
+                "admin",
+                44,
+                55,
+                "192.168.3.8",
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_onboarding_targets (
+                run_id,
+                job_id,
+                scheduled_ts,
+                site_id,
+                target_input,
+                target_address,
+                target_hostname,
+                ssh_port,
+                status,
+                detail,
+                stdout_snippet,
+                approval_reference,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                88,
+                28,
+                1_700_000_300,
+                1,
+                "10.0.0.54 # LAB-OPERATOR-01",
+                "10.0.0.54",
+                "LAB-OPERATOR-01",
+                445,
+                "waiting_approval",
+                "Agent installed through Windows SMB service. Device approval pending operator action.",
+                "Borealis approval detected before Windows remote output completed.",
+                "OLD-APPROVAL-LAB-OPERATOR-01",
+                1_700_000_300,
+                1_700_000_300,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO device_approvals (
+                id,
+                approval_reference,
+                guid,
+                hostname_claimed,
+                ssl_key_fingerprint_claimed,
+                enrollment_code,
+                site_id,
+                status,
+                created_at,
+                updated_at,
+                approved_by_user_id,
+                onboarding_job_id,
+                onboarding_run_id,
+                onboarding_target
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "pending-approval-lab-operator-01",
+                "PENDING-APPROVAL-LAB-OPERATOR-01",
+                "pending-device-lab-operator-01",
+                "LAB-OPERATOR-01",
+                "22:33:44:55",
+                "SITE-MAIN-CODE",
+                1,
+                "pending",
+                "2026-05-07T00:10:00Z",
+                "2026-05-07T00:11:00Z",
+                "",
+                27,
+                77,
+                "10.0.0.54:445",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = scheduler._load_onboarding_target_rows(44, now)
+    hydrated = scheduler._backfill_onboarding_target_approval_references(rows)
+
+    assert hydrated[0]["status"] == "approved"
+    assert hydrated[0]["approval_id"] == "approval-onboard-1"
+    assert hydrated[0]["approval_status"] == "approved"
+    assert hydrated[0]["detail"] == "Device approved. Agent finalizing enrollment."
+
+
+def test_onboarding_approval_lookup_ignores_old_completed_fallback(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO devices (guid, hostname, internal_ip, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "device-lab-operator-01",
+                "LAB-OPERATOR-01",
+                "10.0.0.54",
+                "Online",
+                "2026-05-07T00:00:00Z",
+                "2026-05-07T00:00:00Z",
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO device_approvals (
+                id,
+                approval_reference,
+                guid,
+                hostname_claimed,
+                ssl_key_fingerprint_claimed,
+                enrollment_code,
+                site_id,
+                status,
+                created_at,
+                updated_at,
+                approved_by_user_id,
+                onboarding_job_id,
+                onboarding_run_id,
+                onboarding_target
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "old-approval-lab-operator-01",
+                "OLD-APPROVAL-LAB-OPERATOR-01",
+                "device-lab-operator-01",
+                "LAB-OPERATOR-01",
+                "11:22:33:55",
+                "SITE-MAIN-CODE",
+                1,
+                "completed",
+                "2026-05-07T00:00:00Z",
+                "2026-05-07T00:05:00Z",
+                "admin",
+                27,
+                77,
+                "10.0.0.54:445",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    context = scheduler._lookup_onboarding_approval_context(
+        job_id=28,
+        run_id=88,
+        target="10.0.0.54",
+        site_id=1,
+    )
+
+    assert context == {}
+
+    stale_reference = scheduler._lookup_onboarding_approval_context(
+        job_id=28,
+        run_id=88,
+        target="10.0.0.54",
+        approval_reference="OLD-APPROVAL-LAB-OPERATOR-01",
+        site_id=1,
+    )
+
+    assert stale_reference["approval_reference_stale"] == "OLD-APPROVAL-LAB-OPERATOR-01"
+    assert stale_reference["approval_job_id"] == 27
+    assert stale_reference["approval_run_id"] == 77
+
+    stale_rows = scheduler._load_onboarding_target_rows(28, 1_700_000_300)
+    stale_hydrated = scheduler._backfill_onboarding_target_approval_references(stale_rows)
+    assert stale_hydrated[0]["status"] == "already_enrolled"
+    assert stale_hydrated[0]["approval_reference"] == ""
+    assert stale_hydrated[0]["detail"] == "Existing Borealis Agent is already enrolled and active."
+
+    pending_reference = scheduler._lookup_onboarding_approval_context(
+        job_id=28,
+        run_id=88,
+        target="10.0.0.54",
+        approval_reference="PENDING-APPROVAL-LAB-OPERATOR-01",
+        site_id=1,
+    )
+
+    assert pending_reference["approval_id"] == "pending-approval-lab-operator-01"
+    assert pending_reference["approval_status"] == "pending"
+    assert "approval_reference_stale" not in pending_reference
+    assert scheduler._onboarding_target_already_known("10.0.0.54:445", 1)
+
+
+def test_waiting_approval_without_approval_row_backfills_failed(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    updates = []
+
+    monkeypatch.setattr(scheduler, "_lookup_onboarding_approval_context", lambda **_kwargs: {})
+    monkeypatch.setattr(scheduler, "_update_onboarding_target_row", lambda row_id, **kwargs: updates.append({"row_id": row_id, **kwargs}))
+    monkeypatch.setattr(scheduler, "_load_onboarding_target_event_rows", lambda row_ids: {int(row_ids[0]): []})
+
+    rows = [
+        {
+            "id": 123,
+            "job_id": 28,
+            "run_id": 88,
+            "site_id": 1,
+            "target_address": "10.0.0.49",
+            "target_hostname": "LAB-FPS-01",
+            "target_input": "10.0.0.49 # LAB-FPS-01",
+            "status": scheduled_job_module.ONBOARDING_STATUS_WAITING_APPROVAL,
+            "detail": "Agent installed through Windows SMB service. Device approval pending operator action.",
+            "stdout_snippet": "__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=0",
+            "stderr_snippet": "",
+            "approval_reference": "",
+        }
+    ]
+
+    hydrated = scheduler._backfill_onboarding_target_approval_references(rows)
+
+    assert hydrated[0]["status"] == scheduled_job_module.ONBOARDING_STATUS_FAILED
+    assert hydrated[0]["approval_reference"] == ""
+    assert "approval request" in hydrated[0]["detail"]
+    assert updates[-1]["status"] == scheduled_job_module.ONBOARDING_STATUS_FAILED
+    assert "windows_onboarding_approval_callback_timeout" in updates[-1]["stderr"]
+
+
+def test_failed_callback_timeout_backfills_completed_when_device_exists(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    updates = []
+
+    monkeypatch.setattr(scheduler, "_lookup_onboarding_approval_context", lambda **_kwargs: {})
+    monkeypatch.setattr(scheduler, "_onboarding_target_already_known", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(scheduler, "_update_onboarding_target_row", lambda row_id, **kwargs: updates.append({"row_id": row_id, **kwargs}))
+    monkeypatch.setattr(scheduler, "_load_onboarding_target_event_rows", lambda row_ids: {int(row_ids[0]): []})
+
+    rows = [
+        {
+            "id": 124,
+            "job_id": 28,
+            "run_id": 89,
+            "site_id": 1,
+            "target_address": "10.0.0.49",
+            "target_hostname": "LAB-FPS-01",
+            "target_input": "10.0.0.49 # LAB-FPS-01",
+            "status": scheduled_job_module.ONBOARDING_STATUS_FAILED,
+            "detail": "Agent completed local bootstrap, but Borealis Engine did not receive an approval request.",
+            "stdout_snippet": "__BOREALIS_WINDOWS_ONBOARDING_EXIT_CODE__=0",
+            "stderr_snippet": "windows_onboarding_approval_callback_timeout",
+            "approval_reference": "",
+        }
+    ]
+
+    hydrated = scheduler._backfill_onboarding_target_approval_references(rows)
+
+    assert hydrated[0]["status"] == "completed"
+    assert hydrated[0]["detail"] == "Device approved and enrollment completed."
+    assert updates[-1]["status"] == "completed"
+    assert updates[-1]["approval_reference"] == ""
+
+
+def test_onboarding_target_update_records_persistent_timeline(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    now = 1_700_000_200
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_onboarding_targets (
+                run_id,
+                job_id,
+                scheduled_ts,
+                site_id,
+                target_input,
+                target_address,
+                target_hostname,
+                ssh_port,
+                status,
+                detail,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                65,
+                54,
+                now,
+                1,
+                "LAB-AIO-01",
+                "10.0.0.56",
+                "LAB-AIO-01",
+                445,
+                "pending",
+                "",
+                now,
+                now,
+            ),
+        )
+        row_id = int(cur.lastrowid)
+        conn.commit()
+    finally:
+        conn.close()
+
+    scheduler._update_onboarding_target_row(row_id, status="running", detail="Connecting to Windows SMB.")
+    scheduler._update_onboarding_target_row(row_id, status="running", detail="Staging Borealis onboarding script.")
+    scheduler._update_onboarding_target_row(
+        row_id,
+        status="failed",
+        detail="Python executable not found after MSI extraction.",
+        stdout="Dependency: Python",
+        stderr="Failed.",
+        finished=True,
+    )
+
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT status, task, finished_at
+              FROM scheduled_job_onboarding_target_events
+             WHERE target_row_id=?
+          ORDER BY id ASC
+            """,
+            (row_id,),
+        )
+        events = cur.fetchall()
+    finally:
+        conn.close()
+
+    assert [row[1] for row in events] == [
+        "Establishing Connection to Remote Device",
+        "Transferring Agent Installation Files",
+        "Onboarding Failed",
+    ]
+    assert events[0][0] == "completed"
+    assert events[0][2] is not None
+    assert events[-1][0] == "failed"
+    assert events[-1][2] is not None
+
+    rows = scheduler._load_onboarding_target_rows(54, now)
+    assert rows[0]["timeline"][1]["task"] == "Transferring Agent Installation Files"
+    assert rows[0]["events"] == rows[0]["timeline"]
+
+
+def test_onboarding_redeploy_clears_history_and_dispatches(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client, scheduler = _scheduled_jobs_client(engine_harness)
+    response = client.post(
+        "/api/scheduled_jobs",
+        json={
+            "job_kind": "onboarding",
+            "name": "Automatic Device Onboarding Main Lab",
+            "targets": [
+                {
+                    "kind": "onboarding_scope",
+                    "site_id": 1,
+                    "site_name": "Main Lab",
+                    "entries": ["192.168.10.5"],
+                }
+            ],
+            "components": [{"kind": "device_onboarding", "install_branch": "main", "ssh_port": 22}],
+            "credential_id": 77,
+            "execution_context": "onboarding_local_network",
+            "schedule": {"type": "immediately"},
+        },
+    )
+    assert response.status_code == 200
+    job_id = int(response.get_json()["job"]["id"])
+
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_runs (
+                job_id,
+                scheduled_ts,
+                status,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (job_id, 1_700_000_000, "Success", 1_700_000_000, 1_700_000_001),
+        )
+        old_run_id = int(cur.lastrowid)
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_onboarding_targets (
+                run_id,
+                job_id,
+                scheduled_ts,
+                site_id,
+                target_input,
+                target_address,
+                target_hostname,
+                ssh_port,
+                status,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                old_run_id,
+                job_id,
+                1_700_000_000,
+                1,
+                "192.168.10.5",
+                "192.168.10.5",
+                "192.168.10.5",
+                22,
+                "waiting_approval",
+                1_700_000_000,
+                1_700_000_001,
+            ),
+        )
+        target_row_id = int(cur.lastrowid)
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_onboarding_target_events (
+                target_row_id,
+                run_id,
+                job_id,
+                status,
+                task,
+                started_at,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                target_row_id,
+                old_run_id,
+                job_id,
+                "waiting_approval",
+                "Awaiting Approval",
+                1_700_000_000,
+                1_700_000_000,
+                1_700_000_001,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    dispatched = []
+
+    def fake_dispatch(**kwargs):
+        dispatched.append(kwargs)
+
+    monkeypatch.setattr(scheduler, "_dispatch_onboarding_run", fake_dispatch)
+
+    redeploy = client.post(f"/api/onboarding/jobs/{job_id}/redeploy", json={})
+
+    assert redeploy.status_code == 200
+    payload = redeploy.get_json()
+    assert payload["cleared"] == 1
+    assert len(payload["run_ids"]) == 1
+    assert dispatched and dispatched[0]["job_id"] == job_id
+
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM scheduled_job_onboarding_targets WHERE run_id=?", (old_run_id,))
+        assert int(cur.fetchone()[0]) == 0
+        cur.execute("SELECT COUNT(*) FROM scheduled_job_onboarding_target_events WHERE run_id=?", (old_run_id,))
+        assert int(cur.fetchone()[0]) == 0
+        cur.execute("SELECT COUNT(*) FROM scheduled_job_runs WHERE job_id=?", (job_id,))
+        assert int(cur.fetchone()[0]) == 1
+    finally:
+        conn.close()
+
+
+def test_onboarding_remote_command_marks_agent_noninteractive(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    command = scheduler._remote_onboarding_command(
+        branch="feature/test",
+        server_url="https://engine.example",
+        enrollment_code="secret-code",
+        job_id=11,
+        run_id=38,
+        target="192.168.3.8",
+    )
+
+    assert "BOREALIS_AGENT_NONINTERACTIVE=1" in command
+    assert "BOREALIS_AGENT_NO_TTY=1" in command
+    assert "BOREALIS_ONBOARDING_TARGET=192.168.3.8" in command
+
+
+def test_onboarding_failure_hint_prefers_actionable_output() -> None:
+    hint = scheduled_job_module._onboarding_failure_hint(
+        stdout=(
+            "Warning: Permanently added '192.168.3.8' (ED25519) to the list of known hosts.\n"
+            "[2026-05-05T03:01:04] Launching /opt/Borealis/Agent.sh deploy --serverurl secret-url.\n"
+            "/tmp/borealis-agent.64Rvmd: line 77: /dev/tty: No such device or address\n"
+        ),
+        stderr="nicole@192.168.3.8's password:",
+        redactions=["secret-url"],
+    )
+
+    assert "/dev/tty" in hint
+    assert "secret-url" not in hint
 
 
 def test_preflight_remote_port_accepts_valid_ssh_banner(

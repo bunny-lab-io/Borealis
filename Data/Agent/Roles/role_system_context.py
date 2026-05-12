@@ -39,7 +39,7 @@ def _find_borealis_root() -> Optional[str]:
     cur = _project_root()
     discovered = None
     for _ in range(8):
-        if os.path.isfile(os.path.join(cur, 'Borealis.ps1')):
+        if os.path.isfile(os.path.join(cur, 'Agent.exe')):
             discovered = cur
             break
         parent = os.path.dirname(cur)
@@ -50,7 +50,7 @@ def _find_borealis_root() -> Optional[str]:
     override = os.environ.get('BOREALIS_ROOT') or os.environ.get('BOREALIS_PROJECT_ROOT')
     if override:
         candidate = os.path.abspath(override)
-        if os.path.isfile(os.path.join(candidate, 'Borealis.ps1')):
+        if os.path.isfile(os.path.join(candidate, 'Agent.exe')):
             try:
                 common_path = os.path.commonpath([_project_root(), candidate])
             except Exception:
@@ -64,7 +64,7 @@ def _find_borealis_root() -> Optional[str]:
         return discovered
 
     fallback = os.path.abspath(os.path.join(_project_root(), '..'))
-    if os.path.isfile(os.path.join(fallback, 'Borealis.ps1')):
+    if os.path.isfile(os.path.join(fallback, 'Agent.exe')):
         return fallback
     return None
 

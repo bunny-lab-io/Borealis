@@ -394,6 +394,17 @@ export default function DeviceApprovals() {
       },
       { headerName: "Hostname", field: "hostname_claimed", minWidth: 200, width: 200 },
       {
+        headerName: "Onboarding Source",
+        valueGetter: (p) => {
+          const jobId = p.data?.onboarding_job_id;
+          const target = p.data?.onboarding_target;
+          if (!jobId && !target) return "—";
+          return [jobId ? `Job ${jobId}` : "", target || ""].filter(Boolean).join(" / ");
+        },
+        minWidth: 220,
+        width: 220,
+      },
+      {
         headerName: "Date of Enrollment Request",
         field: "created_at",
         valueFormatter: (p) => formatDateTime(p.value),

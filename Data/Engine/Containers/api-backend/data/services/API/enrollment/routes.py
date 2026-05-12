@@ -116,6 +116,23 @@ def register(
         record = dict(zip(keys, row))
         return record
 
+    def _onboarding_context_from_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+        raw = payload.get("onboarding_context")
+        if not isinstance(raw, dict):
+            return {}
+        context: Dict[str, Any] = {}
+        for key in ("job_id", "run_id"):
+            try:
+                value = int(str(raw.get(key) or "").strip())
+                if value > 0:
+                    context[key] = value
+            except Exception:
+                pass
+        target = str(raw.get("target") or "").strip()
+        if target:
+            context["target"] = target[:253]
+        return context
+
     def _record_wrong_code_attempt(
         cur: sqlite3.Cursor,
         *,
@@ -419,6 +436,7 @@ def register(
         enrollment_code = str(payload.get("enrollment_code") or "").strip()
         agent_pubkey_b64 = payload.get("agent_pubkey")
         client_nonce_b64 = payload.get("client_nonce")
+        onboarding_context = _onboarding_context_from_payload(payload)
 
         _enrollment_log(
             "enrollment request received "
@@ -531,6 +549,9 @@ def register(
                            client_nonce = ?,
                            server_nonce = ?,
                            agent_pubkey_der = ?,
+                           onboarding_job_id = ?,
+                           onboarding_run_id = ?,
+                           onboarding_target = ?,
                            updated_at = ?
                      WHERE id = ?
                     """,
@@ -542,6 +563,9 @@ def register(
                         client_nonce_b64,
                         server_nonce_b64,
                         agent_pubkey_der,
+                        onboarding_context.get("job_id"),
+                        onboarding_context.get("run_id"),
+                        onboarding_context.get("target"),
                         now,
                         record_id,
                     ),
@@ -555,9 +579,10 @@ def register(
                         id, approval_reference, guid, hostname_claimed,
                         ssl_key_fingerprint_claimed, enrollment_code, site_id,
                         status, client_nonce, server_nonce, agent_pubkey_der,
-                        created_at, updated_at
+                        created_at, updated_at, onboarding_job_id, onboarding_run_id,
+                        onboarding_target
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record_id,
@@ -572,6 +597,9 @@ def register(
                         agent_pubkey_der,
                         now,
                         now,
+                        onboarding_context.get("job_id"),
+                        onboarding_context.get("run_id"),
+                        onboarding_context.get("target"),
                     ),
                 )
 

@@ -9,7 +9,7 @@
 # - GET /api/agent/software-management/overrides (Device Authenticated) - Returns file-backed software-management override hints for agent-side inventory/icon collection.
 # - POST /api/agent/vpn/ensure (Device Authenticated) - Ensures persistent WireGuard tunnel material.
 # - POST /api/agent/vpn/ready (Device Authenticated) - Records agent-side WireGuard readiness for the active tunnel.
-# - POST /api/agent/vnc/ensure (Device Authenticated) - Ensures VNC readiness and refreshes the Engine's cached agent VNC credential.
+# - POST /api/agent/vnc/ensure (Device Authenticated) - Ensures VNC readiness and reports listener/session metadata.
 # ======================================================
 
 """Device-affiliated agent endpoints for the Borealis Engine runtime."""
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from Data.Engine.db import dbapi as sqlite3
+import threading
 import time
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -130,6 +131,90 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
     db_conn_factory = adapters.db_conn_factory
     script_signer = adapters.script_signer
     release_manager = getattr(adapters, "agent_release_manager", None)
+    status_cache_lock = threading.Lock()
+    status_cache: Dict[str, Dict[str, Any]] = {}
+    script_signing_key_cache: Dict[str, Any] = {"value": "", "expires_at": 0.0}
+
+    STATUS_DUPLICATE_SUPPRESS_SECONDS = 30.0
+    STATUS_EMIT_MIN_INTERVAL_SECONDS = 10.0
+    STATUS_CACHE_MAX_ENTRIES = 2048
+
+    def _status_cache_key(guid: str, service_mode: str) -> str:
+        return f"{normalize_guid(guid) or str(guid or '').strip()}|{str(service_mode or '').strip().lower()}"
+
+    def _status_signature(payload: Dict[str, Any]) -> str:
+        try:
+            return json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        except Exception:
+            return str(payload)
+
+    def _cached_status_response(cache_key: str, signature: str, now_mono: float) -> Optional[Dict[str, Any]]:
+        with status_cache_lock:
+            cached = status_cache.get(cache_key)
+            if not cached:
+                return None
+            if cached.get("signature") != signature:
+                return None
+            seen_at = float(cached.get("seen_at") or 0.0)
+            if now_mono - seen_at > STATUS_DUPLICATE_SUPPRESS_SECONDS:
+                return None
+            cached["seen_at"] = now_mono
+            return {
+                "status": "ok",
+                "poll_after_ms": 30000,
+                "site_id": cached.get("site_id"),
+                "site_name": cached.get("site_name") or "",
+                "coalesced": True,
+            }
+
+    def _remember_status_response(
+        cache_key: str,
+        signature: str,
+        now_mono: float,
+        *,
+        site_id: Optional[int],
+        site_name: str,
+    ) -> bool:
+        emit_allowed = False
+        with status_cache_lock:
+            cached = status_cache.get(cache_key) or {}
+            last_emit_at = float(cached.get("last_emit_at") or 0.0)
+            if now_mono - last_emit_at >= STATUS_EMIT_MIN_INTERVAL_SECONDS:
+                emit_allowed = True
+                cached["last_emit_at"] = now_mono
+            cached.update(
+                {
+                    "signature": signature,
+                    "seen_at": now_mono,
+                    "site_id": site_id,
+                    "site_name": site_name,
+                }
+            )
+            status_cache[cache_key] = cached
+            if len(status_cache) > STATUS_CACHE_MAX_ENTRIES:
+                stale_keys = sorted(status_cache, key=lambda key: float(status_cache[key].get("seen_at") or 0.0))
+                for stale_key in stale_keys[: max(1, len(status_cache) - STATUS_CACHE_MAX_ENTRIES)]:
+                    status_cache.pop(stale_key, None)
+        return emit_allowed
+
+    def _script_signing_key() -> str:
+        if script_signer is None:
+            return ""
+        now_mono = time.monotonic()
+        cached_value = str(script_signing_key_cache.get("value") or "")
+        try:
+            expires_at = float(script_signing_key_cache.get("expires_at") or 0.0)
+        except Exception:
+            expires_at = 0.0
+        if cached_value and now_mono < expires_at:
+            return cached_value
+        try:
+            signing_key = script_signer.public_base64_spki()
+        except Exception:
+            signing_key = ""
+        script_signing_key_cache["value"] = signing_key
+        script_signing_key_cache["expires_at"] = now_mono + 300.0
+        return signing_key
 
     def _vnc_trace(step: str, context_hint: Optional[str], *, level: str = "INFO", **fields: Any) -> None:
         parts = [f"vnc_trace step={str(step or '-').strip() or '-'}"]
@@ -268,8 +353,6 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             "session_id": session.session_id,
             "session_state": session.state,
             "controller_operator_id": session.controller_operator_id or "",
-            "controller_password": session.controller_password,
-            "view_only_password": "",
             "credential_revision": int(session.credential_revision or 0),
             "remove_wallpaper": bool(session.remove_wallpaper),
             "session": manager.session_snapshot(session),
@@ -513,6 +596,22 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             "milestones_json": json.dumps(milestones, ensure_ascii=True, sort_keys=True),
             "last_error_json": json.dumps(last_error, ensure_ascii=True, sort_keys=True) if last_error else "",
         }
+        status_cache_key = _status_cache_key(guid_lookup, service_mode)
+        status_signature = _status_signature(
+            {
+                "boot_id": boot_id,
+                "phase": phase,
+                "message": message,
+                "status": status_code,
+                "milestones": milestones,
+                "last_error": last_error,
+            }
+        )
+        now_mono = time.monotonic()
+        cached_response = _cached_status_response(status_cache_key, status_signature, now_mono)
+        if cached_response is not None:
+            return jsonify(cached_response)
+
         role = {
             "role_id": f"{service_mode}:system_heartbeat",
             "role_name": "system_heartbeat",
@@ -586,8 +685,15 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         finally:
             conn.close()
 
+        emit_allowed = _remember_status_response(
+            status_cache_key,
+            status_signature,
+            time.monotonic(),
+            site_id=site_id,
+            site_name=site_name,
+        )
         socketio = getattr(adapters.context, "socketio", None)
-        if socketio is not None:
+        if socketio is not None and emit_allowed:
             try:
                 socketio.emit(
                     "agent_status_changed",
@@ -618,12 +724,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         if ctx is None:
             return jsonify({"error": "auth_context_missing"}), 500
 
-        signing_key = ""
-        if script_signer is not None:
-            try:
-                signing_key = script_signer.public_base64_spki()
-            except Exception:
-                signing_key = ""
+        signing_key = _script_signing_key()
 
         if ctx.status != "active":
             return jsonify(
@@ -756,16 +857,8 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         active_vnc_session = _active_vnc_session_payload(resolved_agent)
         response_payload = dict(payload)
         response_payload["vnc_port"] = vnc_port
-        response_payload["vnc_password"] = (
-            str(active_vnc_session.get("controller_password") or "").strip()
-            if isinstance(active_vnc_session, dict)
-            else ""
-        )
-        response_payload["view_only_password"] = (
-            str(active_vnc_session.get("view_only_password") or "").strip()
-            if isinstance(active_vnc_session, dict)
-            else ""
-        )
+        response_payload["vnc_password"] = ""
+        response_payload["view_only_password"] = ""
         response_payload["vnc_session_id"] = (
             str(active_vnc_session.get("session_id") or "").strip()
             if isinstance(active_vnc_session, dict)
@@ -943,51 +1036,24 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             vnc_port=vnc_port,
         )
 
-        manager = ensure_vnc_collaboration_manager(adapters.context)
         if advertised_password:
-            try:
-                stored_credential = manager.upsert_agent_credential(
-                    agent_id=resolved_agent,
-                    controller_password=advertised_password,
-                    credential_revision=advertised_revision,
-                    display_topology=advertised_display_topology,
-                )
-                _vnc_trace(
-                    "R03",
-                    context_hint,
-                    resolved_agent=resolved_agent,
-                    credential_revision=stored_credential.credential_revision,
-                    display_count=len(stored_credential.display_topology or []),
-                    virtual_width=(stored_credential.display_virtual_bounds or {}).get("width", 0),
-                    virtual_height=(stored_credential.display_virtual_bounds or {}).get("height", 0),
-                )
-            except ValueError:
-                log(
-                    "VNC",
-                    "vnc_agent_ensure_rejected_credential agent_id={0}".format(resolved_agent),
-                    context_hint,
-                    level="WARNING",
-                )
-                _vnc_trace(
-                    "R03F",
-                    context_hint,
-                    level="WARNING",
-                    resolved_agent=resolved_agent,
-                    result="credential_rejected",
-                )
+            _vnc_trace(
+                "R03",
+                context_hint,
+                resolved_agent=resolved_agent,
+                credential_revision=advertised_revision or 0,
+                display_count=len(advertised_display_topology or []),
+                credential_stored=False,
+            )
 
         active_session = _active_vnc_session_payload(resolved_agent)
         role_health = _load_agent_vnc_health(resolved_agent)
-        agent_credential = manager.get_agent_credential(resolved_agent)
         if isinstance(active_session, dict):
             active_session_payload = dict(active_session)
         else:
             active_session_payload = {}
         display_topology = []
         display_virtual_bounds: Dict[str, Any] = {}
-        if agent_credential is not None:
-            display_topology = [dict(item) for item in agent_credential.display_topology]
-            display_virtual_bounds = dict(agent_credential.display_virtual_bounds)
         if not display_topology:
             display_topology = list(role_health.get("display_topology") or [])
         if not display_virtual_bounds:
@@ -996,7 +1062,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             "R04",
             context_hint,
             resolved_agent=resolved_agent,
-            cached_credential=agent_credential is not None,
+            cached_credential=False,
             active_session=bool(active_session_payload),
             ready=bool(role_health.get("ready")),
             service_state=role_health.get("service_state") or "-",
@@ -1037,9 +1103,9 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                     "session_id": str(active_session_payload.get("session_id") or "").strip(),
                     "session_state": str(active_session_payload.get("session_state") or "").strip(),
                     "controller_operator_id": str(active_session_payload.get("controller_operator_id") or "").strip(),
-                    "controller_password": str(active_session_payload.get("controller_password") or "").strip(),
-                    "view_only_password": str(active_session_payload.get("view_only_password") or "").strip(),
-                    "vnc_password": str(active_session_payload.get("controller_password") or "").strip(),
+                    "controller_password": "",
+                    "view_only_password": "",
+                    "vnc_password": "",
                     "credential_revision": int(active_session_payload.get("credential_revision") or 0),
                     "remove_wallpaper": bool(active_session_payload.get("remove_wallpaper")),
                     "display_topology": display_topology,

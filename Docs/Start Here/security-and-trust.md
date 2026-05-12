@@ -43,6 +43,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Device authentication checks GUID normalization, SSL fingerprint matches, token version counters, and quarantine flags before admitting requests; missing rows with valid tokens auto-recover into placeholder records to avoid accidental lockouts.
 - Refresh tokens are never stored in cleartext; only SHA-256 hashes plus DPoP bindings are stored in PostgreSQL, and reuse after revocation/expiry returns explicit error codes.
 - Enrollment workflow queues approvals, detects hostname and fingerprint conflicts, offers merge/overwrite options, and records auditor identities so trust decisions are traceable.
+- Automatic local-network onboarding never bypasses enrollment approval. It only performs a remote agent install using stored machine or domain credentials; the installed agent must still request approval with the selected site's enrollment code.
 - Background pruning of expired enrollment codes and refresh tokens is not wired yet; a maintenance task is still needed.
 
 ### Agent
@@ -87,13 +88,20 @@ If you deploy the agent via Group Policy or another automation platform, you can
 
 **Windows**:
 ```powershell
-.\Borealis.ps1 -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
+.\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
 ```
 **Linux**:
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Agent.sh" | { if [ "$(id -u)" -eq 0 ]; then bash -s -- deploy --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --newEngine; else sudo bash -s -- deploy --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --newEngine; fi; }
 ```
 Passing an enrollment code to `Agent.sh` refreshes stale Linux Agent enrollment state before the service starts so the supplied code wins over cached installer codes. Linux one-line installs do not require `sudo` in the pipe when run from a root shell; non-root launches still use `sudo bash` before script execution so password prompts work normally.
+
+### Automatic Local-Network Enrollment
+- Sites > Onboard Devices creates scheduler-backed enrollment jobs for local-network Linux and Windows targets.
+- Operators provide a site, device OS, discovery scope, stored machine or domain credential, install branch, and schedule. The selected credential remains in Aegis-protected credential storage.
+- Linux enrollment uses SSH. Windows enrollment tries SMB `ADMIN$` plus Remote Service Control Manager, then a remote scheduled task, then WMI/DCOM process creation, then WinRM before requiring manual install. Windows onboarding uses the standard `C:\Borealis` install root plus a host-wide mutex and a non-secret state marker so repeated Engine redeploys do not create parallel installers or duplicate pending approvals.
+- Borealis writes only non-secret onboarding correlation (`job_id`, `run_id`, target) to the agent settings during remote install so pending approvals can show their source.
+- Manual approval remains the trust boundary. A successful remote install means the agent reached the approval queue, not that the device is trusted.
 
 ## Agent/Server Enrollment (Sequence Diagram)
 ```mermaid

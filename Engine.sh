@@ -47,11 +47,16 @@ if [[ -n "${REPO_REF}" ]]; then
 fi
 SERVICE_ROLES=(
   "api-backend"
+  "job-scheduler"
   "webui-frontend"
   "traefik-edge"
   "postgres-db"
   "remote-desktop-guacd"
   "wireguard-tunnel"
+)
+BUILD_ROLES=(
+  "${SERVICE_ROLES[@]}"
+  "site-worker"
 )
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
@@ -786,6 +791,8 @@ BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS=${BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS:-60000}
 
 BOREALIS_WEBUI_EXTERNAL=1
 BOREALIS_ENGINE_CONTAINERIZED=1
+BOREALIS_SCHEDULED_JOBS_START_LOOP=0
+BOREALIS_INTERNAL_API_BASE_URL=http://127.0.0.1:5000
 BOREALIS_COOKIE_SECURE=1
 BOREALIS_GUACAMOLE_ENABLED=1
 BOREALIS_GUACD_HOST=127.0.0.1
@@ -818,6 +825,8 @@ EOF
   cp "${RUNTIME_ENV}" "${COMPOSE_ENV}"
   cat >> "${COMPOSE_ENV}" <<EOF
 BOREALIS_API_BACKEND_IMAGE=${IMAGE_TAGS[api-backend]:-borealis-engine/api-backend:local}
+BOREALIS_JOB_SCHEDULER_IMAGE=${IMAGE_TAGS[job-scheduler]:-borealis-engine/job-scheduler:local}
+BOREALIS_SITE_WORKER_IMAGE=${IMAGE_TAGS[site-worker]:-borealis-engine/site-worker:local}
 BOREALIS_WEBUI_FRONTEND_IMAGE=${IMAGE_TAGS[webui-frontend]:-borealis-engine/webui-frontend:local}
 BOREALIS_TRAEFIK_EDGE_IMAGE=${IMAGE_TAGS[traefik-edge]:-borealis-engine/traefik-edge:local}
 BOREALIS_POSTGRES_DB_IMAGE=${IMAGE_TAGS[postgres-db]:-borealis-engine/postgres-db:local}
@@ -1040,19 +1049,19 @@ build_images() {
   shift || true
   local selected=("$@")
   if [[ "${#selected[@]}" -eq 0 ]]; then
-    selected=("${SERVICE_ROLES[@]}")
+    selected=("${BUILD_ROLES[@]}")
   fi
   local service=""
   : > "${BUILD_LOG}"
   for service in "${selected[@]}"; do
-    validate_service "${service}"
+    validate_build_role "${service}"
     build_service_image "${service}" "${mode}"
   done
 }
 
 write_image_manifest() {
   local mode="$1"
-  python3 - "${IMAGE_MANIFEST}" "${mode}" "${SERVICE_ROLES[@]}" <<PY
+  python3 - "${IMAGE_MANIFEST}" "${mode}" "${BUILD_ROLES[@]}" <<PY
 import json
 import os
 import pathlib
@@ -1099,7 +1108,7 @@ PY
 
 export_image_manifest_env() {
   local service=""
-  for service in "${SERVICE_ROLES[@]}"; do
+  for service in "${BUILD_ROLES[@]}"; do
     if [[ -n "${IMAGE_TAGS[${service}]:-}" && -n "${IMAGE_HASHES[${service}]:-}" ]]; then
       local prefix
       prefix="$(service_env_prefix "${service}")"
@@ -1114,7 +1123,7 @@ export_image_manifest_env() {
 load_existing_image_tags() {
   [[ -f "${IMAGE_MANIFEST}" ]] || return 0
   local service=""
-  for service in "${SERVICE_ROLES[@]}"; do
+  for service in "${BUILD_ROLES[@]}"; do
     local image
     image="$(python3 - "${IMAGE_MANIFEST}" "${service}" <<'PY'
 import json
@@ -1140,6 +1149,9 @@ changed_build_services() {
       printf '%s\n' "${service}"
     fi
   done
+  if [[ "${BUILD_STATUSES[site-worker]:-}" == "built" ]]; then
+    printf '%s\n' job-scheduler
+  fi
 }
 
 previous_deploy_mode() {
@@ -1183,26 +1195,26 @@ services = sys.argv[7:]
 def file_hash(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
-def env_settings_hash(path: pathlib.Path) -> str:
+def env_settings_hash(path: pathlib.Path, legacy_scheduler_worker_images: bool = False) -> str:
     lines = []
+    image_keys = {
+        "BOREALIS_API_BACKEND_IMAGE",
+        "BOREALIS_JOB_SCHEDULER_IMAGE",
+        "BOREALIS_SITE_WORKER_IMAGE",
+        "BOREALIS_WEBUI_FRONTEND_IMAGE",
+        "BOREALIS_TRAEFIK_EDGE_IMAGE",
+        "BOREALIS_POSTGRES_DB_IMAGE",
+        "BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE",
+        "BOREALIS_WIREGUARD_TUNNEL_IMAGE",
+        "BOREALIS_ENGINE_MODE",
+        "BOREALIS_WEBUI_MODE",
+    }
     for raw in path.read_text(encoding="utf-8").splitlines():
-        if raw.startswith("BOREALIS_") and raw.endswith("_IMAGE="):
-            continue
-        if raw.startswith("BOREALIS_API_BACKEND_IMAGE="):
-            continue
-        if raw.startswith("BOREALIS_WEBUI_FRONTEND_IMAGE="):
-            continue
-        if raw.startswith("BOREALIS_TRAEFIK_EDGE_IMAGE="):
-            continue
-        if raw.startswith("BOREALIS_POSTGRES_DB_IMAGE="):
-            continue
-        if raw.startswith("BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE="):
-            continue
-        if raw.startswith("BOREALIS_WIREGUARD_TUNNEL_IMAGE="):
-            continue
-        if raw.startswith("BOREALIS_ENGINE_MODE="):
-            continue
-        if raw.startswith("BOREALIS_WEBUI_MODE="):
+        key = raw.split("=", 1)[0]
+        if key in image_keys and not (
+            legacy_scheduler_worker_images
+            and key in {"BOREALIS_JOB_SCHEDULER_IMAGE", "BOREALIS_SITE_WORKER_IMAGE"}
+        ):
             continue
         lines.append(raw)
     return hashlib.sha256(("\n".join(lines) + "\n").encode("utf-8")).hexdigest()
@@ -1235,6 +1247,11 @@ expected = {
     "service_images": image_records(),
 }
 for key, value in expected.items():
+    if key == "env_settings_hash":
+        acceptable = {value, env_settings_hash(env_path, legacy_scheduler_worker_images=True)}
+        if existing.get(key) not in acceptable:
+            raise SystemExit(1)
+        continue
     if existing.get(key) != value:
         raise SystemExit(1)
 PY
@@ -1256,10 +1273,12 @@ project = sys.argv[5]
 def file_hash(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
-def env_settings_hash(path: pathlib.Path) -> str:
+def env_settings_hash(path: pathlib.Path, legacy_scheduler_worker_images: bool = False) -> str:
     lines = []
     image_keys = {
         "BOREALIS_API_BACKEND_IMAGE",
+        "BOREALIS_JOB_SCHEDULER_IMAGE",
+        "BOREALIS_SITE_WORKER_IMAGE",
         "BOREALIS_WEBUI_FRONTEND_IMAGE",
         "BOREALIS_TRAEFIK_EDGE_IMAGE",
         "BOREALIS_POSTGRES_DB_IMAGE",
@@ -1270,7 +1289,10 @@ def env_settings_hash(path: pathlib.Path) -> str:
     }
     for raw in path.read_text(encoding="utf-8").splitlines():
         key = raw.split("=", 1)[0]
-        if key in image_keys:
+        if key in image_keys and not (
+            legacy_scheduler_worker_images
+            and key in {"BOREALIS_JOB_SCHEDULER_IMAGE", "BOREALIS_SITE_WORKER_IMAGE"}
+        ):
             continue
         lines.append(raw)
     return hashlib.sha256(("\n".join(lines) + "\n").encode("utf-8")).hexdigest()
@@ -1289,6 +1311,11 @@ expected = {
     "env_settings_hash": env_settings_hash(env_path),
 }
 for key, value in expected.items():
+    if key == "env_settings_hash":
+        acceptable = {value, env_settings_hash(env_path, legacy_scheduler_worker_images=True)}
+        if existing.get(key) not in acceptable:
+            raise SystemExit(1)
+        continue
     if existing.get(key) != value:
         raise SystemExit(1)
 PY
@@ -1325,6 +1352,8 @@ def env_settings_hash(path: pathlib.Path) -> str:
     lines = []
     image_keys = {
         "BOREALIS_API_BACKEND_IMAGE",
+        "BOREALIS_JOB_SCHEDULER_IMAGE",
+        "BOREALIS_SITE_WORKER_IMAGE",
         "BOREALIS_WEBUI_FRONTEND_IMAGE",
         "BOREALIS_TRAEFIK_EDGE_IMAGE",
         "BOREALIS_POSTGRES_DB_IMAGE",
@@ -1342,6 +1371,7 @@ def env_settings_hash(path: pathlib.Path) -> str:
 
 services = [
     "api-backend",
+    "job-scheduler",
     "webui-frontend",
     "traefik-edge",
     "postgres-db",
@@ -1391,6 +1421,15 @@ validate_service() {
     [[ "${candidate}" == "${service}" ]] && return 0
   done
   die "Unknown Engine service '${service}'."
+}
+
+validate_build_role() {
+  local service="$1"
+  local candidate=""
+  for candidate in "${BUILD_ROLES[@]}"; do
+    [[ "${candidate}" == "${service}" ]] && return 0
+  done
+  die "Unknown Engine build role '${service}'."
 }
 
 prepare_runtime() {
@@ -1443,18 +1482,14 @@ deploy_engine() {
     return 0
   fi
   if ((${#target_services[@]} > 0)) && deploy_non_image_state_matches "${mode}" && all_engine_containers_running; then
-    log_status "Compose" "(Re)Building ${target_services[*]}" "${C_YELLOW}"
-    compose_base up -d --no-deps "${target_services[@]}"
+    log_status "Compose" "Reconciling ${target_services[*]}" "${C_YELLOW}"
+    compose_base up -d --no-deps --no-build "${target_services[@]}"
     write_deploy_manifest "${mode}" "up-scoped" "${target_services[@]}"
     log_webui_url
     return 0
   fi
-  if ((${#changed_services[@]} > 0)); then
-    log_status "Compose" "(Re)Building Stack" "${C_YELLOW}"
-  else
-    log_status "Compose" "Applying Stack" "${C_YELLOW}"
-  fi
-  compose_base up -d
+  log_status "Compose" "Reconciling Stack" "${C_YELLOW}"
+  compose_base up -d --no-build
   write_deploy_manifest "${mode}" "up" "${changed_services[@]}"
   log_webui_url
 }
@@ -1485,7 +1520,7 @@ service_action() {
       write_image_manifest "${mode}"
       write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)"
       log_status "${service}" "Recreating Container" "${C_YELLOW}"
-      compose_base up -d --no-deps "$(service_compose_name "${service}")"
+      compose_base up -d --no-deps --no-build "$(service_compose_name "${service}")"
       write_deploy_manifest "${mode}" "up-scoped" "${service}"
       log_webui_url
       ;;
@@ -1507,7 +1542,7 @@ usage() {
   cat <<'EOF'
 Usage:
   Engine.sh deploy [prod|dev]
-  Engine.sh --service <api-backend|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
+  Engine.sh --service <api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
   Engine.sh [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
 EOF
 }

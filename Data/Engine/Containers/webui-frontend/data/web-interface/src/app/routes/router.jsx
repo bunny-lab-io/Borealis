@@ -254,6 +254,26 @@ export function buildAppRoutes() {
                   lazy: lazyNamed(() => import("../route-modules/jobsRoutes.jsx"), "JobEditorRoute"),
                 },
                 {
+                  path: "onboarding/new",
+                  handle: {
+                    title: "Automatic Device Onboarding",
+                    breadcrumb: "Device Onboarding",
+                    navKey: "jobs",
+                    pageKey: "job",
+                  },
+                  lazy: lazyNamed(() => import("../route-modules/jobsRoutes.jsx"), "OnboardingJobEditorRoute"),
+                },
+                {
+                  path: "onboarding/:jobId",
+                  handle: {
+                    title: "Automatic Device Onboarding",
+                    breadcrumb: "Device Onboarding",
+                    navKey: "jobs",
+                    pageKey: "job",
+                  },
+                  lazy: lazyNamed(() => import("../route-modules/jobsRoutes.jsx"), "OnboardingJobEditorRoute"),
+                },
+                {
                   path: ":jobId",
                   handle: {
                     title: "Scheduled Job",

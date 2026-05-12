@@ -33,7 +33,7 @@ def _require_dependency(module: str, friendly_name: str) -> None:
     if importlib.util.find_spec(module) is None:  # pragma: no cover - import check
         raise RuntimeError(
             f"{friendly_name} (Python module '{module}') is required for the Borealis Engine runtime. "
-            "Install the packaged dependencies by running Borealis.ps1 or ensure the module is present in the active environment."
+            "Install the packaged dependencies by running Engine.sh or ensure the module is present in the active environment."
         )
 
 

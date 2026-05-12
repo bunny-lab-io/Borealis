@@ -24,6 +24,8 @@ export const APP_PATHS = {
   filter: (filterId) => `/filters/${encodeURIComponent(normalizedString(filterId))}`,
   jobs: "/jobs",
   jobNew: "/jobs/new",
+  jobOnboardingNew: "/jobs/onboarding/new",
+  jobOnboarding: (jobId) => `/jobs/onboarding/${encodeURIComponent(normalizedString(jobId))}`,
   job: (jobId) => `/jobs/${encodeURIComponent(normalizedString(jobId))}`,
   watchdogs: "/automation/watchdogs",
   watchdogNew: "/automation/watchdogs/new",

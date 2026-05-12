@@ -115,7 +115,10 @@ CREATE TABLE IF NOT EXISTS device_approvals (
     agent_pubkey_der BLOB,
     created_at TEXT,
     updated_at TEXT,
-    approved_by_user_id TEXT
+    approved_by_user_id TEXT,
+    onboarding_job_id INTEGER,
+    onboarding_run_id INTEGER,
+    onboarding_target TEXT
 );
 CREATE TABLE IF NOT EXISTS enrollment_code_failures (
     id TEXT PRIMARY KEY,
@@ -207,6 +210,7 @@ CREATE TABLE IF NOT EXISTS scheduled_jobs (
     execution_context TEXT NOT NULL DEFAULT 'system',
     credential_id INTEGER,
     use_service_account INTEGER NOT NULL DEFAULT 1,
+    job_kind TEXT NOT NULL DEFAULT 'automation',
     enabled INTEGER DEFAULT 1,
     created_at INTEGER,
     updated_at INTEGER
@@ -238,6 +242,40 @@ CREATE TABLE IF NOT EXISTS scheduled_job_run_activity (
     component_path TEXT,
     component_name TEXT,
     created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS scheduled_job_onboarding_targets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    job_id INTEGER NOT NULL,
+    scheduled_ts INTEGER NOT NULL,
+    site_id INTEGER,
+    target_input TEXT NOT NULL,
+    target_address TEXT,
+    target_hostname TEXT,
+    ssh_port INTEGER NOT NULL DEFAULT 22,
+    status TEXT NOT NULL,
+    detail TEXT,
+    stdout_snippet TEXT,
+    stderr_snippet TEXT,
+    approval_reference TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    finished_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS scheduled_job_onboarding_target_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_row_id INTEGER NOT NULL,
+    run_id INTEGER NOT NULL,
+    job_id INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    task TEXT NOT NULL,
+    detail TEXT,
+    stdout_snippet TEXT,
+    stderr_snippet TEXT,
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS scheduled_job_run_targets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -72,7 +72,7 @@ BOREALIS_AGENT_UNIT_TEST_DOMAIN=tokens ./Agent_Unit_Tests.sh
 | `rbac` | Role-based access control API behavior. |
 | `remote-access` | Guacamole, VNC, VPN shell/tunnel, WireGuard, and websocket registry behavior. |
 | `runtime-overrides` | Runtime override merge behavior. |
-| `scheduler` | Scheduled jobs API and scheduler timing behavior. |
+| `scheduler` | Scheduled jobs API, scheduler timing behavior, target parsing, and automatic onboarding job creation. |
 | `server` | Server information API behavior. |
 | `watchdogs` | Watchdog API behavior. |
 | `webui` | Engine WebUI Vitest lane only. |

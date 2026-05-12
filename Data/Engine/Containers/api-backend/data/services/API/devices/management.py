@@ -31,10 +31,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import secrets
 from Data.Engine.db import dbapi as sqlite3
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -572,7 +574,50 @@ class DeviceManagementService:
         self.repo_cache = adapters.github_integration
         self.agent_release_manager = getattr(adapters, "agent_release_manager", None)
         self._repo_hash_cache: Dict[str, Any] = {"sha": "", "expires_at": 0}
+        self._details_ingest_lock = threading.Lock()
+        self._details_ingest_cache: Dict[str, Dict[str, Any]] = {}
         self.site_access = UserSiteAccessManager(self.db_conn_factory, logger=self.logger)
+
+    def _details_cache_key(self, guid: Optional[str], hostname: str, service_mode: Optional[str]) -> str:
+        identity = normalize_guid(guid) if guid else ""
+        if not identity:
+            identity = (_clean_device_str(hostname) or "").lower()
+        return f"{identity}|{(_clean_device_str(service_mode) or '').lower()}"
+
+    def _details_duplicate_recent(self, cache_key: str, payload_hash: str, now_mono: float) -> bool:
+        if not cache_key or not payload_hash:
+            return False
+        with self._details_ingest_lock:
+            cached = self._details_ingest_cache.get(cache_key)
+            if not cached:
+                return False
+            if cached.get("payload_hash") != payload_hash:
+                return False
+            try:
+                accepted_at = float(cached.get("accepted_at") or 0.0)
+            except Exception:
+                accepted_at = 0.0
+            if now_mono - accepted_at > 60.0:
+                return False
+            cached["seen_at"] = now_mono
+            return True
+
+    def _remember_details_ingest(self, cache_key: str, payload_hash: str, now_mono: float) -> None:
+        if not cache_key or not payload_hash:
+            return
+        with self._details_ingest_lock:
+            self._details_ingest_cache[cache_key] = {
+                "payload_hash": payload_hash,
+                "accepted_at": now_mono,
+                "seen_at": now_mono,
+            }
+            if len(self._details_ingest_cache) > 2048:
+                stale_keys = sorted(
+                    self._details_ingest_cache,
+                    key=lambda key: float(self._details_ingest_cache[key].get("seen_at") or 0.0),
+                )
+                for stale_key in stale_keys[: max(1, len(self._details_ingest_cache) - 2048)]:
+                    self._details_ingest_cache.pop(stale_key, None)
 
     def _emit_device_services_changed(self, hostname: str, *, change: str) -> None:
         socketio = getattr(self.adapters.context, "socketio", None)
@@ -1187,6 +1232,8 @@ class DeviceManagementService:
             self.service_log("server", "/api/agent/details missing device auth context", level="ERROR")
             return {"error": "auth_context_missing"}, 500
 
+        raw_body = request.get_data(cache=True) or b""
+        payload_hash = hashlib.sha256(raw_body).hexdigest() if raw_body else ""
         payload = request.get_json(silent=True) or {}
         details = payload.get("details")
         if not isinstance(details, dict):
@@ -1251,6 +1298,10 @@ class DeviceManagementService:
         fingerprint = _clean_device_str(getattr(ctx, "ssl_key_fingerprint", None))
         fingerprint_lower = fingerprint.lower() if fingerprint else ""
         scope_hint = getattr(ctx, "service_mode", None)
+        details_cache_key = self._details_cache_key(auth_guid, hostname, incoming_service_mode or scope_hint)
+        details_now_mono = time.monotonic()
+        if self._details_duplicate_recent(details_cache_key, payload_hash, details_now_mono):
+            return {"status": "ok", "coalesced": True}, 200
 
         conn = self._db_conn()
         try:
@@ -1466,6 +1517,7 @@ class DeviceManagementService:
                 self._emit_device_services_changed(hostname, change="updated")
             if software_changed:
                 self._emit_device_inventory_changed(hostname, change="software_updated")
+            self._remember_details_ingest(details_cache_key, payload_hash, time.monotonic())
             return {"status": "ok"}, 200
         except Exception as exc:
             try:

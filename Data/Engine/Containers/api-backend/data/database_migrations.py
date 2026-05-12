@@ -214,7 +214,10 @@ def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:
             agent_pubkey_der BLOB NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            approved_by_user_id TEXT
+            approved_by_user_id TEXT,
+            onboarding_job_id INTEGER,
+            onboarding_run_id INTEGER,
+            onboarding_target TEXT
         )
         """
     )
@@ -240,6 +243,12 @@ def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:
                 ADD COLUMN site_id INTEGER
             """
         )
+    if "onboarding_job_id" not in columns:
+        cur.execute("ALTER TABLE device_approvals ADD COLUMN onboarding_job_id INTEGER")
+    if "onboarding_run_id" not in columns:
+        cur.execute("ALTER TABLE device_approvals ADD COLUMN onboarding_run_id INTEGER")
+    if "onboarding_target" not in columns:
+        cur.execute("ALTER TABLE device_approvals ADD COLUMN onboarding_target TEXT")
 
     cur.execute(
         """
@@ -257,6 +266,12 @@ def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_da_site
             ON device_approvals(site_id)
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_da_onboarding_job
+            ON device_approvals(onboarding_job_id)
         """
     )
 
@@ -506,7 +521,10 @@ def _rebuild_device_approvals_table(
                 agent_pubkey_der BLOB NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                approved_by_user_id TEXT
+                approved_by_user_id TEXT,
+                onboarding_job_id INTEGER,
+                onboarding_run_id INTEGER,
+                onboarding_target TEXT
             )
             """
         )
@@ -529,6 +547,9 @@ def _rebuild_device_approvals_table(
                 "created_at",
                 "updated_at",
                 "approved_by_user_id",
+                "onboarding_job_id",
+                "onboarding_run_id",
+                "onboarding_target",
             )
             if col in legacy_columns
         ]
@@ -556,9 +577,12 @@ def _rebuild_device_approvals_table(
                 agent_pubkey_der,
                 created_at,
                 updated_at,
-                approved_by_user_id
+                approved_by_user_id,
+                onboarding_job_id,
+                onboarding_run_id,
+                onboarding_target
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 approval_reference = EXCLUDED.approval_reference,
                 guid = EXCLUDED.guid,
@@ -572,7 +596,10 @@ def _rebuild_device_approvals_table(
                 agent_pubkey_der = EXCLUDED.agent_pubkey_der,
                 created_at = EXCLUDED.created_at,
                 updated_at = EXCLUDED.updated_at,
-                approved_by_user_id = EXCLUDED.approved_by_user_id
+                approved_by_user_id = EXCLUDED.approved_by_user_id,
+                onboarding_job_id = EXCLUDED.onboarding_job_id,
+                onboarding_run_id = EXCLUDED.onboarding_run_id,
+                onboarding_target = EXCLUDED.onboarding_target
             """
         )
         for row in rows:
@@ -608,6 +635,9 @@ def _rebuild_device_approvals_table(
                     record.get("created_at") or now_iso,
                     record.get("updated_at") or now_iso,
                     record.get("approved_by_user_id"),
+                    record.get("onboarding_job_id"),
+                    record.get("onboarding_run_id"),
+                    record.get("onboarding_target"),
                 ),
             )
 

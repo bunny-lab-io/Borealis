@@ -40,18 +40,15 @@ def _bootstrap_logger() -> logging.Logger:
 
 
 def _project_root() -> Path:
-    """Locate the repository root by discovering the Borealis bootstrap script."""
+    """Locate the repository root by discovering the Borealis Agent entrypoint."""
 
     current = Path(__file__).resolve().parent
 
     for candidate in (current, *current.parents):
-        if (candidate / "Borealis.ps1").is_file():
+        if (candidate / "Agent.exe").is_file():
             return candidate
 
-    raise RuntimeError(
-        "Unable to locate the Borealis project root; Borealis.ps1 was not found "
-        "in any parent directory."
-    )
+    raise RuntimeError("Unable to locate the Borealis project root; Agent.exe was not found in any parent directory.")
 
 
 def _build_runtime_config() -> Dict[str, Any]:
@@ -487,7 +484,13 @@ def main() -> None:
             "Socket.IO is running in threading mode; allowing Werkzeug because the public Borealis edge handles front-end traffic."
         )
 
-    socketio.run(app, **run_kwargs)
+    try:
+        socketio.run(app, **run_kwargs)
+    except BaseException:
+        context.logger.exception("Engine loopback runtime crashed.")
+        raise
+    finally:
+        context.logger.error("Engine loopback runtime stopped.")
 
 
 if __name__ == "__main__":  # pragma: no cover - manual launch helper

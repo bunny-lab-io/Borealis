@@ -13,8 +13,43 @@
         "Data/Engine/Containers/api-backend/data/Official_Assemblies/**",
         "Data/Agent/**/*.py",
         "Data/Agent/agent-requirements.txt",
-        "Data/Engine/Containers/api-backend/**",
-        "Borealis.ps1"
+        "Data/Agent/Bootstrap/**",
+        "Data/Engine/Containers/api-backend/**"
+      ]
+    },
+    "job-scheduler": {
+      "dockerfile": "Data/Engine/Containers/job-scheduler/Dockerfile",
+      "context": ".",
+      "inputs": [
+        ".dockerignore",
+        "Data/Engine/Containers/api-backend/data/**/*.py",
+        "Data/Engine/Containers/api-backend/data/**/*.txt",
+        "Data/Engine/Containers/api-backend/data/**/*.ini",
+        "Data/Engine/Containers/api-backend/data/alembic/**",
+        "Data/Engine/Containers/api-backend/data/Ansible/**",
+        "Data/Engine/Containers/api-backend/data/Official_Assemblies/**",
+        "Data/Agent/**/*.py",
+        "Data/Agent/agent-requirements.txt",
+        "Data/Agent/Bootstrap/**",
+        "Data/Engine/Containers/compose.yaml",
+        "Data/Engine/Containers/job-scheduler/**"
+      ]
+    },
+    "site-worker": {
+      "dockerfile": "Data/Engine/Containers/site-worker/Dockerfile",
+      "context": ".",
+      "inputs": [
+        ".dockerignore",
+        "Data/Engine/Containers/api-backend/data/**/*.py",
+        "Data/Engine/Containers/api-backend/data/**/*.txt",
+        "Data/Engine/Containers/api-backend/data/**/*.ini",
+        "Data/Engine/Containers/api-backend/data/alembic/**",
+        "Data/Engine/Containers/api-backend/data/Ansible/**",
+        "Data/Engine/Containers/api-backend/data/Official_Assemblies/**",
+        "Data/Agent/**/*.py",
+        "Data/Agent/agent-requirements.txt",
+        "Data/Agent/Bootstrap/**",
+        "Data/Engine/Containers/site-worker/**"
       ]
     },
     "webui-frontend": {

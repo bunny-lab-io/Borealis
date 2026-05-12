@@ -60,12 +60,14 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Docker Buildx cache is stored under `Engine/Deploy/cache/buildkit/<service>/` when usable; plain Docker build remains the fallback.
 - Deploy output uses compact colored service status lines in interactive terminals; set `NO_COLOR=1` to force plain text.
 - No-op redeploys reuse existing image tags and skip Compose when deploy manifest, runtime env, image hashes, and container state already match.
-- Image tag changes and WebUI mode changes are kept out of the shared service `env_file`; a WebUI-only image change or prod/dev mode flip should recreate only `webui-frontend` when the rest of the stack is healthy.
+- Image tag changes and WebUI mode changes are kept out of shared service state hashes; a WebUI-only image change or prod/dev mode flip should run scoped Compose reconciliation for `webui-frontend` only when the rest of the stack is healthy.
+- Scoped image redeploys use `docker compose up -d --no-deps --no-build <service...>` after Borealis has already built changed images, so unrelated services are not intentionally recreated.
 - Compose health checks gate startup: PostgreSQL `pg_isready`, WireGuard control socket presence, guacd TCP `4822`, WebUI loopback HTTP, API `/health`, and Traefik ping on `127.0.0.1:8082`.
 
 ### Container service boundaries
-- `api-backend` runs the Python Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, and Engine-side Ansible execution. It binds `127.0.0.1:5000`.
-- `api-backend` has Docker CLI/Compose access to the host Docker socket in container mode so Server Info can mirror Docker service health and queue detached `Engine.sh --service ...` actions through helper containers.
+- `api-backend` runs the Python Engine API, Socket.IO, live operator sessions, workflow APIs, and VNC WebSocket proxy. It binds `127.0.0.1:5000`.
+- `job-scheduler` owns the scheduled-job tick loop, Postgres work leases, Docker-backed service actions, and `site-worker-<uuid>` lifecycle. It owns the host Docker socket in container mode.
+- Site workers execute site-scoped pressure work such as automatic local-network onboarding outside the API process. They do not mount the Docker socket.
 - `webui-frontend` serves the production WebUI or Vite HMR on stable loopback port `127.0.0.1:8000`. Dev mode bind-mounts `Engine/Services/webui-frontend/data/web-interface/` into the container for host-side UI edits.
 - `traefik-edge` owns public HTTP/HTTPS on `80/443`, ACME storage, Traefik config, UI/API/Socket.IO/VNC routing, and edge logs.
 - `postgres-db` owns PostgreSQL state under `Engine/Services/postgres-db/state` and binds `127.0.0.1:5432`.
@@ -135,7 +137,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Guacamole VNC bridge: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/guacamole_proxy.py`.
 - API entrypoints: `/api/vnc/viewers`, `/api/vnc/establish`, `/api/vnc/disconnect`, `/api/vnc/handoff`, `/api/vnc/sessions`, `/api/shell/establish`, `/api/shell/disconnect`.
 - Persistent tunnels are established by agents via `POST /api/agent/vpn/ensure`, then marked dispatch-ready by `POST /api/agent/vpn/ready` after the active service/config/firewall path is applied.
-- The Engine caches each agent's currently advertised VNC password in memory, reuses that credential across collaboration sessions until the agent restarts or the agent-side daily VNC credential rotation publishes a new revision, fast-probes the advertised UltraVNC listener before re-emitting bootstrap events, waits for agent listener readiness before returning browser bootstrap data when that fast probe misses, and exposes active remote desktop session inventory in `GET /api/server/overview`.
+- The Engine requests the current Agent VNC password on demand over the registered Agent Socket.IO channel during `/api/vnc/establish`, uses that live credential for the Guacamole token it is minting, and does not maintain an agent-level VNC password cache. It still fast-probes the advertised UltraVNC listener, waits for listener readiness before returning browser bootstrap data when that fast probe misses, skips the backend RFB VNCAuth probe by default to avoid consuming UltraVNC login attempts before Guacamole connects, and exposes active remote desktop session inventory in `GET /api/server/overview`. Set `BOREALIS_VNC_AUTH_PROBE=1` only for focused backend VNCAuth diagnostics.
 - Apache Guacamole is the sole browser remote desktop path. Guacamole VNC uses local `guacd` on `127.0.0.1:4822` by default, is served through `/remote-desktop/vnc/guacamole`, and never returns the UltraVNC password to the browser.
 - `remote-desktop-guacd` uses Apache Guacamole Server 1.6.0 in VNC-only mode, binds loopback port `4822`, and mirrors guacd stdout/stderr into `Engine/Services/remote-desktop-guacd/logs/guacd.log`.
 
@@ -165,7 +167,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 Use this section for Engine work (successor to the legacy server). Shared guidance is consolidated in `Docs/Start Here/ui-and-notifications.md` and other knowledgebase pages.
 
 #### Scope and runtime paths
-- Staging / launch: `Engine.sh` handles Linux first install, dependency checks, Engine container build, and Compose deployment. (`Borealis.ps1` is agent-only.)
+- Staging / launch: `Engine.sh` handles Linux first install, dependency checks, Engine container build, and Compose deployment. (`Agent.exe` is Windows Agent-only.)
 - Edit in `Data/Engine` and `Data/Engine/Containers`; use `Engine.sh deploy dev|prod` when source changes need to reach the running service.
 - Container redeploys use committed source JSON for `software_icons_overrides.json`, `software_uninstall_overrides.json`, and `software_uninstall_blocklist.json`; commit operator-tested hotloaded rules that must survive image rebuilds.
 - Raw one-line or repo-option `Engine.sh` runs sync first, then re-execs the installed `Engine.sh`; local `Engine.sh deploy` uses existing on-disk source and does not update git.

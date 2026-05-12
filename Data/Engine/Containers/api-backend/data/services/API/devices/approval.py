@@ -249,7 +249,10 @@ class AdminDeviceService:
                     da.updated_at,
                     da.approved_by_user_id,
                     u.username AS approved_by_username,
-                    s.name AS site_name
+                    s.name AS site_name,
+                    da.onboarding_job_id,
+                    da.onboarding_run_id,
+                    da.onboarding_target
                   FROM device_approvals AS da
              LEFT JOIN users AS u
                     ON (
@@ -311,6 +314,9 @@ class AdminDeviceService:
                         "fingerprint_match": fingerprint_match,
                         "approved_by_username": row[13],
                         "site_name": row[14],
+                        "onboarding_job_id": row[15],
+                        "onboarding_run_id": row[16],
+                        "onboarding_target": row[17] or "",
                     }
                 )
         finally:

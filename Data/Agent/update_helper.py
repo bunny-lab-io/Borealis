@@ -39,7 +39,7 @@ _REQUIRED_UPDATE_STATE_ATTRS = (
 )
 # Preserve live runtime/dependency trees; the platform-specific refresh step restages them safely afterward.
 _SYNC_EXCLUDED_TOP_LEVEL = frozenset({"Agent", "Engine", "Dependencies", ".git", "__pycache__", ".pytest_cache"})
-_SYNC_EXCLUDED_RELATIVE = frozenset({"Update.ps1", "Update.sh", "Updater.log"})
+_SYNC_EXCLUDED_RELATIVE = frozenset({"Update.sh", "Updater.log"})
 
 
 def _settings_dir() -> Path:
@@ -85,7 +85,7 @@ def _resolve_project_root() -> Path:
     current = Path(__file__).resolve().parent
     for candidate in [current, *current.parents]:
         if (
-            (candidate / "Borealis.ps1").is_file()
+            (candidate / "Agent.exe").is_file()
             or (candidate / "Agent.sh").is_file()
             or (candidate / "Engine.sh").is_file()
         ):

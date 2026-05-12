@@ -69,10 +69,13 @@ Operators should treat `Engine/` as generated runtime state. Edit committed sour
 | `wireguard-tunnel` | `borealis-engine-wireguard-tunnel` | Privileged WireGuard interface, peer config, firewall/routing, control socket | UDP `30000`, interface `borealis-wg` |
 | `remote-desktop-guacd` | `borealis-engine-remote-desktop-guacd` | VNC-only Apache Guacamole guacd runtime | `127.0.0.1:4822` |
 | `webui-frontend` | `borealis-engine-webui-frontend` | Production static WebUI or dev Vite HMR | `127.0.0.1:8000` |
-| `api-backend` | `borealis-engine-api-backend` | Flask API, Socket.IO, scheduler, workflows, VNC WebSocket proxy, Ansible control-node logic | `127.0.0.1:5000`, VNC WS `127.0.0.1:4823` |
+| `api-backend` | `borealis-engine-api-backend` | Flask API, Socket.IO, live operator sessions, VNC WebSocket proxy, workflow/runtime APIs | `127.0.0.1:5000`, VNC WS `127.0.0.1:4823` |
+| `job-scheduler` | `borealis-engine-job-scheduler` | Scheduled tick loop, Postgres work leases, service actions, ephemeral site-worker lifecycle | Internal only |
 | `traefik-edge` | `borealis-engine-traefik-edge` | Public HTTP/HTTPS edge, ACME, UI/API/Socket.IO/VNC routing | `80`, `443`, health `127.0.0.1:8082` |
 
 All Engine containers use `network_mode: host`. Loopback assumptions are intentional.
+
+`job-scheduler` owns `/var/run/docker.sock`. `api-backend` does not need Docker socket access in container mode. Dynamic onboarding workers are launched as `site-worker-<uuid>` containers with no Docker socket, site id labels, read-only Engine secret/config mounts, and an idle timeout of 2 minutes.
 
 ## Reverse Proxy Client IP Preservation
 When another reverse proxy sits in front of `traefik-edge`, Borealis must trust only that proxy IP or CIDR. Otherwise all API requests look like they originate from the proxy, and IP-scoped enrollment rate limits can block every agent behind it.
@@ -131,7 +134,7 @@ Engine/Services/wireguard-tunnel/secrets -> /opt/Borealis/Engine/Services/wiregu
 /var/run/docker.sock -> /var/run/docker.sock
 ```
 
-`api-backend` does not mount the whole `Engine/Services` tree. It receives its own runtime plus specific Traefik and WireGuard paths needed for edge settings and tunnel control. It also receives the Docker socket so the Server Info admin page can read Docker health/state and launch detached helper containers for `Engine.sh --service ...` actions.
+`api-backend` does not mount the whole `Engine/Services` tree. It receives its own runtime plus specific Traefik and WireGuard paths needed for edge settings and tunnel control. It does not mount the Docker socket in container mode; Server Info reads service snapshots from `job-scheduler`, and service actions are queued for `job-scheduler` execution.
 
 `postgres-db`:
 ```text
@@ -186,9 +189,9 @@ Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Boreal
 13. Re-render `compose.env` with resolved image tags while keeping service runtime env files free of image tag variables.
 14. Compare compose/env/image hashes against `Engine/Deploy/deploy-manifest.json`.
 15. Skip Compose if nothing changed and all containers are running.
-15. Run scoped Compose `up -d --no-deps <service...>` when only service images changed or when switching prod/dev WebUI mode.
-16. Run full Compose `up -d` when compose config, shared runtime env, or container state requires it.
-17. Write `Engine/Deploy/deploy-manifest.json`.
+16. Run scoped Compose `up -d --no-deps --no-build <service...>` when only service images changed or when switching prod/dev WebUI mode.
+17. Run full Compose `up -d --no-build` when compose config, shared runtime env, or container state requires it.
+18. Write `Engine/Deploy/deploy-manifest.json`.
 
 Build order follows `Engine.sh` service order:
 ```text
@@ -213,7 +216,7 @@ borealis-engine/<service>:sha-<inputhash12>
 Build cache:
 - Docker Buildx uses `Engine/Deploy/cache/buildkit/<service>/` when available.
 - Hosts without usable Buildx fall back to `DOCKER_BUILDKIT=1 docker build`.
-- `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Borealis.ps1`.
+- `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Agent.exe`.
 - `webui-frontend`, `traefik-edge`, `postgres-db`, `remote-desktop-guacd`, and `wireguard-tunnel` use service-local build contexts.
 - Service-local build contexts carry their own `.dockerignore` files so `node_modules`, WebUI build output, Python bytecode, pytest caches, logs, and local test output stay out of image contexts.
 - Deploy mode is part of the image hash only for services with explicit mode targets, currently `webui-frontend`. Switching between prod and dev should not make PostgreSQL, guacd, WireGuard, Traefik, or the API image appear changed unless their own inputs changed.
@@ -224,7 +227,7 @@ Build cache:
 
 Deploy output:
 - Terminal output uses compact service status lines such as `<timestamp> <service>: [Already Up-to-Date]` or `<timestamp> <service>: [(Re)Building]`.
-- Compose uses `Applying Stack` when env/Compose metadata changed without image rebuilds.
+- Compose uses `Reconciling <service...>` for scoped service updates and `Reconciling Stack` only when shared Compose metadata must be applied.
 - Color is enabled only for interactive terminals. Set `NO_COLOR=1` to disable it.
 - Successful deploys print `WebUI Accessible @ <public-base-url>`.
 - Full Docker build detail remains in `Engine/Deploy/build.log`.
@@ -368,7 +371,7 @@ Action support:
 | `reload` | `traefik-edge` only | Restarts Traefik after config/env changes. |
 | `reconcile` | `wireguard-tunnel` only | Runs `borealis-wireguard-control-client reconcile` inside tunnel container. |
 
-Server Info service actions use the same command surface. The API backend queues those actions by launching a short-lived helper container from the current `api-backend` image with `/opt/Borealis` and the Docker socket mounted, then returns immediately while the helper runs `Engine.sh --service ...`.
+Server Info service actions use the same command surface. The API backend writes a service-action work item, then `job-scheduler` launches the short-lived helper container with `/opt/Borealis` and the Docker socket mounted while the API returns immediately.
 
 ## Direct Compose Commands
 Use `Engine.sh` when possible. Direct Compose commands are useful for read-only inspection or emergency operations.
@@ -559,8 +562,8 @@ bash Engine.sh deploy prod
 ## Operational Notes
 - `Engine.sh deploy` is idempotent for unchanged inputs and skips Compose when deploy manifest, env, image hashes, and running containers already match.
 - Unchanged image hashes skip Docker builds.
-- Service image changes can use scoped Compose `up -d --no-deps <service...>` when compose config and non-image env settings are unchanged.
-- Service-specific `rebuild` uses `--no-deps`, so dependent services are not intentionally restarted.
+- Service image changes use scoped Compose `up -d --no-deps --no-build <service...>` when compose config and non-image env settings are unchanged.
+- Service-specific `rebuild` uses `--no-deps --no-build`, so dependent services are not intentionally restarted and Compose does not rebuild images Borealis already built.
 - `restart` does not rebuild images.
 - `reload` is currently a Traefik restart.
 - `reconcile` is currently WireGuard-only.

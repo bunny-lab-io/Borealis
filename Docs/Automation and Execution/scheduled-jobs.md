@@ -6,8 +6,11 @@ Explain how Borealis schedules recurring jobs, targets devices, and records run 
 
 ## Scheduler Overview
 - Scheduler implementation lives in `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`.
-- It reads job definitions from PostgreSQL and emits quick job payloads over the host's SYSTEM socket.
-- Run history is stored in `scheduled_job_runs`, `scheduled_job_run_targets`, and `scheduled_job_run_activity` tables.
+- `job-scheduler` owns the scheduled tick loop in container deployments. `api-backend` keeps CRUD/status APIs and the live Socket.IO bridge.
+- Site-scoped pressure work is queued in PostgreSQL and executed by ephemeral `site-worker-<uuid>` containers.
+- Existing agent-side quick job dispatch still crosses `api-backend` because active agent sockets live there.
+- Run history is stored in `scheduled_job_runs`, `scheduled_job_run_targets`, `scheduled_job_run_activity`, and, for automatic onboarding, `scheduled_job_onboarding_targets` plus `scheduled_job_onboarding_target_events`.
+- Scheduled job definitions carry `job_kind`; normal jobs use `automation`, while local-network device enrollment uses `onboarding`.
 
 ## Schedule Types
 Supported schedule types (from the scheduler core):
@@ -31,14 +34,15 @@ Supported schedule types (from the scheduler core):
 - Engine-side Ansible jobs persist structured device targets with `device_guid`, `hostname`, and site context so duplicate hostnames across sites can be targeted safely.
 - When an operator creates or edits a job, Borealis constrains targets to the operator's assigned sites before persistence.
 - Filter targets created by operators persist `allowed_site_ids` alongside the filter reference so future scheduler runs stay inside the operator's approved site scope.
+- Onboarding jobs use `kind = onboarding_scope` targets. Scope entries accept single IPv4 addresses, IPv4 ranges, CIDR blocks, and FQDNs. Inline `#` comments and blank separator lines are preserved in the saved job definition so operators can organize scopes, but comments and empty lines are ignored while expanding targets. Optional `exclusions` entries use the same formats and are expanded as a blacklist before SSH attempts start. Borealis deduplicates expanded targets and enforces `BOREALIS_ONBOARDING_TARGET_CAP` (default `512`).
 
 ## Execution Flow
-1) Scheduler tick loads enabled jobs.
+1) `job-scheduler` tick loads enabled jobs.
 2) Each due occurrence resolves its targets once and creates `scheduled_job_runs` plus `scheduled_job_run_targets` rows.
-3) Pending targets dispatch when their host is online.
+3) Pending agent targets dispatch through the `api-backend` internal Socket.IO bridge when their host is online.
 4) Device-local script runs emit quick job payloads with `scheduled_job_id`, `target_context`, and helper-routing metadata when the job targets current-user execution.
-5) Engine-side Ansible jobs using `local`, `ssh`, or `winrm` create one shared run row per playbook component, synthesize an ephemeral inventory, and execute directly on the Linux Engine.
-6) Engine-side Ansible jobs using `ssh_individual` or `winrm_individual` create one `scheduled_job_runs` row per target host per playbook component, synthesize a one-host inventory for each row, and execute those rows with bounded concurrency on the Linux Engine.
+5) Engine-side Ansible jobs using `local`, `ssh`, or `winrm` create one shared run row per playbook component, synthesize an ephemeral inventory, and execute in the Linux `job-scheduler` runtime.
+6) Engine-side Ansible jobs using `ssh_individual` or `winrm_individual` create one `scheduled_job_runs` row per target host per playbook component, synthesize a one-host inventory for each row, and execute those rows with bounded concurrency in the Linux `job-scheduler` runtime.
 7) Remote Ansible runs map Borealis inventory aliases to active WireGuard peer IPs and exclude devices that are not currently eligible.
 8) Remote SSH/WinRM targets require an active WireGuard peer IP and an agent-side WireGuard readiness callback before they can enter the generated inventory. Borealis emits or refreshes the tunnel, waits for `/api/agent/vpn/ready` for the current tunnel and selected transport port, then dispatches. Standard SSH `22` is part of the default shell/VNC/SSH allowlist, while non-default SSH or WinRM ports are widened in addition to that baseline.
 9) For `execution_context = ssh` and `ssh_individual`, Borealis defers host reachability, authentication, and task connectivity to Ansible itself instead of running scheduler-side SSH banner/session probes first. The Engine passes through the WireGuard peer IP plus the selected credential, and Ansible records unreachable/auth/task failures in the normal recap and per-device status surfaces.
@@ -51,6 +55,30 @@ Supported schedule types (from the scheduler core):
   - global limit: `global_concurrency_limit` (default `50`)
 15) The Engine updates run status, activity links, and Ansible recap rows as results arrive.
 16) If zero devices are resolved, the occurrence is recorded as `Skipped` with `skip_reason = no_devices_targeted`.
+
+## Job Scheduler And Site Workers
+- `job-scheduler` is a long-lived Engine container with Docker socket access. It owns scheduled ticking, queue lease reconciliation, service-action execution, and site-worker lifecycle.
+- Site workers are dynamic containers named `site-worker-<uuid>`. They receive a site id, claim work for that site only, and exit after 2 minutes idle.
+- Worker lanes are site-local. Onboarding work claims the `onboarding` lane and honors the job's device onboarding concurrency. Scheduled ticking and Engine-side Ansible execution run in `job-scheduler` for v1 so they are still outside `api-backend`.
+- Work items use Postgres leases. A worker heartbeat extends the lease; stale leases return to `queued` so another worker can reclaim them.
+- Worker records are visible in Server Info under the Workers domain and through `GET /api/server/workers`. The long-lived manager heartbeats as `job-scheduler`; active site workers expose site id, lanes, claimed counts, and task links.
+- VNC, interactive shell, live file browsing/transfers, live process actions, live service actions, and software refresh remain in `api-backend` for v1 because those paths are browser/session-affine.
+
+## Automatic Device Onboarding
+- Local-network device onboarding is scheduled through the same job service with `job_kind = onboarding`.
+- Onboarding execution runs in a site worker, not in `api-backend`.
+- The WebUI flow lives at `/jobs/onboarding/new`, is launched from the Sites page action rail, and creates jobs named like `Automatic Device Onboarding <SiteName>`.
+- Operators select one site, target OS, one stored machine or domain credential, discovery scope entries, exclusion scope entries, agent install branch, remote ports, per-job device onboarding concurrency, and normal schedule options.
+- Linux targets use SSH. At run time the Engine probes TCP/SSH, authenticates with the selected credential, confirms the target is Linux, downloads `Agent.sh` from the selected branch, and runs `Agent.sh --repo-branch <branch> deploy --serverurl <engine_url> --enrollmentcode <site_code> --newEngine`.
+- Windows targets use the same discovery/exclusion model. The Engine first tries SMB `ADMIN$` plus a temporary Remote Service Control Manager service, then a remote scheduled task, then WMI/DCOM process creation, then WinRM. The Engine stages `Agent.exe`, an agent payload bundle, and `bootstrapper-config.json` under `C:\Borealis`; `Agent.exe` handles native service/process semantics, existing-agent repair checks, dependency setup, Python environment creation, runtime staging, task registration, state/events, timeout logging, and process cleanup before handing off to the Python agent. If an existing agent has a valid Engine token and the `Borealis Agent` scheduled task is running, or the task accepts a start request and the Engine accepts the token even while Task Scheduler reports `Ready`, the EXE reports `Already Enrolled and Active`; the scheduler records the target as skipped because no new onboarding was performed. If the task is missing, cannot be started, or the Engine rejects the local token, the EXE reports `Unable to Repair Agent > Re-Deploying` and runs fresh onboarding. If all paths fail, the target records a manual-install-required failure because local security policy blocked remote enrollment.
+- `Agent.exe` reports the remote hostname through onboarding state, events, and the `__BOREALIS_ONBOARDING_HOSTNAME__` log marker. The scheduler stores that value in `scheduled_job_onboarding_targets.target_hostname`, while preserving `target_address`, so the Onboarding Summary can render `address:port (hostname)` when the hostname is known.
+- The Detailed Breakdown table intentionally collapses low-level logs into task-oriented rows in chronological order: `Spinning-Up Site-Worker Container`, `Establishing Connection to Remote Device`, `Connection Established using <protocol>`, `Uploading Agent.exe to Remote Device`, `Creating Windows Service to Run Agent.exe using <protocol/service>`, `Ensuring Windows Service is Running`, `Existing Agent Detected`, `Already Enrolled and Active`, `Successfully Repaired Agent`, `Unable to Repair Agent > Re-Deploying`, `Running Agent Bootstrap`, `Installing Agent Dependencies: <dependency>`, `Configuring Agent Runtime`, `Agent Ready and Awaiting Approval`, and `Device Enrollment Approved`. Agent.exe timeline JSONL events are replayed in order with their original timestamps so elapsed time reflects remote bootstrap work instead of Engine polling cadence. Repeated singleton rows such as `Running Agent Bootstrap` and duplicate `Connection Established using <protocol>` updates are collapsed while preserving StdOut/StdErr snippets for drilldown, and the table does not expose sorting or filtering because task order is meaningful.
+- Wrong credential failures remain failed targets and render with the red key status icon in the onboarding tables so operators can distinguish authentication failures from generic runtime failures at a glance.
+- Remote machine credentials stay only in existing Aegis-protected credential records. Onboarding target output is stored as sanitized snippets in `scheduled_job_onboarding_targets`; per-target task timeline snippets are stored in `scheduled_job_onboarding_target_events`.
+- Successful remote installs do not auto-approve devices. Agents submit normal enrollment requests and remain in the existing approval queue. Remote onboarding writes `onboarding_context.json` into the Agent settings directory so the approval records `onboarding_job_id`, `onboarding_run_id`, and `onboarding_target`. The onboarding target endpoint hydrates pending target rows with current approval status, with hostname/IP fallback for older rows that predate context persistence, so approved or completed devices stop showing as `waiting_approval`.
+- Windows SCM-based deployment may still report a service-control timeout if the remote Service Control Manager is slow. Borealis treats that timeout as recoverable, polls the staged EXE output/state files, and also accepts a matching approval record as proof that the installer reached the Engine.
+- Re-deploying an onboarding job saves the current job definition, deletes prior run history for that job, creates a fresh immediate onboarding occurrence, and repopulates target status from the new run.
+- Fan-out is bounded by each job's `onboarding_concurrency` component field (default `5`). Jobs without that field fall back to `BOREALIS_ONBOARDING_CONCURRENCY` (default `5`). Install command timeout is controlled by `BOREALIS_ONBOARDING_INSTALL_TIMEOUT_SECONDS` (default `900`), and Windows SMB/scheduled-task observation follows that value unless `BOREALIS_WINDOWS_ONBOARDING_OBSERVATION_TIMEOUT_SECONDS` is set.
 
 ## Execution Contexts
 - `system` - runs on the agent as SYSTEM.
@@ -86,6 +114,9 @@ Supported schedule types (from the scheduler core):
 - `GET /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - run history.
 - `GET /api/scheduled_jobs/<int:job_id>/devices` (Token Authenticated) - device results.
 - `DELETE /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - clear run history.
+- `POST /api/onboarding/jobs/<int:job_id>/redeploy` (Token Authenticated) - clear onboarding job history and start a fresh immediate onboarding run.
+- `GET /api/onboarding/jobs/<int:job_id>/targets` (Token Authenticated) - onboarding target attempts for an occurrence, including approval context and persistent per-target timeline events with sanitized output snippets when available.
+- `GET /api/server/workers` (Admin) - active and recent job-scheduler site worker state.
 
 ## Related Documentation
 - [Assemblies and Quick Jobs](assemblies.md)
@@ -98,13 +129,19 @@ Supported schedule types (from the scheduler core):
 ### Scheduler entry points
 - API registration: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/management.py`.
 - Scheduler core: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`.
-- Scheduler runner: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/runner.py`.
+- Job scheduler runtime: `Data/Engine/Containers/api-backend/data/services/job_scheduler/manager.py`.
+- Site worker runtime: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker.py`.
 
 ### Core tables (Engine DB)
 - `scheduled_jobs` - job definition, schedule, targets, execution context.
 - `scheduled_job_runs` - per-run status, timestamps, error fields, skip reason.
 - `scheduled_job_run_targets` - frozen occurrence target snapshot and originating filter links.
 - `scheduled_job_run_activity` - links activity_history to scheduled runs.
+- `scheduled_job_onboarding_targets` - per-target local-network onboarding attempt state and sanitized output.
+- `scheduled_job_onboarding_target_events` - persistent per-target onboarding task timeline for Detailed Breakdown.
+- `job_scheduler_work_items` - durable queued/running/completed work with Postgres leases.
+- `job_scheduler_workers` - active/recent site-worker lifecycle snapshots.
+- `job_scheduler_service_snapshots` - last known Compose service state from `job-scheduler` for Server Info when `api-backend` has no Docker socket.
 
 ### Schedule computation
 - `_compute_next_run` normalizes timestamps to minutes and applies schedule type logic.
@@ -159,7 +196,8 @@ Supported schedule types (from the scheduler core):
 - WebUI deep links:
 - Create route: `/jobs/new`
 - Edit route: `/jobs/<job_id>`
-- Tab query keys: `job_name`, `assemblies`, `targets`, `schedule`, `execution_context`, `job_history` (edit mode only).
+- Scheduled automation tab query keys: `job_name`, `assemblies`, `targets`, `schedule`, `execution_context`, `job_history` (edit mode only).
+- Automatic onboarding tab query keys: `job_name`, `scope`, `connection_method`, `schedule`, `discovered_devices` (edit mode only). Legacy `ssh_context` and `target_status` links still map to the current tabs.
 - Route registration and URL preservation are implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/paths.js`; component-level tab URL sync is implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/Create_Job.jsx`.
 
 ### Debug checklist

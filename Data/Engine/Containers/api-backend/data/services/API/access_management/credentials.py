@@ -1,6 +1,6 @@
 # ======================================================
 # Data\Engine\services\API\access_management\credentials.py
-# Description: Credential-management endpoints for reusable SSH and WinRM authentication records.
+# Description: Credential-management endpoints for reusable SSH, Windows, and WinRM authentication records.
 #
 # API Endpoints (if applicable):
 # - GET /api/credentials (Token Authenticated) - Lists stored credentials for scheduler and access-management UI use.
@@ -37,7 +37,7 @@ from ...aegis_cipher import (
 )
 
 _ALLOWED_CREDENTIAL_TYPES = {"machine", "domain", "token"}
-_ALLOWED_CONNECTION_TYPES = {"ssh", "winrm"}
+_ALLOWED_CONNECTION_TYPES = {"ssh", "windows", "winrm"}
 _AFFECTED_SECRET_FIELDS = ("password", "private_key", "private_key_passphrase", "become_password")
 _AEGIS_RESET_METADATA_KEYS = (
     "aegis_secret_state",

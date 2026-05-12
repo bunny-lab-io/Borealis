@@ -32,7 +32,7 @@ def _discover_project_root() -> Path:
 
     current = ENGINE_DIR
     for candidate in (current, *current.parents):
-        if (candidate / "Borealis.ps1").is_file():
+        if (candidate / "Agent.exe").is_file():
             return candidate
     return ENGINE_DIR.parent.parent
 

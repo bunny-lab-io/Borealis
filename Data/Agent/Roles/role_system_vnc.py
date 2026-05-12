@@ -14,6 +14,7 @@ import os
 import secrets
 import shutil
 import socket
+import struct
 import subprocess
 import tempfile
 import threading
@@ -21,7 +22,7 @@ import time
 import ctypes
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 try:
     from ctypes import wintypes
@@ -75,13 +76,20 @@ ROLE_CONTEXTS = ["system"]
 
 VNC_FIREWALL_RULE_NAME = "Borealis - VNC - UltraVNC"
 DEFAULT_VNC_PORT = 5900
-ULTRAVNC_SERVICE_NAME = os.environ.get("BOREALIS_ULTRAVNC_SERVICE") or "uvnc_service"
+ULTRAVNC_SERVICE_NAME = os.environ.get("BOREALIS_ULTRAVNC_SERVICE") or "BorealisAgentUltraVNC"
+ULTRAVNC_SERVICE_DISPLAY_NAME = os.environ.get(
+    "BOREALIS_ULTRAVNC_DISPLAY_NAME"
+) or "Borealis Agent - UltraVNC"
+ULTRAVNC_LEGACY_SERVICE_NAMES = ("uvnc_service", "uvnc_service_64", "UltraVNC", "WinVNC")
 ULTRAVNC_SERVICE_START_MODE = _normalize_service_start_mode(
     os.environ.get("BOREALIS_ULTRAVNC_START_TYPE"),
-    default="demand",
+    default="auto",
 )
 VNC_REQUIRE_ENGINE_READY = _env_bool(os.environ.get("BOREALIS_VNC_REQUIRE_ENGINE_READY"), True)
 VNC_ALWAYS_ON_INTERVAL_SECONDS = 30
+VNC_HEALTH_RECENT_READY_GRACE_SECONDS = 20
+VNC_HEALTH_RECOVER_MIN_INTERVAL_SECONDS = 30
+ULTRAVNC_STORED_PASSWORD_KEY = bytes([23, 82, 107, 6, 35, 78, 88, 7])
 
 
 def _log_path() -> Path:
@@ -96,6 +104,15 @@ def _write_log(message: str) -> None:
         _log_path().open("a", encoding="utf-8").write(f"[{ts}] [vnc] {message}\n")
     except Exception:
         pass
+
+
+def _vnc_trace_enabled() -> bool:
+    return _env_bool(os.environ.get("BOREALIS_VNC_TRACE"), False)
+
+
+def _write_vnc_trace(message: str) -> None:
+    if _vnc_trace_enabled():
+        _write_log(message)
 
 
 def _coerce_int(value: Any, default: int, *, min_value: int = 1, max_value: Optional[int] = None) -> int:
@@ -487,6 +504,13 @@ def _resolve_vnc_root() -> Optional[Path]:
             pass
     root = _find_project_root()
     candidates: list[Path] = []
+    if os.name == "nt":
+        for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+            base = os.environ.get(env_name)
+            if not base:
+                continue
+            candidates.append(Path(base) / "uvnc bvba" / "UltraVNC")
+            candidates.append(Path(base) / "UltraVNC")
     if root:
         candidates.append(root / "Agent" / "Borealis" / "Tools" / "UltraVNC" / "Server")
         candidates.append(root / "Agent" / "Borealis" / "Tools" / "UltraVNC")
@@ -531,20 +555,37 @@ def _resolve_vnc_config_dir() -> Optional[Path]:
                 return override_path
         except Exception:
             pass
+    if os.name == "nt":
+        program_data = os.environ.get("ProgramData") or r"C:\ProgramData"
+        return Path(program_data) / "UltraVNC"
     root = _find_project_root()
     if root:
-        tools_config = root / "Agent" / "Borealis" / "Tools" / "UltraVNC" / "Server"
-        if tools_config.is_dir():
-            return tools_config
-        return root / "Agent" / "Borealis" / "Settings" / "UltraVNC"
+        settings_config = root / "Agent" / "Borealis" / "Settings" / "UltraVNC"
+        return settings_config
     try:
         base = agent_borealis_root(__file__).parent
-        tools_config = base / "Borealis" / "Tools" / "UltraVNC" / "Server"
-        if tools_config.is_dir():
-            return tools_config
-        return base / "Borealis" / "Settings" / "UltraVNC"
+        settings_config = base / "Borealis" / "Settings" / "UltraVNC"
+        return settings_config
     except Exception:
         return None
+
+
+def _ultravnc_config_name_for_service(service_name: Optional[str] = None) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9_.-]", "", str(service_name or "").strip())
+    if not normalized:
+        normalized = ULTRAVNC_SERVICE_NAME
+    return f"{normalized}.ini" if normalized else "ultravnc.ini"
+
+
+def _resolve_ultravnc_config_path(
+    config_dir: Path,
+    *,
+    service_name: Optional[str] = None,
+    vnc_exe: Optional[str] = None,
+) -> Path:
+    if os.name == "nt" and not _should_use_ultravnc_config_arg(vnc_exe):
+        return config_dir / _ultravnc_config_name_for_service(service_name)
+    return config_dir / "ultravnc.ini"
 
 
 def _resolve_vnc_exe() -> Optional[str]:
@@ -658,7 +699,13 @@ def _write_ultravnc_config(path: Path, updates: dict[str, str]) -> bool:
         lines.extend(["", "[admin]", f"Secure={secure_value}"])
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("\n".join(lines) + "\n", encoding="ascii")
+        content = "\n".join(lines) + "\n"
+        try:
+            previous = path.read_text(encoding="ascii", errors="ignore")
+        except Exception:
+            previous = ""
+        if previous != content:
+            path.write_text(content, encoding="ascii")
         return True
     except Exception as exc:
         _write_log(f"Failed to write UltraVNC config at {path}: {exc}")
@@ -674,6 +721,21 @@ def _resolve_vnc_port(value: Any = None) -> int:
     if port < 1 or port > 65535:
         return DEFAULT_VNC_PORT
     return port
+
+
+def _should_force_ultravnc_reload(reason: Any) -> bool:
+    normalized = str(reason or "").strip().lower()
+    return normalized in {
+        "credential_rotation",
+        "engine_credential_refresh",
+        "vnc_auth_retry",
+        "vnc_credential_verify",
+    }
+
+
+def _should_rotate_runtime_credential_for_refresh(reason: Any) -> bool:
+    normalized = str(reason or "").strip().lower()
+    return normalized in {"vnc_auth_retry"}
 
 
 def _resolve_vnc_password_tool(root: Optional[Path]) -> Optional[str]:
@@ -752,9 +814,21 @@ def _resolve_vnc_password_tool(root: Optional[Path]) -> Optional[str]:
 def _discover_ultravnc_service_name() -> Optional[str]:
     if os.name != "nt":
         return None
+    if ULTRAVNC_SERVICE_NAME:
+        try:
+            result = subprocess.run(
+                ["sc.exe", "query", ULTRAVNC_SERVICE_NAME],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                return ULTRAVNC_SERVICE_NAME
+        except Exception:
+            pass
     command = (
         "Get-Service -ErrorAction SilentlyContinue | "
-        "Where-Object { $_.Name -like '*uvnc*' -or $_.DisplayName -like '*UltraVNC*' } | "
+        "Where-Object { $_.Name -like '*Borealis*UltraVNC*' -or $_.DisplayName -like 'Borealis Agent - UltraVNC' } | "
         "Select-Object -First 1 -ExpandProperty Name"
     )
     try:
@@ -772,11 +846,44 @@ def _discover_ultravnc_service_name() -> Optional[str]:
     return None
 
 
+def _ultravnc_capture_settings(vnc_exe: Optional[str] = None) -> dict[str, str]:
+    helper_root: Optional[Path] = None
+    try:
+        if vnc_exe:
+            exe_path = Path(vnc_exe)
+            if exe_path.is_file():
+                helper_root = exe_path.parent
+    except Exception:
+        helper_root = None
+    driver_present = False
+    hook_present = False
+    if helper_root:
+        try:
+            driver_present = (helper_root / "ddengine64.dll").is_file() or (helper_root / "ddengine.dll").is_file()
+            hook_present = (helper_root / "vnchooks.dll").is_file()
+        except Exception:
+            driver_present = False
+            hook_present = False
+    return {
+        "TurboMode": "1",
+        "PollUnderCursor": "0",
+        "PollForeground": "0",
+        "PollFullScreen": "1",
+        "OnlyPollConsole": "0",
+        "OnlyPollOnEvent": "0",
+        "EnableDriver": "1" if driver_present else "0",
+        "EnableHook": "1" if hook_present else "0",
+        "EnableVirtual": "0",
+        "SingleWindow": "0",
+    }
+
+
 def _ensure_ultravnc_ini(
     config_path: Path,
     port: int,
     *,
     remove_wallpaper: bool = True,
+    vnc_exe: Optional[str] = None,
 ) -> Optional[Path]:
     base_settings = {
         "UseRegistry": "0",
@@ -786,14 +893,25 @@ def _ensure_ultravnc_ini(
         "PortNumber": str(port),
         "AutoPortSelect": "0",
         "SocketConnect": "1",
+        "AllowLoopback": "1",
+        "LoopbackOnly": "0",
         "HTTPConnect": "0",
         "AllowShutdown": "1",
         "DisableTrayIcon": "1",
         "EnableFileTransfer": "0",
         "RemoveWallpaper": "1" if remove_wallpaper else "0",
     }
+    base_settings.update(_ultravnc_capture_settings(vnc_exe))
     if not _write_ultravnc_config(config_path, base_settings):
         return None
+    if os.name == "nt" and config_path.name.lower() != "ultravnc.ini":
+        legacy_path = config_path.parent / "ultravnc.ini"
+        try:
+            if not _same_path(config_path, legacy_path):
+                raw = config_path.read_text(encoding="ascii", errors="ignore")
+                legacy_path.write_text(raw, encoding="ascii")
+        except Exception:
+            pass
     return config_path
 
 
@@ -836,6 +954,256 @@ def _read_ultravnc_password_hash(
     except Exception as exc:
         _write_log(f"Failed to generate VNC password hash: {exc}")
         return None, None
+
+
+def _normalize_ultravnc_password_hash(hash_value: Optional[str]) -> Optional[str]:
+    normalized = re.sub(r"[^0-9A-Fa-f]", "", str(hash_value or "")).upper()
+    if len(normalized) >= 18:
+        return normalized[:18]
+    if len(normalized) == 16:
+        return f"{normalized}00"
+    return normalized or None
+
+
+def _compute_ultravnc_password_hash(password: str) -> Optional[str]:
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, modes
+    except Exception as exc:
+        _write_log(f"VNC password hash fallback unavailable: {exc}")
+        return None
+    try:
+        triple_des = None
+        try:
+            from cryptography.hazmat.decrepit.ciphers import algorithms as decrepit_algorithms
+
+            triple_des = getattr(decrepit_algorithms, "TripleDES", None)
+        except Exception:
+            pass
+        if triple_des is None:
+            from cryptography.hazmat.primitives.ciphers import algorithms
+
+            triple_des = getattr(algorithms, "TripleDES", None)
+        if triple_des is None:
+            _write_log("VNC password hash fallback unavailable: TripleDES cipher missing.")
+            return None
+        raw_password = str(password or "").encode("latin-1", errors="ignore")[:8].ljust(8, b"\x00")
+        # UltraVNC's D3DES reverses key bit order internally; cryptography DES does not.
+        stored_key = bytes(_reverse_byte_bits(byte) for byte in ULTRAVNC_STORED_PASSWORD_KEY)
+        encryptor = Cipher(triple_des(stored_key * 3), modes.ECB()).encryptor()
+        encrypted = encryptor.update(raw_password) + encryptor.finalize()
+        return _normalize_ultravnc_password_hash(encrypted.hex())
+    except Exception as exc:
+        _write_log(f"VNC password hash fallback failed: {exc}")
+        return None
+
+
+class _VncAuthProbeResult(NamedTuple):
+    checked: bool
+    ok: bool
+    reason: str
+
+
+def _vnc_auth_probe_explicit_auth_failure(result: _VncAuthProbeResult) -> bool:
+    if not result.checked or result.ok:
+        return False
+    reason = str(result.reason or "").strip().replace("_", " ").lower()
+    return (
+        reason.startswith(("auth failed", "too many auth failures"))
+        or "authentication rejected" in reason
+        or "too many attempts" in reason
+        or "to many attempts" in reason
+    )
+
+
+def _vnc_auth_probe_transient_failure(result: _VncAuthProbeResult) -> bool:
+    if not result.checked or result.ok:
+        return False
+    reason = str(result.reason or "").replace("_", " ").lower()
+    if reason.startswith("server init failed"):
+        return True
+    return any(
+        marker in reason
+        for marker in {
+            "connect failed",
+            "connection refused",
+            "connection reset",
+            "socket closed",
+            "timed out",
+            "timeout",
+        }
+    )
+
+
+def _local_vnc_auth_verify_enabled() -> bool:
+    value = str(os.environ.get("BOREALIS_VNC_LOCAL_AUTH_VERIFY", "") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _read_socket_exact(sock: socket.socket, byte_count: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = int(byte_count)
+    while remaining > 0:
+        chunk = sock.recv(remaining)
+        if not chunk:
+            raise RuntimeError("socket_closed")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _read_rfb_failure_reason(sock: socket.socket) -> str:
+    try:
+        raw_length = _read_socket_exact(sock, 4)
+        length = struct.unpack(">I", raw_length)[0]
+        if length <= 0 or length > 4096:
+            return ""
+        return _read_socket_exact(sock, length).decode("utf-8", errors="replace").strip()
+    except Exception:
+        return ""
+
+
+def _reverse_byte_bits(value: int) -> int:
+    result = 0
+    for _index in range(8):
+        result = (result << 1) | (value & 1)
+        value >>= 1
+    return result
+
+
+def _vnc_auth_challenge_response(password: str, challenge: bytes) -> Optional[bytes]:
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, modes
+    except Exception:
+        return None
+    try:
+        des_algorithm = None
+        triple_des_algorithm = None
+        try:
+            from cryptography.hazmat.decrepit.ciphers import algorithms as decrepit_algorithms
+
+            des_algorithm = getattr(decrepit_algorithms, "DES", None)
+            triple_des_algorithm = getattr(decrepit_algorithms, "TripleDES", None)
+        except Exception:
+            pass
+        if des_algorithm is None or triple_des_algorithm is None:
+            from cryptography.hazmat.primitives.ciphers import algorithms
+
+            if des_algorithm is None:
+                des_algorithm = getattr(algorithms, "DES", None)
+            if triple_des_algorithm is None:
+                triple_des_algorithm = getattr(algorithms, "TripleDES", None)
+        raw_key = str(password or "").encode("latin-1", errors="ignore")[:8].ljust(8, b"\x00")
+        key = bytes(_reverse_byte_bits(byte) for byte in raw_key)
+        if des_algorithm is not None:
+            algorithm = des_algorithm(key)
+        elif triple_des_algorithm is not None:
+            algorithm = triple_des_algorithm(key * 3)
+        else:
+            return None
+        encryptor = Cipher(algorithm, modes.ECB()).encryptor()
+        return encryptor.update(challenge) + encryptor.finalize()
+    except Exception:
+        return None
+
+
+def _complete_rfb_client_init(sock: socket.socket) -> _VncAuthProbeResult:
+    try:
+        sock.sendall(b"\x01")
+        server_init = _read_socket_exact(sock, 24)
+        width, height = struct.unpack(">HH", server_init[:4])
+        if width <= 0 or height <= 0:
+            return _VncAuthProbeResult(True, False, "server_init_invalid_display")
+        name_length = struct.unpack(">I", server_init[20:24])[0]
+        if name_length < 0 or name_length > 4096:
+            return _VncAuthProbeResult(True, False, "server_init_invalid_name")
+        if name_length:
+            _read_socket_exact(sock, name_length)
+        return _VncAuthProbeResult(True, True, "server_init_ok")
+    except Exception as exc:
+        return _VncAuthProbeResult(True, False, f"server_init_failed:{str(exc)[:120]}")
+
+
+def _probe_local_vnc_auth(port: int, password: str, timeout_seconds: float = 1.5) -> _VncAuthProbeResult:
+    try:
+        port_value = int(port)
+    except Exception:
+        return _VncAuthProbeResult(True, False, "invalid_port")
+    if port_value < 1 or port_value > 65535:
+        return _VncAuthProbeResult(True, False, "invalid_port")
+    if not str(password or "").strip():
+        return _VncAuthProbeResult(True, False, "missing_password")
+    try:
+        with socket.create_connection(("127.0.0.1", port_value), timeout=max(0.25, timeout_seconds)) as sock:
+            sock.settimeout(max(0.25, timeout_seconds))
+            server_version = _read_socket_exact(sock, 12)
+            if not server_version.startswith(b"RFB "):
+                return _VncAuthProbeResult(True, False, "invalid_rfb_banner")
+            try:
+                major = int(server_version[4:7])
+                minor = int(server_version[8:11])
+            except Exception:
+                major = 3
+                minor = 8
+            client_version = b"RFB 003.008\n" if major > 3 or minor >= 8 else server_version
+            sock.sendall(client_version)
+            security_type = 0
+            if major == 3 and minor <= 3:
+                security_type = struct.unpack(">I", _read_socket_exact(sock, 4))[0]
+                if security_type == 0:
+                    detail = _read_rfb_failure_reason(sock)
+                    return _VncAuthProbeResult(True, False, detail or "security_type_rejected")
+                if security_type == 1:
+                    return _VncAuthProbeResult(True, True, "none_auth")
+                if security_type != 2:
+                    return _VncAuthProbeResult(True, False, f"unsupported_security_type_{security_type}")
+            else:
+                security_type_count = _read_socket_exact(sock, 1)[0]
+                if security_type_count <= 0:
+                    detail = _read_rfb_failure_reason(sock)
+                    return _VncAuthProbeResult(True, False, detail or "security_type_rejected")
+                security_types = _read_socket_exact(sock, security_type_count)
+                if 2 in security_types:
+                    security_type = 2
+                    sock.sendall(b"\x02")
+                elif 1 in security_types:
+                    sock.sendall(b"\x01")
+                    return _VncAuthProbeResult(True, True, "none_auth")
+                else:
+                    offered = ".".join(str(item) for item in security_types)
+                    return _VncAuthProbeResult(True, False, f"unsupported_security_types_{offered}")
+            if security_type != 2:
+                return _VncAuthProbeResult(True, False, "vnc_auth_unavailable")
+            challenge = _read_socket_exact(sock, 16)
+            response = _vnc_auth_challenge_response(password, challenge)
+            if response is None or len(response) != 16:
+                return _VncAuthProbeResult(False, True, "auth_probe_crypto_unavailable")
+            sock.sendall(response)
+            result = struct.unpack(">I", _read_socket_exact(sock, 4))[0]
+            if result == 0:
+                return _complete_rfb_client_init(sock)
+            detail = _read_rfb_failure_reason(sock)
+            if result == 1:
+                return _VncAuthProbeResult(True, False, detail or "auth_failed")
+            if result == 2:
+                return _VncAuthProbeResult(True, False, detail or "too_many_auth_failures")
+            return _VncAuthProbeResult(True, False, f"auth_result_{result}")
+    except Exception as exc:
+        return _VncAuthProbeResult(True, False, (str(exc) or "connect_failed")[:160])
+
+
+def _generate_ultravnc_password_hash(
+    password_tool: Optional[str],
+    password: str,
+    config_dir: Path,
+) -> tuple[Optional[str], Optional[str]]:
+    if password_tool:
+        hash_value, secure_value = _read_ultravnc_password_hash(password_tool, password, config_dir)
+        if hash_value:
+            return _normalize_ultravnc_password_hash(hash_value), secure_value
+        _write_log("VNC password tool failed; falling back to internal hash generator.")
+    else:
+        _write_log("VNC password tool not found; using internal hash generator.")
+    return _compute_ultravnc_password_hash(password), None
 
 
 def _apply_ultravnc_password_hash(config_path: Path, password_hash: str, *, key: str = "passwd") -> bool:
@@ -999,6 +1367,69 @@ def _write_ultravnc_password_file(
         return
 
 
+def _mirror_ultravnc_config_to_service_dir(config_path: Path, vnc_exe: Optional[str]) -> Optional[Path]:
+    if not vnc_exe:
+        return None
+    try:
+        source = config_path if isinstance(config_path, Path) else Path(config_path)
+        target = type(source)(vnc_exe).parent / "ultravnc.ini"
+        if _same_path(source, target):
+            return target
+        raw = source.read_text(encoding="ascii", errors="ignore")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(raw, encoding="ascii")
+        return target
+    except Exception as exc:
+        _write_log(f"Failed to mirror UltraVNC config beside service binary: {exc}")
+        return None
+
+
+def _sync_ultravnc_programdata_peer_config(config_path: Path, config_dir: Path) -> Optional[Path]:
+    try:
+        source = config_path if isinstance(config_path, Path) else Path(config_path)
+        target = config_dir / "ultravnc.ini"
+        if _same_path(source, target):
+            return target
+        raw = source.read_text(encoding="ascii", errors="ignore")
+        previous = ""
+        try:
+            previous = target.read_text(encoding="ascii", errors="ignore")
+        except Exception:
+            pass
+        if previous != raw:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(raw, encoding="ascii")
+            _write_log(f"UltraVNC ProgramData peer config synchronized to {target}.")
+        return target
+    except Exception as exc:
+        _write_log(f"Failed to synchronize UltraVNC ProgramData peer config: {exc}")
+        return None
+
+
+def _should_use_ultravnc_config_arg(vnc_exe: Optional[str]) -> bool:
+    if os.name != "nt":
+        return True
+    exe_text = str(vnc_exe or "").strip()
+    if not exe_text:
+        return True
+    exe_norm = os.path.normcase(os.path.abspath(exe_text)).rstrip("\\/")
+    for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+        value = os.environ.get(env_name)
+        if not value:
+            continue
+        base_norm = os.path.normcase(os.path.abspath(value)).rstrip("\\/")
+        if exe_norm == base_norm or exe_norm.startswith(base_norm + os.sep):
+            return False
+    return True
+
+
+def _ultravnc_service_binpath(vnc_exe: str, config_path: Optional[Path] = None) -> str:
+    base = f"\"{vnc_exe}\" -service"
+    if config_path:
+        return f"{base} -config \"{config_path}\""
+    return base
+
+
 def _parse_allowed_ips(value: Any) -> Optional[str]:
     if isinstance(value, list):
         if not value:
@@ -1020,6 +1451,9 @@ class VncManager:
         self._password_tool: Optional[str] = None
         self._password_tool_logged = False
         self._service_name: Optional[str] = None
+        self._last_service_error = ""
+        self._last_listener_recovery_at = 0.0
+        self._remove_legacy_services()
 
     def _service_state_by_name(self, service_name: str) -> Optional[str]:
         if os.name != "nt":
@@ -1042,6 +1476,42 @@ class VncManager:
             return None
         return None
 
+    def _service_status_summary(self, service_name: Optional[str]) -> str:
+        if os.name != "nt" or not service_name:
+            return ""
+        try:
+            result = subprocess.run(
+                ["sc.exe", "queryex", service_name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except Exception as exc:
+            return f"query_error={exc}"
+        output = (result.stdout or "") + (result.stderr or "")
+        if result.returncode != 0:
+            detail = " ".join(output.split())
+            return detail or f"query_exit={result.returncode}"
+        fields: dict[str, str] = {}
+        for line in output.splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            normalized = key.strip().lower().replace(" ", "_")
+            value = " ".join(value.strip().split())
+            if normalized in {"state", "win32_exit_code", "service_exit_code", "pid"}:
+                fields[normalized] = value
+        parts: list[str] = []
+        if fields.get("state"):
+            parts.append(f"state={fields['state']}")
+        if fields.get("win32_exit_code"):
+            parts.append(f"win32_exit={fields['win32_exit_code']}")
+        if fields.get("service_exit_code"):
+            parts.append(f"service_exit={fields['service_exit_code']}")
+        if fields.get("pid"):
+            parts.append(f"pid={fields['pid']}")
+        return " ".join(parts)
+
     def is_running(self) -> bool:
         service_name = self._resolve_service_name()
         if not service_name:
@@ -1057,6 +1527,50 @@ class VncManager:
                 return True
         except Exception:
             return False
+
+    def _wait_for_listener(self, port: int, timeout: float = 8.0) -> bool:
+        deadline = time.time() + max(0.5, timeout)
+        while time.time() < deadline:
+            if self.is_listener_ready(port):
+                return True
+            time.sleep(0.5)
+        return self.is_listener_ready(port)
+
+    def _recover_listener(
+        self,
+        port: int,
+        service_name: Optional[str],
+        reason: str,
+        *,
+        config_path: Optional[Path] = None,
+    ) -> bool:
+        if not service_name:
+            return False
+        state = self._service_state_by_name(service_name)
+        if state in {"STOPPED", None}:
+            now = time.time()
+            if now - float(self._last_listener_recovery_at or 0.0) < 15.0:
+                return self._wait_for_listener(port, timeout=1.0)
+            self._last_listener_recovery_at = now
+            _write_log(
+                "UltraVNC listener not ready; service stopped; starting for recovery "
+                f"(service={service_name}, port={port}, reason={reason}, status={self._service_status_summary(service_name)})."
+            )
+            if self._ensure_service_running(config_path=config_path):
+                return self._wait_for_listener(port, timeout=10.0)
+            return False
+        if state not in {"RUNNING", "START_PENDING"}:
+            return False
+        now = time.time()
+        if now - float(self._last_listener_recovery_at or 0.0) < 15.0:
+            return self._wait_for_listener(port, timeout=1.0)
+        self._last_listener_recovery_at = now
+        _write_log(
+            "UltraVNC listener not ready; restarting service for recovery "
+            f"(service={service_name}, port={port}, reason={reason})."
+        )
+        self._restart_service()
+        return self._wait_for_listener(port, timeout=10.0)
 
     def ensure_firewall(self, allowed_ips: Optional[str], port: int) -> None:
         self._ensure_firewall(allowed_ips, port)
@@ -1100,6 +1614,55 @@ class VncManager:
             return None
         return None
 
+    def _remove_legacy_services(self) -> None:
+        if os.name != "nt":
+            return
+        for legacy_name in ULTRAVNC_LEGACY_SERVICE_NAMES:
+            if not legacy_name or legacy_name == ULTRAVNC_SERVICE_NAME:
+                continue
+            bin_path = self._service_binpath(legacy_name)
+            if not bin_path or "\\borealis\\" not in bin_path.replace("/", "\\").lower():
+                continue
+            _write_log(f"Removing legacy Borealis UltraVNC service {legacy_name}.")
+            try:
+                subprocess.run(["sc.exe", "stop", legacy_name], capture_output=True, text=True, check=False)
+                self._wait_for_service_stopped(legacy_name, timeout=8.0)
+                subprocess.run(["sc.exe", "delete", legacy_name], capture_output=True, text=True, check=False)
+            except Exception as exc:
+                _write_log(f"Failed to remove legacy UltraVNC service {legacy_name}: {exc}")
+
+    def _set_service_error(self, message: str) -> None:
+        self._last_service_error = str(message or "").strip()
+
+    def _clear_service_error(self) -> None:
+        self._last_service_error = ""
+
+    def _configure_service_display_name(self, service_name: str) -> None:
+        if os.name != "nt":
+            return
+        try:
+            result = subprocess.run(
+                [
+                    "sc.exe",
+                    "config",
+                    service_name,
+                    "DisplayName=",
+                    ULTRAVNC_SERVICE_DISPLAY_NAME,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                _write_log(
+                    "UltraVNC service display-name config failed: {0}".format(
+                        detail or f"exit {result.returncode}"
+                    )
+                )
+        except Exception as exc:
+            _write_log(f"UltraVNC service display-name config failed: {exc}")
+
     def _configure_service_start_mode(self, service_name: str, start_mode: str) -> None:
         if os.name != "nt":
             return
@@ -1120,16 +1683,42 @@ class VncManager:
         except Exception as exc:
             _write_log(f"UltraVNC service start-type config failed: {exc}")
 
+    def _configure_service_recovery(self, service_name: str) -> None:
+        if os.name != "nt":
+            return
+        try:
+            result = subprocess.run(
+                [
+                    "sc.exe",
+                    "failure",
+                    service_name,
+                    "reset=",
+                    "86400",
+                    "actions=",
+                    "restart/5000/restart/15000/restart/30000",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                _write_log(
+                    "UltraVNC service recovery config failed: {0}".format(
+                        detail or f"exit {result.returncode}"
+                    )
+                )
+        except Exception as exc:
+            _write_log(f"UltraVNC service recovery config failed: {exc}")
+
     def _ensure_service_binpath(self, service_name: str, config_path: Optional[Path]) -> bool:
         if os.name != "nt":
             return False
-        if not config_path:
-            return False
         if not self._vnc_exe:
             return False
-        desired = f"\"{self._vnc_exe}\" -service -config \"{config_path}\""
+        desired = _ultravnc_service_binpath(self._vnc_exe, config_path)
         current = self._service_binpath(service_name)
-        if current and "-config" in current:
+        if current:
             normalized = current.replace("'", "").replace('"', "").lower()
             desired_norm = desired.replace("'", "").replace('"', "").lower()
             if normalized == desired_norm:
@@ -1144,15 +1733,17 @@ class VncManager:
             )
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout or "").strip()
+                self._set_service_error(detail or f"binPath update exit {result.returncode}")
                 _write_log(
                     "UltraVNC service binPath update failed: {0}".format(
                         detail or f"exit {result.returncode}"
                     )
                 )
                 return False
-            _write_log(f"UltraVNC service binPath updated for config {config_path}.")
+            _write_log(f"UltraVNC service binPath updated: {desired}.")
             return True
         except Exception as exc:
+            self._set_service_error(str(exc))
             _write_log(f"UltraVNC service binPath update failed: {exc}")
             return False
 
@@ -1174,6 +1765,24 @@ class VncManager:
             if state in ("STOPPED", None):
                 return True
             time.sleep(0.5)
+        return False
+
+    def _verify_service_still_running(self, service_name: str, *, context: str) -> bool:
+        time.sleep(1)
+        state = self._service_state_by_name(service_name)
+        if state == "RUNNING":
+            return True
+        detail = self._service_status_summary(service_name)
+        self._set_service_error(
+            f"service {service_name} stopped after {context} ({detail or state or 'unknown state'})"
+        )
+        _write_log(
+            "UltraVNC service stopped after {0} (service={1}, status={2}).".format(
+                context,
+                service_name,
+                detail or state or "unknown",
+            )
+        )
         return False
 
     def _kill_winvnc_processes(self) -> None:
@@ -1228,12 +1837,16 @@ class VncManager:
             )
             if start_result.returncode != 0:
                 detail = (start_result.stderr or start_result.stdout or "").strip()
+                self._set_service_error(detail or f"service restart exit {start_result.returncode}")
                 _write_log(
                     "UltraVNC service restart failed: {0}".format(detail or f"exit {start_result.returncode}")
                 )
             if not self._wait_for_service(service_name, timeout=12.0):
-                _write_log(f"UltraVNC service restart timed out (service={service_name}).")
+                detail = self._service_status_summary(service_name)
+                self._set_service_error(f"service restart timed out ({detail})")
+                _write_log(f"UltraVNC service restart timed out (service={service_name}, status={detail}).")
         except Exception as exc:
+            self._set_service_error(str(exc))
             _write_log(f"Failed to restart UltraVNC service: {exc}")
 
     def _ensure_service_running(self, config_path: Optional[Path] = None) -> bool:
@@ -1243,7 +1856,9 @@ class VncManager:
         service_name = self._resolve_service_name()
         state = self._service_state_by_name(service_name) if service_name else None
         if service_name and state is not None:
+            self._configure_service_display_name(service_name)
             self._configure_service_start_mode(service_name, desired_start)
+            self._configure_service_recovery(service_name)
         if state == "STOP_PENDING" and service_name:
             if not self._wait_for_service_stopped(service_name, timeout=8.0):
                 _write_log(
@@ -1257,6 +1872,9 @@ class VncManager:
         if state == "RUNNING":
             if updated_binpath:
                 self._restart_service()
+                if not self._verify_service_still_running(service_name, context="binPath restart"):
+                    return False
+            self._clear_service_error()
             return True
         if state == "START_PENDING" and service_name:
             return self._wait_for_service(service_name, timeout=10.0)
@@ -1268,8 +1886,8 @@ class VncManager:
             self._vnc_root = _resolve_vnc_root()
         try:
             if state is None:
-                service_name = ULTRAVNC_SERVICE_NAME or "uvnc_service"
-                desired = f"\"{self._vnc_exe}\" -service -config \"{config_path}\""
+                service_name = ULTRAVNC_SERVICE_NAME
+                desired = _ultravnc_service_binpath(self._vnc_exe, config_path)
                 create_args = [
                     "sc.exe",
                     "create",
@@ -1281,7 +1899,7 @@ class VncManager:
                     "type=",
                     "own",
                     "DisplayName=",
-                    service_name,
+                    ULTRAVNC_SERVICE_DISPLAY_NAME,
                 ]
                 create_result = subprocess.run(
                     create_args,
@@ -1291,16 +1909,21 @@ class VncManager:
                 )
                 if create_result.returncode != 0:
                     detail = (create_result.stderr or create_result.stdout or "").strip()
+                    self._set_service_error(detail or f"service create exit {create_result.returncode}")
                     _write_log(
                         "UltraVNC service create failed: {0}".format(
                             detail or f"exit {create_result.returncode}"
                         )
                     )
                 service_name = self._resolve_service_name(refresh=True) or service_name
+                self._configure_service_display_name(service_name)
+                self._configure_service_recovery(service_name)
                 updated_binpath = self._ensure_service_binpath(service_name, config_path)
             if not service_name:
                 service_name = ULTRAVNC_SERVICE_NAME
+            self._configure_service_display_name(service_name)
             self._configure_service_start_mode(service_name, desired_start)
+            self._configure_service_recovery(service_name)
             start_result = subprocess.run(
                 ["sc.exe", "start", service_name],
                 capture_output=True,
@@ -1315,21 +1938,31 @@ class VncManager:
             ):
                 if updated_binpath:
                     self._restart_service()
+                self._clear_service_error()
                 return True
             if start_result.returncode != 0:
                 detail = start_output.strip()
+                self._set_service_error(detail or f"service start exit {start_result.returncode}")
                 _write_log(
                     "UltraVNC service start failed: {0}".format(
                         detail or f"exit {start_result.returncode}"
                     )
                 )
         except Exception as exc:
+            self._set_service_error(str(exc))
             _write_log(f"Failed to ensure UltraVNC service running: {exc}")
             return False
         if self._wait_for_service(service_name, timeout=10.0):
+            if not self._verify_service_still_running(service_name, context="start"):
+                return False
             if updated_binpath:
                 self._restart_service()
+                if not self._verify_service_still_running(service_name, context="binPath restart"):
+                    return False
+            self._clear_service_error()
             return True
+        detail = self._service_status_summary(service_name)
+        self._set_service_error(f"service {service_name} did not reach RUNNING ({detail})")
         return False
 
     def ensure_standby(self, *, reason: str = "standby") -> None:
@@ -1434,29 +2067,27 @@ class VncManager:
             if self._password_tool and not self._password_tool_logged:
                 self._password_tool_logged = True
                 _write_log(f"Using VNC password tool: {self._password_tool}")
-        if not self._password_tool:
-            _write_log(
-                "VNC password tool not found; expected createpassword.exe under "
-                "Agent/Borealis/Tools/UltraVNC or Dependencies/UltraVNC_Server/tools."
-            )
-            return None, None
-        controller_hash, secure_value = _read_ultravnc_password_hash(
+        controller_hash, secure_value = _generate_ultravnc_password_hash(
             self._password_tool, trimmed_controller, config_dir
         )
         if not controller_hash:
+            self._set_service_error("unable to generate UltraVNC controller password hash")
             return None, None
         if not _apply_ultravnc_password_hash(config_path, controller_hash, key="passwd"):
+            self._set_service_error("unable to apply UltraVNC controller password hash")
             return None, None
         password_hashes = {"passwd": controller_hash}
         if trimmed_view_only:
-            view_only_hash, secondary_secure_value = _read_ultravnc_password_hash(
+            view_only_hash, secondary_secure_value = _generate_ultravnc_password_hash(
                 self._password_tool,
                 trimmed_view_only,
                 config_dir,
             )
             if not view_only_hash:
+                self._set_service_error("unable to generate UltraVNC view-only password hash")
                 return None, None
             if not _apply_ultravnc_password_hash(config_path, view_only_hash, key="passwd2"):
+                self._set_service_error("unable to apply UltraVNC view-only password hash")
                 return None, None
             password_hashes["passwd2"] = view_only_hash
             if secure_value is None:
@@ -1491,7 +2122,7 @@ class VncManager:
             port_value = _resolve_vnc_port(port)
             service_name = self._resolve_service_name()
             prior_service_state = self._service_state_by_name(service_name) if service_name else None
-            _write_log(
+            _write_vnc_trace(
                 "vnc_trace step=AM01 port={0} allowed_ips={1} controller_password={2} view_only_password={3} "
                 "service_name={4} service_state={5} reason={6}".format(
                     port_value,
@@ -1518,55 +2149,130 @@ class VncManager:
             if not config_dir:
                 _write_log("Unable to resolve UltraVNC config directory.")
                 return
-            config_path = config_dir / "ultravnc.ini"
+            service_name = self._resolve_service_name()
+            config_path = _resolve_ultravnc_config_path(
+                config_dir,
+                service_name=service_name or ULTRAVNC_SERVICE_NAME,
+                vnc_exe=self._vnc_exe,
+            )
             remove_wallpaper_value = True if remove_wallpaper is None else bool(remove_wallpaper)
             ini_path = _ensure_ultravnc_ini(
                 config_path,
                 port_value,
                 remove_wallpaper=remove_wallpaper_value,
+                vnc_exe=self._vnc_exe,
             )
             if not ini_path:
                 return
-            applied_controller_password, applied_view_only_password = self._apply_passwords(
-                config_dir,
-                config_path,
-                controller_password or "",
-                view_only_password,
+            force_service_reload = _should_force_ultravnc_reload(reason)
+            requested_controller_password = str(controller_password or "")[:8]
+            requested_view_only_password = str(view_only_password or "")[:8] if view_only_password else None
+            credentials_already_applied = (
+                requested_controller_password
+                and self._last_port == port_value
+                and self._last_controller_password == requested_controller_password
+                and self._last_view_only_password == requested_view_only_password
             )
-            if not applied_controller_password:
-                return
+            should_apply_passwords = force_service_reload or not credentials_already_applied
+            if should_apply_passwords:
+                applied_controller_password, applied_view_only_password = self._apply_passwords(
+                    config_dir,
+                    config_path,
+                    controller_password or "",
+                    view_only_password,
+                )
+                if not applied_controller_password:
+                    return
+            else:
+                applied_controller_password = requested_controller_password
+                applied_view_only_password = requested_view_only_password
+            peer_config_path: Optional[Path] = None
+            if os.name == "nt" and should_apply_passwords:
+                peer_config_path = _sync_ultravnc_programdata_peer_config(config_path, config_dir)
+            service_config_path: Optional[Path] = None
+            if _should_use_ultravnc_config_arg(self._vnc_exe):
+                mirror_target = type(config_path)(self._vnc_exe).parent / "ultravnc.ini"
+                mirror_missing = not mirror_target.exists()
+                mirrored_config = (
+                    _mirror_ultravnc_config_to_service_dir(config_path, self._vnc_exe)
+                    if should_apply_passwords or mirror_missing
+                    else mirror_target
+                )
+                if mirrored_config and (should_apply_passwords or mirror_missing):
+                    _write_log(f"UltraVNC service config mirrored to {mirrored_config}.")
+                service_config_path = mirrored_config or config_path
+            else:
+                if should_apply_passwords:
+                    _write_log(
+                        "UltraVNC service using ProgramData config paths primary={0} legacy={1}.".format(
+                            config_path,
+                            peer_config_path or "-",
+                        )
+                    )
 
-            service_name = self._resolve_service_name()
             service_was_running = False
             if service_name:
                 state = self._service_state_by_name(service_name)
                 service_was_running = state == "RUNNING"
-            if not self._ensure_service_running(config_path=config_path):
+            if not self._ensure_service_running(config_path=service_config_path):
                 _write_log("Failed to start UltraVNC service.")
                 return
+            service_name = self._resolve_service_name(refresh=True) or service_name
 
+            service_restarted = False
             if service_was_running and (
-                self._last_port != port_value
+                force_service_reload
+                or self._last_port != port_value
                 or self._last_controller_password != applied_controller_password
                 or self._last_view_only_password != applied_view_only_password
             ):
+                if force_service_reload:
+                    _write_log(f"UltraVNC service reload requested reason={reason}.")
                 self._restart_service()
+                service_restarted = True
             self._last_port = port_value
             self._last_controller_password = applied_controller_password
             self._last_view_only_password = applied_view_only_password
-            listener_ready = self.is_listener_ready(port_value)
-            _write_log(
+            listener_ready = self._wait_for_listener(port_value, timeout=8.0)
+            if not listener_ready:
+                listener_ready = self._recover_listener(
+                    port_value,
+                    service_name,
+                    reason,
+                    config_path=service_config_path,
+                )
+            if listener_ready:
+                self._clear_service_error()
+            else:
+                self._set_service_error(
+                    "VNC listener not ready on port {0} ({1})".format(
+                        port_value,
+                        self._service_status_summary(service_name),
+                    )
+                )
+            _write_vnc_trace(
                 "vnc_trace step=AM02 port={0} listener_ready={1} service_name={2} service_state={3} "
-                "service_was_running={4} reason={5}".format(
+                "service_was_running={4} force_reload={5} reason={6}".format(
                     port_value,
                     "true" if listener_ready else "false",
                     service_name or "-",
                     self._service_state_by_name(service_name) if service_name else "-",
                     "true" if service_was_running else "false",
+                    "true" if force_service_reload else "false",
                     str(reason or "-").strip() or "-",
                 )
             )
-            _write_log(f"VNC service running port={port_value} reason={reason}.")
+            if listener_ready:
+                if not service_was_running or service_restarted:
+                    _write_log(f"VNC service running port={port_value} reason={reason}.")
+            else:
+                _write_log(
+                    "VNC service not ready port={0} reason={1} status={2}.".format(
+                        port_value,
+                        reason,
+                        self._service_status_summary(service_name),
+                    )
+                )
 
     def stop(self, *, reason: str = "stop") -> None:
         self.ensure_standby(reason=reason)
@@ -1588,6 +2294,7 @@ class Role:
         self._engine_ready_for_vnc = not VNC_REQUIRE_ENGINE_READY
         self._engine_wait_logged = False
         self._last_ready_at = 0
+        self._last_health_recover_at = 0
         self._state = _load_vnc_state()
         self._sanitize_state()
         self._last_allowed_ips = _parse_allowed_ips(self._state.get("allowed_ips"))
@@ -1623,7 +2330,14 @@ class Role:
         try:
             config_dir = _resolve_vnc_config_dir()
             if config_dir:
-                _ensure_ultravnc_ini(config_dir / "ultravnc.ini", DEFAULT_VNC_PORT, remove_wallpaper=True)
+                vnc_exe = _resolve_vnc_exe()
+                service_name = _discover_ultravnc_service_name() or ULTRAVNC_SERVICE_NAME
+                config_path = _resolve_ultravnc_config_path(
+                    config_dir,
+                    service_name=service_name,
+                    vnc_exe=vnc_exe,
+                )
+                _ensure_ultravnc_ini(config_path, DEFAULT_VNC_PORT, remove_wallpaper=True, vnc_exe=vnc_exe)
         except Exception:
             self._log("Failed to ensure UltraVNC config present.", error=True)
         self._trace(
@@ -1648,6 +2362,8 @@ class Role:
         _write_log(message)
 
     def _trace(self, step: str, **fields: Any) -> None:
+        if not _vnc_trace_enabled():
+            return
         parts = [f"vnc_trace step={str(step or '-').strip() or '-'}"]
         for key, value in fields.items():
             if isinstance(value, bool):
@@ -1821,7 +2537,7 @@ class Role:
             "deadline": deadline,
             "controller_password": str(controller_password),
             "view_only_password": grace_state.get("view_only_password"),
-            "allowed_ips": grace_state.get("allowed_ips") or self._last_allowed_ips,
+            "allowed_ips": grace_state.get("allowed_ips") or getattr(self, "_last_allowed_ips", None),
             "port": _resolve_vnc_port(grace_state.get("port")),
             "remove_wallpaper": bool(grace_state.get("remove_wallpaper", True)),
             "reason": str(grace_state.get("reason") or "").strip(),
@@ -1840,7 +2556,7 @@ class Role:
             self._clear_disconnect_grace()
             return False
         controller_password = self._controller_password()
-        allowed_ips = self._last_allowed_ips or _parse_allowed_ips(self._state.get("allowed_ips"))
+        allowed_ips = getattr(self, "_last_allowed_ips", None) or _parse_allowed_ips(self._state.get("allowed_ips"))
         if not controller_password or not allowed_ips:
             self._clear_disconnect_grace()
             return False
@@ -2044,7 +2760,7 @@ class Role:
         allowed_ips = (
             str(grace_snapshot.get("allowed_ips") or "").strip()
             if grace_snapshot
-            else (self._last_allowed_ips or _parse_allowed_ips(self._state.get("allowed_ips")))
+            else (getattr(self, "_last_allowed_ips", None) or _parse_allowed_ips(self._state.get("allowed_ips")))
         )
         if not allowed_ips:
             if not self._engine_wait_logged:
@@ -2101,7 +2817,7 @@ class Role:
             try:
                 rotated = self._ensure_runtime_credential_fresh(reason="scheduled_rotation")
                 has_allowed_ips = bool(
-                    self._last_allowed_ips
+                    getattr(self, "_last_allowed_ips", None)
                     or (self._disconnect_grace_snapshot() or {}).get("allowed_ips")
                 )
                 listener_ready = self.vnc.is_listener_ready(self._state_port())
@@ -2145,25 +2861,37 @@ class Role:
         active_session_id = self._active_session_id()
         listener_ready = self.vnc.is_listener_ready(port_value)
         grace_snapshot = self._disconnect_grace_snapshot()
+        allowed_ips = getattr(self, "_last_allowed_ips", None) or _parse_allowed_ips(self._state.get("allowed_ips"))
         display_topology = _collect_windows_display_topology()
         display_virtual_bounds = _display_virtual_bounds(display_topology)
         if listener_ready:
             self._last_ready_at = max(self._last_ready_at, int(time.time()))
+        now = int(time.time())
+        recent_ready = (
+            service_state in {"RUNNING", "START_PENDING"}
+            and not listener_ready
+            and int(self._last_ready_at or 0) > 0
+            and now - int(self._last_ready_at or 0) <= VNC_HEALTH_RECENT_READY_GRACE_SECONDS
+        )
         details = {
             "running_status": str(service_state or "Stopped"),
             "service_state": str(service_state or "Stopped"),
             "listener_ip": "0.0.0.0",
             "listener_port": str(port_value),
             "service_name": service_name or ULTRAVNC_SERVICE_NAME,
+            "allowed_ips": str(allowed_ips or ""),
+            "last_service_error": str(getattr(self.vnc, "_last_service_error", "") or ""),
             "listener_state": (
                 "listening"
                 if listener_ready
+                else "recently_listening"
+                if recent_ready
                 else "not_listening"
             ),
             "listener_ready": "true" if listener_ready else "false",
             "ready": (
                 "true"
-                if listener_ready and service_state in {"RUNNING", "START_PENDING"}
+                if (listener_ready or recent_ready) and service_state in {"RUNNING", "START_PENDING"}
                 else "false"
             ),
             "last_ready_at": str(int(self._last_ready_at or 0)),
@@ -2175,6 +2903,17 @@ class Role:
             "display_virtual_bounds_json": json.dumps(display_virtual_bounds, ensure_ascii=True, sort_keys=True),
             "display_count": str(len(display_topology)),
         }
+        if recent_ready:
+            return {
+                "status": "healthy",
+                "role_label": self.role_health_label,
+                "detail": (
+                    f"{service_name or ULTRAVNC_SERVICE_NAME} listener was recently ready for session {active_session_id}."
+                    if active_session_id
+                    else f"{service_name or ULTRAVNC_SERVICE_NAME} listener was recently ready for always-on access."
+                ),
+                "details": details,
+            }
         if service_state in {"RUNNING", "START_PENDING"} and listener_ready:
             return {
                 "status": "healthy",
@@ -2186,6 +2925,51 @@ class Role:
                 ),
                 "details": details,
             }
+        if (
+            loop_alive
+            and self._engine_ready_for_vnc
+            and self._controller_password()
+            and allowed_ips
+            and not (service_state in {"RUNNING", "START_PENDING"} and listener_ready)
+            and now - int(getattr(self, "_last_health_recover_at", 0) or 0)
+            >= VNC_HEALTH_RECOVER_MIN_INTERVAL_SECONDS
+        ):
+            self._last_health_recover_at = now
+            self._trace(
+                "A50",
+                event="health_report_recover",
+                service_state=service_state or "-",
+                listener_ready=listener_ready,
+                allowed_ips=allowed_ips or "-",
+                port=port_value,
+            )
+            self._ensure_always_on(reason="health_report_recover")
+            service_name = self.vnc._resolve_service_name()
+            service_state = self.vnc._service_state_by_name(service_name) if service_name else None
+            listener_ready = self.vnc.is_listener_ready(port_value)
+            details["running_status"] = str(service_state or "Stopped")
+            details["service_state"] = str(service_state or "Stopped")
+            details["listener_state"] = "listening" if listener_ready else "not_listening"
+            details["listener_ready"] = "true" if listener_ready else "false"
+            details["ready"] = (
+                "true"
+                if listener_ready and service_state in {"RUNNING", "START_PENDING"}
+                else "false"
+            )
+            details["last_service_error"] = str(getattr(self.vnc, "_last_service_error", "") or "")
+            if listener_ready:
+                self._last_ready_at = max(self._last_ready_at, int(time.time()))
+                details["last_ready_at"] = str(int(self._last_ready_at or 0))
+                return {
+                    "status": "healthy",
+                    "role_label": self.role_health_label,
+                    "detail": (
+                        f"{service_name or ULTRAVNC_SERVICE_NAME} listener is ready for session {active_session_id}."
+                        if active_session_id
+                        else f"{service_name or ULTRAVNC_SERVICE_NAME} listener is ready for always-on access."
+                    ),
+                    "details": details,
+                }
         if not loop_alive:
             return {
                 "status": "unhealthy",
@@ -2221,11 +3005,152 @@ class Role:
                 "detail": "UltraVNC service is running but the VNC listener is not ready yet.",
                 "details": details,
             }
+        service_error = str(getattr(self.vnc, "_last_service_error", "") or "").strip()
+        detail = f"{service_name or ULTRAVNC_SERVICE_NAME} is {service_state or 'stopped'}; restart will be retried."
+        if service_error:
+            detail = f"{detail} Last error: {service_error}"
         return {
             "status": "recovering",
             "role_label": self.role_health_label,
-            "detail": f"{service_name or ULTRAVNC_SERVICE_NAME} is {service_state or 'stopped'}; restart will be retried.",
+            "detail": detail,
             "details": details,
+        }
+
+    def _live_credential_payload(self, *, reason: str, request_id: str = "", rotate_if_requested: bool = True) -> dict[str, Any]:
+        if rotate_if_requested and _should_rotate_runtime_credential_for_refresh(reason):
+            self._rotate_runtime_credential(reason=str(reason))
+        else:
+            self._ensure_runtime_credential_fresh(reason=str(reason))
+            self._sync_runtime_session_credentials()
+        display_topology = _collect_windows_display_topology()
+        display_virtual_bounds = _display_virtual_bounds(display_topology)
+        port_value = self._state_port()
+        service_name = self.vnc._resolve_service_name() if hasattr(self.vnc, "_resolve_service_name") else None
+        service_state_lookup = getattr(self.vnc, "_service_state_by_name", None)
+        service_state = service_state_lookup(service_name) if callable(service_state_lookup) else ""
+        listener_ready = self.vnc.is_listener_ready(port_value)
+        controller_password = self._controller_password() or ""
+        self._trace(
+            "A45",
+            event="vnc_credential_request",
+            reason=reason or "-",
+            request_id=request_id or "-",
+            credential_revision=self._credential_revision(),
+            password_present=bool(controller_password),
+            listener_ready=listener_ready,
+            display_count=len(display_topology),
+        )
+        return {
+            "status": "ok",
+            "agent_id": self.ctx.agent_id,
+            "request_id": request_id,
+            "reason": reason,
+            "controller_password": controller_password,
+            "credential_revision": self._credential_revision(),
+            "display_topology": display_topology,
+            "display_virtual_bounds": display_virtual_bounds,
+            "ready": bool(listener_ready),
+            "service_state": str(service_state or "").strip(),
+            "listener_state": "listening" if listener_ready else "not_listening",
+            "port": port_value,
+        }
+
+    def _wait_for_local_vnc_auth(self, *, port: int, password: str, timeout_seconds: float = 5.0) -> _VncAuthProbeResult:
+        deadline = time.monotonic() + max(0.25, float(timeout_seconds or 0.0))
+        last_result = _VncAuthProbeResult(True, False, "not_checked")
+        while time.monotonic() < deadline:
+            last_result = _probe_local_vnc_auth(port, password, timeout_seconds=1.5)
+            if last_result.ok:
+                return last_result
+            reason = str(last_result.reason or "").replace("_", " ").lower()
+            retry = any(
+                marker in reason
+                for marker in {
+                    "connect failed",
+                    "connection refused",
+                    "connection reset",
+                    "socket closed",
+                    "timed out",
+                    "timeout",
+                }
+            ) or reason.startswith("server init failed")
+            if not retry:
+                return last_result
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.25, remaining))
+        return last_result
+
+    def _verified_live_credential_payload(self, *, reason: str, request_id: str = "") -> dict[str, Any]:
+        self._ensure_always_on(reason=str(reason or "vnc_establish"))
+        payload = self._live_credential_payload(
+            reason=str(reason or "vnc_establish"),
+            request_id=request_id,
+            rotate_if_requested=False,
+        )
+        if not _local_vnc_auth_verify_enabled():
+            payload["auth_verified"] = False
+            payload["auth_verify_reason"] = "local_probe_disabled"
+            self._trace(
+                "A47",
+                event="vnc_credential_verify",
+                reason=reason or "-",
+                request_id=request_id or "-",
+                auth_checked=False,
+                auth_ready="-",
+                listener_ready=bool(payload.get("ready")),
+                result="local_probe_disabled",
+            )
+            return payload
+        password = str(payload.get("controller_password") or "")[:8]
+        port_value = _coerce_int(payload.get("port"), DEFAULT_VNC_PORT, min_value=1, max_value=65535)
+        auth_result = self._wait_for_local_vnc_auth(port=port_value, password=password)
+        if _vnc_auth_probe_explicit_auth_failure(auth_result):
+            self._trace(
+                "A46",
+                event="vnc_credential_verify",
+                reason=reason or "-",
+                request_id=request_id or "-",
+                result=auth_result.reason or "-",
+                retry="force_reload",
+            )
+            self._ensure_always_on(reason="vnc_credential_verify")
+            payload = self._live_credential_payload(
+                reason=str(reason or "vnc_establish"),
+                request_id=request_id,
+                rotate_if_requested=False,
+            )
+            password = str(payload.get("controller_password") or "")[:8]
+            port_value = _coerce_int(payload.get("port"), DEFAULT_VNC_PORT, min_value=1, max_value=65535)
+            auth_result = self._wait_for_local_vnc_auth(port=port_value, password=password)
+        self._trace(
+            "A47",
+            event="vnc_credential_verify",
+            reason=reason or "-",
+            request_id=request_id or "-",
+            ready=auth_result.ok,
+            result=auth_result.reason or "-",
+        )
+        if auth_result.ok:
+            payload["auth_verified"] = True
+            payload["auth_verify_reason"] = auth_result.reason
+            return payload
+        if not _vnc_auth_probe_explicit_auth_failure(auth_result) and _vnc_auth_probe_transient_failure(auth_result):
+            payload["auth_verified"] = False
+            payload["auth_verify_reason"] = auth_result.reason
+            payload["auth_verify_warning"] = "local_probe_transient"
+            return payload
+        return {
+            "status": "not_ready",
+            "agent_id": self.ctx.agent_id,
+            "request_id": request_id,
+            "reason": reason,
+            "ready": False,
+            "auth_verified": False,
+            "auth_verify_reason": auth_result.reason,
+            "credential_revision": self._credential_revision(),
+            "port": port_value,
         }
 
     def register_events(self) -> None:
@@ -2259,7 +3184,7 @@ class Role:
             self._log(f"VNC stop requested (reason={reason}).")
             self._clear_disconnect_grace()
             self._release_session_busy()
-            self.vnc.stop(reason=str(reason))
+            self._ensure_always_on(reason=f"vpn_tunnel_stop:{reason}")
 
         @sio.on("vnc_start")
         async def _vnc_start(payload):
@@ -2268,7 +3193,7 @@ class Role:
                 if target_agent and str(target_agent).strip() != str(self.ctx.agent_id).strip():
                     return
                 port = payload.get("port")
-                allowed_ips = payload.get("allowed_ips") or self._last_allowed_ips
+                allowed_ips = payload.get("allowed_ips") or getattr(self, "_last_allowed_ips", None)
                 controller_password = (
                     payload.get("controller_password")
                     or payload.get("vnc_password")
@@ -2282,7 +3207,7 @@ class Role:
                 reason = payload.get("reason") or "vnc_session_start"
             else:
                 port = None
-                allowed_ips = self._last_allowed_ips
+                allowed_ips = getattr(self, "_last_allowed_ips", None)
                 controller_password = ""
                 view_only_password = ""
                 remove_wallpaper = None
@@ -2328,6 +3253,8 @@ class Role:
                 reason = payload.get("reason") or reason
             self._log(f"VNC credential refresh requested (reason={reason}).")
             self._trace("A42", event="vnc_refresh", reason=reason or "-")
+            if _should_rotate_runtime_credential_for_refresh(reason):
+                self._rotate_runtime_credential(reason=str(reason))
             bootstrap_payload = self._request_vnc_bootstrap(str(reason))
             if bootstrap_payload:
                 self._apply_bootstrap_payload(bootstrap_payload)
@@ -2335,6 +3262,25 @@ class Role:
                 self._ensure_always_on(reason=str(reason))
             else:
                 self._trace("A43", event="vnc_refresh", reason=reason or "-", result="bootstrap_payload_missing")
+
+        @sio.on("vnc_credential_request")
+        async def _vnc_credential_request(payload):
+            reason = "vnc_establish"
+            request_id = ""
+            if isinstance(payload, dict):
+                target_agent = payload.get("agent_id")
+                if target_agent and str(target_agent).strip() != str(self.ctx.agent_id).strip():
+                    return {
+                        "status": "ignored",
+                        "agent_id": self.ctx.agent_id,
+                    }
+                reason = str(payload.get("reason") or reason)
+                request_id = str(payload.get("request_id") or "")
+            self._mark_engine_ready("vnc_credential_request")
+            if str(reason or "").strip().lower() == "vnc_auth_retry":
+                if _should_rotate_runtime_credential_for_refresh(reason):
+                    self._rotate_runtime_credential(reason=str(reason))
+            return self._verified_live_credential_payload(reason=str(reason), request_id=request_id)
 
         @sio.on("vnc_stop")
         async def _vnc_stop(payload):

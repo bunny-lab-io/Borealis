@@ -15,6 +15,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Sites group devices for organizational and targeting purposes.
 - Each site can have an enrollment code that agents can use during install.
 - Site mapping is stored separately from device records and exposed via API.
+- Automatic local-network onboarding uses the selected site's enrollment code after a successful SSH install. The resulting device still lands in the normal approval queue.
 
 ## Operator Site Scope (RBAC)
 - Admins implicitly see all sites, devices, approvals, and remote-access surfaces.
@@ -78,6 +79,16 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Enrollment requests are queued for approval within the request's site.
 - Admins can approve any site; operators can approve only requests for sites they are assigned to.
 - Approvals enforce hostname conflict checks and device identity tracking.
+- Approvals created by automatic local-network onboarding can include `onboarding_job_id`, `onboarding_run_id`, and `onboarding_target` so operators can trace a pending approval back to the scheduled onboarding run and target.
+
+## Automatic Local-Network Onboarding
+- Jobs are created from Sites > Onboard Devices and appear in Scheduled Jobs alongside automation jobs.
+- Targets can be supplied as IPv4 addresses, IPv4 ranges, CIDR blocks, or FQDNs. Exclusion scope entries use the same formats and remove targets before onboarding attempts start.
+- Windows targets use the same IP/FQDN scope model. Borealis tries SMB `ADMIN$` plus Remote Service Control Manager, then remote scheduled task, then WMI/DCOM process creation, then WinRM. Windows onboarding stages `Agent.exe`, which owns install, repair, update, dependency setup, Python environment setup, scheduled-task registration, and handoff to the Python agent. When `Agent.exe` validates an already-running enrolled agent, the onboarding target is marked skipped with `Already Enrolled and Active` instead of completed. If policy blocks all methods, Borealis records that manual agent installation is required.
+- The Engine reaches targets directly over the local network; no WireGuard tunnel or existing Borealis agent is required.
+- Borealis uses one stored machine or domain credential per onboarding job and does not copy credentials into the job definition.
+- The remote installer uses the selected agent install branch, the Engine public URL, and the selected site's enrollment code. Device approval remains manual, but pending approvals can be approved directly from the onboarding job target status table when no hostname conflict prompt is required.
+- Re-deploy clears prior onboarding run history for that job and starts a new immediate local-network deployment. Device onboarding concurrency defaults to `5` so subnet scans do not flood the Engine, and operators can tune it per onboarding job.
 
 ## Device Purge
 - The Device List `Delete` action is now an admin-only purge flow backed by `POST /api/devices/<guid>/purge`.
@@ -159,6 +170,8 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `GET /api/admin/device-approvals` (Token Authenticated) - approval queue scoped to the current operator's assigned sites unless the operator is an admin. Admins can use `status=wrong_code` for recent invalid enrollment-code attempts.
 - `POST /api/admin/device-approvals/<approval_id>/approve` (Token Authenticated) - approve an in-scope device.
 - `POST /api/admin/device-approvals/<approval_id>/deny` (Token Authenticated) - deny an in-scope device.
+- `POST /api/onboarding/jobs/<job_id>/redeploy` (Token Authenticated) - clear onboarding history for a job and start a fresh run.
+- `GET /api/onboarding/jobs/<job_id>/targets` (Token Authenticated) - per-target automatic onboarding attempts for a scheduled job occurrence, including current approval context when available.
 
 ## Related Documentation
 - [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
@@ -192,7 +205,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Service inventory is cached in the `devices.services` JSON blob and merged with pending operator actions until a fresh agent snapshot confirms the desired state.
 - Process Management uses the device SYSTEM Socket.IO channel with ACK responses under `process_management_request` for live process snapshots and process termination. It does not replace the slower cached `devices.processes` watchdog inventory, which remains name/count oriented.
 - Manual agent update requests from the Device Summary action menu call `POST /api/device/update-agent/<hostname>` and are delivered over the device's SYSTEM Socket.IO channel as `agent_update_request`.
-- The agent does not launch `Update.ps1` / `Update.sh` directly for that request anymore; it starts the existing local AutoUpdater scheduler path instead so manual and scheduled updates use the same execution flow.
+- The agent does not launch platform update scripts directly for that request anymore; it starts the existing local AutoUpdater scheduler path instead so manual and scheduled updates use the same execution flow.
 - File Management browse and mutation requests use the device SYSTEM Socket.IO channel with Socket.IO ACK responses under the `file_management_request` event instead of piggybacking on quick-job stdout/stderr.
 - File transfers use Engine temp-file staging plus device-authenticated agent pull/push endpoints so large uploads and downloads do not have to fit inside one socket payload.
 - Folder uploads rely on an Engine-staged upload manifest that preserves each browser file's relative path so the agent can rebuild the destination tree incrementally without requiring the whole folder to ride in one payload.

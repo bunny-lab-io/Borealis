@@ -883,22 +883,22 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     connectAttemptRef.current += 1;
   }, []);
 
-  const notifyAgentOnboarding = useCallback(async () => {
+  const notifyAgentSocketUnavailable = useCallback(async () => {
     await notifyOperator({
-      title: "Agent Onboarding Underway",
+      title: "Agent Connection Not Ready",
       message:
-        "Please wait for the agent to finish onboarding into Borealis. It takes about 1 minute to finish the process.",
+        "Engine does not have a live Agent socket for this device yet. Remote desktop will work after the Agent reconnects.",
       icon: "info",
       variant: "info",
     });
   }, [notifyOperator]);
 
-  const handleAgentOnboarding = useCallback(async () => {
-    await notifyAgentOnboarding();
-    setStatusMessage("Agent Onboarding Underway.");
+  const handleAgentSocketUnavailable = useCallback(async () => {
+    await notifyAgentSocketUnavailable();
+    setStatusMessage("Agent connection not ready.");
     setSessionState("idle");
     setVncStage("agent_onboarding");
-  }, [notifyAgentOnboarding]);
+  }, [notifyAgentSocketUnavailable]);
 
   const resetDisconnectedViewState = useCallback(() => {
     forcedViewportKeyRef.current = "";
@@ -1164,7 +1164,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
         if (data?.error === "agent_socket_missing") {
-          await handleAgentOnboarding();
+          await handleAgentSocketUnavailable();
           return null;
         }
         const detail = data?.detail ? `: ${data.detail}` : "";
@@ -1182,7 +1182,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       }
       throw err;
     }
-  }, [agentId, applySessionBootstrap, handleAgentOnboarding, performancePreference]);
+  }, [agentId, applySessionBootstrap, handleAgentSocketUnavailable, performancePreference]);
 
   const handleClipboardSyncAttempt = useCallback(() => {
     setClipboardSync(false);

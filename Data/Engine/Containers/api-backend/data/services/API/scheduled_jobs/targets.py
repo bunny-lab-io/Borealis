@@ -21,10 +21,20 @@ def _normalize_site_id(value: Any) -> Optional[int]:
         return None
 
 
+def _normalize_onboarding_scope_values(value: Any) -> List[str]:
+    if isinstance(value, str):
+        text = value.replace("\r\n", "\n").replace("\r", "\n")
+        return text.split("\n") if text else []
+    if isinstance(value, (list, tuple)):
+        return ["" if item is None else str(item) for item in value]
+    return []
+
+
 def normalize_targets_for_save(entries: Sequence[Any]) -> List[Any]:
     normalized: List[Any] = []
     seen_filters: set[int] = set()
     seen_devices: set[str] = set()
+    seen_onboarding_scopes: set[str] = set()
     include_all_devices = False
     if not isinstance(entries, (list, tuple)):
         return normalized
@@ -42,6 +52,52 @@ def normalize_targets_for_save(entries: Sequence[Any]) -> List[Any]:
         if not isinstance(entry, dict):
             continue
         kind = str(entry.get("kind") or entry.get("type") or "").strip().lower()
+        if kind == "onboarding_scope":
+            site_id_value = _normalize_site_id(entry.get("site_id") or entry.get("siteId"))
+            if site_id_value is None:
+                continue
+            raw_entries = entry.get("entries")
+            if raw_entries is None:
+                raw_entries = entry.get("scope") or entry.get("targets") or entry.get("discovery_scope")
+            scope_entries = _normalize_onboarding_scope_values(raw_entries)
+            if not any(str(value or "").strip() for value in scope_entries):
+                continue
+            raw_exclusions = (
+                entry.get("exclusions")
+                or entry.get("exclude_entries")
+                or entry.get("exclusion_scope")
+                or entry.get("exclusionScope")
+                or []
+            )
+            exclusion_entries = _normalize_onboarding_scope_values(raw_exclusions)
+            deduped_scope_entries = [
+                str(value).strip().lower()
+                for value in scope_entries
+                if str(value or "").strip()
+            ]
+            deduped_exclusion_entries = [
+                str(value).strip().lower()
+                for value in exclusion_entries
+                if str(value or "").strip()
+            ]
+            dedupe_key = (
+                f"onboarding:{site_id_value}:"
+                f"{'|'.join(deduped_scope_entries)}:"
+                f"{'|'.join(deduped_exclusion_entries)}"
+            )
+            if dedupe_key in seen_onboarding_scopes:
+                continue
+            seen_onboarding_scopes.add(dedupe_key)
+            normalized.append(
+                {
+                    "kind": "onboarding_scope",
+                    "site_id": site_id_value,
+                    "site_name": entry.get("site_name") or entry.get("site") or "",
+                    "entries": scope_entries,
+                    "exclusions": exclusion_entries,
+                }
+            )
+            continue
         if kind == "all_devices" or entry.get("all_devices") is True:
             if include_all_devices:
                 continue

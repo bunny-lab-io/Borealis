@@ -20,22 +20,12 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Storage is displayed during profile detection as an advisory guideline only. It does not change which Engine profile gets selected.
 
 ## Optional: Install the Agent (Windows)
-- Run in elevated PowerShell: `./Borealis.ps1`.
-- Bootstrap one-liner:
-  `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent`
-- Bootstrap one-liner pinned to the latest stable release tag:
-  `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --release-channel stable --agent`
-- Bootstrap one-liner pinned to a testing branch:
-  `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/optimization/agent-context-socket-consolidation/bootstrap.ps1"))) --repo-branch optimization/agent-context-socket-consolidation --agent`
-- When testing bootstrap-only changes that have not merged to `main` yet, fetch `bootstrap.ps1` from the same branch or commit you want to validate; otherwise `main` may download an older bootstrapper that does not understand the new flags even if the target branch does.
+- Run in elevated PowerShell from a checkout: `.\Data\Agent\Bootstrap\Agent.exe`.
+- Build or refresh Windows bootstrap binary from Linux when source changes: `Data/Agent/Bootstrap/build-agent.sh`.
 - Automated enrollment example:
-  `./Borealis.ps1 -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
+  `.\Data\Agent\Bootstrap\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Non-interactive server URL + enrollment example:
-  `./Borealis.ps1 -ServerUrl "https://borealis.example.com" -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
-- Bootstrap + server URL + enrollment example:
-  `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
-- Branch bootstrap + server URL + enrollment example:
-  `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/optimization/agent-context-socket-consolidation/bootstrap.ps1"))) --agent --repo-branch optimization/agent-context-socket-consolidation --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
+  `C:\Borealis\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Linux agents run from the same script-staged Python runtime model as the rest of Borealis, not shipped binaries. The Linux Agent path can be installed with `./Agent.sh deploy`; current parity notes live in `Docs/Core Runtimes/agent-runtime.md`.
 - Linux Agent one-line installs use a root check: root shells pipe to `bash`; non-root shells use `sudo bash` before the script starts.
 - Do not install the Linux Agent into a deployed Engine runtime root. `Agent.sh deploy` blocks same-root installs when Engine deploy/runtime markers are present, but the synced `Data/Engine/` source tree is expected and does not block Agent first install.
@@ -73,7 +63,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Agent source code lives in `Data/Agent/`.
 - Runtime copies are staged to `Engine/` and `Agent/` every launch; these are disposable.
 - Engine container source lives in `Data/Engine/Containers/`; generated runtime state lives under `Engine/Deploy/` and sparse service-owned folders under `Engine/Services/<role>/`.
-- Edit durable source under `Data/` and re-run the appropriate launcher to apply changes: `Engine.sh` for Linux Engine first install and redeploys, `Agent.sh` for Linux Agent first install and redeploys, and `Borealis.ps1` / `bootstrap.ps1` for the Windows agent. For rapid WebUI HMR testing, edit `Engine/Services/webui-frontend/data/web-interface/` while running `Engine.sh deploy dev`.
+- Edit durable source under `Data/` and re-run the appropriate launcher to apply changes: `Engine.sh` for Linux Engine first install and redeploys, `Agent.sh` for Linux Agent first install and redeploys, and `Agent.exe` for the Windows agent. For rapid WebUI HMR testing, edit `Engine/Services/webui-frontend/data/web-interface/` while running `Engine.sh deploy dev`.
 
 ### Launch mechanics
 - `Engine.sh` is the Linux Engine first-run and redeploy path. When run from a raw one-liner or with repo options, it syncs source first; local `Engine.sh deploy` uses existing on-disk source.
@@ -81,8 +71,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - `Engine.sh deploy dev` runs the same service set but sets the WebUI frontend to Vite HMR behind Traefik. Switching between prod and dev should only recreate WebUI after the stack is already current.
 - `Agent.sh` is the Linux Agent first-run and redeploy path. When run from a raw one-liner or with repo options, it syncs source first; local `Agent.sh deploy` uses existing on-disk source.
 - `Agent.sh deploy` installs missing Agent OS dependencies and stages the Linux Agent runtime.
-- `bootstrap.ps1` and `Borealis.ps1` handle dependency setup and staging for the Windows agent runtime, and `bootstrap.ps1` accepts release-channel and branch-selection options for Windows Agent installs.
-- When validating new bootstrap-only behavior before it merges to `main`, download `bootstrap.ps1` from the same branch or commit you intend to test; using the `main` bootstrapper with branch-only flags can fail before the repo sync step has a chance to pull the newer code.
+- `Agent.exe` handles dependency setup, runtime staging, repair, update checks, and uninstall for Windows Agent installs.
 - Dev mode (`Engine.sh deploy dev`) uses Vite for the WebUI behind the Traefik edge container, while the Engine API stays on loopback.
 - Production (`Engine.sh deploy prod`) runs the Engine API on loopback HTTP, serves the static WebUI from the WebUI frontend container, and publishes the app through Traefik.
 - Engine and Agent dependency checks live in their domain launchers.

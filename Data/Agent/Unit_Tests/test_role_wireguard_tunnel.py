@@ -259,13 +259,32 @@ def _build_windows_client() -> WireGuardClient:
     client._client_keys = {"private": "client-private"}
     client._wg_exe = "wireguard.exe"
     client._last_install_already_present = False
+    client._last_service_error = ""
     client.service_name = "Borealis"
     client.display_name = "Borealis"
-    client.service_display_name = "Borealis - WireGuard - Agent"
+    client.service_display_name = "Borealis Agent - WireGuard"
     client.conf_path = Path("/tmp/Borealis.conf")
     client.session = None
     client.idle_deadline = None
     return client
+
+
+def test_windows_client_removes_stale_engine_listener_service(monkeypatch) -> None:
+    client = _build_windows_client()
+    calls: list[list[str]] = []
+    exists_checks: list[str] = []
+
+    monkeypatch.setattr(wireguard_role.os, "name", "nt")
+    client._named_service_exists = lambda tunnel_name: exists_checks.append(tunnel_name) or len(exists_checks) == 1
+    client._run = lambda args: calls.append(list(args)) or (0, "", "")
+
+    client._remove_stale_engine_listener_services()
+
+    assert exists_checks == ["borealis-wg", "borealis-wg"]
+    assert calls == [
+        ["sc.exe", "stop", "WireGuardTunnel$borealis-wg"],
+        ["wireguard.exe", "/uninstalltunnelservice", "borealis-wg"],
+    ]
 
 
 def test_windows_client_reuses_same_session_and_primes_engine_path(monkeypatch) -> None:
@@ -305,6 +324,32 @@ def test_windows_client_repairs_stale_service_binding() -> None:
 
     assert calls == ["write_config", "reinstall", "restart", "adapter", "display", "firewall"]
     assert client.session is session
+
+
+def test_windows_client_repairs_stale_idle_service_binding() -> None:
+    client = _build_windows_client()
+    calls: list[str] = []
+
+    client._service_exists = lambda: True
+    client._service_config_path = lambda: Path("D:/Github/Borealis/Agent/Agent/Borealis/Settings/WireGuard/Borealis.conf")
+    client._write_config = lambda text: calls.append("write_idle") or True
+    client._reinstall_service = lambda: calls.append("reinstall") or True
+    client._ensure_service_display_name = lambda: calls.append("display")
+
+    client._ensure_idle_service()
+
+    assert calls == ["write_idle", "reinstall", "display"]
+
+
+def test_windows_client_accepts_existing_tunnel_service_install_response() -> None:
+    client = _build_windows_client()
+    calls: list[list[str]] = []
+    client._run = lambda args: calls.append(list(args)) or (1, "The specified service already exists.", "")
+
+    assert client._install_service() is True
+    assert client._last_install_already_present is True
+    assert client._last_service_error == ""
+    assert calls == [["wireguard.exe", "/installtunnelservice", "/tmp/Borealis.conf"]]
 
 
 def test_windows_client_does_not_mirror_config_to_stale_service_path() -> None:
@@ -538,6 +583,62 @@ def test_role_notify_engine_ready_requires_running_service() -> None:
     role._notify_engine_ready(session, reason="vpn_tunnel_start")
 
     assert posted == []
+
+
+def test_role_health_report_requests_recovery_when_expected_tunnel_is_stopped(monkeypatch) -> None:
+    role = Role.__new__(Role)
+    recovery_reasons: list[str] = []
+    session = _build_session()
+
+    class _Client:
+        @staticmethod
+        def _service_state() -> str:
+            return "STOPPED"
+
+    _Client.session = session
+    role.client = _Client()
+    role.role_health_label = "WireGuard Service"
+    role._ensure_thread = type("Thread", (), {"is_alive": lambda self: True})()
+    role._last_tunnel_snapshot = {}
+    role._read_live_config_snapshot = lambda: {}
+    role._last_health_recover_at = 0.0
+    role.request_immediate_ensure = lambda *, reason: recovery_reasons.append(reason)
+    monkeypatch.setattr(wireguard_role.time, "time", lambda: 100.0)
+
+    report = role.health_report()
+
+    assert report["status"] == "recovering"
+    assert report["details"]["running_status"] == "STOPPED"
+    assert "Tunnel expected but service state is STOPPED" in report["detail"]
+    assert recovery_reasons == ["health_report_recover"]
+
+
+def test_role_health_report_includes_wireguard_service_error(monkeypatch) -> None:
+    role = Role.__new__(Role)
+    session = _build_session()
+
+    class _Client:
+        _last_service_error = "sc start WireGuardTunnel$Borealis exit code 2"
+
+        @staticmethod
+        def _service_state() -> str:
+            return "STOPPED"
+
+    _Client.session = session
+    role.client = _Client()
+    role.role_health_label = "WireGuard Service"
+    role._ensure_thread = type("Thread", (), {"is_alive": lambda self: True})()
+    role._last_tunnel_snapshot = {}
+    role._read_live_config_snapshot = lambda: {}
+    role._last_health_recover_at = 0.0
+    role.request_immediate_ensure = lambda *, reason: None
+    monkeypatch.setattr(wireguard_role.time, "time", lambda: 100.0)
+
+    report = role.health_report()
+
+    assert report["status"] == "recovering"
+    assert report["details"]["last_service_error"] == "sc start WireGuardTunnel$Borealis exit code 2"
+    assert "Last service error: sc start WireGuardTunnel$Borealis exit code 2" in report["detail"]
 
 
 def test_role_run_ensure_cycle_safe_logs_exceptions() -> None:

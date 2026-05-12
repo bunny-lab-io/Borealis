@@ -35,16 +35,23 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - `GET /api/vnc/viewers` reports Guacamole availability. Remote Desktop is available only when `guacd` is enabled and reachable.
 - Guacamole v1 is VNC-only. RDP, SSH, and Telnet protocol plugins are not exposed.
 - Borealis keeps one shared interactive collaboration session per device. Everyone who joins the session can type, click, and interact concurrently.
-- VNC authentication is handled by a single shared UltraVNC password plus a Borealis one-time session token for the WebSocket proxy.
-- The Windows agent generates that UltraVNC password when the VNC role starts, rotates it again every 24 hours by default (`BOREALIS_VNC_CREDENTIAL_ROTATION_SECONDS`), keeps it in memory only instead of persisting it into `vnc_state.json`, and re-advertises it to the Engine through `POST /api/agent/vnc/ensure`.
-- Engine collaboration state reuses the currently advertised agent password across VNC sessions until the agent restarts, reboots, or the next agent-side daily credential rotation publishes a new revision.
-- Agent runs UltraVNC as a Windows service; once the agent has its current controller credential and Engine /32 firewall scope, Borealis keeps the VNC listener running continuously instead of standing it down between sessions, and `/api/vnc/disconnect` now makes the caller leave the collaboration session or closes it entirely when requested.
+- VNC authentication is handled by the Agent's current UltraVNC password plus a Borealis one-time session token for the WebSocket proxy.
+- The Windows agent generates that UltraVNC password when the VNC role starts, rotates it again every 24 hours by default (`BOREALIS_VNC_CREDENTIAL_ROTATION_SECONDS`), keeps it in memory only instead of persisting it into `vnc_state.json`, and returns it directly to the Engine only when the Engine calls the Agent Socket.IO `vnc_credential_request` chain for a live `/api/vnc/establish`. The Agent no longer attempts a loopback RFB auth probe by default because that probe appears as client `127.0.0.1` in UltraVNC logs and consumes login attempts before the Engine/Guacamole path connects. Set `BOREALIS_VNC_LOCAL_AUTH_VERIFY=1` only for focused diagnostics.
+- Engine collaboration state no longer maintains an agent-level VNC password cache. Each VNC establish asks the Agent for the current runtime password, then uses that password only for the Guacamole session being minted.
+- Agent runs UltraVNC as a Windows service from the system UltraVNC install; once the agent has its current controller credential and Engine /32 firewall scope, Borealis keeps the VNC listener running continuously instead of standing it down between sessions, and `/api/vnc/disconnect` now makes the caller leave the collaboration session or closes it entirely when requested.
+- `Agent.exe` installs UltraVNC 1.8.2.1 through the vendor MSI, stores UltraVNC config under `%ProgramData%\UltraVNC\`, and points the Borealis service at the installed `winvnc.exe` without a portable `-config` mirror. The Agent keeps both the service-named config (`BorealisAgentUltraVNC.ini`) and legacy `ultravnc.ini` synchronized after writing live credentials so UltraVNC cannot read a stale password from the alternate default path.
+- `Agent.exe` registers UltraVNC but does not start the Borealis service during bootstrap; the VNC role starts it only after the current password, firewall scope, and display metadata are ready, which keeps deployment headless and avoids UltraVNC settings dialogs on fresh installs.
+- The Windows VNC role computes UltraVNC-compatible stored VNC DES password hashes internally when the UltraVNC password helper does not return a hash. The stored `passwd` value is the 18-hex-character UltraVNC field: the 8-byte VNC DES blob plus the UltraVNC checksum byte, so missing or unusable `createpassword.exe` must not leave `BorealisAgentUltraVNC` stopped.
+- When the official UltraVNC helper DLLs are present beside `winvnc.exe`, the Agent enables `EnableDriver=1` for `ddengine64.dll`/`ddengine.dll` and `EnableHook=1` for `vnchooks.dll`, plus standard polling/turbo settings, to improve screen update performance without bundling non-official DLLs.
 - `POST /api/vnc/handoff` remains available only to reassign the session owner metadata; it no longer forces reconnects or changes who can interact. `GET /api/vnc/sessions` exposes active-session inventory for the WebUI and admin/server overview.
-- `POST /api/agent/vnc/ensure` now returns readiness detail (`ready`, `service_state`, `listener_state`, `last_ready_at`, and session metadata) so the Engine can wait for the listener before minting browser bootstrap data.
+- `POST /api/agent/vnc/ensure` now returns readiness detail (`ready`, `service_state`, `listener_state`, `last_ready_at`, and session metadata) without storing or echoing VNC passwords.
+- Agent health reports tolerate a short recent-ready window for UltraVNC listener probes and throttle health-triggered recovery. This prevents a transient TCP probe miss from causing repeated config rewrites and service pokes while the UltraVNC service is already running.
+- Steady-state `always_on_check` and VNC establish paths are read-only for UltraVNC passwords when the requested port and credentials already match the last applied values. The Agent only rewrites UltraVNC password config on first application, credential change, port change, missing portable mirror, or forced reload reason.
 - Before the proxy connects, the Engine prewarms the cached WireGuard path for registered agents, then fast-probes the agent's advertised UltraVNC listener; prewarmed fast probes use a slightly longer window (`BOREALIS_VNC_PREWARM_FAST_READY_WAIT_SECONDS`, default 2.0 seconds) so the Agent path-prime acknowledgement can land before the Engine falls back to `reason=vnc_bootstrap`.
 - After soft browser disconnects (`operator_disconnect` and `component_unmount`), the Windows VNC role preserves a short reconnect-grace snapshot (default 45 seconds via `BOREALIS_VNC_DISCONNECT_GRACE_SECONDS`) for session metadata, but the UltraVNC listener itself now stays running instead of dropping to standby.
 - When the last participant disconnects without explicitly closing the session, the Engine now retains that collaboration session briefly so a quick reconnect can reuse the same VNC password instead of forcing a brand-new UltraVNC restart.
 - Fast-path VNC establish now uses a short optimistic probe window (`BOREALIS_VNC_FAST_READY_WAIT_SECONDS`, default 0.75 seconds, with `BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS`, default 0.15 seconds) so healthy listeners connect without restarting WireGuard or UltraVNC.
+- Before issuing a Guacamole token, the Engine normally skips backend RFB VNCAuth verification and gives Guacamole the first authentication attempt. Set `BOREALIS_VNC_AUTH_PROBE=1` only for focused diagnostics. When enabled, the Engine can complete an RFB VNCAuth challenge and ServerInit probe against the advertised UltraVNC listener using the live credential returned by `vnc_credential_request`. The auth probe retries transient socket startup errors but stops after one definitive authentication rejection so Borealis does not burn through UltraVNC's hardcoded blacklist threshold. If authentication fails, the Engine calls `vnc_credential_request` with `reason=vnc_auth_retry`; the Agent rotates the runtime VNC credential, force-reloads UltraVNC, and the Engine returns `vnc_backend_auth_refresh_pending` while caching a short retry window (`BOREALIS_VNC_AUTH_REFRESH_BACKOFF_SECONDS`, default 20 seconds) instead of immediately probing again. If UltraVNC reports too many authentication attempts, the Engine returns `vnc_backend_auth_rate_limited`, caches that agent lockout window, and skips further RFB probes until the retry window expires so repeated browser clicks do not extend the lockout. The Engine returns `vnc_backend_auth_failed` only when a later eligible probe still rejects the live password.
 - If the Engine does have to fall back to `reason=vnc_bootstrap`, the optional settle delay (`BOREALIS_VNC_BOOTSTRAP_SETTLE_SECONDS`) now defaults to `0.0` seconds instead of pausing every new session by default.
 - If the backend listener does not become reachable after the readiness wait, the proxy escalates once with `reason=vnc_connect_retry`, and Borealis now applies an agent-level cooldown so closely spaced browser retries do not each force another shared transport recovery.
 - The initial backend readiness window now defaults to 12 seconds (`BOREALIS_VNC_READY_WAIT_SECONDS`) and the post-recovery retry window defaults to 8 seconds (`BOREALIS_VNC_RETRY_READY_WAIT_SECONDS`), which makes normal UltraVNC startup less likely to be mistaken for a WireGuard failure.
@@ -62,7 +69,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - `GET /api/tunnel/status` (Token Authenticated) - tunnel status by agent, including `listener_healthy`, `recovery_in_progress`, `last_recovery_attempt_at`, and `last_recovery_attempt_at_iso`.
 - `GET /api/tunnel/active` (Token Authenticated) - list active tunnels with the same listener-health fields.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - agent-side persistent tunnel bootstrap.
-- `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure VNC readiness, advertise the agent's current boot-scoped UltraVNC credential, and return active session metadata.
+- `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure VNC readiness and return active session metadata without returning the VNC password.
 - `GET /api/vnc/viewers` (Token Authenticated) - report Apache Guacamole VNC availability.
 - `POST /api/vnc/establish` (Token Authenticated) - establish or join an Apache Guacamole VNC collaboration session.
 - `POST /api/vnc/disconnect` (Token Authenticated) - leave or close a VNC collaboration session.
@@ -87,6 +94,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - VNC session API: `Data/Engine/Containers/api-backend/data/services/API/devices/vnc.py`.
 - VNC collaboration manager: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/vnc_sessions.py`.
 - VNC proxy: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/vnc_proxy.py`.
+- VNC RFB auth probe helper: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/rfb_probe.py`.
 - Guacamole bridge: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/guacamole_proxy.py`.
 
 ### Core Agent files
@@ -192,7 +200,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - `GET /api/tunnel/status` -> returns up/down status for an agent plus `listener_healthy`, `recovery_in_progress`, `last_recovery_attempt_at`, and `last_recovery_attempt_at_iso`.
 - `GET /api/tunnel/active` -> lists active VPN tunnel sessions (tunnel_id, agent_id, virtual_ip, last_activity, etc.) plus the same shared listener-health fields.
 - `POST /api/agent/vpn/ensure` -> device-authenticated tunnel bootstrap for persistent mode.
-- `POST /api/agent/vnc/ensure` -> device-authenticated VNC readiness check, active session bootstrap, and agent credential advertisement for the Windows agent.
+- `POST /api/agent/vnc/ensure` -> device-authenticated VNC readiness check and active session bootstrap for the Windows agent; live passwords move only through Agent Socket.IO `vnc_credential_request`.
 - `GET /api/vnc/viewers` -> report Apache Guacamole VNC availability.
 - `POST /api/shell/establish` -> establish remote shell session.
 - `POST /api/shell/disconnect` -> disconnect remote shell session.
@@ -204,6 +212,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 #### 4) Agent components
 - Tunnel lifecycle: `Data/Agent/Roles/role_system_wireguard.py`
   - Validates orchestration tokens, starts WireGuard client service, keeps the tunnel persistent, and retries same-session service recovery when the watchdog finds the Windows WireGuard service stopped.
+  - `Agent.exe` installs the official WireGuard Windows MSI system-wide, verifies the MSI checksum, and removes `WireGuardManager` by default so bootstrap stays headless. The tunnel role installs and controls `WireGuardTunnel$Borealis` on demand using the system `wireguard.exe`. Set `BOREALIS_WIREGUARD_INSTALL_MANAGER_SERVICE=1` only when explicitly testing manager-service behavior.
 - Shell server: `Data/Agent/Roles/role_system_remote_shell.py`
 - TCP PowerShell server bound to `0.0.0.0:47002`, restricted to VPN subnet (10.255.x.x).
 - Logging: `Agent/Logs/VPN_Tunnel/tunnel.log` (tunnel lifecycle) and `Agent/Logs/VPN_Tunnel/remote_shell.log` (shell I/O).
@@ -240,7 +249,7 @@ This section consolidates the troubleshooting context and environment notes for 
 - Remote Agent: mounted read-only at Z:\ (maps to C:\Borealis on the remote device; logs/configs under Z:\Agent\...).
 - Agent and Engine launch:
   - Engine: `Engine.sh` on Linux.
-  - Agent (Windows): `Borealis.ps1` (or `bootstrap.ps1` -> `Borealis.ps1`) with elevation.
+  - Agent (Windows): `Agent.exe` with elevation.
 - Network: Engine on 10.0.0.54; remote agent uses server_url.txt to derive endpoint host.
 - WireGuard tooling:
   - Engine host: `wg`, `ip`, and `wg-quick` for first-interface bootstrap only.
@@ -290,7 +299,7 @@ This section consolidates the troubleshooting context and environment notes for 
   - Successful backend VNC TCP connects confirm transport with `reason=vnc_backend_connect`.
   - The VNC backend writer socket enables `TCP_NODELAY`.
 
-Note: Data/Agent changes only apply after Borealis.ps1 re-stages the agent under Agent\.
+Note: Data/Agent changes only apply after Agent.exe re-stages the agent under Agent\.
 
 #### Current operational notes (2026-03-31)
 - `LAB-OPERATOR-01` shell and VNC are generally interactive in fresh tests, and intentional shell closes now end with `vpn_shell_closed ... reason=close_request` instead of warning-level post-close read errors.

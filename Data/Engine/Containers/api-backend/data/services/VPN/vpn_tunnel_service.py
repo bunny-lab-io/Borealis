@@ -1382,8 +1382,9 @@ class VpnTunnelService:
                 existing = None
 
         if existing is not None:
-            self._ensure_session_allowed_ports(existing, required_ports=required_ports)
-            self._ensure_listener_ready(trigger="connect_reuse", reason="session_reuse")
+            ports_changed = self._ensure_session_allowed_ports(existing, required_ports=required_ports)
+            if mark_activity or operator_id or ports_changed:
+                self._ensure_listener_ready(trigger="connect_reuse", reason="session_reuse")
             payload = self.session_payload(agent_id, include_token=True)
             return dict(payload or {})
 

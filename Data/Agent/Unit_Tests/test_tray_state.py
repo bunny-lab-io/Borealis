@@ -6,7 +6,7 @@ import Data.Agent.tray_state as tray_state
 
 
 def _setup_start_path(tmp_path: Path) -> Path:
-    (tmp_path / "Borealis.ps1").write_text("", encoding="utf-8")
+    (tmp_path / "Agent.exe").write_text("", encoding="utf-8")
     start = tmp_path / "Data" / "Agent"
     start.mkdir(parents=True, exist_ok=True)
     return start

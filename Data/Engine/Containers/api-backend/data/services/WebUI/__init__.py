@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -84,6 +85,11 @@ def _register_spa_routes(app: Flask, static_root: Path, logger: logging.Logger) 
 
 def register_web_ui(app: Flask, context: EngineContext) -> None:
     """Register static asset routes for the Engine WebUI."""
+
+    external_webui = str(os.environ.get("BOREALIS_WEBUI_EXTERNAL") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if external_webui:
+        context.logger.info("External WebUI service enabled; skipping Engine WebUI static route registration.")
+        return
 
     static_root = _resolve_static_root(app, context)
     if static_root is None:

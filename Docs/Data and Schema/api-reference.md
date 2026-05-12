@@ -179,6 +179,10 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 - `GET /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - run history.
 - `GET /api/scheduled_jobs/<int:job_id>/devices` (Token Authenticated) - device results.
 - `DELETE /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - clear run history.
+- `job_kind = onboarding` on scheduled-job create/update creates an automatic local-network onboarding job. Payloads use a `device_onboarding` component and an `onboarding_scope` target. The component accepts `agent_platform` (`linux` or `windows`), `install_branch`, `ssh_port`, `windows_port`, `winrm_port`, optional `onboarding_methods` (`smb_scm`, `scheduled_task`, `wmi_dcom`, `winrm`), and optional `onboarding_concurrency` (default `5`). The target accepts `entries` for discovery scope and optional `exclusions` for IP/FQDN/CIDR/range blacklist entries.
+- `POST /api/onboarding/jobs/<int:job_id>/redeploy` (Token Authenticated) - delete prior run history for one onboarding job and dispatch a fresh immediate onboarding occurrence.
+- `GET /api/onboarding/jobs/<int:job_id>/targets` (Token Authenticated) - per-target onboarding status, SSH port, approval reference, approval id, current approval status when available, and a persistent `timeline`/`events` array of sanitized task events with status, task, start/finish timestamps, and stdout/stderr snippets.
+- Internal job-scheduler endpoints under `/api/internal/job-scheduler/*` are HMAC-authenticated with the Engine secret and are not public operator APIs. They let workers fetch decrypted credentials at execution time, fetch the Engine public base URL, ask `api-backend` to emit host-service events over existing agent sockets, start workflow runs, and bridge WireGuard session lookup/preparation for scheduled Ansible dispatch.
 
 ### Notifications
 - `POST /api/notifications/notify` (Token Authenticated) - broadcast toast notification.
@@ -189,7 +193,7 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 - `GET /api/tunnel/active` (Token Authenticated) - list active tunnels visible in the current operator's site scope.
 
 ### VNC
-- `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure always-on VNC tunnel/readiness state, refresh the Engine's cached agent VNC credential, and return active session metadata for the agent.
+- `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure always-on VNC tunnel/readiness state and return listener/session metadata for the agent without caching or echoing the VNC password.
 - `GET /api/vnc/viewers` (Token Authenticated) - report Apache Guacamole VNC availability.
 - `POST /api/vnc/establish` (Token Authenticated) - establish or join an Apache Guacamole VNC collaboration session for an in-scope device. Optional `viewer` accepts `guacamole` and defaults to `guacamole`.
 - `POST /api/vnc/disconnect` (Token Authenticated) - leave or close a VNC collaboration session for an in-scope device.
@@ -206,9 +210,10 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 - `GET /api/server/timezones` (Admin) - list the current engine host timezone and the selectable timezone inventory for WebUI timezone management.
 - `POST /api/server/timezone` (Admin) - change the timezone used by the entire engine host.
 - `GET /api/server/overview` (Admin) - consolidated Engine host overview used by the Server Info dashboard, including Compose-backed service state in container mode, public cert status, live operator sessions, WireGuard runtime state, Aegis state, and host resource basics.
+- `GET /api/server/workers` (Admin) - active and recent `job-scheduler` site-worker state.
 - `GET /api/server/ansible-runner-settings` (Admin) - read the persisted per-job and global scheduled-Ansible runner limits used by the Engine scheduler.
 - `PUT /api/server/ansible-runner-settings` (Admin) - update the persisted per-job and global scheduled-Ansible runner limits used by the Engine scheduler.
-- `POST /api/server/services/<service_key>/action` (Admin) - queue a detached container service action through `Engine.sh --service`. Supported container actions are `api-backend restart`, `webui-frontend rebuild prod|dev`, `traefik-edge reload`, `postgres-db restart`, `remote-desktop-guacd restart`, and `wireguard-tunnel reconcile`.
+- `POST /api/server/services/<service_key>/action` (Admin) - queue a detached container service action through `job-scheduler` and `Engine.sh --service`. Supported container actions are `api-backend restart`, `job-scheduler restart`, `webui-frontend rebuild prod|dev`, `traefik-edge reload`, `postgres-db restart`, `remote-desktop-guacd restart`, and `wireguard-tunnel reconcile`.
 - `POST /api/server/services/<service_key>/restart` (Admin) - queue a detached `systemd-run` restart for `borealis_engine`, `borealis_traefik`, or a `postgresql_cluster` instance on non-container/systemd installs. Container service operations use `Engine.sh --service ...`.
 - `POST /api/server/wireguard/recover` (Admin) - force a Borealis WireGuard listener recovery attempt when active VPN sessions exist.
 - `GET /api/server/logs` (Admin) - list logs and retention.

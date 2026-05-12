@@ -3,17 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_borealis_ps1_stages_runtime_paths_into_agent_runtime() -> None:
-    script_path = Path(__file__).resolve().parents[3] / "Borealis.ps1"
-    content = script_path.read_text(encoding="utf-8")
+def test_agent_exe_bootstrap_source_layout_exists() -> None:
+    bootstrap_root = Path(__file__).resolve().parents[3] / "Data" / "Agent" / "Bootstrap"
 
-    assert "launch_service.ps1" in content
-    assert "restart_agent_tasks.ps1" in content
-    assert "desktop_environment.py" in content
-    assert "runtime_paths.py" in content
-    assert "qt_compat.py" in content
-    assert "session_runtime.py" in content
-    assert "tray_state.py" in content
+    assert (bootstrap_root / "Agent.exe").is_file()
+    assert (bootstrap_root / "main.go").is_file()
+    assert (bootstrap_root / "bootstrap-config.go").is_file()
+    assert (bootstrap_root / "bootstrap-update.go").is_file()
+    assert (bootstrap_root / "bootstrap-uninstall.go").is_file()
+    assert (bootstrap_root / "bootstrap-python-environment.go").is_file()
 
 
 def test_agent_sh_stages_runtime_paths_into_agent_runtime() -> None:
@@ -63,11 +61,23 @@ def test_agent_sh_supports_root_shell_bootstrap_without_sudo_pipe() -> None:
     assert "curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Agent.sh | bash -s -- deploy" in content
 
 
-def test_borealis_ps1_hardens_tray_folder_permissions() -> None:
-    script_path = Path(__file__).resolve().parents[3] / "Borealis.ps1"
+def test_agent_sh_supports_noninteractive_ssh_onboarding_without_tty() -> None:
+    script_path = Path(__file__).resolve().parents[3] / "Agent.sh"
     content = script_path.read_text(encoding="utf-8")
 
-    assert "Ensure-AgentTrayFolderPermissions" in content
-    assert "Join-Path $settingsDir 'Tray'" in content
-    assert "S-1-5-11" in content
-    assert "S-1-5-32-545" in content
+    assert "BOREALIS_AGENT_NONINTERACTIVE" in content
+    assert "BOREALIS_AGENT_NO_TTY" in content
+    assert "{ exec {tty_fd}< /dev/tty; } 2>/dev/null" in content
+
+
+def test_agent_exe_owns_windows_runtime_tasks() -> None:
+    bootstrap_root = Path(__file__).resolve().parents[3] / "Data" / "Agent" / "Bootstrap"
+    task_content = (bootstrap_root / "bootstrap-tasks.go").read_text(encoding="utf-8")
+    python_content = (bootstrap_root / "bootstrap-python-environment.go").read_text(encoding="utf-8")
+
+    assert "Borealis Agent (AutoUpdater)" in (bootstrap_root / "bootstrap-config.go").read_text(encoding="utf-8")
+    assert "launch_service.ps1" in task_content
+    assert "Agent.exe" in task_content
+    assert "https://www.nuget.org/api/v2/package/python/3.13.3" in (bootstrap_root / "bootstrap-config.go").read_text(encoding="utf-8")
+    assert "python.exe not found after NuGet extraction" in python_content
+    assert "agent-requirements.txt" in python_content

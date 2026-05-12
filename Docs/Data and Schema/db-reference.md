@@ -10,6 +10,7 @@ Describe the Borealis PostgreSQL schema, table ownership, runtime interactions, 
 - `Data/Engine/Containers/api-backend/data/database.py`
 - `Data/Engine/Containers/api-backend/data/database_migrations.py`
 - `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`
+- `Data/Engine/Containers/api-backend/data/services/job_scheduler/queue.py`
 - Assembly catalog tables live in PostgreSQL `assemblies.*`.
 - Bundled official assembly snapshot lives in `Data/Engine/Containers/api-backend/data/Official_Assemblies/`.
 - Assembly schema source: `Data/Engine/Containers/api-backend/data/assembly_management/databases.py`.
@@ -304,19 +305,21 @@ finally:
 #### `device_approvals`
 - Status: Active.
 - Purpose: Enrollment approval queue and history.
-- Columns: `id`, `approval_reference`, `guid`, `hostname_claimed`, `ssl_key_fingerprint_claimed`, `enrollment_code`, `site_id`, `status`, `client_nonce`, `server_nonce`, `agent_pubkey_der`, `created_at`, `updated_at`, `approved_by_user_id`.
+- Columns: `id`, `approval_reference`, `guid`, `hostname_claimed`, `ssl_key_fingerprint_claimed`, `enrollment_code`, `site_id`, `status`, `client_nonce`, `server_nonce`, `agent_pubkey_der`, `created_at`, `updated_at`, `approved_by_user_id`, `onboarding_job_id`, `onboarding_run_id`, `onboarding_target`.
 - Constraints and indexes:
 - `id` primary key.
 - `approval_reference` unique.
 - `idx_da_status` on `status`.
 - `idx_da_fp_status` on `(ssl_key_fingerprint_claimed, status)`.
 - `idx_da_site` on `site_id`.
+- `idx_da_onboarding_job` on `onboarding_job_id`.
 - Used by:
 - Enrollment request and poll endpoints.
 - Admin approval APIs (`/api/admin/device-approvals*`).
 - Notes:
 - `status` lifecycle typically `pending -> approved|denied|expired -> completed`.
 - `site_id` and `approved_by_user_id` are soft relations (not enforced FK in schema).
+- Automatic local-network onboarding stores source job/run/target context when the agent submits it. Approval trust flow remains unchanged.
 - Rebuild migration removes legacy `enrollment_code_id` if present.
 
 #### `enrollment_code_failures`
@@ -550,7 +553,7 @@ finally:
 #### `scheduled_jobs`
 - Status: Active.
 - Purpose: Scheduled-job definitions.
-- Columns: `id`, `name`, `components_json`, `targets_json`, `schedule_type`, `start_ts`, `duration_stop_enabled`, `expiration`, `execution_context`, `credential_id`, `use_service_account`, `enabled`, `created_at`, `updated_at`.
+- Columns: `id`, `name`, `components_json`, `targets_json`, `schedule_type`, `start_ts`, `duration_stop_enabled`, `expiration`, `execution_context`, `credential_id`, `use_service_account`, `job_kind`, `enabled`, `created_at`, `updated_at`.
 - Constraints and indexes:
 - `id` autoincrement primary key.
 - Used by:
@@ -558,6 +561,8 @@ finally:
 - Scheduler background loop.
 - Notes:
 - `credential_id` is logical linkage to `credentials.id`; no FK constraint in schema.
+- `job_kind = automation` is normal scheduled automation. `job_kind = onboarding` is automatic local-network device enrollment.
+- Onboarding jobs store discovery entries and exclusion entries inside the JSON `targets_json` `onboarding_scope` record. Inline `#` comments remain in these saved JSON entries and are stripped only when runtime parsing expands the target list. New onboarding target rows preserve the raw matching scope entry in `target_input` so comments such as `10.0.0.56 # LAB-AIO-01` can help correlate pending approvals back to the summary row. Agent branch, target platform, remote ports, Windows fallback methods, and per-job onboarding concurrency live in the JSON `components_json` `device_onboarding` record. No remote machine credential material is copied into either JSON payload.
 
 #### `scheduled_job_runs`
 - Status: Active.
@@ -589,6 +594,43 @@ finally:
 - Scheduler component dispatch bookkeeping.
 - WebSocket run status propagation and run activity lookups.
 
+#### `scheduled_job_onboarding_targets`
+- Status: Active.
+- Purpose: Per-target status for automatic local-network onboarding jobs.
+- Columns: `id`, `run_id`, `job_id`, `scheduled_ts`, `site_id`, `target_input`, `target_address`, `target_hostname`, `ssh_port`, `status`, `detail`, `stdout_snippet`, `stderr_snippet`, `approval_reference`, `created_at`, `updated_at`, `finished_at`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- FK declared: `run_id -> scheduled_job_runs(id) ON DELETE CASCADE`.
+- FK declared: `job_id -> scheduled_jobs(id) ON DELETE CASCADE`.
+- `idx_onboarding_targets_run` on `run_id`.
+- `idx_onboarding_targets_job` on `(job_id, scheduled_ts)`.
+- `idx_onboarding_targets_status` on `status`.
+- Used by:
+- Automatic local-network onboarding runner.
+- Scheduled Jobs result summaries.
+- `/api/onboarding/jobs/<job_id>/targets`.
+- Notes:
+- stdout/stderr are sanitized snippets only. Stored machine and domain credentials remain in `credentials` and are not copied into onboarding attempts.
+- Approval status is not duplicated here. `/api/onboarding/jobs/<job_id>/targets` joins back to `device_approvals` by saved approval reference or onboarding context, then falls back through hostname/IP matching for legacy rows, and hydrates approval id/status for UI display and inline approval actions.
+
+#### `scheduled_job_onboarding_target_events`
+- Status: Active.
+- Purpose: Persistent per-target onboarding timeline used by the WebUI Detailed Breakdown table.
+- Columns: `id`, `target_row_id`, `run_id`, `job_id`, `status`, `task`, `detail`, `stdout_snippet`, `stderr_snippet`, `started_at`, `finished_at`, `created_at`, `updated_at`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- FK declared: `target_row_id -> scheduled_job_onboarding_targets(id) ON DELETE CASCADE`.
+- FK declared: `run_id -> scheduled_job_runs(id) ON DELETE CASCADE`.
+- FK declared: `job_id -> scheduled_jobs(id) ON DELETE CASCADE`.
+- `idx_onboarding_target_events_target` on `(target_row_id, started_at)`.
+- `idx_onboarding_target_events_run` on `run_id`.
+- Used by:
+- Automatic local-network onboarding runner.
+- `/api/onboarding/jobs/<job_id>/targets`, nested under each target as `timeline` and `events`.
+- Notes:
+- Rows are appended when target task/status changes. Active prior rows are closed with `finished_at`; terminal rows are written as completed/failed/skipped snapshots.
+- stdout/stderr are sanitized snippets captured for the specific task event, not raw remote logs.
+
 #### `scheduled_job_run_targets`
 - Status: Active.
 - Purpose: Frozen point-in-time target membership for each scheduled occurrence or shared Ansible playbook run.
@@ -605,6 +647,37 @@ finally:
 - Notes:
 - Legacy rows may still repeat a host when more than one saved filter contributed to the same occurrence target.
 - Shared Ansible rows store the generated inventory alias and target-resolution outcome per device.
+
+#### `job_scheduler_work_items`
+- Status: Active.
+- Purpose: Durable work queue for `job-scheduler` and `site-worker-<uuid>` containers.
+- Columns: `id`, `dedupe_key`, `kind`, `site_id`, `lane`, `job_id`, `run_id`, `target_id`, `payload_json`, `status`, `attempt_count`, `priority`, `available_at`, `lease_owner`, `lease_expires_at`, `heartbeat_at`, `worker_guid`, `container_name`, `error`, `created_at`, `updated_at`, `started_at`, `finished_at`.
+- Used by:
+- `job-scheduler` scheduled ticking and service-action dispatch.
+- Site-worker onboarding execution.
+- Notes:
+- Credentials are not stored in `payload_json`; workers retrieve decrypted credential material from the internal API only while executing.
+- `lease_owner` plus `lease_expires_at` protect work from duplicate claims and allow stale work to be reclaimed.
+
+#### `job_scheduler_workers`
+- Status: Active.
+- Purpose: Worker lifecycle/status visibility for ephemeral site workers.
+- Columns: `worker_guid`, `container_name`, `site_id`, `status`, `started_at`, `last_seen_at`, `idle_since`, `stopped_at`, `current_lanes_json`, `claimed_count`, `task_links_json`, `docker_state`, `exit_code`, `created_at`, `updated_at`.
+- Used by:
+- Server Info Workers view.
+- Task-scheduler worker reconciliation.
+- Notes:
+- Worker container names use random UUIDs (`site-worker-<uuid>`) and do not include site names.
+
+#### `job_scheduler_service_snapshots`
+- Status: Active.
+- Purpose: Last known Compose service visibility snapshot written by `job-scheduler` for Server Info when `api-backend` has no Docker socket.
+- Columns: `service_key`, `payload_json`, `updated_at`.
+- Used by:
+- `/api/server/overview` and `/api/server/services` fallback service rows.
+- Task-scheduler Compose reconciliation.
+- Notes:
+- `api-backend` reads this table only for display. Docker-backed service actions are queued into `job_scheduler_work_items` and executed by `job-scheduler`.
 
 #### `credentials`
 - Status: Active for scheduler and WebUI credential selection; protected at rest after Aegis Cipher setup.

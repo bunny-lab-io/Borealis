@@ -26,6 +26,7 @@ import LocationCityIcon from "@mui/icons-material/LocationCity";
 import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import AltRouteRoundedIcon from "@mui/icons-material/AltRouteRounded";
+import DevicesIcon from "@mui/icons-material/Devices";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { CreateSiteDialog, RenameSiteDialog } from "../Dialogs.jsx";
@@ -431,13 +432,11 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
   }
 
   if (osId === "windows") {
-    const bootstrapUrl = rawBorealisFileUrl(normalizedBranch, "bootstrap.ps1");
-    const bootstrapCommand = usesDefaultBranch
-      ? `irm ${bootstrapUrl} | iex`
-      : `& ([ScriptBlock]::Create((irm ${quotePowerShellValue(bootstrapUrl)}))) --agent --repo-branch ${quotePowerShellValue(normalizedBranch)}`;
-    return `$env:BOREALIS_SERVER_URL="${escapePowerShellDoubleQuoted(normalizedServerUrl)}"; ` +
-      `$env:BOREALIS_ENROLLMENT_CODE="${escapePowerShellDoubleQuoted(normalizedEnrollmentCode)}"; ` +
-      bootstrapCommand;
+    const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/Bootstrap/Agent.exe");
+    return `$borealisAgent = Join-Path $env:TEMP "Borealis-Agent.exe"; ` +
+      `Invoke-WebRequest -UseBasicParsing -Uri ${quotePowerShellValue(agentUrl)} -OutFile $borealisAgent; ` +
+      `& $borealisAgent --server-url ${quotePowerShellValue(normalizedServerUrl)} ` +
+      `--site-enrollment-code ${quotePowerShellValue(normalizedEnrollmentCode)}`;
   }
 
   const agentUrl = rawBorealisFileUrl(normalizedBranch, "Agent.sh");
@@ -766,6 +765,15 @@ export default function SiteList() {
       const siteId = site?.id;
       if (siteId == null || siteId === "") return;
       navigate(`${APP_PATHS.software}?site=${encodeURIComponent(String(siteId))}`);
+    },
+    [navigate]
+  );
+
+  const handleOpenOnboardingForSite = useCallback(
+    (site) => {
+      const siteId = site?.id;
+      if (siteId == null || siteId === "") return;
+      navigate(`${APP_PATHS.jobOnboardingNew}?site_id=${encodeURIComponent(String(siteId))}&site_locked=1&tab=scope`);
     },
     [navigate]
   );
@@ -1246,6 +1254,15 @@ export default function SiteList() {
         tooltip: installActionTooltip,
         onClick: handleOpenInstallMenu,
       },
+      ...(singleSelectedSite
+        ? [{
+            id: "onboard-site-devices",
+            label: "Onboard Devices",
+            icon: <DevicesIcon />,
+            tone: "primary",
+            onClick: () => handleOpenOnboardingForSite(singleSelectedSite),
+          }]
+        : []),
       {
         id: "create-site",
         label: "Create Site",
@@ -1257,7 +1274,9 @@ export default function SiteList() {
     [
       canOpenInstallMenu,
       handleOpenInstallMenu,
+      handleOpenOnboardingForSite,
       installActionTooltip,
+      singleSelectedSite,
     ]
   );
 
@@ -1295,6 +1314,19 @@ export default function SiteList() {
         onClick: () => {
           handleCloseSiteContextMenu();
           handleOpenSoftwareAuditForSite(row);
+        },
+      },
+      {
+        id: "onboard-site-devices",
+        group: "primary",
+        label: "Onboard Devices",
+        icon: DevicesIcon,
+        disabled: Boolean(unavailableReason),
+        disabledReason: unavailableReason,
+        description: "Open Automatic Device Onboarding locked to this site.",
+        onClick: () => {
+          handleCloseSiteContextMenu();
+          handleOpenOnboardingForSite(row);
         },
       },
       {
@@ -1343,6 +1375,7 @@ export default function SiteList() {
     handleCopy,
     handleOpenDeleteDialog,
     handleOpenDevicesForSite,
+    handleOpenOnboardingForSite,
     handleOpenSoftwareAuditForSite,
     openRenameDialog,
     selectedSiteRows.length,

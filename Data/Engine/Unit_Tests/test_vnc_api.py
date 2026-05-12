@@ -7,18 +7,21 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from Data.Engine.services.API.devices import vnc as vnc_api
+from Data.Engine.services.RemoteDesktop import rfb_probe
 
 from .conftest import EngineTestHarness
 
 
 @pytest.fixture(autouse=True)
 def _guacd_ready(monkeypatch):
+    vnc_api._clear_vnc_auth_rate_limits()
     monkeypatch.setattr(
         vnc_api,
         "guacd_health",
@@ -30,6 +33,13 @@ def _guacd_ready(monkeypatch):
             "port": 4822,
         },
     )
+    monkeypatch.setattr(
+        vnc_api,
+        "_wait_for_backend_auth_ready",
+        lambda *args, **kwargs: rfb_probe.VncAuthProbeResult(True, True, "auth_ok"),
+    )
+    yield
+    vnc_api._clear_vnc_auth_rate_limits()
 
 
 def _client_with_admin_session(harness: EngineTestHarness):
@@ -52,13 +62,41 @@ def _register_agent_credential(
     revision: int = 42,
     display_topology: Any = None,
 ) -> None:
-    manager = vnc_api.ensure_vnc_collaboration_manager(harness.context, logger=harness.context.logger)
-    manager.upsert_agent_credential(
-        agent_id=agent_id,
-        controller_password=password,
-        credential_revision=revision,
-        display_topology=display_topology,
-    )
+    display = list(display_topology or [])
+    if display:
+        left = min(int(item.get("left") or 0) for item in display)
+        top = min(int(item.get("top") or 0) for item in display)
+        right = max(int(item.get("right") or (int(item.get("left") or 0) + int(item.get("width") or 0))) for item in display)
+        bottom = max(int(item.get("bottom") or (int(item.get("top") or 0) + int(item.get("height") or 0))) for item in display)
+        virtual_bounds = {
+            "left": left,
+            "top": top,
+            "right": right,
+            "bottom": bottom,
+            "width": max(0, right - left),
+            "height": max(0, bottom - top),
+        }
+    else:
+        virtual_bounds = {}
+
+    def _call_agent_event(target_agent_id, event, payload, *, timeout=30.0):
+        _ = timeout
+        if target_agent_id != agent_id or event != "vnc_credential_request":
+            return None
+        return {
+            "status": "ok",
+            "agent_id": agent_id,
+            "request_id": payload.get("request_id") if isinstance(payload, dict) else "",
+            "controller_password": password,
+            "credential_revision": revision,
+            "display_topology": display,
+            "display_virtual_bounds": virtual_bounds,
+            "ready": True,
+            "service_state": "RUNNING",
+            "listener_state": "listening",
+        }
+
+    harness.context.call_agent_event = _call_agent_event
 
 
 class _FakeTunnelService:
@@ -218,6 +256,143 @@ class _FakeProxy:
         self.disconnect_participant_calls.append((session_id, participant_id, str(reason or "")))
 
 
+class _FakeRfbSocket:
+    def __init__(self, payload: bytes) -> None:
+        self.payload = bytearray(payload)
+        self.sent: list[bytes] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def settimeout(self, _timeout: float) -> None:
+        return None
+
+    def recv(self, byte_count: int) -> bytes:
+        if not self.payload:
+            return b""
+        chunk = bytes(self.payload[:byte_count])
+        del self.payload[:byte_count]
+        return chunk
+
+    def sendall(self, payload: bytes) -> None:
+        self.sent.append(bytes(payload))
+
+
+def test_vnc_rfb_auth_probe_accepts_valid_password(monkeypatch) -> None:
+    challenge = b"0123456789abcdef"
+    fake_socket = _FakeRfbSocket(
+        b"RFB 003.008\n"
+        + b"\x01\x02"
+        + challenge
+        + b"\x00\x00\x00\x00"
+        + b"\x04\x00\x03\x00"
+        + (b"\x00" * 20)
+    )
+
+    monkeypatch.setattr(rfb_probe.socket, "create_connection", lambda *_args, **_kwargs: fake_socket)
+    monkeypatch.setattr(rfb_probe, "_vnc_auth_challenge_response", lambda password, challenge: b"x" * 16)
+
+    result = rfb_probe.probe_vnc_auth("10.255.0.2", 5900, "bootpass", 1.0)
+
+    assert result == rfb_probe.VncAuthProbeResult(True, True, "server_init_ok")
+    assert fake_socket.sent == [b"RFB 003.008\n", b"\x02", b"x" * 16, b"\x01"]
+
+
+def test_vnc_rfb_auth_probe_reports_bad_password(monkeypatch) -> None:
+    fake_socket = _FakeRfbSocket(
+        b"RFB 003.008\n"
+        + b"\x01\x02"
+        + b"0123456789abcdef"
+        + b"\x00\x00\x00\x01"
+    )
+
+    monkeypatch.setattr(rfb_probe.socket, "create_connection", lambda *_args, **_kwargs: fake_socket)
+    monkeypatch.setattr(rfb_probe, "_vnc_auth_challenge_response", lambda password, challenge: b"x" * 16)
+
+    result = rfb_probe.probe_vnc_auth("10.255.0.2", 5900, "wrongpass", 1.0)
+
+    assert result == rfb_probe.VncAuthProbeResult(True, False, "auth_failed")
+
+
+def test_vnc_rfb_auth_wait_stops_after_definitive_auth_failure(monkeypatch) -> None:
+    calls = 0
+
+    def _auth_failed(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return rfb_probe.VncAuthProbeResult(True, False, "auth_failed")
+
+    monkeypatch.setattr(rfb_probe, "probe_vnc_auth", _auth_failed)
+    monkeypatch.setattr(rfb_probe.time, "sleep", lambda _seconds: None)
+    monkeypatch.setenv("BOREALIS_VNC_AUTH_PROBE", "1")
+
+    result = rfb_probe.wait_for_vnc_auth_ready(
+        "10.255.0.2",
+        5900,
+        "wrongpass",
+        timeout_seconds=10.0,
+        poll_interval_seconds=0.1,
+    )
+
+    assert result == rfb_probe.VncAuthProbeResult(True, False, "auth_failed")
+    assert calls == 1
+
+
+def test_vnc_rfb_auth_wait_disabled_by_default(monkeypatch) -> None:
+    calls = 0
+
+    def _auth_failed(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return rfb_probe.VncAuthProbeResult(True, False, "auth_failed")
+
+    monkeypatch.setattr(rfb_probe, "probe_vnc_auth", _auth_failed)
+    monkeypatch.delenv("BOREALIS_VNC_AUTH_PROBE", raising=False)
+
+    result = rfb_probe.wait_for_vnc_auth_ready(
+        "10.255.0.2",
+        5900,
+        "wrongpass",
+        timeout_seconds=10.0,
+        poll_interval_seconds=0.1,
+    )
+
+    assert result == rfb_probe.VncAuthProbeResult(False, True, "auth_probe_disabled")
+    assert calls == 0
+
+
+def test_vnc_rfb_auth_wait_retries_transient_connect_failure(monkeypatch) -> None:
+    results = [
+        rfb_probe.VncAuthProbeResult(True, False, "connection refused"),
+        rfb_probe.VncAuthProbeResult(True, True, "server_init_ok"),
+    ]
+
+    monkeypatch.setattr(rfb_probe, "probe_vnc_auth", lambda *_args, **_kwargs: results.pop(0))
+    monkeypatch.setattr(rfb_probe.time, "sleep", lambda _seconds: None)
+    monkeypatch.setenv("BOREALIS_VNC_AUTH_PROBE", "1")
+
+    result = rfb_probe.wait_for_vnc_auth_ready(
+        "10.255.0.2",
+        5900,
+        "bootpass",
+        timeout_seconds=10.0,
+        poll_interval_seconds=0.1,
+    )
+
+    assert result == rfb_probe.VncAuthProbeResult(True, True, "server_init_ok")
+    assert results == []
+
+
+def test_vnc_rfb_auth_response_available_without_des_algorithm() -> None:
+    response = rfb_probe._vnc_auth_challenge_response("bootpass", b"0123456789abcdef")
+
+    assert response is not None
+    assert len(response) == 16
+
+
 def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestHarness, monkeypatch) -> None:
     client = _client_with_admin_session(engine_harness)
     fake_tunnel = _FakeTunnelService()
@@ -310,6 +485,267 @@ def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestH
         ("test-device-agent", "vnc_backend_ready"),
         ("test-device-agent", "vnc_backend_connect"),
     ]
+
+
+def test_vnc_establish_defers_after_auth_refresh(engine_harness: EngineTestHarness, monkeypatch) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    fake_registry = _FakeRegistry()
+    emitted_events: list[tuple[str, str, dict[str, Any]]] = []
+    manager = vnc_api.ensure_vnc_collaboration_manager(engine_harness.context, logger=engine_harness.context.logger)
+    auth_results = [
+        rfb_probe.VncAuthProbeResult(True, False, "auth_failed"),
+    ]
+    _register_agent_credential(engine_harness)
+
+    def _emit(agent_id, event, payload):
+        emitted_events.append((agent_id, event, dict(payload)))
+        if event == "vnc_refresh":
+            manager.upsert_agent_credential(
+                agent_id=agent_id,
+                controller_password="freshpw",
+                credential_revision=43,
+            )
+        return True
+
+    engine_harness.context.emit_agent_event = _emit
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: fake_registry)
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+    monkeypatch.setenv("BOREALIS_VNC_AUTH_REFRESH_BACKOFF_SECONDS", "12")
+    monkeypatch.setattr(
+        vnc_api,
+        "_wait_for_backend_auth_ready",
+        lambda *args, **kwargs: auth_results.pop(0),
+    )
+    monkeypatch.setattr(vnc_api.time, "sleep", lambda _seconds: None)
+
+    response = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "remove_wallpaper": True},
+    )
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "error": "vnc_backend_auth_refresh_pending",
+        "detail": "auth_failed",
+        "retry_after_seconds": 12.0,
+    }
+    assert auth_results == []
+    assert fake_registry.created == []
+    assert fake_tunnel.transport_marks == []
+    assert fake_tunnel.start_calls == []
+    assert emitted_events == []
+
+
+def test_vnc_establish_caches_auth_refresh_backoff(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    emitted_events: list[tuple[str, str, dict[str, Any]]] = []
+    manager = vnc_api.ensure_vnc_collaboration_manager(engine_harness.context, logger=engine_harness.context.logger)
+    auth_probe_calls = 0
+    _register_agent_credential(engine_harness)
+
+    def _emit(agent_id, event, payload):
+        emitted_events.append((agent_id, event, dict(payload)))
+        if event == "vnc_refresh":
+            manager.upsert_agent_credential(
+                agent_id=agent_id,
+                controller_password="freshpw",
+                credential_revision=43,
+            )
+        return True
+
+    def _auth_probe(*_args, **_kwargs):
+        nonlocal auth_probe_calls
+        auth_probe_calls += 1
+        return rfb_probe.VncAuthProbeResult(True, False, "auth_failed")
+
+    engine_harness.context.emit_agent_event = _emit
+
+    monkeypatch.setenv("BOREALIS_VNC_AUTH_REFRESH_BACKOFF_SECONDS", "30")
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_auth_ready", _auth_probe)
+    monkeypatch.setattr(vnc_api.time, "sleep", lambda _seconds: None)
+
+    first = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "remove_wallpaper": True},
+    )
+    assert first.status_code == 503
+    assert first.get_json()["error"] == "vnc_backend_auth_refresh_pending"
+
+    def _unexpected_probe(*_args, **_kwargs):
+        raise AssertionError("cached auth refresh backoff should skip RFB probe")
+
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_auth_ready", _unexpected_probe)
+
+    second = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "remove_wallpaper": True},
+    )
+
+    assert second.status_code == 503
+    assert second.get_json()["error"] == "vnc_backend_auth_refresh_pending"
+    assert second.get_json()["retry_after_seconds"] <= 30.0
+    assert auth_probe_calls == 1
+    assert emitted_events == []
+    assert fake_tunnel.transport_marks == []
+    assert fake_tunnel.start_calls == []
+
+
+def test_vnc_establish_fails_when_auth_retry_credential_does_not_rotate(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    emitted_events: list[tuple[str, str, dict[str, Any]]] = []
+    _register_agent_credential(engine_harness)
+    original_call = engine_harness.context.call_agent_event
+    call_count = 0
+
+    def _call_agent_event(agent_id, event, payload, *, timeout=30.0):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return original_call(agent_id, event, payload, timeout=timeout)
+        return None
+
+    engine_harness.context.call_agent_event = _call_agent_event
+
+    def _emit(agent_id, event, payload):
+        emitted_events.append((agent_id, event, dict(payload)))
+        return True
+
+    engine_harness.context.emit_agent_event = _emit
+
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        vnc_api,
+        "_wait_for_backend_auth_ready",
+        lambda *args, **kwargs: rfb_probe.VncAuthProbeResult(True, False, "auth_failed"),
+    )
+    response = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "remove_wallpaper": True},
+    )
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "error": "vnc_backend_auth_refresh_failed",
+        "detail": "live_credential_unavailable",
+    }
+    assert fake_tunnel.transport_marks == []
+    assert fake_tunnel.start_calls == []
+    assert emitted_events == []
+
+
+def test_vnc_establish_stops_when_backend_auth_is_rate_limited(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    emitted_events: list[tuple[str, str, dict[str, Any]]] = []
+    _register_agent_credential(engine_harness)
+
+    engine_harness.context.emit_agent_event = lambda agent_id, event, payload: emitted_events.append(
+        (agent_id, event, dict(payload))
+    ) or True
+
+    monkeypatch.setenv("BOREALIS_VNC_AUTH_RATE_LIMIT_RETRY_SECONDS", "90")
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        vnc_api,
+        "_wait_for_backend_auth_ready",
+        lambda *args, **kwargs: rfb_probe.VncAuthProbeResult(
+            True,
+            False,
+            "Your connection has been rejected to many attempts.",
+        ),
+    )
+
+    response = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "remove_wallpaper": True},
+    )
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "error": "vnc_backend_auth_rate_limited",
+        "detail": "Your connection has been rejected to many attempts.",
+        "retry_after_seconds": 90.0,
+    }
+    assert emitted_events == []
+    assert fake_tunnel.transport_marks == []
+    assert fake_tunnel.start_calls == []
+
+
+def test_vnc_establish_caches_backend_auth_rate_limit(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    emitted_events: list[tuple[str, str, dict[str, Any]]] = []
+    auth_probe_calls = 0
+    _register_agent_credential(engine_harness)
+
+    engine_harness.context.emit_agent_event = lambda agent_id, event, payload: emitted_events.append(
+        (agent_id, event, dict(payload))
+    ) or True
+
+    monkeypatch.setenv("BOREALIS_VNC_AUTH_RATE_LIMIT_RETRY_SECONDS", "90")
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+
+    def _rate_limited_probe(*_args, **_kwargs):
+        nonlocal auth_probe_calls
+        auth_probe_calls += 1
+        return rfb_probe.VncAuthProbeResult(
+            True,
+            False,
+            "Your connection has been rejected to many attempts.",
+        )
+
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_auth_ready", _rate_limited_probe)
+
+    first = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "remove_wallpaper": True},
+    )
+    assert first.status_code == 503
+    assert first.get_json()["error"] == "vnc_backend_auth_rate_limited"
+
+    def _unexpected_probe(*_args, **_kwargs):
+        raise AssertionError("cached auth lockout should skip RFB probe")
+
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_auth_ready", _unexpected_probe)
+
+    second = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "remove_wallpaper": True},
+    )
+
+    assert second.status_code == 503
+    assert second.get_json()["error"] == "vnc_backend_auth_rate_limited"
+    assert second.get_json()["retry_after_seconds"] <= 90.0
+    assert auth_probe_calls == 1
+    assert emitted_events == []
+    assert fake_tunnel.transport_marks == []
+    assert fake_tunnel.start_calls == []
 
 
 def test_vnc_establish_rejects_unknown_viewer(engine_harness: EngineTestHarness) -> None:
@@ -656,6 +1092,7 @@ def test_vnc_establish_uses_shorter_waits_for_recently_healthy_reconnects(
     client = _client_with_admin_session(engine_harness)
     fake_tunnel = _FakeTunnelService()
     wait_calls: list[float] = []
+    _register_agent_credential(engine_harness)
     manager = vnc_api.ensure_vnc_collaboration_manager(engine_harness.context, logger=engine_harness.context.logger)
     manager.upsert_agent_credential(
         agent_id="test-device-agent",
@@ -739,7 +1176,14 @@ def test_vnc_establish_skips_bootstrap_settle_when_fast_probe_succeeds(
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
     monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
     monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
-    monkeypatch.setattr(vnc_api.time, "sleep", lambda seconds: sleep_calls.append(float(seconds)))
+
+    def _record_vnc_sleep(seconds: float) -> None:
+        for frame in inspect.stack()[1:6]:
+            if frame.filename.replace("\\", "/").endswith("/services/API/devices/vnc.py"):
+                sleep_calls.append(float(seconds))
+                break
+
+    monkeypatch.setattr(vnc_api.time, "sleep", _record_vnc_sleep)
 
     controller_response = admin_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
     peer_response = peer_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
@@ -921,7 +1365,7 @@ def test_vnc_establish_requires_advertised_agent_credential(
     response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
 
     assert response.status_code == 503
-    assert response.get_json()["error"] == "vnc_agent_credentials_unavailable"
+    assert response.get_json()["error"] == "vnc_agent_live_credentials_unavailable"
 
 
 def test_vnc_establish_requests_agent_credential_refresh_when_cache_is_empty(
@@ -932,33 +1376,26 @@ def test_vnc_establish_requests_agent_credential_refresh_when_cache_is_empty(
     fake_tunnel = _FakeTunnelService()
     fake_registry = _FakeRegistry()
     emitted_events: list[tuple[str, str, dict[str, Any]]] = []
-    manager = vnc_api.ensure_vnc_collaboration_manager(engine_harness.context, logger=engine_harness.context.logger)
-
-    def _emit(agent_id, event, payload):
-        emitted_events.append((agent_id, event, dict(payload)))
-        if event == "vnc_refresh":
-            manager.upsert_agent_credential(
-                agent_id=agent_id,
-                controller_password="bootpass",
-                credential_revision=42,
-                display_topology=[
-                    {
-                        "id": "1",
-                        "display_index": 1,
-                        "label": "1",
-                        "left": 0,
-                        "top": 0,
-                        "right": 1920,
-                        "bottom": 1080,
-                        "width": 1920,
-                        "height": 1080,
-                        "primary": True,
-                    }
-                ],
-            )
-        return True
-
-    engine_harness.context.emit_agent_event = _emit
+    _register_agent_credential(
+        engine_harness,
+        display_topology=[
+            {
+                "id": "1",
+                "display_index": 1,
+                "label": "1",
+                "left": 0,
+                "top": 0,
+                "right": 1920,
+                "bottom": 1080,
+                "width": 1920,
+                "height": 1080,
+                "primary": True,
+            }
+        ],
+    )
+    engine_harness.context.emit_agent_event = (
+        lambda agent_id, event, payload: emitted_events.append((agent_id, event, dict(payload))) or True
+    )
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
     monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: fake_registry)
@@ -968,13 +1405,7 @@ def test_vnc_establish_requests_agent_credential_refresh_when_cache_is_empty(
 
     assert response.status_code == 200
     payload = response.get_json()
-    assert emitted_events == [
-        (
-            "test-device-agent",
-            "vnc_refresh",
-            {"agent_id": "test-device-agent", "reason": "engine_credential_refresh"},
-        )
-    ]
+    assert emitted_events == []
     assert payload["display_topology"][0]["label"] == "1"
     assert fake_registry.created[0]["agent_id"] == "test-device-agent"
 
@@ -988,28 +1419,18 @@ def test_vnc_establish_uses_shorter_waits_after_fresh_credential_refresh(
     fake_registry = _FakeRegistry()
     emitted_events: list[tuple[str, str, dict[str, Any]]] = []
     wait_calls: list[float] = []
-    manager = vnc_api.ensure_vnc_collaboration_manager(engine_harness.context, logger=engine_harness.context.logger)
-
-    def _emit(agent_id, event, payload):
-        emitted_events.append((agent_id, event, dict(payload)))
-        if event == "vnc_refresh":
-            manager.upsert_agent_credential(
-                agent_id=agent_id,
-                controller_password="bootpass",
-                credential_revision=42,
-                display_topology=[],
-            )
-        return True
-
-    engine_harness.context.emit_agent_event = _emit
+    _register_agent_credential(engine_harness)
+    engine_harness.context.emit_agent_event = (
+        lambda agent_id, event, payload: emitted_events.append((agent_id, event, dict(payload))) or True
+    )
     engine_harness.context.agent_socket_registry = SimpleNamespace(
         is_registered=lambda agent_id: True
     )
-    monkeypatch.setenv("BOREALIS_VNC_REFRESH_READY_WAIT_SECONDS", "2.5")
-    monkeypatch.setenv("BOREALIS_VNC_REFRESH_RETRY_READY_WAIT_SECONDS", "2.0")
-    monkeypatch.setenv("BOREALIS_VNC_REFRESH_READY_POLL_INTERVAL_SECONDS", "0.2")
-    monkeypatch.setenv("BOREALIS_VNC_REFRESH_POST_BOOTSTRAP_GRACE_SECONDS", "0")
-    monkeypatch.setenv("BOREALIS_VNC_REFRESH_SOFT_RETRY_WAIT_SECONDS", "0")
+    monkeypatch.setenv("BOREALIS_VNC_SOCKET_READY_WAIT_SECONDS", "2.5")
+    monkeypatch.setenv("BOREALIS_VNC_SOCKET_RETRY_READY_WAIT_SECONDS", "2.0")
+    monkeypatch.setenv("BOREALIS_VNC_SOCKET_READY_POLL_INTERVAL_SECONDS", "0.2")
+    monkeypatch.setenv("BOREALIS_VNC_SOCKET_POST_BOOTSTRAP_GRACE_SECONDS", "0")
+    monkeypatch.setenv("BOREALIS_VNC_SOCKET_SOFT_RETRY_WAIT_SECONDS", "0")
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
     monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: fake_registry)
 
@@ -1023,11 +1444,7 @@ def test_vnc_establish_uses_shorter_waits_after_fresh_credential_refresh(
     response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
 
     assert response.status_code == 200
-    assert emitted_events[0] == (
-        "test-device-agent",
-        "vnc_refresh",
-        {"agent_id": "test-device-agent", "reason": "engine_credential_refresh"},
-    )
+    assert all(event != "vnc_refresh" for _agent_id, event, _payload in emitted_events)
     assert wait_calls == [0.75, 2.5, 2.0]
 
 
@@ -1048,11 +1465,7 @@ def test_agent_socket_connect_prewarms_vnc_credential_when_cache_is_empty(
 
     received = socket_client.get_received()
     refresh_events = [item for item in received if item["name"] == "vnc_refresh"]
-    assert len(refresh_events) == 1
-    assert refresh_events[0]["args"][0] == {
-        "agent_id": "test-device-agent",
-        "reason": "socket_register_prewarm",
-    }
+    assert refresh_events == []
 
     socket_client.disconnect()
 

@@ -31,6 +31,7 @@ ROLE_NAME = "system_heartbeat"
 ROLE_CONTEXTS = ["system"]
 
 ROLE_LABEL = "Startup Timeline"
+MIN_FLUSH_INTERVAL_SECONDS = 5
 
 MILESTONE_DEFINITIONS = OrderedDict(
     [
@@ -102,6 +103,7 @@ class HeartbeatController:
         self._last_error: Optional[Dict[str, Any]] = None
         self._last_flush_success_at = 0
         self._last_flush_attempt_at = 0
+        self._last_payload_signature = ""
         self._dirty = True
         self._hooks: Dict[str, Any] = {}
         self._ctx = None
@@ -244,15 +246,27 @@ class HeartbeatController:
         return None
 
     def flush_now(self, *, reason: str = "") -> bool:
+        payload = self.payload()
+        try:
+            payload_signature = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        except Exception:
+            payload_signature = ""
         with self._lock:
-            self._last_flush_attempt_at = _now()
+            now = _now()
+            recent_success = now - int(self._last_flush_success_at or 0) < MIN_FLUSH_INTERVAL_SECONDS
+            if recent_success and self._status != "unhealthy":
+                return True
+            if recent_success and payload_signature and payload_signature == self._last_payload_signature:
+                return True
+            self._last_flush_attempt_at = now
         client = self._http_client()
         if client is None:
             return False
         try:
-            client.post_json("/api/agent/status", self.payload(), require_auth=True)
+            client.post_json("/api/agent/status", payload, require_auth=True)
             with self._lock:
                 self._last_flush_success_at = _now()
+                self._last_payload_signature = payload_signature
                 self._dirty = False
                 channel = self._ensure_milestone("status_channel_online")
                 if channel.get("state") != "complete":

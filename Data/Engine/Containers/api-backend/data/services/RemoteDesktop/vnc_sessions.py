@@ -196,7 +196,6 @@ class VncCollaborationManager:
         self._lock = threading.Lock()
         self._sessions_by_id: Dict[str, VncCollaborationSession] = {}
         self._session_ids_by_agent: Dict[str, str] = {}
-        self._credentials_by_agent: Dict[str, AgentVncCredential] = {}
 
     def upsert_agent_credential(
         self,
@@ -219,24 +218,6 @@ class VncCollaborationManager:
         with self._lock:
             sanitized_topology = _sanitize_display_topology(display_topology)
             virtual_bounds = _display_virtual_bounds(sanitized_topology)
-            credential = self._credentials_by_agent.get(normalized_agent_id)
-            if credential is None:
-                credential = AgentVncCredential(
-                    agent_id=normalized_agent_id,
-                    controller_password=normalized_password,
-                    credential_revision=revision_value,
-                    updated_at=_now_ts(),
-                    display_topology=sanitized_topology,
-                    display_virtual_bounds=virtual_bounds,
-                )
-                self._credentials_by_agent[normalized_agent_id] = credential
-            else:
-                credential.controller_password = normalized_password
-                credential.credential_revision = revision_value
-                if display_topology is not None:
-                    credential.display_topology = sanitized_topology
-                    credential.display_virtual_bounds = virtual_bounds
-                credential.touch()
             session_id = self._session_ids_by_agent.get(normalized_agent_id)
             session = self._sessions_by_id.get(session_id or "")
             if session is not None:
@@ -244,30 +225,20 @@ class VncCollaborationManager:
                 session.credential_revision = revision_value
                 session.touch()
             return AgentVncCredential(
-                agent_id=credential.agent_id,
-                controller_password=credential.controller_password,
-                credential_revision=credential.credential_revision,
-                updated_at=credential.updated_at,
-                display_topology=[dict(item) for item in credential.display_topology],
-                display_virtual_bounds=dict(credential.display_virtual_bounds),
+                agent_id=normalized_agent_id,
+                controller_password=normalized_password,
+                credential_revision=revision_value,
+                updated_at=_now_ts(),
+                display_topology=[dict(item) for item in sanitized_topology],
+                display_virtual_bounds=dict(virtual_bounds),
             )
 
     def get_agent_credential(self, agent_id: str) -> Optional[AgentVncCredential]:
         normalized_agent_id = _clean_text(agent_id)
         if not normalized_agent_id:
             return None
-        with self._lock:
-            credential = self._credentials_by_agent.get(normalized_agent_id)
-            if credential is None:
-                return None
-            return AgentVncCredential(
-                agent_id=credential.agent_id,
-                controller_password=credential.controller_password,
-                credential_revision=credential.credential_revision,
-                updated_at=credential.updated_at,
-                display_topology=[dict(item) for item in credential.display_topology],
-                display_virtual_bounds=dict(credential.display_virtual_bounds),
-            )
+        # Agent-level VNC password cache intentionally disabled; Engine asks Agent live at establish time.
+        return None
 
     def _assign_owner_locked(
         self,
@@ -379,18 +350,6 @@ class VncCollaborationManager:
             revision_value = 1
         with self._lock:
             self._cleanup_stale_locked()
-            credential = self._credentials_by_agent.get(normalized_agent_id)
-            if credential is None:
-                self._credentials_by_agent[normalized_agent_id] = AgentVncCredential(
-                    agent_id=normalized_agent_id,
-                    controller_password=normalized_password,
-                    credential_revision=revision_value,
-                    updated_at=_now_ts(),
-                )
-            else:
-                credential.controller_password = normalized_password
-                credential.credential_revision = revision_value
-                credential.touch()
             existing_session_id = self._session_ids_by_agent.get(normalized_agent_id)
             session = self._sessions_by_id.get(existing_session_id or "")
             if session is None:
@@ -603,7 +562,6 @@ class VncCollaborationManager:
         if not normalized_agent_id:
             return None
         with self._lock:
-            self._credentials_by_agent.pop(normalized_agent_id, None)
             session_id = self._session_ids_by_agent.pop(normalized_agent_id, None)
             if not session_id:
                 return None

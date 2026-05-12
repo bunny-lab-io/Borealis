@@ -63,7 +63,7 @@ def _project_root() -> Path:
 
     current = Path(__file__).resolve()
     for parent in (current, *current.parents):
-        if (parent / "Borealis.ps1").is_file():
+        if (parent / "Agent.exe").is_file():
             return parent
 
     try:
