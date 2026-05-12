@@ -1293,6 +1293,28 @@ def _mirror_ultravnc_config_to_service_dir(config_path: Path, vnc_exe: Optional[
         return None
 
 
+def _sync_ultravnc_programdata_peer_config(config_path: Path, config_dir: Path) -> Optional[Path]:
+    try:
+        source = config_path if isinstance(config_path, Path) else Path(config_path)
+        target = config_dir / "ultravnc.ini"
+        if _same_path(source, target):
+            return target
+        raw = source.read_text(encoding="ascii", errors="ignore")
+        previous = ""
+        try:
+            previous = target.read_text(encoding="ascii", errors="ignore")
+        except Exception:
+            pass
+        if previous != raw:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(raw, encoding="ascii")
+            _write_log(f"UltraVNC ProgramData peer config synchronized to {target}.")
+        return target
+    except Exception as exc:
+        _write_log(f"Failed to synchronize UltraVNC ProgramData peer config: {exc}")
+        return None
+
+
 def _should_use_ultravnc_config_arg(vnc_exe: Optional[str]) -> bool:
     if os.name != "nt":
         return True
@@ -2058,6 +2080,9 @@ class VncManager:
             )
             if not applied_controller_password:
                 return
+            peer_config_path: Optional[Path] = None
+            if os.name == "nt":
+                peer_config_path = _sync_ultravnc_programdata_peer_config(config_path, config_dir)
             service_config_path: Optional[Path] = None
             if _should_use_ultravnc_config_arg(self._vnc_exe):
                 mirrored_config = _mirror_ultravnc_config_to_service_dir(config_path, self._vnc_exe)
@@ -2065,7 +2090,12 @@ class VncManager:
                     _write_log(f"UltraVNC service config mirrored to {mirrored_config}.")
                 service_config_path = mirrored_config or config_path
             else:
-                _write_log(f"UltraVNC service using default config path {config_path}.")
+                _write_log(
+                    "UltraVNC service using ProgramData config paths primary={0} legacy={1}.".format(
+                        config_path,
+                        peer_config_path or "-",
+                    )
+                )
 
             service_was_running = False
             if service_name:

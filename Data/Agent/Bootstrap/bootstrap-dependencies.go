@@ -307,7 +307,7 @@ func generateUltraVNCStoredPasswordHash() (string, error) {
 	}
 	encrypted := make([]byte, 8)
 	block.Encrypt(encrypted, password)
-	return strings.ToUpper(hex.EncodeToString(encrypted)) + "00", nil
+	return strings.ToUpper(hex.EncodeToString(encrypted)), nil
 }
 
 func mirrorUltraVNCBootstrapConfigToServiceDir(exePath string, configPath string, logger *BootstrapLogger) string {
