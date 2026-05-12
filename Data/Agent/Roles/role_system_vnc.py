@@ -907,8 +907,8 @@ def _read_ultravnc_password_hash(
 
 def _normalize_ultravnc_password_hash(hash_value: Optional[str]) -> Optional[str]:
     normalized = re.sub(r"[^0-9A-Fa-f]", "", str(hash_value or "")).upper()
-    if len(normalized) == 16:
-        return normalized + "00"
+    if len(normalized) >= 16:
+        return normalized[:16]
     return normalized or None
 
 

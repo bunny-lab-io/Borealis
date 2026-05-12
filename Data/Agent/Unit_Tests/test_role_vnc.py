@@ -365,16 +365,16 @@ def test_read_ultravnc_password_hash_uses_temp_scratch_not_live_config(monkeypat
 
 
 def test_compute_ultravnc_password_hash_uses_stored_vnc_des_format() -> None:
-    assert vnc_role._compute_ultravnc_password_hash("password") == "33483FD570CF869B00"
-    assert vnc_role._compute_ultravnc_password_hash("bootpass") == "2FEAEE5C3DA6B27C00"
+    assert vnc_role._compute_ultravnc_password_hash("password") == "33483FD570CF869B"
+    assert vnc_role._compute_ultravnc_password_hash("bootpass") == "2FEAEE5C3DA6B27C"
 
 
-def test_normalize_ultravnc_password_hash_adds_checksum_byte() -> None:
+def test_normalize_ultravnc_password_hash_uses_eight_byte_blob() -> None:
     assert (
         vnc_role._normalize_ultravnc_password_hash("ff 97 50 2e 94 22 f0 89")
-        == "FF97502E9422F08900"
+        == "FF97502E9422F089"
     )
-    assert vnc_role._normalize_ultravnc_password_hash("FF97502E9422F089AA") == "FF97502E9422F089AA"
+    assert vnc_role._normalize_ultravnc_password_hash("FF97502E9422F089AA") == "FF97502E9422F089"
 
 
 def test_apply_passwords_uses_internal_hash_when_tool_missing(monkeypatch, tmp_path) -> None:
@@ -395,7 +395,7 @@ def test_apply_passwords_uses_internal_hash_when_tool_missing(monkeypatch, tmp_p
     assert manager._apply_passwords(config_dir, config_path, "bootpass", None) == ("bootpass", None)
 
     raw = config_path.read_text(encoding="ascii")
-    assert "passwd=2FEAEE5C3DA6B27C00" in raw
+    assert "passwd=2FEAEE5C3DA6B27C" in raw
     assert "passwd2=" in raw
     assert manager._last_service_error == ""
     assert any("internal hash generator" in entry for entry in logs)
