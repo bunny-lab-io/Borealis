@@ -485,6 +485,49 @@ def test_vnc_establish_fails_when_auth_retry_credential_does_not_rotate(
     ]
 
 
+def test_vnc_establish_stops_when_backend_auth_is_rate_limited(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    emitted_events: list[tuple[str, str, dict[str, Any]]] = []
+    _register_agent_credential(engine_harness)
+
+    engine_harness.context.emit_agent_event = lambda agent_id, event, payload: emitted_events.append(
+        (agent_id, event, dict(payload))
+    ) or True
+
+    monkeypatch.setenv("BOREALIS_VNC_AUTH_RATE_LIMIT_RETRY_SECONDS", "90")
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "ensure_guacamole_vnc_proxy", lambda *args, **kwargs: _FakeRegistry())
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        vnc_api,
+        "_wait_for_backend_auth_ready",
+        lambda *args, **kwargs: rfb_probe.VncAuthProbeResult(
+            True,
+            False,
+            "Your connection has been rejected to many attempts.",
+        ),
+    )
+
+    response = client.post(
+        "/api/vnc/establish",
+        json={"agent_id": "test-device-agent", "remove_wallpaper": True},
+    )
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "error": "vnc_backend_auth_rate_limited",
+        "detail": "Your connection has been rejected to many attempts.",
+        "retry_after_seconds": 90.0,
+    }
+    assert emitted_events == []
+    assert fake_tunnel.transport_marks == []
+    assert fake_tunnel.start_calls == []
+
+
 def test_vnc_establish_rejects_unknown_viewer(engine_harness: EngineTestHarness) -> None:
     client = _client_with_admin_session(engine_harness)
     _register_agent_credential(engine_harness)

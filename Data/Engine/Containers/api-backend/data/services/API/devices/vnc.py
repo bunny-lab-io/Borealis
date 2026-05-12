@@ -164,6 +164,13 @@ def _coerce_nonnegative_timeout(value: Any, default: float) -> float:
     return parsed
 
 
+def _is_vnc_auth_rate_limited(reason: Any) -> bool:
+    normalized = _normalize_text(reason).replace("_", " ").lower()
+    return ("too many" in normalized or "to many" in normalized) and (
+        "attempt" in normalized or "auth" in normalized
+    )
+
+
 def _probe_tcp_listener(host: str, port: int, timeout_seconds: float) -> bool:
     host_value = _normalize_text(host)
     try:
@@ -966,6 +973,26 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             wait_seconds=auth_probe_wait_seconds,
         )
         if auth_probe.checked and not auth_probe.ok:
+            if _is_vnc_auth_rate_limited(auth_probe.reason):
+                retry_after_seconds = _coerce_nonnegative_timeout(
+                    os.environ.get("BOREALIS_VNC_AUTH_RATE_LIMIT_RETRY_SECONDS"),
+                    120.0,
+                )
+                manager.record_error(collaboration_session.session_id, "backend_auth_rate_limited")
+                _service_log_event(
+                    "vnc_backend_auth_rate_limited agent_id={0} session_id={1} retry_after_seconds={2} reason={3}".format(
+                        agent_id,
+                        collaboration_session.session_id,
+                        retry_after_seconds,
+                        auth_probe.reason,
+                    ),
+                    level="WARNING",
+                )
+                return {
+                    "error": "vnc_backend_auth_rate_limited",
+                    "detail": auth_probe.reason,
+                    "retry_after_seconds": retry_after_seconds,
+                }, 503
             refresh_wait_seconds = _coerce_nonnegative_timeout(
                 os.environ.get("BOREALIS_VNC_AUTH_REFRESH_WAIT_SECONDS"),
                 10.0,
@@ -1099,6 +1126,26 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 wait_seconds=retry_wait_seconds,
             )
             if auth_probe.checked and not auth_probe.ok:
+                if _is_vnc_auth_rate_limited(auth_probe.reason):
+                    retry_after_seconds = _coerce_nonnegative_timeout(
+                        os.environ.get("BOREALIS_VNC_AUTH_RATE_LIMIT_RETRY_SECONDS"),
+                        120.0,
+                    )
+                    manager.record_error(collaboration_session.session_id, "backend_auth_rate_limited")
+                    _service_log_event(
+                        "vnc_backend_auth_rate_limited agent_id={0} session_id={1} retry_after_seconds={2} reason={3}".format(
+                            agent_id,
+                            collaboration_session.session_id,
+                            retry_after_seconds,
+                            auth_probe.reason,
+                        ),
+                        level="WARNING",
+                    )
+                    return {
+                        "error": "vnc_backend_auth_rate_limited",
+                        "detail": auth_probe.reason,
+                        "retry_after_seconds": retry_after_seconds,
+                    }, 503
                 manager.record_error(collaboration_session.session_id, "backend_auth_failed")
                 _service_log_event(
                     "vnc_backend_auth_failed agent_id={0} session_id={1} reason={2}".format(
