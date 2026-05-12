@@ -3083,7 +3083,9 @@ class Role:
                 event="vnc_credential_verify",
                 reason=reason or "-",
                 request_id=request_id or "-",
-                ready=False,
+                auth_checked=False,
+                auth_ready="-",
+                listener_ready=bool(payload.get("ready")),
                 result="local_probe_disabled",
             )
             return payload

@@ -1149,6 +1149,14 @@ def test_verified_live_credential_returns_password_without_local_probe_by_defaul
     assert payload["auth_verify_reason"] == "local_probe_disabled"
     assert ensure_calls == ["vnc_establish"]
     assert not any(kwargs.get("retry") == "force_reload" for _args, kwargs in traces)
+    assert any(
+        args == ("A47",)
+        and kwargs.get("auth_checked") is False
+        and kwargs.get("auth_ready") == "-"
+        and kwargs.get("listener_ready") is True
+        and kwargs.get("result") == "local_probe_disabled"
+        for args, kwargs in traces
+    )
 
 
 def test_verified_live_credential_returns_password_on_probe_timeout_without_reload(monkeypatch) -> None:
