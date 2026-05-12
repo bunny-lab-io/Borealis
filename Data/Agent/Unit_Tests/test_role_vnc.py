@@ -55,6 +55,36 @@ def test_ensure_firewall_failure_still_logs(monkeypatch) -> None:
     assert logs == ["Failed to ensure VNC firewall rule: boom"]
 
 
+def test_vnc_trace_is_silent_by_default(monkeypatch) -> None:
+    logs: list[str] = []
+    hook_logs: list[tuple[str, str]] = []
+    role = vnc_role.Role.__new__(vnc_role.Role)
+    role._log_hook = lambda message, fname=None: hook_logs.append((message, fname or ""))
+
+    monkeypatch.delenv("BOREALIS_VNC_TRACE", raising=False)
+    monkeypatch.setattr(vnc_role, "_write_log", lambda message: logs.append(message))
+
+    role._trace("A99", result="noop")
+
+    assert logs == []
+    assert hook_logs == []
+
+
+def test_vnc_trace_can_be_enabled_for_diagnostics(monkeypatch) -> None:
+    logs: list[str] = []
+    hook_logs: list[tuple[str, str]] = []
+    role = vnc_role.Role.__new__(vnc_role.Role)
+    role._log_hook = lambda message, fname=None: hook_logs.append((message, fname or ""))
+
+    monkeypatch.setenv("BOREALIS_VNC_TRACE", "1")
+    monkeypatch.setattr(vnc_role, "_write_log", lambda message: logs.append(message))
+
+    role._trace("A99", listener_ready=True, result="diagnostic")
+
+    assert logs == ["vnc_trace step=A99 listener_ready=true result=diagnostic"]
+    assert hook_logs == [("vnc_trace step=A99 listener_ready=true result=diagnostic", "VPN_Tunnel/vnc.log")]
+
+
 def test_ensure_ultravnc_ini_enables_loopback_health_probe(tmp_path) -> None:
     config_path = tmp_path / "ultravnc.ini"
 
@@ -823,7 +853,7 @@ def test_vnc_auth_retry_reloads_running_service_when_password_changes(monkeypatc
 
     assert restarts == ["restart"]
     assert any("reload requested reason=vnc_auth_retry" in entry for entry in logs)
-    assert any("force_reload=true" in entry for entry in logs)
+    assert not any(entry.startswith("vnc_trace ") for entry in logs)
 
 
 def test_vnc_auth_retry_reloads_running_service_for_same_password(monkeypatch, tmp_path) -> None:

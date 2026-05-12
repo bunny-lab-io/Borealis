@@ -106,6 +106,15 @@ def _write_log(message: str) -> None:
         pass
 
 
+def _vnc_trace_enabled() -> bool:
+    return _env_bool(os.environ.get("BOREALIS_VNC_TRACE"), False)
+
+
+def _write_vnc_trace(message: str) -> None:
+    if _vnc_trace_enabled():
+        _write_log(message)
+
+
 def _coerce_int(value: Any, default: int, *, min_value: int = 1, max_value: Optional[int] = None) -> int:
     try:
         parsed = int(value)
@@ -2113,7 +2122,7 @@ class VncManager:
             port_value = _resolve_vnc_port(port)
             service_name = self._resolve_service_name()
             prior_service_state = self._service_state_by_name(service_name) if service_name else None
-            _write_log(
+            _write_vnc_trace(
                 "vnc_trace step=AM01 port={0} allowed_ips={1} controller_password={2} view_only_password={3} "
                 "service_name={4} service_state={5} reason={6}".format(
                     port_value,
@@ -2210,6 +2219,7 @@ class VncManager:
                 return
             service_name = self._resolve_service_name(refresh=True) or service_name
 
+            service_restarted = False
             if service_was_running and (
                 force_service_reload
                 or self._last_port != port_value
@@ -2219,6 +2229,7 @@ class VncManager:
                 if force_service_reload:
                     _write_log(f"UltraVNC service reload requested reason={reason}.")
                 self._restart_service()
+                service_restarted = True
             self._last_port = port_value
             self._last_controller_password = applied_controller_password
             self._last_view_only_password = applied_view_only_password
@@ -2239,7 +2250,7 @@ class VncManager:
                         self._service_status_summary(service_name),
                     )
                 )
-            _write_log(
+            _write_vnc_trace(
                 "vnc_trace step=AM02 port={0} listener_ready={1} service_name={2} service_state={3} "
                 "service_was_running={4} force_reload={5} reason={6}".format(
                     port_value,
@@ -2252,7 +2263,8 @@ class VncManager:
                 )
             )
             if listener_ready:
-                _write_log(f"VNC service running port={port_value} reason={reason}.")
+                if not service_was_running or service_restarted:
+                    _write_log(f"VNC service running port={port_value} reason={reason}.")
             else:
                 _write_log(
                     "VNC service not ready port={0} reason={1} status={2}.".format(
@@ -2350,6 +2362,8 @@ class Role:
         _write_log(message)
 
     def _trace(self, step: str, **fields: Any) -> None:
+        if not _vnc_trace_enabled():
+            return
         parts = [f"vnc_trace step={str(step or '-').strip() or '-'}"]
         for key, value in fields.items():
             if isinstance(value, bool):
