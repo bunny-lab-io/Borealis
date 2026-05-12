@@ -327,6 +327,7 @@ def test_vnc_rfb_auth_wait_stops_after_definitive_auth_failure(monkeypatch) -> N
 
     monkeypatch.setattr(rfb_probe, "probe_vnc_auth", _auth_failed)
     monkeypatch.setattr(rfb_probe.time, "sleep", lambda _seconds: None)
+    monkeypatch.setenv("BOREALIS_VNC_AUTH_PROBE", "1")
 
     result = rfb_probe.wait_for_vnc_auth_ready(
         "10.255.0.2",
@@ -340,6 +341,29 @@ def test_vnc_rfb_auth_wait_stops_after_definitive_auth_failure(monkeypatch) -> N
     assert calls == 1
 
 
+def test_vnc_rfb_auth_wait_disabled_by_default(monkeypatch) -> None:
+    calls = 0
+
+    def _auth_failed(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return rfb_probe.VncAuthProbeResult(True, False, "auth_failed")
+
+    monkeypatch.setattr(rfb_probe, "probe_vnc_auth", _auth_failed)
+    monkeypatch.delenv("BOREALIS_VNC_AUTH_PROBE", raising=False)
+
+    result = rfb_probe.wait_for_vnc_auth_ready(
+        "10.255.0.2",
+        5900,
+        "wrongpass",
+        timeout_seconds=10.0,
+        poll_interval_seconds=0.1,
+    )
+
+    assert result == rfb_probe.VncAuthProbeResult(False, True, "auth_probe_disabled")
+    assert calls == 0
+
+
 def test_vnc_rfb_auth_wait_retries_transient_connect_failure(monkeypatch) -> None:
     results = [
         rfb_probe.VncAuthProbeResult(True, False, "connection refused"),
@@ -348,6 +372,7 @@ def test_vnc_rfb_auth_wait_retries_transient_connect_failure(monkeypatch) -> Non
 
     monkeypatch.setattr(rfb_probe, "probe_vnc_auth", lambda *_args, **_kwargs: results.pop(0))
     monkeypatch.setattr(rfb_probe.time, "sleep", lambda _seconds: None)
+    monkeypatch.setenv("BOREALIS_VNC_AUTH_PROBE", "1")
 
     result = rfb_probe.wait_for_vnc_auth_ready(
         "10.255.0.2",
