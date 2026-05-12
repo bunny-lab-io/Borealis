@@ -289,6 +289,50 @@ def test_vnc_rfb_auth_probe_reports_bad_password(monkeypatch) -> None:
     assert result == rfb_probe.VncAuthProbeResult(True, False, "auth_failed")
 
 
+def test_vnc_rfb_auth_wait_stops_after_definitive_auth_failure(monkeypatch) -> None:
+    calls = 0
+
+    def _auth_failed(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return rfb_probe.VncAuthProbeResult(True, False, "auth_failed")
+
+    monkeypatch.setattr(rfb_probe, "probe_vnc_auth", _auth_failed)
+    monkeypatch.setattr(rfb_probe.time, "sleep", lambda _seconds: None)
+
+    result = rfb_probe.wait_for_vnc_auth_ready(
+        "10.255.0.2",
+        5900,
+        "wrongpass",
+        timeout_seconds=10.0,
+        poll_interval_seconds=0.1,
+    )
+
+    assert result == rfb_probe.VncAuthProbeResult(True, False, "auth_failed")
+    assert calls == 1
+
+
+def test_vnc_rfb_auth_wait_retries_transient_connect_failure(monkeypatch) -> None:
+    results = [
+        rfb_probe.VncAuthProbeResult(True, False, "connection refused"),
+        rfb_probe.VncAuthProbeResult(True, True, "server_init_ok"),
+    ]
+
+    monkeypatch.setattr(rfb_probe, "probe_vnc_auth", lambda *_args, **_kwargs: results.pop(0))
+    monkeypatch.setattr(rfb_probe.time, "sleep", lambda _seconds: None)
+
+    result = rfb_probe.wait_for_vnc_auth_ready(
+        "10.255.0.2",
+        5900,
+        "bootpass",
+        timeout_seconds=10.0,
+        poll_interval_seconds=0.1,
+    )
+
+    assert result == rfb_probe.VncAuthProbeResult(True, True, "server_init_ok")
+    assert results == []
+
+
 def test_vnc_rfb_auth_response_available_without_des_algorithm() -> None:
     response = rfb_probe._vnc_auth_challenge_response("bootpass", b"0123456789abcdef")
 

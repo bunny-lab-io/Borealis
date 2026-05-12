@@ -199,6 +199,27 @@ def probe_vnc_auth(host: str, port: int, password: str, timeout_seconds: float) 
         return VncAuthProbeResult(True, False, (str(exc) or "connect_failed")[:160])
 
 
+def _should_retry_vnc_auth_probe(result: VncAuthProbeResult) -> bool:
+    if result.ok or not result.checked:
+        return False
+    reason = _normalize_text(result.reason).replace("_", " ").lower()
+    if not reason:
+        return False
+    transient_markers = {
+        "connect failed",
+        "connection refused",
+        "connection reset",
+        "network is unreachable",
+        "no route to host",
+        "socket closed",
+        "timed out",
+        "timeout",
+    }
+    if any(marker in reason for marker in transient_markers):
+        return True
+    return reason.startswith("server init failed")
+
+
 def wait_for_vnc_auth_ready(
     host: str,
     port: int,
@@ -214,6 +235,8 @@ def wait_for_vnc_auth_ready(
     while time.monotonic() < deadline:
         last_result = probe_vnc_auth(host, port, password, min(1.5, max(0.25, timeout_seconds)))
         if last_result.ok:
+            return last_result
+        if not _should_retry_vnc_auth_probe(last_result):
             return last_result
         remaining = deadline - time.monotonic()
         if remaining <= 0:
