@@ -18,7 +18,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - VPN logs: `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`, `Engine/Services/api-backend/logs/VPN_Tunnel/remote_shell.log`, and WireGuard control logs under `Engine/Services/wireguard-tunnel/logs/control.log`.
 - Agent install log: `Agent/Logs/install.log` records Agent launcher actions such as enrollment state cleanup; package-manager output remains on the console.
 - Agent logs: `Agent/Logs/agent.log` and `Agent/Logs/agent.error.log` (daily rotation).
-- Windows bootstrap/update diagnostics: `<ProjectRoot>/Agent/Logs/bootstrap.log`. Linux updater diagnostics: `<ProjectRoot>/Updater.log`.
+- Windows bootstrap/update diagnostics: `<ProjectRoot>/Agent/Logs/bootstrap.log`. `Agent.exe` writes high-level step summaries by default and hides trace/command output unless run with `-verbose` or `--verbose`. Linux updater diagnostics: `<ProjectRoot>/Updater.log`.
 
 ## Log Retention
 - Retention is managed via `/api/server/logs` endpoints.

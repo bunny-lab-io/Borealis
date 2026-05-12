@@ -14,6 +14,7 @@ Normal arguments:
 ```text
 Agent.exe --server-url https://borealis.example.com --site-enrollment-code E925-...
 Agent.exe
+Agent.exe -verbose
 Agent.exe -uninstall
 ```
 
@@ -31,6 +32,8 @@ Logs:
 ```text
 C:\Borealis\Agent\Logs\bootstrap.log
 ```
+
+Default console and onboarding stdout show high-level task summaries plus warnings/errors. Detailed command output and trace lines are hidden unless `-verbose` or `--verbose` is passed.
 
 Remote onboarding stages `Agent.exe`, `agent-payload.zip`, `agent-payload-manifest.json`, and `bootstrapper-config.json`, then starts `C:\Borealis\Agent.exe` through a transient remote execution method.
 

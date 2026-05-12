@@ -35,6 +35,7 @@ type cliOptions struct {
 	ServerURL          string
 	SiteEnrollmentCode string
 	Uninstall          bool
+	Verbose            bool
 }
 
 type BootstrapConfig struct {
@@ -58,6 +59,7 @@ type BootstrapConfig struct {
 	ServiceName         string `json:"service_name"`
 	NonInteractive      bool   `json:"noninteractive"`
 	Uninstall           bool   `json:"-"`
+	Verbose             bool   `json:"verbose"`
 	Interactive         bool   `json:"-"`
 	ConfigPath          string `json:"-"`
 	ResolvedPayloadRoot string `json:"-"`
@@ -85,6 +87,8 @@ func parseCLI(args []string) (cliOptions, error) {
 			opts.SiteEnrollmentCode = strings.TrimSpace(args[i])
 		case "-uninstall":
 			opts.Uninstall = true
+		case "-verbose", "--verbose":
+			opts.Verbose = true
 		default:
 			return opts, fmt.Errorf("unsupported Agent.exe argument %q", arg)
 		}
@@ -95,6 +99,7 @@ func parseCLI(args []string) (cliOptions, error) {
 func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, error) {
 	cfg := defaultBootstrapConfig()
 	cfg.Uninstall = cli.Uninstall
+	cfg.Verbose = cli.Verbose
 	cfg.Interactive = !serviceMode && isInteractiveConsole()
 	if serviceMode {
 		cfg.NonInteractive = true
@@ -115,6 +120,9 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 	}
 	if cli.SiteEnrollmentCode != "" {
 		cfg.SiteEnrollmentCode = cli.SiteEnrollmentCode
+	}
+	if cli.Verbose {
+		cfg.Verbose = true
 	}
 	if cfg.SiteEnrollmentCode == "" && cfg.LegacyEnrollment != "" {
 		cfg.SiteEnrollmentCode = cfg.LegacyEnrollment
@@ -221,6 +229,9 @@ func mergeBootstrapConfig(base *BootstrapConfig, incoming BootstrapConfig) {
 	if incoming.NonInteractive {
 		base.NonInteractive = true
 		base.Interactive = false
+	}
+	if incoming.Verbose {
+		base.Verbose = true
 	}
 }
 

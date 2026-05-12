@@ -58,6 +58,7 @@ func pauseInteractiveConsole(cfg BootstrapConfig) {
 
 func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 	startedAt := time.Now()
+	logger.Stepf("Running Agent Bootstrap.")
 	logger.Marker("__BOREALIS_AGENT_EXE_STARTED__=1")
 	logger.Marker("__BOREALIS_ONBOARDING_HOSTNAME__=" + currentHostname())
 	logBootstrapConfigSummary(cfg, logger)
@@ -65,6 +66,7 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 	writeState(cfg, "running", 1, "Agent.exe started.")
 
 	if cfg.Uninstall {
+		logger.Stepf("Uninstalling Borealis Agent.")
 		logger.Tracef("Bootstrap action requested: uninstall")
 		if err := uninstallBorealis(cfg, logger); err != nil {
 			logger.Errorf("Uninstall failed: %v", err)
@@ -74,6 +76,7 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 		return 0
 	}
 
+	logger.Stepf("Preparing Bootstrap Runtime.")
 	logger.Tracef("Acquiring bootstrap mutex.")
 	release, acquired, err := acquireBootstrapMutex()
 	if err != nil {
@@ -99,6 +102,7 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 	}
 	logger.Tracef("Bootstrap directories ready.")
 
+	logger.Stepf("Checking Existing Agent Installation.")
 	health := assessInstallHealth(cfg, logger)
 	if health.Hostname != "" {
 		logger.Marker("__BOREALIS_ONBOARDING_HOSTNAME__=" + health.Hostname)
@@ -130,6 +134,7 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 
 	switch action {
 	case actionAlreadyHealthy:
+		logger.Stepf("Existing Agent Healthy; Checking For Updates.")
 		logger.Tracef("Existing Agent healthy. Running update check then exiting skipped.")
 		logger.Marker("__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1")
 		writeTimeline(cfg, "skipped", "Already Enrolled and Active", "Existing Borealis Agent is already enrolled and active.", 73)
@@ -141,6 +146,7 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 		logger.Tracef("Bootstrap completed action=%s duration=%s exit_code=73", action, time.Since(startedAt).Round(time.Millisecond))
 		return 73
 	case actionRepairOnly:
+		logger.Stepf("Repairing Existing Agent Scheduled Task.")
 		logger.Tracef("Existing Agent repaired by starting scheduled task. Running update check then exiting skipped.")
 		writeTimeline(cfg, "running", "Successfully Repaired Agent", "Existing Borealis Agent task was repaired.", 0)
 		writeState(cfg, "already_enrolled", 73, "Existing Borealis Agent was repaired and is active.")
@@ -153,6 +159,7 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 		logger.Tracef("Bootstrap completed action=%s duration=%s exit_code=73", action, time.Since(startedAt).Round(time.Millisecond))
 		return 73
 	case actionDeploy:
+		logger.Stepf("Installing Or Repairing Borealis Agent.")
 		logger.Tracef("Deploy/redeploy path starting.")
 		if health.Exists {
 			logger.Marker("__BOREALIS_ONBOARDING_EXISTING_AGENT_DETECTED__=1")
@@ -181,11 +188,13 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	startedAt := time.Now()
 	logger.Tracef("Install/redeploy sequence start.")
+	logger.Stepf("Cleaning Up Existing Agent Processes.")
 	logger.Tracef("Stopping stale Borealis-owned processes before staging runtime.")
 	stopBorealisProcesses(cfg, logger)
 	if err := copySelfToInstallRoot(cfg, logger); err != nil {
 		return err
 	}
+	logger.Stepf("Resolving Agent Payload Source.")
 	sourceRoot, cleanup, err := preparePayloadSource(cfg, logger)
 	if cleanup != nil {
 		defer cleanup()
@@ -194,30 +203,37 @@ func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error 
 		return err
 	}
 	logger.Tracef("Payload source ready: %s", sourceRoot)
+	logger.Stepf("(Re)Installing Agent Dependencies.")
 	if err := ensureAgentDependencies(cfg, logger); err != nil {
 		return err
 	}
 	logger.Tracef("Agent dependencies ready.")
 	writeTimeline(cfg, "running", "Configuring Agent Runtime", "Creating Python environment and staging Agent files.", 1)
+	logger.Stepf("Configuring Python Runtime.")
 	if err := setupPythonEnvironment(cfg, sourceRoot, logger); err != nil {
 		return err
 	}
 	logger.Tracef("Python environment ready.")
+	logger.Stepf("Staging Agent Runtime Files.")
 	if err := stageAgentRuntime(cfg, sourceRoot, logger); err != nil {
 		return err
 	}
 	logger.Tracef("Agent runtime files ready.")
+	logger.Stepf("Reconciling Remote Access Services.")
 	reconcileUltraVNCServiceAfterRuntimeStage(cfg, logger)
+	logger.Stepf("Writing Agent Configuration.")
 	if err := writeAgentSettings(cfg, logger); err != nil {
 		return err
 	}
 	logger.Tracef("Agent settings ready.")
+	logger.Stepf("Creating Scheduled Tasks And Starting Agent.")
 	if err := ensureAgentTasks(cfg, logger); err != nil {
 		return err
 	}
 	logger.Tracef("Agent scheduled tasks ready.")
 	writeState(cfg, "pending_approval", 0, "Agent.exe completed; device approval pending operator action.")
 	writeTimeline(cfg, "running", "Agent Ready and Awaiting Approval", "Agent.exe completed; device approval pending operator action.", 0)
+	logger.Stepf("Agent Ready And Awaiting Approval.")
 	logger.Tracef("Install/redeploy sequence complete duration=%s.", time.Since(startedAt).Round(time.Millisecond))
 	return nil
 }

@@ -14,6 +14,7 @@ import (
 type BootstrapLogger struct {
 	mu       sync.Mutex
 	console  bool
+	verbose  bool
 	files    []*os.File
 	redacts  []string
 	lastPath string
@@ -29,6 +30,7 @@ func openBootstrapLogger(cfg BootstrapConfig, console bool) (*BootstrapLogger, f
 	}
 	logger := &BootstrapLogger{
 		console: console,
+		verbose: cfg.Verbose,
 		redacts: []string{
 			cfg.SiteEnrollmentCode,
 			cfg.LegacyEnrollment,
@@ -65,10 +67,23 @@ func (l *BootstrapLogger) Println(message string) {
 }
 
 func (l *BootstrapLogger) Infof(format string, args ...any) {
+	if l == nil || !l.verbose {
+		return
+	}
+	l.writeLine("INFO", fmt.Sprintf(format, args...))
+}
+
+func (l *BootstrapLogger) Stepf(format string, args ...any) {
+	if l == nil {
+		return
+	}
 	l.writeLine("INFO", fmt.Sprintf(format, args...))
 }
 
 func (l *BootstrapLogger) Tracef(format string, args ...any) {
+	if l == nil || !l.verbose {
+		return
+	}
 	l.writeLine("TRACE", fmt.Sprintf(format, args...))
 }
 
