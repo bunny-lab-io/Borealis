@@ -48,6 +48,7 @@ export const APP_PATHS = {
   users: "/users",
   siteAssignment: "/users/site-assignment",
   server: "/server",
+  siteWorkers: "/site-workers",
   logs: "/logs",
   devTools: "/dev-tools",
   pageStyleTemplate: "/dev-tools?tab=page_style_template",

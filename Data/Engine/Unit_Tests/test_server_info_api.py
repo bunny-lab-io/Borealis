@@ -235,6 +235,10 @@ def test_server_workers_includes_recent_terminal_work(engine_harness: EngineTest
         ensure_job_scheduler_tables(conn)
         cur = conn.cursor()
         cur.execute(
+            "INSERT OR IGNORE INTO sites(id, name, description, created_at) VALUES (?,?,?,?)",
+            (7, "Bunny Lab", "", now),
+        )
+        cur.execute(
             """
             INSERT INTO job_scheduler_workers(
                 worker_guid, container_name, site_id, status, started_at, last_seen_at,
@@ -271,7 +275,12 @@ def test_server_workers_includes_recent_terminal_work(engine_harness: EngineTest
                 55,
                 88,
                 None,
-                json.dumps({"task_link": {"label": "Scheduled Job 55", "path": "/jobs/55?tab=job_history"}}),
+                json.dumps(
+                    {
+                        "target_row_ids": [101, 102],
+                        "task_link": {"label": "Scheduled Job 55", "path": "/jobs/55?tab=job_history"},
+                    }
+                ),
                 "succeeded",
                 1,
                 0,
@@ -318,11 +327,15 @@ def test_server_workers_includes_recent_terminal_work(engine_harness: EngineTest
 
     assert response.status_code == 200
     payload = response.get_json()
+    assert payload["worker_idle_ttl_seconds"] == 60
     recent_ids = {row["id"] for row in payload["recent_work"]}
     assert len(recent_ids) == 1
     recent = payload["recent_work"][0]
     assert recent["kind"] == "scheduled_run"
     assert recent["status"] == "succeeded"
+    assert recent["site_name"] == "Bunny Lab"
+    assert recent["target_count"] == 2
+    assert recent["task_type"] == "Assembly"
     assert recent["task_link"]["path"] == "/jobs/55?tab=job_history"
 
 

@@ -18,6 +18,7 @@ const OPERATOR_PRESENCE_PAGE_LABELS = Object.freeze({
   users: "Users",
   "site-assignment": "Site Assignment",
   server: "Server Info",
+  "site-workers": "Site Workers",
   logs: "Log Management",
   "device-approvals": "Device Approvals",
   "dev-tools": "Dev Tools",

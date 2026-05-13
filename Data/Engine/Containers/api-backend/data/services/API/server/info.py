@@ -1352,12 +1352,32 @@ def _build_overview_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]
     }
 
 
-def _collect_worker_payload(adapters: "EngineServiceAdapters", *, history_seconds: int = 600) -> Dict[str, Any]:
+def _collect_worker_payload(adapters: "EngineServiceAdapters", *, history_seconds: int = 60) -> Dict[str, Any]:
+    try:
+        worker_idle_ttl_seconds = max(30, int(str(os.environ.get("BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS") or "60").strip() or "60"))
+    except Exception:
+        worker_idle_ttl_seconds = 60
     conn = adapters.db_conn_factory()
     try:
         rows = list_worker_snapshots(conn, include_stopped_since=history_seconds)
         active_work = list_active_work_items(conn)
         recent_work = list_recent_work_items(conn, history_seconds=history_seconds)
+        site_ids = {
+            int(row.get("site_id") or 0)
+            for row in [*rows, *active_work, *recent_work]
+            if int(row.get("site_id") or 0) > 0
+        }
+        site_names: Dict[int, str] = {}
+        if site_ids:
+            placeholders = ",".join("?" for _ in site_ids)
+            cur = conn.cursor()
+            cur.execute(f"SELECT id, name FROM sites WHERE id IN ({placeholders})", tuple(sorted(site_ids)))
+            site_names = {int(row[0]): str(row[1] or "").strip() for row in cur.fetchall() or [] if row and row[0] is not None}
+            for collection in (rows, active_work, recent_work):
+                for item in collection:
+                    site_id = int(item.get("site_id") or 0)
+                    if site_id > 0:
+                        item["site_name"] = site_names.get(site_id) or f"Site {site_id}"
         conn.commit()
     finally:
         conn.close()
@@ -1370,6 +1390,8 @@ def _collect_worker_payload(adapters: "EngineServiceAdapters", *, history_second
         "workers": rows,
         "active_work": active_work,
         "recent_work": recent_work,
+        "site_names": {str(key): value for key, value in site_names.items()},
+        "worker_idle_ttl_seconds": worker_idle_ttl_seconds,
     }
 
 
@@ -1631,9 +1653,9 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if admin_error:
             return jsonify(admin_error[0]), admin_error[1]
         try:
-            history_seconds = int(request.args.get("history_seconds") or 600)
+            history_seconds = int(request.args.get("history_seconds") or 60)
         except Exception:
-            history_seconds = 600
+            history_seconds = 60
         return jsonify(_collect_worker_payload(adapters, history_seconds=max(0, min(history_seconds, 86400))))
 
     @blueprint.route("/api/server/agent-release-channels", methods=["GET"])

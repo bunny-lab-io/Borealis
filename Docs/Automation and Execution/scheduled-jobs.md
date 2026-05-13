@@ -60,7 +60,7 @@ Supported schedule types (from the scheduler core):
 
 ## Job Scheduler And Site Workers
 - `job-scheduler` is a long-lived Engine container with Docker socket access. It owns scheduled ticking, queue lease reconciliation, service-action execution, and site-worker lifecycle.
-- Site workers are dynamic containers named `site-worker-<uuid>`. They receive a site id, claim work for that site only, and exit after 2 minutes idle.
+- Site workers are dynamic containers named `site-worker-<uuid>`. They receive a site id, claim work for that site only, and exit after 60 seconds idle by default (`BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS`).
 - Worker lanes are site-local. Onboarding work claims the `onboarding` lane and honors the job's device onboarding concurrency. Scheduled automation claims the `scheduled_job` lane; global workflow work with no site scope is claimed by the manager.
 - Work items use Postgres leases. A worker heartbeat extends the lease; stale leases return to `queued` so another worker can reclaim them.
 - Worker records are visible in Server Info under the Workers domain, the Sites page Active Site Workers tab, and through `GET /api/server/workers`. The long-lived manager heartbeats as `job-scheduler`; active/recent site workers expose site id, lanes, claimed counts, task links, and recent work-item status.
@@ -118,7 +118,7 @@ Supported schedule types (from the scheduler core):
 - `DELETE /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - clear run history.
 - `POST /api/onboarding/jobs/<int:job_id>/redeploy` (Token Authenticated) - clear onboarding job history and start a fresh immediate onboarding run.
 - `GET /api/onboarding/jobs/<int:job_id>/targets` (Token Authenticated) - onboarding target attempts for an occurrence, including approval context and persistent per-target timeline events with sanitized output snippets when available.
-- `GET /api/server/workers?history_seconds=600` (Admin) - active and recent job-scheduler site worker state plus recent work items for visualizers.
+- `GET /api/server/workers?history_seconds=60` (Admin) - active and recent job-scheduler site worker state plus recent work items for visualizers.
 
 ## Related Documentation
 - [Assemblies and Quick Jobs](assemblies.md)
@@ -184,8 +184,8 @@ Supported schedule types (from the scheduler core):
 ### Retention and cleanup
 - Retention defaults to 30 days and is configured by `BOREALIS_JOB_HISTORY_DAYS`.
 - Purging is done inside the scheduler tick loop.
-- Site worker lifecycle rows are separate from scheduled job history. Terminal `site-worker-*` rows are kept for the worker canvas history window, then pruned by `job-scheduler`; default is 10 minutes via `BOREALIS_WORKER_HISTORY_SECONDS`.
-- `GET /api/server/workers?history_seconds=600` uses the same history window for stopped/lost worker visibility, so old terminal rows with missing `stopped_at` no longer remain visible forever.
+- Site worker lifecycle rows are separate from scheduled job history. Terminal `site-worker-*` rows are kept for the worker canvas history window, then pruned by `job-scheduler`; default is 60 seconds via `BOREALIS_WORKER_HISTORY_SECONDS`.
+- `GET /api/server/workers?history_seconds=60` uses the same history window for stopped/lost worker visibility, so old terminal rows with missing `stopped_at` no longer remain visible forever.
 
 ### Failure and retry notes
 - The scheduler is designed to be resilient; it logs and continues on errors.

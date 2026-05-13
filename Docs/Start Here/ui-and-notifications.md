@@ -154,7 +154,7 @@ Applies to all Borealis frontends. Use `Data/Engine/Containers/webui-frontend/da
 - Supported variants: `grid`, `grid_with_stack`, `split_tool`, `content_panel`.
 - Informational admin dashboards such as Server Info should prefer `content_panel`, start with a hero strip of high-signal stat cards, and then stack glass sections beneath it rather than recreating toolbar chrome inside the body.
 - Server Info now includes a runtime row for scheduled Ansible concurrency so operators can adjust the per-job and global Engine-side runner budget without restarting the engine or editing env files.
-- Sites includes an `Active Site Workers` tab backed by ReactFlow. It polls `/api/server/workers?history_seconds=600` and renders manager/site-worker containers, queued/running/completed work items, task links, and teardown state using Flow Editor-style node cards, circular ports, animated dashed edges, and status bubbles.
+- Sites includes an `Active Site Workers` tab backed by ReactFlow. It polls `/api/server/workers?history_seconds=60` and renders a left-to-right scheduler -> site-worker -> task pyramid using Flow Editor-style node cards, circular ports, animated dashed edges, site display names, and aggregated recent task cards.
 - Default body inset is `px: 2`, `pt: 2.5`, and `pb: 2`. The `pt: 2.5` token adds 20px of shared spacing between the page subtitle and the body frame.
 - The body shell keeps that outer inset, but the main page content should bleed to the inside edge of the shell rather than sitting inside a second shared padding layer.
 - Do not add manual `mt: "10px"` drops or top-level `p: 3` wrappers to compensate for the header or to recreate internal shell padding.

@@ -31,6 +31,7 @@ import {
   VpnKey as CredentialIcon,
   PersonOutline as UserIcon,
   AccountTree as DirectoryIcon,
+  AccountTreeRounded as SiteWorkersIcon,
   AdminPanelSettings as AdminPanelSettingsIcon,
   DashboardCustomizeRounded as PageStyleTemplateIcon,
   ReceiptLong as LogsIcon,
@@ -217,6 +218,12 @@ const BASE_NAV_SECTIONS = Object.freeze([
         label: "Server Info",
         navKey: "server",
         to: APP_PATHS.server,
+      },
+      {
+        icon: SiteWorkersIcon,
+        label: "Site Workers",
+        navKey: "site-workers",
+        to: APP_PATHS.siteWorkers,
       },
       {
         icon: LogsIcon,

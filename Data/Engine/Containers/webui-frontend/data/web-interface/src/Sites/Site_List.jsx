@@ -13,8 +13,6 @@ import {
   Menu,
   MenuItem,
   Paper,
-  Tab,
-  Tabs,
   Typography,
   IconButton,
   Tooltip,
@@ -43,7 +41,6 @@ import {
   rethrowIfRouteRedirect,
 } from "../app/routes/routeData.js";
 import { APP_PATHS } from "../app/routes/paths.js";
-import ActiveSiteWorkersCanvas from "./ActiveSiteWorkersCanvas.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -739,7 +736,6 @@ export default function SiteList() {
   const [branchRows, setBranchRows] = useState([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchLoadError, setBranchLoadError] = useState("");
-  const [activeTab, setActiveTab] = useState("sites");
   const gridRef = useRef(null);
   const gridApiRef = useRef(null);
   const autoSizeHandleRef = useRef(null);
@@ -1531,43 +1527,8 @@ export default function SiteList() {
           </React.Fragment>
         ))}
       </Menu>
-      <Box
-        sx={{
-          px: 1.5,
-          borderBottom: "1px solid rgba(148,163,184,0.16)",
-          background: "rgba(4,7,17,0.62)",
-        }}
-      >
-        <Tabs
-          value={activeTab}
-          onChange={(_event, value) => setActiveTab(value)}
-          textColor="inherit"
-          TabIndicatorProps={{ sx: { backgroundColor: MAGIC_UI.accentA, height: 2 } }}
-          sx={{
-            minHeight: 44,
-            "& .MuiTab-root": {
-              minHeight: 44,
-              px: 1.6,
-              color: MAGIC_UI.textMuted,
-              textTransform: "none",
-              fontSize: "0.86rem",
-              fontWeight: 700,
-            },
-            "& .Mui-selected": {
-              color: MAGIC_UI.textBright,
-            },
-          }}
-        >
-          <Tab value="sites" label="Sites" />
-          <Tab value="workers" label="Active Site Workers" />
-        </Tabs>
-      </Box>
       <PageBodyFrame variant="grid">
         <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0 }}>
-          {activeTab === "workers" ? (
-            <ActiveSiteWorkersCanvas active={activeTab === "workers"} />
-          ) : (
-            <>
           {loadError ? (
             <Alert severity="error" sx={{ mx: 2, mt: 2, mb: 0 }}>
               {loadError}
@@ -1651,8 +1612,6 @@ export default function SiteList() {
               theme={myTheme}
             />
           </Box>
-            </>
-          )}
         </Box>
       </PageBodyFrame>
 

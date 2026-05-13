@@ -69,6 +69,31 @@ def _positive_ints(values: Sequence[Any]) -> List[int]:
     return results
 
 
+def _payload_target_count(payload: Mapping[str, Any]) -> Optional[int]:
+    for key in ("target_row_ids", "targets"):
+        values = payload.get(key)
+        if isinstance(values, Sequence) and not isinstance(values, (str, bytes, bytearray)):
+            return len([value for value in values if value is not None])
+    return None
+
+
+def _payload_task_type(kind: str, payload: Mapping[str, Any]) -> str:
+    normalized_kind = str(kind or "").strip().lower()
+    if normalized_kind == WORK_KIND_ONBOARDING_RUN:
+        return "Onboarding"
+    if normalized_kind == WORK_KIND_SCHEDULED_WORKFLOW_RUN:
+        return "Workflow"
+    if normalized_kind == WORK_KIND_SCHEDULED_RUN:
+        script_components = payload.get("script_components")
+        ansible_components = payload.get("ansible_components")
+        has_scripts = isinstance(script_components, Sequence) and not isinstance(script_components, (str, bytes, bytearray)) and len(script_components) > 0
+        has_ansible = isinstance(ansible_components, Sequence) and not isinstance(ansible_components, (str, bytes, bytearray)) and len(ansible_components) > 0
+        if has_ansible and not has_scripts:
+            return "Playbook"
+        return "Assembly"
+    return ""
+
+
 def ensure_job_scheduler_tables(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
     cur.execute(
@@ -734,10 +759,10 @@ def mark_missing_workers_lost(conn: sqlite3.Connection, *, live_worker_guids: Se
     return max(0, int(getattr(cur, "rowcount", 0) or 0))
 
 
-def prune_worker_history(conn: sqlite3.Connection, *, retention_seconds: int = 600) -> int:
+def prune_worker_history(conn: sqlite3.Connection, *, retention_seconds: int = 60) -> int:
     ensure_job_scheduler_tables(conn)
     now = _now_ts()
-    cutoff = now - max(0, int(retention_seconds or 600))
+    cutoff = now - max(0, int(retention_seconds or 60))
     cur = conn.cursor()
     cur.execute(
         """
@@ -806,7 +831,8 @@ def list_active_work_items(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     cur.execute(
         """
         SELECT id, kind, site_id, lane, job_id, run_id, target_id, status, lease_owner,
-               worker_guid, container_name, attempt_count, heartbeat_at, started_at
+               worker_guid, container_name, attempt_count, heartbeat_at, started_at,
+               payload_json
           FROM job_scheduler_work_items
          WHERE status=?
       ORDER BY started_at DESC, id DESC
@@ -815,6 +841,8 @@ def list_active_work_items(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     )
     rows = []
     for row in cur.fetchall() or []:
+        payload = _json_loads(row[14], {})
+        payload_map = payload if isinstance(payload, Mapping) else {}
         rows.append(
             {
                 "id": int(row[0]),
@@ -831,6 +859,8 @@ def list_active_work_items(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
                 "attempt_count": int(row[11] or 0),
                 "heartbeat_at": row[12],
                 "started_at": row[13],
+                "target_count": _payload_target_count(payload_map),
+                "task_type": _payload_task_type(row[1] or "", payload_map),
             }
         )
     return rows
@@ -863,7 +893,9 @@ def list_recent_work_items(conn: sqlite3.Connection, *, history_seconds: int = 6
     rows = []
     for row in cur.fetchall() or []:
         payload = _json_loads(row[16], {})
+        payload_map = payload if isinstance(payload, Mapping) else {}
         task_link = payload.get("task_link") if isinstance(payload, Mapping) and isinstance(payload.get("task_link"), Mapping) else {}
+        target_count = _payload_target_count(payload_map)
         rows.append(
             {
                 "id": int(row[0]),
@@ -883,6 +915,8 @@ def list_recent_work_items(conn: sqlite3.Connection, *, history_seconds: int = 6
                 "finished_at": row[14],
                 "updated_at": row[15],
                 "task_link": dict(task_link or {}),
+                "target_count": target_count,
+                "task_type": _payload_task_type(row[1] or "", payload_map),
                 "error": row[17] or "",
             }
         )

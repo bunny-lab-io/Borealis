@@ -469,13 +469,16 @@ def _reconcile_site_workers(db_factory, logger) -> None:
                 duplicate_sites.setdefault(site_id, [seen_sites[site_id]]).append(container_name)
             else:
                 seen_sites[site_id] = container_name
-            register_worker(
-                conn,
-                worker_guid=worker_guid,
-                container_name=container_name,
-                site_id=site_id,
-                status=WORKER_STATUS_RUNNING,
-            )
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM job_scheduler_workers WHERE worker_guid=? LIMIT 1", (worker_guid,))
+            if not cur.fetchone():
+                register_worker(
+                    conn,
+                    worker_guid=worker_guid,
+                    container_name=container_name,
+                    site_id=site_id,
+                    status=WORKER_STATUS_RUNNING,
+                )
             update_worker_docker_state(
                 conn,
                 worker_guid=worker_guid,
@@ -596,6 +599,8 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
             f"BOREALIS_SITE_WORKER_SITE_ID={int(site_id)}",
             "-e",
             f"BOREALIS_SITE_WORKER_CONTAINER_NAME={container_name}",
+            "-e",
+            "BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS=60",
             "-e",
             f"BOREALIS_INTERNAL_API_BASE_URL={_api_base_url()}",
             "-e",
@@ -841,7 +846,7 @@ def main() -> None:
     next_tick = 0
     next_worker_reconcile = 0
     worker_reconcile_interval = max(10, int(str(os.environ.get("BOREALIS_SITE_WORKER_RECONCILE_SECONDS") or "30").strip() or "30"))
-    worker_history_seconds = max(60, int(str(os.environ.get("BOREALIS_WORKER_HISTORY_SECONDS") or "600").strip() or "600"))
+    worker_history_seconds = max(60, int(str(os.environ.get("BOREALIS_WORKER_HISTORY_SECONDS") or "60").strip() or "60"))
     while True:
         now = _now_ts()
         try:
