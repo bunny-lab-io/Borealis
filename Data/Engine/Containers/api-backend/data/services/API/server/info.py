@@ -25,6 +25,9 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -86,17 +89,22 @@ _CONTAINER_ACTION_DELAY_SECONDS = 2
 _CERT_WARNING_DAYS = 30
 _CERT_CRITICAL_DAYS = 14
 _SYSTEMD_COMMAND_TIMEOUT_SECONDS = 8
+_DOCKER_PROXY_TIMEOUT_SECONDS = 2.5
 
 _COMPOSE_SERVICE_SPECS: Tuple[Tuple[str, str], ...] = (
+    ("docker-proxy", "Docker Proxy"),
     ("api-backend", "API Backend"),
     ("job-scheduler", "Job Scheduler"),
     ("webui-frontend", "WebUI Frontend"),
     ("traefik-edge", "Traefik Edge"),
     ("postgres-db", "PostgreSQL"),
-    ("remote-desktop-guacd", "Remote Desktop guacd"),
+    ("remote-desktop-guacd", "Guacamole"),
     ("wireguard-tunnel", "WireGuard Tunnel"),
 )
 _COMPOSE_SERVICE_ACTIONS: Mapping[str, Tuple[Mapping[str, str], ...]] = {
+    "docker-proxy": (
+        {"id": "restart", "label": "Restart", "action": "restart"},
+    ),
     "api-backend": (
         {"id": "restart", "label": "Restart", "action": "restart"},
     ),
@@ -534,6 +542,36 @@ def _compose_runtime_paths() -> Tuple[Path, Path, str]:
     return compose_file, env_file, project_name
 
 
+def _docker_proxy_base_url() -> str:
+    return str(os.environ.get("BOREALIS_DOCKER_PROXY_URL") or "").strip().rstrip("/")
+
+
+def _docker_proxy_get_json(path: str, params: Optional[Mapping[str, Any]] = None) -> Any:
+    base_url = _docker_proxy_base_url()
+    if not base_url:
+        return None
+    normalized_path = "/" + str(path or "").lstrip("/")
+    query = urllib.parse.urlencode({str(key): str(value) for key, value in (params or {}).items() if value is not None})
+    url = f"{base_url}{normalized_path}"
+    if query:
+        url = f"{url}?{query}"
+    request_obj = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
+    try:
+        with urllib.request.urlopen(request_obj, timeout=_DOCKER_PROXY_TIMEOUT_SECONDS) as response:
+            status_code = int(getattr(response, "status", 200) or 200)
+            if status_code >= 400:
+                return None
+            payload = response.read(2_000_000)
+    except (OSError, urllib.error.URLError, TimeoutError, ValueError):
+        return None
+    if not payload:
+        return None
+    try:
+        return json.loads(payload.decode("utf-8"))
+    except Exception:
+        return None
+
+
 def _compose_service_actions(service_key: str) -> List[Dict[str, str]]:
     normalized = str(service_key or "").strip().lower()
     return [dict(item) for item in _COMPOSE_SERVICE_ACTIONS.get(normalized, ())]
@@ -569,7 +607,57 @@ def _parse_compose_ps_json(raw: str) -> Dict[str, Mapping[str, Any]]:
     return by_service
 
 
+def _health_from_docker_status_text(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if "(healthy)" in text:
+        return "healthy"
+    if "(unhealthy)" in text:
+        return "unhealthy"
+    if "(health: starting)" in text or "(starting)" in text:
+        return "starting"
+    return ""
+
+
+def _container_name_from_proxy_row(record: Mapping[str, Any]) -> str:
+    names = record.get("Names")
+    if isinstance(names, list) and names:
+        return str(names[0] or "").strip().lstrip("/")
+    return str(record.get("Name") or record.get("Names") or "").strip().lstrip("/")
+
+
+def _compose_ps_rows_from_docker_proxy() -> Dict[str, Mapping[str, Any]]:
+    payload = _docker_proxy_get_json("/containers/json", {"all": "1"})
+    if not isinstance(payload, list):
+        return {}
+    _compose_file, _env_file, project_name = _compose_runtime_paths()
+    known_services = {service_key for service_key, _label in _COMPOSE_SERVICE_SPECS}
+    by_service: Dict[str, Mapping[str, Any]] = {}
+    for record in payload:
+        if not isinstance(record, Mapping):
+            continue
+        labels = record.get("Labels") if isinstance(record.get("Labels"), Mapping) else {}
+        service = str(labels.get("com.docker.compose.service") or record.get("Service") or "").strip()
+        project = str(labels.get("com.docker.compose.project") or "").strip()
+        if service not in known_services:
+            continue
+        if project and project != project_name:
+            continue
+        container_name = _container_name_from_proxy_row(record) or f"borealis-engine-{service}"
+        status_text = str(record.get("Status") or "").strip()
+        by_service[service] = {
+            "Service": service,
+            "Name": container_name,
+            "State": str(record.get("State") or "").strip(),
+            "Status": status_text,
+            "Health": _health_from_docker_status_text(status_text),
+        }
+    return by_service
+
+
 def _compose_ps_rows(context: Any = None) -> Dict[str, Mapping[str, Any]]:
+    proxy_rows = _compose_ps_rows_from_docker_proxy()
+    if proxy_rows:
+        return proxy_rows
     docker_bin = shutil.which("docker") or ""
     compose_file, env_file, project_name = _compose_runtime_paths()
     if not docker_bin or not Path("/var/run/docker.sock").exists() or not compose_file.is_file() or not env_file.is_file():
@@ -610,6 +698,10 @@ def _compose_ps_rows_from_scheduler_snapshot(context: Any = None) -> Dict[str, M
 
 def _docker_inspect_container(container_name: str) -> Mapping[str, Any]:
     normalized_name = str(container_name or "").strip()
+    if normalized_name:
+        proxy_payload = _docker_proxy_get_json(f"/containers/{urllib.parse.quote(normalized_name, safe='')}/json")
+        if isinstance(proxy_payload, Mapping):
+            return proxy_payload
     docker_bin = shutil.which("docker") or ""
     if not docker_bin or not normalized_name or not Path("/var/run/docker.sock").exists():
         return {}
@@ -764,6 +856,7 @@ def _compose_service_rows(context: Any) -> List[Dict[str, Any]]:
         if inspected_health:
             health = inspected_health
         started_at = str(state_payload.get("StartedAt") or "").strip() if state_payload else ""
+        docker_status_text = str(record.get("Status") or record.get("status") or "").strip()
         display_status = _compose_display_status(state, health)
         rows.append(
             {
@@ -776,6 +869,7 @@ def _compose_service_rows(context: Any) -> List[Dict[str, Any]]:
                 "docker_state": state,
                 "docker_health": health or None,
                 "docker_status": display_status,
+                "docker_status_text": docker_status_text,
                 "display_status": display_status,
                 "active_state": state,
                 "sub_state": health or state,

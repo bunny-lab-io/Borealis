@@ -602,6 +602,8 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
             "-e",
             "BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS=60",
             "-e",
+            "BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY=7",
+            "-e",
             f"BOREALIS_INTERNAL_API_BASE_URL={_api_base_url()}",
             "-e",
             "BOREALIS_LOG_FILE=/tmp/borealis-site-worker.log",

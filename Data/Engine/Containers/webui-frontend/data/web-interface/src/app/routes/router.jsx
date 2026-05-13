@@ -531,17 +531,21 @@ export function buildAppRoutes() {
                   ),
                 },
                 {
-                  path: "site-workers",
+                  path: "engine-status",
                   handle: {
-                    title: "Site Workers",
-                    breadcrumb: "Site Workers",
-                    navKey: "site-workers",
-                    pageKey: "site-workers",
+                    title: "Engine Status",
+                    breadcrumb: "Engine Status",
+                    navKey: "engine-status",
+                    pageKey: "engine-status",
                   },
                   lazy: lazyNamed(
                     () => import("../route-modules/adminRoutes.jsx"),
-                    "SiteWorkersRoute"
+                    "EngineStatusRoute"
                   ),
+                },
+                {
+                  path: "site-workers",
+                  element: <Navigate to={APP_PATHS.engineStatus} replace />,
                 },
                 {
                   path: "logs",

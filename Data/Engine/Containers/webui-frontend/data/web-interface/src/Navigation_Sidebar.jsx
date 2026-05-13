@@ -221,9 +221,9 @@ const BASE_NAV_SECTIONS = Object.freeze([
       },
       {
         icon: SiteWorkersIcon,
-        label: "Site Workers",
-        navKey: "site-workers",
-        to: APP_PATHS.siteWorkers,
+        label: "Engine Status",
+        navKey: "engine-status",
+        to: APP_PATHS.engineStatus,
       },
       {
         icon: LogsIcon,

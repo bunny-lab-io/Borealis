@@ -213,7 +213,7 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 - `GET /api/server/workers` (Admin) - active and recent `job-scheduler` site-worker state.
 - `GET /api/server/ansible-runner-settings` (Admin) - read the persisted per-job and global scheduled-Ansible runner limits used by the Engine scheduler.
 - `PUT /api/server/ansible-runner-settings` (Admin) - update the persisted per-job and global scheduled-Ansible runner limits used by the Engine scheduler.
-- `POST /api/server/services/<service_key>/action` (Admin) - queue a detached container service action through `job-scheduler` and `Engine.sh --service`. Supported container actions are `api-backend restart`, `job-scheduler restart`, `webui-frontend rebuild prod|dev`, `traefik-edge reload`, `postgres-db restart`, `remote-desktop-guacd restart`, and `wireguard-tunnel reconcile`.
+- `POST /api/server/services/<service_key>/action` (Admin) - queue a detached container service action through `job-scheduler` and `Engine.sh --service`. Supported container actions are `docker-proxy restart`, `api-backend restart`, `job-scheduler restart`, `webui-frontend rebuild prod|dev`, `traefik-edge reload`, `postgres-db restart`, `remote-desktop-guacd restart`, and `wireguard-tunnel reconcile`.
 - `POST /api/server/services/<service_key>/restart` (Admin) - queue a detached `systemd-run` restart for `borealis_engine`, `borealis_traefik`, or a `postgresql_cluster` instance on non-container/systemd installs. Container service operations use `Engine.sh --service ...`.
 - `POST /api/server/wireguard/recover` (Admin) - force a Borealis WireGuard listener recovery attempt when active VPN sessions exist.
 - `GET /api/server/logs` (Admin) - list logs and retention.

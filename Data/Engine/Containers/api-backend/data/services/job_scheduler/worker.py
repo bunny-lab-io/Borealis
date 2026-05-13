@@ -37,6 +37,9 @@ from .queue import (
 )
 from .security import INTERNAL_TOKEN_HEADER, internal_token
 
+DEFAULT_SCHEDULED_WORK_CONCURRENCY = 7
+MAX_SCHEDULED_WORK_CONCURRENCY = 32
+
 
 class _WorkerApp:
     def __init__(self, *, logger, secret_key: str) -> None:
@@ -264,8 +267,35 @@ def _work_item_links(item: Mapping[str, Any]) -> list[Dict[str, Any]]:
     return []
 
 
-def _heartbeat_until(stop_event: threading.Event, db_factory, *, worker_guid: str, work_id: int, task_links: list[Dict[str, Any]]) -> None:
+def _site_worker_scheduled_concurrency() -> int:
+    try:
+        value = int(str(os.environ.get("BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY") or DEFAULT_SCHEDULED_WORK_CONCURRENCY).strip())
+    except Exception:
+        value = DEFAULT_SCHEDULED_WORK_CONCURRENCY
+    return min(MAX_SCHEDULED_WORK_CONCURRENCY, max(1, value))
+
+
+def _active_task_links(active_items: Dict[int, Dict[str, Any]], active_lock: threading.Lock) -> list[Dict[str, Any]]:
+    with active_lock:
+        links: list[Dict[str, Any]] = []
+        for entry in active_items.values():
+            for link in entry.get("task_links") or []:
+                if isinstance(link, Mapping):
+                    links.append(dict(link))
+        return links
+
+
+def _heartbeat_until(
+    stop_event: threading.Event,
+    db_factory,
+    *,
+    worker_guid: str,
+    work_id: int,
+    task_links: list[Dict[str, Any]],
+    task_links_getter=None,
+) -> None:
     while not stop_event.wait(20.0):
+        visible_links = task_links_getter() if callable(task_links_getter) else task_links
         conn = db_factory()
         try:
             heartbeat_work_item(conn, work_id=int(work_id), lease_owner=worker_guid, lease_seconds=300)
@@ -274,11 +304,112 @@ def _heartbeat_until(stop_event: threading.Event, db_factory, *, worker_guid: st
                 worker_guid=worker_guid,
                 status=WORKER_STATUS_RUNNING,
                 lanes=[LANE_ONBOARDING, LANE_SCHEDULED_JOB],
-                task_links=task_links,
+                task_links=visible_links,
             )
             conn.commit()
         finally:
             conn.close()
+
+
+def _execute_work_item(settings, logger, db_factory, *, worker_guid: str, item: Mapping[str, Any], task_links_getter=None) -> None:
+    scheduler = _build_worker_scheduler(settings, logger, db_factory)
+    error = ""
+    final_status = WORK_STATUS_FAILED
+    stop_event = threading.Event()
+    task_links = _work_item_links(item)
+    heartbeat = threading.Thread(
+        target=_heartbeat_until,
+        args=(stop_event, db_factory),
+        kwargs={"worker_guid": worker_guid, "work_id": int(item["id"]), "task_links": task_links, "task_links_getter": task_links_getter},
+        daemon=True,
+    )
+    heartbeat.start()
+    try:
+        item_kind = str(item.get("kind") or "")
+        if item_kind == WORK_KIND_ONBOARDING_RUN:
+            final_status = _run_onboarding_item(scheduler, item)
+        elif item_kind == WORK_KIND_SCHEDULED_WORKFLOW_RUN:
+            payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
+            scheduler._dispatch_workflow_run(
+                job_id=int(payload.get("job_id") or item.get("job_id") or 0),
+                run_row_id=int(payload.get("run_id") or item.get("run_id") or 0),
+                scheduled_ts=int(payload.get("scheduled_ts") or 0),
+                workflow_component=dict(payload.get("workflow_component") or {}),
+                workflow_site_scope=dict(payload.get("workflow_site_scope") or {}),
+            )
+            final_status = WORK_STATUS_SUCCEEDED
+        elif item_kind == WORK_KIND_SCHEDULED_RUN:
+            payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
+            if bool(payload.get("shared_execution")):
+                ansible_components = list(payload.get("ansible_components") or [])
+                try:
+                    component_index = int(payload.get("component_index")) if payload.get("component_index") is not None else 0
+                except Exception:
+                    component_index = 0
+                component = ansible_components[component_index] if 0 <= component_index < len(ansible_components) else None
+                if isinstance(component, Mapping):
+                    link = scheduler._dispatch_shared_ansible(
+                        job_id=int(payload.get("job_id") or item.get("job_id") or 0),
+                        run_row_id=int(payload.get("run_id") or item.get("run_id") or 0),
+                        scheduled_ts=int(payload.get("scheduled_ts") or 0),
+                        run_mode=str(payload.get("run_mode") or "system"),
+                        component=dict(component),
+                        credential_id=payload.get("credential_id"),
+                        use_service_account=bool(payload.get("use_service_account")),
+                        target_row_ids=list(payload.get("target_row_ids") or []),
+                    )
+                    normalized_link = scheduler._normalize_run_activity_link(
+                        run_row_id=int(payload.get("run_id") or item.get("run_id") or 0),
+                        link=link,
+                        default_component_kind="ansible",
+                        default_script_type="ansible",
+                    )
+                    if normalized_link:
+                        scheduler._persist_run_activity_links([normalized_link], created_at=_now_ts())
+            else:
+                conn_lookup = scheduler._conn()
+                try:
+                    cur_lookup = conn_lookup.cursor()
+                    cur_lookup.execute("SELECT target_hostname FROM scheduled_job_runs WHERE id=?", (int(payload.get("run_id") or item.get("run_id") or 0),))
+                    row = cur_lookup.fetchone()
+                finally:
+                    conn_lookup.close()
+                host = str(row[0] if row else "").strip()
+                if host:
+                    scheduler._dispatch_run_activities(
+                        job_id=int(payload.get("job_id") or item.get("job_id") or 0),
+                        run_row_id=int(payload.get("run_id") or item.get("run_id") or 0),
+                        scheduled_ts=int(payload.get("scheduled_ts") or 0),
+                        hostname=host,
+                        run_mode=str(payload.get("run_mode") or "system"),
+                        script_components=list(payload.get("script_components") or []),
+                        ansible_components=list(payload.get("ansible_components") or []),
+                        credential_id=payload.get("credential_id"),
+                        use_service_account=bool(payload.get("use_service_account")),
+                        component_index=payload.get("component_index"),
+                    )
+            final_status = WORK_STATUS_SUCCEEDED
+        else:
+            error = f"unsupported work kind {item.get('kind')}"
+    except Exception as exc:
+        error = str(exc)
+        logger.exception("work item failed")
+    finally:
+        stop_event.set()
+        heartbeat.join(timeout=5.0)
+    conn = db_factory()
+    try:
+        complete_work_item(conn, work_id=int(item["id"]), status=final_status, error=error)
+        heartbeat_worker(
+            conn,
+            worker_guid=worker_guid,
+            status=WORKER_STATUS_RUNNING,
+            lanes=[],
+            task_links=task_links_getter() if callable(task_links_getter) else task_links,
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def main() -> None:
@@ -298,150 +429,142 @@ def main() -> None:
         conn.commit()
     finally:
         conn.close()
-    scheduler = _build_worker_scheduler(settings, logger, db_factory)
     idle_since = None
     claimed_count = 0
+    scheduled_concurrency = _site_worker_scheduled_concurrency()
+    active_items: Dict[int, Dict[str, Any]] = {}
+    active_lock = threading.Lock()
+
+    def active_links() -> list[Dict[str, Any]]:
+        return _active_task_links(active_items, active_lock)
+
+    def prune_active_items() -> None:
+        with active_lock:
+            finished_ids = [work_id for work_id, entry in active_items.items() if not entry["thread"].is_alive()]
+            for work_id in finished_ids:
+                active_items.pop(work_id, None)
+
+    def active_lane_state() -> tuple[int, int, list[str]]:
+        with active_lock:
+            scheduled_count = 0
+            onboarding_count = 0
+            for entry in active_items.values():
+                kind = str((entry.get("item") or {}).get("kind") or "")
+                if kind == WORK_KIND_ONBOARDING_RUN:
+                    onboarding_count += 1
+                elif kind in {WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN}:
+                    scheduled_count += 1
+            lanes = []
+            if onboarding_count:
+                lanes.append(LANE_ONBOARDING)
+            if scheduled_count:
+                lanes.append(LANE_SCHEDULED_JOB)
+            return scheduled_count, onboarding_count, lanes
+
     try:
         while True:
-            conn = db_factory()
-            try:
-                item = claim_next_work_item(
-                    conn,
-                    site_id=site_id,
-                    lanes=[LANE_ONBOARDING, LANE_SCHEDULED_JOB],
-                    lease_owner=worker_guid,
-                    lease_seconds=300,
-                )
+            prune_active_items()
+            active_scheduled, active_onboarding, active_lanes = active_lane_state()
+            claim_lanes = []
+            if active_onboarding <= 0:
+                if active_scheduled <= 0:
+                    claim_lanes = [LANE_ONBOARDING, LANE_SCHEDULED_JOB]
+                elif active_scheduled < scheduled_concurrency:
+                    claim_lanes = [LANE_SCHEDULED_JOB]
+
+            item = None
+            if claim_lanes:
+                task_links = []
+                conn = db_factory()
+                try:
+                    item = claim_next_work_item(
+                        conn,
+                        site_id=site_id,
+                        lanes=claim_lanes,
+                        lease_owner=worker_guid,
+                        lease_seconds=300,
+                    )
+                    if item:
+                        claimed_count += 1
+                        idle_since = None
+                        task_links = _work_item_links(item)
+                        item_kind = str(item.get("kind") or "")
+                        current_lanes = list(active_lanes)
+                        if item_kind == WORK_KIND_ONBOARDING_RUN and LANE_ONBOARDING not in current_lanes:
+                            current_lanes.append(LANE_ONBOARDING)
+                        if item_kind in {WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN} and LANE_SCHEDULED_JOB not in current_lanes:
+                            current_lanes.append(LANE_SCHEDULED_JOB)
+                        heartbeat_worker(
+                            conn,
+                            worker_guid=worker_guid,
+                            status=WORKER_STATUS_RUNNING,
+                            lanes=current_lanes,
+                            task_links=active_links() + task_links,
+                            claimed_count=claimed_count,
+                        )
+                    conn.commit()
+                finally:
+                    conn.close()
                 if item:
-                    claimed_count += 1
-                    task_links = _work_item_links(item)
+                    thread = threading.Thread(
+                        target=_execute_work_item,
+                        kwargs={
+                            "settings": settings,
+                            "logger": logger,
+                            "db_factory": db_factory,
+                            "worker_guid": worker_guid,
+                            "item": item,
+                            "task_links_getter": active_links,
+                        },
+                        daemon=True,
+                    )
+                    with active_lock:
+                        active_items[int(item["id"])] = {"thread": thread, "item": item, "task_links": task_links}
+                    thread.start()
+
+            prune_active_items()
+            active_scheduled, active_onboarding, active_lanes = active_lane_state()
+            if active_scheduled or active_onboarding:
+                conn = db_factory()
+                try:
                     heartbeat_worker(
                         conn,
                         worker_guid=worker_guid,
                         status=WORKER_STATUS_RUNNING,
-                        lanes=[LANE_ONBOARDING, LANE_SCHEDULED_JOB],
-                        task_links=task_links,
+                        lanes=active_lanes,
+                        task_links=active_links(),
                         claimed_count=claimed_count,
                     )
-                else:
-                    if idle_since is None:
-                        idle_since = _now_ts()
-                    heartbeat_worker(
-                        conn,
-                        worker_guid=worker_guid,
-                        status=WORKER_STATUS_IDLE,
-                        lanes=[],
-                        idle_since=idle_since,
-                        claimed_count=claimed_count,
-                    )
-                conn.commit()
-            finally:
-                conn.close()
-            if not item:
-                if idle_since is not None and (_now_ts() - idle_since) >= idle_ttl:
-                    logger.info("site worker idle ttl reached; exiting")
-                    return
-                time.sleep(3.0)
+                    conn.commit()
+                finally:
+                    conn.close()
+                time.sleep(1.0 if active_scheduled < scheduled_concurrency else 3.0)
                 continue
-            idle_since = None
-            error = ""
-            final_status = WORK_STATUS_FAILED
-            stop_event = threading.Event()
-            task_links = _work_item_links(item)
-            heartbeat = threading.Thread(
-                target=_heartbeat_until,
-                args=(stop_event, db_factory),
-                kwargs={"worker_guid": worker_guid, "work_id": int(item["id"]), "task_links": task_links},
-                daemon=True,
-            )
-            heartbeat.start()
-            try:
-                item_kind = str(item.get("kind") or "")
-                if item_kind == WORK_KIND_ONBOARDING_RUN:
-                    final_status = _run_onboarding_item(scheduler, item)
-                elif item_kind == WORK_KIND_SCHEDULED_WORKFLOW_RUN:
-                    payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
-                    scheduler._dispatch_workflow_run(
-                        job_id=int(payload.get("job_id") or item.get("job_id") or 0),
-                        run_row_id=int(payload.get("run_id") or item.get("run_id") or 0),
-                        scheduled_ts=int(payload.get("scheduled_ts") or 0),
-                        workflow_component=dict(payload.get("workflow_component") or {}),
-                        workflow_site_scope=dict(payload.get("workflow_site_scope") or {}),
-                    )
-                    final_status = WORK_STATUS_SUCCEEDED
-                elif item_kind == WORK_KIND_SCHEDULED_RUN:
-                    payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
-                    if bool(payload.get("shared_execution")):
-                        ansible_components = list(payload.get("ansible_components") or [])
-                        try:
-                            component_index = int(payload.get("component_index")) if payload.get("component_index") is not None else 0
-                        except Exception:
-                            component_index = 0
-                        component = ansible_components[component_index] if 0 <= component_index < len(ansible_components) else None
-                        if isinstance(component, Mapping):
-                            link = scheduler._dispatch_shared_ansible(
-                                job_id=int(payload.get("job_id") or item.get("job_id") or 0),
-                                run_row_id=int(payload.get("run_id") or item.get("run_id") or 0),
-                                scheduled_ts=int(payload.get("scheduled_ts") or 0),
-                                run_mode=str(payload.get("run_mode") or "system"),
-                                component=dict(component),
-                                credential_id=payload.get("credential_id"),
-                                use_service_account=bool(payload.get("use_service_account")),
-                                target_row_ids=list(payload.get("target_row_ids") or []),
-                            )
-                            normalized_link = scheduler._normalize_run_activity_link(
-                                run_row_id=int(payload.get("run_id") or item.get("run_id") or 0),
-                                link=link,
-                                default_component_kind="ansible",
-                                default_script_type="ansible",
-                            )
-                            if normalized_link:
-                                scheduler._persist_run_activity_links([normalized_link], created_at=_now_ts())
-                    else:
-                        conn_lookup = scheduler._conn()
-                        try:
-                            cur_lookup = conn_lookup.cursor()
-                            cur_lookup.execute("SELECT target_hostname FROM scheduled_job_runs WHERE id=?", (int(payload.get("run_id") or item.get("run_id") or 0),))
-                            row = cur_lookup.fetchone()
-                        finally:
-                            conn_lookup.close()
-                        host = str(row[0] if row else "").strip()
-                        if host:
-                            scheduler._dispatch_run_activities(
-                                job_id=int(payload.get("job_id") or item.get("job_id") or 0),
-                                run_row_id=int(payload.get("run_id") or item.get("run_id") or 0),
-                                scheduled_ts=int(payload.get("scheduled_ts") or 0),
-                                hostname=host,
-                                run_mode=str(payload.get("run_mode") or "system"),
-                                script_components=list(payload.get("script_components") or []),
-                                ansible_components=list(payload.get("ansible_components") or []),
-                                credential_id=payload.get("credential_id"),
-                                use_service_account=bool(payload.get("use_service_account")),
-                                component_index=payload.get("component_index"),
-                            )
-                    final_status = WORK_STATUS_SUCCEEDED
-                else:
-                    error = f"unsupported work kind {item.get('kind')}"
-            except Exception as exc:
-                error = str(exc)
-                logger.exception("work item failed")
-            finally:
-                stop_event.set()
-                heartbeat.join(timeout=5.0)
+
+            if idle_since is None:
+                idle_since = _now_ts()
             conn = db_factory()
             try:
-                complete_work_item(conn, work_id=int(item["id"]), status=final_status, error=error)
                 heartbeat_worker(
                     conn,
                     worker_guid=worker_guid,
-                    status=WORKER_STATUS_RUNNING,
+                    status=WORKER_STATUS_IDLE,
                     lanes=[],
+                    idle_since=idle_since,
                     claimed_count=claimed_count,
                 )
                 conn.commit()
             finally:
                 conn.close()
+            if (_now_ts() - idle_since) >= idle_ttl:
+                logger.info("site worker idle ttl reached; exiting")
+                return
+            time.sleep(3.0)
     finally:
+        with active_lock:
+            active_threads = [entry["thread"] for entry in active_items.values()]
+        for thread in active_threads:
+            thread.join(timeout=5.0)
         conn = db_factory()
         try:
             stop_worker(conn, worker_guid=worker_guid)

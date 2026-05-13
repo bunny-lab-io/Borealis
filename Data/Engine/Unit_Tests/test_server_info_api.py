@@ -552,6 +552,64 @@ def test_collect_service_rows_uses_compose_manifest(tmp_path: Path, engine_harne
     assert by_key["postgres-db"]["status"] == "unknown"
 
 
+def test_collect_service_rows_uses_docker_proxy(engine_harness: EngineTestHarness, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_ENGINE_CONTAINERIZED", "1")
+    monkeypatch.setenv("BOREALIS_DOCKER_PROXY_URL", "http://127.0.0.1:2375")
+    monkeypatch.setattr(server_info_api.shutil, "which", lambda _name: "")
+
+    def _fake_proxy_json(path, params=None):
+        if path == "/containers/json":
+            return [
+                {
+                    "Names": ["/borealis-engine-api-backend"],
+                    "State": "running",
+                    "Status": "Up 2 minutes (healthy)",
+                    "Labels": {
+                        "com.docker.compose.project": "borealis-engine",
+                        "com.docker.compose.service": "api-backend",
+                    },
+                },
+                {
+                    "Names": ["/borealis-engine-docker-proxy"],
+                    "State": "running",
+                    "Status": "Up 3 minutes",
+                    "Labels": {
+                        "com.docker.compose.project": "borealis-engine",
+                        "com.docker.compose.service": "docker-proxy",
+                    },
+                },
+            ]
+        if path == "/containers/borealis-engine-api-backend/json":
+            return {
+                "State": {
+                    "Status": "running",
+                    "Health": {"Status": "healthy"},
+                    "StartedAt": "2026-05-13T06:00:00Z",
+                    "Pid": 101,
+                }
+            }
+        if path == "/containers/borealis-engine-docker-proxy/json":
+            return {
+                "State": {
+                    "Status": "running",
+                    "StartedAt": "2026-05-13T05:59:00Z",
+                    "Pid": 102,
+                }
+            }
+        return None
+
+    monkeypatch.setattr(server_info_api, "_docker_proxy_get_json", _fake_proxy_json)
+
+    rows = server_info_api._collect_service_rows(engine_harness.context)
+    by_key = {row["key"]: row for row in rows}
+
+    assert by_key["api-backend"]["status"] == "healthy"
+    assert by_key["api-backend"]["docker_status_text"] == "Up 2 minutes (healthy)"
+    assert by_key["api-backend"]["started_at"] == "2026-05-13T06:00:00Z"
+    assert by_key["docker-proxy"]["runtime"] == "compose"
+    assert by_key["docker-proxy"]["docker_status_text"] == "Up 3 minutes"
+
+
 def test_service_row_falls_back_to_human_systemd_timestamp() -> None:
     tracker = server_info_api.ServerActionTracker()
 

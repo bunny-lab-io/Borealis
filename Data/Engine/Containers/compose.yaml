@@ -1,6 +1,21 @@
 name: ${BOREALIS_COMPOSE_PROJECT_NAME:-borealis-engine}
 
 services:
+  docker-proxy:
+    image: ${BOREALIS_DOCKER_PROXY_IMAGE:-ghcr.io/tecnativa/docker-socket-proxy:v0.4.2}
+    container_name: borealis-engine-docker-proxy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      CONTAINERS: "1"
+      POST: "0"
+      LOG_LEVEL: warning
+    ports:
+      - "127.0.0.1:2375:2375"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
   api-backend:
     image: ${BOREALIS_API_BACKEND_IMAGE:-borealis-engine/api-backend:local}
     container_name: borealis-engine-api-backend
@@ -20,6 +35,8 @@ services:
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/run:/opt/Borealis/Engine/Services/wireguard-tunnel/run
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/secrets:/opt/Borealis/Engine/Services/wireguard-tunnel/secrets
     depends_on:
+      docker-proxy:
+        condition: service_started
       postgres-db:
         condition: service_healthy
       wireguard-tunnel:

@@ -46,6 +46,7 @@ if [[ -n "${REPO_REF}" ]]; then
   REPO_REF_EXPLICIT=1
 fi
 SERVICE_ROLES=(
+  "docker-proxy"
   "api-backend"
   "job-scheduler"
   "webui-frontend"
@@ -55,7 +56,13 @@ SERVICE_ROLES=(
   "wireguard-tunnel"
 )
 BUILD_ROLES=(
-  "${SERVICE_ROLES[@]}"
+  "api-backend"
+  "job-scheduler"
+  "webui-frontend"
+  "traefik-edge"
+  "postgres-db"
+  "remote-desktop-guacd"
+  "wireguard-tunnel"
   "site-worker"
 )
 
@@ -807,6 +814,7 @@ BOREALIS_WIREGUARD_PORT_ALLOWLIST=47002,5900,22
 BOREALIS_WIREGUARD_CONFIG_ROOT=${RUNTIME_ROOT}/Services/wireguard-tunnel/config
 BOREALIS_WIREGUARD_KEY_ROOT=${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets
 BOREALIS_WIREGUARD_CONTROL_SOCKET=${RUNTIME_ROOT}/Services/wireguard-tunnel/run/control.sock
+BOREALIS_DOCKER_PROXY_URL=http://127.0.0.1:2375
 BOREALIS_ENGINE_SECRET_PATH=${RUNTIME_ROOT}/Services/api-backend/secrets/engine_secret.txt
 BOREALIS_ENGINE_CERT_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Certificates
 BOREALIS_ENGINE_AUTH_TOKEN_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Auth_Tokens
@@ -832,6 +840,7 @@ BOREALIS_TRAEFIK_EDGE_IMAGE=${IMAGE_TAGS[traefik-edge]:-borealis-engine/traefik-
 BOREALIS_POSTGRES_DB_IMAGE=${IMAGE_TAGS[postgres-db]:-borealis-engine/postgres-db:local}
 BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE=${IMAGE_TAGS[remote-desktop-guacd]:-borealis-engine/remote-desktop-guacd:local}
 BOREALIS_WIREGUARD_TUNNEL_IMAGE=${IMAGE_TAGS[wireguard-tunnel]:-borealis-engine/wireguard-tunnel:local}
+BOREALIS_DOCKER_PROXY_IMAGE=${BOREALIS_DOCKER_PROXY_IMAGE:-ghcr.io/tecnativa/docker-socket-proxy:v0.4.2}
 EOF
   chmod 600 "${COMPOSE_ENV}" "${RUNTIME_ENV}" "${WEBUI_ENV}"
 }
@@ -1370,6 +1379,7 @@ def env_settings_hash(path: pathlib.Path) -> str:
     return hashlib.sha256(("\n".join(lines) + "\n").encode("utf-8")).hexdigest()
 
 services = [
+    "docker-proxy",
     "api-backend",
     "job-scheduler",
     "webui-frontend",
@@ -1379,7 +1389,7 @@ services = [
     "wireguard-tunnel",
 ]
 allowed_services = set(services)
-service_images = {}
+service_images = {service: {"image": "", "hash": ""} for service in services}
 if image_path.is_file():
     try:
         image_data = json.loads(image_path.read_text(encoding="utf-8"))
@@ -1542,7 +1552,7 @@ usage() {
   cat <<'EOF'
 Usage:
   Engine.sh deploy [prod|dev]
-  Engine.sh --service <api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
+  Engine.sh --service <docker-proxy|api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
   Engine.sh [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
 EOF
 }

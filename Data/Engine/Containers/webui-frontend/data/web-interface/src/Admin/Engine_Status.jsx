@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import ReactFlow, { Background, Handle, MarkerType, Position, useEdgesState, useNodesState } from "reactflow";
 import "reactflow/dist/style.css";
 
-import { Alert, Box, Checkbox, CircularProgress, FormControlLabel, Tooltip, Typography } from "@mui/material";
+import { Alert, Box, Button, Checkbox, CircularProgress, FormControlLabel, Tooltip, Typography } from "@mui/material";
 import AutorenewRoundedIcon from "@mui/icons-material/AutorenewRounded";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import ErrorRoundedIcon from "@mui/icons-material/ErrorRounded";
@@ -14,6 +14,7 @@ import StopCircleRoundedIcon from "@mui/icons-material/StopCircleRounded";
 import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 
 const WORKER_HISTORY_SECONDS = 60;
 const WORKER_CLOSE_SECONDS = 60;
@@ -35,13 +36,28 @@ const COLORS = {
 
 const NODE_WIDTH = 292;
 const NODE_HEADER_HEIGHT = 34;
-const NODE_BODY_HEIGHT = 54;
-const NODE_ROW_GAP = 128;
-const TASK_ROW_GAP = 108;
+const NODE_BODY_HEIGHT = 69;
+const SERVICE_GAP_Y = 132;
+const WORKER_ONLY_ROW_GAP = SERVICE_GAP_Y * 2;
+const TASK_ROW_GAP = SERVICE_GAP_Y;
+const WORKER_GROUP_GAP = SERVICE_GAP_Y;
+const WORKER_LANE_MIN_HEIGHT = SERVICE_GAP_Y * 2;
 const MANAGER_COLUMN_X = 64;
-const WORKER_COLUMN_X = 440;
-const TASK_COLUMN_X = 820;
+const SERVICE_COLUMN_X = 440;
+const WORKER_COLUMN_X = 820;
+const TASK_COLUMN_X = 1200;
 const PYRAMID_CENTER_Y = 330;
+const ENGINE_SERVICE_KEYS = ["api-backend", "webui-frontend", "traefik-edge", "postgres-db", "job-scheduler", "remote-desktop-guacd", "wireguard-tunnel", "docker-proxy"];
+const SERVICE_EDGES = [
+  ["api-backend", "traefik-edge"],
+  ["api-backend", "postgres-db"],
+  ["api-backend", "remote-desktop-guacd"],
+  ["api-backend", "job-scheduler"],
+  ["api-backend", "wireguard-tunnel"],
+  ["api-backend", "docker-proxy"],
+  ["api-backend", "webui-frontend"],
+];
+const SERVICE_OUTPUT_KEYS = new Set(["api-backend", "job-scheduler"]);
 
 const TONE_COLORS = {
   success: { accent: COLORS.green, border: "rgba(52,211,153,0.46)", bg: "rgba(6,78,59,0.2)", text: "#bbf7d0" },
@@ -92,6 +108,9 @@ function titleCase(value) {
 
 export function statusTone(status) {
   const normalized = String(status || "").toLowerCase();
+  if (["healthy"].includes(normalized)) return "success";
+  if (["critical", "unhealthy"].includes(normalized)) return "failed";
+  if (["warning", "starting", "restarting"].includes(normalized)) return "queued";
   if (["succeeded", "success", "completed"].includes(normalized)) return "success";
   if (["failed", "lost", "error"].includes(normalized)) return "failed";
   if (["running", "starting"].includes(normalized)) return "running";
@@ -255,19 +274,57 @@ function WorkflowLikeCard({ data, children, hasOutput = false, hasInput = false,
 }
 
 const WorkerNode = memo(({ data }) => {
+  const showWorkerDetails = !data.isService;
   return (
-    <WorkflowLikeCard data={data} hasInput={!data.isManager} hasOutput>
+    <WorkflowLikeCard data={data} hasInput={data.hasInput !== false && !data.isManager} hasOutput={data.hasOutput !== false}>
       <Box sx={{ minWidth: 0, pr: 4 }}>
-        <Typography sx={{ color: COLORS.muted, fontSize: "0.7rem", lineHeight: 1.15 }}>
-          Started: {data.startedLabel}
-        </Typography>
-        {data.isManager ? null : (
+        {showWorkerDetails || data.serviceUptimeLabel ? (
+          <Typography sx={{ color: COLORS.muted, fontSize: "0.7rem", lineHeight: 1.15 }}>
+            {showWorkerDetails ? `${data.detailLabel || "Started"}: ` : ""}
+            {data.startedLabel}
+          </Typography>
+        ) : null}
+        {showWorkerDetails && data.serviceState ? (
+          <Typography sx={{ mt: 0.35, color: COLORS.muted, fontSize: "0.68rem", lineHeight: 1.1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {data.serviceState}
+          </Typography>
+        ) : null}
+        {showWorkerDetails && !data.isManager ? (
           <Box sx={{ mt: 0.55, display: "flex", flexWrap: "wrap", gap: 0.65 }}>
             <Box sx={{ borderRadius: 999, border: "1px solid rgba(148,163,184,0.24)", background: "rgba(15,23,42,0.42)", px: 0.85, py: 0.32, color: COLORS.muted, fontSize: "0.67rem", lineHeight: 1 }}>
               {data.siteLabel}
             </Box>
           </Box>
-        )}
+        ) : null}
+        {Array.isArray(data.actions) && data.actions.length ? (
+          <Box sx={{ mt: 0.55, display: "flex", flexWrap: "wrap", gap: 0.55 }}>
+            {data.actions.map((action) => (
+              <Button
+                key={action.id}
+                size="small"
+                disabled={Boolean(action.disabled)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  action.onClick?.();
+                }}
+                sx={{
+                  minHeight: 22,
+                  px: 0.85,
+                  py: 0.1,
+                  borderRadius: 999,
+                  color: COLORS.blue,
+                  border: "1px solid rgba(125,211,252,0.32)",
+                  background: "rgba(8,17,31,0.54)",
+                  textTransform: "none",
+                  fontSize: "0.64rem",
+                  fontWeight: 800,
+                }}
+              >
+                {action.label}
+              </Button>
+            ))}
+          </Box>
+        ) : null}
       </Box>
     </WorkflowLikeCard>
   );
@@ -348,6 +405,28 @@ function workerNodeId(worker, index) {
   return `worker:${worker?.worker_guid || worker?.container_name || index}`;
 }
 
+function centerOf(values, fallback = PYRAMID_CENTER_Y) {
+  const numbers = (values || []).map((value) => Number(value)).filter((value) => Number.isFinite(value));
+  if (!numbers.length) return fallback;
+  return (Math.min(...numbers) + Math.max(...numbers)) / 2;
+}
+
+function taskEntryTone(entry) {
+  return statusTone(entry?.work?.status);
+}
+
+function workerLaneRank(worker, taskEntries = []) {
+  const taskTones = new Set((taskEntries || []).map((entry) => taskEntryTone(entry)));
+  if (taskTones.has("running")) return 0;
+  if (taskTones.has("queued")) return 1;
+  const workerTone = statusTone(worker?.status);
+  if (workerTone === "running") return 2;
+  if (workerTone === "idle") return 3;
+  if (taskTones.has("failed")) return 4;
+  if (workerTone === "failed" || workerTone === "stopped") return 5;
+  return 6;
+}
+
 function workCacheKey(work) {
   return [
     work?.id || "",
@@ -381,6 +460,41 @@ function mergeWorkerPayload(currentPayload, nextPayload, holdInactive) {
   };
 }
 
+function serviceKey(row) {
+  return String(row?.key || row?.compose_service || "").trim();
+}
+
+function serviceStatus(row) {
+  return String(row?.status || row?.docker_health || row?.docker_state || row?.display_status || "unknown").trim().toLowerCase();
+}
+
+function serviceUptime(row) {
+  const raw = String(row?.docker_status_text || "").trim();
+  return raw.replace(/\s+\((?:healthy|unhealthy|health:\s*starting|starting)\)\s*$/i, "").trim();
+}
+
+function serviceActionButtons(row, onServiceAction) {
+  const actions = Array.isArray(row?.actions) ? row.actions : [];
+  return actions.map((action) => ({
+    id: `${serviceKey(row)}:${action.id || action.action || action.label}`,
+    label: action.label || titleCase(action.action || "Action"),
+    disabled: Boolean(row?.pending_action) || !action?.action,
+    onClick: () => onServiceAction?.(row, action),
+  }));
+}
+
+function servicePosition(key, centerY) {
+  if (key === "api-backend") return { x: MANAGER_COLUMN_X, y: centerY };
+  if (key === "webui-frontend") return { x: SERVICE_COLUMN_X, y: centerY - SERVICE_GAP_Y * 3 };
+  if (key === "traefik-edge") return { x: SERVICE_COLUMN_X, y: centerY - SERVICE_GAP_Y * 2 };
+  if (key === "postgres-db") return { x: SERVICE_COLUMN_X, y: centerY - SERVICE_GAP_Y };
+  if (key === "job-scheduler") return { x: SERVICE_COLUMN_X, y: centerY };
+  if (key === "remote-desktop-guacd") return { x: SERVICE_COLUMN_X, y: centerY + SERVICE_GAP_Y };
+  if (key === "wireguard-tunnel") return { x: SERVICE_COLUMN_X, y: centerY + SERVICE_GAP_Y * 2 };
+  if (key === "docker-proxy") return { x: SERVICE_COLUMN_X, y: centerY + SERVICE_GAP_Y * 3 };
+  return { x: SERVICE_COLUMN_X, y: centerY };
+}
+
 export function buildGraph(payload, navigate) {
   const nowSeconds = Math.floor(Date.now() / 1000);
   return buildGraphAt(payload, navigate, nowSeconds);
@@ -396,7 +510,11 @@ function terminalAgeSeconds(item, nowSeconds, fallbackSince) {
 export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
   const dismissInactive = options?.dismissInactive !== false;
   const dismissStartedAt = Number(options?.dismissStartedAt || 0);
+  const onServiceAction = options?.onServiceAction;
   const workers = Array.isArray(payload?.workers) ? payload.workers : [];
+  const services = Array.isArray(payload?.services) ? payload.services : [];
+  const serviceRows = ENGINE_SERVICE_KEYS.map((key) => services.find((row) => serviceKey(row) === key)).filter(Boolean);
+  const hasJobSchedulerService = serviceRows.some((row) => serviceKey(row) === "job-scheduler");
   const recentWorkRaw = Array.isArray(payload?.recent_work) ? payload.recent_work : Array.isArray(payload?.active_work) ? payload.active_work : [];
   const idleTtlSeconds = Math.max(30, Number(payload?.worker_idle_ttl_seconds || 60));
   const visibleWorkers = workers.filter((worker) => {
@@ -417,7 +535,7 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     current_lanes: ["scheduled_tick", "worker_reconcile"],
     claimed_count: 0,
   };
-  const managerNodeId = workerNodeId(managerWorker, 0);
+  const managerNodeId = hasJobSchedulerService ? "service:job-scheduler" : workerNodeId(managerWorker, 0);
   const siteWorkers = visibleWorkers.filter((worker) => Number(worker?.site_id || 0) > 0);
   const nodeIdByGuid = new Map();
   const nodeIdBySite = new Map();
@@ -509,31 +627,80 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     if (!tasksByWorker.has(entry.anchorId)) tasksByWorker.set(entry.anchorId, []);
     tasksByWorker.get(entry.anchorId).push(entry);
   });
-
-  const workerY = distributeY(workerRows.length || 1, PYRAMID_CENTER_Y, NODE_ROW_GAP);
-  const workerNodes = [];
-  workerNodes.push({
-    id: managerNodeId,
-    type: "worker",
-    position: { x: MANAGER_COLUMN_X, y: PYRAMID_CENTER_Y },
-    data: {
-      label: "Job Scheduler",
-      startedLabel: epochLabel(managerWorker?.started_at),
-      status: managerWorker?.status || "running",
-      isManager: true,
-      siteLabel: "manager",
-    },
-    draggable: false,
+  tasksByWorker.forEach((entries) => {
+    entries.sort((left, right) => {
+      const rank = { running: 0, queued: 1, failed: 2, success: 3, stopped: 4, unknown: 5 };
+      const leftRank = rank[taskEntryTone(left)] ?? 6;
+      const rightRank = rank[taskEntryTone(right)] ?? 6;
+      if (leftRank !== rightRank) return leftRank - rightRank;
+      return Number(left?.work?.started_at || left?.work?.created_at || 0) - Number(right?.work?.started_at || right?.work?.created_at || 0);
+    });
   });
+  const workerIdForRow = new Map(workerRows.map((worker, index) => [worker, workerNodeId(worker, index + 1)]));
+  workerRows.sort((left, right) => {
+    const leftId = workerIdForRow.get(left) || workerNodeId(left, 0);
+    const rightId = workerIdForRow.get(right) || workerNodeId(right, 0);
+    const leftTasks = tasksByWorker.get(leftId) || [];
+    const rightTasks = tasksByWorker.get(rightId) || [];
+    const leftRank = workerLaneRank(left, leftTasks);
+    const rightRank = workerLaneRank(right, rightTasks);
+    if (leftRank !== rightRank) return leftRank - rightRank;
+    const taskDelta = rightTasks.length - leftTasks.length;
+    if (taskDelta !== 0) return taskDelta;
+    return String(left?.site_name || left?.container_name || "").localeCompare(String(right?.site_name || right?.container_name || ""));
+  });
+
+  const taskLaneYByWorker = new Map();
+  const workerYById = new Map();
+  let nextLaneTop = PYRAMID_CENTER_Y;
+  workerRows.forEach((worker, index) => {
+    const workerId = workerIdForRow.get(worker) || workerNodeId(worker, index + 1);
+    const tasks = tasksByWorker.get(workerId) || [];
+    const taskBandHeight = Math.max(0, (tasks.length - 1) * TASK_ROW_GAP);
+    const laneHeight = Math.max(WORKER_LANE_MIN_HEIGHT, taskBandHeight);
+    const taskStartY = nextLaneTop + (laneHeight - taskBandHeight) / 2;
+    if (tasks.length) {
+      const taskYs = Array.from({ length: tasks.length }, (_value, taskIndex) => taskStartY + taskIndex * TASK_ROW_GAP);
+      taskLaneYByWorker.set(workerId, taskYs);
+      workerYById.set(workerId, centerOf(taskYs));
+      nextLaneTop += laneHeight + WORKER_GROUP_GAP;
+      return;
+    }
+    workerYById.set(workerId, nextLaneTop + WORKER_ONLY_ROW_GAP / 2);
+    nextLaneTop += WORKER_ONLY_ROW_GAP + WORKER_GROUP_GAP;
+  });
+  const workerYValues = workerRows.map((worker, index) => workerYById.get(workerIdForRow.get(worker) || workerNodeId(worker, index + 1))).filter((value) => Number.isFinite(value));
+  const managerY = centerOf(workerYValues, PYRAMID_CENTER_Y);
+  const verticalOffset = PYRAMID_CENTER_Y - managerY;
+  workerYById.forEach((value, key) => workerYById.set(key, value + verticalOffset));
+  taskLaneYByWorker.forEach((values, key) => taskLaneYByWorker.set(key, values.map((value) => value + verticalOffset)));
+  const centeredManagerY = managerY + verticalOffset;
+
+  const workerNodes = [];
+  if (!hasJobSchedulerService) {
+    workerNodes.push({
+      id: managerNodeId,
+      type: "worker",
+      position: { x: SERVICE_COLUMN_X, y: centeredManagerY },
+      data: {
+        label: "Job Scheduler",
+        startedLabel: epochLabel(managerWorker?.started_at),
+        status: managerWorker?.status || "running",
+        isManager: true,
+        siteLabel: "manager",
+      },
+      draggable: false,
+    });
+  }
 
   workerRows.forEach((worker, index) => {
     const siteId = Number(worker?.site_id || 0);
     const siteName = String(worker?.site_name || siteNameFor(payload, siteId)).trim();
-    const id = workerNodeId(worker, index + 1);
+    const id = workerIdForRow.get(worker) || workerNodeId(worker, index + 1);
     workerNodes.push({
       id,
       type: "worker",
-      position: { x: WORKER_COLUMN_X, y: workerY[index] },
+      position: { x: WORKER_COLUMN_X, y: workerYById.get(id) ?? PYRAMID_CENTER_Y },
       data: {
         label: "Site Worker",
         startedLabel: epochLabel(worker?.started_at),
@@ -579,7 +746,7 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
 
   workerNodes.forEach((workerNode) => {
     const tasks = tasksByWorker.get(workerNode.id) || [];
-    const taskY = distributeY(tasks.length || 1, workerNode.position.y, TASK_ROW_GAP);
+    const taskY = taskLaneYByWorker.get(workerNode.id) || distributeY(tasks.length || 1, workerNode.position.y, TASK_ROW_GAP);
     tasks.forEach((entry, taskIndex) => {
       const work = entry.work || {};
       const taskLink = work?.task_link || {};
@@ -633,41 +800,118 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     });
   });
 
-  return { nodes: [...workerNodes, ...taskNodes], edges };
+  const serviceNodes = serviceRows.map((row) => {
+    const key = serviceKey(row);
+    const position = servicePosition(key, centeredManagerY);
+    const serviceUptimeLabel = serviceUptime(row);
+    return {
+      id: `service:${key}`,
+      type: "worker",
+      position,
+      data: {
+        label: row?.label || titleCase(key),
+        startedLabel: serviceUptimeLabel || (row?.started_at ? epochLabel(Date.parse(row.started_at) / 1000) : "unavailable"),
+        detailLabel: "Started",
+        status: serviceStatus(row),
+        isService: true,
+        serviceUptimeLabel,
+        isManager: false,
+        hasInput: key !== "api-backend",
+        hasOutput: SERVICE_OUTPUT_KEYS.has(key),
+        actions: serviceActionButtons(row, onServiceAction),
+      },
+      draggable: false,
+    };
+  });
+  const serviceEdges = SERVICE_EDGES.filter(([source, target]) => serviceRows.some((row) => serviceKey(row) === source) && serviceRows.some((row) => serviceKey(row) === target)).map(([source, target]) => {
+    const color = COLORS.blue;
+    return {
+      id: `edge:service:${source}:${target}`,
+      source: `service:${source}`,
+      target: `service:${target}`,
+      sourceHandle: "output",
+      targetHandle: "input",
+      animated: true,
+      type: "bezier",
+      markerEnd: { type: MarkerType.ArrowClosed, color },
+      style: { stroke: color, strokeWidth: 2, strokeDasharray: "6 3" },
+    };
+  });
+
+  return { nodes: [...serviceNodes, ...workerNodes, ...taskNodes], edges: [...serviceEdges, ...edges] };
 }
 
-export function ActiveSiteWorkersCanvas({ active = true }) {
+export function EngineStatusCanvas({ active = true }) {
   const navigate = useNavigate();
-  const [payload, setPayload] = useState({ workers: [], recent_work: [] });
+  const notify = useAppNotifications({ title: "Engine Status", icon: "settings", variant: "info" });
+  const [payload, setPayload] = useState({ workers: [], recent_work: [], services: [] });
   const [clockSeconds, setClockSeconds] = useState(() => Math.floor(Date.now() / 1000));
   const [dismissInactive, setDismissInactive] = useState(true);
   const [dismissStartedAt, setDismissStartedAt] = useState(0);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
+  const [actionBusyKey, setActionBusyKey] = useState("");
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
   const fetchWorkers = useCallback(async () => {
     try {
       setLoading((current) => current || !loaded);
-      const response = await fetch(`/api/server/workers?history_seconds=${WORKER_HISTORY_SECONDS}`, {
-        credentials: "include",
-        cache: "no-store",
-      });
-      const nextPayload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(nextPayload?.error || nextPayload?.message || `Worker lookup failed (HTTP ${response.status}).`);
+      const [workerResponse, overviewResponse] = await Promise.all([
+        fetch(`/api/server/workers?history_seconds=${WORKER_HISTORY_SECONDS}`, {
+          credentials: "include",
+          cache: "no-store",
+        }),
+        fetch("/api/server/overview", {
+          credentials: "include",
+          cache: "no-store",
+        }),
+      ]);
+      const nextPayload = await workerResponse.json().catch(() => ({}));
+      const overviewPayload = await overviewResponse.json().catch(() => ({}));
+      if (!workerResponse.ok) {
+        throw new Error(nextPayload?.error || nextPayload?.message || `Worker lookup failed (HTTP ${workerResponse.status}).`);
       }
-      setPayload((currentPayload) => mergeWorkerPayload(currentPayload, nextPayload, !dismissInactive));
+      if (!overviewResponse.ok) {
+        throw new Error(overviewPayload?.error || overviewPayload?.message || `Engine overview failed (HTTP ${overviewResponse.status}).`);
+      }
+      setPayload((currentPayload) => mergeWorkerPayload(currentPayload, { ...nextPayload, services: overviewPayload?.services || [] }, !dismissInactive));
       setError("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load site workers.");
+      setError(err instanceof Error ? err.message : "Unable to load engine status.");
     } finally {
       setLoaded(true);
       setLoading(false);
     }
   }, [dismissInactive, loaded]);
+
+  const runServiceAction = useCallback(async (row, action) => {
+    const key = serviceKey(row);
+    const busyKey = `${key}:${action?.id || action?.action || action?.label}`;
+    if (!key || !action?.action) return;
+    setActionBusyKey(busyKey);
+    try {
+      const response = await fetch(`/api/server/services/${encodeURIComponent(key)}/action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ id: action.id, action: action.action, mode: action.mode }),
+      });
+      const nextPayload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(nextPayload?.message || nextPayload?.error || `HTTP ${response.status}`);
+      }
+      await notify(`${action.label || titleCase(action.action)} queued for ${row?.label || key}.`);
+      await fetchWorkers();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Service action failed.";
+      setError(message);
+      await notify(message);
+    } finally {
+      setActionBusyKey("");
+    }
+  }, [fetchWorkers, notify]);
 
   useEffect(() => {
     if (!active) return undefined;
@@ -691,8 +935,12 @@ export function ActiveSiteWorkersCanvas({ active = true }) {
   }, []);
 
   const graph = useMemo(
-    () => buildGraphAt(payload, navigate, clockSeconds, { dismissInactive, dismissStartedAt }),
-    [clockSeconds, dismissInactive, dismissStartedAt, navigate, payload]
+    () => buildGraphAt(payload, navigate, clockSeconds, {
+      dismissInactive,
+      dismissStartedAt,
+      onServiceAction: (row, action) => runServiceAction(row, { ...action, label: actionBusyKey === `${serviceKey(row)}:${action?.id || action?.action || action?.label}` ? `${action.label || titleCase(action.action)}...` : action.label }),
+    }),
+    [actionBusyKey, clockSeconds, dismissInactive, dismissStartedAt, navigate, payload, runServiceAction]
   );
 
   useEffect(() => {
@@ -740,10 +988,10 @@ export function ActiveSiteWorkersCanvas({ active = true }) {
         />
         {loading ? <CircularProgress size={16} sx={{ color: COLORS.blue }} /> : <RadioButtonCheckedRoundedIcon sx={{ fontSize: 16, color: COLORS.green }} />}
         <Typography sx={{ color: COLORS.text, fontSize: "0.84rem", fontWeight: 700 }}>
-          Active Site Workers
+          Engine Status
         </Typography>
         <Typography sx={{ color: COLORS.muted, fontSize: "0.76rem" }}>
-          {Number(payload?.active_count || 0)} active · {taskNodeCount} recent task groups
+          {Number(payload?.active_count || 0)} active workers · {ENGINE_SERVICE_KEYS.length} engine services · {taskNodeCount} recent task groups
         </Typography>
       </Box>
       {error ? (
@@ -788,17 +1036,17 @@ export function ActiveSiteWorkersCanvas({ active = true }) {
   );
 }
 
-export default function SiteWorkers() {
+export default function EngineStatus() {
   useRoutePageChrome({
-    title: "Site Workers",
-    subtitle: "Live site-worker containers, assigned workloads, terminal status, and teardown timing.",
+    title: "Engine Status",
+    subtitle: "Live topology of Borealis engine containers, service health, site-worker activity, and assigned workloads.",
     Icon: AccountTreeRoundedIcon,
-    breadcrumbLabel: "Site Workers",
+    breadcrumbLabel: "Engine Status",
   });
 
   return (
     <PageBodyFrame variant="grid">
-      <ActiveSiteWorkersCanvas active />
+      <EngineStatusCanvas active />
     </PageBodyFrame>
   );
 }

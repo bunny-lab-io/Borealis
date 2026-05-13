@@ -1,7 +1,63 @@
 import { describe, expect, it } from "vitest";
-import { buildGraph, buildGraphAt, statusTone } from "@/Scheduling/Site_Workers.jsx";
+import { buildGraph, buildGraphAt, statusTone } from "@/Admin/Engine_Status.jsx";
 
 describe("active site workers canvas mapping", () => {
+  it("renders engine service topology nodes and edges", () => {
+    const graph = buildGraphAt(
+      {
+        services: [
+          { key: "api-backend", label: "API Backend", status: "healthy", docker_state: "running", actions: [{ id: "restart", label: "Restart", action: "restart" }] },
+          { key: "postgres-db", label: "Postgres", status: "healthy", docker_state: "running", actions: [{ id: "restart", label: "Restart", action: "restart" }] },
+          { key: "webui-frontend", label: "Web UI", status: "healthy", docker_state: "running", actions: [{ id: "rebuild_prod", label: "Rebuild Prod", action: "rebuild", mode: "prod" }] },
+          { key: "traefik-edge", label: "Traefik Edge", status: "warning", docker_state: "running", actions: [{ id: "reload", label: "Reload", action: "reload" }] },
+          { key: "remote-desktop-guacd", label: "Guacamole", status: "healthy", docker_state: "running", actions: [{ id: "restart", label: "Restart", action: "restart" }] },
+          { key: "wireguard-tunnel", label: "WireGuard", status: "healthy", docker_state: "running", actions: [{ id: "reconcile", label: "Reconcile", action: "reconcile" }] },
+          { key: "docker-proxy", label: "Docker Proxy", status: "healthy", docker_state: "running", docker_status_text: "Up 3 minutes", actions: [{ id: "restart", label: "Restart", action: "restart" }] },
+          { key: "job-scheduler", label: "Job Scheduler", status: "healthy", docker_state: "running", actions: [{ id: "restart", label: "Restart", action: "restart" }] },
+        ],
+      },
+      () => {},
+      1000,
+      { onServiceAction: () => {} }
+    );
+
+    expect(graph.nodes.some((node) => node.id === "service:api-backend")).toBe(true);
+    expect(graph.nodes.some((node) => node.id === "service:postgres-db")).toBe(true);
+    expect(graph.edges.some((edge) => edge.source === "service:api-backend" && edge.target === "service:postgres-db")).toBe(true);
+    expect(graph.edges.some((edge) => edge.source === "service:api-backend" && edge.target === "service:docker-proxy")).toBe(true);
+    expect(graph.edges.some((edge) => edge.source === "service:api-backend" && edge.target === "service:job-scheduler")).toBe(true);
+    expect(graph.edges.some((edge) => edge.source === "service:api-backend" && edge.target === "service:traefik-edge")).toBe(true);
+    expect(graph.edges.some((edge) => edge.source === "service:webui-frontend" && edge.target === "service:traefik-edge")).toBe(false);
+    expect(graph.nodes.find((node) => node.id === "service:api-backend")?.position.x).toBeLessThan(graph.nodes.find((node) => node.id === "service:postgres-db")?.position.x);
+    expect(graph.nodes.find((node) => node.id === "service:job-scheduler")?.position.y).toBe(330);
+    expect(graph.nodes.find((node) => node.id === "service:job-scheduler")?.position.y).toBeLessThan(graph.nodes.find((node) => node.id === "service:remote-desktop-guacd")?.position.y);
+    expect(graph.nodes.find((node) => node.id === "service:remote-desktop-guacd")?.position.y).toBeLessThan(graph.nodes.find((node) => node.id === "service:wireguard-tunnel")?.position.y);
+    expect(graph.nodes.find((node) => node.id === "service:remote-desktop-guacd")?.data.label).toBe("Guacamole");
+    expect(graph.nodes.find((node) => node.id === "service:docker-proxy")?.position.y).toBeGreaterThan(graph.nodes.find((node) => node.id === "service:job-scheduler")?.position.y);
+    expect(graph.nodes.find((node) => node.id === "service:docker-proxy")?.data.startedLabel).toBe("Up 3 minutes");
+    expect(graph.nodes.find((node) => node.id === "service:wireguard-tunnel")?.data.actions[0].label).toBe("Reconcile");
+  });
+
+  it("uses service job scheduler as site-worker parent when available", () => {
+    const graph = buildGraphAt(
+      {
+        services: [
+          { key: "api-backend", label: "API Backend", status: "healthy", docker_state: "running" },
+          { key: "job-scheduler", label: "Job Scheduler", status: "healthy", docker_state: "running" },
+        ],
+        workers: [
+          { worker_guid: "job-scheduler-worker", site_id: 0, status: "running", started_at: 100 },
+          { worker_guid: "site-worker-1", site_id: 7, status: "running", started_at: 100 },
+        ],
+      },
+      () => {},
+      1000
+    );
+
+    expect(graph.nodes.filter((node) => node.data?.label === "Job Scheduler")).toHaveLength(1);
+    expect(graph.edges.some((edge) => edge.source === "service:job-scheduler" && edge.target === "worker:site-worker-1")).toBe(true);
+  });
+
   it("creates worker and task nodes with terminal task status", () => {
     const now = Math.floor(Date.now() / 1000);
     const idleSince = now - 10;
@@ -284,5 +340,64 @@ describe("active site workers canvas mapping", () => {
     expect(taskNodes[0].data.label).toBe("Task");
     expect(taskNodes[0].data.targetCountLabel).toBe("2 Devices Targeted");
     expect(taskNodes[0].data.taskName).toBe("Scheduled Job 42");
+  });
+
+  it("lays out tasks first and centers workers to their task groups", () => {
+    const graph = buildGraphAt(
+      {
+        workers: [
+          {
+            worker_guid: "worker-a",
+            site_id: 7,
+            status: "running",
+          },
+          {
+            worker_guid: "worker-b",
+            site_id: 8,
+            status: "running",
+          },
+        ],
+        recent_work: [
+          {
+            id: 51,
+            kind: "scheduled_run",
+            site_id: 7,
+            worker_guid: "worker-a",
+            job_id: 51,
+            status: "queued",
+          },
+          {
+            id: 52,
+            kind: "scheduled_run",
+            site_id: 7,
+            worker_guid: "worker-a",
+            job_id: 52,
+            status: "queued",
+          },
+          {
+            id: 53,
+            kind: "scheduled_run",
+            site_id: 8,
+            worker_guid: "worker-b",
+            job_id: 53,
+            status: "queued",
+          },
+        ],
+      },
+      () => {},
+      1000
+    );
+
+    const workerA = graph.nodes.find((node) => node.id === "worker:worker-a");
+    const workerB = graph.nodes.find((node) => node.id === "worker:worker-b");
+    const scheduler = graph.nodes.find((node) => node.data?.label === "Job Scheduler");
+    const workerATasks = graph.nodes.filter((node) => node.type === "task" && graph.edges.some((edge) => edge.source === workerA?.id && edge.target === node.id));
+    const workerBTasks = graph.nodes.filter((node) => node.type === "task" && graph.edges.some((edge) => edge.source === workerB?.id && edge.target === node.id));
+
+    expect(workerATasks).toHaveLength(2);
+    expect(Math.abs(workerA.position.y - ((workerATasks[0].position.y + workerATasks[1].position.y) / 2))).toBeLessThan(1);
+    expect(workerB.position.y).toBe(workerBTasks[0].position.y);
+    expect(workerBTasks[0].position.y - workerATasks[1].position.y).toBeGreaterThanOrEqual(72);
+    expect(scheduler.position.y).toBeCloseTo((workerA.position.y + workerB.position.y) / 2, 0);
   });
 });

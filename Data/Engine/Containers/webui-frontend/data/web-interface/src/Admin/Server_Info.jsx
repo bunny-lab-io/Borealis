@@ -1876,7 +1876,6 @@ export default function ServerInfo() {
 
     return [
       ...runtimeMasterRows,
-      ...serviceMasterRows,
       ...workerMasterRows,
       ...resourceMasterRows,
       ...accessMasterRows,

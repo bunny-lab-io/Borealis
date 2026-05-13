@@ -61,7 +61,7 @@ Supported schedule types (from the scheduler core):
 ## Job Scheduler And Site Workers
 - `job-scheduler` is a long-lived Engine container with Docker socket access. It owns scheduled ticking, queue lease reconciliation, service-action execution, and site-worker lifecycle.
 - Site workers are dynamic containers named `site-worker-<uuid>`. They receive a site id, claim work for that site only, and exit after 60 seconds idle by default (`BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS`).
-- Worker lanes are site-local. Onboarding work claims the `onboarding` lane and honors the job's device onboarding concurrency. Scheduled automation claims the `scheduled_job` lane; global workflow work with no site scope is claimed by the manager.
+- Worker lanes are site-local. Onboarding work claims the `onboarding` lane and honors the job's device onboarding concurrency. Scheduled automation claims the `scheduled_job` lane with up to 7 concurrent scheduled work items per site worker by default (`BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY`). Global workflow work with no site scope is claimed by the manager.
 - Work items use Postgres leases. A worker heartbeat extends the lease; stale leases return to `queued` so another worker can reclaim them.
 - Worker records are visible in Server Info under the Workers domain, the Sites page Active Site Workers tab, and through `GET /api/server/workers`. The long-lived manager heartbeats as `job-scheduler`; active/recent site workers expose site id, lanes, claimed counts, task links, and recent work-item status.
 - VNC, interactive shell, live file browsing/transfers, live process actions, live service actions, and software refresh remain in `api-backend` for v1 because those paths are browser/session-affine.

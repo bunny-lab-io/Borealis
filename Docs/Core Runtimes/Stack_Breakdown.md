@@ -65,6 +65,7 @@ Operators should treat `Engine/` as generated runtime state. Edit committed sour
 ## Stack Services
 | Service | Container | Main responsibility | Host network endpoint |
 | --- | --- | --- | --- |
+| `docker-proxy` | `borealis-engine-docker-proxy` | Read-only Docker API proxy for Engine Status and Server Info container status reads | `127.0.0.1:2375` |
 | `postgres-db` | `borealis-engine-postgres-db` | PostgreSQL database and persisted DB state | `127.0.0.1:5432` |
 | `wireguard-tunnel` | `borealis-engine-wireguard-tunnel` | Privileged WireGuard interface, peer config, firewall/routing, control socket | UDP `30000`, interface `borealis-wg` |
 | `remote-desktop-guacd` | `borealis-engine-remote-desktop-guacd` | VNC-only Apache Guacamole guacd runtime | `127.0.0.1:4822` |
@@ -73,9 +74,9 @@ Operators should treat `Engine/` as generated runtime state. Edit committed sour
 | `job-scheduler` | `borealis-engine-job-scheduler` | Scheduled tick loop, Postgres work leases, service actions, ephemeral site-worker lifecycle | Internal only |
 | `traefik-edge` | `borealis-engine-traefik-edge` | Public HTTP/HTTPS edge, ACME, UI/API/Socket.IO/VNC routing | `80`, `443`, health `127.0.0.1:8082` |
 
-All Engine containers use `network_mode: host`. Loopback assumptions are intentional.
+Most Engine containers use `network_mode: host`. Loopback assumptions are intentional. `docker-proxy` uses bridge networking with a loopback-only host port so the Docker API proxy is not exposed publicly.
 
-`job-scheduler` owns `/var/run/docker.sock`. `api-backend` does not need Docker socket access in container mode. Dynamic onboarding workers are launched as `site-worker-<uuid>` containers with no Docker socket, site id labels, read-only Engine secret/config mounts, and an idle timeout of 2 minutes.
+`job-scheduler` owns `/var/run/docker.sock` for controlled service actions and site-worker lifecycle. `api-backend` does not mount Docker socket in container mode; it reads container status through `docker-proxy` with `CONTAINERS=1` and `POST=0`, then falls back to job-scheduler snapshots if the proxy is unavailable. Dynamic onboarding workers are launched as `site-worker-<uuid>` containers with no Docker socket, site id labels, read-only Engine secret/config mounts, and an idle timeout of 60 seconds.
 
 ## Reverse Proxy Client IP Preservation
 When another reverse proxy sits in front of `traefik-edge`, Borealis must trust only that proxy IP or CIDR. Otherwise all API requests look like they originate from the proxy, and IP-scoped enrollment rate limits can block every agent behind it.
@@ -131,10 +132,17 @@ Engine/Services/traefik-edge/state  -> /opt/Borealis/Engine/Services/traefik-edg
 Engine/Services/wireguard-tunnel/config  -> /opt/Borealis/Engine/Services/wireguard-tunnel/config
 Engine/Services/wireguard-tunnel/run     -> /opt/Borealis/Engine/Services/wireguard-tunnel/run
 Engine/Services/wireguard-tunnel/secrets -> /opt/Borealis/Engine/Services/wireguard-tunnel/secrets
-/var/run/docker.sock -> /var/run/docker.sock
 ```
 
-`api-backend` does not mount the whole `Engine/Services` tree. It receives its own runtime plus specific Traefik and WireGuard paths needed for edge settings and tunnel control. It does not mount the Docker socket in container mode; Server Info reads service snapshots from `job-scheduler`, and service actions are queued for `job-scheduler` execution.
+`api-backend` does not mount the whole `Engine/Services` tree. It receives its own runtime plus specific Traefik and WireGuard paths needed for edge settings and tunnel control. It does not mount the Docker socket in container mode; Server Info and Engine Status read status through `docker-proxy` or job-scheduler snapshots, and service actions are queued for `job-scheduler` execution.
+
+`docker-proxy`:
+```text
+/var/run/docker.sock -> /var/run/docker.sock:ro
+127.0.0.1:2375 -> 2375
+```
+
+The proxy grants only Docker container read APIs and denies POST operations. Do not expose `2375` beyond loopback.
 
 `postgres-db`:
 ```text
@@ -193,20 +201,22 @@ Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Boreal
 17. Run full Compose `up -d --no-build` when compose config, shared runtime env, or container state requires it.
 18. Write `Engine/Deploy/deploy-manifest.json`.
 
-Build order follows `Engine.sh` service order:
+Build order follows `Engine.sh` local build roles. `docker-proxy` is an external image and is not locally built.
 ```text
 api-backend
+job-scheduler
 webui-frontend
 traefik-edge
 postgres-db
 remote-desktop-guacd
 wireguard-tunnel
+site-worker
 ```
 
 Build order is not the same as runtime dependency order.
 
 ## Local Build Behavior
-Engine images are always local in this pass. No registry pull, push, or GHCR workflow is used.
+Borealis-built Engine images are local in this pass. `docker-proxy` is pulled from GHCR as `ghcr.io/tecnativa/docker-socket-proxy:v0.4.2`; no Borealis image push or GHCR workflow is used.
 
 Image naming:
 ```text
@@ -360,7 +370,7 @@ bash Engine.sh --service wireguard-tunnel reconcile
 
 Generic service syntax:
 ```sh
-bash Engine.sh --service <api-backend|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
+bash Engine.sh --service <docker-proxy|api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
 ```
 
 Action support:

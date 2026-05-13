@@ -7,7 +7,7 @@ export async function SitesListRouteLoader({ request }) {
   const url = new URL(request.url);
   const tab = String(url.searchParams.get("tab") || "").trim().toLowerCase();
   if (["workers", "site_workers", "active_site_workers"].includes(tab)) {
-    throw redirect(APP_PATHS.siteWorkers);
+    throw redirect(APP_PATHS.engineStatus);
   }
   return loadSiteListPageData(request);
 }
