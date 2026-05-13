@@ -1238,7 +1238,7 @@ class WorkflowRuntimeService:
         created_at = _now_ts()
         source_metadata_json = dict(source_metadata or {})
         with self._lock:
-            active_run = self._active_run_for_workflow(workflow_guid)
+            active_run = self._active_run_for_workflow(workflow_guid, source_metadata=source_metadata_json)
             if active_run is not None:
                 skipped_id = self._create_run_row(
                     workflow_guid=workflow_guid,
@@ -1447,7 +1447,19 @@ class WorkflowRuntimeService:
         thread = threading.Thread(target=fn, args=args, daemon=True)
         thread.start()
 
-    def _active_run_for_workflow(self, workflow_guid: str) -> Optional[int]:
+    def _active_run_for_workflow(
+        self,
+        workflow_guid: str,
+        *,
+        source_metadata: Optional[Mapping[str, Any]] = None,
+    ) -> Optional[int]:
+        scope = source_metadata.get("workflow_site_scope") if isinstance(source_metadata, Mapping) else None
+        try:
+            scoped_site_id = int(scope.get("site_id")) if isinstance(scope, Mapping) and scope.get("site_id") not in (None, "", "null") else 0
+        except Exception:
+            scoped_site_id = 0
+        if scoped_site_id > 0 and _coerce_optional_int((source_metadata or {}).get("scheduled_job_run_id")) is not None:
+            return None
         conn = self._conn()
         try:
             cur = conn.cursor()
@@ -2089,6 +2101,7 @@ class WorkflowRuntimeService:
                 node_run_id=node_run_id,
                 node=node,
                 input_envelope=input_envelope,
+                source_metadata=source_metadata,
                 device_snapshot=device_snapshot,
             )
         if node_type == NODE_TYPE_AGENT_ARRAY:
@@ -2096,6 +2109,7 @@ class WorkflowRuntimeService:
                 node_run_id=node_run_id,
                 node=node,
                 input_envelope=input_envelope,
+                source_metadata=source_metadata,
                 device_snapshot=device_snapshot,
             )
         if node_type == NODE_TYPE_EXECUTE_ASSEMBLY:
@@ -2277,6 +2291,33 @@ class WorkflowRuntimeService:
             seen.add(key)
             deduped.append(entry)
         return deduped
+
+    def _site_scope_targets(
+        self,
+        records: Sequence[Mapping[str, Any]],
+        *,
+        source_metadata: Mapping[str, Any],
+    ) -> List[Dict[str, Any]]:
+        scope = source_metadata.get("workflow_site_scope") if isinstance(source_metadata, Mapping) else None
+        if not isinstance(scope, Mapping):
+            return [dict(record or {}) for record in (records or []) if isinstance(record, Mapping)]
+        try:
+            site_id = int(scope.get("site_id")) if scope.get("site_id") not in (None, "", "null") else 0
+        except Exception:
+            site_id = 0
+        if site_id <= 0:
+            return [dict(record or {}) for record in (records or []) if isinstance(record, Mapping)]
+        scoped = []
+        for record in records or []:
+            if not isinstance(record, Mapping):
+                continue
+            try:
+                record_site_id = int(record.get("site_id")) if record.get("site_id") not in (None, "", "null") else 0
+            except Exception:
+                record_site_id = 0
+            if record_site_id == site_id:
+                scoped.append(dict(record))
+        return scoped
 
     def _classify_execution_targets(
         self,
@@ -2561,6 +2602,7 @@ class WorkflowRuntimeService:
         node_run_id: int,
         node: Mapping[str, Any],
         input_envelope: Mapping[str, Any],
+        source_metadata: Mapping[str, Any],
         device_snapshot: Sequence[Mapping[str, Any]],
     ) -> Dict[str, Any]:
         filter_summary = self._node_agent_filter_summary(node)
@@ -2604,7 +2646,10 @@ class WorkflowRuntimeService:
             devices=device_snapshot,
             filters_by_id={int(filter_id): filter_record},
         )
-        targets = self._dedupe_target_records(metadata.get("resolved_targets") or [])
+        targets = self._site_scope_targets(
+            self._dedupe_target_records(metadata.get("resolved_targets") or []),
+            source_metadata=source_metadata,
+        )
         status = WORKFLOW_STATUS_SUCCESS if targets else WORKFLOW_STATUS_WARNING
         output = self._build_output_envelope(
             status=status,
@@ -2640,6 +2685,7 @@ class WorkflowRuntimeService:
         node_run_id: int,
         node: Mapping[str, Any],
         input_envelope: Mapping[str, Any],
+        source_metadata: Mapping[str, Any],
         device_snapshot: Sequence[Mapping[str, Any]],
     ) -> Dict[str, Any]:
         selected_devices = self._node_agent_array_entries(node)
@@ -2660,7 +2706,10 @@ class WorkflowRuntimeService:
             return {"status": WORKFLOW_STATUS_WARNING, "output_envelope": output}
 
         _hosts, metadata = self._filter_matcher.resolve_target_entries(selected_devices, devices=device_snapshot)
-        targets = self._dedupe_target_records(metadata.get("resolved_targets") or [])
+        targets = self._site_scope_targets(
+            self._dedupe_target_records(metadata.get("resolved_targets") or []),
+            source_metadata=source_metadata,
+        )
         status = WORKFLOW_STATUS_SUCCESS if targets else WORKFLOW_STATUS_WARNING
         output = self._build_output_envelope(
             status=status,

@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import json
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from cryptography.x509.oid import NameOID
 from Data.Engine.services.API.server import info as server_info_api
 from Data.Engine.services.RemoteDesktop.vnc_sessions import ensure_vnc_collaboration_manager
 from Data.Engine.services.ansible import runtime_settings as ansible_runtime_settings
+from Data.Engine.services.job_scheduler.queue import ensure_job_scheduler_tables
 from Data.Engine.services.WebSocket.__init__ import OperatorPresenceRegistry
 
 from .conftest import EngineTestHarness
@@ -223,6 +225,105 @@ def test_server_overview_includes_operator_session_count(engine_harness: EngineT
     assert payload["operator_session_count"] == 1
     assert payload["security"]["aegis"]["unlock_scope"] == "engine_global"
     assert payload["services"][0]["unit_name"] == "borealis-engine.service"
+
+
+def test_server_workers_includes_recent_terminal_work(engine_harness: EngineTestHarness) -> None:
+    client = _admin_client(engine_harness)
+    now = int(time.time())
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        ensure_job_scheduler_tables(conn)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO job_scheduler_workers(
+                worker_guid, container_name, site_id, status, started_at, last_seen_at,
+                current_lanes_json, claimed_count, task_links_json, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "worker-1",
+                "site-worker-worker-1",
+                7,
+                "stopped",
+                now - 120,
+                now - 10,
+                json.dumps(["scheduled_job"]),
+                1,
+                "[]",
+                now - 120,
+                now - 5,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO job_scheduler_work_items(
+                dedupe_key, kind, site_id, lane, job_id, run_id, target_id, payload_json,
+                status, attempt_count, priority, available_at, lease_owner, worker_guid,
+                created_at, updated_at, started_at, finished_at, error
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "scheduled-run:55",
+                "scheduled_run",
+                7,
+                "scheduled_job",
+                55,
+                88,
+                None,
+                json.dumps({"task_link": {"label": "Scheduled Job 55", "path": "/jobs/55?tab=job_history"}}),
+                "succeeded",
+                1,
+                0,
+                now - 80,
+                "worker-1",
+                "worker-1",
+                now - 80,
+                now - 20,
+                now - 75,
+                now - 20,
+                "",
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO job_scheduler_work_items(
+                dedupe_key, kind, site_id, lane, job_id, run_id, target_id, payload_json,
+                status, attempt_count, priority, available_at, created_at, updated_at, finished_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "scheduled-run:old",
+                "scheduled_run",
+                7,
+                "scheduled_job",
+                56,
+                89,
+                None,
+                "{}",
+                "failed",
+                1,
+                0,
+                now - 5000,
+                now - 5000,
+                now - 5000,
+                now - 5000,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = client.get("/api/server/workers?history_seconds=600")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    recent_ids = {row["id"] for row in payload["recent_work"]}
+    assert len(recent_ids) == 1
+    recent = payload["recent_work"][0]
+    assert recent["kind"] == "scheduled_run"
+    assert recent["status"] == "succeeded"
+    assert recent["task_link"]["path"] == "/jobs/55?tab=job_history"
 
 
 def test_server_overview_includes_active_vnc_sessions(engine_harness: EngineTestHarness, monkeypatch) -> None:

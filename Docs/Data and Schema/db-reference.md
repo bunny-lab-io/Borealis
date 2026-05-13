@@ -656,6 +656,8 @@ finally:
 - `job-scheduler` scheduled ticking and service-action dispatch.
 - Site-worker onboarding execution.
 - Notes:
+- Work kinds include `onboarding_run`, `scheduled_run`, `scheduled_workflow_run`, and `service_action`.
+- `scheduled_run` and `scheduled_workflow_run` payloads include task-link metadata for Server Info and the Sites Active Site Workers canvas; secrets stay out of `payload_json`.
 - Credentials are not stored in `payload_json`; workers retrieve decrypted credential material from the internal API only while executing.
 - `lease_owner` plus `lease_expires_at` protect work from duplicate claims and allow stale work to be reclaimed.
 
@@ -665,6 +667,7 @@ finally:
 - Columns: `worker_guid`, `container_name`, `site_id`, `status`, `started_at`, `last_seen_at`, `idle_since`, `stopped_at`, `current_lanes_json`, `claimed_count`, `task_links_json`, `docker_state`, `exit_code`, `created_at`, `updated_at`.
 - Used by:
 - Server Info Workers view.
+- Sites Active Site Workers canvas.
 - Task-scheduler worker reconciliation.
 - Notes:
 - Worker container names use random UUIDs (`site-worker-<uuid>`) and do not include site names.

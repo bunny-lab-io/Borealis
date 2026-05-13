@@ -42,7 +42,13 @@ from ....public_endpoints import public_vnc_path as resolve_public_vnc_path
 from ...RemoteDesktop.guacamole_proxy import guacd_health
 from ....public_endpoints import wireguard_endpoint
 from ....security import signing
-from ...job_scheduler.queue import enqueue_service_action, list_active_work_items, list_service_snapshots, list_worker_snapshots
+from ...job_scheduler.queue import (
+    enqueue_service_action,
+    list_active_work_items,
+    list_recent_work_items,
+    list_service_snapshots,
+    list_worker_snapshots,
+)
 from ...ansible.runtime_settings import (
     DEFAULT_ANSIBLE_RUNNER_GLOBAL_CONCURRENCY_LIMIT,
     DEFAULT_ANSIBLE_RUNNER_JOB_CONCURRENCY_LIMIT,
@@ -1346,11 +1352,12 @@ def _build_overview_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]
     }
 
 
-def _collect_worker_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]:
+def _collect_worker_payload(adapters: "EngineServiceAdapters", *, history_seconds: int = 600) -> Dict[str, Any]:
     conn = adapters.db_conn_factory()
     try:
         rows = list_worker_snapshots(conn)
         active_work = list_active_work_items(conn)
+        recent_work = list_recent_work_items(conn, history_seconds=history_seconds)
         conn.commit()
     finally:
         conn.close()
@@ -1362,6 +1369,7 @@ def _collect_worker_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]
         "manager_active_count": len(active_managers),
         "workers": rows,
         "active_work": active_work,
+        "recent_work": recent_work,
     }
 
 
@@ -1622,7 +1630,11 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
         admin_error = auth.require_admin()
         if admin_error:
             return jsonify(admin_error[0]), admin_error[1]
-        return jsonify(_collect_worker_payload(adapters))
+        try:
+            history_seconds = int(request.args.get("history_seconds") or 600)
+        except Exception:
+            history_seconds = 600
+        return jsonify(_collect_worker_payload(adapters, history_seconds=max(0, min(history_seconds, 86400))))
 
     @blueprint.route("/api/server/agent-release-channels", methods=["GET"])
     def get_agent_release_channels() -> Any:

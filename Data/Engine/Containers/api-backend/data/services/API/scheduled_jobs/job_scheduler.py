@@ -825,6 +825,9 @@ class JobScheduler(OnboardingSchedulerMixin):
         self._workflow_document_validator: Optional[Callable[..., List[str]]] = None
         # Optional callback that moves onboarding execution into job-scheduler/site-workers.
         self._onboarding_run_dispatcher: Optional[Callable[..., Any]] = None
+        # Optional callbacks that move scheduled execution into queued worker items.
+        self._scheduled_run_dispatcher: Optional[Callable[..., Any]] = None
+        self._scheduled_workflow_dispatcher: Optional[Callable[..., Any]] = None
         self._onboarding_dispatch_lock = threading.Lock()
         self._onboarding_running_runs: set[int] = set()
 
@@ -2102,6 +2105,12 @@ class JobScheduler(OnboardingSchedulerMixin):
 
     def set_onboarding_run_dispatcher(self, fn: Optional[Callable[..., Any]]):
         self._onboarding_run_dispatcher = fn
+
+    def set_scheduled_run_dispatcher(self, fn: Optional[Callable[..., Any]]):
+        self._scheduled_run_dispatcher = fn
+
+    def set_scheduled_workflow_dispatcher(self, fn: Optional[Callable[..., Any]]):
+        self._scheduled_workflow_dispatcher = fn
 
     def _init_tables(self):
         conn = self._conn()
@@ -3845,6 +3854,7 @@ class JobScheduler(OnboardingSchedulerMixin):
         run_row_id: int,
         scheduled_ts: int,
         workflow_component: Mapping[str, Any],
+        workflow_site_scope: Optional[Mapping[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         workflow_guid = str(
             workflow_component.get("assembly_guid")
@@ -3931,6 +3941,8 @@ class JobScheduler(OnboardingSchedulerMixin):
             "scheduled_ts": int(scheduled_ts),
             "component_name": self._component_name_for_display(dict(workflow_component or {}), fallback="Workflow"),
         }
+        if isinstance(workflow_site_scope, Mapping):
+            source_metadata["workflow_site_scope"] = dict(workflow_site_scope)
         try:
             launch_result = self._workflow_run_launcher(
                 workflow_guid=workflow_guid,
@@ -3996,6 +4008,7 @@ class JobScheduler(OnboardingSchedulerMixin):
         component: Dict[str, Any],
         credential_id: Optional[int],
         use_service_account: bool,
+        target_row_ids: Optional[Sequence[int]] = None,
     ) -> Optional[Dict[str, Any]]:
         run_mode_norm = str(run_mode or "local").strip().lower() or "local"
         ts_now = _now_ts()
@@ -4019,6 +4032,16 @@ class JobScheduler(OnboardingSchedulerMixin):
             conn.close()
 
         run_targets = self._load_run_targets(run_row_id)
+        if target_row_ids:
+            allowed_target_ids = set()
+            for value in target_row_ids:
+                try:
+                    parsed_value = int(value)
+                except Exception:
+                    continue
+                if parsed_value > 0:
+                    allowed_target_ids.add(parsed_value)
+            run_targets = [target for target in run_targets if int(target.get("id") or 0) in allowed_target_ids]
         if not run_targets:
             conn = self._conn()
             try:
@@ -4961,6 +4984,247 @@ class JobScheduler(OnboardingSchedulerMixin):
             if conn is not None:
                 conn.close()
 
+    def _run_task_link(self, *, job_id: int, run_id: int, kind: str) -> Dict[str, Any]:
+        if kind == "workflow":
+            label = f"Workflow Job {int(job_id)}"
+        elif kind == "ansible":
+            label = f"Scheduled Ansible Job {int(job_id)}"
+        else:
+            label = f"Scheduled Job {int(job_id)}"
+        return {
+            "kind": kind,
+            "label": label,
+            "job_id": int(job_id),
+            "run_id": int(run_id),
+            "path": f"/jobs/{int(job_id)}?tab=job_history",
+        }
+
+    def _site_ids_for_run_targets(self, run_id: int) -> Dict[int, List[int]]:
+        grouped: Dict[int, List[int]] = {}
+        for target in self._load_run_targets(int(run_id)):
+            raw_site_id = target.get("site_id")
+            try:
+                site_id = int(raw_site_id) if raw_site_id is not None else 0
+            except Exception:
+                site_id = 0
+            target_id = int(target.get("id") or 0)
+            grouped.setdefault(site_id, [])
+            if target_id > 0:
+                grouped[site_id].append(target_id)
+        return grouped or {0: []}
+
+    def _enqueue_or_dispatch_scheduled_run(
+        self,
+        *,
+        job_id: int,
+        run_row_id: int,
+        scheduled_ts: int,
+        run_mode: str,
+        script_components: Sequence[Dict[str, Any]],
+        ansible_components: Sequence[Dict[str, Any]],
+        credential_id: Optional[int],
+        use_service_account: bool,
+        shared_execution: bool = False,
+        component_index: Optional[int] = None,
+        target_row_ids: Optional[Sequence[int]] = None,
+        site_id: Optional[int] = None,
+    ) -> bool:
+        if callable(self._scheduled_run_dispatcher):
+            self._scheduled_run_dispatcher(
+                job_id=int(job_id),
+                run_id=int(run_row_id),
+                scheduled_ts=int(scheduled_ts),
+                site_id=site_id,
+                run_mode=run_mode,
+                script_components=list(script_components or []),
+                ansible_components=list(ansible_components or []),
+                credential_id=credential_id,
+                use_service_account=bool(use_service_account),
+                shared_execution=bool(shared_execution),
+                component_index=component_index,
+                target_row_ids=list(target_row_ids or []),
+                task_link=self._run_task_link(
+                    job_id=int(job_id),
+                    run_id=int(run_row_id),
+                    kind="ansible" if ansible_components and not script_components else "scheduled_job",
+                ),
+            )
+            return True
+
+        if shared_execution:
+            try:
+                component_index_int = int(component_index) if component_index is not None else 0
+            except Exception:
+                component_index_int = 0
+            component = ansible_components[component_index_int] if 0 <= component_index_int < len(ansible_components) else None
+            if not isinstance(component, dict):
+                return False
+            link = self._dispatch_shared_ansible(
+                job_id=int(job_id),
+                run_row_id=int(run_row_id),
+                scheduled_ts=int(scheduled_ts),
+                run_mode=run_mode,
+                component=component,
+                credential_id=credential_id,
+                use_service_account=bool(use_service_account),
+                target_row_ids=target_row_ids,
+            )
+            normalized_link = self._normalize_run_activity_link(
+                run_row_id=int(run_row_id),
+                link=link,
+                default_component_kind="ansible",
+                default_script_type="ansible",
+            )
+            if normalized_link:
+                self._persist_run_activity_links([normalized_link], created_at=_now_ts())
+                return True
+            return False
+
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT target_hostname FROM scheduled_job_runs WHERE id=?", (int(run_row_id),))
+            row = cur.fetchone()
+        finally:
+            conn.close()
+        host = str(row[0] if row else "").strip()
+        if not host:
+            return False
+        return self._dispatch_run_activities(
+            job_id=int(job_id),
+            run_row_id=int(run_row_id),
+            scheduled_ts=int(scheduled_ts),
+            hostname=host,
+            run_mode=run_mode,
+            script_components=script_components,
+            ansible_components=ansible_components,
+            credential_id=credential_id,
+            use_service_account=bool(use_service_account),
+            component_index=component_index,
+        )
+
+    def _enqueue_or_dispatch_workflow_run(
+        self,
+        *,
+        job_id: int,
+        run_row_id: int,
+        scheduled_ts: int,
+        workflow_component: Mapping[str, Any],
+        site_id: Optional[int] = None,
+    ) -> bool:
+        if callable(self._scheduled_workflow_dispatcher):
+            self._scheduled_workflow_dispatcher(
+                job_id=int(job_id),
+                run_id=int(run_row_id),
+                scheduled_ts=int(scheduled_ts),
+                site_id=site_id,
+                workflow_component=dict(workflow_component or {}),
+                task_link=self._run_task_link(job_id=int(job_id), run_id=int(run_row_id), kind="workflow"),
+            )
+            return True
+        self._dispatch_workflow_run(
+            job_id=int(job_id),
+            run_row_id=int(run_row_id),
+            scheduled_ts=int(scheduled_ts),
+            workflow_component=workflow_component,
+            workflow_site_scope={"site_id": site_id},
+        )
+        return True
+
+    def _workflow_guid_from_component(self, workflow_component: Mapping[str, Any]) -> str:
+        return str(
+            workflow_component.get("assembly_guid")
+            or workflow_component.get("assemblyGuid")
+            or workflow_component.get("workflow_guid")
+            or workflow_component.get("workflowGuid")
+            or ""
+        ).strip().lower()
+
+    def _site_ids_for_workflow_component(self, workflow_component: Mapping[str, Any]) -> List[int]:
+        workflow_guid = self._workflow_guid_from_component(workflow_component)
+        if not workflow_guid:
+            return [0]
+        doc, _record = self._resolve_runtime_document("", "workflow", assembly_guid=workflow_guid)
+        nodes = list((doc or {}).get("nodes") or [])
+        if not nodes and isinstance((doc or {}).get("graph"), Mapping):
+            nodes = list(doc.get("graph", {}).get("nodes") or [])
+        if not nodes and isinstance((doc or {}).get("workflow"), Mapping):
+            nodes = list(doc.get("workflow", {}).get("nodes") or [])
+        site_ids: set[int] = set()
+        all_site_ids: set[int] = set()
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM sites")
+            all_site_ids = {int(row[0]) for row in cur.fetchall() or [] if row and row[0] is not None}
+        except Exception:
+            all_site_ids = set()
+        finally:
+            conn.close()
+
+        for node in nodes:
+            if not isinstance(node, Mapping):
+                continue
+            node_type = str(node.get("type") or "").strip()
+            data = node.get("data") if isinstance(node.get("data"), Mapping) else {}
+            if node_type == "workflow_agent_array":
+                raw_entries = data.get("selected_devices") or data.get("selectedDevices") or data.get("devices") or data.get("targets") or []
+                if isinstance(raw_entries, str):
+                    try:
+                        raw_entries = json.loads(raw_entries)
+                    except Exception:
+                        raw_entries = []
+                if not isinstance(raw_entries, list):
+                    continue
+                for entry in raw_entries:
+                    if not isinstance(entry, Mapping):
+                        continue
+                    try:
+                        site_id = int(entry.get("site_id")) if entry.get("site_id") not in (None, "", "null") else 0
+                    except Exception:
+                        site_id = 0
+                    if site_id > 0:
+                        site_ids.add(site_id)
+                        continue
+                    hostname = str(entry.get("hostname") or "").strip()
+                    guid = str(entry.get("device_guid") or entry.get("guid") or "").strip()
+                    conn_lookup = self._conn()
+                    try:
+                        cur_lookup = conn_lookup.cursor()
+                        if guid:
+                            cur_lookup.execute("SELECT site_id FROM devices WHERE guid=? LIMIT 1", (guid,))
+                        elif hostname:
+                            cur_lookup.execute("SELECT site_id FROM devices WHERE LOWER(hostname)=LOWER(?) LIMIT 1", (hostname,))
+                        else:
+                            continue
+                        row = cur_lookup.fetchone()
+                        if row and row[0] is not None:
+                            site_ids.add(int(row[0]))
+                    except Exception:
+                        pass
+                    finally:
+                        conn_lookup.close()
+            elif node_type == "workflow_agent_filter":
+                filter_id = data.get("filter_id") or data.get("agent_filter_id") or data.get("selected_filter_id") or data.get("id")
+                try:
+                    filter_id_int = int(filter_id)
+                except Exception:
+                    continue
+                try:
+                    filters = self._filter_matcher.load_filters([filter_id_int], include_archived=True)
+                    record = filters.get(filter_id_int) or {}
+                    mode = str(record.get("site_mode") or "global").strip().lower()
+                    configured = {int(value) for value in (record.get("site_ids") or []) if value is not None}
+                    if mode == "specific_sites":
+                        site_ids.update(configured)
+                    elif mode == "global_exclusions":
+                        site_ids.update(all_site_ids.difference(configured))
+                    else:
+                        site_ids.update(all_site_ids)
+                except Exception:
+                    continue
+        return sorted(site_ids) if site_ids else [0]
+
     def _normalize_run_activity_link(
         self,
         *,
@@ -5407,12 +5671,14 @@ class JobScheduler(OnboardingSchedulerMixin):
                     if status == RUN_STATUS_RUNNING:
                         continue
                     if is_workflow_job and isinstance(workflow_component, dict):
-                        self._dispatch_workflow_run(
-                            job_id=int(job_id),
-                            run_row_id=int(run["id"]),
-                            scheduled_ts=int(occurrence_ts),
-                            workflow_component=workflow_component,
-                        )
+                        for workflow_site_id in self._site_ids_for_workflow_component(workflow_component):
+                            self._enqueue_or_dispatch_workflow_run(
+                                job_id=int(job_id),
+                                run_row_id=int(run["id"]),
+                                scheduled_ts=int(occurrence_ts),
+                                workflow_component=workflow_component,
+                                site_id=workflow_site_id,
+                            )
                         continue
                     if shared_ansible_mode and bool(run.get("shared_execution")):
                         component_index = run.get("component_index")
@@ -5453,23 +5719,23 @@ class JobScheduler(OnboardingSchedulerMixin):
                             limits=ansible_runner_limits,
                         ):
                             continue
-                        link = self._dispatch_shared_ansible(
-                            job_id=int(job_id),
-                            run_row_id=int(run["id"]),
-                            scheduled_ts=int(occurrence_ts),
-                            run_mode=run_mode,
-                            component=component,
-                            credential_id=job_credential_id,
-                            use_service_account=job_use_service_account,
-                        )
-                        normalized_link = self._normalize_run_activity_link(
-                            run_row_id=int(run["id"]),
-                            link=link,
-                            default_component_kind="ansible",
-                            default_script_type="ansible",
-                        )
-                        if normalized_link:
-                            self._persist_run_activity_links([normalized_link], created_at=now)
+                        dispatched_shared = False
+                        for site_id_for_run, target_row_ids in self._site_ids_for_run_targets(int(run["id"])).items():
+                            dispatched_shared = self._enqueue_or_dispatch_scheduled_run(
+                                job_id=int(job_id),
+                                run_row_id=int(run["id"]),
+                                scheduled_ts=int(occurrence_ts),
+                                run_mode=run_mode,
+                                script_components=[],
+                                ansible_components=ansible_components,
+                                credential_id=job_credential_id,
+                                use_service_account=job_use_service_account,
+                                shared_execution=True,
+                                component_index=component_index,
+                                target_row_ids=target_row_ids,
+                                site_id=site_id_for_run,
+                            ) or dispatched_shared
+                        if dispatched_shared:
                             global_running_ansible += 1
                             running_ansible_by_job[int(job_id)] = int(running_ansible_by_job.get(int(job_id), 0) or 0) + 1
                         continue
@@ -5484,17 +5750,19 @@ class JobScheduler(OnboardingSchedulerMixin):
                             limits=ansible_runner_limits,
                         ):
                             continue
-                        dispatched = self._dispatch_run_activities(
+                        site_groups = self._site_ids_for_run_targets(int(run["id"]))
+                        site_id_for_run = next(iter(site_groups.keys()), 0)
+                        dispatched = self._enqueue_or_dispatch_scheduled_run(
                             job_id=int(job_id),
                             run_row_id=int(run["id"]),
                             scheduled_ts=int(occurrence_ts),
-                            hostname=host,
                             run_mode=run_mode,
                             script_components=script_components,
                             ansible_components=ansible_components,
                             credential_id=job_credential_id,
                             use_service_account=job_use_service_account,
                             component_index=run.get("component_index") if individual_ansible_mode else None,
+                            site_id=site_id_for_run,
                         )
                         if individual_ansible_mode and dispatched:
                             global_running_ansible += 1
@@ -6949,3 +7217,11 @@ def set_workflow_document_validator(scheduler: JobScheduler, fn: Callable[..., L
 
 def set_onboarding_run_dispatcher(scheduler: JobScheduler, fn: Callable[..., Any]):
     scheduler._onboarding_run_dispatcher = fn
+
+
+def set_scheduled_run_dispatcher(scheduler: JobScheduler, fn: Callable[..., Any]):
+    scheduler._scheduled_run_dispatcher = fn
+
+
+def set_scheduled_workflow_dispatcher(scheduler: JobScheduler, fn: Callable[..., Any]):
+    scheduler._scheduled_workflow_dispatcher = fn

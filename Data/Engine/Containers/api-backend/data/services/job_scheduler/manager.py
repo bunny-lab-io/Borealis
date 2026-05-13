@@ -26,11 +26,17 @@ from Data.Engine.assembly_management import initialise_assembly_runtime
 from .queue import (
     WORK_STATUS_FAILED,
     WORK_STATUS_SUCCEEDED,
+    WORK_KIND_SCHEDULED_RUN,
+    WORK_KIND_SCHEDULED_WORKFLOW_RUN,
+    LANE_SCHEDULED_JOB,
     WORKER_STATUS_RUNNING,
     active_worker_for_site,
+    claim_next_work_item,
     claim_service_action,
     complete_work_item,
     enqueue_onboarding_run,
+    enqueue_scheduled_run,
+    enqueue_scheduled_workflow_run,
     ensure_job_scheduler_tables,
     expire_stale_leases,
     mark_missing_workers_lost,
@@ -324,6 +330,27 @@ def _build_scheduler(settings, logger):
             conn2.close()
 
     job_scheduler.set_onboarding_run_dispatcher(scheduler, _enqueue_onboarding)
+
+    def _enqueue_scheduled_run(**kwargs):
+        conn2 = db_factory()
+        try:
+            work_id = enqueue_scheduled_run(conn2, **kwargs)
+            conn2.commit()
+            return work_id
+        finally:
+            conn2.close()
+
+    def _enqueue_scheduled_workflow(**kwargs):
+        conn2 = db_factory()
+        try:
+            work_id = enqueue_scheduled_workflow_run(conn2, **kwargs)
+            conn2.commit()
+            return work_id
+        finally:
+            conn2.close()
+
+    job_scheduler.set_scheduled_run_dispatcher(scheduler, _enqueue_scheduled_run)
+    job_scheduler.set_scheduled_workflow_dispatcher(scheduler, _enqueue_scheduled_workflow)
     return scheduler, db_factory
 
 
@@ -701,6 +728,102 @@ def _process_service_actions(db_factory, logger) -> None:
         conn.close()
 
 
+def _run_scheduler_work_item(scheduler, item: Mapping[str, Any]) -> str:
+    payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
+    kind = str(item.get("kind") or "")
+    if kind == WORK_KIND_SCHEDULED_WORKFLOW_RUN:
+        scheduler._dispatch_workflow_run(
+            job_id=int(payload.get("job_id") or item.get("job_id") or 0),
+            run_row_id=int(payload.get("run_id") or item.get("run_id") or 0),
+            scheduled_ts=int(payload.get("scheduled_ts") or 0),
+            workflow_component=dict(payload.get("workflow_component") or {}),
+            workflow_site_scope=dict(payload.get("workflow_site_scope") or {}),
+        )
+        return WORK_STATUS_SUCCEEDED
+    if kind == WORK_KIND_SCHEDULED_RUN:
+        job_id = int(payload.get("job_id") or item.get("job_id") or 0)
+        run_id = int(payload.get("run_id") or item.get("run_id") or 0)
+        scheduled_ts = int(payload.get("scheduled_ts") or 0)
+        run_mode = str(payload.get("run_mode") or "system")
+        script_components = list(payload.get("script_components") or [])
+        ansible_components = list(payload.get("ansible_components") or [])
+        component_index = payload.get("component_index")
+        if bool(payload.get("shared_execution")):
+            try:
+                component_index_int = int(component_index) if component_index is not None else 0
+            except Exception:
+                component_index_int = 0
+            component = ansible_components[component_index_int] if 0 <= component_index_int < len(ansible_components) else None
+            if isinstance(component, Mapping):
+                link = scheduler._dispatch_shared_ansible(
+                    job_id=job_id,
+                    run_row_id=run_id,
+                    scheduled_ts=scheduled_ts,
+                    run_mode=run_mode,
+                    component=dict(component),
+                    credential_id=payload.get("credential_id"),
+                    use_service_account=bool(payload.get("use_service_account")),
+                    target_row_ids=list(payload.get("target_row_ids") or []),
+                )
+                normalized_link = scheduler._normalize_run_activity_link(
+                    run_row_id=run_id,
+                    link=link,
+                    default_component_kind="ansible",
+                    default_script_type="ansible",
+                )
+                if normalized_link:
+                    scheduler._persist_run_activity_links([normalized_link], created_at=_now_ts())
+        else:
+            conn = scheduler._conn()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT target_hostname FROM scheduled_job_runs WHERE id=?", (run_id,))
+                row = cur.fetchone()
+            finally:
+                conn.close()
+            host = str(row[0] if row else "").strip()
+            if host:
+                scheduler._dispatch_run_activities(
+                    job_id=job_id,
+                    run_row_id=run_id,
+                    scheduled_ts=scheduled_ts,
+                    hostname=host,
+                    run_mode=run_mode,
+                    script_components=script_components,
+                    ansible_components=ansible_components,
+                    credential_id=payload.get("credential_id"),
+                    use_service_account=bool(payload.get("use_service_account")),
+                    component_index=component_index,
+                )
+        return WORK_STATUS_SUCCEEDED
+    raise RuntimeError(f"unsupported scheduler work kind {kind}")
+
+
+def _process_global_scheduled_work(scheduler, db_factory, logger) -> None:
+    conn = db_factory()
+    try:
+        item = claim_next_work_item(conn, site_id=0, lanes=[LANE_SCHEDULED_JOB], lease_owner="job-scheduler", lease_seconds=300)
+        conn.commit()
+    finally:
+        conn.close()
+    if not item:
+        return
+    status = WORK_STATUS_SUCCEEDED
+    error = ""
+    try:
+        status = _run_scheduler_work_item(scheduler, item)
+    except Exception as exc:
+        status = WORK_STATUS_FAILED
+        error = str(exc)
+        logger.exception("global scheduled work failed")
+    conn = db_factory()
+    try:
+        complete_work_item(conn, work_id=int(item["id"]), status=status, error=error)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def main() -> None:
     settings = load_runtime_config()
     logger = initialise_engine_logger(settings, name="borealis.job_scheduler")
@@ -752,6 +875,10 @@ def main() -> None:
             _process_service_actions(db_factory, logger)
         except Exception:
             logger.exception("failed to process service action queue")
+        try:
+            _process_global_scheduled_work(scheduler, db_factory, logger)
+        except Exception:
+            logger.exception("failed to process global scheduled work")
         try:
             _refresh_service_snapshots(db_factory, logger)
         except Exception:

@@ -29,6 +29,10 @@ LANE_ONBOARDING = "onboarding"
 LANE_SCHEDULED_JOB = "scheduled_job"
 LANE_SERVICE_ACTION = "service_action"
 
+WORK_KIND_ONBOARDING_RUN = "onboarding_run"
+WORK_KIND_SCHEDULED_RUN = "scheduled_run"
+WORK_KIND_SCHEDULED_WORKFLOW_RUN = "scheduled_workflow_run"
+
 
 def _now_ts() -> int:
     return int(time.time())
@@ -47,6 +51,18 @@ def _json_loads(value: Any, default: Any) -> Any:
     except Exception:
         return default
     return parsed if parsed is not None else default
+
+
+def _positive_ints(values: Sequence[Any]) -> List[int]:
+    results: List[int] = []
+    for value in values or []:
+        try:
+            parsed = int(value)
+        except Exception:
+            continue
+        if parsed > 0:
+            results.append(parsed)
+    return results
 
 
 def ensure_job_scheduler_tables(conn: sqlite3.Connection) -> None:
@@ -208,7 +224,7 @@ def enqueue_onboarding_run(
     work_id = _insert_work_item(
         conn,
         dedupe_key=f"onboarding:{int(run_id)}",
-        kind="onboarding_run",
+        kind=WORK_KIND_ONBOARDING_RUN,
         site_id=site_id,
         lane=LANE_ONBOARDING,
         job_id=int(job_id),
@@ -230,6 +246,85 @@ def enqueue_onboarding_run(
         ("Running", now, now, int(run_id)),
     )
     return work_id
+
+
+def enqueue_scheduled_run(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int,
+    run_id: int,
+    scheduled_ts: int,
+    site_id: Optional[int],
+    run_mode: str,
+    script_components: Sequence[Any],
+    ansible_components: Sequence[Any],
+    credential_id: Optional[int],
+    use_service_account: bool = False,
+    shared_execution: bool = False,
+    component_index: Optional[int] = None,
+    target_row_ids: Optional[Sequence[int]] = None,
+    task_link: Optional[Mapping[str, Any]] = None,
+) -> int:
+    payload = {
+        "job_id": int(job_id),
+        "run_id": int(run_id),
+        "scheduled_ts": int(scheduled_ts),
+        "run_mode": str(run_mode or "system").strip().lower() or "system",
+        "script_components": list(script_components or []),
+        "ansible_components": list(ansible_components or []),
+        "credential_id": credential_id,
+        "use_service_account": bool(use_service_account),
+        "shared_execution": bool(shared_execution),
+        "component_index": component_index,
+        "target_row_ids": _positive_ints(target_row_ids or []),
+        "task_link": dict(task_link or {}),
+    }
+    target_suffix = ",".join(str(value) for value in payload["target_row_ids"]) or "all"
+    return _insert_work_item(
+        conn,
+        dedupe_key=f"scheduled-run:{int(run_id)}:{target_suffix}",
+        kind=WORK_KIND_SCHEDULED_RUN,
+        site_id=site_id,
+        lane=LANE_SCHEDULED_JOB,
+        job_id=int(job_id),
+        run_id=int(run_id),
+        target_id=None,
+        payload=payload,
+        priority=40,
+    )
+
+
+def enqueue_scheduled_workflow_run(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int,
+    run_id: int,
+    scheduled_ts: int,
+    site_id: Optional[int],
+    workflow_component: Mapping[str, Any],
+    task_link: Optional[Mapping[str, Any]] = None,
+) -> int:
+    payload = {
+        "job_id": int(job_id),
+        "run_id": int(run_id),
+        "scheduled_ts": int(scheduled_ts),
+        "workflow_component": dict(workflow_component or {}),
+        "workflow_site_scope": {"site_id": site_id},
+        "task_link": dict(task_link or {}),
+    }
+    site_suffix = int(site_id or 0)
+    return _insert_work_item(
+        conn,
+        dedupe_key=f"scheduled-workflow:{int(run_id)}:{site_suffix}",
+        kind=WORK_KIND_SCHEDULED_WORKFLOW_RUN,
+        site_id=site_id,
+        lane=LANE_SCHEDULED_JOB,
+        job_id=int(job_id),
+        run_id=int(run_id),
+        target_id=None,
+        payload=payload,
+        priority=40,
+    )
 
 
 def enqueue_service_action(
@@ -704,6 +799,59 @@ def list_active_work_items(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
                 "attempt_count": int(row[11] or 0),
                 "heartbeat_at": row[12],
                 "started_at": row[13],
+            }
+        )
+    return rows
+
+
+def list_recent_work_items(conn: sqlite3.Connection, *, history_seconds: int = 600) -> List[Dict[str, Any]]:
+    ensure_job_scheduler_tables(conn)
+    now = _now_ts()
+    cutoff = now - max(0, int(history_seconds or 600))
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, kind, site_id, lane, job_id, run_id, target_id, status, lease_owner,
+               worker_guid, container_name, attempt_count, heartbeat_at, started_at,
+               finished_at, updated_at, payload_json, error
+          FROM job_scheduler_work_items
+         WHERE status IN (?,?,?,?,?)
+           AND COALESCE(finished_at, heartbeat_at, started_at, updated_at, created_at, 0) >= ?
+      ORDER BY COALESCE(finished_at, heartbeat_at, started_at, updated_at, created_at, 0) DESC, id DESC
+        """,
+        (
+            WORK_STATUS_QUEUED,
+            WORK_STATUS_RUNNING,
+            WORK_STATUS_SUCCEEDED,
+            WORK_STATUS_FAILED,
+            WORK_STATUS_CANCELLED,
+            cutoff,
+        ),
+    )
+    rows = []
+    for row in cur.fetchall() or []:
+        payload = _json_loads(row[16], {})
+        task_link = payload.get("task_link") if isinstance(payload, Mapping) and isinstance(payload.get("task_link"), Mapping) else {}
+        rows.append(
+            {
+                "id": int(row[0]),
+                "kind": row[1] or "",
+                "site_id": row[2],
+                "lane": row[3] or "",
+                "job_id": row[4],
+                "run_id": row[5],
+                "target_id": row[6],
+                "status": row[7] or "",
+                "lease_owner": row[8] or "",
+                "worker_guid": row[9] or "",
+                "container_name": row[10] or "",
+                "attempt_count": int(row[11] or 0),
+                "heartbeat_at": row[12],
+                "started_at": row[13],
+                "finished_at": row[14],
+                "updated_at": row[15],
+                "task_link": dict(task_link or {}),
+                "error": row[17] or "",
             }
         )
     return rows

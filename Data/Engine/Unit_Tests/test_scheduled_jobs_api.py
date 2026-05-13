@@ -1297,6 +1297,112 @@ def test_onboarding_redeploy_clears_history_and_dispatches(
         conn.close()
 
 
+def test_scheduler_tick_enqueues_scheduled_run_when_dispatcher_configured(engine_harness: EngineTestHarness) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    now = 1_800_000_000
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO devices(guid, hostname, site_id, last_seen, status, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            ("guid-host-1", "host-1", 9, now, "Online", now, now),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_jobs(
+                name, components_json, targets_json, schedule_type, start_ts,
+                duration_stop_enabled, expiration, execution_context, credential_id,
+                enabled, created_at, updated_at, job_kind
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "Queued Worker Job",
+                json.dumps([{"type": "powershell", "path": "Scripts/test.ps1", "name": "Test Script"}]),
+                json.dumps(["host-1"]),
+                "immediately",
+                now,
+                0,
+                "no_expire",
+                "system",
+                None,
+                1,
+                now,
+                now,
+                "automation",
+            ),
+        )
+        job_id = int(cur.lastrowid)
+        conn.commit()
+    finally:
+        conn.close()
+
+    scheduler.set_online_lookup(lambda: ["host-1"])
+    dispatched = []
+    scheduler.set_scheduled_run_dispatcher(lambda **kwargs: dispatched.append(kwargs) or 101)
+
+    scheduler._tick_once()
+
+    assert dispatched
+    payload = dispatched[0]
+    assert payload["job_id"] == job_id
+    assert payload["site_id"] == 9
+    assert payload["run_mode"] == "system"
+    assert payload["script_components"][0]["name"] == "Test Script"
+    assert payload["task_link"]["path"] == f"/jobs/{job_id}?tab=job_history"
+
+
+def test_scheduler_derives_workflow_worker_sites_from_graph(engine_harness: EngineTestHarness, monkeypatch) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    workflow_doc = {
+        "nodes": [
+            {
+                "id": "devices",
+                "type": "workflow_agent_array",
+                "data": {
+                    "selected_devices": [
+                        {"hostname": "alpha", "site_id": 4},
+                        {"hostname": "beta", "site_id": 9},
+                    ],
+                },
+            }
+        ]
+    }
+    monkeypatch.setattr(scheduler, "_resolve_runtime_document", lambda *_args, **_kwargs: (workflow_doc, {}))
+
+    site_ids = scheduler._site_ids_for_workflow_component({"assembly_guid": "workflow-guid"})
+
+    assert site_ids == [4, 9]
+
+
+def test_scheduler_derives_workflow_worker_sites_from_filter_node(engine_harness: EngineTestHarness, monkeypatch) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    workflow_doc = {
+        "nodes": [
+            {
+                "id": "filter",
+                "type": "workflow_agent_filter",
+                "data": {"filter_id": 12},
+            }
+        ]
+    }
+
+    class _FilterMatcher:
+        def load_filters(self, filter_ids, include_archived=False):
+            assert filter_ids == [12]
+            assert include_archived is True
+            return {12: {"site_mode": "specific_sites", "site_ids": [3, 8]}}
+
+    scheduler._filter_matcher = _FilterMatcher()
+    monkeypatch.setattr(scheduler, "_resolve_runtime_document", lambda *_args, **_kwargs: (workflow_doc, {}))
+
+    site_ids = scheduler._site_ids_for_workflow_component({"assembly_guid": "workflow-guid"})
+
+    assert site_ids == [3, 8]
+
+
 def test_onboarding_remote_command_marks_agent_noninteractive(engine_harness: EngineTestHarness) -> None:
     _client, scheduler = _scheduled_jobs_client(engine_harness)
 
