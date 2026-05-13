@@ -44,7 +44,7 @@ describe("site install command builder", () => {
       "windows",
       "https://borealis.example.com",
       "CODE-1234",
-      "feature/automatic-local-network-device-enrollment"
+      "feature/test-agent-install"
     );
 
     expect(command).toContain("Data/Agent/Bootstrap/Agent.exe");
