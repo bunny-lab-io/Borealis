@@ -24,6 +24,10 @@ WORKER_ACTIVE_STATUSES = (
     WORKER_STATUS_RUNNING,
     WORKER_STATUS_IDLE,
 )
+WORKER_TERMINAL_STATUSES = (
+    WORKER_STATUS_STOPPED,
+    WORKER_STATUS_LOST,
+)
 
 LANE_ONBOARDING = "onboarding"
 LANE_SCHEDULED_JOB = "scheduled_job"
@@ -730,6 +734,33 @@ def mark_missing_workers_lost(conn: sqlite3.Connection, *, live_worker_guids: Se
     return max(0, int(getattr(cur, "rowcount", 0) or 0))
 
 
+def prune_worker_history(conn: sqlite3.Connection, *, retention_seconds: int = 600) -> int:
+    ensure_job_scheduler_tables(conn)
+    now = _now_ts()
+    cutoff = now - max(0, int(retention_seconds or 600))
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE job_scheduler_workers
+           SET stopped_at=COALESCE(stopped_at, last_seen_at, updated_at, ?),
+               updated_at=?
+         WHERE status IN (?, ?)
+           AND stopped_at IS NULL
+        """,
+        (now, now, *WORKER_TERMINAL_STATUSES),
+    )
+    cur.execute(
+        """
+        DELETE FROM job_scheduler_workers
+         WHERE COALESCE(site_id, 0)>0
+           AND status IN (?, ?)
+           AND COALESCE(stopped_at, last_seen_at, updated_at, started_at, created_at, 0) < ?
+        """,
+        (*WORKER_TERMINAL_STATUSES, cutoff),
+    )
+    return max(0, int(getattr(cur, "rowcount", 0) or 0))
+
+
 def list_worker_snapshots(conn: sqlite3.Connection, *, include_stopped_since: int = 86400) -> List[Dict[str, Any]]:
     ensure_job_scheduler_tables(conn)
     cutoff = _now_ts() - max(0, int(include_stopped_since or 0))
@@ -741,10 +772,11 @@ def list_worker_snapshots(conn: sqlite3.Connection, *, include_stopped_since: in
             idle_since, stopped_at, current_lanes_json, claimed_count, task_links_json,
             docker_state, exit_code
           FROM job_scheduler_workers
-         WHERE stopped_at IS NULL OR stopped_at>=?
+         WHERE status NOT IN (?, ?)
+            OR COALESCE(stopped_at, last_seen_at, updated_at, started_at, 0)>=?
          ORDER BY COALESCE(stopped_at, last_seen_at, started_at) DESC
         """,
-        (cutoff,),
+        (*WORKER_TERMINAL_STATUSES, cutoff),
     )
     rows = []
     for row in cur.fetchall() or []:

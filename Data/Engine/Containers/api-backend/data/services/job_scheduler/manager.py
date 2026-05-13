@@ -41,6 +41,7 @@ from .queue import (
     expire_stale_leases,
     mark_missing_workers_lost,
     mark_lost_workers,
+    prune_worker_history,
     queued_site_ids,
     register_worker,
     replace_service_snapshots,
@@ -840,6 +841,7 @@ def main() -> None:
     next_tick = 0
     next_worker_reconcile = 0
     worker_reconcile_interval = max(10, int(str(os.environ.get("BOREALIS_SITE_WORKER_RECONCILE_SECONDS") or "30").strip() or "30"))
+    worker_history_seconds = max(60, int(str(os.environ.get("BOREALIS_WORKER_HISTORY_SECONDS") or "600").strip() or "600"))
     while True:
         now = _now_ts()
         try:
@@ -862,6 +864,7 @@ def main() -> None:
         try:
             expire_stale_leases(conn)
             mark_lost_workers(conn)
+            prune_worker_history(conn, retention_seconds=worker_history_seconds)
             site_ids = queued_site_ids(conn)
             conn.commit()
         finally:

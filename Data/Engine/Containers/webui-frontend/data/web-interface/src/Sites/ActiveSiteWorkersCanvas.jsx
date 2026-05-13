@@ -1,6 +1,6 @@
 import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import ReactFlow, { Background, Controls, MarkerType, useEdgesState, useNodesState } from "reactflow";
+import ReactFlow, { Background, Controls, Handle, MarkerType, Position, useEdgesState, useNodesState } from "reactflow";
 import "reactflow/dist/style.css";
 
 import { Alert, Box, CircularProgress, Tooltip, Typography } from "@mui/material";
@@ -26,6 +26,24 @@ const COLORS = {
   red: "#fb7185",
   amber: "#fbbf24",
   gray: "#94a3b8",
+};
+
+const NODE_WIDTH = 292;
+const NODE_HEADER_HEIGHT = 42;
+const NODE_BODY_HEIGHT = 96;
+const NODE_ROW_GAP = 188;
+const TASK_COLUMN_GAP = 348;
+const WORKER_COLUMN_X = 48;
+const WORKER_START_Y = 68;
+
+const TONE_COLORS = {
+  success: { accent: COLORS.green, border: "rgba(52,211,153,0.46)", bg: "rgba(6,78,59,0.2)", text: "#bbf7d0" },
+  failed: { accent: COLORS.red, border: "rgba(251,113,133,0.52)", bg: "rgba(127,29,29,0.22)", text: "#fecdd3" },
+  running: { accent: COLORS.blue, border: "rgba(125,211,252,0.5)", bg: "rgba(14,116,144,0.2)", text: "#bae6fd" },
+  queued: { accent: COLORS.amber, border: "rgba(251,191,36,0.5)", bg: "rgba(120,53,15,0.2)", text: "#fde68a" },
+  stopped: { accent: COLORS.gray, border: "rgba(148,163,184,0.3)", bg: "rgba(30,41,59,0.22)", text: "#cbd5e1" },
+  idle: { accent: COLORS.green, border: "rgba(52,211,153,0.34)", bg: "rgba(6,78,59,0.16)", text: "#bbf7d0" },
+  unknown: { accent: COLORS.gray, border: "rgba(148,163,184,0.28)", bg: "rgba(30,41,59,0.2)", text: "#cbd5e1" },
 };
 
 function epochLabel(value) {
@@ -78,82 +96,172 @@ function StatusIcon({ tone }) {
   return <HourglassEmptyRoundedIcon sx={{ fontSize: 18, color: COLORS.gray }} />;
 }
 
-const WorkerNode = memo(({ data }) => {
-  const tone = statusTone(data.status);
-  const opacity = tone === "stopped" || tone === "failed" ? 0.72 : 1;
+function toneColor(tone) {
+  return TONE_COLORS[tone] || TONE_COLORS.unknown;
+}
+
+function edgeColor(tone) {
+  return toneColor(tone).accent;
+}
+
+function statusLabel(status) {
+  return titleCase(status || "unknown");
+}
+
+function portHandleStyle(direction, tone) {
+  const color = edgeColor(tone);
+  const isInput = direction === "input";
+  return {
+    top: NODE_HEADER_HEIGHT + NODE_BODY_HEIGHT - 24,
+    left: isInput ? 0 : "auto",
+    right: isInput ? "auto" : 0,
+    width: 14,
+    height: 14,
+    borderRadius: "50%",
+    border: `2px solid ${color}`,
+    background: "rgba(8,17,31,0.98)",
+    boxShadow: `0 0 0 2px rgba(8,17,31,0.98), 0 0 0 1px ${color}66`,
+    transform: isInput ? "translate(-50%, -50%)" : "translate(50%, -50%)",
+    zIndex: 8,
+  };
+}
+
+function PortLabel({ side, children }) {
   return (
-    <Box
+    <Typography
       sx={{
-        width: 260,
-        minHeight: 112,
-        borderRadius: 2,
-        border: `1px solid ${tone === "failed" ? "rgba(251,113,133,0.5)" : COLORS.border}`,
-        background: COLORS.panel,
-        boxShadow: "0 18px 44px rgba(2,8,23,0.34)",
-        p: 1.4,
-        opacity,
+        position: "absolute",
+        bottom: 18,
+        [side]: 18,
+        color: "#dbeafe",
+        fontSize: "0.72rem",
+        fontWeight: 500,
+        lineHeight: 1,
       }}
     >
-      <Box sx={{ display: "flex", alignItems: "center", gap: 0.9 }}>
-        <StatusIcon tone={tone} />
-        <Box sx={{ minWidth: 0 }}>
+      {children}
+    </Typography>
+  );
+}
+
+function WorkflowLikeCard({ data, children, outputLabel, inputLabel, onClick }) {
+  const tone = statusTone(data.status);
+  const colors = toneColor(tone);
+  const terminal = tone === "stopped" || tone === "failed";
+  return (
+    <Box
+      onClick={onClick}
+      sx={{
+        width: NODE_WIDTH,
+        minHeight: NODE_HEADER_HEIGHT + NODE_BODY_HEIGHT,
+        borderRadius: "10px",
+        border: `1px solid ${colors.border}`,
+        background:
+          `radial-gradient(110% 120% at 0% 0%, ${colors.accent}22, transparent 52%), ` +
+          "radial-gradient(110% 120% at 100% 0%, rgba(192,132,252,0.14), transparent 56%), " +
+          "rgba(9,14,27,0.96)",
+        color: COLORS.text,
+        boxShadow: `0 0 0 1px ${colors.border} inset, 0 18px 36px rgba(2,8,23,0.34)`,
+        opacity: terminal ? 0.68 : 1,
+        position: "relative",
+        overflow: "visible",
+        cursor: onClick ? "pointer" : "default",
+      }}
+    >
+      {inputLabel ? (
+        <>
+          <Handle id="input" type="target" position={Position.Left} className="borealis-handle" style={portHandleStyle("input", tone)} />
+          <PortLabel side="left">{inputLabel}</PortLabel>
+        </>
+      ) : null}
+      {outputLabel ? (
+        <>
+          <Handle id="output" type="source" position={Position.Right} className="borealis-handle" style={portHandleStyle("output", tone)} />
+          <PortLabel side="right">{outputLabel}</PortLabel>
+        </>
+      ) : null}
+      <Box
+        className="borealis-node-header"
+        sx={{
+          height: NODE_HEADER_HEIGHT,
+          px: 1.55,
+          borderBottom: "1px solid rgba(148,163,184,0.12)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 1,
+          background: `linear-gradient(135deg, ${colors.accent}22 0%, rgba(15,23,42,0.35) 65%, rgba(15,23,42,0.55) 100%)`,
+          borderTopLeftRadius: "10px",
+          borderTopRightRadius: "10px",
+        }}
+      >
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.9, minWidth: 0 }}>
+          <StatusIcon tone={tone} />
           <Tooltip title={data.label || ""} placement="top-start">
-            <Typography sx={{ color: COLORS.text, fontSize: "0.86rem", fontWeight: 700, lineHeight: 1.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 210 }}>
+            <Typography sx={{ color: "#f8fafc", fontSize: "0.88rem", fontWeight: 700, lineHeight: 1.15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {data.label}
             </Typography>
           </Tooltip>
-          <Typography sx={{ color: COLORS.muted, fontSize: "0.72rem", lineHeight: 1.25, mt: 0.25 }}>
-            {data.detail}
-          </Typography>
+        </Box>
+        <Box
+          sx={{
+            borderRadius: 999,
+            border: `1px solid ${colors.border}`,
+            bgcolor: colors.bg,
+            color: colors.text,
+            px: 0.85,
+            py: 0.25,
+            fontSize: "0.62rem",
+            fontWeight: 700,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {statusLabel(data.status)}
         </Box>
       </Box>
-      <Box sx={{ mt: 1.1, display: "flex", flexWrap: "wrap", gap: 0.7 }}>
+      <Box sx={{ height: NODE_BODY_HEIGHT, px: 1.4, py: 1.2, position: "relative" }}>
+        {children}
+      </Box>
+    </Box>
+  );
+}
+
+const WorkerNode = memo(({ data }) => {
+  return (
+    <WorkflowLikeCard data={data} outputLabel="Work">
+      <Box sx={{ minWidth: 0 }}>
+        <Typography sx={{ color: COLORS.muted, fontSize: "0.74rem", lineHeight: 1.25 }}>
+          {data.detail}
+        </Typography>
+      </Box>
+      <Box sx={{ mt: 1.05, display: "flex", flexWrap: "wrap", gap: 0.65, pr: 4 }}>
         {data.badges.map((badge) => (
-          <Box key={badge} sx={{ borderRadius: 999, border: "1px solid rgba(148,163,184,0.2)", px: 0.85, py: 0.35, color: COLORS.muted, fontSize: "0.68rem", lineHeight: 1 }}>
+          <Box key={badge} sx={{ borderRadius: 999, border: "1px solid rgba(148,163,184,0.24)", background: "rgba(15,23,42,0.42)", px: 0.85, py: 0.32, color: COLORS.muted, fontSize: "0.67rem", lineHeight: 1 }}>
             {badge}
           </Box>
         ))}
       </Box>
-    </Box>
+    </WorkflowLikeCard>
   );
 });
 
 const TaskNode = memo(({ data }) => {
-  const tone = statusTone(data.status);
   const canOpen = Boolean(data.path);
   return (
     <Tooltip title={canOpen ? "Open task" : data.error || ""} placement="top">
-      <Box
-        onClick={canOpen ? data.onOpen : undefined}
-        sx={{
-          width: 248,
-          minHeight: 94,
-          borderRadius: 2,
-          border: `1px solid ${
-            tone === "success" ? "rgba(52,211,153,0.46)" : tone === "failed" ? "rgba(251,113,133,0.52)" : COLORS.border
-          }`,
-          background: "rgba(10,16,31,0.94)",
-          p: 1.25,
-          cursor: canOpen ? "pointer" : "default",
-          boxShadow: "0 14px 34px rgba(2,8,23,0.28)",
-        }}
-      >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 0.85 }}>
-          <StatusIcon tone={tone} />
-          <Box sx={{ minWidth: 0 }}>
-            <Typography sx={{ color: COLORS.text, fontSize: "0.82rem", fontWeight: 700, lineHeight: 1.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 195 }}>
-              {data.label}
-            </Typography>
-            <Typography sx={{ color: COLORS.muted, fontSize: "0.7rem", mt: 0.25 }}>
+      <Box>
+        <WorkflowLikeCard data={data} inputLabel="Claim" outputLabel="Result" onClick={canOpen ? data.onOpen : undefined}>
+          <Box sx={{ minWidth: 0, pr: 4 }}>
+            <Typography sx={{ color: COLORS.muted, fontSize: "0.72rem", lineHeight: 1.25 }}>
               {data.detail}
             </Typography>
+            {data.error ? (
+              <Typography sx={{ color: COLORS.red, fontSize: "0.68rem", mt: 0.8, lineHeight: 1.25, maxHeight: 34, overflow: "hidden" }}>
+                {data.error}
+              </Typography>
+            ) : null}
           </Box>
-        </Box>
-        {data.error ? (
-          <Typography sx={{ color: COLORS.red, fontSize: "0.68rem", mt: 0.8, lineHeight: 1.25, maxHeight: 34, overflow: "hidden" }}>
-            {data.error}
-          </Typography>
-        ) : null}
+        </WorkflowLikeCard>
       </Box>
     </Tooltip>
   );
@@ -183,7 +291,7 @@ export function buildGraph(payload, navigate) {
     return {
       id: `worker:${worker?.worker_guid || worker?.container_name || index}`,
       type: "worker",
-      position: { x: index * 330, y: 40 },
+      position: { x: WORKER_COLUMN_X, y: WORKER_START_Y + index * NODE_ROW_GAP },
       data: {
         label: worker?.container_name || worker?.worker_guid || (isManager ? "Job Scheduler" : `Site Worker ${siteId}`),
         detail: `${titleCase(worker?.status || "unknown")} · started ${epochLabel(worker?.started_at)}`,
@@ -208,7 +316,7 @@ export function buildGraph(payload, navigate) {
       workerNodes.push({
         id: placeholderId,
         type: "worker",
-        position: { x: workerNodes.length * 330, y: 40 },
+        position: { x: WORKER_COLUMN_X, y: WORKER_START_Y + workerNodes.length * NODE_ROW_GAP },
         data: {
           label: siteId > 0 ? `Queued Site ${siteId}` : "Queued Manager Work",
           detail: "waiting for worker claim",
@@ -230,6 +338,9 @@ export function buildGraph(payload, navigate) {
 
   const taskNodes = [];
   const edges = [];
+  workerNodes.forEach((workerNode, index) => {
+    workerNode.position = { x: WORKER_COLUMN_X, y: WORKER_START_Y + index * NODE_ROW_GAP };
+  });
   workerNodes.forEach((workerNode) => {
     const tasks = tasksByWorker.get(workerNode.id) || [];
     tasks.forEach((work, taskIndex) => {
@@ -244,7 +355,7 @@ export function buildGraph(payload, navigate) {
       taskNodes.push({
         id: nodeId,
         type: "task",
-        position: { x: workerNode.position.x + 36, y: 210 + taskIndex * 128 },
+        position: { x: workerNode.position.x + TASK_COLUMN_GAP * (taskIndex + 1), y: workerNode.position.y },
         data: {
           label,
           detail: detailParts.join(" · "),
@@ -256,16 +367,33 @@ export function buildGraph(payload, navigate) {
         draggable: false,
       });
       const tone = statusTone(work?.status);
+      const color = edgeColor(tone);
       edges.push({
         id: `edge:${workerNode.id}:${nodeId}`,
         source: workerNode.id,
         target: nodeId,
+        sourceHandle: "output",
+        targetHandle: "input",
         animated: tone === "running" || tone === "queued",
-        type: "smoothstep",
-        markerEnd: { type: MarkerType.ArrowClosed, color: tone === "success" ? COLORS.green : tone === "failed" ? COLORS.red : COLORS.blue },
+        type: "bezier",
+        label: statusLabel(work?.status),
+        labelStyle: {
+          fill: color,
+          fontSize: 12,
+          fontWeight: 700,
+        },
+        labelBgStyle: {
+          fill: "rgba(8,17,31,0.94)",
+          stroke: color,
+          strokeWidth: 1,
+        },
+        labelBgPadding: [10, 5],
+        labelBgBorderRadius: 999,
+        markerEnd: { type: MarkerType.ArrowClosed, color },
         style: {
-          stroke: tone === "success" ? COLORS.green : tone === "failed" ? COLORS.red : COLORS.blue,
+          stroke: color,
           strokeWidth: 2,
+          strokeDasharray: "6 3",
         },
       });
     });
@@ -377,7 +505,7 @@ export default function ActiveSiteWorkersCanvas({ active }) {
           elementsSelectable
           proOptions={{ hideAttribution: true }}
         >
-          <Background color="rgba(148,163,184,0.18)" gap={24} />
+          <Background variant="lines" color="rgba(255,255,255,0.2)" gap={65} size={1} />
           <Controls showInteractive={false} />
         </ReactFlow>
       </Box>

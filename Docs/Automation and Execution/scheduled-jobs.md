@@ -184,6 +184,8 @@ Supported schedule types (from the scheduler core):
 ### Retention and cleanup
 - Retention defaults to 30 days and is configured by `BOREALIS_JOB_HISTORY_DAYS`.
 - Purging is done inside the scheduler tick loop.
+- Site worker lifecycle rows are separate from scheduled job history. Terminal `site-worker-*` rows are kept for the worker canvas history window, then pruned by `job-scheduler`; default is 10 minutes via `BOREALIS_WORKER_HISTORY_SECONDS`.
+- `GET /api/server/workers?history_seconds=600` uses the same history window for stopped/lost worker visibility, so old terminal rows with missing `stopped_at` no longer remain visible forever.
 
 ### Failure and retry notes
 - The scheduler is designed to be resilient; it logs and continues on errors.

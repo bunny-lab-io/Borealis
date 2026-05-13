@@ -9,6 +9,7 @@ from .queue import (
     enqueue_onboarding_run,
     enqueue_service_action,
     list_worker_snapshots,
+    prune_worker_history,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "enqueue_onboarding_run",
     "enqueue_service_action",
     "list_worker_snapshots",
+    "prune_worker_history",
 ]

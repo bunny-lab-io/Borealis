@@ -1355,7 +1355,7 @@ def _build_overview_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]
 def _collect_worker_payload(adapters: "EngineServiceAdapters", *, history_seconds: int = 600) -> Dict[str, Any]:
     conn = adapters.db_conn_factory()
     try:
-        rows = list_worker_snapshots(conn)
+        rows = list_worker_snapshots(conn, include_stopped_since=history_seconds)
         active_work = list_active_work_items(conn)
         recent_work = list_recent_work_items(conn, history_seconds=history_seconds)
         conn.commit()

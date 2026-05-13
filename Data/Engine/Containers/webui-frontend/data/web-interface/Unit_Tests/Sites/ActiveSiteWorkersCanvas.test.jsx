@@ -42,6 +42,9 @@ describe("active site workers canvas mapping", () => {
     expect(taskNode?.type).toBe("task");
     expect(taskNode?.data.status).toBe("succeeded");
     expect(statusTone(taskNode?.data.status)).toBe("success");
+    expect(edge?.label).toBe("Succeeded");
+    expect(edge?.sourceHandle).toBe("output");
+    expect(edge?.targetHandle).toBe("input");
     expect(edge?.animated).toBe(false);
   });
 

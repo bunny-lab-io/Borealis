@@ -671,6 +671,7 @@ finally:
 - Task-scheduler worker reconciliation.
 - Notes:
 - Worker container names use random UUIDs (`site-worker-<uuid>`) and do not include site names.
+- Terminal site-worker rows are lifecycle records, not job history. `job-scheduler` prunes stopped/lost site workers after `BOREALIS_WORKER_HISTORY_SECONDS` (default 600 seconds), and `/api/server/workers?history_seconds=600` hides old terminal rows even if legacy rows lack `stopped_at`.
 
 #### `job_scheduler_service_snapshots`
 - Status: Active.

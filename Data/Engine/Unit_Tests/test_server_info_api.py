@@ -21,7 +21,7 @@ from cryptography.x509.oid import NameOID
 from Data.Engine.services.API.server import info as server_info_api
 from Data.Engine.services.RemoteDesktop.vnc_sessions import ensure_vnc_collaboration_manager
 from Data.Engine.services.ansible import runtime_settings as ansible_runtime_settings
-from Data.Engine.services.job_scheduler.queue import ensure_job_scheduler_tables
+from Data.Engine.services.job_scheduler.queue import ensure_job_scheduler_tables, prune_worker_history
 from Data.Engine.services.WebSocket.__init__ import OperatorPresenceRegistry
 
 from .conftest import EngineTestHarness
@@ -324,6 +324,42 @@ def test_server_workers_includes_recent_terminal_work(engine_harness: EngineTest
     assert recent["kind"] == "scheduled_run"
     assert recent["status"] == "succeeded"
     assert recent["task_link"]["path"] == "/jobs/55?tab=job_history"
+
+
+def test_worker_history_prunes_old_terminal_site_workers(engine_harness: EngineTestHarness) -> None:
+    now = int(time.time())
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        ensure_job_scheduler_tables(conn)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO job_scheduler_workers(
+                worker_guid, container_name, site_id, status, started_at, last_seen_at,
+                current_lanes_json, claimed_count, task_links_json, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "old-worker",
+                "site-worker-old",
+                4,
+                "stopped",
+                now - 7200,
+                now - 7200,
+                "[]",
+                1,
+                "[]",
+                now - 7200,
+                now - 7200,
+            ),
+        )
+        deleted = prune_worker_history(conn, retention_seconds=600)
+        conn.commit()
+        assert deleted == 1
+        cur.execute("SELECT COUNT(*) FROM job_scheduler_workers WHERE worker_guid='old-worker'")
+        assert int(cur.fetchone()[0]) == 0
+    finally:
+        conn.close()
 
 
 def test_server_overview_includes_active_vnc_sessions(engine_harness: EngineTestHarness, monkeypatch) -> None:
