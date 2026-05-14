@@ -26,7 +26,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
   `.\Data\Agent\dist\windows-amd64\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Non-interactive server URL + enrollment example:
   `C:\Borealis\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
-- Linux Go Agent builds to `Data/Agent/dist/linux-amd64/Agent.exe` and installs as a systemd service with `--install-service`; Linux bootstrap parity remains tracked in `Data/Agent/Golang_Agent_Migration.md`.
+- Linux Go Agent builds to `Data/Agent/dist/linux-amd64/Agent` and installs as a systemd service with `--install-service`; Linux bootstrap parity remains tracked in `Data/Agent/Golang_Agent_Migration.md`.
 - Linux Agent one-line installs use a root check: root shells pipe to `bash`; non-root shells use `sudo bash` before the script starts.
 - Do not install the Linux Agent into a deployed Engine runtime root. Keep the installed Agent binary and `config.json` in a dedicated Agent install directory.
 

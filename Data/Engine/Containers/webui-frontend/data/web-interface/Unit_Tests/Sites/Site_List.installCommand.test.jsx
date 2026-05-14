@@ -9,7 +9,7 @@ describe("site install command builder", () => {
       "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
     );
 
-    expect(command).toContain("Data/Agent/dist/linux-amd64/Agent.exe");
+    expect(command).toContain("Data/Agent/dist/linux-amd64/Agent");
     expect(command).toContain('if [ "$(id -u)" -eq 0 ]; then "$borealisAgent"');
     expect(command).toContain('else sudo "$borealisAgent"');
     expect(command).not.toContain("| sudo bash");
@@ -26,7 +26,7 @@ describe("site install command builder", () => {
       "feature/proxmox-agent"
     );
 
-    expect(command).toContain("/refs/heads/feature/proxmox-agent/Data/Agent/dist/linux-amd64/Agent.exe");
+    expect(command).toContain("/refs/heads/feature/proxmox-agent/Data/Agent/dist/linux-amd64/Agent");
     expect(command).not.toContain("--repo-branch");
   });
 

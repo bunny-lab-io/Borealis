@@ -87,10 +87,10 @@ if ($status -eq 0) {
     $status = Invoke-Go -GoPath $Go -Arguments @("test", "./...")
 }
 if ($status -eq 0) {
-    $status = Invoke-Go -GoPath $Go -Arguments @("build", "-trimpath", "-o", (Join-Path $ResultsDir "Agent-windows-amd64.exe"), "./cmd/agent") -EnvVars @{ GOOS = "windows"; GOARCH = "amd64"; CGO_ENABLED = "0" }
+    $status = Invoke-Go -GoPath $Go -Arguments @("build", "-trimpath", "-buildvcs=false", "-o", (Join-Path $ResultsDir "Agent-windows-amd64.exe"), "./cmd/agent") -EnvVars @{ GOOS = "windows"; GOARCH = "amd64"; CGO_ENABLED = "0" }
 }
 if ($status -eq 0) {
-    $status = Invoke-Go -GoPath $Go -Arguments @("build", "-trimpath", "-o", (Join-Path $ResultsDir "Agent-linux-amd64.exe"), "./cmd/agent") -EnvVars @{ GOOS = "linux"; GOARCH = "amd64"; CGO_ENABLED = "0" }
+    $status = Invoke-Go -GoPath $Go -Arguments @("build", "-trimpath", "-buildvcs=false", "-o", (Join-Path $ResultsDir "Agent-linux-amd64"), "./cmd/agent") -EnvVars @{ GOOS = "linux"; GOARCH = "amd64"; CGO_ENABLED = "0" }
 }
 
 if ($status -ne 0) {

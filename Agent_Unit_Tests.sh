@@ -132,8 +132,8 @@ else
     cd "${PROJECT_ROOT}/Data/Agent"
     "$GO_BIN" mod tidy
     "$GO_BIN" test ./...
-    GOOS=windows GOARCH=amd64 CGO_ENABLED=0 "$GO_BIN" build -trimpath -o "${RESULT_DIR}/Agent-windows-amd64.exe" ./cmd/agent
-    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "$GO_BIN" build -trimpath -o "${RESULT_DIR}/Agent-linux-amd64.exe" ./cmd/agent
+    GOOS=windows GOARCH=amd64 CGO_ENABLED=0 "$GO_BIN" build -trimpath -buildvcs=false -o "${RESULT_DIR}/Agent-windows-amd64.exe" ./cmd/agent
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "$GO_BIN" build -trimpath -buildvcs=false -o "${RESULT_DIR}/Agent-linux-amd64" ./cmd/agent
   } >"$GO_AGENT_LOG" 2>&1
   status=$?
 fi

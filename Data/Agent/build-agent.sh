@@ -80,8 +80,8 @@ mkdir -p "${output_root}/windows-amd64" "${output_root}/linux-amd64"
 (
   cd "${script_dir}"
   "${go_cmd}" mod tidy
-  GOOS=windows GOARCH=amd64 CGO_ENABLED=0 "${go_cmd}" build -trimpath -ldflags="-s -w -X main.version=${version_value}" -o "${output_root}/windows-amd64/Agent.exe" ./cmd/agent
-  GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "${go_cmd}" build -trimpath -ldflags="-s -w -X main.version=${version_value}" -o "${output_root}/linux-amd64/Agent.exe" ./cmd/agent
+  GOOS=windows GOARCH=amd64 CGO_ENABLED=0 "${go_cmd}" build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=${version_value}" -o "${output_root}/windows-amd64/Agent.exe" ./cmd/agent
+  GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "${go_cmd}" build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=${version_value}" -o "${output_root}/linux-amd64/Agent" ./cmd/agent
 )
 
 printf 'Built Go Agent binaries under %s\n' "${output_root}"

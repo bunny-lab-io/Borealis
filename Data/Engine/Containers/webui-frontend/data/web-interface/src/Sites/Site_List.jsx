@@ -445,7 +445,7 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
   }
 
   if (osId === "linux") {
-    const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/linux-amd64/Agent.exe");
+    const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/linux-amd64/Agent");
     const urlArg = usesDefaultBranch ? agentUrl : quoteShellValue(agentUrl);
     const launchArgs = `--server-url "${escapeShellDoubleQuoted(normalizedServerUrl)}" ` +
       `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}" --install-service`;

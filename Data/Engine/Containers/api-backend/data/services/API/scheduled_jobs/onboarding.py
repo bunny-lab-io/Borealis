@@ -2923,7 +2923,7 @@ class OnboardingSchedulerMixin:
         run_id: int,
         target: str,
     ) -> str:
-        agent_url = f"https://raw.githubusercontent.com/bunny-lab-io/Borealis/{branch}/Data/Agent/dist/linux-amd64/Agent.exe"
+        agent_url = f"https://raw.githubusercontent.com/bunny-lab-io/Borealis/{branch}/Data/Agent/dist/linux-amd64/Agent"
         env_parts = [
             f"BOREALIS_ONBOARDING_JOB_ID={shlex.quote(str(int(job_id)))}",
             f"BOREALIS_ONBOARDING_RUN_ID={shlex.quote(str(int(run_id)))}",

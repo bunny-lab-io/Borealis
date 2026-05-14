@@ -7,7 +7,7 @@ Back to Docs Index: ../../Docs/index.md
 1. Agent source now lives under `Data/Agent`; legacy Python agent source moved to `Data/Agent_Old`.
 2. Fresh install runtime is one compiled Go binary named `Agent.exe`.
 3. Windows `Agent.exe` owns bootstrap, deployment, repair, update checks, service task registration, and runtime execution.
-4. Linux `Agent.exe` owns runtime execution and systemd service install/uninstall; Linux bootstrap parity is tracked as pending.
+4. Linux `Agent` owns runtime execution and systemd service install/uninstall; Linux bootstrap parity is tracked as pending.
 5. Installed runtime uses one `config.json` beside `Agent.exe`.
 6. `config.json` stores keys, tokens, trust material, enrollment code, runtime flags, and agent identity.
 7. `config.json` protection uses filesystem permissions only: Windows ACL for SYSTEM/Administrators and Linux root-owned `0600` with parent `0700`.
@@ -35,7 +35,7 @@ Back to Docs Index: ../../Docs/index.md
 16. Agent self-update and release channels.
 17. Tray UI/status, optional later.
 18. Legacy macros/node screenshot, decide retire vs port.
-19. Linux deployment/bootstrap parity with Windows Agent.exe.
+19. Linux deployment/bootstrap parity with Windows `Agent.exe`.
 
 ## Completed
 
@@ -57,7 +57,7 @@ Back to Docs Index: ../../Docs/index.md
 16. Updated Engine onboarding lookup paths and install commands to use Go Agent artifacts under `Data/Agent/dist`.
 17. Updated Agent runtime/security/testing docs for Go Agent, `config.json`, and legacy source relocation.
 18. Updated SBOM Agent dependency inventory for Go runtime dependencies.
-19. Built Windows and Linux `Agent.exe` artifacts under `Data/Agent/dist`.
+19. Built Windows `Agent.exe` and Linux `Agent` artifacts under `Data/Agent/dist`.
 
 ## In Progress
 
@@ -78,7 +78,7 @@ Back to Docs Index: ../../Docs/index.md
 8. Implement remote shell over WireGuard in Go.
 9. Implement VNC lifecycle and credential broker in Go.
 10. Implement full release-channel update format and Engine artifact packaging for Go binaries.
-11. Implement Linux Agent.exe deployment/bootstrap parity.
+11. Implement Linux `Agent` deployment/bootstrap parity.
 12. Decide whether macros/node screenshot should be retired or ported.
 13. Rework tray UI/status as optional Go/native helper or external UI.
 14. Add fake Engine HTTP/Socket.IO harness coverage for live `connect_agent` and `quick_job_run`.
