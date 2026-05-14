@@ -1,35 +1,19 @@
 # Borealis SBOM
 
-This software bill of materials is an inventory of the direct, repo-declared, bundled, container base image, or script-installed third-party software used by Borealis. It was assembled from `Agent.exe`, `Engine.sh`, `Agent.sh`, `Data/Agent/agent-requirements.txt`, `Data/Engine/Containers/api-backend/data/engine-requirements.txt`, `Data/Engine/Containers/webui-frontend/data/web-interface/package.json`, `Data/Engine/Containers/api-backend/data/Ansible/collections.yml`, and `Data/Engine/Containers/`.
+This software bill of materials is an inventory of the direct, repo-declared, bundled, container base image, or script-installed third-party software used by Borealis. It was assembled from `Agent.exe`, `Engine.sh`, `Data/Agent/go.mod`, `Data/Engine/Containers/api-backend/data/engine-requirements.txt`, `Data/Engine/Containers/webui-frontend/data/web-interface/package.json`, `Data/Engine/Containers/api-backend/data/Ansible/collections.yml`, and `Data/Engine/Containers/`.
 
 The Python requirement files are currently unpinned, so the exact resolved version can change between installs. Where the install scripts pin a version explicitly, that version is called out below.
 
 ## Borealis Agent Dependencies
 
-- Python (system Python on Linux; Windows bootstrap downloads Python 3.13.3 NuGet package, MSI packages, and installer fallback) - PSF License - https://docs.python.org/3/license.html
-- requests - Apache-2.0 - https://spdx.org/licenses/Apache-2.0.html
-- python-socketio - MIT - https://spdx.org/licenses/MIT.html
-- websocket-client - Apache-2.0 - https://spdx.org/licenses/Apache-2.0.html
-- eventlet - MIT - https://spdx.org/licenses/MIT.html
-- aiohttp - Apache-2.0 AND MIT - https://github.com/aio-libs/aiohttp/blob/master/LICENSE.txt
-- cryptography - Apache-2.0 OR BSD-3-Clause - https://github.com/pyca/cryptography/blob/main/LICENSE
-- PySide6 - LGPL-3.0-only OR GPL-3.0-only - https://doc.qt.io/qt-6/licensing.html
-- qasync - BSD-2-Clause - https://github.com/CabbageDevelopment/qasync/blob/master/LICENSE
-- opencv-python - Apache-2.0 - https://spdx.org/licenses/Apache-2.0.html
-- Pillow - MIT-CMU - https://github.com/python-pillow/Pillow/blob/main/LICENSE
-- pywinauto - BSD-3-Clause - https://spdx.org/licenses/BSD-3-Clause.html
-- sounddevice - MIT - https://spdx.org/licenses/MIT.html
-- numpy - BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 - https://github.com/numpy/numpy/blob/main/LICENSE.txt
-- pywin32 (Windows only) - PSF License - https://github.com/mhammond/pywin32/blob/main/LICENSE.txt
-- psutil - BSD-3-Clause - https://spdx.org/licenses/BSD-3-Clause.html
+- Go standard library/runtime (compiled into `Agent.exe`) - BSD-3-Clause - https://go.dev/LICENSE
+- github.com/gorilla/websocket v1.5.3 - BSD-2-Clause - https://github.com/gorilla/websocket/blob/main/LICENSE
+- golang.org/x/sys v0.28.0 - BSD-3-Clause - https://cs.opensource.google/go/x/sys/+/master:LICENSE
 - WireGuard (Windows MSI package 1.1 / client 0.5.3 and Linux `wireguard-tools`) - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
 - UltraVNC Server 1.8.2.1 - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
-- MinGit 2.47.1 (Windows bootstrap only) - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
-- curl (vendored Windows download helper) - curl license - https://curl.se/docs/copyright.html
-- 7-Zip CLI (vendored Windows archive helper) - LGPL-2.1-or-later with unRAR restriction - https://www.7-zip.org/license.txt
 - Go toolchain (native Linux build helper installs official Go into `Dependencies/Go` when missing) - BSD-3-Clause - https://go.dev/LICENSE
-- golang.org/x/sys v0.28.0 (Windows service APIs for `Agent.exe`) - BSD-3-Clause - https://cs.opensource.google/go/x/sys/+/master:LICENSE
-- github.com/akavel/rsrc v0.10.2 (Windows PE resource generator used to embed `Borealis.ico` into `Agent.exe`) - MIT - https://github.com/akavel/rsrc/blob/master/LICENSE.txt
+
+Legacy Python Agent dependencies live under `Data/Agent_Old` for migration reference only and are not part of the installed Go Agent runtime.
 
 ## Borealis Engine Dependencies
 

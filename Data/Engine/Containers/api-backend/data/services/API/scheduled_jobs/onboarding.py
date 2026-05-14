@@ -2923,7 +2923,7 @@ class OnboardingSchedulerMixin:
         run_id: int,
         target: str,
     ) -> str:
-        agent_url = f"https://raw.githubusercontent.com/bunny-lab-io/Borealis/{branch}/Agent.sh"
+        agent_url = f"https://raw.githubusercontent.com/bunny-lab-io/Borealis/{branch}/Data/Agent/dist/linux-amd64/Agent.exe"
         env_parts = [
             f"BOREALIS_ONBOARDING_JOB_ID={shlex.quote(str(int(job_id)))}",
             f"BOREALIS_ONBOARDING_RUN_ID={shlex.quote(str(int(run_id)))}",
@@ -2932,14 +2932,11 @@ class OnboardingSchedulerMixin:
             "BOREALIS_AGENT_NO_TTY=1",
         ]
         args = [
-            "--repo-branch",
-            branch,
-            "deploy",
-            "--serverurl",
+            "--server-url",
             server_url,
-            "--enrollmentcode",
+            "--site-enrollment-code",
             enrollment_code,
-            "--newEngine",
+            "--install-service",
         ]
         quoted_args = " ".join(shlex.quote(str(arg)) for arg in args)
         quoted_url = shlex.quote(agent_url)
@@ -2957,9 +2954,9 @@ class OnboardingSchedulerMixin:
                 f"elif command -v wget >/dev/null 2>&1; then wget -qO \"$tmp_file\" {quoted_url}; "
                 "else echo 'curl_or_wget_required' >&2; exit 43; fi",
                 "chmod 700 \"$tmp_file\"",
-                f"if [ \"$(id -u)\" -eq 0 ]; then env {env_prefix} bash \"$tmp_file\" {quoted_args}; "
+                f"if [ \"$(id -u)\" -eq 0 ]; then env {env_prefix} \"$tmp_file\" {quoted_args}; "
                 f"else command -v sudo >/dev/null 2>&1 || {{ echo 'sudo_required' >&2; exit 44; }}; "
-                f"sudo -S -p {shlex.quote(sudo_marker)} env {env_prefix} bash \"$tmp_file\" {quoted_args}; fi",
+                f"sudo -S -p {shlex.quote(sudo_marker)} env {env_prefix} \"$tmp_file\" {quoted_args}; fi",
             ]
         )
 
@@ -3987,7 +3984,7 @@ class OnboardingSchedulerMixin:
         if exit_code != 0:
             detail = f"Agent install failed with exit code {exit_code}."
             if exit_code == 43:
-                detail = "Target needs curl or wget to download Agent.sh."
+                detail = "Target needs curl or wget to download Agent.exe."
             elif exit_code == 44:
                 detail = "Target user needs root or sudo for agent deployment."
             elif exit_code == 45:
@@ -4199,8 +4196,11 @@ class OnboardingSchedulerMixin:
             roots.insert(0, Path(env_root).expanduser())
         for root in roots:
             for candidate in (
+                root / "Data" / "Agent" / "dist" / "windows-amd64" / AGENT_EXE_NAME,
+                root / "Data" / "Agent" / AGENT_EXE_NAME,
                 root / "Data" / "Agent" / "Bootstrap" / AGENT_EXE_NAME,
                 root / "Engine" / "Services" / "api-backend" / "data" / "Data" / "Agent" / "Bootstrap" / AGENT_EXE_NAME,
+                root / "Engine" / "Services" / "api-backend" / "data" / "Data" / "Agent" / "dist" / "windows-amd64" / AGENT_EXE_NAME,
                 root / "Engine" / "Services" / "api-backend" / "data" / AGENT_EXE_NAME,
             ):
                 if candidate.is_file():
@@ -4213,7 +4213,7 @@ class OnboardingSchedulerMixin:
             "stdout": "",
             "stderr": (
                 f"{AGENT_EXE_NAME} unavailable. Build "
-                "Data/Agent/Bootstrap/Agent.exe, or set "
+                "Data/Agent/dist/windows-amd64/Agent.exe, or set "
                 "BOREALIS_WINDOWS_AGENT_EXE."
             ),
         }
@@ -4248,19 +4248,19 @@ class OnboardingSchedulerMixin:
         candidates.extend([current.parent, *current.parents])
         for candidate in candidates:
             probe = candidate / "Data" / "Agent"
-            if (probe / "agent.py").is_file():
+            if (probe / "go.mod").is_file() or (probe / "cmd" / "agent" / "main.go").is_file():
                 source_root = probe
                 project_root = candidate
                 break
             probe = candidate / "Data" / "Engine" / "Data" / "Agent"
-            if (probe / "agent.py").is_file():
+            if (probe / "go.mod").is_file() or (probe / "cmd" / "agent" / "main.go").is_file():
                 source_root = probe
                 project_root = candidate
                 break
         if source_root is None:
-            raise FileNotFoundError("Data/Agent/agent.py")
-        if not (source_root / "agent.py").is_file():
-            raise FileNotFoundError("Data/Agent/agent.py")
+            raise FileNotFoundError("Data/Agent/go.mod")
+        if not ((source_root / "go.mod").is_file() or (source_root / "cmd" / "agent" / "main.go").is_file()):
+            raise FileNotFoundError("Data/Agent/go.mod")
         local_branch = self._local_project_branch(project_root)
         if branch_ref and (
             (local_branch and local_branch.lower() != branch_ref.lower())
@@ -4269,7 +4269,7 @@ class OnboardingSchedulerMixin:
             source_root = self._download_windows_agent_payload_source(branch_ref)
         temp_dir = Path(tempfile.mkdtemp(prefix="borealis-agent-payload-"))
         bundle_path = temp_dir / "agent-payload.zip"
-        excluded_dirs = {"Unit_Tests", "Bootstrap", "Logs", "__pycache__", ".pytest_cache"}
+        excluded_dirs = {"Logs", "dist", "__pycache__", ".pytest_cache"}
         excluded_files: set[str] = set()
         with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for path in source_root.rglob("*"):
@@ -4313,9 +4313,9 @@ class OnboardingSchedulerMixin:
             archive.extractall(extract_root)
         for child in extract_root.iterdir():
             candidate = child / "Data" / "Agent"
-            if (candidate / "agent.py").is_file():
+            if (candidate / "go.mod").is_file() or (candidate / "cmd" / "agent" / "main.go").is_file():
                 return candidate
-        raise FileNotFoundError(f"Data/Agent/agent.py missing from branch {branch_ref}")
+        raise FileNotFoundError(f"Data/Agent/go.mod missing from branch {branch_ref}")
 
     def _windows_smb_stage_agent_exe(
         self,
