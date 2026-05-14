@@ -53,9 +53,15 @@ describe("site install command builder", () => {
 
     expect(command).toContain("Data/Agent/dist/windows-amd64/Agent.exe");
     expect(command).toContain('$ErrorActionPreference = "Stop"');
+    expect(command).toContain('Borealis-Agent-{0}.exe');
+    expect(command).toContain('([guid]::NewGuid().ToString("N"))');
+    expect(command).toContain("try {");
     expect(command).toContain("Invoke-WebRequest -UseBasicParsing");
+    expect(command).toContain("Unblock-File -Path $borealisAgent");
+    expect(command).toContain("finally { Remove-Item $borealisAgent");
     expect(command).toContain('--server-url "https://borealis.example.com"');
     expect(command).toContain('--site-enrollment-code "CODE-1234"');
+    expect(command).not.toContain("Data/Agent/Bootstrap/Agent.exe");
     expect(command).not.toContain(".ps1");
     expect(command).not.toContain("--serverurl");
     expect(command).not.toContain("--enrollmentcode");

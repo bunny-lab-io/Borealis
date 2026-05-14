@@ -439,10 +439,13 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
   if (osId === "windows") {
     const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/windows-amd64/Agent.exe");
     return `$ErrorActionPreference = "Stop"; ` +
-      `$borealisAgent = Join-Path $env:TEMP "Borealis-Agent.exe"; ` +
+      `$borealisAgent = Join-Path $env:TEMP ("Borealis-Agent-{0}.exe" -f ([guid]::NewGuid().ToString("N"))); ` +
+      `try { ` +
       `Invoke-WebRequest -UseBasicParsing -Uri ${quotePowerShellValue(agentUrl)} -OutFile $borealisAgent; ` +
+      `Unblock-File -Path $borealisAgent -ErrorAction SilentlyContinue; ` +
       `& $borealisAgent --server-url ${quotePowerShellValue(normalizedServerUrl)} ` +
-      `--site-enrollment-code ${quotePowerShellValue(normalizedEnrollmentCode)}`;
+      `--site-enrollment-code ${quotePowerShellValue(normalizedEnrollmentCode)} ` +
+      `} finally { Remove-Item $borealisAgent -Force -ErrorAction SilentlyContinue }`;
   }
 
   if (osId === "linux") {
