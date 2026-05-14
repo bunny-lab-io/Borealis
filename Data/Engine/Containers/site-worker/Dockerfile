@@ -25,7 +25,6 @@ RUN python -m pip install --upgrade pip \
 
 COPY Data/Engine/Containers/api-backend/data /opt/Borealis/Data/Engine
 COPY Data/Agent /opt/Borealis/Data/Agent
-COPY Data/Agent/Bootstrap/Agent.exe /opt/Borealis/Data/Agent/Bootstrap/Agent.exe
 COPY Data/Engine/Containers/site-worker/entrypoint.sh /usr/local/bin/borealis-site-worker
 
 RUN chmod +x /usr/local/bin/borealis-site-worker

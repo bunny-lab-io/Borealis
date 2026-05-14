@@ -37,7 +37,6 @@ RUN python -m pip install --upgrade pip \
 
 COPY Data/Engine/Containers/api-backend/data /opt/Borealis/Data/Engine
 COPY Data/Agent /opt/Borealis/Data/Agent
-COPY Data/Agent/Bootstrap/Agent.exe /opt/Borealis/Data/Agent/Bootstrap/Agent.exe
 COPY Data/Engine/Containers/api-backend/entrypoint.sh /usr/local/bin/borealis-api-backend
 COPY Data/Engine/Containers/api-backend/healthcheck.py /usr/local/bin/borealis-api-healthcheck
 
