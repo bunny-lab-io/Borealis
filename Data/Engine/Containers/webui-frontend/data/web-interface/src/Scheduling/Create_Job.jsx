@@ -31,6 +31,7 @@ import {
   Sync as SyncIcon,
   Timer as TimerIcon,
   Check as CheckIcon,
+  PlayArrow as PlayArrowIcon,
   Error as ErrorIcon,
   Refresh as RefreshIcon,
   Search as SearchIcon,
@@ -68,6 +69,7 @@ import "reactflow/dist/style.css";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { DirtyStatePill, DomainBadge } from "../Assemblies/Assembly_Badges";
+import AssemblyPicker from "../Assemblies/Assembly_Picker.jsx";
 import {
   buildAssemblyIndex,
   parseAssembliesCollectionPayload,
@@ -128,13 +130,17 @@ const CREATE_JOB_TAB_KEY_BY_URL = Object.freeze({
 const JOB_HISTORY_SUBTAB_URL_BY_KEY = Object.freeze({
   current: "current_run",
   historical: "historical_runs",
+  historical_run: "historical_run",
 });
 const JOB_HISTORY_SUBTAB_KEY_BY_URL = Object.freeze({
   current_run: "current",
   historical_runs: "historical",
+  historical_run: "historical_run",
   current: "current",
   historical: "historical",
+  historical_run: "historical_run",
 });
+const JOB_HISTORY_SUBTAB_KEYS = Object.freeze(["current", "historical", "historical_run"]);
 
 const ASSEMBLY_TYPE_FILTER_OPTIONS = [
   { key: "applications", label: "Applications", match: "applications" },
@@ -174,6 +180,7 @@ const gridTheme = themeQuartz.withParams({
 const gridThemeClass = gridTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans","Helvetica Neue",Arial,sans-serif';
 const iconFontFamily = '"Quartz Regular"';
+const BOREALIS_BLUE = "#58a6ff";
 const LEFT_ALIGN_CELL_STYLE = {
   display: "flex",
   alignItems: "center",
@@ -495,6 +502,27 @@ const normalizeJobStatusKey = (status) => {
 const getJobStatusSortRank = (status) => {
   const key = normalizeJobStatusKey(status);
   return JOB_STATUS_SORT_RANK[key] ?? JOB_STATUS_SORT_RANK.default;
+};
+
+const summarizeHistoricalRunStatus = (statuses = []) => {
+  const normalized = statuses.map((status) => normalizeJobStatusKey(status)).filter(Boolean);
+  if (!normalized.length) return "";
+  const count = (key) => normalized.filter((status) => status === key).length;
+  if (count("running")) return "running";
+  if (count("failed")) return "failed";
+  if (count("timed_out")) return "timed_out";
+  if (count("warning")) return "warning";
+  if (count("expired")) return "expired";
+  if (count("pending")) return "pending";
+  if (count("success")) return "success";
+  const allNoEligibleTargets = normalized.every((status) => status === "no_eligible_targets");
+  const allNoDevicesTargeted = normalized.every((status) => status === "no_devices_targeted");
+  if (allNoEligibleTargets) return "No Eligible Targets";
+  if (allNoDevicesTargeted) return "No Devices Targeted";
+  if (normalized.every((status) => ["skipped", "no_devices_targeted", "no_eligible_targets"].includes(status))) {
+    return "skipped";
+  }
+  return normalized[0] || "";
 };
 
 const isWorkflowComponentRecord = (component) => {
@@ -3006,6 +3034,21 @@ export default function CreateJob() {
   const [copiedOutputKey, setCopiedOutputKey] = useState("");
   const outputCopyResetRef = useRef(null);
   const [clearingHistory, setClearingHistory] = useState(false);
+  const [rerunningJob, setRerunningJob] = useState(false);
+  const [selectedHistoryOccurrence, setSelectedHistoryOccurrence] = useState(null);
+  const { activeKey: historySubTabKey, setActiveKey: setHistorySubTabKey } = useUrlTabState({
+    param: "history_view",
+    defaultKey: "current",
+    allowedKeys: JOB_HISTORY_SUBTAB_KEYS,
+    keyByUrl: JOB_HISTORY_SUBTAB_KEY_BY_URL,
+    urlByKey: JOB_HISTORY_SUBTAB_URL_BY_KEY,
+  });
+  const effectiveHistorySubTabKey =
+    historySubTabKey === "historical_run" && !selectedHistoryOccurrence ? "historical" : historySubTabKey;
+  const selectedHistoryRunLabel = useMemo(
+    () => (selectedHistoryOccurrence ? fmtTs(selectedHistoryOccurrence) : "Historical Run"),
+    [fmtTs, selectedHistoryOccurrence]
+  );
 
   useEffect(() => () => {
     if (outputCopyResetRef.current) {
@@ -3026,7 +3069,12 @@ export default function CreateJob() {
       if (!runsResp.ok) throw new Error(runs.error || `HTTP ${runsResp.status}`);
       if (!jobResp.ok) throw new Error(job.error || `HTTP ${jobResp.status}`);
       const jobPayload = job.job || {};
-      const occurrence = Number(jobPayload?.latest_occurrence || jobPayload?.last_run_ts || 0);
+      const latestOccurrence = Number(jobPayload?.latest_occurrence || jobPayload?.last_run_ts || 0);
+      const selectedOccurrence = Number(selectedHistoryOccurrence || 0);
+      const occurrence =
+        effectiveHistorySubTabKey === "historical_run" && selectedOccurrence
+          ? selectedOccurrence
+          : latestOccurrence;
       const devicesUrl = occurrence
         ? `/api/scheduled_jobs/${initialJob.id}/devices?occurrence=${occurrence}`
         : `/api/scheduled_jobs/${initialJob.id}/devices`;
@@ -3058,7 +3106,7 @@ export default function CreateJob() {
       setJobSummary({});
       setDeviceRows([]);
     }
-  }, [editing, initialJob?.id]);
+  }, [editing, effectiveHistorySubTabKey, initialJob?.id, selectedHistoryOccurrence]);
 
   useEffect(() => {
     if (!editing) return;
@@ -3073,6 +3121,7 @@ export default function CreateJob() {
     setClearingHistory(true);
     try {
       await fetch(`/api/scheduled_jobs/${initialJob.id}/runs`, { method: "DELETE" });
+      setSelectedHistoryOccurrence(null);
       await loadHistory();
     } catch {
       // no-op; page poll will reconcile if the delete fails silently
@@ -3118,33 +3167,14 @@ export default function CreateJob() {
         .map((s) => normalizeJobStatusKey(s))
         .filter(Boolean);
       if (!statuses.length) return;
-      const hasInFlight = statuses.some((s) => s === "running" || s === "pending");
-      if (hasInFlight) return;
-      const allSkipped = statuses.every((s) => ["skipped", "no_devices_targeted", "no_eligible_targets"].includes(s));
-      const allNoDevicesTargeted = statuses.every((s) => s === "no_devices_targeted");
-      const allNoEligibleTargets = statuses.every((s) => s === "no_eligible_targets");
-      const hasFailure = statuses.some((s) => ["failed", "expired", "timed_out"].includes(s));
-      const hasWarning = statuses.some((s) => s === "warning");
-      const hasSuccess = statuses.some((s) => s === "success");
-      const statusLabel = allSkipped
-        ? allNoEligibleTargets
-          ? "No Eligible Targets"
-          : allNoDevicesTargeted
-            ? "No Devices Targeted"
-            : "Skipped"
-        : hasFailure
-          ? "Failed"
-          : hasWarning
-            ? "Warning"
-            : hasSuccess
-              ? "Success"
-              : "Failed";
+      const ranOn = entry.started_ts || entry.scheduled_ts || entry.finished_ts || Number(entry.key || 0);
       summaries.push({
         key: entry.key,
+        ran_on: ranOn,
         scheduled_ts: entry.scheduled_ts,
         started_ts: entry.started_ts,
         finished_ts: entry.finished_ts,
-        status: statusLabel
+        status: summarizeHistoricalRunStatus(statuses)
       });
     });
     return summaries;
@@ -3152,39 +3182,61 @@ export default function CreateJob() {
 
   const sortedHistory = useMemo(() => {
     return [...aggregatedHistory].sort(
-      (a, b) => Number(b?.finished_ts || 0) - Number(a?.finished_ts || 0)
+      (a, b) => Number(b?.ran_on || b?.finished_ts || 0) - Number(a?.ran_on || a?.finished_ts || 0)
     );
   }, [aggregatedHistory]);
 
+  const openHistoricalRun = useCallback(
+    (row) => {
+      const occurrence = Number(row?.key || row?.scheduled_ts || row?.started_ts || row?.finished_ts || row?.ran_on || 0);
+      if (!Number.isFinite(occurrence) || occurrence <= 0) return;
+      setSelectedHistoryOccurrence(occurrence);
+      setHistorySubTabKey("historical_run");
+    },
+    [setHistorySubTabKey]
+  );
+
   const historySummaryComponents = useMemo(
     () => ({
+      HistoryRanOnRenderer: (params) => (
+        <Box
+          component="a"
+          href="#"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openHistoricalRun(params?.data);
+          }}
+          sx={{
+            color: "#58a6ff",
+            cursor: "pointer",
+            font: "inherit",
+            fontWeight: 700,
+            textDecoration: "none",
+            "&:hover": {
+              color: "#a8d4ff",
+              textDecoration: "none",
+            },
+          }}
+        >
+          {params.value ? fmtTs(params.value) : "-"}
+        </Box>
+      ),
       HistoryStatusRenderer: (params) => resultChip(params.value || ""),
     }),
-    [resultChip]
+    [fmtTs, openHistoricalRun, resultChip]
   );
   const historySummaryColumnDefs = useMemo(
     () => [
       {
-        field: "scheduled_ts",
-        headerName: "Scheduled",
-        minWidth: 180,
-        valueFormatter: (params) => (params.value ? fmtTs(params.value) : ""),
-      },
-      {
-        field: "started_ts",
-        headerName: "Started",
-        minWidth: 180,
-        valueFormatter: (params) => (params.value ? fmtTs(params.value) : ""),
-      },
-      {
-        field: "finished_ts",
-        headerName: "Finished",
-        minWidth: 180,
-        valueFormatter: (params) => (params.value ? fmtTs(params.value) : ""),
+        field: "ran_on",
+        headerName: "Ran On",
+        minWidth: 220,
+        cellRenderer: "HistoryRanOnRenderer",
       },
       {
         field: "status",
-        headerName: "Status",
+        headerName: "Job Status",
         minWidth: 140,
         cellRenderer: "HistoryStatusRenderer",
         cellClass: "status-pill-cell",
@@ -3192,7 +3244,7 @@ export default function CreateJob() {
         suppressHeaderMenuButton: true,
       },
     ],
-    [fmtTs]
+    []
   );
   const historySummaryDefaultColDef = useMemo(
     () => ({
@@ -3204,7 +3256,7 @@ export default function CreateJob() {
     []
   );
   const historySummaryGridApiRef = useRef(null);
-  const HISTORY_SUMMARY_AUTO_COLS = useRef(["scheduled_ts", "started_ts", "finished_ts", "status"]);
+  const HISTORY_SUMMARY_AUTO_COLS = useRef(["ran_on", "status"]);
   const handleHistorySummaryGridReady = useCallback((params) => {
     historySummaryGridApiRef.current = params.api;
     requestAnimationFrame(() => {
@@ -3250,6 +3302,9 @@ export default function CreateJob() {
   }, [deviceRows]);
 
   const statusCounts = useMemo(() => {
+    if (effectiveHistorySubTabKey === "historical_run") {
+      return deviceStatusCounts;
+    }
     const summaryKeys = ["pending", "running", "success", "warning", "failed", "expired", "timed_out", "skipped"];
     const hasSummaryCounts =
       Number((counts || {}).total_targets ?? 0) > 0 ||
@@ -3265,7 +3320,7 @@ export default function CreateJob() {
       };
     }
     return deviceStatusCounts;
-  }, [counts, deviceStatusCounts]);
+  }, [counts, deviceStatusCounts, effectiveHistorySubTabKey]);
 
   const statusNodeTypes = useMemo(() => ({ statusNode: StatusNode }), []);
 
@@ -3751,7 +3806,49 @@ export default function CreateJob() {
   );
   const jobHistoryGridColumnDefs = useMemo(
     () => [
-      { field: "hostname", headerName: "Hostname", minWidth: 200, filter: "agTextColumnFilter" },
+      {
+        field: "hostname",
+        headerName: "Hostname",
+        minWidth: 200,
+        filter: "agTextColumnFilter",
+        cellRenderer: (params) => {
+          const hostname = String(params?.value || params?.data?.hostname || "").trim();
+          if (!hostname) return null;
+          const raw = params?.data?.raw || {};
+          const deviceRouteId =
+            raw.device_guid ||
+            raw.guid ||
+            raw.agent_guid ||
+            params?.data?.deviceGuid ||
+            params?.data?.device_guid ||
+            hostname;
+          const targetPath = APP_PATHS.device(deviceRouteId);
+          const handleClick = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            navigate(targetPath, {
+              state: {
+                initialDevice: {
+                  ...raw,
+                  hostname,
+                  site_id: raw.site_id ?? params?.data?.site_id ?? null,
+                  site_name: raw.site_name || params?.data?.site || "",
+                },
+              },
+            });
+          };
+          return (
+            <a
+              href={targetPath}
+              onClick={handleClick}
+              title={hostname}
+              style={{ color: BOREALIS_BLUE, textDecoration: "none", fontWeight: 500 }}
+            >
+              {hostname}
+            </a>
+          );
+        },
+      },
       {
         field: "onlineLabel",
         headerName: "Status",
@@ -3795,7 +3892,7 @@ export default function CreateJob() {
         filter: "agSetColumnFilter",
       },
     ],
-    [fmtTs]
+    [fmtTs, navigate]
   );
   const jobHistoryGridDefaultColDef = useMemo(
     () => ({
@@ -4169,10 +4266,11 @@ export default function CreateJob() {
     if (editing) base.push({ key: "history", label: "Job History", icon: HistoryRoundedIcon });
     return base;
   }, [editing, isWorkflowJob]);
+  const tabDefKeys = useMemo(() => tabDefs.map((tabDef) => tabDef.key), [tabDefs]);
   const { activeKey: activeTabUrlKey, setActiveKey: setActiveTabUrlKey } = useUrlTabState({
     param: "tab",
     defaultKey: tabDefs[0]?.key || "name",
-    allowedKeys: tabDefs.map((tabDef) => tabDef.key),
+    allowedKeys: tabDefKeys,
     keyByUrl: CREATE_JOB_TAB_KEY_BY_URL,
     urlByKey: CREATE_JOB_TAB_URL_BY_KEY,
   });
@@ -4200,13 +4298,29 @@ export default function CreateJob() {
     },
     [activeTabKey, setActiveTabUrlKey, tabDefs]
   );
-  const { activeKey: historySubTabKey, setActiveKey: setHistorySubTabKey } = useUrlTabState({
-    param: "history_view",
-    defaultKey: "current",
-    allowedKeys: ["current", "historical"],
-    keyByUrl: JOB_HISTORY_SUBTAB_KEY_BY_URL,
-    urlByKey: JOB_HISTORY_SUBTAB_URL_BY_KEY,
-  });
+
+  const handleRerunJob = useCallback(async () => {
+    if (!editing || !initialJob?.id || rerunningJob) return;
+    setRerunningJob(true);
+    try {
+      const resp = await fetch(`/api/scheduled_jobs/${encodeURIComponent(initialJob.id)}/rerun`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(body?.message || body?.error || `HTTP ${resp.status}`);
+      }
+      sendNotification(`Job ${jobName || initialJob.id} Re-Run Queued`);
+      setSelectedHistoryOccurrence(null);
+      await loadHistory();
+    } catch (err) {
+      alert(String(err?.message || err || "Unable to re-run job"));
+    } finally {
+      setRerunningJob(false);
+    }
+  }, [editing, initialJob?.id, jobName, loadHistory, rerunningJob, sendNotification]);
+
   const pageHeaderActions = useMemo(
     () => [
       {
@@ -4224,6 +4338,17 @@ export default function CreateJob() {
         loading: clearingHistory,
         onClick: clearJobHistory,
       },
+      ...(editing
+        ? [{
+            id: "scheduled-job-rerun",
+            label: "Re-Run Job",
+            icon: <PlayArrowIcon />,
+            tone: "primary",
+            disabled: resolvedInitialJob?.enabled === false || rerunningJob,
+            loading: rerunningJob,
+            onClick: handleRerunJob,
+          }]
+        : []),
       {
         id: "scheduled-job-save",
         label: editing ? "Save Changes" : "Create Job",
@@ -4237,7 +4362,7 @@ export default function CreateJob() {
         },
       },
     ],
-    [clearJobHistory, clearingHistory, editing, isValid, navigate]
+    [clearJobHistory, clearingHistory, editing, handleRerunJob, isValid, navigate, rerunningJob, resolvedInitialJob?.enabled]
   );
 
   useRoutePageChrome({
@@ -4650,7 +4775,7 @@ export default function CreateJob() {
         {editing && activeTabKey === "history" && (
           <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5, flexGrow: 1, minHeight: 0 }}>
             <Tabs
-              value={historySubTabKey}
+              value={effectiveHistorySubTabKey}
               onChange={(_, value) => setHistorySubTabKey(value)}
               variant="scrollable"
               scrollButtons="auto"
@@ -4665,16 +4790,58 @@ export default function CreateJob() {
             >
               <Tab label="Current Run" value="current" />
               <Tab label="Historical Runs" value="historical" />
+              {selectedHistoryOccurrence ? (
+                <Tab label={selectedHistoryRunLabel} value="historical_run" />
+              ) : null}
             </Tabs>
 
-            {historySubTabKey === "current" ? (
+            {effectiveHistorySubTabKey === "historical" ? (
+              <GlassPanel sx={{ flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                <Typography variant="subtitle1" sx={{ color: MAGIC_UI.textBright, mb: 0.5 }}>
+                  Historical Runs
+                </Typography>
+                <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
+                  Historical job run summaries from the last 30 days.
+                </Typography>
+                <Box
+                  className={gridThemeClass}
+                  sx={{
+                    ...GRID_PANEL_SX,
+                    mt: 1.5,
+                    flexGrow: 1,
+                    minHeight: { xs: 420, md: 640 },
+                    height: "100%",
+                  }}
+                >
+                  <AgGridReact
+                    rowData={sortedHistory}
+                    columnDefs={historySummaryColumnDefs}
+                    defaultColDef={historySummaryDefaultColDef}
+                    components={historySummaryComponents}
+                    suppressCellFocus
+                    headerHeight={44}
+                    rowHeight={48}
+                    pagination
+                    paginationPageSize={20}
+                    paginationPageSizeSelector={[20, 50, 100]}
+                    overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No runs in the last 30 days.</span>"
+                    getRowId={(params) => params.data?.key || params.rowIndex}
+                    onGridReady={handleHistorySummaryGridReady}
+                    onRowDoubleClicked={(event) => openHistoricalRun(event?.data)}
+                    theme={gridTheme}
+                  />
+                </Box>
+              </GlassPanel>
+            ) : (
               <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5, flexGrow: 1, minHeight: 0 }}>
                 <GlassPanel>
                   <Typography variant="subtitle1" sx={{ color: MAGIC_UI.textBright, mb: 0.5 }}>
-                    Devices
+                    {effectiveHistorySubTabKey === "historical_run" ? `Historical Run - ${selectedHistoryRunLabel}` : "Devices"}
                   </Typography>
                   <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
-                    Devices targeted by this scheduled job. Use the built-in AG Grid column filters from each header to narrow the current run.
+                    {effectiveHistorySubTabKey === "historical_run"
+                      ? "Devices and output captured for the selected historical run."
+                      : "Devices targeted by this scheduled job. Use the built-in AG Grid column filters from each header to narrow the current run."}
                   </Typography>
                   <Box
                     className={gridThemeClass}
@@ -4706,42 +4873,6 @@ export default function CreateJob() {
 
                 <JobStatusFlow />
               </Box>
-            ) : (
-              <GlassPanel sx={{ flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-                <Typography variant="subtitle1" sx={{ color: MAGIC_UI.textBright, mb: 0.5 }}>
-                  Historical Runs
-                </Typography>
-                <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
-                  Historical job history summaries from the last 30 days.
-                </Typography>
-                <Box
-                  className={gridThemeClass}
-                  sx={{
-                    ...GRID_PANEL_SX,
-                    mt: 1.5,
-                    flexGrow: 1,
-                    minHeight: { xs: 420, md: 640 },
-                    height: "100%",
-                  }}
-                >
-                  <AgGridReact
-                    rowData={sortedHistory}
-                    columnDefs={historySummaryColumnDefs}
-                    defaultColDef={historySummaryDefaultColDef}
-                    components={historySummaryComponents}
-                    suppressCellFocus
-                    headerHeight={44}
-                    rowHeight={48}
-                    pagination
-                    paginationPageSize={20}
-                    paginationPageSizeSelector={[20, 50, 100]}
-                    overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No runs in the last 30 days.</span>"
-                    getRowId={(params) => params.data?.key || params.rowIndex}
-                    onGridReady={handleHistorySummaryGridReady}
-                    theme={gridTheme}
-                  />
-                </Box>
-              </GlassPanel>
             )}
           </Box>
         )}
@@ -5011,155 +5142,23 @@ export default function CreateJob() {
             overflow: "hidden",
           }}
         >
-          <Box
-            sx={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 2,
-              mb: 2,
-              alignItems: "flex-start",
-              justifyContent: "space-between",
-            }}
-          >
-            <Box
-              sx={{
-                display: "flex",
-                flexWrap: "wrap",
-                alignItems: "flex-start",
-                columnGap: 1,
-                rowGap: 1.2,
+          <Box sx={{ flex: 1, minHeight: 0, height: "100%" }}>
+            <AssemblyPicker
+              records={assemblyIndex.records}
+              loading={assembliesLoading}
+              error={assembliesError}
+              allowedKinds={["script", "ansible", "workflow"]}
+              selectedAssemblyGuid={selectedNodeId}
+              onSelectionChange={(record) => {
+                setSelectedNodeId(record?.assemblyGuid ? String(record.assemblyGuid).toLowerCase() : "");
               }}
-            >
-              <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "8px" }}>
-                <Typography
-                  component="span"
-                  sx={{
-                    color: "#58a6ff",
-                    fontSize: 11,
-                    fontWeight: 600,
-                    lineHeight: 1.1,
-                    pl: 1,
-                  }}
-                >
-                  Assembly Type
-                </Typography>
-                <CountSliderGroup
-                  options={ASSEMBLY_TYPE_FILTER_OPTIONS}
-                  activeKey={assemblyTypeFilterMode}
-                  counts={assemblyTypeCounts}
-                  onChange={setAssemblyTypeFilterMode}
-                />
-              </Box>
-              <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "8px" }}>
-                <Typography
-                  component="span"
-                  sx={{
-                    color: "#58a6ff",
-                    fontSize: 11,
-                    fontWeight: 600,
-                    lineHeight: 1.1,
-                    pl: 1,
-                  }}
-                >
-                  Operating System
-                </Typography>
-                <CountSliderGroup
-                  options={ASSEMBLY_OS_FILTER_OPTIONS}
-                  activeKey={assemblyOsFilterMode}
-                  counts={assemblyOsCounts}
-                  onChange={setAssemblyOsFilterMode}
-                />
-              </Box>
-            </Box>
-            <Box sx={{ display: "flex", flexDirection: "column", gap: 1, minWidth: { xs: "100%", md: 360 }, ml: "auto" }}>
-              <Box
-                sx={{
-                  position: "relative",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 1.2,
-                  width: "100%",
-                  minWidth: 0,
-                  height: 42,
-                  px: 1.6,
-                  borderRadius: "999px",
-                  border: `1px solid ${MAGIC_UI.panelBorder}`,
-                  background:
-                    "linear-gradient(135deg, rgba(10, 16, 31, 0.94) 0%, rgba(8, 13, 28, 0.92) 60%, rgba(20, 8, 33, 0.92) 100%)",
-                  boxShadow: "0 10px 28px rgba(4, 8, 24, 0.38)",
-                  backdropFilter: "blur(16px) saturate(145%)",
-                  transition: "border-color 160ms ease, box-shadow 180ms ease, transform 120ms ease",
-                  "&:hover": {
-                    borderColor: "rgba(125, 183, 255, 0.34)",
-                  },
-                  "&:focus-within": {
-                    borderColor: "rgba(125, 183, 255, 0.34)",
-                    transform: "translateY(-0.5px)",
-                  },
-                }}
-              >
-                <SearchIcon sx={{ color: MAGIC_UI.accentA, fontSize: 19, flexShrink: 0 }} />
-                <InputBase
-                  value={assemblyFilterText}
-                  onChange={(e) => setAssemblyFilterText(e.target.value)}
-                  placeholder="Search Assemblies..."
-                  inputProps={{ "aria-label": "Search assemblies" }}
-                  sx={{
-                    flex: 1,
-                    minWidth: 0,
-                    color: MAGIC_UI.textBright,
-                    fontSize: "0.95rem",
-                    fontWeight: 500,
-                    "& input::placeholder": {
-                      color: "rgba(148, 163, 184, 0.92)",
-                      opacity: 1,
-                    },
-                  }}
-                />
-              </Box>
-            </Box>
-          </Box>
-          {assembliesError ? (
-            <Typography variant="body2" sx={{ color: "#f87171", mb: 1 }}>
-              {assembliesError}
-            </Typography>
-          ) : null}
-          {assembliesLoading && (
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: MAGIC_UI.accentA, mb: 1 }}>
-              <CircularProgress size={18} sx={{ color: MAGIC_UI.accentA }} />
-              <Typography variant="body2">Loading assemblies…</Typography>
-            </Box>
-          )}
-          <Box
-            className={gridThemeClass}
-            sx={{
-              ...GRID_PANEL_SX,
-              flexGrow: 1,
-              minHeight: 0,
-              height: "100%",
-            }}
-          >
-            <AgGridReact
-              rowData={filteredAssemblyRows}
-              columnDefs={assemblyColumnDefs}
-              defaultColDef={assemblyDefaultColDef}
-              suppressCellFocus
-              headerHeight={44}
-              rowHeight={48}
-              domLayout="normal"
-              overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No assemblies match the current filters.</span>"
-              pagination
-              paginationPageSize={100}
-              paginationPageSizeSelector={[25, 50, 100]}
-              theme={gridTheme}
-              rowSelection={SINGLE_ROW_SELECTION}
-              animateRows
-              getRowId={(params) => params.data?.id || params.rowIndex}
-              onGridReady={handleAssemblyGridReady}
-              onFirstDataRendered={handleAssemblyGridFirstDataRendered}
-              onRowClicked={handleAssemblyRowClick}
-              onRowDoubleClicked={handleAssemblyRowDoubleClick}
-              onSelectionChanged={handleAssemblySelectionChanged}
+              onChoose={async (record) => {
+                if (!record) return;
+                setSelectedNodeId(String(record.assemblyGuid || "").toLowerCase());
+                const ok = await addSelectedComponent(record);
+                if (ok) setAddCompOpen(false);
+              }}
+              height="100%"
             />
           </Box>
         </DialogContent>

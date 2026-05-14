@@ -27,6 +27,11 @@ import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import AltRouteRoundedIcon from "@mui/icons-material/AltRouteRounded";
 import DevicesIcon from "@mui/icons-material/Devices";
+import CheckCircleOutlineRoundedIcon from "@mui/icons-material/CheckCircleOutlineRounded";
+import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
+import { DateTimePicker } from "@mui/x-date-pickers/DateTimePicker";
+import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
+import dayjs from "dayjs";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { CreateSiteDialog, RenameSiteDialog } from "../Dialogs.jsx";
@@ -727,6 +732,11 @@ export default function SiteList() {
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [renameSiteId, setRenameSiteId] = useState(null);
+  const [autoApprovalOpen, setAutoApprovalOpen] = useState(false);
+  const [autoApprovalSite, setAutoApprovalSite] = useState(null);
+  const [autoApprovalUntil, setAutoApprovalUntil] = useState(() => dayjs().add(6, "hour"));
+  const [autoApprovalSaving, setAutoApprovalSaving] = useState(false);
+  const [autoApprovalError, setAutoApprovalError] = useState("");
   const [siteContextMenu, setSiteContextMenu] = useState({ open: false, top: 0, left: 0, row: null });
   const [installMenuAnchorEl, setInstallMenuAnchorEl] = useState(null);
   const [installMenuSite, setInstallMenuSite] = useState(null);
@@ -1106,7 +1116,6 @@ export default function SiteList() {
       headerName: "Description",
       field: "description",
       minWidth: 220,
-      flex: 1,
     },
     {
       headerName: "Devices",
@@ -1153,6 +1162,37 @@ export default function SiteList() {
               </span>
             </Tooltip>
           </Box>
+        );
+      },
+    },
+    {
+      headerName: "Auto-Approval",
+      field: "auto_approve_until",
+      minWidth: 210,
+      valueGetter: (params) => {
+        const until = Number(params.data?.auto_approve_until || 0);
+        const active = Boolean(params.data?.auto_approval_active) && until > Math.floor(Date.now() / 1000);
+        if (!active) return "Off";
+        return `Until ${new Date(until * 1000).toLocaleString()}`;
+      },
+      cellStyle: {
+        display: "flex",
+        alignItems: "center",
+      },
+      cellRenderer: (params) => {
+        const until = Number(params.data?.auto_approve_until || 0);
+        const active = Boolean(params.data?.auto_approval_active) && until > Math.floor(Date.now() / 1000);
+        return (
+          <Typography
+            variant="body2"
+            sx={{
+              color: active ? MAGIC_UI.success : MAGIC_UI.textMuted,
+              fontWeight: active ? 700 : 500,
+              lineHeight: 1.2,
+            }}
+          >
+            {params.value}
+          </Typography>
         );
       },
     },
@@ -1213,6 +1253,18 @@ export default function SiteList() {
     setSiteContextMenu({ open: false, top: 0, left: 0, row: null });
   }, []);
 
+  const openAutoApprovalDialog = useCallback((siteOverride = null) => {
+    const selId = siteOverride?.id ?? (selectedIds.size === 1 ? Array.from(selectedIds)[0] : null);
+    const site = siteOverride || rows.find((row) => row.id === selId);
+    if (!site?.id) return;
+    handleCloseSiteContextMenu();
+    setAutoApprovalSite(site);
+    const existingUntil = Number(site.auto_approve_until || 0);
+    setAutoApprovalUntil(existingUntil > Math.floor(Date.now() / 1000) ? dayjs.unix(existingUntil) : dayjs().add(6, "hour"));
+    setAutoApprovalError("");
+    setAutoApprovalOpen(true);
+  }, [handleCloseSiteContextMenu, rows, selectedIds]);
+
   const handleOpenDeleteDialog = useCallback((siteOverride = null) => {
     handleCloseSiteContextMenu();
     if (siteOverride?.id != null && !selectedIds.has(siteOverride.id)) {
@@ -1261,6 +1313,13 @@ export default function SiteList() {
             icon: <DevicesIcon />,
             tone: "primary",
             onClick: () => handleOpenOnboardingForSite(singleSelectedSite),
+          },
+          {
+            id: "site-auto-approval",
+            label: "Auto-Approval",
+            icon: <CheckCircleOutlineRoundedIcon />,
+            tone: "secondary",
+            onClick: () => openAutoApprovalDialog(singleSelectedSite),
           }]
         : []),
       {
@@ -1275,6 +1334,7 @@ export default function SiteList() {
       canOpenInstallMenu,
       handleOpenInstallMenu,
       handleOpenOnboardingForSite,
+      openAutoApprovalDialog,
       installActionTooltip,
       singleSelectedSite,
     ]
@@ -1343,6 +1403,16 @@ export default function SiteList() {
         },
       },
       {
+        id: "configure-auto-approval",
+        group: "primary",
+        label: "Configure Auto-Approval",
+        icon: CheckCircleOutlineRoundedIcon,
+        disabled: Boolean(unavailableReason),
+        disabledReason: unavailableReason,
+        description: "Approve new enrollments for this site until a chosen time.",
+        onClick: () => openAutoApprovalDialog(row),
+      },
+      {
         id: "rename-site",
         group: "organize",
         label: "Rename",
@@ -1378,6 +1448,7 @@ export default function SiteList() {
     handleOpenOnboardingForSite,
     handleOpenSoftwareAuditForSite,
     openRenameDialog,
+    openAutoApprovalDialog,
     selectedSiteRows.length,
     selectedIds,
     siteContextMenu.row,
@@ -1688,6 +1759,101 @@ export default function SiteList() {
           } catch {}
         }}
       />
+
+      <Dialog
+        open={autoApprovalOpen}
+        onClose={() => {
+          if (!autoApprovalSaving) setAutoApprovalOpen(false);
+        }}
+        maxWidth="xs"
+        fullWidth
+        PaperProps={{ sx: SITE_DIALOG_PAPER_SX }}
+      >
+        <DialogTitle sx={SITE_DIALOG_TITLE_SX}>
+          Site Auto-Approval
+        </DialogTitle>
+        <DialogContent sx={SITE_DIALOG_CONTENT_SX}>
+          <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, mb: 2 }}>
+            {autoApprovalSite?.name || "Selected site"}
+          </Typography>
+          {autoApprovalError ? <Alert severity="error" sx={{ mb: 2 }}>{autoApprovalError}</Alert> : null}
+          <LocalizationProvider dateAdapter={AdapterDayjs}>
+            <DateTimePicker
+              label="Approve Until"
+              value={autoApprovalUntil}
+              onChange={(nextValue) => setAutoApprovalUntil(nextValue)}
+              minDateTime={dayjs()}
+              slotProps={{
+                textField: {
+                  fullWidth: true,
+                  size: "small",
+                },
+              }}
+            />
+          </LocalizationProvider>
+        </DialogContent>
+        <DialogActions sx={SITE_DIALOG_ACTIONS_SX}>
+          <Button
+            sx={SITE_DIALOG_BUTTON_SX}
+            disabled={autoApprovalSaving || !autoApprovalSite?.auto_approval_active}
+            onClick={async () => {
+              if (!autoApprovalSite?.id) return;
+              setAutoApprovalSaving(true);
+              setAutoApprovalError("");
+              try {
+                const resp = await fetch(`/api/sites/${encodeURIComponent(autoApprovalSite.id)}/auto-approval`, {
+                  method: "POST",
+                  credentials: "include",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ auto_approve_until: null }),
+                });
+                const body = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(body?.message || body?.error || `HTTP ${resp.status}`);
+                setAutoApprovalOpen(false);
+                await sendNotification(`Site ${autoApprovalSite.name} Auto-Approval Disabled`);
+                fetchSites();
+              } catch (err) {
+                setAutoApprovalError(String(err?.message || err || "Unable to disable auto-approval"));
+              } finally {
+                setAutoApprovalSaving(false);
+              }
+            }}
+          >
+            Disable
+          </Button>
+          <Button sx={SITE_DIALOG_BUTTON_SX} onClick={() => setAutoApprovalOpen(false)} disabled={autoApprovalSaving}>
+            Cancel
+          </Button>
+          <Button
+            sx={SITE_DIALOG_BUTTON_SX}
+            disabled={autoApprovalSaving || !autoApprovalUntil?.isValid?.()}
+            onClick={async () => {
+              if (!autoApprovalSite?.id || !autoApprovalUntil?.isValid?.()) return;
+              setAutoApprovalSaving(true);
+              setAutoApprovalError("");
+              try {
+                const resp = await fetch(`/api/sites/${encodeURIComponent(autoApprovalSite.id)}/auto-approval`, {
+                  method: "POST",
+                  credentials: "include",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ auto_approve_until: autoApprovalUntil.unix() }),
+                });
+                const body = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(body?.message || body?.error || `HTTP ${resp.status}`);
+                setAutoApprovalOpen(false);
+                await sendNotification(`Site ${autoApprovalSite.name} Auto-Approval Updated`);
+                fetchSites();
+              } catch (err) {
+                setAutoApprovalError(String(err?.message || err || "Unable to update auto-approval"));
+              } finally {
+                setAutoApprovalSaving(false);
+              }
+            }}
+          >
+            {autoApprovalSaving ? "Saving..." : "Save"}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <InstallBranchDialog
         open={branchDialogOpen}

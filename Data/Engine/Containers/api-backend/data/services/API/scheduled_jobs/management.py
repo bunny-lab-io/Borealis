@@ -8,6 +8,7 @@
 # - GET /api/scheduled_jobs/<int:job_id> (Token Authenticated) - Retrieves a scheduled job.
 # - PUT /api/scheduled_jobs/<int:job_id> (Token Authenticated) - Updates a scheduled job.
 # - POST /api/scheduled_jobs/<int:job_id>/toggle (Token Authenticated) - Enables or disables a job.
+# - POST /api/scheduled_jobs/<int:job_id>/rerun (Token Authenticated) - Queues a fresh immediate occurrence for an enabled job.
 # - DELETE /api/scheduled_jobs/<int:job_id> (Token Authenticated) - Deletes a job.
 # - GET /api/scheduled_jobs/<int:job_id>/runs (Token Authenticated) - Lists run history for a job.
 # - GET /api/scheduled_jobs/<int:job_id>/devices (Token Authenticated) - Summarises device results for a run.

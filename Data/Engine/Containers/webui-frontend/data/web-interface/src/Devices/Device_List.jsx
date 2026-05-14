@@ -36,7 +36,7 @@ import {
   rethrowIfRouteRedirect,
 } from "../app/routes/routeData.js";
 import { APP_PATHS } from "../app/routes/paths.js";
-import { createQuickJobDraft } from "../app/utils/quickJob.js";
+import QuickJobDialog from "../Assemblies/Quick_Job_Dialog.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -593,6 +593,9 @@ export default function DeviceList({
   // Track selection by agent id to avoid duplicate hostname collisions
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const canLaunchQuickJob = selectedIds.size > 0;
+  const [quickJobOpen, setQuickJobOpen] = useState(false);
+  const [quickJobHostnames, setQuickJobHostnames] = useState([]);
+  const [quickJobTargetRecords, setQuickJobTargetRecords] = useState([]);
   const [addDeviceOpen, setAddDeviceOpen] = useState(false);
   const [addDeviceType, setAddDeviceType] = useState(null);
   const handleSelectDevice = useCallback(
@@ -606,12 +609,21 @@ export default function DeviceList({
     [navigate]
   );
   const handleQuickJobLaunch = useCallback(
-    (hostnames) => {
-      const quickJobDraft = createQuickJobDraft(hostnames);
-      if (!quickJobDraft) return;
-      navigate(APP_PATHS.jobNew, { state: { quickJobDraft } });
+    (selectedRows) => {
+      const targets = (selectedRows || [])
+        .map((row) => ({
+          hostname: String(row?.hostname || "").trim(),
+          device_guid: row?.agentGuid || row?.agent_guid || row?.guid || "",
+          site_id: row?.siteId || row?.site_id || null,
+          site_name: row?.site || row?.site_name || "",
+        }))
+        .filter((target) => Boolean(target.hostname));
+      if (!targets.length) return;
+      setQuickJobHostnames(targets.map((target) => target.hostname));
+      setQuickJobTargetRecords(targets);
+      setQuickJobOpen(true);
     },
-    [navigate]
+    []
   );
   const computedTitle = useMemo(() => {
     if (title) return title;
@@ -1260,12 +1272,8 @@ export default function DeviceList({
         disabled: !canLaunchQuickJob,
         onClick: () => {
           if (!canLaunchQuickJob) return;
-          const hostnames = rows
-            .filter((row) => selectedIds.has(row.id))
-            .map((row) => row.hostname)
-            .filter((hostname) => Boolean(hostname));
-          if (!hostnames.length) return;
-          handleQuickJobLaunch(hostnames);
+          const selectedRows = rows.filter((row) => selectedIds.has(row.id));
+          handleQuickJobLaunch(selectedRows);
         },
       },
       ...(derivedShowAddButton
@@ -2413,6 +2421,18 @@ export default function DeviceList({
           </Box>
         </Popover>
       )}
+      <QuickJobDialog
+        open={quickJobOpen}
+        onClose={() => setQuickJobOpen(false)}
+        hostnames={quickJobHostnames}
+        targetRecords={quickJobTargetRecords}
+        deviceLabel={
+          quickJobHostnames.length === 1
+            ? quickJobHostnames[0]
+            : `${quickJobHostnames.length} devices`
+        }
+        notifyOperator={notifyOperator}
+      />
       <AddDevice
         open={addDeviceOpen}
         defaultType={addDeviceType}

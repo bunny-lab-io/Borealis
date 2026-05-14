@@ -205,12 +205,12 @@ Build order follows `Engine.sh` local build roles. `docker-proxy` is an external
 ```text
 api-backend
 job-scheduler
-webui-frontend
 traefik-edge
 postgres-db
 remote-desktop-guacd
 wireguard-tunnel
 site-worker
+webui-frontend
 ```
 
 Build order is not the same as runtime dependency order.

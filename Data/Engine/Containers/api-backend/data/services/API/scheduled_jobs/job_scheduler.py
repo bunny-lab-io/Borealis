@@ -6739,6 +6739,178 @@ class JobScheduler(OnboardingSchedulerMixin):
             except Exception as e:
                 return json.dumps({"error": str(e)}), 500, {"Content-Type": "application/json"}
 
+        @app.route("/api/scheduled_jobs/<int:job_id>/rerun", methods=["POST"])
+        def api_scheduled_jobs_rerun(job_id: int):
+            requirement = self._require_user()
+            if requirement:
+                return json.dumps(requirement[0]), requirement[1], {"Content-Type": "application/json"}
+            user = self._current_user() or {}
+            try:
+                conn = self._conn()
+                try:
+                    cur = conn.cursor()
+                    cur.execute(
+                        """
+                        SELECT id, name, components_json, targets_json, schedule_type, start_ts,
+                               duration_stop_enabled, expiration, execution_context, credential_id,
+                               use_service_account, enabled, created_at, updated_at, job_kind
+                          FROM scheduled_jobs
+                         WHERE id=?
+                        """,
+                        (job_id,),
+                    )
+                    row = cur.fetchone()
+                finally:
+                    conn.close()
+                if not row:
+                    return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                if not self._job_visible_to_user(user, row[3]):
+                    return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                if not bool(row[11]):
+                    return json.dumps({"error": "job_disabled"}), 409, {"Content-Type": "application/json"}
+
+                try:
+                    components = json.loads(row[2] or "[]")
+                except Exception:
+                    components = []
+                try:
+                    raw_targets = json.loads(row[3] or "[]")
+                except Exception:
+                    raw_targets = []
+                if not components:
+                    return json.dumps({"error": "job has no components"}), 400, {"Content-Type": "application/json"}
+
+                now = _now_ts()
+                occurrence_ts = now
+                latest_occurrence = self._get_latest_occurrence_ts(int(job_id))
+                if latest_occurrence is not None and int(latest_occurrence) >= occurrence_ts:
+                    occurrence_ts = int(latest_occurrence) + 1
+
+                job_kind = _normalize_job_kind(row[14] if len(row) > 14 else JOB_KIND_AUTOMATION)
+                if job_kind == JOB_KIND_ONBOARDING:
+                    self._record_onboarding_occurrence_snapshot(
+                        job_id=int(job_id),
+                        scheduled_ts=int(occurrence_ts),
+                        created_at=now,
+                    )
+                    return (
+                        json.dumps(
+                            {
+                                "status": "queued",
+                                "occurrence": int(occurrence_ts),
+                                "job": _job_row_to_dict(row),
+                            }
+                        ),
+                        200,
+                        {"Content-Type": "application/json"},
+                    )
+
+                workflow_components: List[Dict[str, Any]] = []
+                script_components: List[Dict[str, Any]] = []
+                ansible_components: List[Dict[str, Any]] = []
+                for component in components:
+                    if not isinstance(component, dict):
+                        continue
+                    component_type = str(
+                        component.get("type")
+                        or component.get("component_type")
+                        or component.get("assembly_type")
+                        or ""
+                    ).strip().lower()
+                    component_subtype = str(
+                        component.get("assembly_subtype")
+                        or component.get("assemblySubtype")
+                        or component.get("script_type")
+                        or ""
+                    ).strip().lower()
+                    is_workflow = component_type == "workflow" or component_subtype == "workflow"
+                    is_ansible = component_type in {"ansible", "playbook"} or component_subtype in {"ansible", "playbook"}
+                    if is_workflow:
+                        workflow_components.append(dict(component))
+                    elif is_ansible:
+                        ansible_components.append(dict(component))
+                    else:
+                        script_components.append(dict(component))
+
+                run_mode = (row[8] or "system").strip().lower()
+                if workflow_components and len(workflow_components) == 1 and not script_components and not ansible_components:
+                    self._record_workflow_occurrence_snapshot(
+                        job_id=int(job_id),
+                        scheduled_ts=int(occurrence_ts),
+                        workflow_component=workflow_components[0],
+                        created_at=now,
+                    )
+                else:
+                    include_filters = self._targets_include_filters(raw_targets)
+                    device_inventory_cache = None
+                    if include_filters:
+                        try:
+                            device_inventory_cache = self._filter_matcher.fetch_devices()
+                        except Exception:
+                            device_inventory_cache = []
+                    try:
+                        targets, resolution_meta = self._filter_matcher.resolve_target_entries(
+                            raw_targets,
+                            devices=device_inventory_cache if include_filters else None,
+                        )
+                    except Exception as exc:
+                        self._log_event(
+                            "failed to resolve job targets for manual rerun",
+                            job_id=int(job_id),
+                            level="ERROR",
+                            extra={"error": str(exc), "scheduled_ts": int(occurrence_ts)},
+                        )
+                        targets = []
+                        resolution_meta = {}
+                    shared_ansible_mode = self._should_use_shared_ansible_runs(
+                        run_mode=run_mode,
+                        script_components=script_components,
+                        ansible_components=ansible_components,
+                    )
+                    individual_ansible_mode = bool(ansible_components) and not bool(script_components) and _is_individual_ansible_context(run_mode)
+                    if shared_ansible_mode:
+                        self._record_shared_ansible_occurrence_snapshot(
+                            job_id=int(job_id),
+                            scheduled_ts=int(occurrence_ts),
+                            run_mode=run_mode,
+                            ansible_components=ansible_components,
+                            resolved_targets=self._resolved_targets_from_meta(resolution_meta),
+                            created_at=now,
+                        )
+                    elif individual_ansible_mode:
+                        self._record_individual_ansible_occurrence_snapshot(
+                            job_id=int(job_id),
+                            scheduled_ts=int(occurrence_ts),
+                            run_mode=run_mode,
+                            ansible_components=ansible_components,
+                            resolved_targets=self._resolved_targets_from_meta(resolution_meta),
+                            created_at=now,
+                        )
+                    else:
+                        self._record_occurrence_snapshot(
+                            job_id=int(job_id),
+                            scheduled_ts=int(occurrence_ts),
+                            targets=[str(host) for host in targets if str(host).strip()],
+                            resolution_meta=resolution_meta,
+                            created_at=now,
+                        )
+
+                occurrence_runs = self._load_occurrence_runs(int(job_id), int(occurrence_ts))
+                return (
+                    json.dumps(
+                        {
+                            "status": "queued",
+                            "occurrence": int(occurrence_ts),
+                            "runs": occurrence_runs,
+                            "job": _job_row_to_dict(row),
+                        }
+                    ),
+                    200,
+                    {"Content-Type": "application/json"},
+                )
+            except Exception as e:
+                return json.dumps({"error": str(e)}), 500, {"Content-Type": "application/json"}
+
         @app.route("/api/scheduled_jobs/<int:job_id>", methods=["DELETE"])
         def api_scheduled_jobs_delete(job_id: int):
             requirement = self._require_user()

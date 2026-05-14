@@ -80,6 +80,8 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Admins can approve any site; operators can approve only requests for sites they are assigned to.
 - Approvals enforce hostname conflict checks and device identity tracking.
 - Approvals created by automatic local-network onboarding can include `onboarding_job_id`, `onboarding_run_id`, and `onboarding_target` so operators can trace a pending approval back to the scheduled onboarding run and target.
+- Admins can bulk-select pending approval rows and approve them in one action. Rows that need hostname conflict resolution stay pending for explicit review.
+- Sites can carry a temporary `auto_approve_until` timestamp. While active, new enrollments for that site are marked approved automatically unless the requested hostname conflicts with a different existing fingerprint.
 
 ## Automatic Local-Network Onboarding
 - Jobs are created from Sites > Onboard Devices and appear in Scheduled Jobs alongside automation jobs.
@@ -147,6 +149,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `GET /api/sites/device_map` (Token Authenticated) - hostname to site map.
 - `POST /api/sites/assign` (Admin) - assign devices to site.
 - `POST /api/sites/rename` (Admin) - rename site.
+- `POST /api/sites/<site_id>/auto-approval` (Admin) - set or clear temporary site-level device auto-approval.
 - `POST /api/user_site_assignments/selection` (Admin) - load selected-operator site assignments.
 - `POST /api/user_site_assignments/assign` (Admin) - replace selected-operator site assignments.
 - `GET /api/device_filters` (Token Authenticated) - list filters.

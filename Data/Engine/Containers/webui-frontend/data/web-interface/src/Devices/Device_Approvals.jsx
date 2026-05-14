@@ -118,6 +118,8 @@ export default function DeviceApprovals() {
   const [guidInputs, setGuidInputs] = useState({});
   const [actioningId, setActioningId] = useState(null);
   const [conflictPrompt, setConflictPrompt] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkApproving, setBulkApproving] = useState(false);
   const gridRef = useRef(null);
 
   const loadApprovals = useCallback(async () => {
@@ -286,6 +288,54 @@ export default function DeviceApprovals() {
     [loadApprovals]
   );
 
+  const selectedPendingApprovals = useMemo(
+    () =>
+      dedupedApprovals.filter(
+        (record) => selectedIds.has(String(record.id)) && normalizeStatus(record.status) === "pending"
+      ),
+    [dedupedApprovals, selectedIds]
+  );
+
+  const handleApproveSelected = useCallback(async () => {
+    if (!selectedPendingApprovals.length || bulkApproving) return;
+    setBulkApproving(true);
+    setFeedback(null);
+    setError("");
+    let approved = 0;
+    let failed = 0;
+    let conflicts = 0;
+    try {
+      for (const record of selectedPendingApprovals) {
+        const manualGuid = (guidInputs[record.id] || "").trim();
+        const payload = manualGuid ? { guid: manualGuid } : {};
+        const resp = await fetch(`/api/admin/device-approvals/${encodeURIComponent(record.id)}/approve`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const body = await resp.json().catch(() => ({}));
+        if (resp.ok) {
+          approved += 1;
+        } else if (resp.status === 409 && body?.error === "conflict_resolution_required") {
+          conflicts += 1;
+        } else {
+          failed += 1;
+        }
+      }
+      const parts = [`${approved} approved`];
+      if (conflicts) parts.push(`${conflicts} need conflict review`);
+      if (failed) parts.push(`${failed} failed`);
+      setFeedback({ type: failed || conflicts ? "warning" : "success", message: parts.join("; ") });
+      setSelectedIds(new Set());
+      await loadApprovals();
+    } catch (err) {
+      setFeedback({ type: "error", message: err.message || "Unable to approve selected requests" });
+    } finally {
+      setBulkApproving(false);
+    }
+  }, [bulkApproving, guidInputs, loadApprovals, selectedPendingApprovals]);
+
   const pageHeaderControls = useMemo(
     () => [
       <FormControl key="approval-status-filter" size="small" sx={{ minWidth: 200, ...PAGE_HEADER_CONTROL_SX }}>
@@ -310,6 +360,15 @@ export default function DeviceApprovals() {
   const pageHeaderActions = useMemo(
     () => [
       {
+        id: "device-approvals-approve-selected",
+        label: "Approve Selected",
+        icon: <ApproveIcon />,
+        tone: "primary",
+        disabled: !selectedPendingApprovals.length || bulkApproving,
+        loading: bulkApproving,
+        onClick: handleApproveSelected,
+      },
+      {
         id: "device-approvals-refresh",
         label: "Refresh",
         icon: <RefreshIcon />,
@@ -318,7 +377,7 @@ export default function DeviceApprovals() {
         onClick: loadApprovals,
       },
     ],
-    [loadApprovals, loading]
+    [bulkApproving, handleApproveSelected, loadApprovals, loading, selectedPendingApprovals.length]
   );
 
   useRoutePageChrome({
@@ -496,6 +555,33 @@ export default function DeviceApprovals() {
     resizable: true,
     minWidth: 140,
   }), []);
+  const rowSelection = useMemo(
+    () => ({
+      mode: "multiRow",
+      checkboxes: true,
+      headerCheckbox: true,
+      enableSelectionWithoutKeys: true,
+      enableClickSelection: false,
+    }),
+    []
+  );
+  const selectionColumnDef = useMemo(
+    () => ({
+      width: 52,
+      minWidth: 52,
+      maxWidth: 52,
+      resizable: false,
+      sortable: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      filter: false,
+      pinned: "left",
+      lockPosition: true,
+      suppressMovable: true,
+    }),
+    []
+  );
+  const getRowId = useCallback((params) => String(params?.data?.id || ""), []);
 
   // Dialog helpers
   const conflictRecord = conflictPrompt?.record;
@@ -604,6 +690,13 @@ export default function DeviceApprovals() {
               pagination
               paginationPageSize={20}
               context={{ startApprove, handleDeny, handleGuidChange, actioningId, guidInputs }}
+              rowSelection={rowSelection}
+              selectionColumnDef={selectionColumnDef}
+              getRowId={getRowId}
+              onSelectionChanged={(event) => {
+                const selected = event.api.getSelectedNodes().map((node) => String(node.data?.id || "")).filter(Boolean);
+                setSelectedIds(new Set(selected));
+              }}
             />
           </Box>
         </Box>

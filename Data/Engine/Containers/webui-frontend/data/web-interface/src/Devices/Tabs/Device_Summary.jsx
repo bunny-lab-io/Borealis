@@ -46,6 +46,7 @@ import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
 import { useAuth } from "../../app/providers/AuthContext.jsx";
 import { useUrlTabState } from "../../app/hooks/useUrlTabState.js";
 import { APP_PATHS } from "../../app/routes/paths.js";
+import QuickJobDialog from "../../Assemblies/Quick_Job_Dialog.jsx";
 import {
   createRouteRequestPlan,
   fetchRouteJson,
@@ -53,12 +54,65 @@ import {
   requireAuthenticatedRequest,
   rethrowIfRouteRedirect,
 } from "../../app/routes/routeData.js";
-import { createQuickJobDraft, normalizeQuickJobTargets } from "../../app/utils/quickJob.js";
+import { normalizeQuickJobTargets } from "../../app/utils/quickJob.js";
 
 const TUNNEL_STATUS_POLL_INTERVAL_MS = 15000;
 const DEVICE_DETAILS_POLL_INTERVAL_MS = 60000;
 
 const PAGE_ICON = DeveloperBoardRoundedIcon;
+
+const getOsIconClass = (osName) => {
+  const value = (osName || "").toString().toLowerCase();
+  if (!value) return "";
+
+  if (value.includes("mac") || value.includes("os x") || value.includes("darwin")) {
+    return "fa-brands fa-apple";
+  }
+
+  if (value.includes("win")) {
+    return "fa-brands fa-windows";
+  }
+
+  if (
+    value.includes("linux") ||
+    value.includes("ubuntu") ||
+    value.includes("debian") ||
+    value.includes("fedora") ||
+    value.includes("red hat") ||
+    value.includes("centos") ||
+    value.includes("suse") ||
+    value.includes("rhel")
+  ) {
+    return "fa-brands fa-linux";
+  }
+
+  return "";
+};
+
+function OperatingSystemPageIcon({ osName, sx }) {
+  const iconClass = getOsIconClass(osName);
+  if (!iconClass) {
+    return <PAGE_ICON sx={sx} />;
+  }
+
+  return (
+    <Box
+      component="i"
+      className={iconClass}
+      aria-hidden="true"
+      sx={[
+        {
+          color: "#7dd3fc",
+          fontSize: 22,
+          lineHeight: 1,
+          textAlign: "center",
+          width: 22,
+        },
+        ...(Array.isArray(sx) ? sx : [sx]).filter(Boolean),
+      ]}
+    />
+  );
+}
 
 const NAV_TAB_HEIGHT = 32;
 const NAV_TAB_COLORS = {
@@ -1034,6 +1088,10 @@ export default function DeviceSummary() {
     });
   }, [agent, device, deviceId]);
   const canLaunchQuickJob = quickJobTargets.length > 0;
+  const [quickJobOpen, setQuickJobOpen] = useState(false);
+  const openQuickJobDialog = useCallback(() => {
+    setQuickJobOpen(true);
+  }, []);
   const shouldPollTunnelStatus = activeTabKey === "shell" || activeTabKey === "vnc" || activeTabKey === "agent_health";
   useEffect(() => {
     setConnectionError("");
@@ -1292,6 +1350,30 @@ export default function DeviceSummary() {
   const activityHostname = useMemo(() => {
     return (meta?.hostname || summary.hostname || agent?.hostname || device?.hostname || "").trim();
   }, [meta?.hostname, summary.hostname, agent?.hostname, device?.hostname]);
+  const quickJobTargetRecords = useMemo(
+    () =>
+      quickJobTargets.map((hostname) => ({
+        hostname,
+        device_guid: meta.agentGuid || summary.agent_guid || device?.agent_guid || agent?.agent_guid || "",
+        site_id: meta.siteId ?? summary.site_id ?? device?.site_id ?? agent?.site_id ?? null,
+        site_name: meta.siteName || summary.site_name || device?.site_name || agent?.site_name || "",
+      })),
+    [
+      agent?.agent_guid,
+      agent?.site_id,
+      agent?.site_name,
+      device?.agent_guid,
+      device?.site_id,
+      device?.site_name,
+      meta.agentGuid,
+      meta.siteId,
+      meta.siteName,
+      quickJobTargets,
+      summary.agent_guid,
+      summary.site_id,
+      summary.site_name,
+    ]
+  );
 
   useEffect(() => {
     const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
@@ -2925,6 +3007,22 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   const rawDisplayHostname = meta.hostname || summary.hostname || agent.hostname || device?.hostname || "";
   const displayHostname = formatHostnameForDisplay(rawDisplayHostname) || "Device Summary";
   const pageSubtitle = status ? `Status: ${status}` : "";
+  const deviceOperatingSystem = readFirstNonEmptyValue(
+    meta.operatingSystem,
+    summary.operating_system,
+    summary.agent_operating_system,
+    agent.agent_operating_system,
+    device?.operating_system,
+    device?.summary?.operating_system,
+    device?.summary?.agent_operating_system
+  );
+  const DeviceSummaryPageIcon = useMemo(
+    () =>
+      function DeviceSummaryPageIcon(props) {
+        return <OperatingSystemPageIcon osName={deviceOperatingSystem} {...props} />;
+      },
+    [deviceOperatingSystem]
+  );
 
   const pageHeaderActions = useMemo(
     () => [
@@ -2956,7 +3054,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   useRoutePageChrome({
     title: displayHostname,
     subtitle: pageSubtitle,
-    Icon: PAGE_ICON,
+    Icon: DeviceSummaryPageIcon,
     actions: pageHeaderActions,
   });
 
@@ -3008,9 +3106,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           onClick={() => {
             setMenuAnchor(null);
             if (!canLaunchQuickJob) return;
-            const quickJobDraft = createQuickJobDraft(quickJobTargets);
-            if (!quickJobDraft) return;
-            navigate(APP_PATHS.jobNew, { state: { quickJobDraft } });
+            openQuickJobDialog();
           }}
         >
           Quick Job
@@ -3098,6 +3194,14 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           Unstable
         </MenuItem>
       </Menu>
+      <QuickJobDialog
+        open={quickJobOpen}
+        onClose={() => setQuickJobOpen(false)}
+        hostnames={quickJobTargets}
+        targetRecords={quickJobTargetRecords}
+        deviceLabel={activityHostname || displayHostname}
+        notifyOperator={notifyOperator}
+      />
       {loadError ? (
         <Alert severity="error" sx={{ mb: 2 }}>
           {loadError}

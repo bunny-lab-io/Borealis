@@ -109,6 +109,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/sites/device_map` (Token Authenticated) - hostname to site map for devices in the current operator's site scope.
 - `POST /api/sites/assign` (Admin) - assign devices to site.
 - `POST /api/sites/rename` (Admin) - rename site.
+- `POST /api/sites/<site_id>/auto-approval` (Admin) - set or clear temporary site-level enrollment auto-approval.
 - `GET /api/repo/current_hash` (Device or Token Authenticated) - current agent repo hash.
 - `GET /api/agent/hash` (Device Authenticated) - get agent hash.
 - `POST /api/agent/hash` (Device Authenticated) - update agent hash.
@@ -175,6 +176,7 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 - `GET /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - get a scheduled job if it is visible within the current operator's site scope.
 - `PUT /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - update a scheduled job within the current operator's site scope.
 - `POST /api/scheduled_jobs/<int:job_id>/toggle` (Token Authenticated) - enable/disable.
+- `POST /api/scheduled_jobs/<int:job_id>/rerun` (Token Authenticated) - queue a fresh immediate occurrence for an enabled scheduled job.
 - `DELETE /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - delete scheduled job.
 - `GET /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - run history.
 - `GET /api/scheduled_jobs/<int:job_id>/devices` (Token Authenticated) - device results.

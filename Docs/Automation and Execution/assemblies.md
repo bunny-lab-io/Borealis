@@ -43,6 +43,7 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - The Engine resolves the script, signs it, and emits a Socket.IO `quick_job_run` event to the host's SYSTEM socket.
 - The agent SYSTEM broker executes SYSTEM work locally and forwards current-user work into helper processes when `run_mode` targets the interactive user context.
 - Agents return `quick_job_result` for status and output through the SYSTEM socket.
+- Device Summary and Device List expose inline Quick Job pickers backed by `src/Assemblies/Assembly_Picker.jsx` and `src/Assemblies/Quick_Job_Dialog.jsx`. They search script assemblies in place, collect assembly variables when present, create saved immediate scheduled jobs for selected devices, and let the scheduler execute them without forcing the operator through the full Scheduled Job editor.
 
 ## Watchdog-Triggered Remediation
 - Watchdogs can use assemblies as remediation actions.

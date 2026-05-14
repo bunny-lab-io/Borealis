@@ -58,12 +58,12 @@ SERVICE_ROLES=(
 BUILD_ROLES=(
   "api-backend"
   "job-scheduler"
-  "webui-frontend"
   "traefik-edge"
   "postgres-db"
   "remote-desktop-guacd"
   "wireguard-tunnel"
   "site-worker"
+  "webui-frontend"
 )
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then

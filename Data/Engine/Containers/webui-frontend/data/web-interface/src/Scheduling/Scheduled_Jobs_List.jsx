@@ -23,6 +23,7 @@ import {
   Schedule as HeaderIcon,
   Cached as CachedIcon,
   Add as AddIcon,
+  PlayArrow as PlayArrowIcon,
   DeleteOutline as DeleteIcon,
   WarningAmberRounded as WarningAmberRoundedIcon,
 } from "@mui/icons-material";
@@ -198,6 +199,7 @@ export default function ScheduledJobsList({ refreshToken }) {
   const [assembliesPayload, setAssembliesPayload] = useState({ items: [], queue: [] });
   const [assembliesLoading, setAssembliesLoading] = useState(false);
   const [assembliesError, setAssembliesError] = useState("");
+  const [rerunningId, setRerunningId] = useState(null);
   const gridApiRef = useRef(null);
   const sendNotification = useAppNotifications({
     title: PAGE_TITLE,
@@ -566,6 +568,11 @@ export default function ScheduledJobsList({ refreshToken }) {
   }, [deriveRowKey, filteredRows, selectedIds]);
 
   const anySelected = selectedIds.size > 0;
+  const selectedJobRows = useMemo(() => {
+    if (!selectedIds.size) return [];
+    return rows.filter((row, index) => selectedIds.has(deriveRowKey(row, index)));
+  }, [deriveRowKey, rows, selectedIds]);
+  const singleSelectedJob = selectedJobRows.length === 1 ? selectedJobRows[0] : null;
   const credentialResetWarningCount = useMemo(
     () => rows.filter((row) => String(row.warningCode || "").toLowerCase() === "credential_reset_required").length,
     [rows]
@@ -897,6 +904,28 @@ export default function ScheduledJobsList({ refreshToken }) {
     await loadJobs({ showLoading: true });
   }, [loadJobs]);
 
+  const handleRerunSelectedJob = useCallback(async () => {
+    const job = singleSelectedJob;
+    if (!job?.id || rerunningId) return;
+    setRerunningId(job.id);
+    try {
+      const resp = await fetch(`/api/scheduled_jobs/${encodeURIComponent(job.id)}/rerun`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(body?.message || body?.error || `HTTP ${resp.status}`);
+      }
+      sendNotification(`Job ${job.name || job.id} Re-Run Queued`);
+      await loadJobs({ showLoading: true });
+    } catch (err) {
+      setError(String(err?.message || err || "Unable to re-run selected job"));
+    } finally {
+      setRerunningId(null);
+    }
+  }, [loadJobs, rerunningId, sendNotification, singleSelectedJob]);
+
   const pageHeaderActions = useMemo(
     () => [
       {
@@ -916,6 +945,15 @@ export default function ScheduledJobsList({ refreshToken }) {
         onClick: () => setBulkDeleteOpen(true),
       },
       {
+        id: "scheduled-jobs-rerun",
+        label: "Re-Run Job",
+        icon: <PlayArrowIcon />,
+        tone: "primary",
+        disabled: !singleSelectedJob || selectedJobRows.length !== 1 || !singleSelectedJob.enabled || Boolean(rerunningId),
+        loading: Boolean(rerunningId),
+        onClick: handleRerunSelectedJob,
+      },
+      {
         id: "scheduled-jobs-create",
         label: "Create Job",
         icon: <AddIcon />,
@@ -923,7 +961,7 @@ export default function ScheduledJobsList({ refreshToken }) {
         onClick: () => navigate(APP_PATHS.jobNew),
       },
     ],
-    [anySelected, handleRefreshClick, loading, navigate]
+    [anySelected, handleRefreshClick, handleRerunSelectedJob, loading, navigate, rerunningId, selectedJobRows.length, singleSelectedJob]
   );
 
   useRoutePageChrome({

@@ -103,7 +103,8 @@ def register(
             """
             SELECT id,
                    name,
-                   enrollment_code
+                   enrollment_code,
+                   auto_approve_until
               FROM sites
              WHERE UPPER(enrollment_code) = UPPER(?)
             """,
@@ -112,9 +113,45 @@ def register(
         row = cur.fetchone()
         if not row:
             return None
-        keys = ["id", "name", "enrollment_code"]
+        keys = ["id", "name", "enrollment_code", "auto_approve_until"]
         record = dict(zip(keys, row))
         return record
+
+    def _auto_approval_decision(
+        cur: sqlite3.Cursor,
+        *,
+        site_record: Dict[str, Any],
+        hostname: str,
+        fingerprint: str,
+    ) -> Dict[str, Any]:
+        try:
+            until_ts = int(site_record.get("auto_approve_until") or 0)
+        except Exception:
+            until_ts = 0
+        if until_ts <= int(time.time()):
+            return {"status": "pending", "guid": None, "reason": "inactive"}
+        cur.execute(
+            """
+            SELECT guid,
+                   ssl_key_fingerprint
+              FROM devices
+             WHERE LOWER(hostname) = LOWER(?)
+             LIMIT 1
+            """,
+            (hostname,),
+        )
+        existing = cur.fetchone()
+        if not existing:
+            return {"status": "approved", "guid": None, "reason": "site_auto_approval"}
+        existing_guid = normalize_guid(existing[0]) if existing[0] else None
+        existing_fingerprint = str(existing[1] or "").strip().lower()
+        if existing_guid and existing_fingerprint and existing_fingerprint == fingerprint:
+            return {
+                "status": "approved",
+                "guid": existing_guid,
+                "reason": "site_auto_approval_fingerprint_match",
+            }
+        return {"status": "pending", "guid": None, "reason": "hostname_conflict"}
 
     def _onboarding_context_from_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         raw = payload.get("onboarding_context")
@@ -519,6 +556,15 @@ def register(
                 (fingerprint,),
             )
             reuse_guid = None
+            auto_approval = _auto_approval_decision(
+                cur,
+                site_record=site_record,
+                hostname=hostname,
+                fingerprint=fingerprint,
+            )
+            approval_status = str(auto_approval.get("status") or "pending").strip().lower()
+            if approval_status == "approved":
+                reuse_guid = auto_approval.get("guid") or None
 
             approval_reference: str
             record_id: str
@@ -552,6 +598,8 @@ def register(
                            onboarding_job_id = ?,
                            onboarding_run_id = ?,
                            onboarding_target = ?,
+                           status = ?,
+                           approved_by_user_id = ?,
                            updated_at = ?
                      WHERE id = ?
                     """,
@@ -566,6 +614,8 @@ def register(
                         onboarding_context.get("job_id"),
                         onboarding_context.get("run_id"),
                         onboarding_context.get("target"),
+                        approval_status,
+                        "site_auto_approval" if approval_status == "approved" else None,
                         now,
                         record_id,
                     ),
@@ -579,10 +629,10 @@ def register(
                         id, approval_reference, guid, hostname_claimed,
                         ssl_key_fingerprint_claimed, enrollment_code, site_id,
                         status, client_nonce, server_nonce, agent_pubkey_der,
-                        created_at, updated_at, onboarding_job_id, onboarding_run_id,
+                        created_at, updated_at, approved_by_user_id, onboarding_job_id, onboarding_run_id,
                         onboarding_target
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record_id,
@@ -592,11 +642,13 @@ def register(
                         fingerprint,
                         site_record.get("enrollment_code"),
                         site_id,
+                        approval_status,
                         client_nonce_b64,
                         server_nonce_b64,
                         agent_pubkey_der,
                         now,
                         now,
+                        "site_auto_approval" if approval_status == "approved" else None,
                         onboarding_context.get("job_id"),
                         onboarding_context.get("run_id"),
                         onboarding_context.get("target"),
@@ -608,14 +660,17 @@ def register(
             conn.close()
 
         response = {
-            "status": "pending",
+            "status": approval_status,
             "approval_reference": approval_reference,
             "server_nonce": server_nonce_b64,
-            "poll_after_ms": 3000,
+            "poll_after_ms": 250 if approval_status == "approved" else 3000,
             "signing_key": _signing_key_b64(),
         }
+        if approval_status == "approved":
+            response["auto_approved"] = True
         _enrollment_log(
-            f"enrollment request queued fingerprint={fingerprint[:12]} host={hostname} ip={remote}",
+            f"enrollment request {approval_status} fingerprint={fingerprint[:12]} host={hostname} ip={remote} "
+            f"auto_reason={auto_approval.get('reason')}",
             context_hint,
         )
         return jsonify(response)

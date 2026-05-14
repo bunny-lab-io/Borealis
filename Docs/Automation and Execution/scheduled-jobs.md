@@ -104,6 +104,7 @@ Supported schedule types (from the scheduler core):
 
 ## Run History and Retention
 - Run history is retained for `BOREALIS_JOB_HISTORY_DAYS` (default 30).
+- The job editor's Historical Runs tab groups `scheduled_job_runs` rows by occurrence timestamp, lists `Ran On` plus the overall summary status, and hydrates the standard device/output grid by calling `GET /api/scheduled_jobs/<job_id>/devices?occurrence=<timestamp>`.
 - Old runs are purged during scheduler ticks.
 
 ## API Endpoints
@@ -112,6 +113,7 @@ Supported schedule types (from the scheduler core):
 - `GET /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - get scheduled job.
 - `PUT /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - update scheduled job.
 - `POST /api/scheduled_jobs/<int:job_id>/toggle` (Token Authenticated) - enable/disable.
+- `POST /api/scheduled_jobs/<int:job_id>/rerun` (Token Authenticated) - queue a fresh immediate occurrence for an enabled job using the saved configuration.
 - `DELETE /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - delete scheduled job.
 - `GET /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - run history.
 - `GET /api/scheduled_jobs/<int:job_id>/devices` (Token Authenticated) - device results.
@@ -196,11 +198,13 @@ Supported schedule types (from the scheduler core):
 ### UI touch points
 - Scheduled job UI lives under `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/`.
 - The list page expects pagination and run history endpoints to respond quickly.
+- The list page exposes `Re-Run Job` for one selected enabled job. It calls `/api/scheduled_jobs/<id>/rerun`, which records a new pending occurrence and lets the scheduler/site-worker lane execute the saved configuration.
 - Session-target selection is currently an ad hoc quick-run concept; scheduled current-user jobs intentionally default to all active sessions until a dedicated scheduler UI is introduced.
 - WebUI deep links:
 - Create route: `/jobs/new`
 - Edit route: `/jobs/<job_id>`
 - Scheduled automation tab query keys: `job_name`, `assemblies`, `targets`, `schedule`, `execution_context`, `job_history` (edit mode only).
+- Scheduled automation history subtab query keys: `current_run`, `historical_runs`, and `historical_run`.
 - Automatic onboarding tab query keys: `job_name`, `scope`, `connection_method`, `schedule`, `discovered_devices` (edit mode only). Legacy `ssh_context` and `target_status` links still map to the current tabs.
 - Route registration and URL preservation are implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/paths.js`; component-level tab URL sync is implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/Create_Job.jsx`.
 

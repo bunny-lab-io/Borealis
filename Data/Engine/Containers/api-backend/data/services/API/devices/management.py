@@ -22,6 +22,7 @@
 # - GET /api/sites/device_map (Token Authenticated) - Provides hostname to site assignment mapping data.
 # - POST /api/sites/assign (Token Authenticated (Admin)) - Assigns a set of devices to a given site.
 # - POST /api/sites/rename (Token Authenticated (Admin)) - Renames an existing site record.
+# - POST /api/sites/<int:site_id>/auto-approval (Token Authenticated (Admin)) - Sets or clears temporary site-level device auto-approval.
 # - GET /api/repo/current_hash (Device or Token Authenticated) - Fetches the current agent repository hash (with caching).
 # - GET/POST /api/agent/hash (Device Authenticated) - Retrieves or updates an agent hash record bound to the authenticated device.
 # - GET /api/agent/hash_list (Token Authenticated (Admin + Loopback)) - Returns stored agent hash metadata for localhost diagnostics.
@@ -167,6 +168,13 @@ def _generate_install_code() -> str:
 
 
 def _row_to_site(row: Tuple[Any, ...]) -> Dict[str, Any]:
+    auto_approve_until = 0
+    if len(row) > 6 and row[6] is not None:
+        try:
+            auto_approve_until = int(row[6])
+        except Exception:
+            auto_approve_until = 0
+    now_ts = int(time.time())
     return {
         "id": row[0],
         "name": row[1],
@@ -174,6 +182,8 @@ def _row_to_site(row: Tuple[Any, ...]) -> Dict[str, Any]:
         "created_at": row[3] or 0,
         "device_count": row[4] or 0,
         "enrollment_code": row[5] or "",
+        "auto_approve_until": auto_approve_until,
+        "auto_approval_active": bool(auto_approve_until and auto_approve_until > now_ts),
     }
 
 
@@ -2283,7 +2293,8 @@ class DeviceManagementService:
                    s.description,
                    s.created_at,
                    COALESCE(ds.cnt, 0) AS device_count,
-                   s.enrollment_code
+                   s.enrollment_code,
+                   s.auto_approve_until
               FROM sites AS s
          LEFT JOIN (
                    SELECT site_id, COUNT(*) AS cnt
@@ -2542,6 +2553,41 @@ class DeviceManagementService:
         except Exception as exc:
             conn.rollback()
             self.logger.debug("Failed to rename site", exc_info=True)
+            return {"error": str(exc)}, 500
+        finally:
+            conn.close()
+
+    def update_site_auto_approval(self, site_id: Any, auto_approve_until: Any) -> Tuple[Dict[str, Any], int]:
+        try:
+            site_id_int = int(site_id)
+        except Exception:
+            return {"error": "invalid id"}, 400
+        until_value: Optional[int] = None
+        if auto_approve_until not in (None, "", 0, "0"):
+            try:
+                until_value = int(auto_approve_until)
+            except Exception:
+                return {"error": "invalid auto_approve_until"}, 400
+            if until_value <= int(time.time()):
+                return {"error": "auto_approve_until must be in the future"}, 400
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE sites SET auto_approve_until = ? WHERE id = ?",
+                (until_value, site_id_int),
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                return {"error": "site not found"}, 404
+            conn.commit()
+            row = self._fetch_site_row(cur, site_id_int)
+            if not row:
+                return {"error": "site not found"}, 404
+            return _row_to_site(row), 200
+        except Exception as exc:
+            conn.rollback()
+            self.logger.debug("Failed to update site auto approval", exc_info=True)
             return {"error": str(exc)}, 500
         finally:
             conn.close()
@@ -3041,6 +3087,16 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify(payload), status
         data = request.get_json(silent=True) or {}
         payload, status = service.rename_site(data.get("id"), (data.get("new_name") or "").strip())
+        return jsonify(payload), status
+
+    @blueprint.route("/api/sites/<int:site_id>/auto-approval", methods=["POST"])
+    def _sites_auto_approval(site_id: int):
+        requirement = service._require_admin()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+        data = request.get_json(silent=True) or {}
+        payload, status = service.update_site_auto_approval(site_id, data.get("auto_approve_until"))
         return jsonify(payload), status
 
     @blueprint.route("/api/repo/current_hash", methods=["GET"])

@@ -155,7 +155,8 @@ def _ensure_sites(conn: sqlite3.Connection, *, logger: Optional[logging.Logger])
                 name TEXT UNIQUE NOT NULL,
                 description TEXT,
                 created_at INTEGER,
-                enrollment_code TEXT
+                enrollment_code TEXT,
+                auto_approve_until INTEGER
             )
             """
         )
@@ -173,6 +174,8 @@ def _ensure_sites(conn: sqlite3.Connection, *, logger: Optional[logging.Logger])
         columns = {row[1] for row in cur.fetchall()}
         if "enrollment_code" not in columns:
             cur.execute("ALTER TABLE sites ADD COLUMN enrollment_code TEXT")
+        if "auto_approve_until" not in columns:
+            cur.execute("ALTER TABLE sites ADD COLUMN auto_approve_until INTEGER")
         if "enrollment_code_id" in columns:
             _rebuild_sites_table(conn, logger=logger)
     except Exception as exc:
@@ -195,20 +198,25 @@ def _rebuild_sites_table(conn: sqlite3.Connection, *, logger: Optional[logging.L
                 name TEXT UNIQUE NOT NULL,
                 description TEXT,
                 created_at INTEGER,
-                enrollment_code TEXT
+                enrollment_code TEXT,
+                auto_approve_until INTEGER
             )
             """
         )
+        cur.execute("PRAGMA table_info(sites)")
+        columns = {row[1] for row in cur.fetchall()}
+        auto_approve_expr = "auto_approve_until" if "auto_approve_until" in columns else "NULL"
         cur.execute(
             """
-            INSERT INTO sites_new (id, name, description, created_at, enrollment_code)
+            INSERT INTO sites_new (id, name, description, created_at, enrollment_code, auto_approve_until)
             SELECT id,
                    name,
                    description,
                    created_at,
-                   enrollment_code
+                   enrollment_code,
+                   {auto_approve_expr}
               FROM sites
-            """
+            """.format(auto_approve_expr=auto_approve_expr)
         )
         cur.execute("DROP TABLE sites")
         cur.execute("ALTER TABLE sites_new RENAME TO sites")

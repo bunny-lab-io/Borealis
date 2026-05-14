@@ -288,7 +288,7 @@ finally:
 #### `sites`
 - Status: Active.
 - Purpose: Site records and static enrollment codes.
-- Columns: `id`, `name`, `description`, `created_at`, `enrollment_code`.
+- Columns: `id`, `name`, `description`, `created_at`, `enrollment_code`, `auto_approve_until`.
 - Constraints and indexes:
 - `id` primary key.
 - `name` unique.
@@ -301,6 +301,7 @@ finally:
 - Notes:
 - Rebuild migration removes legacy `enrollment_code_id` if present.
 - Current design stores site-code association directly in this table.
+- `auto_approve_until` stores a UTC epoch timestamp for temporary site-level auto-approval. Enrollment only auto-approves while the timestamp is in the future and hostname conflict checks are safe.
 
 #### `device_approvals`
 - Status: Active.
