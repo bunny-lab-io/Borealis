@@ -70,8 +70,8 @@ const RAW_BOREALIS_BASE_URL = "https://raw.githubusercontent.com/bunny-lab-io/Bo
 const INSTALL_OS_OPTIONS = [
   { id: "windows", label: "Windows" },
   { id: "linux", label: "Linux" },
-  { id: "macos", label: "MacOS" },
 ];
+const LINUX_AGENT_INSTALL_DIR = "/opt/Borealis/Agent";
 
 const MAGIC_UI = {
   shellBg:
@@ -438,7 +438,8 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
 
   if (osId === "windows") {
     const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/windows-amd64/Agent.exe");
-    return `$borealisAgent = Join-Path $env:TEMP "Borealis-Agent.exe"; ` +
+    return `$ErrorActionPreference = "Stop"; ` +
+      `$borealisAgent = Join-Path $env:TEMP "Borealis-Agent.exe"; ` +
       `Invoke-WebRequest -UseBasicParsing -Uri ${quotePowerShellValue(agentUrl)} -OutFile $borealisAgent; ` +
       `& $borealisAgent --server-url ${quotePowerShellValue(normalizedServerUrl)} ` +
       `--site-enrollment-code ${quotePowerShellValue(normalizedEnrollmentCode)}`;
@@ -447,11 +448,19 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
   if (osId === "linux") {
     const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/linux-amd64/Agent");
     const urlArg = usesDefaultBranch ? agentUrl : quoteShellValue(agentUrl);
+    const installDir = quoteShellValue(LINUX_AGENT_INSTALL_DIR);
+    const agentPath = `${LINUX_AGENT_INSTALL_DIR}/Agent`;
+    const quotedAgentPath = quoteShellValue(agentPath);
     const launchArgs = `--server-url "${escapeShellDoubleQuoted(normalizedServerUrl)}" ` +
       `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}" --install-service`;
-    return `borealisAgent="$(mktemp /tmp/borealis-agent.XXXXXX)"; ` +
-      `curl -fsSL ${urlArg} -o "$borealisAgent"; chmod 700 "$borealisAgent"; ` +
-      `if [ "$(id -u)" -eq 0 ]; then "$borealisAgent" ${launchArgs}; else sudo "$borealisAgent" ${launchArgs}; fi`;
+    return `set -e; borealisAgent="$(mktemp /tmp/borealis-agent.XXXXXX)"; ` +
+      `trap 'rm -f "$borealisAgent"' EXIT; ` +
+      `if command -v curl >/dev/null 2>&1; then curl -fsSL ${urlArg} -o "$borealisAgent"; ` +
+      `elif command -v wget >/dev/null 2>&1; then wget -qO "$borealisAgent" ${urlArg}; ` +
+      `else echo "curl or wget required" >&2; exit 43; fi; ` +
+      `chmod 700 "$borealisAgent"; ` +
+      `if [ "$(id -u)" -eq 0 ]; then mkdir -p ${installDir}; install -m 700 "$borealisAgent" ${quotedAgentPath}; ${quotedAgentPath} ${launchArgs}; ` +
+      `else sudo mkdir -p ${installDir}; sudo install -m 700 "$borealisAgent" ${quotedAgentPath}; sudo ${quotedAgentPath} ${launchArgs}; fi`;
   }
   return "";
 }

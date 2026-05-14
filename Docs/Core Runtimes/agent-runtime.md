@@ -127,7 +127,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Bootstrap: `Agent.exe` owns deploy, repair, update check, config write, scheduled-task registration, and runtime. Windows onboarding stages the Go binary from `Data/Agent/dist/windows-amd64/Agent.exe`; the installed copy runs from `C:\Borealis\Agent.exe`.
 - Windows support dependencies: `Agent.exe` can still install UltraVNC and WireGuard from official installers for later role ports. It does not stage Python, create a venv, or call `launch_service.ps1`.
 - Existing Windows agents are repairable when `C:\Borealis\Agent.exe`, the `Borealis Agent` scheduled task, and an Engine-accepted token in `config.json` are present.
-- Linux first install: copy `Data/Agent/dist/linux-amd64/Agent` to the target Agent directory, then run `./Agent --server-url <url> --site-enrollment-code <code> --install-service` as root.
+- Linux first install: copy `Data/Agent/dist/linux-amd64/Agent` to `/opt/Borealis/Agent/Agent`, then run `/opt/Borealis/Agent/Agent --server-url <url> --site-enrollment-code <code> --install-service` as root.
 - Edit in `Data/Agent`, not `/Agent`; runtime copies are ephemeral and wiped regularly.
 - Keep Linux Agent installation separate from deployed Engine runtime roots.
 

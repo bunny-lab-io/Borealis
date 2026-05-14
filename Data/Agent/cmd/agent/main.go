@@ -51,6 +51,10 @@ func run() int {
 		return 1
 	}
 	if installService {
+		if err := persistInstallConfig(options); err != nil {
+			fmt.Fprintf(os.Stderr, "persist install config: %v\n", err)
+			return 1
+		}
 		if err := agentruntime.InstallService(exePath); err != nil {
 			fmt.Fprintf(os.Stderr, "install service: %v\n", err)
 			return 1
@@ -98,4 +102,26 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+func persistInstallConfig(options agentruntime.Options) error {
+	configPath := options.ConfigPath
+	if configPath == "" {
+		resolved, err := agentconfig.PathFromBinary()
+		if err != nil {
+			return err
+		}
+		configPath = resolved
+	}
+	cfg, err := agentconfig.LoadOrCreate(configPath)
+	if err != nil {
+		return err
+	}
+	if options.ServerURL != "" {
+		cfg.ServerURL = agentconfig.NormalizeServerURL(options.ServerURL)
+	}
+	if options.EnrollmentCode != "" {
+		cfg.EnrollmentCode = options.EnrollmentCode
+	}
+	return agentconfig.Save(configPath, &cfg)
 }

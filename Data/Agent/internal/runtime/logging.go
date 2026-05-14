@@ -8,7 +8,7 @@ import (
 )
 
 func OpenLogger(configPath string, verbose bool) (*log.Logger, func()) {
-	logPath := filepath.Join(filepath.Dir(configPath), "Agent", "Logs", "agent.log")
+	logPath := logPathForConfig(configPath)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return log.New(os.Stdout, "", log.LstdFlags), func() {}
 	}

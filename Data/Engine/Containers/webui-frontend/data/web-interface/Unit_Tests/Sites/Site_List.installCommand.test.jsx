@@ -10,12 +10,15 @@ describe("site install command builder", () => {
     );
 
     expect(command).toContain("Data/Agent/dist/linux-amd64/Agent");
-    expect(command).toContain('if [ "$(id -u)" -eq 0 ]; then "$borealisAgent"');
-    expect(command).toContain('else sudo "$borealisAgent"');
+    expect(command).toContain('install -m 700 "$borealisAgent" "/opt/Borealis/Agent/Agent"');
+    expect(command).toContain('if [ "$(id -u)" -eq 0 ]; then mkdir -p "/opt/Borealis/Agent"');
+    expect(command).toContain('else sudo mkdir -p "/opt/Borealis/Agent"');
+    expect(command).toContain('sudo "/opt/Borealis/Agent/Agent"');
     expect(command).not.toContain("| sudo bash");
     expect(command).toContain('--server-url "https://borealis.example.com"');
     expect(command).toContain('--site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"');
     expect(command).toContain("--install-service");
+    expect(command).not.toContain("Agent.exe");
   });
 
   it("preserves branch selection while using the Linux Go Agent artifact path", () => {
@@ -49,6 +52,7 @@ describe("site install command builder", () => {
     );
 
     expect(command).toContain("Data/Agent/dist/windows-amd64/Agent.exe");
+    expect(command).toContain('$ErrorActionPreference = "Stop"');
     expect(command).toContain("Invoke-WebRequest -UseBasicParsing");
     expect(command).toContain('--server-url "https://borealis.example.com"');
     expect(command).toContain('--site-enrollment-code "CODE-1234"');
