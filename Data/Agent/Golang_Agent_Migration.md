@@ -78,26 +78,27 @@ Back to Docs Index: ../../Docs/index.md
 36. Added Go Process Management role for live process snapshots, cache reuse, parent/child metadata, and process termination.
 37. Validated Go Process Management task termination on real Windows/Linux targets and Linux CPU/memory reporting.
 38. Added process metric collectors for Windows CPU/disk activity plus Linux disk/network rate deltas and Windows TCP network rate deltas.
+39. Validated Go Process Management CPU, disk, network, memory, and task termination metrics on real Windows/Linux targets and marked process management migration complete.
+40. Added Go Service Management role for Windows service inventory, Linux systemd service inventory, Engine details publishing, role health, and operator start/stop/restart requests.
 
 ## In Progress
 
 1. Validate Engine onboarding/update artifact contracts against a deployed Engine.
-2. Validate Go Process Management Windows CPU/disk/network metrics and Linux disk/network metrics after redeploy.
+2. Validate Go Service Management inventory and start/stop/restart actions on real Windows/Linux targets after redeploy.
 
 ## Pending
 
 1. Implement full Windows CURRENTUSER helper/tray broker in Go using same binary helper mode for richer session inventory and long-lived desktop helpers.
-2. Implement service management role in Go.
-3. Implement software inventory/actions role in Go.
-4. Implement WireGuard role in Go.
-5. Implement remote shell over WireGuard in Go.
-6. Implement VNC lifecycle and credential broker in Go.
-7. Implement full release-channel update format and Engine artifact packaging for Go binaries.
-8. Implement Linux `Agent` deployment/bootstrap parity.
-9. Decide whether macros/node screenshot should be retired or ported.
-10. Rework tray UI/status as optional Go/native helper or external UI.
-11. Add fake Engine HTTP/Socket.IO harness coverage for live `connect_agent`, `quick_job_run`, `file_management_request`, and `process_management_request`.
-12. Add Engine contract tests for onboarding/update artifact path changes.
+2. Implement software inventory/actions role in Go.
+3. Implement WireGuard role in Go.
+4. Implement remote shell over WireGuard in Go.
+5. Implement VNC lifecycle and credential broker in Go.
+6. Implement full release-channel update format and Engine artifact packaging for Go binaries.
+7. Implement Linux `Agent` deployment/bootstrap parity.
+8. Decide whether macros/node screenshot should be retired or ported.
+9. Rework tray UI/status as optional Go/native helper or external UI.
+10. Add fake Engine HTTP/Socket.IO harness coverage for live `connect_agent`, `quick_job_run`, `file_management_request`, `process_management_request`, and `service_control_action`.
+11. Add Engine contract tests for onboarding/update artifact path changes.
 
 ## Release-Blocking Technical Debt
 
@@ -108,4 +109,4 @@ Back to Docs Index: ../../Docs/index.md
 5. Manual Windows acceptance has validated fresh enrollment, SYSTEM script execution, and CURRENTUSER PowerShell/Batch execution; update check validation and final config access-control decision remain open.
 6. Manual Linux acceptance has validated service install, fresh enrollment, root SYSTEM Bash execution, and root-owned `0600` config; update behavior decision remains open.
 7. Windows `config.json` ACL hardening is deferred because current install ACL changes blocked administrator repair/uninstall workflows during real-host testing.
-8. Process Management has Go unit coverage and Engine contract compatibility; live Windows/Linux acceptance still needs operator validation after redeploy.
+8. Service Management has Go unit coverage and Engine contract compatibility; live Windows/Linux acceptance still needs operator validation after redeploy.

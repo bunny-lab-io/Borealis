@@ -14,6 +14,7 @@ import (
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/device_audit"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/file_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/process_management"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/service_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/system_context"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/transport"
 )
@@ -39,6 +40,7 @@ type Agent struct {
 	auditor    *deviceaudit.Auditor
 	files      *filemanagement.Manager
 	processes  *processmanagement.Manager
+	services   *servicemanagement.Manager
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -75,6 +77,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	auditor := deviceaudit.NewAuditor()
 	fileManager := filemanagement.New(authClient, hostname)
 	processManager := processmanagement.New(hostname)
+	serviceManager := servicemanagement.New(authClient, hostname, options.ServiceMode)
 	return &Agent{
 		options:    options,
 		configPath: configPath,
@@ -87,6 +90,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		auditor:    auditor,
 		files:      fileManager,
 		processes:  processManager,
+		services:   serviceManager,
 	}, nil
 }
 
@@ -95,6 +99,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.authClient.EnsureAuthenticated(ctx); err != nil {
 		_ = a.postStatus(context.Background(), "authenticating", "unhealthy", err.Error())
 		return err
+	}
+	if a.services != nil {
+		a.services.Start(ctx)
 	}
 	if err := a.postStatus(ctx, "status_channel_online", "healthy", "Status channel online."); err != nil {
 		a.logger.Printf("status post failed: %v", err)
@@ -164,6 +171,9 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	if a.processes != nil {
 		socket.On("process_management_request", a.processes.HandleRequest)
 	}
+	if a.services != nil {
+		socket.On("service_control_action", a.services.HandleControlAction)
+	}
 	socket.OnConnected(func(ctx context.Context) error {
 		payload := map[string]any{
 			"agent_id":     a.authClient.AgentID(),
@@ -174,6 +184,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 				"system_scripts":     true,
 				"file_management":    true,
 				"process_management": true,
+				"service_management": true,
 				"python_fallback":    false,
 				"linux_currentuser":  false,
 			},
@@ -259,6 +270,18 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	if a.processes != nil {
 		processHealth = a.processes.Health()
 	}
+	serviceHealth := servicemanagement.RoleHealth{
+		Status:     "unsupported",
+		StatusCode: "unsupported",
+		Detail:     "Service Management role is unavailable.",
+		Details: map[string]any{
+			"running_status": "Unavailable",
+			"runtime":        "go",
+		},
+	}
+	if a.services != nil {
+		serviceHealth = a.services.Health()
+	}
 	metrics := map[string]any{
 		"service_mode":     auth.NormalizeServiceMode(a.options.ServiceMode),
 		"operating_system": operatingSystemName(),
@@ -333,6 +356,17 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 					"detail":          processHealth.Detail,
 					"last_checked_at": time.Now().Unix(),
 					"details":         processHealth.Details,
+				},
+				{
+					"role_id":         "system:service_management",
+					"role_name":       "service_management",
+					"role_label":      "Service Management",
+					"context":         "system",
+					"status":          serviceHealth.Status,
+					"status_code":     serviceHealth.StatusCode,
+					"detail":          serviceHealth.Detail,
+					"last_checked_at": time.Now().Unix(),
+					"details":         serviceHealth.Details,
 				},
 			},
 		},

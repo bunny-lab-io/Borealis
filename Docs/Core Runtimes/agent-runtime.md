@@ -18,7 +18,8 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `internal/roles/device_audit` - core CPU, memory, storage media type, removable media, network link speed, OS/build, hardware model/serial with motherboard serial fallback, last reboot, internal IP, device type, uptime, and last-user inventory published through heartbeat payloads.
 - `internal/roles/file_management` - SYSTEM/root file-management browse, upload-conflict preflight, lightweight text editing, copy/cut/paste mutations, delete, mkdir, rename, move, upload pull, and download artifact transfer.
 - `internal/roles/process_management` - SYSTEM/root live process snapshots, parent/child metadata, cache reuse, and operator-triggered process termination for the Device Summary `Processes` tab.
-- Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`: service management, software management, WireGuard, remote shell, VNC, tray UI, macros, and node screenshot.
+- `internal/roles/service_management` - SYSTEM/root service inventory publishing plus operator-triggered start, stop, and restart through `service_control_action`.
+- Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`: software management, WireGuard, remote shell, VNC, tray UI, macros, and node screenshot.
 
 ## Agent Settings and Storage
 - Installed configuration file: `config.json` beside `Agent.exe`.
@@ -77,6 +78,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
   - `quick_job_run` dispatch (system jobs plus helper-backed current-user jobs).
   - `file_management_request` browse, upload-conflict preflight, lightweight text-edit, copy/cut/paste mutate, and transfer orchestration for the Device Summary `File Management` tab.
   - `process_management_request` live process snapshots and process termination for the Device Summary `Processes` tab.
+  - `service_control_action` start, stop, and restart requests for services discovered by the Service Management role.
   - `vpn_tunnel_start` (WireGuard lifecycle; tunnels are persistent and ignore stop events).
   - `connect_agent` registration (agent socket registry).
 - The SYSTEM socket advertises `helper_contexts=["currentuser"]` when the session broker is running so the Engine can route logical current-user work through the same socket.
@@ -158,14 +160,14 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 
 #### Execution contexts and roles
 - Go roles are explicit packages under `Data/Agent/internal/roles`.
-- First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER direct session PowerShell/Batch execution, core device audit inventory, SYSTEM/root file management, and SYSTEM/root process management.
+- First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER direct session PowerShell/Batch execution, core device audit inventory, SYSTEM/root file management, SYSTEM/root process management, and SYSTEM/root service management.
 - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`.
 - SYSTEM tasks depend on scheduled-task creation rights; failures should surface through Engine logging.
 
 #### Platform parity
 - Windows is the reference path and has the broadest tested feature surface.
 - Linux Go runtime builds as `Agent`, installs through systemd, and supports root/SYSTEM Bash quick jobs in first PR.
-- Linux CURRENTUSER, tray/helper UI, WireGuard, remote shell, service/software management, and VNC are pending Go ports.
+- Linux CURRENTUSER, tray/helper UI, WireGuard, remote shell, software management, and VNC are pending Go ports.
 
 #### Ansible support
 - The agent no longer hosts an Ansible playbook execution role.
