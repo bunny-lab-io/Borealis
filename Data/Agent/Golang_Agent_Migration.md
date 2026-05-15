@@ -58,11 +58,12 @@ Back to Docs Index: ../../Docs/index.md
 17. Updated Agent runtime/security/testing docs for Go Agent, `config.json`, and legacy source relocation.
 18. Updated SBOM Agent dependency inventory for Go runtime dependencies.
 19. Built Windows `Agent.exe` and Linux `Agent` artifacts under `Data/Agent/dist`.
+20. Validated Windows real-host enrollment, approval, startup timeline, and SYSTEM PowerShell quick-job execution.
+21. Validated Linux real-host systemd service install/start and root-owned `0600` `config.json`.
 
 ## In Progress
 
-1. Validate Windows bootstrap behavior on a real Windows host.
-2. Validate Linux systemd service install on a real Linux target.
+1. Validate Linux enrollment approval, online status, startup timeline, and SYSTEM Bash quick-job execution on a real Linux target.
 3. Validate Engine onboarding/update artifact contracts against a deployed Engine.
 4. Finish Windows CURRENTUSER helper broker in Go.
 
