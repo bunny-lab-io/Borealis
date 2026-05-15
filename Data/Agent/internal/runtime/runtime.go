@@ -108,6 +108,9 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 
 func (a *Agent) Run(ctx context.Context) error {
 	a.logger.Printf("agent starting service_mode=%s config=%s", auth.NormalizeServiceMode(a.options.ServiceMode), a.configPath)
+	if err := cleanupStartupTemp(a.configPath, a.logger); err != nil {
+		a.logger.Printf("startup temp cleanup failed: %v", err)
+	}
 	if err := a.authClient.EnsureAuthenticated(ctx); err != nil {
 		_ = a.postStatus(context.Background(), "authenticating", "unhealthy", err.Error())
 		return err

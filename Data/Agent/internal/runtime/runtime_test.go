@@ -1,6 +1,11 @@
 package agentruntime
 
-import "testing"
+import (
+	"log"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestStartupMilestonesSteadyStateComplete(t *testing.T) {
 	milestones := startupMilestones("steady_state_online", "healthy", "ready", 123)
@@ -48,5 +53,36 @@ func TestStartupMilestonesFailureMarksPhaseFailed(t *testing.T) {
 	}
 	if byKey["authenticated"]["state"] != "pending" {
 		t.Fatalf("authenticated state = %v", byKey["authenticated"]["state"])
+	}
+}
+
+func TestCleanupStartupTempRemovesOnlyAgentTemp(t *testing.T) {
+	root := t.TempDir()
+	tempDir := filepath.Join(root, "Temp")
+	if err := os.MkdirAll(filepath.Join(tempDir, "Onboarding"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "Onboarding", "state.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cleanupStartupTemp(filepath.Join(root, "config.json"), log.New(os.Stdout, "", 0)); err != nil {
+		t.Fatalf("cleanupStartupTemp returned error: %v", err)
+	}
+	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
+		t.Fatalf("Temp still exists or stat failed with unexpected error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "config.json")); err != nil {
+		t.Fatalf("config.json was touched: %v", err)
+	}
+}
+
+func TestCleanupStartupTempNoopsWhenMissing(t *testing.T) {
+	root := t.TempDir()
+	if err := cleanupStartupTemp(filepath.Join(root, "config.json"), nil); err != nil {
+		t.Fatalf("cleanupStartupTemp returned error: %v", err)
 	}
 }

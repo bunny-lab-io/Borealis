@@ -26,6 +26,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 ## Agent Settings and Storage
 - Installed configuration file: `config.json` beside `Agent.exe`.
 - WireGuard runtime configuration file: `wireguard.conf` beside `Agent.exe`/`Agent`, generated from Engine tunnel material.
+- Startup cleanup removes `Temp` under the Agent install root so onboarding payload/state files do not persist after service start.
 - `config.json` stores `schema_version`, `server_url`, `enrollment_code`, `agent.guid`, `agent.agent_id`, Ed25519 keys, access/refresh tokens, and Engine script-signing trust material.
 - Windows protection: ACL hardening is deferred in the current Go migration branch; files inherit permissions from `C:\Borealis`.
 - Linux protection: root-owned `0600` file with `0700` parent directory.
