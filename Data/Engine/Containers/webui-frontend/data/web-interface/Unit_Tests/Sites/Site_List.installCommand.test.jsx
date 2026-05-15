@@ -17,6 +17,7 @@ describe("site install command builder", () => {
     expect(command).not.toContain("| sudo bash");
     expect(command).toContain('--server-url "https://borealis.example.com"');
     expect(command).toContain('--site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"');
+    expect(command).toContain('--repo-ref "main"');
     expect(command).toContain("--install-service");
     expect(command).not.toContain("Agent.exe");
   });
@@ -30,6 +31,7 @@ describe("site install command builder", () => {
     );
 
     expect(command).toContain("/refs/heads/feature/proxmox-agent/Data/Agent/dist/linux-amd64/Agent");
+    expect(command).toContain('--repo-ref "feature/proxmox-agent"');
     expect(command).not.toContain("--repo-branch");
   });
 
@@ -61,6 +63,7 @@ describe("site install command builder", () => {
     expect(command).toContain("finally { Remove-Item $borealisAgent");
     expect(command).toContain('--server-url "https://borealis.example.com"');
     expect(command).toContain('--site-enrollment-code "CODE-1234"');
+    expect(command).toContain('--repo-ref "feature/test-agent-install"');
     expect(command).not.toContain("Data/Agent/Bootstrap/Agent.exe");
     expect(command).not.toContain(".ps1");
     expect(command).not.toContain("--serverurl");

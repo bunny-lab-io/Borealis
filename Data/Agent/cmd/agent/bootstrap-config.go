@@ -32,6 +32,7 @@ var defaultRepoRef = "main"
 type cliOptions struct {
 	ServerURL          string
 	SiteEnrollmentCode string
+	RepoRef            string
 	Uninstall          bool
 	Verbose            bool
 }
@@ -83,6 +84,12 @@ func parseCLI(args []string) (cliOptions, error) {
 			}
 			i++
 			opts.SiteEnrollmentCode = strings.TrimSpace(args[i])
+		case "--repo-ref", "--repo-branch":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return opts, errors.New(arg + " requires value")
+			}
+			i++
+			opts.RepoRef = strings.TrimSpace(args[i])
 		case "-uninstall":
 			opts.Uninstall = true
 		case "-verbose", "--verbose":
@@ -118,6 +125,9 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 	}
 	if cli.SiteEnrollmentCode != "" {
 		cfg.SiteEnrollmentCode = cli.SiteEnrollmentCode
+	}
+	if cli.RepoRef != "" {
+		cfg.RepoRef = cli.RepoRef
 	}
 	if cli.Verbose {
 		cfg.Verbose = true

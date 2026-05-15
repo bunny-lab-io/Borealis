@@ -445,6 +445,7 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
       `Unblock-File -Path $borealisAgent -ErrorAction SilentlyContinue; ` +
       `& $borealisAgent --server-url ${quotePowerShellValue(normalizedServerUrl)} ` +
       `--site-enrollment-code ${quotePowerShellValue(normalizedEnrollmentCode)} ` +
+      `--repo-ref ${quotePowerShellValue(normalizedBranch)} ` +
       `} finally { Remove-Item $borealisAgent -Force -ErrorAction SilentlyContinue }`;
   }
 
@@ -455,7 +456,8 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
     const agentPath = `${LINUX_AGENT_INSTALL_DIR}/Agent`;
     const quotedAgentPath = quoteShellValue(agentPath);
     const launchArgs = `--server-url "${escapeShellDoubleQuoted(normalizedServerUrl)}" ` +
-      `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}" --install-service`;
+      `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}" ` +
+      `--repo-ref "${escapeShellDoubleQuoted(normalizedBranch)}" --install-service`;
     return `set -e; borealisAgent="$(mktemp /tmp/borealis-agent.XXXXXX)"; ` +
       `trap 'rm -f "$borealisAgent"' EXIT; ` +
       `if command -v curl >/dev/null 2>&1; then curl -fsSL ${urlArg} -o "$borealisAgent"; ` +

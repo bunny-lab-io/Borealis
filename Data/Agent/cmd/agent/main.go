@@ -31,6 +31,7 @@ func run() int {
 	flag.StringVar(&options.ServerURL, "server-url", "", "Borealis Engine public URL.")
 	flag.StringVar(&options.EnrollmentCode, "site-enrollment-code", "", "Site enrollment code.")
 	flag.StringVar(&options.EnrollmentCode, "enrollment-code", "", "Enrollment code.")
+	flag.StringVar(&options.RepoRef, "repo-ref", "", "Borealis repository branch/ref used for install/update metadata.")
 	flag.BoolVar(&options.Verbose, "verbose", false, "Mirror logs to stdout.")
 	flag.BoolVar(&options.Once, "once", false, "Run auth and heartbeat once, then exit.")
 	flag.BoolVar(&installService, "install-service", false, "Install and start Borealis Agent service.")
@@ -122,6 +123,13 @@ func persistInstallConfig(options agentruntime.Options) error {
 	}
 	if options.EnrollmentCode != "" {
 		cfg.EnrollmentCode = options.EnrollmentCode
+	}
+	if options.RepoRef != "" {
+		if cfg.Extra == nil {
+			cfg.Extra = map[string]string{}
+		}
+		cfg.Extra["bootstrap_repo_ref"] = options.RepoRef
+		cfg.Extra["bootstrap_runtime"] = "go"
 	}
 	return agentconfig.Save(configPath, &cfg)
 }

@@ -90,6 +90,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 ### Token storage
 - Refresh/access tokens are stored in `config.json`.
 - Device GUID and Engine agent ID are stored in `config.json`.
+- `extra.bootstrap_repo_ref` records the branch/ref selected by the installer for later update-channel diagnostics. Direct install commands pass this through as `--repo-ref`.
 - When tokens are invalid or expired, the agent refreshes or re-enters enrollment.
 
 ### Logging

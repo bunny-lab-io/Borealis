@@ -65,6 +65,7 @@ Back to Docs Index: ../../Docs/index.md
 24. Validated Windows CURRENTUSER real-host script execution with user-writable Desktop canary success and root `C:\` write denial.
 25. Preserved startup timeline telemetry across heartbeat role-health merges by moving timeline status into a startup context.
 26. Cleaned PowerShell CLIXML progress/error output from Go quick-job result streams.
+27. Added `--repo-ref` install metadata flow so branch-selected installs persist the selected branch in `config.json`.
 
 ## In Progress
 
