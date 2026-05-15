@@ -20,9 +20,15 @@ func RestrictFile(path string) error {
 }
 
 func applyACL(path string) error {
+	systemGrant := "*S-1-5-18:F"
+	adminGrant := "*S-1-5-32-544:F"
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		systemGrant = "*S-1-5-18:(OI)(CI)F"
+		adminGrant = "*S-1-5-32-544:(OI)(CI)F"
+	}
 	commands := [][]string{
 		{"icacls.exe", path, "/inheritance:r"},
-		{"icacls.exe", path, "/grant:r", "*S-1-5-18:F", "*S-1-5-32-544:F"},
+		{"icacls.exe", path, "/grant:r", systemGrant, adminGrant},
 	}
 	for _, args := range commands {
 		cmd := exec.Command(args[0], args[1:]...)

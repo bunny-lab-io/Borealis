@@ -249,7 +249,7 @@ func dirExists(path string) bool {
 func ensureBootstrapDirs(cfg BootstrapConfig) error {
 	paths := []string{
 		cfg.InstallDir,
-		filepath.Join(cfg.InstallDir, "Agent", "Logs"),
+		filepath.Join(cfg.InstallDir, "Logs"),
 		filepath.Join(cfg.InstallDir, "Temp", "Onboarding"),
 		filepath.Join(cfg.InstallDir, "Dependencies"),
 	}
@@ -258,6 +258,28 @@ func ensureBootstrapDirs(cfg BootstrapConfig) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func applyInstallTreeACL(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	root := filepath.Clean(cfg.InstallDir)
+	if root == "." || root == string(filepath.Separator) {
+		return fmt.Errorf("refusing to ACL invalid install root %q", cfg.InstallDir)
+	}
+	if !dirExists(root) {
+		return fmt.Errorf("install root does not exist: %s", root)
+	}
+	logger.Tracef("Applying install tree ACLs: root=%s", root)
+	commands := [][]string{
+		{"icacls.exe", root, "/inheritance:r", "/T", "/C", "/Q"},
+		{"icacls.exe", root, "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F", "/T", "/C", "/Q"},
+	}
+	for _, args := range commands {
+		if _, err := runCommandTimeout(logger, 120*time.Second, args[0], args[1:]...); err != nil {
+			return err
+		}
+	}
+	logger.Tracef("Install tree ACLs applied.")
 	return nil
 }
 
