@@ -71,6 +71,7 @@ Back to Docs Index: ../../Docs/index.md
 29. Validated Windows CURRENTUSER Batch quick-job execution on a real Windows target.
 30. Improved Go device audit inventory for Windows OS/build, domain-qualified last user, model/serial, last reboot, removable media, and network link speed.
 31. Added storage media classification so fixed disks can report SSD/HDD instead of only Fixed Disk.
+32. Added motherboard/baseboard serial fallback when device BIOS/product serial is unavailable.
 
 ## In Progress
 

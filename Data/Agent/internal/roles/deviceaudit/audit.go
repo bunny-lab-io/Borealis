@@ -41,6 +41,7 @@ type platformMetadata struct {
 	SystemModelRaw  string
 	SystemModel     string
 	SystemSerial    string
+	BoardSerial     string
 }
 
 func NewAuditor() *Auditor {
@@ -59,7 +60,7 @@ func collectPlatformMetadata(ctx context.Context) platformMetadata {
 }
 
 func collectWindowsPlatformMetadata(ctx context.Context) platformMetadata {
-	const script = `$ErrorActionPreference='SilentlyContinue'; $os=Get-CimInstance Win32_OperatingSystem; $cs=Get-CimInstance Win32_ComputerSystem; $bios=Get-CimInstance Win32_BIOS; $cv=Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; $logon=Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI'; $lastBoot=''; if($os -and $os.LastBootUpTime){ $lastBoot=$os.LastBootUpTime.ToString('MM/dd/yyyy @ hh:mmtt') }; [pscustomobject]@{ Caption=$os.Caption; DisplayVersion=$cv.DisplayVersion; ReleaseId=$cv.ReleaseId; BuildNumber=$os.BuildNumber; UBR=$cv.UBR; Version=$os.Version; LastBootUpTime=$lastBoot; UserName=$cs.UserName; LastLoggedOnSAMUser=$logon.LastLoggedOnSAMUser; LastLoggedOnUser=$logon.LastLoggedOnUser; ComputerName=$env:COMPUTERNAME; Domain=$cs.Domain; PartOfDomain=[bool]$cs.PartOfDomain; Manufacturer=$cs.Manufacturer; Model=$cs.Model; SerialNumber=$bios.SerialNumber } | ConvertTo-Json -Compress -Depth 4`
+	const script = `$ErrorActionPreference='SilentlyContinue'; $os=Get-CimInstance Win32_OperatingSystem; $cs=Get-CimInstance Win32_ComputerSystem; $bios=Get-CimInstance Win32_BIOS; $baseboard=Get-CimInstance Win32_BaseBoard; $cv=Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; $logon=Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI'; $lastBoot=''; if($os -and $os.LastBootUpTime){ $lastBoot=$os.LastBootUpTime.ToString('MM/dd/yyyy @ hh:mmtt') }; [pscustomobject]@{ Caption=$os.Caption; DisplayVersion=$cv.DisplayVersion; ReleaseId=$cv.ReleaseId; BuildNumber=$os.BuildNumber; UBR=$cv.UBR; Version=$os.Version; LastBootUpTime=$lastBoot; UserName=$cs.UserName; LastLoggedOnSAMUser=$logon.LastLoggedOnSAMUser; LastLoggedOnUser=$logon.LastLoggedOnUser; ComputerName=$env:COMPUTERNAME; Domain=$cs.Domain; PartOfDomain=[bool]$cs.PartOfDomain; Manufacturer=$cs.Manufacturer; Model=$cs.Model; SerialNumber=$bios.SerialNumber; BaseBoardSerialNumber=$baseboard.SerialNumber } | ConvertTo-Json -Compress -Depth 4`
 	out, err := commandOutput(ctx, "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
 	if err != nil {
 		return platformMetadata{}
@@ -71,6 +72,8 @@ func collectWindowsPlatformMetadata(ctx context.Context) platformMetadata {
 	item := items[0]
 	manufacturer := normalizeHardwareString(asString(item["Manufacturer"]))
 	modelRaw := normalizeHardwareString(asString(item["Model"]))
+	systemSerial := normalizeHardwareString(asString(item["SerialNumber"]))
+	boardSerial := normalizeHardwareString(asString(item["BaseBoardSerialNumber"]))
 	return platformMetadata{
 		OperatingSystem: formatWindowsOperatingSystem(
 			asString(item["Caption"]),
@@ -85,7 +88,8 @@ func collectWindowsPlatformMetadata(ctx context.Context) platformMetadata {
 		Manufacturer:   manufacturer,
 		SystemModelRaw: modelRaw,
 		SystemModel:    combineManufacturerModel(manufacturer, modelRaw),
-		SystemSerial:   normalizeHardwareString(asString(item["SerialNumber"])),
+		SystemSerial:   firstNonEmpty(systemSerial, boardSerial),
+		BoardSerial:    boardSerial,
 	}
 }
 
@@ -103,13 +107,18 @@ func collectLinuxPlatformMetadata() platformMetadata {
 		readFile("/sys/class/dmi/id/product_serial"),
 		readFile("/sys/devices/virtual/dmi/id/product_serial"),
 	))
+	boardSerial := normalizeHardwareString(firstNonEmpty(
+		readFile("/sys/class/dmi/id/board_serial"),
+		readFile("/sys/devices/virtual/dmi/id/board_serial"),
+	))
 	return platformMetadata{
 		OperatingSystem: firstNonEmpty(osRelease["PRETTY_NAME"], osRelease["NAME"]),
 		LastUser:        currentUserName(),
 		Manufacturer:    manufacturer,
 		SystemModelRaw:  modelRaw,
 		SystemModel:     combineManufacturerModel(manufacturer, modelRaw),
-		SystemSerial:    serial,
+		SystemSerial:    firstNonEmpty(serial, boardSerial),
+		BoardSerial:     boardSerial,
 	}
 }
 
@@ -469,9 +478,13 @@ func addPlatformHardwareIdentity(cpu map[string]any, platform platformMetadata) 
 	if platform.SystemModel != "" {
 		cpu["system_model"] = platform.SystemModel
 	}
-	if platform.SystemSerial != "" {
-		cpu["system_serial_number"] = platform.SystemSerial
-		cpu["serial_number"] = platform.SystemSerial
+	if serial := firstNonEmpty(platform.SystemSerial, platform.BoardSerial); serial != "" {
+		cpu["system_serial_number"] = serial
+		cpu["serial_number"] = serial
+	}
+	if platform.BoardSerial != "" {
+		cpu["baseboard_serial_number"] = platform.BoardSerial
+		cpu["motherboard_serial_number"] = platform.BoardSerial
 	}
 	return cpu
 }
@@ -603,6 +616,8 @@ func normalizeHardwareString(value string) string {
 		"unknown",
 		"system product name",
 		"system serial number",
+		"base board serial number",
+		"serial number",
 		"to be filled by o.e.m.",
 		"to be filled by oem",
 		"default string",

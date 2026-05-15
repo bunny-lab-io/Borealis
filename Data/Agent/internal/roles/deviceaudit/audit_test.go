@@ -90,13 +90,18 @@ func TestHardwareIdentityHelpers(t *testing.T) {
 		SystemModelRaw: "Latitude 5450",
 		SystemModel:    combineManufacturerModel("Dell Inc.", "Latitude 5450"),
 		SystemSerial:   "ABC1234",
+		BoardSerial:    "BOARD1234",
 	}
 	cpu := addPlatformHardwareIdentity(map[string]any{"name": "Example CPU"}, platform)
-	if cpu["system_model"] != "Dell Inc. Latitude 5450" || cpu["system_serial_number"] != "ABC1234" {
+	if cpu["system_model"] != "Dell Inc. Latitude 5450" || cpu["system_serial_number"] != "ABC1234" || cpu["motherboard_serial_number"] != "BOARD1234" {
 		t.Fatalf("cpu identity = %#v", cpu)
 	}
 	if normalizeHardwareString("To Be Filled By O.E.M.") != "" {
 		t.Fatalf("placeholder hardware string was not removed")
+	}
+	fallback := addPlatformHardwareIdentity(map[string]any{}, platformMetadata{BoardSerial: "BOARD-ONLY"})
+	if fallback["system_serial_number"] != "BOARD-ONLY" {
+		t.Fatalf("motherboard fallback = %#v", fallback)
 	}
 }
 
