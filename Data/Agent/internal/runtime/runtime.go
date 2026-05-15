@@ -31,6 +31,7 @@ type Agent struct {
 	authClient *auth.Client
 	logger     *log.Logger
 	hostname   string
+	bootID     string
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -70,16 +71,17 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		authClient: authClient,
 		logger:     logger,
 		hostname:   hostname,
+		bootID:     fmt.Sprintf("%d", time.Now().Unix()),
 	}, nil
 }
 
 func (a *Agent) Run(ctx context.Context) error {
 	a.logger.Printf("agent starting service_mode=%s config=%s", auth.NormalizeServiceMode(a.options.ServiceMode), a.configPath)
 	if err := a.authClient.EnsureAuthenticated(ctx); err != nil {
-		_ = a.postStatus(context.Background(), "auth_failed", "unhealthy", err.Error())
+		_ = a.postStatus(context.Background(), "authenticating", "unhealthy", err.Error())
 		return err
 	}
-	if err := a.postStatus(ctx, "auth_complete", "healthy", "Agent authenticated."); err != nil {
+	if err := a.postStatus(ctx, "status_channel_online", "healthy", "Status channel online."); err != nil {
 		a.logger.Printf("status post failed: %v", err)
 	}
 	if err := a.postHeartbeat(ctx); err != nil {
@@ -133,6 +135,9 @@ func (a *Agent) socketLoop(ctx context.Context) error {
 }
 
 func (a *Agent) connectSocket(ctx context.Context) error {
+	if err := a.postStatus(ctx, "socket_connecting", "healthy", "Engine socket connecting."); err != nil {
+		a.logger.Printf("status post failed: %v", err)
+	}
 	headers := a.authClient.AuthHeaders()
 	socket := transport.NewClient(a.authClient.BaseURL(), headers)
 	dispatcher := currentuser.NewDispatcher()
@@ -158,23 +163,22 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 		if err := socket.Emit("connect_agent", payload); err != nil {
 			return err
 		}
-		_ = a.postStatus(ctx, "socket_connected", "healthy", "Agent socket connected.")
+		_ = a.postStatus(ctx, "steady_state_online", "healthy", "Agent steady state online.")
 		return nil
 	})
 	return socket.Connect(ctx)
 }
 
 func (a *Agent) postStatus(ctx context.Context, phase string, status string, message string) error {
+	now := time.Now().Unix()
 	payload := map[string]any{
 		"hostname":     a.hostname,
 		"service_mode": auth.NormalizeServiceMode(a.options.ServiceMode),
 		"phase":        phase,
 		"status":       status,
 		"message":      message,
-		"boot_id":      bootID(),
-		"milestones": []map[string]any{
-			{"name": phase, "status": status, "message": message, "completed_at": time.Now().Unix()},
-		},
+		"boot_id":      a.bootID,
+		"milestones":   startupMilestones(phase, status, message, now),
 	}
 	_, err := a.authClient.PostJSON(ctx, "/api/agent/status", payload, nil)
 	return err
@@ -210,9 +214,9 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 					"role_name":       "context_currentuser",
 					"role_label":      "Current User Context",
 					"context":         "currentuser",
-					"status":          "degraded",
-					"status_code":     "degraded",
-					"detail":          "Go CURRENTUSER helper broker is pending migration.",
+					"status":          "unsupported",
+					"status_code":     "unsupported",
+					"detail":          "Windows CURRENTUSER helper broker is pending Go migration.",
 					"last_checked_at": time.Now().Unix(),
 					"details": map[string]any{
 						"running_status": "Pending Migration",
@@ -230,6 +234,73 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	return err
 }
 
-func bootID() string {
-	return fmt.Sprintf("%d", time.Now().Unix())
+type startupMilestoneDefinition struct {
+	Key   string
+	Label string
+}
+
+var startupMilestoneDefinitions = []startupMilestoneDefinition{
+	{Key: "process_start", Label: "Agent process started"},
+	{Key: "server_config_loaded", Label: "Server configuration loaded"},
+	{Key: "identity_loaded", Label: "Device identity loaded"},
+	{Key: "authenticating", Label: "Engine authentication started"},
+	{Key: "authenticated", Label: "Engine authentication complete"},
+	{Key: "roles_loading", Label: "Agent role loading"},
+	{Key: "roles_ready", Label: "Agent roles ready"},
+	{Key: "status_channel_online", Label: "Status channel online"},
+	{Key: "socket_connecting", Label: "Engine socket connecting"},
+	{Key: "socket_connected", Label: "Engine socket connected"},
+	{Key: "steady_state_online", Label: "Agent steady state online"},
+}
+
+func startupMilestones(phase string, status string, message string, timestamp int64) []map[string]any {
+	normalizedPhase := strings.ToLower(strings.TrimSpace(phase))
+	if normalizedPhase == "socket_connected" {
+		normalizedPhase = "steady_state_online"
+	}
+	phaseRank := len(startupMilestoneDefinitions) - 1
+	for index, definition := range startupMilestoneDefinitions {
+		if definition.Key == normalizedPhase {
+			phaseRank = index
+			break
+		}
+	}
+	failed := strings.EqualFold(strings.TrimSpace(status), "unhealthy") || strings.EqualFold(strings.TrimSpace(status), "failed")
+	out := make([]map[string]any, 0, len(startupMilestoneDefinitions))
+	for index, definition := range startupMilestoneDefinitions {
+		state := "pending"
+		if index < phaseRank {
+			state = "complete"
+		} else if index == phaseRank {
+			if failed {
+				state = "failed"
+			} else if definition.Key == "steady_state_online" {
+				state = "complete"
+			} else {
+				state = "active"
+			}
+		}
+		if normalizedPhase == "steady_state_online" && index <= phaseRank {
+			state = "complete"
+		}
+		item := map[string]any{
+			"key":   definition.Key,
+			"label": definition.Label,
+			"state": state,
+		}
+		if state == "complete" || state == "active" || state == "failed" {
+			item["updated_at"] = timestamp
+		}
+		if state == "complete" {
+			item["completed_at"] = timestamp
+		}
+		if state == "active" {
+			item["started_at"] = timestamp
+		}
+		if state == "failed" {
+			item["detail"] = message
+		}
+		out = append(out, item)
+	}
+	return out
 }

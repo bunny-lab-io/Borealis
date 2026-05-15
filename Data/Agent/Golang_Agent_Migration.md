@@ -47,7 +47,7 @@ Back to Docs Index: ../../Docs/index.md
 6. Added Ed25519 identity generation and persistence.
 7. Added enrollment, token refresh, and authenticated REST helper.
 8. Added minimal Engine.IO/Socket.IO client.
-9. Added heartbeat/status payloads with Go runtime capability markers.
+9. Added heartbeat/status payloads with Go runtime capability markers and full startup timeline milestones.
 10. Added SYSTEM quick-job execution path with script decoding, env mapping, timeouts, and signature verification.
 11. Added Windows bootstrap integration into same `Agent.exe` package.
 12. Rewired Windows bootstrap deploy/repair to self-stage `Agent.exe`, write `config.json`, and run scheduled tasks directly.
@@ -68,7 +68,7 @@ Back to Docs Index: ../../Docs/index.md
 
 ## Pending
 
-1. Implement Windows CURRENTUSER helper broker in Go using same binary helper mode.
+1. Implement Windows CURRENTUSER helper broker in Go using same binary helper mode. Until this lands, Go reports the CURRENTUSER role as unsupported/skipped instead of recovering.
 2. Implement device audit inventory role in Go.
 3. Implement file management RPC and transfer endpoints in Go.
 4. Implement process management role in Go.
