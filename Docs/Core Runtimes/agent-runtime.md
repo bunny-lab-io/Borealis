@@ -10,7 +10,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Service modes: SYSTEM/root plus helper mode through the same binary. Windows CURRENTUSER helper execution is first-PR scope; Linux CURRENTUSER reports unsupported until ported.
 - Role system: compiled Go role registry under `Data/Agent/internal/roles`.
 - Networking: SYSTEM/root runtime owns REST to Engine APIs plus the single Socket.IO connection.
-- Security: Ed25519 identity keys, public CA + hostname validation for the Engine FQDN, signed script payloads, and protected `config.json` token/key storage.
+- Security: Ed25519 identity keys, public CA + hostname validation for the Engine FQDN, signed script payloads, and `config.json` token/key storage.
 
 ## Role Catalog (Go v1)
 - `internal/roles/systemcontext` - SYSTEM/root quick-job router and script execution for signed `quick_job_run` payloads.
@@ -20,7 +20,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 ## Agent Settings and Storage
 - Installed configuration file: `config.json` beside `Agent.exe`.
 - `config.json` stores `schema_version`, `server_url`, `enrollment_code`, `agent.guid`, `agent.agent_id`, Ed25519 keys, access/refresh tokens, Engine script-signing trust material, and runtime feature flags.
-- Windows protection: ACL grants SYSTEM and Administrators full control, removes inheritance.
+- Windows protection: ACL hardening is deferred in the current Go migration branch; files inherit permissions from `C:\Borealis`.
 - Linux protection: root-owned `0600` file with `0700` parent directory.
 - Writes are atomic temp-write + rename. No OS file-lock dependency is used.
 
@@ -88,8 +88,8 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - The UltraVNC config writer enables capture performance flags (`TurboMode`, full-screen polling defaults, `EnableDriver`, and `EnableHook`) when the official UltraVNC helper DLLs are present beside `winvnc.exe`.
 
 ### Token storage
-- Refresh/access tokens are stored in protected `config.json`.
-- Device GUID and Engine agent ID are stored in protected `config.json`.
+- Refresh/access tokens are stored in `config.json`.
+- Device GUID and Engine agent ID are stored in `config.json`.
 - When tokens are invalid or expired, the agent refreshes or re-enters enrollment.
 
 ### Logging
@@ -139,8 +139,8 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Troubleshooting: prefix lines with `<timestamp>-<service-name>-<log-data>`; ask operators whether verbose logging should stay after resolution.
 
 #### Security
-- Generates device-wide Ed25519 keys on first launch and stores PKCS8/SPKI base64 in protected `config.json`.
-- Refresh/access tokens are stored in protected `config.json` and bound to the device identity plus Engine-issued token state; mismatches force re-enrollment.
+- Generates device-wide Ed25519 keys on first launch and stores PKCS8/SPKI base64 in `config.json`.
+- Refresh/access tokens are stored in `config.json` and bound to the device identity plus Engine-issued token state; mismatches force re-enrollment.
 - REST and Socket.IO traffic use the public Engine FQDN with normal CA + hostname validation.
 - Validates script payloads with backend-issued Ed25519 signatures before execution.
 - Outbound-only; API/WebSocket calls flow through the Go auth client for proactive refresh. Logs bootstrap, enrollment, token refresh, and signature events in `Logs/`.

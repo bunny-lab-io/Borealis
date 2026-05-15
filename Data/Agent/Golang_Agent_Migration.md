@@ -10,7 +10,7 @@ Back to Docs Index: ../../Docs/index.md
 4. Linux `Agent` owns runtime execution and systemd service install/uninstall; Linux bootstrap parity is tracked as pending.
 5. Installed runtime uses one `config.json` beside `Agent.exe`.
 6. `config.json` stores keys, tokens, trust material, enrollment code, runtime flags, and agent identity.
-7. `config.json` protection uses filesystem permissions only: Windows ACL for SYSTEM/Administrators and Linux root-owned `0600` with parent `0700`.
+7. `config.json` protection uses filesystem permissions only: Windows ACL hardening is deferred and Windows files inherit from `C:\` for now; Linux remains root-owned `0600` with parent `0700`.
 8. SQLite is not used in v1 because configuration is small, single-writer, and not query-heavy.
 9. No installed Agent runtime path may depend on Python.
 10. Non-migrated roles stay disabled or degraded in Go status payloads; no Python fallback.
@@ -18,7 +18,7 @@ Back to Docs Index: ../../Docs/index.md
 ## Numbered Feature Backlog
 
 1. Core binary, CLI flags, logging, bootstrap entrypoint, service install/uninstall.
-2. `config.json` schema, atomic load/save, Windows ACL, Linux ownership/permissions.
+2. `config.json` schema, atomic load/save, Windows inherited permissions, Linux ownership/permissions.
 3. Ed25519 identity, enrollment, token refresh, script-signing key persistence.
 4. Engine REST client and Socket.IO transport.
 5. Startup status, heartbeat, role-health payloads.
@@ -43,7 +43,7 @@ Back to Docs Index: ../../Docs/index.md
 2. Added Go module under `Data/Agent`.
 3. Added `cmd/agent` runtime entrypoint with CLI flags.
 4. Added compiled role registry foundation under `internal/roles`.
-5. Added `internal/config` schema and protected atomic save path.
+5. Added `internal/config` schema and atomic save path with Windows inherited permissions and Linux restricted permissions.
 6. Added Ed25519 identity generation and persistence.
 7. Added enrollment, token refresh, and authenticated REST helper.
 8. Added minimal Engine.IO/Socket.IO client.
@@ -90,5 +90,6 @@ Back to Docs Index: ../../Docs/index.md
 2. Linux CURRENTUSER is unsupported by design in first PR and must report explicit unsupported status.
 3. Release-channel updater requires prebuilt `Agent.exe` artifacts; source-zip self-build updates are not supported on installed hosts.
 4. Engine release-channel packaging must publish prebuilt Go Windows/Linux artifacts before fleet updates can use fresh Go binaries.
-5. Manual Windows acceptance needs fresh enrollment, SYSTEM script execution, CURRENTUSER behavior validation, update check validation, and non-admin config read denial.
+5. Manual Windows acceptance needs fresh enrollment, SYSTEM script execution, CURRENTUSER behavior validation, update check validation, and final config access-control decision.
 6. Manual Linux acceptance needs fresh enrollment, root SYSTEM Bash execution, systemd service install, update behavior decision, and non-root config read denial.
+7. Windows `config.json` ACL hardening is deferred because current install ACL changes blocked administrator repair/uninstall workflows during real-host testing.

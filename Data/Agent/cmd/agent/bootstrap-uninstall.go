@@ -29,7 +29,6 @@ func uninstallBorealis(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	uninstallWireGuardManagerService(logger)
 	removeBorealisOwnedServices(logger)
 	removeDependencyInstallRoots(logger)
-	relaxInstallDirAcl(cfg.InstallDir, logger)
 
 	exe, _ := os.Executable()
 	logger.Tracef("Uninstall executing from: %s", exe)
@@ -365,7 +364,7 @@ func removeDependencyInstallRoots(logger *BootstrapLogger) {
 			continue
 		}
 		logger.Tracef("Removing dependency install root: %s", root)
-		relaxInstallDirAcl(root, logger)
+		clearInstallDirAttributes(root, logger)
 		if err := removePathWithRetries(root, 5, 2*time.Second, logger); err != nil {
 			logger.Warnf("Dependency install root removal failed: path=%s error=%v", root, err)
 		}
@@ -400,13 +399,11 @@ func dependencyInstallRoots() []string {
 	return roots
 }
 
-func relaxInstallDirAcl(path string, logger *BootstrapLogger) {
+func clearInstallDirAttributes(path string, logger *BootstrapLogger) {
 	if !dirExists(path) {
 		return
 	}
-	logger.Tracef("Relaxing install directory ACLs before removal: %s", path)
-	_, _ = runCommandTimeout(logger, 60*time.Second, "takeown.exe", "/F", path, "/R", "/D", "Y")
-	_, _ = runCommandTimeout(logger, 120*time.Second, "icacls.exe", path, "/grant", "*S-1-5-18:F", "*S-1-5-32-544:F", "/T", "/C", "/Q")
+	logger.Tracef("Clearing install directory attributes before removal: %s", path)
 	_, _ = runCommandTimeout(logger, 60*time.Second, "attrib.exe", "-R", "-S", "-H", filepath.Join(path, "*"), "/S", "/D")
 }
 
@@ -418,7 +415,7 @@ func removeInstallDirWithRetries(path string, finalLog string, logger *Bootstrap
 			return nil
 		}
 		if attempt == 1 || attempt%3 == 0 {
-			relaxInstallDirAcl(path, logger)
+			clearInstallDirAttributes(path, logger)
 		}
 		logger.Tracef("Install directory removal attempt %d: %s", attempt, path)
 		if err := os.RemoveAll(path); err != nil {
@@ -537,8 +534,6 @@ function Remove-DependencyRoots {
     if (-not $root -or -not (Test-Path -LiteralPath $root)) {
       continue
     }
-    takeown.exe /F $root /R /D Y *> $null
-    icacls.exe $root /grant '*S-1-5-18:F' '*S-1-5-32-544:F' /T /C /Q *> $null
     attrib.exe -R -S -H (Join-Path $root '*') /S /D *> $null
     Remove-Item -LiteralPath $root -Recurse -Force *> $null
   }
@@ -551,8 +546,6 @@ for ($attempt = 1; $attempt -le 12; $attempt++) {
   Stop-BorealisProcesses
   Remove-DependencyRoots
   if (Test-Path -LiteralPath $InstallDir) {
-    takeown.exe /F $InstallDir /R /D Y *> $null
-    icacls.exe $InstallDir /grant '*S-1-5-18:F' '*S-1-5-32-544:F' /T /C /Q *> $null
     attrib.exe -R -S -H (Join-Path $InstallDir '*') /S /D *> $null
     Remove-Item -LiteralPath $InstallDir -Recurse -Force *> $null
   }

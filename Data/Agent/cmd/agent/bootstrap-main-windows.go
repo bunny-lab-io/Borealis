@@ -187,9 +187,6 @@ func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error 
 		return err
 	}
 	logger.Tracef("Agent config.json ready.")
-	if err := applyInstallTreeACL(cfg, logger); err != nil {
-		return err
-	}
 	logger.Stepf("Creating Scheduled Tasks And Starting Agent.")
 	if err := ensureAgentTasks(cfg, logger); err != nil {
 		return err
