@@ -116,6 +116,26 @@ resolve_go() {
   return 1
 }
 
+WINDOWS_ICON_SOURCE="${PROJECT_ROOT}/Data/Agent/Agent.syso"
+WINDOWS_ICON_TARGET="${PROJECT_ROOT}/Data/Agent/cmd/agent/agent_windows.syso"
+STAGED_WINDOWS_ICON=""
+
+stage_windows_icon() {
+  if [[ -f "$WINDOWS_ICON_SOURCE" ]]; then
+    cp "$WINDOWS_ICON_SOURCE" "$WINDOWS_ICON_TARGET"
+    STAGED_WINDOWS_ICON="$WINDOWS_ICON_TARGET"
+  fi
+}
+
+cleanup_windows_icon() {
+  if [[ -n "$STAGED_WINDOWS_ICON" ]]; then
+    rm -f "$STAGED_WINDOWS_ICON"
+    STAGED_WINDOWS_ICON=""
+  fi
+}
+
+trap cleanup_windows_icon EXIT
+
 GO_AGENT_LOG="${RESULT_DIR}/agent-go.log"
 echo "==> Go Agent unit/build checks (${REQUESTED_DOMAIN})"
 GO_BIN="$(resolve_go || true)"
@@ -132,7 +152,9 @@ else
     cd "${PROJECT_ROOT}/Data/Agent"
     "$GO_BIN" mod tidy
     "$GO_BIN" test ./...
+    stage_windows_icon
     GOOS=windows GOARCH=amd64 CGO_ENABLED=0 "$GO_BIN" build -trimpath -buildvcs=false -o "${RESULT_DIR}/Agent-windows-amd64.exe" ./cmd/agent
+    cleanup_windows_icon
     GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "$GO_BIN" build -trimpath -buildvcs=false -o "${RESULT_DIR}/Agent-linux-amd64" ./cmd/agent
   } >"$GO_AGENT_LOG" 2>&1
   status=$?

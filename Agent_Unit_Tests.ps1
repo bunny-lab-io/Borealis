@@ -78,19 +78,42 @@ function Invoke-Go {
     return $LASTEXITCODE
 }
 
+$StagedWindowsIcon = ""
+function Stage-AgentWindowsIcon {
+    $source = Join-Path $ProjectRoot "Data\Agent\Agent.syso"
+    $target = Join-Path $ProjectRoot "Data\Agent\cmd\agent\agent_windows.syso"
+    if (Test-Path $source) {
+        Copy-Item -Path $source -Destination $target -Force
+        $script:StagedWindowsIcon = $target
+    }
+}
+
+function Clear-AgentWindowsIcon {
+    if ($script:StagedWindowsIcon -and (Test-Path $script:StagedWindowsIcon)) {
+        Remove-Item -Path $script:StagedWindowsIcon -Force -ErrorAction SilentlyContinue
+    }
+    $script:StagedWindowsIcon = ""
+}
+
 Write-Host "==> Go Agent unit/build checks ($RequestedDomain)"
-$Go = Resolve-Go
-$AgentRoot = Join-Path $ProjectRoot "Data\Agent"
-Set-Location $AgentRoot
-$status = Invoke-Go -GoPath $Go -Arguments @("mod", "tidy")
-if ($status -eq 0) {
-    $status = Invoke-Go -GoPath $Go -Arguments @("test", "./...")
-}
-if ($status -eq 0) {
-    $status = Invoke-Go -GoPath $Go -Arguments @("build", "-trimpath", "-buildvcs=false", "-o", (Join-Path $ResultsDir "Agent-windows-amd64.exe"), "./cmd/agent") -EnvVars @{ GOOS = "windows"; GOARCH = "amd64"; CGO_ENABLED = "0" }
-}
-if ($status -eq 0) {
-    $status = Invoke-Go -GoPath $Go -Arguments @("build", "-trimpath", "-buildvcs=false", "-o", (Join-Path $ResultsDir "Agent-linux-amd64"), "./cmd/agent") -EnvVars @{ GOOS = "linux"; GOARCH = "amd64"; CGO_ENABLED = "0" }
+try {
+    $Go = Resolve-Go
+    $AgentRoot = Join-Path $ProjectRoot "Data\Agent"
+    Set-Location $AgentRoot
+    $status = Invoke-Go -GoPath $Go -Arguments @("mod", "tidy")
+    if ($status -eq 0) {
+        $status = Invoke-Go -GoPath $Go -Arguments @("test", "./...")
+    }
+    if ($status -eq 0) {
+        Stage-AgentWindowsIcon
+        $status = Invoke-Go -GoPath $Go -Arguments @("build", "-trimpath", "-buildvcs=false", "-o", (Join-Path $ResultsDir "Agent-windows-amd64.exe"), "./cmd/agent") -EnvVars @{ GOOS = "windows"; GOARCH = "amd64"; CGO_ENABLED = "0" }
+        Clear-AgentWindowsIcon
+    }
+    if ($status -eq 0) {
+        $status = Invoke-Go -GoPath $Go -Arguments @("build", "-trimpath", "-buildvcs=false", "-o", (Join-Path $ResultsDir "Agent-linux-amd64"), "./cmd/agent") -EnvVars @{ GOOS = "linux"; GOARCH = "amd64"; CGO_ENABLED = "0" }
+    }
+} finally {
+    Clear-AgentWindowsIcon
 }
 
 if ($status -ne 0) {

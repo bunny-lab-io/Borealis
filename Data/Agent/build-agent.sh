@@ -9,6 +9,9 @@ go_version="${BOREALIS_GO_VERSION:-1.22.12}"
 go_install_root="${BOREALIS_GO_INSTALL_ROOT:-${repo_root}/Dependencies/Go/go${go_version}}"
 version_value="${BOREALIS_AGENT_VERSION:-$(git -C "${repo_root}" rev-parse --short=12 HEAD 2>/dev/null || echo dev)}"
 output_root="${BOREALIS_GO_AGENT_OUTPUT_ROOT:-${script_dir}/dist}"
+windows_icon_source="${script_dir}/Agent.syso"
+windows_icon_target="${script_dir}/cmd/agent/agent_windows.syso"
+staged_windows_icon=""
 
 go_version_ok() {
   version="$1"
@@ -65,6 +68,20 @@ install_native_go() {
   export PATH="${go_install_root}/bin:${PATH}"
 }
 
+stage_windows_icon() {
+  if [ -f "${windows_icon_source}" ]; then
+    cp "${windows_icon_source}" "${windows_icon_target}"
+    staged_windows_icon="${windows_icon_target}"
+  fi
+}
+
+cleanup_windows_icon() {
+  if [ -n "${staged_windows_icon}" ]; then
+    rm -f "${staged_windows_icon}"
+    staged_windows_icon=""
+  fi
+}
+
 go_cmd="$(command -v go || true)"
 if [ -n "${go_cmd}" ]; then
   detected_version="$(installed_go_version "${go_cmd}")"
@@ -79,8 +96,11 @@ go_cmd="$(command -v go)"
 mkdir -p "${output_root}/windows-amd64" "${output_root}/linux-amd64"
 (
   cd "${script_dir}"
+  trap cleanup_windows_icon EXIT
   "${go_cmd}" mod tidy
+  stage_windows_icon
   GOOS=windows GOARCH=amd64 CGO_ENABLED=0 "${go_cmd}" build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=${version_value}" -o "${output_root}/windows-amd64/Agent.exe" ./cmd/agent
+  cleanup_windows_icon
   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "${go_cmd}" build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=${version_value}" -o "${output_root}/linux-amd64/Agent" ./cmd/agent
 )
 
