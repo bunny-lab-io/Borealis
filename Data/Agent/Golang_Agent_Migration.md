@@ -84,7 +84,7 @@ Back to Docs Index: ../../Docs/index.md
 42. Added Go Software Management role for Windows installed-app inventory, Linux dpkg/rpm inventory, Engine details publishing, refresh requests, role health, and post-uninstall inventory refresh through the SYSTEM quick-job lane.
 43. Added Go Software Management Windows icon extraction/cache payloads with Engine icon override support, matching the legacy installed-software icon pipeline.
 44. Validated Go Software Management inventory, icon cache payloads, and uninstall-triggered refresh behavior on a real Windows target and marked software management migration complete.
-45. Added Go WireGuard tunnel role for persistent `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, signed orchestration token validation, Windows tunnel-service apply, Linux `wg-quick` apply, firewall readiness, role health, and `/api/agent/vpn/ready` reporting.
+45. Added Go WireGuard tunnel role for persistent `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, signed orchestration token validation, side-by-side `wireguard.conf`, Windows tunnel-service apply, Linux `wg-quick` apply, firewall readiness, role health, and `/api/agent/vpn/ready` reporting.
 
 ## In Progress
 

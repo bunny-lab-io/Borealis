@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -60,7 +61,6 @@ func testManager(t *testing.T) *Manager {
 		serviceMode:   "system",
 		configPath:    dir + "/config.json",
 		baseDir:       dir,
-		settingsDir:   dir + "/Settings/WireGuard",
 		logPath:       dir + "/Logs/VPN_Tunnel/tunnel.log",
 		platform:      "linux",
 		interfaceName: "borealis",
@@ -114,6 +114,9 @@ func TestBuildSessionNormalizesAllowedPortsAndHostRoute(t *testing.T) {
 	}
 	if session.AllowedPorts != "22,5900,47002" {
 		t.Fatalf("unexpected allowed ports: %s", session.AllowedPorts)
+	}
+	if got := manager.configPathForPlatform(); got != filepath.Join(manager.baseDir, "wireguard.conf") {
+		t.Fatalf("unexpected config path: %s", got)
 	}
 }
 

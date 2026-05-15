@@ -70,7 +70,6 @@ type Manager struct {
 	serviceMode    string
 	configPath     string
 	baseDir        string
-	settingsDir    string
 	logPath        string
 	platform       string
 	interfaceName  string
@@ -130,7 +129,6 @@ type commandRunner func(ctx context.Context, timeout time.Duration, name string,
 
 func New(client *auth.Client, hostname string, serviceMode string, configPath string) *Manager {
 	baseDir := filepath.Dir(configPath)
-	settingsDir := filepath.Join(baseDir, "Settings", "WireGuard")
 	logPath := filepath.Join(baseDir, "Logs", "VPN_Tunnel", "tunnel.log")
 	privateKey, publicKey := generateWireGuardKeys()
 	manager := &Manager{
@@ -139,7 +137,6 @@ func New(client *auth.Client, hostname string, serviceMode string, configPath st
 		serviceMode:        auth.NormalizeServiceMode(serviceMode),
 		configPath:         configPath,
 		baseDir:            baseDir,
-		settingsDir:        settingsDir,
 		logPath:            logPath,
 		platform:           runtime.GOOS,
 		interfaceName:      resolveInterfaceName(),
@@ -732,10 +729,7 @@ func (m *Manager) renderIdleConfig() string {
 }
 
 func (m *Manager) configPathForPlatform() string {
-	if m.platform == "linux" {
-		return filepath.Join(m.settingsDir, m.interfaceName+".conf")
-	}
-	return filepath.Join(m.settingsDir, tunnelName+".conf")
+	return filepath.Join(m.baseDir, "wireguard.conf")
 }
 
 func (m *Manager) writeConfig(text string) error {
