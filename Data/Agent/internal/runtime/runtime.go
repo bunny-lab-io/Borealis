@@ -11,6 +11,7 @@ import (
 	"github.com/bunny-lab-io/borealis/go-agent/internal/auth"
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/currentuser"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/deviceaudit"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/systemcontext"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/transport"
 )
@@ -33,6 +34,7 @@ type Agent struct {
 	hostname   string
 	bootID     string
 	dispatcher *currentuser.Dispatcher
+	auditor    *deviceaudit.Auditor
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -66,6 +68,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		return nil, err
 	}
 	dispatcher := currentuser.NewDispatcher()
+	auditor := deviceaudit.NewAuditor()
 	return &Agent{
 		options:    options,
 		configPath: configPath,
@@ -75,6 +78,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		hostname:   hostname,
 		bootID:     fmt.Sprintf("%d", time.Now().Unix()),
 		dispatcher: dispatcher,
+		auditor:    auditor,
 	}, nil
 }
 
@@ -199,13 +203,36 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	if a.dispatcher != nil {
 		currentUserHealth = a.dispatcher.RoleHealth()
 	}
+	auditSnapshot := deviceaudit.Snapshot{
+		Inventory: map[string]any{},
+		Metrics:   map[string]any{},
+		Health: deviceaudit.RoleHealth{
+			Status:     "recovering",
+			StatusCode: "recovering",
+			Detail:     "Device audit inventory has not run.",
+			Details: map[string]any{
+				"running_status": "Starting",
+				"runtime":        "go",
+			},
+		},
+	}
+	if a.auditor != nil {
+		auditSnapshot = a.auditor.Collect(ctx)
+	}
+	metrics := map[string]any{
+		"service_mode":     auth.NormalizeServiceMode(a.options.ServiceMode),
+		"operating_system": operatingSystemName(),
+	}
+	for key, value := range auditSnapshot.Metrics {
+		if value != nil && fmt.Sprint(value) != "" {
+			metrics[key] = value
+		}
+	}
 	payload := map[string]any{
 		"hostname":     a.hostname,
 		"service_mode": auth.NormalizeServiceMode(a.options.ServiceMode),
-		"metrics": map[string]any{
-			"service_mode":     auth.NormalizeServiceMode(a.options.ServiceMode),
-			"operating_system": operatingSystemName(),
-		},
+		"metrics":      metrics,
+		"inventory":    auditSnapshot.Inventory,
 		"agent_role_health": map[string]any{
 			"roles": []map[string]any{
 				{
@@ -234,8 +261,25 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 					"last_checked_at": time.Now().Unix(),
 					"details":         currentUserHealth.Details,
 				},
+				{
+					"role_id":         "system:device_auditor",
+					"role_name":       "device_auditor",
+					"role_label":      "Device Auditor",
+					"context":         "system",
+					"status":          auditSnapshot.Health.Status,
+					"status_code":     auditSnapshot.Health.StatusCode,
+					"detail":          auditSnapshot.Health.Detail,
+					"last_checked_at": time.Now().Unix(),
+					"details":         auditSnapshot.Health.Details,
+				},
 			},
 		},
+	}
+	if auditSnapshot.InternalIP != "" {
+		payload["internal_ip"] = auditSnapshot.InternalIP
+	}
+	if auditSnapshot.DeviceType != "" {
+		payload["device_type"] = auditSnapshot.DeviceType
 	}
 	cfg := a.authClient.Config()
 	if cfg.Agent.AgentID != "" {

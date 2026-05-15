@@ -67,29 +67,30 @@ Back to Docs Index: ../../Docs/index.md
 25. Preserved startup timeline telemetry across heartbeat role-health merges by moving timeline status into a startup context.
 26. Cleaned PowerShell CLIXML progress/error output from Go quick-job result streams.
 27. Simplified Site install commands and removed nonessential `config.json` runtime metadata.
+28. Added Go device audit inventory for CPU, memory, storage, network, internal IP, device type, uptime, and last user via heartbeat payloads.
 
 ## In Progress
 
 1. Validate Engine onboarding/update artifact contracts against a deployed Engine.
 2. Validate Windows CURRENTUSER Batch quick jobs on a real Windows target.
+3. Validate Go device audit inventory on real Windows and Linux targets.
 
 ## Pending
 
 1. Implement full Windows CURRENTUSER helper/tray broker in Go using same binary helper mode for richer session inventory and long-lived desktop helpers.
-2. Implement device audit inventory role in Go.
-3. Implement file management RPC and transfer endpoints in Go.
-4. Implement process management role in Go.
-5. Implement service management role in Go.
-6. Implement software inventory/actions role in Go.
-7. Implement WireGuard role in Go.
-8. Implement remote shell over WireGuard in Go.
-9. Implement VNC lifecycle and credential broker in Go.
-10. Implement full release-channel update format and Engine artifact packaging for Go binaries.
-11. Implement Linux `Agent` deployment/bootstrap parity.
-12. Decide whether macros/node screenshot should be retired or ported.
-13. Rework tray UI/status as optional Go/native helper or external UI.
-14. Add fake Engine HTTP/Socket.IO harness coverage for live `connect_agent` and `quick_job_run`.
-15. Add Engine contract tests for onboarding/update artifact path changes.
+2. Implement file management RPC and transfer endpoints in Go.
+3. Implement process management role in Go.
+4. Implement service management role in Go.
+5. Implement software inventory/actions role in Go.
+6. Implement WireGuard role in Go.
+7. Implement remote shell over WireGuard in Go.
+8. Implement VNC lifecycle and credential broker in Go.
+9. Implement full release-channel update format and Engine artifact packaging for Go binaries.
+10. Implement Linux `Agent` deployment/bootstrap parity.
+11. Decide whether macros/node screenshot should be retired or ported.
+12. Rework tray UI/status as optional Go/native helper or external UI.
+13. Add fake Engine HTTP/Socket.IO harness coverage for live `connect_agent` and `quick_job_run`.
+14. Add Engine contract tests for onboarding/update artifact path changes.
 
 ## Release-Blocking Technical Debt
 
