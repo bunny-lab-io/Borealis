@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
+	"strings"
 	"testing"
 )
 
@@ -50,6 +51,32 @@ func TestBuildEnvMap(t *testing.T) {
 	}
 	if env["PATH_VALUE"] != "abc" {
 		t.Fatalf("default env mismatch: %#v", env)
+	}
+}
+
+func TestBuildPowerShellScriptSuppressesNoisyStreams(t *testing.T) {
+	wrapped := BuildPowerShellScript("Write-Output 'ok'", nil)
+	for _, expected := range []string{
+		"$ProgressPreference = 'SilentlyContinue'",
+		"$InformationPreference = 'SilentlyContinue'",
+		"$VerbosePreference = 'SilentlyContinue'",
+		"$DebugPreference = 'SilentlyContinue'",
+	} {
+		if !strings.Contains(wrapped, expected) {
+			t.Fatalf("missing PowerShell prelude %q in %q", expected, wrapped)
+		}
+	}
+}
+
+func TestCleanPowerShellStreamDecodesCliXMLAndDropsProgressOnlyPayloads(t *testing.T) {
+	progressOnly := "#< CLIXML\r\n<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\"><Obj S=\"progress\"><MS><PR N=\"Record\"><AV>Preparing modules for first use.</AV></PR></MS></Obj></Objs>"
+	if got := CleanPowerShellStream(progressOnly); got != "" {
+		t.Fatalf("progress-only CLIXML should clean to empty string, got %q", got)
+	}
+	withError := "#< CLIXML\r\n<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\"><S S=\"Error\">Out-File : Access denied._x000D__x000A_</S><S S=\"Error\">At line:1 char:1_x000D__x000A_</S></Objs>"
+	got := CleanPowerShellStream(withError)
+	if !strings.Contains(got, "Out-File : Access denied.") || !strings.Contains(got, "At line:1 char:1") || strings.Contains(got, "#< CLIXML") {
+		t.Fatalf("decoded CLIXML mismatch: %q", got)
 	}
 }
 

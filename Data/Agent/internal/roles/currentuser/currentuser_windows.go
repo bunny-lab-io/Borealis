@@ -110,7 +110,7 @@ func commandForScript(scriptType string, content string, envMap map[string]strin
 }
 
 func batchPowerShellWrapper(content string, envMap map[string]string) string {
-	var lines []string
+	lines := scripts.PowerShellPreludeLines()
 	encodedBatch := base64.StdEncoding.EncodeToString([]byte(normalizeBatchNewlines(content)))
 	lines = append(lines, "$ErrorActionPreference = 'Stop'")
 	for key, value := range envMap {
@@ -267,10 +267,11 @@ func runInSession(ctx context.Context, sessionID uint32, appPath string, command
 	_ = stdoutFile.Close()
 	_ = stderrFile.Close()
 	stdoutText, stderrText := readCapturedOutput(stdoutFile.Name(), stderrFile.Name())
+	cleaned := scripts.CleanPowerShellResult(scripts.Result{ReturnCode: int(exitCode), Stdout: stdoutText, Stderr: stderrText})
 	if waitErr != nil {
-		return scripts.Result{ReturnCode: -1, Stdout: stdoutText, Stderr: joinStderr(stderrText, waitErr.Error())}, nil
+		return scripts.Result{ReturnCode: -1, Stdout: cleaned.Stdout, Stderr: joinStderr(cleaned.Stderr, waitErr.Error())}, nil
 	}
-	return scripts.Result{ReturnCode: int(exitCode), Stdout: stdoutText, Stderr: stderrText}, nil
+	return cleaned, nil
 }
 
 func prepareProcessHandles() (*os.File, *os.File, windows.Handle, func(), error) {

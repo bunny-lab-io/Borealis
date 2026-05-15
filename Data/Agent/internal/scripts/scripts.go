@@ -6,12 +6,14 @@ import (
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/xml"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -152,7 +154,7 @@ func runPowerShell(ctx context.Context, content string, envMap map[string]string
 		return Result{ReturnCode: -1, Stderr: err.Error()}
 	}
 	defer cleanup()
-	return runCommand(ctx, timeoutSeconds, envMap, binary, "-ExecutionPolicy", "Bypass", "-NoProfile", "-File", path)
+	return CleanPowerShellResult(runCommand(ctx, timeoutSeconds, envMap, binary, "-ExecutionPolicy", "Bypass", "-NoProfile", "-File", path))
 }
 
 func runBatch(ctx context.Context, content string, envMap map[string]string, timeoutSeconds int) Result {
@@ -181,7 +183,7 @@ func runBash(ctx context.Context, content string, envMap map[string]string, time
 }
 
 func BuildPowerShellScript(content string, envMap map[string]string) string {
-	var lines []string
+	lines := PowerShellPreludeLines()
 	for key, value := range envMap {
 		if key == "" {
 			continue
@@ -194,8 +196,76 @@ func BuildPowerShellScript(content string, envMap map[string]string) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
+func PowerShellPreludeLines() []string {
+	return []string{
+		"$ProgressPreference = 'SilentlyContinue'",
+		"$InformationPreference = 'SilentlyContinue'",
+		"$VerbosePreference = 'SilentlyContinue'",
+		"$DebugPreference = 'SilentlyContinue'",
+	}
+}
+
 func PowerShellLiteral(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+func CleanPowerShellResult(result Result) Result {
+	result.Stdout = CleanPowerShellStream(result.Stdout)
+	result.Stderr = CleanPowerShellStream(result.Stderr)
+	return result
+}
+
+func CleanPowerShellStream(text string) string {
+	trimmed := strings.TrimLeft(text, "\ufeff\r\n\t ")
+	if !strings.HasPrefix(trimmed, "#< CLIXML") {
+		return text
+	}
+	xmlStart := strings.Index(trimmed, "<Objs")
+	if xmlStart < 0 {
+		return ""
+	}
+	decoder := xml.NewDecoder(strings.NewReader(trimmed[xmlStart:]))
+	var streamTexts []string
+	inString := false
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		switch typed := token.(type) {
+		case xml.StartElement:
+			inString = typed.Name.Local == "S"
+		case xml.EndElement:
+			if typed.Name.Local == "S" {
+				inString = false
+			}
+		case xml.CharData:
+			if inString {
+				decoded := decodeCliXMLString(string(typed))
+				if strings.TrimSpace(decoded) != "" {
+					streamTexts = append(streamTexts, decoded)
+				}
+			}
+		}
+	}
+	if len(streamTexts) == 0 {
+		return ""
+	}
+	return strings.TrimRight(strings.Join(streamTexts, ""), "\r\n") + "\n"
+}
+
+func decodeCliXMLString(text string) string {
+	return regexp.MustCompile(`_x([0-9A-Fa-f]{4})_`).ReplaceAllStringFunc(text, func(match string) string {
+		parts := regexp.MustCompile(`^_x([0-9A-Fa-f]{4})_$`).FindStringSubmatch(match)
+		if len(parts) != 2 {
+			return match
+		}
+		value, err := strconv.ParseInt(parts[1], 16, 32)
+		if err != nil {
+			return match
+		}
+		return string(rune(value))
+	})
 }
 
 func runCommand(ctx context.Context, timeoutSeconds int, envMap map[string]string, name string, args ...string) Result {

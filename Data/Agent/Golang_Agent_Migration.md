@@ -62,11 +62,14 @@ Back to Docs Index: ../../Docs/index.md
 21. Validated Linux real-host systemd service install/start and root-owned `0600` `config.json`.
 22. Validated Linux real-host enrollment, online state, and SYSTEM Bash quick-job execution.
 23. Added Windows CURRENTUSER direct session launch for signed PowerShell and Batch quick jobs through the SYSTEM runtime.
+24. Validated Windows CURRENTUSER real-host script execution with user-writable Desktop canary success and root `C:\` write denial.
+25. Preserved startup timeline telemetry across heartbeat role-health merges by moving timeline status into a startup context.
+26. Cleaned PowerShell CLIXML progress/error output from Go quick-job result streams.
 
 ## In Progress
 
 1. Validate Engine onboarding/update artifact contracts against a deployed Engine.
-2. Validate Windows CURRENTUSER PowerShell and Batch quick jobs on a real Windows target.
+2. Validate Windows CURRENTUSER Batch quick jobs on a real Windows target.
 
 ## Pending
 

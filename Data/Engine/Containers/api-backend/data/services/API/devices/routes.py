@@ -613,10 +613,10 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify(cached_response)
 
         role = {
-            "role_id": f"{service_mode}:system_heartbeat",
+            "role_id": "startup:system_heartbeat",
             "role_name": "system_heartbeat",
             "role_label": "Startup Timeline",
-            "context": service_mode,
+            "context": "startup",
             "status_code": status_code,
             "status": status_code,
             "detail": message or phase or "Startup status updated.",

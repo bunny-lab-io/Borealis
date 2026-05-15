@@ -1,7 +1,7 @@
 # ======================================================
 # Data\Engine\Unit_Tests\test_agent_role_manager.py
-# Description: Ensures agent roles resolve the current agent ID instead
-#              of keeping a stale boot-time snapshot.
+# Description: Ensures archived Python agent roles resolve current agent ID
+#              instead of keeping stale boot-time snapshot.
 # ======================================================
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import sys
 
 
 def _load_role_manager():
-    module_path = Path(__file__).resolve().parents[2] / "Agent" / "role_manager.py"
+    module_path = Path(__file__).resolve().parents[2] / "Agent_Old" / "role_manager.py"
     spec = importlib.util.spec_from_file_location("agent_role_manager", module_path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
