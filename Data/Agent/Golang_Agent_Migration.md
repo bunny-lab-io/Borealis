@@ -109,6 +109,7 @@ Back to Docs Index: ../../Docs/index.md
 67. Changed Windows update cleanup so updater workspaces are removed immediately, full `C:\Borealis\Temp` cleanup is deferred until after bootstrap exits, and locked onboarding stdout handles no longer create operator-facing warnings.
 68. Moved Windows dependency version tracking for WireGuard and UltraVNC into `config.json` under `dependency_versions`, removed `installed_version.txt` dependency markers, and cleaned transient `Dependencies` installer folders after dependency reconciliation.
 69. Reorganized installed Agent logs into `Logs/Agent`, `Logs/WireGuard`, and `Logs/UltraVNC` category folders.
+70. Ported Windows display topology collection into the Go VNC role and included display topology plus virtual bounds in VNC ensure, credential, and role-health payloads.
 
 ## In Progress
 

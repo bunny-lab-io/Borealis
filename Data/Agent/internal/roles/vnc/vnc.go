@@ -82,6 +82,7 @@ type Manager struct {
 	lastReady          bool
 	serviceName        string
 	vncExe             string
+	displayCollector   func() []map[string]any
 	stop               context.CancelFunc
 }
 
@@ -113,6 +114,7 @@ func New(client *auth.Client, hostname string, serviceMode string, configPath st
 		credentialIssuedAt: time.Now(),
 		serviceName:        serviceName,
 		vncExe:             resolveVNCExe(),
+		displayCollector:   collectDisplayTopology,
 		lastServiceState:   "Stopped",
 		lastListenerState:  "not_listening",
 		lastReady:          false,
@@ -297,23 +299,28 @@ func (m *Manager) Health() RoleHealth {
 			m.mu.Unlock()
 		}
 	}
+	displayTopology, displayVirtualBounds := m.displaySnapshot()
 	details := map[string]any{
-		"running_status":      displayServiceState(serviceState),
-		"service_state":       displayServiceState(serviceState),
-		"listener_ip":         "0.0.0.0",
-		"listener_port":       strconv.Itoa(port),
-		"service_name":        service,
-		"allowed_ips":         allowedIPs,
-		"last_service_error":  lastError,
-		"listener_state":      listenerState,
-		"listener_ready":      strconv.FormatBool(ready),
-		"ready":               strconv.FormatBool(ready && isServiceRunning(serviceState)),
-		"last_ready_at":       strconv.FormatInt(lastReadyAt, 10),
-		"active_session_id":   activeSessionID,
-		"credential_revision": strconv.FormatInt(revision, 10),
-		"vnc_exe":             vncExe,
-		"display_count":       "0",
-		"runtime":             "go",
+		"running_status":              displayServiceState(serviceState),
+		"service_state":               displayServiceState(serviceState),
+		"listener_ip":                 "0.0.0.0",
+		"listener_port":               strconv.Itoa(port),
+		"service_name":                service,
+		"allowed_ips":                 allowedIPs,
+		"last_service_error":          lastError,
+		"listener_state":              listenerState,
+		"listener_ready":              strconv.FormatBool(ready),
+		"ready":                       strconv.FormatBool(ready && isServiceRunning(serviceState)),
+		"last_ready_at":               strconv.FormatInt(lastReadyAt, 10),
+		"active_session_id":           activeSessionID,
+		"credential_revision":         strconv.FormatInt(revision, 10),
+		"vnc_exe":                     vncExe,
+		"display_count":               strconv.Itoa(len(displayTopology)),
+		"display_topology":            jsonText(displayTopology),
+		"display_virtual_bounds":      jsonText(displayVirtualBounds),
+		"display_topology_json":       jsonText(displayTopology),
+		"display_virtual_bounds_json": jsonText(displayVirtualBounds),
+		"runtime":                     "go",
 	}
 	if ready && isServiceRunning(serviceState) {
 		return RoleHealth{
@@ -381,14 +388,7 @@ func (m *Manager) ensureFromEngine(ctx context.Context, reason string) error {
 	revision := m.credentialRevision
 	m.lastEnsureAt = time.Now().Unix()
 	m.mu.Unlock()
-	request := map[string]any{
-		"agent_id":               m.agentID(),
-		"reason":                 reason,
-		"controller_password":    credential,
-		"credential_revision":    revision,
-		"display_topology":       []any{},
-		"display_virtual_bounds": map[string]any{},
-	}
+	request := m.ensureRequestPayload(reason, credential, revision)
 	var response map[string]any
 	_, err := m.authClient.PostJSON(ctx, "/api/agent/vnc/ensure", request, &response)
 	if err != nil {
@@ -410,6 +410,18 @@ func (m *Manager) ensureFromEngine(ctx context.Context, reason string) error {
 		m.mu.Unlock()
 	}
 	return m.ensureAlwaysOn(ctx, reason)
+}
+
+func (m *Manager) ensureRequestPayload(reason string, credential string, revision int64) map[string]any {
+	displayTopology, displayVirtualBounds := m.displaySnapshot()
+	return map[string]any{
+		"agent_id":               m.agentID(),
+		"reason":                 reason,
+		"controller_password":    credential,
+		"credential_revision":    revision,
+		"display_topology":       displayTopology,
+		"display_virtual_bounds": displayVirtualBounds,
+	}
 }
 
 func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
@@ -478,6 +490,7 @@ func (m *Manager) credentialPayload(requestID string, reason string) map[string]
 	listenerState := m.lastListenerState
 	ready := m.lastReady
 	m.mu.Unlock()
+	displayTopology, displayVirtualBounds := m.displaySnapshot()
 	return map[string]any{
 		"status":                 "ok",
 		"agent_id":               m.agentID(),
@@ -485,8 +498,8 @@ func (m *Manager) credentialPayload(requestID string, reason string) map[string]
 		"reason":                 reason,
 		"controller_password":    password,
 		"credential_revision":    revision,
-		"display_topology":       []any{},
-		"display_virtual_bounds": map[string]any{},
+		"display_topology":       displayTopology,
+		"display_virtual_bounds": displayVirtualBounds,
 		"ready":                  ready,
 		"service_state":          serviceState,
 		"listener_state":         listenerState,
@@ -494,6 +507,15 @@ func (m *Manager) credentialPayload(requestID string, reason string) map[string]
 		"auth_verified":          false,
 		"auth_verify_reason":     "local_probe_disabled",
 	}
+}
+
+func (m *Manager) displaySnapshot() ([]map[string]any, map[string]any) {
+	collector := collectDisplayTopology
+	if m != nil && m.displayCollector != nil {
+		collector = m.displayCollector
+	}
+	topology := collector()
+	return topology, displayVirtualBounds(topology)
 }
 
 func (m *Manager) ensureConfig(port int, password string, removeWallpaper bool) (string, error) {

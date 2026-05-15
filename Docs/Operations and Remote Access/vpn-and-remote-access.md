@@ -216,7 +216,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - Shell server: `Data/Agent/internal/roles/remote_shell/`.
 - TCP PowerShell/Bash server bound to `0.0.0.0:47002`, restricted to VPN subnet (10.255.x.x).
 - VNC role: `Data/Agent/internal/roles/vnc/`.
-  - Manages Windows UltraVNC as an always-on service after Engine firewall scope and runtime credentials are ready, handles `vnc_start`, `vnc_stop`, `vnc_refresh`, and `vnc_credential_request`, and reports service/listener readiness through role health.
+  - Manages Windows UltraVNC as an always-on service after Engine firewall scope and runtime credentials are ready, handles `vnc_start`, `vnc_stop`, `vnc_refresh`, and `vnc_credential_request`, and reports service/listener readiness plus Windows display topology through VNC ensure, credential, and role-health payloads.
 - Logging: `Agent/Logs/WireGuard/wireguard.log` (tunnel lifecycle), `Agent/Logs/Agent/remote_shell.log` (shell I/O), and `Agent/Logs/UltraVNC/vnc.log` (VNC lifecycle).
 
 #### 5) Security and auth
