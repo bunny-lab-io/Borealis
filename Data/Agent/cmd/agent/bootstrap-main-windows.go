@@ -56,6 +56,7 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 	}
 	if !acquired {
 		logger.Tracef("Bootstrap mutex already held by another process.")
+		logger.Warnf("Another Borealis Agent bootstrap is already running.")
 		logger.Marker("__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1")
 		writeTimeline(cfg, "skipped", "Agent Bootstrap Mutex", "Another Borealis Agent bootstrap is already running.", 73)
 		writeState(cfg, "already_pending", 73, "Another Borealis Agent bootstrap is already running.")

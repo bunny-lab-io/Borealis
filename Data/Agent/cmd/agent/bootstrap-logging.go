@@ -12,12 +12,12 @@ import (
 )
 
 type BootstrapLogger struct {
-	mu       sync.Mutex
-	console  bool
-	verbose  bool
-	files    []*os.File
-	redacts  []string
-	lastPath string
+	mu            sync.Mutex
+	console       bool
+	primaryFile   *os.File
+	operatorFiles []*os.File
+	redacts       []string
+	lastPath      string
 }
 
 func openBootstrapLogger(cfg BootstrapConfig, console bool) (*BootstrapLogger, func(), error) {
@@ -30,7 +30,6 @@ func openBootstrapLogger(cfg BootstrapConfig, console bool) (*BootstrapLogger, f
 	}
 	logger := &BootstrapLogger{
 		console: console,
-		verbose: cfg.Verbose,
 		redacts: []string{
 			cfg.SiteEnrollmentCode,
 			cfg.LegacyEnrollment,
@@ -48,74 +47,87 @@ func openBootstrapLogger(cfg BootstrapConfig, console bool) (*BootstrapLogger, f
 		if err != nil {
 			return nil, nil, err
 		}
-		logger.files = append(logger.files, file)
+		if index == 0 {
+			logger.primaryFile = file
+		} else {
+			logger.operatorFiles = append(logger.operatorFiles, file)
+		}
 		logger.lastPath = path
 	}
 	closeFn := func() {
 		logger.mu.Lock()
 		defer logger.mu.Unlock()
-		for _, file := range logger.files {
+		if logger.primaryFile != nil {
+			_ = logger.primaryFile.Close()
+		}
+		for _, file := range logger.operatorFiles {
 			_ = file.Close()
 		}
-		logger.files = nil
+		logger.primaryFile = nil
+		logger.operatorFiles = nil
 	}
 	return logger, closeFn, nil
 }
 
 func (l *BootstrapLogger) Println(message string) {
-	l.writeLine("INFO", message)
+	l.writeLine("INFO", message, true)
 }
 
 func (l *BootstrapLogger) Infof(format string, args ...any) {
-	if l == nil || !l.verbose {
+	if l == nil {
 		return
 	}
-	l.writeLine("INFO", fmt.Sprintf(format, args...))
+	l.writeLine("INFO", fmt.Sprintf(format, args...), false)
 }
 
 func (l *BootstrapLogger) Stepf(format string, args ...any) {
 	if l == nil {
 		return
 	}
-	l.writeLine("INFO", fmt.Sprintf(format, args...))
+	l.writeLine("INFO", fmt.Sprintf(format, args...), true)
 }
 
 func (l *BootstrapLogger) Tracef(format string, args ...any) {
-	if l == nil || !l.verbose {
+	if l == nil {
 		return
 	}
-	l.writeLine("TRACE", fmt.Sprintf(format, args...))
+	l.writeLine("TRACE", fmt.Sprintf(format, args...), false)
 }
 
 func (l *BootstrapLogger) Warnf(format string, args ...any) {
-	l.writeLine("WARN", fmt.Sprintf(format, args...))
+	l.writeLine("WARN", fmt.Sprintf(format, args...), true)
 }
 
 func (l *BootstrapLogger) Errorf(format string, args ...any) {
-	l.writeLine("ERROR", fmt.Sprintf(format, args...))
+	l.writeLine("ERROR", fmt.Sprintf(format, args...), true)
 }
 
 func (l *BootstrapLogger) Marker(marker string) {
-	l.writeRaw(marker)
+	l.writeRaw(marker, false)
 }
 
-func (l *BootstrapLogger) writeLine(level string, message string) {
+func (l *BootstrapLogger) writeLine(level string, message string, operatorVisible bool) {
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	l.writeRaw(fmt.Sprintf("[%s] [%s] %s", timestamp, level, message))
+	l.writeRaw(fmt.Sprintf("[%s] [%s] %s", timestamp, level, message), operatorVisible)
 }
 
-func (l *BootstrapLogger) writeRaw(line string) {
+func (l *BootstrapLogger) writeRaw(line string, operatorVisible bool) {
 	if l == nil {
 		return
 	}
 	text := l.redact(line)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.console {
+	if operatorVisible && l.console {
 		fmt.Println(text)
 	}
-	for _, file := range l.files {
-		_, _ = file.WriteString(text + "\r\n")
+	if l.primaryFile != nil {
+		_, _ = l.primaryFile.WriteString(text + "\r\n")
+	}
+	if operatorVisible {
+		for _, file := range l.operatorFiles {
+			_, _ = file.WriteString(text + "\r\n")
+		}
 	}
 }
 

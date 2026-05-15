@@ -89,6 +89,7 @@ Back to Docs Index: ../../Docs/index.md
 47. Fixed Windows WireGuard role-health refresh, serialized concurrent tunnel applies, and corrected firewall port creation to pass PowerShell port arrays instead of quoted comma-separated strings.
 48. Moved Go WireGuard role logs from `Logs/VPN_Tunnel/tunnel.log` to `Logs/wireguard.log`.
 49. Changed Windows bootstrap logging so `Logs/bootstrap.log` is truncated at each bootstrap start and contains only the latest run.
+50. Split Windows bootstrap logging so `bootstrap.log` always receives verbose trace/marker output while console, stdout, and stderr show only operator-facing step/warn/error lines.
 
 ## In Progress
 

@@ -377,15 +377,24 @@ def _windows_onboarding_methods_with_required_fallbacks(methods: Sequence[str]) 
 
 def _windows_onboarding_skip_detail(*, stdout: Any = "", stderr: Any = "") -> str:
     combined = f"{stdout or ''}\n{stderr or ''}"
+    normalized = combined.lower()
     if "__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1" in combined:
+        return "Another Borealis onboarding deployment is already running on this target."
+    if "another borealis onboarding deployment is already running" in normalized:
         return "Another Borealis onboarding deployment is already running on this target."
     if "__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1" in combined:
         return "Existing Borealis Agent is already enrolled and active."
+    if "existing borealis agent is already enrolled and active" in normalized or "existing agent healthy" in normalized:
+        return "Existing Borealis Agent is already enrolled and active."
     if "__BOREALIS_ONBOARDING_AGENT_REPAIRED__=1" in combined:
+        return "Existing Borealis Agent repaired and started."
+    if "existing borealis agent repaired and started" in normalized or "repairing existing agent scheduled task" in normalized:
         return "Existing Borealis Agent repaired and started."
     if "__BOREALIS_ONBOARDING_ALREADY_PENDING__=1" in combined:
         if re.search(r"__BOREALIS_ONBOARDING_ALREADY_PENDING__=1[^\r\n]*status=running\b", combined, re.IGNORECASE):
             return ""
+        return "Previous Borealis onboarding attempt is already pending approval on this target."
+    if "previous borealis onboarding attempt is already pending approval" in normalized or "state=already_pending" in normalized:
         return "Previous Borealis onboarding attempt is already pending approval on this target."
     return ""
 
@@ -408,7 +417,8 @@ def _onboarding_target_without_port(value: Any) -> str:
 
 def _windows_onboarding_repair_succeeded(*, stdout: Any = "", stderr: Any = "") -> bool:
     combined = f"{stdout or ''}\n{stderr or ''}"
-    return "__BOREALIS_ONBOARDING_AGENT_REPAIRED__=1" in combined
+    normalized = combined.lower()
+    return "__BOREALIS_ONBOARDING_AGENT_REPAIRED__=1" in combined or "existing borealis agent repaired and started" in normalized or "repairing existing agent scheduled task" in normalized
 
 
 def _windows_onboarding_local_bootstrap_completed(*, stdout: Any = "", stderr: Any = "", detail: Any = "") -> bool:
@@ -4396,7 +4406,7 @@ class OnboardingSchedulerMixin:
                 smb.putFile("C$", payload_path, handle.read)
             config_bytes = io.BytesIO(json.dumps(config, separators=(",", ":")).encode("utf-8"))
             manifest_bytes = io.BytesIO(json.dumps(manifest, separators=(",", ":")).encode("utf-8"))
-            output_bytes = io.BytesIO(b"__BOREALIS_AGENT_EXE_STAGED__=1\r\n")
+            output_bytes = io.BytesIO(b"")
             events_bytes = io.BytesIO(b"")
             smb.putFile("C$", config_path, config_bytes.read)
             smb.putFile("C$", manifest_path, manifest_bytes.read)
@@ -4593,9 +4603,9 @@ class OnboardingSchedulerMixin:
                 if stdout:
                     stdout += "\n"
                 if state_status == "already_enrolled":
-                    stdout += "__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1"
+                    stdout += "Existing Borealis Agent is already enrolled and active."
                 else:
-                    stdout += f"__BOREALIS_ONBOARDING_ALREADY_PENDING__=1 status={state_status}"
+                    stdout += "Previous Borealis onboarding attempt is already pending approval on this target."
                 return {"exit_code": 73, "stdout": stdout, "stderr": "", "state": state, "events": events, "target_hostname": reported_hostname}
             if state_status == "failed":
                 stdout = last_output
@@ -5455,7 +5465,7 @@ class OnboardingSchedulerMixin:
             skip_detail = _windows_onboarding_skip_detail(stdout=stdout, stderr=stderr)
             if skip_detail:
                 repaired = _windows_onboarding_repair_succeeded(stdout=stdout, stderr=stderr)
-                already_enrolled = "__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1" in f"{stdout}\n{stderr}"
+                already_enrolled = "already enrolled and active" in f"{stdout}\n{stderr}".lower()
                 terminal_status = "already_enrolled" if already_enrolled else ("completed" if repaired else ONBOARDING_STATUS_SKIPPED)
                 self._update_onboarding_target_row(
                     row_id,
