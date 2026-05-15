@@ -82,6 +82,7 @@ Back to Docs Index: ../../Docs/index.md
 40. Added Go Service Management role for Windows service inventory, Linux systemd service inventory, Engine details publishing, role health, and operator start/stop/restart requests.
 41. Validated Go Service Management inventory and service start/stop/restart actions on real Windows/Linux targets and marked service management migration complete.
 42. Added Go Software Management role for Windows installed-app inventory, Linux dpkg/rpm inventory, Engine details publishing, refresh requests, role health, and post-uninstall inventory refresh through the SYSTEM quick-job lane.
+43. Added Go Software Management Windows icon extraction/cache payloads with Engine icon override support, matching the legacy installed-software icon pipeline.
 
 ## In Progress
 
@@ -111,4 +112,3 @@ Back to Docs Index: ../../Docs/index.md
 6. Manual Linux acceptance has validated service install, fresh enrollment, root SYSTEM Bash execution, and root-owned `0600` config; update behavior decision remains open.
 7. Windows `config.json` ACL hardening is deferred because current install ACL changes blocked administrator repair/uninstall workflows during real-host testing.
 8. Software Management has Go unit coverage and Engine contract compatibility; live Windows/Linux acceptance still needs operator validation after redeploy.
-9. Go Software Management publishes inventory and refreshes after uninstall quick jobs, but Windows software icon extraction/override payload parity remains pending in GitHub issue #221.

@@ -1231,7 +1231,10 @@ def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHa
         dispatched["environment"]["QUIET_UNINSTALL_STRING"]
         == '"C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe" --uninstall --multi-install --chrome --system-level --force-uninstall'
     )
-    assert "Invoke-LocalInstalledUninstall" in base64.b64decode(dispatched["script_content"]).decode("utf-8")
+    script_text = base64.b64decode(dispatched["script_content"]).decode("utf-8")
+    assert "Invoke-LocalInstalledUninstall" in script_text
+    assert 'Write-Host ("Invoking {0} {1}"' in script_text
+    assert 'Write-Output ("Invoking {0} {1}"' not in script_text
     assert any(event_name == "device_activity_changed" for event_name, _payload, _to in socket_events)
 
     conn = sqlite3.connect(str(engine_harness.db_path))

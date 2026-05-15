@@ -154,7 +154,7 @@ _WINDOWS_UNINSTALL_SCRIPT = textwrap.dedent(
       foreach ($arg in ($ExtraArgs | Where-Object { $_ -and ('' + $_).Trim() })) {
         $argumentList += [string]$arg
       }
-      Write-Output ("Invoking {0} {1}" -f $parsed.FilePath, (($argumentList -join ' ').Trim()))
+      Write-Host ("Invoking {0} {1}" -f $parsed.FilePath, (($argumentList -join ' ').Trim()))
       $proc = Start-Process -FilePath $parsed.FilePath -ArgumentList $argumentList -Wait -PassThru -WindowStyle Hidden
       return [int]($proc.ExitCode)
     }
@@ -194,7 +194,7 @@ _WINDOWS_UNINSTALL_SCRIPT = textwrap.dedent(
           Remove-AppxPackage -Package $pkg.PackageFullName -ErrorAction Stop
         }
         $removed = $true
-        Write-Output ("Removed Appx package {0}" -f $pkg.PackageFullName)
+        Write-Host ("Removed Appx package {0}" -f $pkg.PackageFullName)
       }
 
       $provisioned = @()
@@ -211,7 +211,7 @@ _WINDOWS_UNINSTALL_SCRIPT = textwrap.dedent(
           continue
         }
         Remove-AppxProvisionedPackage -Online -PackageName $pkg.PackageName -ErrorAction SilentlyContinue | Out-Null
-        Write-Output ("Removed provisioned package {0}" -f $pkg.PackageName)
+        Write-Host ("Removed provisioned package {0}" -f $pkg.PackageName)
         $removed = $true
       }
 
@@ -238,7 +238,7 @@ _WINDOWS_UNINSTALL_SCRIPT = textwrap.dedent(
         $resolvedProductCode = Get-MsiProductCode $uninstallString
       }
       if ($resolvedProductCode) {
-        Write-Output ("Using MSI product code {0}" -f $resolvedProductCode)
+        Write-Host ("Using MSI product code {0}" -f $resolvedProductCode)
         $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/x', $resolvedProductCode, '/qn', '/norestart') -Wait -PassThru -WindowStyle Hidden
         return [int]($proc.ExitCode)
       }
@@ -258,7 +258,7 @@ _WINDOWS_UNINSTALL_SCRIPT = textwrap.dedent(
         return Start-QuietProcess $uninstallString
       }
       if ($exeName -like 'unins*.exe') {
-        Write-Output "Applying Inno Setup silent flags."
+        Write-Host "Applying Inno Setup silent flags."
         return Start-QuietProcess $uninstallString @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
       }
       if ($exeName -eq 'update.exe') {
@@ -269,7 +269,7 @@ _WINDOWS_UNINSTALL_SCRIPT = textwrap.dedent(
         if ($existingArgs -notmatch '(?i)(^|\s)(/s|-s|--silent|--quiet)(\s|$)') {
           $extraArgs += '--silent'
         }
-        Write-Output "Applying Squirrel-style silent flags."
+        Write-Host "Applying Squirrel-style silent flags."
         return Start-QuietProcess $uninstallString $extraArgs
       }
 

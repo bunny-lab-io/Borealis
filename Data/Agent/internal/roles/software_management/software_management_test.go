@@ -83,8 +83,8 @@ func TestRefreshPublishesLinuxInventory(t *testing.T) {
 		return commandResult{Stdout: "bash\t5.2\ncoreutils\t9.1\n", ExitCode: 0}, nil
 	}
 	published := make(chan []Software, 1)
-	manager.publisher = func(_ context.Context, rows []Software) error {
-		published <- rows
+	manager.publisher = func(_ context.Context, snapshot Snapshot) error {
+		published <- snapshot.Software
 		return nil
 	}
 	if err := manager.Refresh(context.Background()); err != nil {
@@ -100,5 +100,57 @@ func TestRefreshPublishesLinuxInventory(t *testing.T) {
 	}
 	if len(commands) != 1 || !strings.Contains(commands[0], "dpkg-query") && !strings.Contains(commands[0], "rpm") {
 		t.Fatalf("commands = %#v", commands)
+	}
+}
+
+func TestParseDisplayIconResource(t *testing.T) {
+	parsed, ok := parseDisplayIconResource(`"C:\Program Files\App\app.exe",1`)
+	if !ok {
+		t.Fatalf("expected display icon resource")
+	}
+	if parsed.FilePath != `C:\Program Files\App\app.exe` || parsed.IconIndex != 1 {
+		t.Fatalf("parsed = %#v", parsed)
+	}
+	parsed, ok = parseDisplayIconResource(`C:\Program Files\App\app.dll,-2`)
+	if !ok || parsed.FilePath != `C:\Program Files\App\app.dll` || parsed.IconIndex != -2 {
+		t.Fatalf("parsed dll = %#v ok=%t", parsed, ok)
+	}
+}
+
+func TestApplySoftwareIconOverrides(t *testing.T) {
+	rows := []Software{
+		{
+			Name:    "Example App",
+			Version: "1.0",
+			Source:  "local_installed",
+			Metadata: map[string]any{
+				"display_icon": `C:\Old\app.exe`,
+				"icon_hash":    "old",
+			},
+		},
+	}
+	rows = applySoftwareIconOverrides(rows, []map[string]any{
+		{
+			"name":         "Example App",
+			"display_icon": `C:\New\app.exe,0`,
+			"rule_id":      "rule-1",
+		},
+	})
+	metadata := rows[0].Metadata
+	if metadata["display_icon"] != `C:\New\app.exe,0` || metadata["original_display_icon"] != `C:\Old\app.exe` {
+		t.Fatalf("metadata = %#v", metadata)
+	}
+	if metadata["display_icon_override_rule_id"] != "rule-1" {
+		t.Fatalf("metadata = %#v", metadata)
+	}
+}
+
+func TestSoftwareIconSignatureIncludesDisplayIcon(t *testing.T) {
+	rows := []Software{{Name: "Example", Source: "local_installed", Metadata: map[string]any{"display_icon": "a.exe"}}}
+	first := softwareIconSignature(rows)
+	rows[0].Metadata["display_icon"] = "b.exe"
+	second := softwareIconSignature(rows)
+	if first == second {
+		t.Fatalf("signature did not change")
 	}
 }
