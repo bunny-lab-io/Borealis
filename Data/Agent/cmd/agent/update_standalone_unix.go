@@ -64,13 +64,13 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	if err := client.EnsureAuthenticated(ctx); err != nil {
 		return err
 	}
-	installed := strings.TrimSpace(readFirstLine(filepath.Join(updaterDir(configPath), "installed_build_id.txt")))
+	installed := agentconfig.NormalizeBuildID(cfg.Agent.InstalledBuildID)
 	if installed == "" {
-		installed = strings.TrimSpace(strings.ToLower(options.BuildID))
+		installed = agentconfig.NormalizeBuildID(options.BuildID)
 	}
 	branch := agentconfig.NormalizeBranch(cfg.Agent.Branch)
 	if branch != "" && !strings.EqualFold(branch, agentconfig.DefaultBranch) {
-		return runLinuxRepoRefUpdateCheck(ctx, configPath, branch, installed)
+		return runLinuxRepoRefUpdateCheck(ctx, configPath, &cfg, branch, installed)
 	}
 	manifest, err := fetchLinuxUpdateManifest(ctx, client, installed)
 	if err != nil {
@@ -126,7 +126,7 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	if err := stageLinuxAgentUpdate(configPath, archivePath); err != nil {
 		return err
 	}
-	_ = writeFirstLine(filepath.Join(updaterDir(configPath), "installed_build_id.txt"), target)
+	_ = writeLinuxInstalledBuildID(configPath, &cfg, target)
 	_ = writeLinuxUpdateStatus(configPath, map[string]any{
 		"state":              "applied",
 		"target_build_id":    target,
@@ -173,7 +173,7 @@ func fetchLinuxUpdateManifest(ctx context.Context, client *auth.Client, installe
 	return manifest, nil
 }
 
-func runLinuxRepoRefUpdateCheck(ctx context.Context, configPath string, branch string, installed string) error {
+func runLinuxRepoRefUpdateCheck(ctx context.Context, configPath string, cfg *agentconfig.AgentConfig, branch string, installed string) error {
 	target, err := resolveGithubRefSHA(ctx, branch)
 	if err != nil {
 		_ = writeLinuxUpdateStatus(configPath, map[string]any{
@@ -223,7 +223,7 @@ func runLinuxRepoRefUpdateCheck(ctx context.Context, configPath string, branch s
 	if err := stageLinuxAgentBinary(configPath, data); err != nil {
 		return err
 	}
-	_ = writeFirstLine(filepath.Join(updaterDir(configPath), "installed_build_id.txt"), target)
+	_ = writeLinuxInstalledBuildID(configPath, cfg, target)
 	_ = writeLinuxUpdateStatus(configPath, map[string]any{
 		"state":              "applied",
 		"repo_ref":           branch,
@@ -406,22 +406,6 @@ func updaterDir(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), "Updater")
 }
 
-func readFirstLine(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	line := strings.SplitN(string(data), "\n", 2)[0]
-	return strings.TrimSpace(line)
-}
-
-func writeFirstLine(path string, value string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(strings.TrimSpace(strings.ToLower(value))), 0o644)
-}
-
 func writeLinuxUpdateStatus(configPath string, values map[string]any) error {
 	path := filepath.Join(updaterDir(configPath), "update_status.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -439,6 +423,25 @@ func writeLinuxUpdateStatus(configPath string, values map[string]any) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+func writeLinuxInstalledBuildID(configPath string, cfg *agentconfig.AgentConfig, value string) error {
+	buildID := agentconfig.NormalizeBuildID(value)
+	if buildID == "" || strings.EqualFold(buildID, "dev") {
+		return nil
+	}
+	if cfg == nil {
+		loaded, err := agentconfig.LoadOrCreate(configPath)
+		if err != nil {
+			return err
+		}
+		cfg = &loaded
+	}
+	cfg.Agent.InstalledBuildID = buildID
+	if err := agentconfig.Save(configPath, cfg); err != nil {
+		return err
+	}
+	return nil
 }
 
 func sha256File(path string) (string, error) {

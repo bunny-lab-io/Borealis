@@ -36,7 +36,7 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if token == "" {
 		return fmt.Errorf("access token missing")
 	}
-	installed := strings.TrimSpace(readFirstLine(filepath.Join(agentSettingsDir(cfg.InstallDir), "Updater", "installed_build_id.txt")))
+	installed := readConfigInstalledBuildID(cfg)
 	logger.Tracef("Agent update check start: installed_build_id=%s", installed)
 	if shouldUseRepoRefUpdate(cfg) {
 		return runRepoRefUpdateCheck(cfg, logger, installed, startedAt)
@@ -296,9 +296,7 @@ func downloadUpdateArtifact(rawURL string, token string, authed bool, destinatio
 }
 
 func writeInstalledBuildID(cfg BootstrapConfig, value string) {
-	path := filepath.Join(agentSettingsDir(cfg.InstallDir), "Updater", "installed_build_id.txt")
-	_ = os.MkdirAll(filepath.Dir(path), 0755)
-	_ = os.WriteFile(path, []byte(strings.TrimSpace(strings.ToLower(value))), 0644)
+	_ = writeConfigInstalledBuildID(cfg, value)
 }
 
 func writeUpdateStatus(cfg BootstrapConfig, values map[string]any) {

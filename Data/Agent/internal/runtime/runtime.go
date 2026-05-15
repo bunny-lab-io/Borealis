@@ -433,7 +433,6 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 		"metrics":             metrics,
 		"inventory":           auditSnapshot.Inventory,
 		"agent_build_id":      strings.TrimSpace(a.options.BuildID),
-		"installed_build_id":  strings.TrimSpace(a.options.BuildID),
 		"agent_update_status": readUpdateStatus(a.configPath, a.options.BuildID),
 		"agent_role_health": map[string]any{
 			"roles": []map[string]any{
@@ -564,6 +563,11 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	if cfg.Agent.AgentID != "" {
 		payload["agent_id"] = cfg.Agent.AgentID
 	}
+	installedBuildID := agentconfig.NormalizeBuildID(cfg.Agent.InstalledBuildID)
+	if installedBuildID == "" {
+		installedBuildID = agentconfig.NormalizeBuildID(a.options.BuildID)
+	}
+	payload["installed_build_id"] = installedBuildID
 	_, err := a.authClient.PostJSON(ctx, "/api/agent/heartbeat", payload, nil)
 	return err
 }

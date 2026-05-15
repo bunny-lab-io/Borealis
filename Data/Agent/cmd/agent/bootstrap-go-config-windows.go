@@ -80,3 +80,31 @@ func readConfigAccessToken(cfg BootstrapConfig) string {
 	}
 	return strings.TrimSpace(parsed.Tokens.AccessToken)
 }
+
+func readConfigInstalledBuildID(cfg BootstrapConfig) string {
+	current, err := agentconfig.Load(agentConfigPath(cfg.InstallDir))
+	if err != nil {
+		return ""
+	}
+	return agentconfig.NormalizeBuildID(current.Agent.InstalledBuildID)
+}
+
+func writeConfigInstalledBuildID(cfg BootstrapConfig, value string) error {
+	buildID := agentconfig.NormalizeBuildID(value)
+	if buildID == "" || strings.EqualFold(buildID, "dev") {
+		return nil
+	}
+	path := agentConfigPath(cfg.InstallDir)
+	current, err := agentconfig.LoadOrCreate(path)
+	if err != nil {
+		return err
+	}
+	current.Agent.InstalledBuildID = buildID
+	if strings.TrimSpace(current.Agent.Branch) == "" {
+		current.Agent.Branch = agentconfig.NormalizeBranch(cfg.RepoRef)
+	}
+	if err := agentconfig.Save(path, &current); err != nil {
+		return err
+	}
+	return nil
+}

@@ -27,9 +27,10 @@ type AgentConfig struct {
 }
 
 type AgentSection struct {
-	GUID    string `json:"guid"`
-	AgentID string `json:"agent_id"`
-	Branch  string `json:"branch"`
+	GUID             string `json:"guid"`
+	AgentID          string `json:"agent_id"`
+	Branch           string `json:"branch"`
+	InstalledBuildID string `json:"installed_build_id"`
 }
 
 type IdentitySection struct {
@@ -73,6 +74,10 @@ func NormalizeBranch(value string) string {
 		return DefaultBranch
 	}
 	return text
+}
+
+func NormalizeBuildID(value string) string {
+	return strings.TrimSpace(strings.ToLower(value))
 }
 
 func Load(path string) (AgentConfig, error) {
@@ -165,6 +170,7 @@ func (c *AgentConfig) ApplyDefaults() {
 		c.SchemaVersion = SchemaVersion
 	}
 	c.Agent.Branch = NormalizeBranch(c.Agent.Branch)
+	c.Agent.InstalledBuildID = NormalizeBuildID(c.Agent.InstalledBuildID)
 }
 
 func (c AgentConfig) Clone() AgentConfig {

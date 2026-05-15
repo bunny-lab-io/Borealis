@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 )
 
 func (a *Agent) handleUpdateRequest(ctx context.Context, payload any) (any, error) {
@@ -38,21 +40,29 @@ func updaterDir(configPath string) string {
 }
 
 func writeInstalledBuildID(configPath string, buildID string) error {
-	buildID = strings.TrimSpace(strings.ToLower(buildID))
+	buildID = agentconfig.NormalizeBuildID(buildID)
 	if buildID == "" || strings.EqualFold(buildID, "dev") {
 		return nil
 	}
-	path := filepath.Join(updaterDir(configPath), "installed_build_id.txt")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	cfg, err := agentconfig.LoadOrCreate(configPath)
+	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(buildID), 0o644)
+	cfg.Agent.InstalledBuildID = buildID
+	if err := agentconfig.Save(configPath, &cfg); err != nil {
+		return err
+	}
+	return nil
 }
 
 func readUpdateStatus(configPath string, buildID string) map[string]any {
+	installedBuildID := agentconfig.NormalizeBuildID(buildID)
+	if cfg, err := agentconfig.Load(configPath); err == nil && strings.TrimSpace(cfg.Agent.InstalledBuildID) != "" {
+		installedBuildID = cfg.Agent.InstalledBuildID
+	}
 	status := map[string]any{
 		"state":              "idle",
-		"installed_build_id": strings.TrimSpace(strings.ToLower(buildID)),
+		"installed_build_id": installedBuildID,
 		"last_source":        "agent_runtime",
 	}
 	path := filepath.Join(updaterDir(configPath), "update_status.json")
@@ -68,8 +78,8 @@ func readUpdateStatus(configPath string, buildID string) map[string]any {
 	for key, value := range stored {
 		status[key] = value
 	}
-	if status["installed_build_id"] == "" && strings.TrimSpace(buildID) != "" {
-		status["installed_build_id"] = strings.TrimSpace(strings.ToLower(buildID))
+	if status["installed_build_id"] == "" && installedBuildID != "" {
+		status["installed_build_id"] = installedBuildID
 	}
 	return status
 }

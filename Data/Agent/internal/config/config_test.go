@@ -16,6 +16,7 @@ func TestSaveLoadConfig(t *testing.T) {
 	cfg.EnrollmentCode = "CODE"
 	cfg.Agent.GUID = "guid"
 	cfg.Agent.Branch = "feature/test"
+	cfg.Agent.InstalledBuildID = "ABCDEF"
 	cfg.Identity.PublicKeySPKIB64 = "pub"
 
 	if err := Save(path, &cfg); err != nil {
@@ -33,6 +34,9 @@ func TestSaveLoadConfig(t *testing.T) {
 	}
 	if loaded.Agent.Branch != "feature/test" {
 		t.Fatalf("branch mismatch: %q", loaded.Agent.Branch)
+	}
+	if loaded.Agent.InstalledBuildID != "abcdef" {
+		t.Fatalf("installed build id mismatch: %q", loaded.Agent.InstalledBuildID)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
