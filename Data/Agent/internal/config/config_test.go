@@ -34,10 +34,30 @@ func TestSaveLoadConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, removed := range []string{"\"runtime\"", "\"feature_flags\"", "\"last_saved_at\"", "\"extra\""} {
-		if strings.Contains(string(raw), removed) {
-			t.Fatalf("config contains removed field %s: %s", removed, string(raw))
+	for _, unexpected := range []string{"\"runtime\"", "\"feature_flags\"", "\"last_saved_at\"", "\"extra\""} {
+		if strings.Contains(string(raw), unexpected) {
+			t.Fatalf("config contains unexpected field %s: %s", unexpected, string(raw))
 		}
+	}
+}
+
+func TestLoadRejectsUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	raw := `{
+  "schema_version": 1,
+  "server_url": "https://borealis.example.com",
+  "agent": {},
+  "identity": {},
+  "tokens": {},
+  "trust": {},
+  "runtime": {"feature_flags": {"system_scripts": true}}
+}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("expected unknown field error, got %v", err)
 	}
 }
 

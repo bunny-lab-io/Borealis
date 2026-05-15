@@ -14,6 +14,7 @@ Back to Docs Index: ../../Docs/index.md
 8. SQLite is not used in v1 because configuration is small, single-writer, and not query-heavy.
 9. No installed Agent runtime path may depend on Python.
 10. Non-migrated roles stay disabled or degraded in Go status payloads; no Python fallback.
+11. First PR assumes clean installs only; no config cleanup or backward-compatible migration logic is carried for removed fields.
 
 ## Numbered Feature Backlog
 

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,7 +79,9 @@ func Load(path string) (AgentConfig, error) {
 		cfg = Default()
 		return cfg, nil
 	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cfg); err != nil {
 		return cfg, fmt.Errorf("parse config: %w", err)
 	}
 	cfg.ApplyDefaults()
