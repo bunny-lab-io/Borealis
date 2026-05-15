@@ -24,14 +24,6 @@ func writeGoAgentConfig(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	current.ServerURL = agentconfig.NormalizeServerURL(cfg.ServerURL)
 	current.EnrollmentCode = strings.TrimSpace(cfg.SiteEnrollmentCode)
 	current.ApplyDefaults()
-	current.Runtime.FeatureFlags["system_scripts"] = true
-	current.Runtime.FeatureFlags["windows_currentuser"] = true
-	current.Runtime.FeatureFlags["linux_currentuser"] = false
-	if current.Extra == nil {
-		current.Extra = map[string]string{}
-	}
-	current.Extra["bootstrap_repo_ref"] = strings.TrimSpace(cfg.RepoRef)
-	current.Extra["bootstrap_runtime"] = "go"
 	if err := agentconfig.Save(path, &current); err != nil {
 		return err
 	}

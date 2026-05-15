@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 const (
@@ -16,16 +15,13 @@ const (
 )
 
 type AgentConfig struct {
-	SchemaVersion  int               `json:"schema_version"`
-	ServerURL      string            `json:"server_url"`
-	EnrollmentCode string            `json:"enrollment_code,omitempty"`
-	Agent          AgentSection      `json:"agent"`
-	Identity       IdentitySection   `json:"identity"`
-	Tokens         TokenSection      `json:"tokens"`
-	Trust          TrustSection      `json:"trust"`
-	Runtime        RuntimeSection    `json:"runtime"`
-	LastSavedAt    string            `json:"last_saved_at,omitempty"`
-	Extra          map[string]string `json:"extra,omitempty"`
+	SchemaVersion  int             `json:"schema_version"`
+	ServerURL      string          `json:"server_url"`
+	EnrollmentCode string          `json:"enrollment_code,omitempty"`
+	Agent          AgentSection    `json:"agent"`
+	Identity       IdentitySection `json:"identity"`
+	Tokens         TokenSection    `json:"tokens"`
+	Trust          TrustSection    `json:"trust"`
 }
 
 type AgentSection struct {
@@ -48,20 +44,9 @@ type TrustSection struct {
 	ServerSigningKeySPKIB64 string `json:"server_signing_key_spki_b64"`
 }
 
-type RuntimeSection struct {
-	FeatureFlags map[string]bool `json:"feature_flags"`
-}
-
 func Default() AgentConfig {
 	return AgentConfig{
 		SchemaVersion: SchemaVersion,
-		Runtime: RuntimeSection{
-			FeatureFlags: map[string]bool{
-				"system_scripts":      true,
-				"windows_currentuser": true,
-				"linux_currentuser":   false,
-			},
-		},
 	}
 }
 
@@ -119,7 +104,6 @@ func Save(path string, cfg *AgentConfig) error {
 	}
 	cfg.ApplyDefaults()
 	cfg.ServerURL = NormalizeServerURL(cfg.ServerURL)
-	cfg.LastSavedAt = time.Now().UTC().Format(time.RFC3339)
 
 	parent := filepath.Dir(path)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
@@ -167,31 +151,8 @@ func (c *AgentConfig) ApplyDefaults() {
 	if c.SchemaVersion == 0 {
 		c.SchemaVersion = SchemaVersion
 	}
-	if c.Runtime.FeatureFlags == nil {
-		c.Runtime.FeatureFlags = map[string]bool{}
-	}
-	if _, ok := c.Runtime.FeatureFlags["system_scripts"]; !ok {
-		c.Runtime.FeatureFlags["system_scripts"] = true
-	}
-	if _, ok := c.Runtime.FeatureFlags["windows_currentuser"]; !ok {
-		c.Runtime.FeatureFlags["windows_currentuser"] = true
-	}
-	if _, ok := c.Runtime.FeatureFlags["linux_currentuser"]; !ok {
-		c.Runtime.FeatureFlags["linux_currentuser"] = false
-	}
 }
 
 func (c AgentConfig) Clone() AgentConfig {
-	out := c
-	out.Runtime.FeatureFlags = map[string]bool{}
-	for k, v := range c.Runtime.FeatureFlags {
-		out.Runtime.FeatureFlags[k] = v
-	}
-	if c.Extra != nil {
-		out.Extra = map[string]string{}
-		for k, v := range c.Extra {
-			out.Extra[k] = v
-		}
-	}
-	return out
+	return c
 }

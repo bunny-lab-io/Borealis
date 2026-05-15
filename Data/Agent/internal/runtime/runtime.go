@@ -19,7 +19,6 @@ type Options struct {
 	ConfigPath     string
 	ServerURL      string
 	EnrollmentCode string
-	RepoRef        string
 	ServiceMode    string
 	Once           bool
 	Verbose        bool
@@ -54,13 +53,6 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	}
 	if strings.TrimSpace(options.EnrollmentCode) != "" {
 		cfg.EnrollmentCode = strings.TrimSpace(options.EnrollmentCode)
-	}
-	if strings.TrimSpace(options.RepoRef) != "" {
-		if cfg.Extra == nil {
-			cfg.Extra = map[string]string{}
-		}
-		cfg.Extra["bootstrap_repo_ref"] = strings.TrimSpace(options.RepoRef)
-		cfg.Extra["bootstrap_runtime"] = "go"
 	}
 	if err := agentconfig.Save(configPath, &cfg); err != nil {
 		return nil, err

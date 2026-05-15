@@ -27,11 +27,12 @@ func run() int {
 	var installService bool
 	var uninstallService bool
 	var printVersion bool
+	var repoRef string
 	flag.StringVar(&options.ConfigPath, "config-path", "", "Path to config.json. Defaults beside Agent.exe.")
 	flag.StringVar(&options.ServerURL, "server-url", "", "Borealis Engine public URL.")
 	flag.StringVar(&options.EnrollmentCode, "site-enrollment-code", "", "Site enrollment code.")
 	flag.StringVar(&options.EnrollmentCode, "enrollment-code", "", "Enrollment code.")
-	flag.StringVar(&options.RepoRef, "repo-ref", "", "Borealis repository branch/ref used for install/update metadata.")
+	flag.StringVar(&repoRef, "repo-ref", "", "Borealis repository branch/ref used by bootstrap installers.")
 	flag.BoolVar(&options.Verbose, "verbose", false, "Mirror logs to stdout.")
 	flag.BoolVar(&options.Once, "once", false, "Run auth and heartbeat once, then exit.")
 	flag.BoolVar(&installService, "install-service", false, "Install and start Borealis Agent service.")
@@ -40,6 +41,7 @@ func run() int {
 	systemService := flag.Bool("system-service", false, "Run as SYSTEM/root service.")
 	helperMode := flag.Bool("helper", false, "Run as current-user helper.")
 	flag.Parse()
+	_ = repoRef
 
 	if printVersion {
 		fmt.Println(version)
@@ -123,13 +125,6 @@ func persistInstallConfig(options agentruntime.Options) error {
 	}
 	if options.EnrollmentCode != "" {
 		cfg.EnrollmentCode = options.EnrollmentCode
-	}
-	if options.RepoRef != "" {
-		if cfg.Extra == nil {
-			cfg.Extra = map[string]string{}
-		}
-		cfg.Extra["bootstrap_repo_ref"] = options.RepoRef
-		cfg.Extra["bootstrap_runtime"] = "go"
 	}
 	return agentconfig.Save(configPath, &cfg)
 }

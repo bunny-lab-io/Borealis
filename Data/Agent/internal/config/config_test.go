@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -29,8 +30,14 @@ func TestSaveLoadConfig(t *testing.T) {
 	if loaded.ServerURL != "https://borealis.example.com" {
 		t.Fatalf("server url not normalized: %q", loaded.ServerURL)
 	}
-	if !loaded.Runtime.FeatureFlags["system_scripts"] {
-		t.Fatalf("system_scripts default missing")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, removed := range []string{"\"runtime\"", "\"feature_flags\"", "\"last_saved_at\"", "\"extra\""} {
+		if strings.Contains(string(raw), removed) {
+			t.Fatalf("config contains removed field %s: %s", removed, string(raw))
+		}
 	}
 }
 

@@ -19,7 +19,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 
 ## Agent Settings and Storage
 - Installed configuration file: `config.json` beside `Agent.exe`.
-- `config.json` stores `schema_version`, `server_url`, `enrollment_code`, `agent.guid`, `agent.agent_id`, Ed25519 keys, access/refresh tokens, Engine script-signing trust material, and runtime feature flags.
+- `config.json` stores `schema_version`, `server_url`, `enrollment_code`, `agent.guid`, `agent.agent_id`, Ed25519 keys, access/refresh tokens, and Engine script-signing trust material.
 - Windows protection: ACL hardening is deferred in the current Go migration branch; files inherit permissions from `C:\Borealis`.
 - Linux protection: root-owned `0600` file with `0700` parent directory.
 - Writes are atomic temp-write + rename. No OS file-lock dependency is used.
@@ -90,7 +90,6 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 ### Token storage
 - Refresh/access tokens are stored in `config.json`.
 - Device GUID and Engine agent ID are stored in `config.json`.
-- `extra.bootstrap_repo_ref` records the branch/ref selected by the installer for later update-channel diagnostics. Direct install commands pass this through as `--repo-ref`.
 - When tokens are invalid or expired, the agent refreshes or re-enters enrollment.
 
 ### Logging

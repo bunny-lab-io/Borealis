@@ -9,7 +9,7 @@ Back to Docs Index: ../../Docs/index.md
 3. Windows `Agent.exe` owns bootstrap, deployment, repair, update checks, service task registration, and runtime execution.
 4. Linux `Agent` owns runtime execution and systemd service install/uninstall; Linux bootstrap parity is tracked as pending.
 5. Installed runtime uses one `config.json` beside `Agent.exe`.
-6. `config.json` stores keys, tokens, trust material, enrollment code, runtime flags, and agent identity.
+6. `config.json` stores keys, tokens, trust material, enrollment code, server URL, and agent identity only.
 7. `config.json` protection uses filesystem permissions only: Windows ACL hardening is deferred and Windows files inherit from `C:\` for now; Linux remains root-owned `0600` with parent `0700`.
 8. SQLite is not used in v1 because configuration is small, single-writer, and not query-heavy.
 9. No installed Agent runtime path may depend on Python.
@@ -65,7 +65,7 @@ Back to Docs Index: ../../Docs/index.md
 24. Validated Windows CURRENTUSER real-host script execution with user-writable Desktop canary success and root `C:\` write denial.
 25. Preserved startup timeline telemetry across heartbeat role-health merges by moving timeline status into a startup context.
 26. Cleaned PowerShell CLIXML progress/error output from Go quick-job result streams.
-27. Added `--repo-ref` install metadata flow so branch-selected installs persist the selected branch in `config.json`.
+27. Simplified Site install commands and removed nonessential `config.json` runtime metadata.
 
 ## In Progress
 
