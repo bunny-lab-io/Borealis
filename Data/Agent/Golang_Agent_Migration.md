@@ -107,6 +107,7 @@ Back to Docs Index: ../../Docs/index.md
 65. Moved Windows update archives and extracted repository payloads into `C:\Borealis\Temp\Updater`, cleaned `C:\Borealis\Temp` when update checks finish, and removed accidental legacy `C:\Borealis\Agent` update workspaces.
 66. Removed persistent `update_status.json`; update checks now use `config.json` for branch/build identity and delete any old updater status sidecar instead of writing state/update_available metadata.
 67. Changed Windows update cleanup so updater workspaces are removed immediately, full `C:\Borealis\Temp` cleanup is deferred until after bootstrap exits, and locked onboarding stdout handles no longer create operator-facing warnings.
+68. Moved Windows dependency version tracking for WireGuard and UltraVNC into `config.json` under `dependency_versions`, removed `installed_version.txt` dependency markers, and cleaned transient `Dependencies` installer folders after dependency reconciliation.
 
 ## In Progress
 

@@ -251,7 +251,6 @@ func ensureBootstrapDirs(cfg BootstrapConfig) error {
 		cfg.InstallDir,
 		filepath.Join(cfg.InstallDir, "Logs"),
 		filepath.Join(cfg.InstallDir, "Temp", "Onboarding"),
-		filepath.Join(cfg.InstallDir, "Dependencies"),
 	}
 	for _, path := range paths {
 		if err := os.MkdirAll(path, 0755); err != nil {

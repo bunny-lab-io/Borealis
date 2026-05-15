@@ -17,13 +17,14 @@ const (
 )
 
 type AgentConfig struct {
-	SchemaVersion  int             `json:"schema_version"`
-	ServerURL      string          `json:"server_url"`
-	EnrollmentCode string          `json:"enrollment_code,omitempty"`
-	Agent          AgentSection    `json:"agent"`
-	Identity       IdentitySection `json:"identity"`
-	Tokens         TokenSection    `json:"tokens"`
-	Trust          TrustSection    `json:"trust"`
+	SchemaVersion      int                        `json:"schema_version"`
+	ServerURL          string                     `json:"server_url"`
+	EnrollmentCode     string                     `json:"enrollment_code,omitempty"`
+	Agent              AgentSection               `json:"agent"`
+	Identity           IdentitySection            `json:"identity"`
+	Tokens             TokenSection               `json:"tokens"`
+	Trust              TrustSection               `json:"trust"`
+	DependencyVersions *DependencyVersionsSection `json:"dependency_versions,omitempty"`
 }
 
 type AgentSection struct {
@@ -46,6 +47,11 @@ type TokenSection struct {
 
 type TrustSection struct {
 	ServerSigningKeySPKIB64 string `json:"server_signing_key_spki_b64"`
+}
+
+type DependencyVersionsSection struct {
+	WireGuard string `json:"wireguard,omitempty"`
+	UltraVNC  string `json:"ultravnc,omitempty"`
 }
 
 func Default() AgentConfig {
@@ -78,6 +84,10 @@ func NormalizeBranch(value string) string {
 
 func NormalizeBuildID(value string) string {
 	return strings.TrimSpace(strings.ToLower(value))
+}
+
+func NormalizeDependencyVersion(value string) string {
+	return strings.TrimSpace(value)
 }
 
 func Load(path string) (AgentConfig, error) {
@@ -171,6 +181,17 @@ func (c *AgentConfig) ApplyDefaults() {
 	}
 	c.Agent.Branch = NormalizeBranch(c.Agent.Branch)
 	c.Agent.InstalledBuildID = NormalizeBuildID(c.Agent.InstalledBuildID)
+	if c.DependencyVersions != nil {
+		c.DependencyVersions.WireGuard = NormalizeDependencyVersion(c.DependencyVersions.WireGuard)
+		c.DependencyVersions.UltraVNC = NormalizeDependencyVersion(c.DependencyVersions.UltraVNC)
+	}
+}
+
+func (c *AgentConfig) EnsureDependencyVersions() *DependencyVersionsSection {
+	if c.DependencyVersions == nil {
+		c.DependencyVersions = &DependencyVersionsSection{}
+	}
+	return c.DependencyVersions
 }
 
 func (c AgentConfig) Clone() AgentConfig {

@@ -29,7 +29,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Installed configuration file: `config.json` beside `Agent.exe`.
 - WireGuard runtime configuration file: `wireguard.conf` beside `Agent.exe`/`Agent`, generated from Engine tunnel material.
 - Startup cleanup removes `Temp` under the Agent install root so onboarding payload/state files do not persist after service start.
-- `config.json` stores `schema_version`, `server_url`, `enrollment_code`, `agent.guid`, `agent.agent_id`, `agent.branch`, `agent.installed_build_id`, Ed25519 keys, access/refresh tokens, and Engine script-signing trust material.
+- `config.json` stores `schema_version`, `server_url`, `enrollment_code`, `agent.guid`, `agent.agent_id`, `agent.branch`, `agent.installed_build_id`, `dependency_versions.wireguard`, `dependency_versions.ultravnc`, Ed25519 keys, access/refresh tokens, and Engine script-signing trust material.
 - Windows protection: ACL hardening is deferred in the current Go migration branch; files inherit permissions from `C:\Borealis`.
 - Linux protection: root-owned `0600` file with `0700` parent directory.
 - Writes are atomic temp-write + rename. No OS file-lock dependency is used.
@@ -144,7 +144,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 #### Scope and runtime paths
 - Purpose: outbound-only connectivity, device telemetry, scripting, UI helpers.
 - Bootstrap: `Agent.exe` owns deploy, repair, update check, config write, scheduled-task registration, and runtime. Windows onboarding stages the Go binary from `Data/Agent/dist/windows-amd64/Agent.exe`; the installed copy runs from `C:\Borealis\Agent.exe`.
-- Windows support dependencies: `Agent.exe` can still install UltraVNC and WireGuard from official installers. It does not stage Python, create a venv, or call `launch_service.ps1`.
+- Windows support dependencies: `Agent.exe` can still install UltraVNC and WireGuard from official installers. Installed dependency versions live in `config.json` under `dependency_versions`, and transient installer payloads under `C:\Borealis\Dependencies` are removed after dependency reconciliation. It does not stage Python, create a venv, or call `launch_service.ps1`.
 - Existing Windows agents are repairable when `C:\Borealis\Agent.exe`, the `Borealis Agent` scheduled task, and an Engine-accepted token in `config.json` are present.
 - Linux first install: download `Data/Agent/dist/linux-amd64/Agent` to any temp path, then run it as root with `--server-url <url> --site-enrollment-code <code> --install-service`; the binary self-stages into `/opt/Borealis/Agent/Agent`, writes `config.json`, installs `borealis-agent.service`, and enables `borealis-agent-updater.timer`.
 - Edit in `Data/Agent`, not `/Agent`; runtime copies are ephemeral and wiped regularly.

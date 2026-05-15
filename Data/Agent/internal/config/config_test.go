@@ -17,6 +17,7 @@ func TestSaveLoadConfig(t *testing.T) {
 	cfg.Agent.GUID = "guid"
 	cfg.Agent.Branch = "feature/test"
 	cfg.Agent.InstalledBuildID = "ABCDEF"
+	cfg.DependencyVersions = &DependencyVersionsSection{WireGuard: "1.1\r\n", UltraVNC: "1.8.2.1"}
 	cfg.Identity.PublicKeySPKIB64 = "pub"
 
 	if err := Save(path, &cfg); err != nil {
@@ -37,6 +38,15 @@ func TestSaveLoadConfig(t *testing.T) {
 	}
 	if loaded.Agent.InstalledBuildID != "abcdef" {
 		t.Fatalf("installed build id mismatch: %q", loaded.Agent.InstalledBuildID)
+	}
+	if loaded.DependencyVersions == nil {
+		t.Fatal("dependency_versions missing")
+	}
+	if loaded.DependencyVersions.WireGuard != "1.1" {
+		t.Fatalf("wireguard dependency version mismatch: %q", loaded.DependencyVersions.WireGuard)
+	}
+	if loaded.DependencyVersions.UltraVNC != "1.8.2.1" {
+		t.Fatalf("ultravnc dependency version mismatch: %q", loaded.DependencyVersions.UltraVNC)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {

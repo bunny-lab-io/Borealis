@@ -108,3 +108,43 @@ func writeConfigInstalledBuildID(cfg BootstrapConfig, value string) error {
 	}
 	return nil
 }
+
+func readConfigDependencyVersion(cfg BootstrapConfig, name string) string {
+	current, err := agentconfig.Load(agentConfigPath(cfg.InstallDir))
+	if err != nil || current.DependencyVersions == nil {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "wireguard":
+		return agentconfig.NormalizeDependencyVersion(current.DependencyVersions.WireGuard)
+	case "ultravnc":
+		return agentconfig.NormalizeDependencyVersion(current.DependencyVersions.UltraVNC)
+	default:
+		return ""
+	}
+}
+
+func writeConfigDependencyVersion(cfg BootstrapConfig, name string, version string) error {
+	normalizedVersion := agentconfig.NormalizeDependencyVersion(version)
+	if normalizedVersion == "" {
+		return nil
+	}
+	path := agentConfigPath(cfg.InstallDir)
+	current, err := agentconfig.LoadOrCreate(path)
+	if err != nil {
+		return err
+	}
+	versions := current.EnsureDependencyVersions()
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "wireguard":
+		versions.WireGuard = normalizedVersion
+	case "ultravnc":
+		versions.UltraVNC = normalizedVersion
+	default:
+		return nil
+	}
+	if err := agentconfig.Save(path, &current); err != nil {
+		return err
+	}
+	return nil
+}
