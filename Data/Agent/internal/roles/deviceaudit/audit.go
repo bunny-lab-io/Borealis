@@ -270,7 +270,33 @@ func collectMemory(ctx context.Context) ([]map[string]any, map[string]any, error
 func collectStorage(ctx context.Context) ([]map[string]any, error) {
 	switch runtime.GOOS {
 	case "windows":
-		const script = `Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DriveType -in 2,3,5 } | Select-Object DeviceID,VolumeName,DriveType,Size,FreeSpace | ConvertTo-Json -Compress -Depth 4`
+		const script = `
+$ErrorActionPreference='SilentlyContinue'
+$rows=@()
+Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DriveType -in 2,3,5 } | ForEach-Object {
+  $logical=$_
+  $letter=($logical.DeviceID -replace ':','')
+  $mediaType=''
+  $busType=''
+  $diskName=''
+  if($logical.DriveType -in 2,3 -and -not [string]::IsNullOrWhiteSpace($letter)){
+    $partition=Get-Partition -DriveLetter $letter -ErrorAction SilentlyContinue | Select-Object -First 1
+    if($partition){
+      $disk=Get-Disk -Number $partition.DiskNumber -ErrorAction SilentlyContinue
+      if($disk){
+        $mediaType=[string]$disk.MediaType
+        $busType=[string]$disk.BusType
+        $diskName=[string]$disk.FriendlyName
+        if([string]::IsNullOrWhiteSpace($mediaType) -or $mediaType -eq 'Unspecified'){
+          $physical=Get-PhysicalDisk -ErrorAction SilentlyContinue | Where-Object { $_.DeviceId -eq $disk.Number -or $_.FriendlyName -eq $disk.FriendlyName } | Select-Object -First 1
+          if($physical){ $mediaType=[string]$physical.MediaType }
+        }
+      }
+    }
+  }
+  $rows += [pscustomobject]@{ DeviceID=$logical.DeviceID; VolumeName=$logical.VolumeName; DriveType=$logical.DriveType; Size=$logical.Size; FreeSpace=$logical.FreeSpace; MediaType=$mediaType; BusType=$busType; DiskName=$diskName }
+}
+$rows | ConvertTo-Json -Compress -Depth 4`
 		out, err := commandOutput(ctx, "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
 		if err != nil {
 			return nil, err
@@ -283,9 +309,21 @@ func collectStorage(ctx context.Context) ([]map[string]any, error) {
 			if total <= 0 && driveType == 3 {
 				continue
 			}
+			mediaType := normalizeWindowsMediaType(asString(item["MediaType"]))
+			diskType := windowsStorageDiskType(driveType, mediaType)
 			entry := map[string]any{
-				"drive":     fallbackString(asString(item["DeviceID"]), "disk"),
-				"disk_type": windowsDriveTypeName(driveType),
+				"drive":      fallbackString(asString(item["DeviceID"]), "disk"),
+				"disk_type":  diskType,
+				"drive_type": windowsDriveTypeName(driveType),
+			}
+			if mediaType != "" {
+				entry["media_type"] = mediaType
+			}
+			if busType := strings.TrimSpace(asString(item["BusType"])); busType != "" && !strings.EqualFold(busType, "Unknown") {
+				entry["bus_type"] = busType
+			}
+			if diskName := strings.TrimSpace(asString(item["DiskName"])); diskName != "" {
+				entry["disk_name"] = diskName
 			}
 			if volumeName := strings.TrimSpace(asString(item["VolumeName"])); volumeName != "" {
 				entry["volume_name"] = volumeName
@@ -617,6 +655,110 @@ func windowsDriveTypeName(driveType int) string {
 	}
 }
 
+func windowsStorageDiskType(driveType int, mediaType string) string {
+	mediaType = normalizeWindowsMediaType(mediaType)
+	if driveType == 5 {
+		return "CD-ROM"
+	}
+	if mediaType != "" {
+		return mediaType
+	}
+	return windowsDriveTypeName(driveType)
+}
+
+func normalizeWindowsMediaType(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	upper := strings.ToUpper(trimmed)
+	switch upper {
+	case "0", "UNSPECIFIED", "UNKNOWN":
+		return ""
+	case "3", "HDD":
+		return "HDD"
+	case "4", "SSD":
+		return "SSD"
+	case "5", "SCM":
+		return "SCM"
+	}
+	if strings.Contains(upper, "SSD") || strings.Contains(upper, "SOLID STATE") {
+		return "SSD"
+	}
+	if strings.Contains(upper, "HDD") || strings.Contains(upper, "ROTATIONAL") || strings.Contains(upper, "HARD DISK") {
+		return "HDD"
+	}
+	return trimmed
+}
+
+func linuxStorageDiskType(source string, fstype string) string {
+	switch strings.ToLower(strings.TrimSpace(fstype)) {
+	case "iso9660", "udf":
+		return "CD-ROM"
+	}
+	root := linuxRootBlockDevice(source)
+	if root == "" {
+		return "Fixed Disk"
+	}
+	if rotational := strings.TrimSpace(readFile("/sys/block/" + root + "/queue/rotational")); rotational != "" {
+		if rotational == "0" {
+			return "SSD"
+		}
+		if rotational == "1" {
+			return "HDD"
+		}
+	}
+	if removable := strings.TrimSpace(readFile("/sys/block/" + root + "/removable")); removable == "1" {
+		return "Removable Disk"
+	}
+	return "Fixed Disk"
+}
+
+func linuxRootBlockDevice(source string) string {
+	name := strings.TrimSpace(source)
+	if strings.HasPrefix(name, "/dev/") {
+		name = strings.TrimPrefix(name, "/dev/")
+	}
+	if name == "" || strings.Contains(name, "/") {
+		return ""
+	}
+	candidates := linuxBlockDeviceCandidates(name)
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if _, err := os.Stat("/sys/block/" + candidate); err == nil {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func linuxBlockDeviceCandidates(name string) []string {
+	candidates := []string{name}
+	if strings.HasPrefix(name, "nvme") && strings.Contains(name, "p") {
+		if index := strings.LastIndex(name, "p"); index > 0 {
+			candidates = append(candidates, name[:index])
+		}
+	}
+	if strings.HasPrefix(name, "mmcblk") && strings.Contains(name, "p") {
+		if index := strings.LastIndex(name, "p"); index > 0 {
+			candidates = append(candidates, name[:index])
+		}
+	}
+	for len(name) > 0 {
+		last := name[len(name)-1]
+		if last < '0' || last > '9' {
+			break
+		}
+		name = name[:len(name)-1]
+	}
+	if name != "" {
+		candidates = append(candidates, name)
+	}
+	return candidates
+}
+
 func linuxInterfaceLinkSpeed(name string) string {
 	value := strings.TrimSpace(readFile("/sys/class/net/" + name + "/speed"))
 	if value == "" || strings.HasPrefix(value, "-") {
@@ -776,12 +918,13 @@ func parseDFOutput(text string) []map[string]any {
 			continue
 		}
 		disks = append(disks, map[string]any{
-			"drive":     mount,
-			"disk_type": "Fixed Disk",
-			"usage":     roundPercent(float64(used) / float64(total) * 100),
-			"total":     total,
-			"free":      free,
-			"used":      used,
+			"drive":          mount,
+			"storage_source": fields[0],
+			"disk_type":      linuxStorageDiskType(fields[0], fstype),
+			"usage":          roundPercent(float64(used) / float64(total) * 100),
+			"total":          total,
+			"free":           free,
+			"used":           used,
 		})
 	}
 	return disks

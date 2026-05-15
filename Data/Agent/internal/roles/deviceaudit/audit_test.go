@@ -109,6 +109,24 @@ func TestFormatBitsPerSecond(t *testing.T) {
 	}
 }
 
+func TestStorageDiskTypeHelpers(t *testing.T) {
+	if got := windowsStorageDiskType(3, "SSD"); got != "SSD" {
+		t.Fatalf("windows fixed ssd = %q", got)
+	}
+	if got := windowsStorageDiskType(3, "Fixed hard disk media"); got != "HDD" {
+		t.Fatalf("windows hard disk = %q", got)
+	}
+	if got := windowsStorageDiskType(5, ""); got != "CD-ROM" {
+		t.Fatalf("windows cdrom = %q", got)
+	}
+	if got := linuxBlockDeviceCandidates("nvme0n1p3"); len(got) < 2 || got[1] != "nvme0n1" {
+		t.Fatalf("nvme candidates = %#v", got)
+	}
+	if got := linuxBlockDeviceCandidates("sda2"); len(got) < 2 || got[1] != "sda" {
+		t.Fatalf("sda candidates = %#v", got)
+	}
+}
+
 func TestAuditorCollectProducesShape(t *testing.T) {
 	snapshot := NewAuditor().Collect(context.Background())
 	if snapshot.Inventory == nil {
