@@ -93,15 +93,15 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - When tokens are invalid or expired, the agent refreshes or re-enters enrollment.
 
 ### Logging
-- Primary log: `Agent/Logs/agent.log` with daily rotation.
-- Error log: `Agent/Logs/agent.error.log`.
-- VPN logs: `Agent/Logs/VPN_Tunnel/tunnel.log` and `remote_shell.log`.
-- Role-specific logs may write to `Agent/Logs/<service>.log`.
-- Windows bootstrap/update diagnostics: `<ProjectRoot>/Agent/Logs/bootstrap.log`. Linux updater diagnostics: `<ProjectRoot>/Updater.log`.
+- Primary log: `Logs/agent.log` with daily rotation.
+- Error log: `Logs/agent.error.log`.
+- VPN logs: `Logs/VPN_Tunnel/tunnel.log` and `remote_shell.log`.
+- Role-specific logs may write to `Logs/<service>.log`.
+- Windows bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/bootstrap.log`. Linux updater diagnostics: `<AgentInstallRoot>/Logs/bootstrap.log`.
 
 ### Troubleshooting flow
 - If enrollment fails, check:
-  - `Agent/Logs/agent.log` for enrollment errors.
+  - `Logs/agent.log` for enrollment errors.
   - `Engine/Services/api-backend/logs/engine.log` for approval or auth failures.
 - If current-user execution fails, confirm the SYSTEM broker is advertising helper capability, inspect session inventory for `helper_ready`, and expect `no_interactive_user_session` when no eligible user session exists.
 - If CURRENTUSER execution fails, inspect the Go helper broker migration status in `Data/Agent/Golang_Agent_Migration.md`.
@@ -115,7 +115,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
   - Check agent WireGuard role logs and confirm `/api/agent/vpn/ensure` succeeds.
   - Ensure the Engine has an active tunnel session and the WireGuard service is running.
 - If VNC fails:
-  - Check `Agent/Logs/VPN_Tunnel/tunnel.log` for `vnc_start` / `vnc_stop` reconciliation events.
+  - Check `Logs/VPN_Tunnel/tunnel.log` for `vnc_start` / `vnc_stop` reconciliation events.
   - Call `POST /api/agent/vnc/ensure` and inspect `ready`, `service_state`, `listener_state`, `detail`, and `last_ready_at`.
   - Confirm the active collaboration session still exists from the Engine side with `GET /api/vnc/sessions`.
 
@@ -132,10 +132,10 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Keep Linux Agent installation separate from deployed Engine runtime roots.
 
 #### Logging
-- Primary log: `Agent/Logs/agent.log` with daily rotation to `agent.log.YYYY-MM-DD` (never auto-delete rotated files).
-- Subsystems: log to `Agent/Logs/<service>.log` with the same rotation policy.
-- Install/diagnostics: `Agent/Logs/install.log`; keep ad-hoc traces (for example, `system_last.ps1`) under `Agent/Logs/` to keep runtime state self-contained.
-- Updater trace exception: Windows `Agent.exe` writes bootstrap/update diagnostics to `<ProjectRoot>/Agent/Logs/bootstrap.log`; Linux `Update.sh` recreates centralized diagnostics in `<ProjectRoot>/Updater.log` at the start of each run.
+- Primary log: `Logs/agent.log` with daily rotation to `agent.log.YYYY-MM-DD` (never auto-delete rotated files).
+- Subsystems: log to `Logs/<service>.log` with the same rotation policy.
+- Install/diagnostics: `Logs/install.log`; keep ad-hoc traces (for example, `system_last.ps1`) under `Logs/` to keep runtime state self-contained.
+- Updater trace exception: `Agent.exe` writes bootstrap/update diagnostics to `<AgentInstallRoot>/Logs/bootstrap.log`.
 - Troubleshooting: prefix lines with `<timestamp>-<service-name>-<log-data>`; ask operators whether verbose logging should stay after resolution.
 
 #### Security
@@ -143,7 +143,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Refresh/access tokens are stored in protected `config.json` and bound to the device identity plus Engine-issued token state; mismatches force re-enrollment.
 - REST and Socket.IO traffic use the public Engine FQDN with normal CA + hostname validation.
 - Validates script payloads with backend-issued Ed25519 signatures before execution.
-- Outbound-only; API/WebSocket calls flow through the Go auth client for proactive refresh. Logs bootstrap, enrollment, token refresh, and signature events in `Agent/Logs/`.
+- Outbound-only; API/WebSocket calls flow through the Go auth client for proactive refresh. Logs bootstrap, enrollment, token refresh, and signature events in `Logs/`.
 - Helper processes inherit no Borealis token state and rely on the local SYSTEM broker for job delivery.
 
 #### Reverse VPN tunnels

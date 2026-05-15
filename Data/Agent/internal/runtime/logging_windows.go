@@ -5,5 +5,5 @@ package agentruntime
 import "path/filepath"
 
 func logPathForConfig(configPath string) string {
-	return filepath.Join(filepath.Dir(configPath), "Agent", "Logs", "agent.log")
+	return filepath.Join(filepath.Dir(configPath), "Logs", "agent.log")
 }

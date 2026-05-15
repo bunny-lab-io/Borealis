@@ -21,7 +21,7 @@ const (
 	bootstrapConfigFileName      = "bootstrapper-config.json"
 	agentPayloadFileName         = "agent-payload.zip"
 	agentPayloadManifestFileName = "agent-payload-manifest.json"
-	bootstrapLogRelativePath     = `Agent\Logs\bootstrap.log`
+	bootstrapLogRelativePath     = `Logs\bootstrap.log`
 	bootstrapStateRelativePath   = `Temp\Onboarding\state.json`
 	bootstrapEventsRelativePath  = `Temp\Onboarding\events.jsonl`
 	bootstrapOutputRelativePath  = `Temp\Onboarding\stdout.log`
