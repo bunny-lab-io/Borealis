@@ -22,7 +22,8 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `internal/roles/software_management` - SYSTEM/root Windows installed-app inventory with cached icon payloads, Linux dpkg/rpm inventory, refresh requests, and post-uninstall inventory refresh through the SYSTEM quick-job lane.
 - `internal/roles/wireguard_tunnel` - SYSTEM/root persistent WireGuard reverse tunnel lifecycle, Engine `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, Windows tunnel-service apply, Linux `wg-quick` apply, and `/api/agent/vpn/ready` reporting.
 - `internal/roles/remote_shell` - SYSTEM/root WireGuard-scoped TCP shell listener for Engine `vpn_shell_*` bridge traffic, using PowerShell on Windows and Bash/sh on Linux.
-- Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`: VNC, tray UI, macros, and node screenshot.
+- `internal/roles/vnc` - Windows UltraVNC always-on lifecycle, runtime credential broker, Engine `/api/agent/vnc/ensure` bootstrap, Socket.IO credential/start events, firewall scope, and listener readiness reporting. Linux VNC reports unsupported.
+- Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`: tray UI, macros, and node screenshot.
 
 ## Agent Settings and Storage
 - Installed configuration file: `config.json` beside `Agent.exe`.
@@ -86,6 +87,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
   - `service_control_action` start, stop, and restart requests for services discovered by the Service Management role.
   - `software_inventory_refresh_request` operator-triggered software inventory refresh after icon/override or software action changes.
   - `vpn_tunnel_start` (WireGuard lifecycle; tunnels are persistent and ignore stop events).
+  - `vnc_start`, `vnc_stop`, `vnc_refresh`, and `vnc_credential_request` for Windows UltraVNC lifecycle and runtime password delivery.
   - `connect_agent` registration (agent socket registry).
 - The SYSTEM socket advertises `helper_contexts=["currentuser"]` when the session broker is running so the Engine can route logical current-user work through the same socket.
 - Helper processes never enroll, never refresh tokens, never open Socket.IO, and never talk to the Engine directly.
@@ -164,17 +166,18 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Agent roles:
   - `Data/Agent/internal/roles/wireguard_tunnel` (Go tunnel lifecycle)
   - `Data/Agent/internal/roles/remote_shell` (Go VPN remote shell TCP server)
+  - `Data/Agent/internal/roles/vnc` (Go Windows UltraVNC lifecycle and credential broker)
 
 #### Execution contexts and roles
 - Go roles are explicit packages under `Data/Agent/internal/roles`.
-- First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER direct session PowerShell/Batch execution, core device audit inventory, SYSTEM/root file management, SYSTEM/root process management, SYSTEM/root service management, SYSTEM/root software management, SYSTEM/root WireGuard tunnel lifecycle, and SYSTEM/root Remote Shell over WireGuard.
+- First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER direct session PowerShell/Batch execution, core device audit inventory, SYSTEM/root file management, SYSTEM/root process management, SYSTEM/root service management, SYSTEM/root software management, SYSTEM/root WireGuard tunnel lifecycle, SYSTEM/root Remote Shell over WireGuard, and Windows VNC lifecycle/credential brokerage over WireGuard.
 - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`.
 - SYSTEM tasks depend on scheduled-task creation rights; failures should surface through Engine logging.
 
 #### Platform parity
 - Windows is the reference path and has the broadest tested feature surface.
 - Linux Go runtime builds as `Agent`, installs through systemd, and supports root/SYSTEM Bash quick jobs in first PR.
-- Linux CURRENTUSER, tray/helper UI, and VNC are pending Go ports.
+- Linux CURRENTUSER and tray/helper UI are pending Go ports. Linux VNC is explicitly unsupported in the current Go role.
 
 #### Ansible support
 - The agent no longer hosts an Ansible playbook execution role.

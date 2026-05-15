@@ -18,6 +18,7 @@ import (
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/service_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/software_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/system_context"
+	vncrole "github.com/bunny-lab-io/borealis/go-agent/internal/roles/vnc"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/wireguard_tunnel"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/transport"
 )
@@ -46,6 +47,7 @@ type Agent struct {
 	remoteShell *remoteshell.Manager
 	services    *servicemanagement.Manager
 	software    *softwaremanagement.Manager
+	vnc         *vncrole.Manager
 	wireguard   *wireguardtunnel.Manager
 }
 
@@ -86,6 +88,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	remoteShellManager := remoteshell.New(hostname, options.ServiceMode, configPath)
 	serviceManager := servicemanagement.New(authClient, hostname, options.ServiceMode)
 	softwareManager := softwaremanagement.New(authClient, hostname, options.ServiceMode)
+	vncManager := vncrole.New(authClient, hostname, options.ServiceMode, configPath)
 	wireGuardManager := wireguardtunnel.New(authClient, hostname, options.ServiceMode, configPath)
 	agent := &Agent{
 		options:     options,
@@ -102,6 +105,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		remoteShell: remoteShellManager,
 		services:    serviceManager,
 		software:    softwareManager,
+		vnc:         vncManager,
 		wireguard:   wireGuardManager,
 	}
 	if agent.wireguard != nil {
@@ -127,6 +131,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	if a.wireguard != nil {
 		a.wireguard.Start(ctx)
+	}
+	if a.vnc != nil {
+		a.vnc.Start(ctx)
+		defer a.vnc.Stop(context.Background())
 	}
 	if a.remoteShell != nil {
 		a.remoteShell.Start(ctx)
@@ -214,6 +222,12 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 		socket.On("vpn_tunnel_stop", a.wireguard.HandleStop)
 		socket.On("vpn_tunnel_activity", a.wireguard.HandleActivity)
 	}
+	if a.vnc != nil {
+		socket.On("vnc_start", a.vnc.HandleStart)
+		socket.On("vnc_stop", a.vnc.HandleStop)
+		socket.On("vnc_refresh", a.vnc.HandleRefresh)
+		socket.On("vnc_credential_request", a.vnc.HandleCredentialRequest)
+	}
 	socket.OnConnected(func(ctx context.Context) error {
 		payload := map[string]any{
 			"agent_id":     a.authClient.AgentID(),
@@ -227,6 +241,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 				"remote_shell":        true,
 				"service_management":  true,
 				"software_management": true,
+				"vnc":                 true,
 				"wireguard_tunnel":    true,
 				"python_fallback":     false,
 				"linux_currentuser":   false,
@@ -367,6 +382,18 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	if a.software != nil {
 		softwareHealth = a.software.Health()
 	}
+	vncHealth := vncrole.RoleHealth{
+		Status:     "unsupported",
+		StatusCode: "unsupported",
+		Detail:     "VNC role is unavailable.",
+		Details: map[string]any{
+			"running_status": "Unavailable",
+			"runtime":        "go",
+		},
+	}
+	if a.vnc != nil {
+		vncHealth = a.vnc.Health()
+	}
 	wireGuardHealth := wireguardtunnel.RoleHealth{
 		Status:     "unsupported",
 		StatusCode: "unsupported",
@@ -486,6 +513,17 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 					"detail":          softwareHealth.Detail,
 					"last_checked_at": time.Now().Unix(),
 					"details":         softwareHealth.Details,
+				},
+				{
+					"role_id":         "system:vnc",
+					"role_name":       "vnc",
+					"role_label":      "UltraVNC Service",
+					"context":         "system",
+					"status":          vncHealth.Status,
+					"status_code":     vncHealth.StatusCode,
+					"detail":          vncHealth.Detail,
+					"last_checked_at": time.Now().Unix(),
+					"details":         vncHealth.Details,
 				},
 				{
 					"role_id":         "system:wireguard_tunnel",

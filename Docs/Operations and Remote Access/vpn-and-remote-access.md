@@ -100,7 +100,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 ### Core Agent files
 - WireGuard client role: `Data/Agent/internal/roles/wireguard_tunnel/`.
 - Remote shell role: `Data/Agent/internal/roles/remote_shell/`.
-- VNC role: pending Go migration.
+- VNC role: `Data/Agent/internal/roles/vnc/`.
 
 ### Config paths
 - Engine WireGuard config: `Engine/Services/wireguard-tunnel/config/borealis-wg.conf`.
@@ -215,7 +215,9 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
   - `Agent.exe` installs the official WireGuard Windows MSI system-wide, verifies the MSI checksum, and removes `WireGuardManager` by default so bootstrap stays headless. The tunnel role installs and controls `WireGuardTunnel$wireguard` on demand using the system `wireguard.exe`. Set `BOREALIS_WIREGUARD_INSTALL_MANAGER_SERVICE=1` only when explicitly testing manager-service behavior.
 - Shell server: `Data/Agent/internal/roles/remote_shell/`.
 - TCP PowerShell/Bash server bound to `0.0.0.0:47002`, restricted to VPN subnet (10.255.x.x).
-- Logging: `Agent/Logs/wireguard.log` (tunnel lifecycle) and `Agent/Logs/VPN_Tunnel/remote_shell.log` (shell I/O).
+- VNC role: `Data/Agent/internal/roles/vnc/`.
+  - Manages Windows UltraVNC as an always-on service after Engine firewall scope and runtime credentials are ready, handles `vnc_start`, `vnc_stop`, `vnc_refresh`, and `vnc_credential_request`, and reports service/listener readiness through role health.
+- Logging: `Agent/Logs/wireguard.log` (tunnel lifecycle), `Agent/Logs/VPN_Tunnel/remote_shell.log` (shell I/O), and `Agent/Logs/VPN_Tunnel/vnc.log` (VNC lifecycle).
 
 #### 5) Security and auth
 - Agent HTTPS trust uses the public CA chain plus hostname validation for the Borealis FQDN.
@@ -293,6 +295,9 @@ This section consolidates the troubleshooting context and environment notes for 
   - Propagates `session_id` into shell control and data frames for Engine/agent log correlation.
   - Logs readiness pongs and idle keepalive pongs separately and throttles idle keepalive log spam on the agent.
   - Closes superseded shell TCP sessions when a newer shell for the same agent connects.
+- Data/Agent/internal/roles/vnc/
+  - Runs the Go Windows UltraVNC lifecycle and credential broker.
+  - Generates runtime VNC credentials, writes UltraVNC-compatible password hashes into `%ProgramData%\UltraVNC\`, keeps service-named and legacy config files synchronized, scopes local firewall rules to Engine-controlled allowlists, and returns live credentials only through Agent Socket.IO credential requests.
 - Data/Engine/Containers/api-backend/data/services/API/devices/vnc.py and Data/Engine/Containers/api-backend/data/services/RemoteDesktop/vnc_proxy.py
   - VNC establish first fast-probes the backend listener and only re-emits tunnel startup with `reason=vnc_bootstrap` when the listener is not already reachable.
   - Backend VNC connect retries only escalate with `reason=vnc_connect_retry` after the connect has been stalled for several seconds, the proxy bounds that forced recovery to one request per browser session, and an agent-level cooldown suppresses stacked recoveries from overlapping browser retries.
@@ -309,6 +314,7 @@ Note: Data/Agent changes only apply after Agent.exe re-stages the agent under Ag
 #### Key paths
 - Agent WireGuard role: Data/Agent/internal/roles/wireguard_tunnel/
 - Agent VPN shell role: Data/Agent/internal/roles/remote_shell/
+- Agent VNC role: Data/Agent/internal/roles/vnc/
 - Engine WireGuard manager: Data/Engine/Containers/api-backend/data/services/VPN/wireguard_server.py
 - Engine tunnel service: Data/Engine/Containers/api-backend/data/services/VPN/vpn_tunnel_service.py
 - Engine shell bridge: Data/Engine/Containers/api-backend/data/services/WebSocket/vpn_shell.py
