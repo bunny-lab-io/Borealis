@@ -130,7 +130,7 @@ type commandRunner func(ctx context.Context, timeout time.Duration, name string,
 
 func New(client *auth.Client, hostname string, serviceMode string, configPath string) *Manager {
 	baseDir := filepath.Dir(configPath)
-	logPath := filepath.Join(baseDir, "Logs", "VPN_Tunnel", "tunnel.log")
+	logPath := filepath.Join(baseDir, "Logs", "wireguard.log")
 	privateKey, publicKey := generateWireGuardKeys()
 	manager := &Manager{
 		authClient:         authClientAdapter{client: client},

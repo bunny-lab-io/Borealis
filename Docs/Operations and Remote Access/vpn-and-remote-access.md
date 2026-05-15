@@ -98,22 +98,22 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - Guacamole bridge: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/guacamole_proxy.py`.
 
 ### Core Agent files
-- WireGuard client role: `Data/Agent/Roles/role_system_wireguard.py`.
-- Remote shell role: `Data/Agent/Roles/role_system_remote_shell.py`.
-- VNC role: `Data/Agent/Roles/role_system_vnc.py`.
+- WireGuard client role: `Data/Agent/internal/roles/wireguard_tunnel/`.
+- Remote shell role: pending Go migration.
+- VNC role: pending Go migration.
 
 ### Config paths
 - Engine WireGuard config: `Engine/Services/wireguard-tunnel/config/borealis-wg.conf`.
-- Agent WireGuard config: `Agent/Borealis/Settings/WireGuard/Borealis.conf`.
+- Agent WireGuard config: `Agent/wireguard.conf`.
 - Engine WireGuard keys: `Engine/Services/wireguard-tunnel/secrets/`.
-- Agent WireGuard keys: `Agent/Borealis/Certificates/VPN_Client/`.
+- Agent WireGuard keys: managed through Engine-issued tunnel material and `config.json`.
 
 ### Service names
 - Engine container service: `wireguard-tunnel`.
 - Engine interface name (Linux): `borealis-wg`.
 - Engine control socket: `Engine/Services/wireguard-tunnel/run/control.sock`.
-- Agent tunnel service: `WireGuardTunnel$Borealis`.
-- Adapter name in Control Panel: `Borealis`.
+- Agent tunnel service: `WireGuardTunnel$wireguard`.
+- Adapter name in Control Panel: `wireguard`.
 - Display names:
   - `Borealis - WireGuard - Agent`
 
@@ -143,7 +143,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - The tunnel and per-device firewall rules remain in place while the agent runs.
 - Keepalive is handled by WireGuard (`PersistentKeepalive = 30` seconds).
 - The agent periodically calls `/api/agent/vpn/ensure` to heal the tunnel if it drops.
-- On Windows agents, same-session ensure calls also recover a stopped `WireGuardTunnel$Borealis` service instead of returning early when the `tunnel_id` matches.
+- On Windows agents, same-session ensure calls also recover a stopped `WireGuardTunnel$wireguard` service instead of returning early when the `tunnel_id` matches.
 - Same-session ensure calls send a short outbound UDP probe to the Engine /32 before returning from reuse, which wakes WireGuard peer state for shell/VNC retries without churning the tunnel service.
 - The Engine listener watchdog keeps shared listener state honest for all sessions, mutates peers live on the persistent interface during routine changes, uses an effective probe grace aligned with the WireGuard keepalive window before declaring `stale_handshake`, and marks status APIs as recovering while full peer reconciliation is underway.
 - Quiet shell sessions no longer depend on operator traffic alone; shell keepalive pongs and shell output can confirm transport health between commands.
@@ -152,7 +152,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 ### Logs to inspect
 - Engine tunnel log: `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`.
 - Engine shell log: `Engine/Services/api-backend/logs/VPN_Tunnel/remote_shell.log`.
-- Agent tunnel log: `Agent/Logs/VPN_Tunnel/tunnel.log`.
+- Agent WireGuard log: `Agent/Logs/wireguard.log`.
 - Agent shell log: `Agent/Logs/VPN_Tunnel/remote_shell.log`.
 - Shell logs now carry a shared `session_id` plus distinct ready/keepalive pong entries, which makes it easier to line up one shell session across Engine and agent logs.
 - Useful recovery keywords include `shell_connect_retry`, `shell_keepalive`, `vnc_bootstrap`, `vnc_connect_retry`, `vnc_backend_connect`, `vpn_transport_watchdog_recovery`, and `vpn_shell_output_timing`.
@@ -163,7 +163,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - Confirm `/api/tunnel/status` returns `status=up` and `agent_socket=true` for a healthy tunnel, and inspect `listener_healthy` / `recovery_in_progress` when the transport is degraded.
 - On the Engine, verify peer-subnet routing lands on the WireGuard interface: `ip route get <agent_vpn_ip>` should resolve to `dev borealis-wg`, not the default LAN gateway.
 - Verify the WireGuard interface MTU is clamped to the expected value on both ends: `ip -d link show borealis-wg` (Engine) and `ip -d link show borealis` (Linux Agent) should normally report `mtu 1420` unless `BOREALIS_WIREGUARD_MTU` has been intentionally overridden.
-- Verify `Agent/Borealis/Settings/WireGuard/Borealis.conf` during an active session.
+- Verify `Agent/wireguard.conf` during an active session.
 - Test TCP shell reachability: `Test-NetConnection <agent_vpn_ip> -Port 47002`.
 
 ### Known limitations
@@ -210,12 +210,12 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - `GET /api/vnc/sessions` -> list active VNC collaboration sessions.
 
 #### 4) Agent components
-- Tunnel lifecycle: `Data/Agent/Roles/role_system_wireguard.py`
+- Tunnel lifecycle: `Data/Agent/internal/roles/wireguard_tunnel/`
   - Validates orchestration tokens, starts WireGuard client service, keeps the tunnel persistent, and retries same-session service recovery when the watchdog finds the Windows WireGuard service stopped.
-  - `Agent.exe` installs the official WireGuard Windows MSI system-wide, verifies the MSI checksum, and removes `WireGuardManager` by default so bootstrap stays headless. The tunnel role installs and controls `WireGuardTunnel$Borealis` on demand using the system `wireguard.exe`. Set `BOREALIS_WIREGUARD_INSTALL_MANAGER_SERVICE=1` only when explicitly testing manager-service behavior.
-- Shell server: `Data/Agent/Roles/role_system_remote_shell.py`
+  - `Agent.exe` installs the official WireGuard Windows MSI system-wide, verifies the MSI checksum, and removes `WireGuardManager` by default so bootstrap stays headless. The tunnel role installs and controls `WireGuardTunnel$wireguard` on demand using the system `wireguard.exe`. Set `BOREALIS_WIREGUARD_INSTALL_MANAGER_SERVICE=1` only when explicitly testing manager-service behavior.
+- Shell server: pending Go migration.
 - TCP PowerShell server bound to `0.0.0.0:47002`, restricted to VPN subnet (10.255.x.x).
-- Logging: `Agent/Logs/VPN_Tunnel/tunnel.log` (tunnel lifecycle) and `Agent/Logs/VPN_Tunnel/remote_shell.log` (shell I/O).
+- Logging: `Agent/Logs/wireguard.log` (tunnel lifecycle) and `Agent/Logs/VPN_Tunnel/remote_shell.log` (shell I/O).
 
 #### 5) Security and auth
 - Agent HTTPS trust uses the public CA chain plus hostname validation for the Borealis FQDN.
@@ -256,22 +256,22 @@ This section consolidates the troubleshooting context and environment notes for 
   - Windows agent host: `wireguard.exe` + `wg.exe`.
 
 #### Desired behavior
-- Agent has a dedicated WireGuard adapter named "Borealis".
-- Adapter provisioning is idempotent: if "Borealis" exists, do not recreate it.
+- Agent has a dedicated WireGuard adapter named "wireguard".
+- Adapter provisioning is idempotent: if "wireguard" exists, do not recreate it.
 - Configs must live inside the project root:
-  - Agent: Agent\Borealis\Settings\WireGuard\Borealis.conf
+  - Agent: Agent\wireguard.conf
   - Engine: Engine\WireGuard\borealis-wg.conf
 - Agent ensures the WireGuard tunnel on boot via `/api/agent/vpn/ensure`, then remote shell/VNC/SSH flow through it.
 - After the agent applies the tunnel config and local firewall allowlist, it calls `/api/agent/vpn/ready`. Engine-side shared Ansible waits for that active-tunnel readiness signal before admitting SSH/WinRM targets into generated inventories.
 - No idle teardown; tunnels and firewall rules stay in place while the agent is running.
 
 #### Recent changes (current repo state)
-- Data/Agent/Roles/role_system_wireguard.py
-  - Lazy client init (avoid side effects on import).
-  - Service name fix: WireGuard tunnel service is "WireGuardTunnel$Borealis".
+- Data/Agent/internal/roles/wireguard_tunnel/
+  - Go WireGuard client role.
+  - Service name follows the side-by-side config basename: "WireGuardTunnel$wireguard".
   - Endpoint override: if Engine sends localhost, use host from server_url.txt and port from the token.
-  - Config path preference: Agent\Borealis\Settings\WireGuard.
-  - Service display name set to "Borealis - WireGuard - Agent".
+  - Config path: Agent\wireguard.conf.
+  - Service display name set to "Borealis Agent - WireGuard".
   - Persistent tunnels with `PersistentKeepalive = 30`.
   - Applies an allowlist firewall rule using the engine /32 from allowed_ips and the Engine allowlist payload.
   - Reports active tunnel readiness to `/api/agent/vpn/ready` after the service/config/firewall path is applied.
@@ -307,24 +307,24 @@ Note: Data/Agent changes only apply after Agent.exe re-stages the agent under Ag
 - Shell timing investigation should rely on `vpn_shell_output_timing`, `vpn_shell_ready_pong`, `vpn_shell_closed`, agent-side `session_id`, and tunnel-side `shell_keepalive` / watchdog recovery events rather than browser symptoms alone.
 
 #### Key paths
-- Agent WireGuard role: Data/Agent/Roles/role_system_wireguard.py
-- Agent VPN shell role: Data/Agent/Roles/role_system_remote_shell.py
+- Agent WireGuard role: Data/Agent/internal/roles/wireguard_tunnel/
+- Agent VPN shell role: pending Go migration.
 - Engine WireGuard manager: Data/Engine/Containers/api-backend/data/services/VPN/wireguard_server.py
 - Engine tunnel service: Data/Engine/Containers/api-backend/data/services/VPN/vpn_tunnel_service.py
 - Engine shell bridge: Data/Engine/Containers/api-backend/data/services/WebSocket/vpn_shell.py
 - Engine VNC API: Data/Engine/Containers/api-backend/data/services/API/devices/vnc.py
 - Engine VNC proxy: Data/Engine/Containers/api-backend/data/services/RemoteDesktop/vnc_proxy.py
-- Agent tunnel logs: Z:\Agent\Logs\VPN_Tunnel\tunnel.log
+- Agent WireGuard logs: Z:\Agent\Logs\wireguard.log
 - Agent shell logs: Z:\Agent\Logs\VPN_Tunnel\remote_shell.log
 - Engine tunnel logs: Engine\Logs\VPN_Tunnel\tunnel.log
 - Engine shell logs: Engine\Logs\VPN_Tunnel\remote_shell.log
-- Agent WireGuard config: Z:\Agent\Borealis\Settings\WireGuard\Borealis.conf
+- Agent WireGuard config: Z:\Agent\wireguard.conf
 - Engine WireGuard config: Engine\WireGuard\borealis-wg.conf
 
 #### Known WireGuard services and names
 - Engine interface name (Linux): "borealis-wg"
-- Agent tunnel service name: "WireGuardTunnel$Borealis"
-- Adapter name in Control Panel: "Borealis"
+- Agent tunnel service name: "WireGuardTunnel$wireguard"
+- Adapter name in Control Panel: "wireguard"
 - Service display names:
   - "Borealis - WireGuard - Agent"
 
@@ -336,15 +336,15 @@ Note: Data/Agent changes only apply after Agent.exe re-stages the agent under Ag
 - Engine WireGuard log tail:
   - `tail -f Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`
 - Agent tunnel state (remote, via Z:\ logs):
-  - Z:\Agent\Logs\VPN_Tunnel\tunnel.log
+  - Z:\Agent\Logs\wireguard.log
   - Z:\Agent\Logs\VPN_Tunnel\remote_shell.log
-  - Z:\Agent\Borealis\Settings\WireGuard\Borealis.conf
+  - Z:\Agent\wireguard.conf
 
 #### Current blockers and next steps
 1) Re-stage the agent runtime after `role_system_remote_shell.py`, `role_system_wireguard.py`, or `role_system_vnc.py` changes so the runtime copy matches `Data/Agent/`.
 2) For shell regressions, correlate `Engine/Services/api-backend/logs/VPN_Tunnel/remote_shell.log` with `Z:\Agent\Logs\VPN_Tunnel\remote_shell.log` by `session_id` before assuming browser-side buffering.
 3) For VNC regressions on weaker hosts, capture `vnc_connect_retry`, `vnc_backend_connect`, `vpn_transport_recovery_request`, and `vpn_transport_watchdog_recovery` from `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log` before changing shell code paths.
-4) If issues persist, confirm `Agent\Borealis\Settings\WireGuard\Borealis.conf` still has a valid [Peer], verify `Test-NetConnection -ComputerName <agent_vpn_ip> -Port 47002`, and re-check WireGuard service state on both ends.
+4) If issues persist, confirm `Agent\wireguard.conf` still has a valid [Peer], verify `Test-NetConnection -ComputerName <agent_vpn_ip> -Port 47002`, and re-check WireGuard service state on both ends.
 
 #### Related Documentation
 - [Ansible SSH Connection Logic](../Automation%20and%20Execution/SSH_Connection_Logic.md)

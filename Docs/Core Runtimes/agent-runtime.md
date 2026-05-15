@@ -105,7 +105,8 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 ### Logging
 - Primary log: `Logs/agent.log` with daily rotation.
 - Error log: `Logs/agent.error.log`.
-- VPN logs: `Logs/VPN_Tunnel/tunnel.log` and `remote_shell.log`.
+- WireGuard log: `Logs/wireguard.log`.
+- Remote shell log: `Logs/VPN_Tunnel/remote_shell.log`.
 - Role-specific logs may write to `Logs/<service>.log`.
 - Windows bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/bootstrap.log`. Linux updater diagnostics: `<AgentInstallRoot>/Logs/bootstrap.log`.
 
@@ -125,7 +126,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
   - Check agent WireGuard role logs and confirm `/api/agent/vpn/ensure` succeeds.
   - Ensure the Engine has an active tunnel session and the WireGuard service is running.
 - If VNC fails:
-  - Check `Logs/VPN_Tunnel/tunnel.log` for `vnc_start` / `vnc_stop` reconciliation events.
+  - Check `Logs/wireguard.log` for tunnel lifecycle and WireGuard recovery events.
   - Call `POST /api/agent/vnc/ensure` and inspect `ready`, `service_state`, `listener_state`, `detail`, and `last_ready_at`.
   - Confirm the active collaboration session still exists from the Engine side with `GET /api/vnc/sessions`.
 

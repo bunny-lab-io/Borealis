@@ -74,7 +74,8 @@ Describe Borealis operational logging, retention, and core runtime checks.
 ### Agent logging notes
 - Logs are scoped by context (SYSTEM vs CURRENTUSER) in prefixes.
 - Role-specific logs live under `Logs/<service>.log`.
-- VPN logs are kept in `Logs/VPN_Tunnel/`.
+- WireGuard role logs are kept in `Logs/wireguard.log`.
+- VPN shell logs are kept in `Logs/VPN_Tunnel/`.
 - Cross-platform updater traces are written to `<AgentInstallRoot>/Logs/bootstrap.log`.
 
 ### Debug workflow

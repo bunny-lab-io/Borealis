@@ -61,7 +61,7 @@ func testManager(t *testing.T) *Manager {
 		serviceMode:   "system",
 		configPath:    dir + "/config.json",
 		baseDir:       dir,
-		logPath:       dir + "/Logs/VPN_Tunnel/tunnel.log",
+		logPath:       dir + "/Logs/wireguard.log",
 		platform:      "linux",
 		interfaceName: "borealis",
 		wgQuick:       "wg-quick",
@@ -117,6 +117,15 @@ func TestBuildSessionNormalizesAllowedPortsAndHostRoute(t *testing.T) {
 	}
 	if got := manager.configPathForPlatform(); got != filepath.Join(manager.baseDir, "wireguard.conf") {
 		t.Fatalf("unexpected config path: %s", got)
+	}
+}
+
+func TestNewUsesFlatWireGuardLogPath(t *testing.T) {
+	dir := t.TempDir()
+	manager := New(nil, "LAB-01", "system", filepath.Join(dir, "config.json"))
+
+	if got := manager.logPath; got != filepath.Join(dir, "Logs", "wireguard.log") {
+		t.Fatalf("unexpected log path: %s", got)
 	}
 }
 
