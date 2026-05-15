@@ -46,6 +46,16 @@ func (f *fakeCurrentUserDispatcher) DispatchCurrentUserQuickJob(ctx context.Cont
 	return f.result, f.accept, f.detail
 }
 
+type fakeSoftwareRefresh struct {
+	called bool
+	reason string
+}
+
+func (f *fakeSoftwareRefresh) RequestRefresh(reason string) {
+	f.called = true
+	f.reason = reason
+}
+
 func TestHandleQuickJobSuccess(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -88,6 +98,45 @@ func TestHandleQuickJobSuccess(t *testing.T) {
 	result := emitter.payloads[1].(map[string]any)
 	if result["status"] != "Success" {
 		t.Fatalf("status = %#v", result)
+	}
+}
+
+func TestHandleQuickJobRequestsSoftwareRefreshForSoftwareLane(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicDER, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scriptBytes := []byte("echo refresh")
+	signature := ed25519.Sign(priv, scriptBytes)
+	refresh := &fakeSoftwareRefresh{}
+	role := New(&fakeEmitter{}, &fakeKeys{}, nil)
+	role.Hostname = "host"
+	role.SoftwareRefresh = refresh
+	role.Runner = func(ctx context.Context, scriptType string, content []byte, envMap map[string]string, timeoutSeconds int) scripts.Result {
+		return scripts.Result{ReturnCode: 0}
+	}
+	_, err = role.HandleQuickJob(context.Background(), map[string]any{
+		"job_id":          12,
+		"target_hostname": "host",
+		"run_mode":        "system",
+		"script_type":     "bash",
+		"script_content":  base64.StdEncoding.EncodeToString(scriptBytes),
+		"script_encoding": "base64",
+		"signature":       base64.StdEncoding.EncodeToString(signature),
+		"signing_key":     base64.StdEncoding.EncodeToString(publicDER),
+		"context": map[string]any{
+			"queue_lane": "software_management",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !refresh.called || refresh.reason != "quick_job:success" {
+		t.Fatalf("refresh = %#v", refresh)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/file_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/process_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/service_management"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/software_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/system_context"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/transport"
 )
@@ -41,6 +42,7 @@ type Agent struct {
 	files      *filemanagement.Manager
 	processes  *processmanagement.Manager
 	services   *servicemanagement.Manager
+	software   *softwaremanagement.Manager
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -78,6 +80,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	fileManager := filemanagement.New(authClient, hostname)
 	processManager := processmanagement.New(hostname)
 	serviceManager := servicemanagement.New(authClient, hostname, options.ServiceMode)
+	softwareManager := softwaremanagement.New(authClient, hostname, options.ServiceMode)
 	return &Agent{
 		options:    options,
 		configPath: configPath,
@@ -91,6 +94,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		files:      fileManager,
 		processes:  processManager,
 		services:   serviceManager,
+		software:   softwareManager,
 	}, nil
 }
 
@@ -102,6 +106,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	if a.services != nil {
 		a.services.Start(ctx)
+	}
+	if a.software != nil {
+		a.software.Start(ctx)
 	}
 	if err := a.postStatus(ctx, "status_channel_online", "healthy", "Status channel online."); err != nil {
 		a.logger.Printf("status post failed: %v", err)
@@ -164,6 +171,9 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	socket := transport.NewClient(a.authClient.BaseURL(), headers)
 	role := systemcontext.New(socket, a.authClient, a.dispatcher)
 	role.Hostname = a.hostname
+	if a.software != nil {
+		role.SoftwareRefresh = a.software
+	}
 	socket.On("quick_job_run", role.HandleQuickJob)
 	if a.files != nil {
 		socket.On("file_management_request", a.files.HandleRequest)
@@ -174,19 +184,23 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	if a.services != nil {
 		socket.On("service_control_action", a.services.HandleControlAction)
 	}
+	if a.software != nil {
+		socket.On("software_inventory_refresh_request", a.software.HandleRefreshRequest)
+	}
 	socket.OnConnected(func(ctx context.Context) error {
 		payload := map[string]any{
 			"agent_id":     a.authClient.AgentID(),
 			"service_mode": auth.NormalizeServiceMode(a.options.ServiceMode),
 			"hostname":     a.hostname,
 			"capabilities": map[string]any{
-				"runtime":            "go",
-				"system_scripts":     true,
-				"file_management":    true,
-				"process_management": true,
-				"service_management": true,
-				"python_fallback":    false,
-				"linux_currentuser":  false,
+				"runtime":             "go",
+				"system_scripts":      true,
+				"file_management":     true,
+				"process_management":  true,
+				"service_management":  true,
+				"software_management": true,
+				"python_fallback":     false,
+				"linux_currentuser":   false,
 			},
 		}
 		if a.dispatcher != nil && a.dispatcher.SupportsCurrentUserDispatch() {
@@ -282,6 +296,18 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	if a.services != nil {
 		serviceHealth = a.services.Health()
 	}
+	softwareHealth := softwaremanagement.RoleHealth{
+		Status:     "unsupported",
+		StatusCode: "unsupported",
+		Detail:     "Software Management role is unavailable.",
+		Details: map[string]any{
+			"running_status": "Unavailable",
+			"runtime":        "go",
+		},
+	}
+	if a.software != nil {
+		softwareHealth = a.software.Health()
+	}
 	metrics := map[string]any{
 		"service_mode":     auth.NormalizeServiceMode(a.options.ServiceMode),
 		"operating_system": operatingSystemName(),
@@ -367,6 +393,17 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 					"detail":          serviceHealth.Detail,
 					"last_checked_at": time.Now().Unix(),
 					"details":         serviceHealth.Details,
+				},
+				{
+					"role_id":         "system:software_management",
+					"role_name":       "software_management",
+					"role_label":      "Software Management",
+					"context":         "system",
+					"status":          softwareHealth.Status,
+					"status_code":     softwareHealth.StatusCode,
+					"detail":          softwareHealth.Detail,
+					"last_checked_at": time.Now().Unix(),
+					"details":         softwareHealth.Details,
 				},
 			},
 		},

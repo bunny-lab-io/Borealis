@@ -24,12 +24,17 @@ type CurrentUserDispatcher interface {
 	DispatchCurrentUserQuickJob(ctx context.Context, payload map[string]any) (scripts.Result, bool, string)
 }
 
+type SoftwareRefreshRequester interface {
+	RequestRefresh(reason string)
+}
+
 type Runner func(ctx context.Context, scriptType string, content []byte, envMap map[string]string, timeoutSeconds int) scripts.Result
 
 type Role struct {
 	Emitter               Emitter
 	SigningKeys           SigningKeyStore
 	CurrentUserDispatcher CurrentUserDispatcher
+	SoftwareRefresh       SoftwareRefreshRequester
 	Runner                Runner
 	Hostname              string
 	mu                    sync.Mutex
@@ -91,7 +96,9 @@ func (r *Role) dispatchCurrentUser(ctx context.Context, payload map[string]any) 
 	if result.ReturnCode == 0 {
 		status = "Success"
 	}
-	return nil, r.emitResult(jobID, status, result.Stdout, result.Stderr, contextPayload)
+	err := r.emitResult(jobID, status, result.Stdout, result.Stderr, contextPayload)
+	r.requestSoftwareRefresh(payload, status)
+	return nil, err
 }
 
 func (r *Role) executeSystem(ctx context.Context, payload map[string]any, jobID any) error {
@@ -117,7 +124,9 @@ func (r *Role) executeSystem(ctx context.Context, payload map[string]any, jobID 
 	if result.ReturnCode == 0 {
 		status = "Success"
 	}
-	return r.emitResult(jobID, status, result.Stdout, result.Stderr, contextPayload)
+	err := r.emitResult(jobID, status, result.Stdout, result.Stderr, contextPayload)
+	r.requestSoftwareRefresh(payload, status)
+	return err
 }
 
 func (r *Role) validateSignedScriptPayload(payload map[string]any) string {
@@ -200,6 +209,17 @@ func (r *Role) emitResult(jobID any, status string, stdout string, stderr string
 		result["context"] = contextPayload
 	}
 	return r.Emitter.Emit("quick_job_result", result)
+}
+
+func (r *Role) requestSoftwareRefresh(payload map[string]any, status string) {
+	if r.SoftwareRefresh == nil {
+		return
+	}
+	if !strings.EqualFold(queueLane(payload), "software_management") {
+		return
+	}
+	reason := "quick_job:" + strings.ToLower(strings.TrimSpace(status))
+	r.SoftwareRefresh.RequestRefresh(reason)
 }
 
 func normalizeRunMode(value string) string {
