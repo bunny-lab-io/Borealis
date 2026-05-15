@@ -10,10 +10,10 @@ import (
 
 	"github.com/bunny-lab-io/borealis/go-agent/internal/auth"
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
-	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/currentuser"
-	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/deviceaudit"
-	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/filemanagement"
-	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/systemcontext"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/current_user"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/device_audit"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/file_management"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/system_context"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/transport"
 )
 

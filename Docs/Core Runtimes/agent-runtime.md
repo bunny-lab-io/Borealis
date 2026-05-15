@@ -13,10 +13,10 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Security: Ed25519 identity keys, public CA + hostname validation for the Engine FQDN, signed script payloads, and `config.json` token/key storage.
 
 ## Role Catalog (Go v1)
-- `internal/roles/systemcontext` - SYSTEM/root quick-job router and script execution for signed `quick_job_run` payloads.
-- `internal/roles/currentuser` - Windows CURRENTUSER direct session quick-job execution for active user sessions. Linux CURRENTUSER reports unsupported in first PR.
-- `internal/roles/deviceaudit` - core CPU, memory, storage media type, removable media, network link speed, OS/build, hardware model/serial with motherboard serial fallback, last reboot, internal IP, device type, uptime, and last-user inventory published through heartbeat payloads.
-- `internal/roles/filemanagement` - SYSTEM/root file-management browse, upload-conflict preflight, lightweight text editing, copy/cut/paste mutations, delete, mkdir, rename, move, upload pull, and download artifact transfer.
+- `internal/roles/system_context` - SYSTEM/root quick-job router and script execution for signed `quick_job_run` payloads.
+- `internal/roles/current_user` - Windows CURRENTUSER direct session quick-job execution for active user sessions. Linux CURRENTUSER reports unsupported in first PR.
+- `internal/roles/device_audit` - core CPU, memory, storage media type, removable media, network link speed, OS/build, hardware model/serial with motherboard serial fallback, last reboot, internal IP, device type, uptime, and last-user inventory published through heartbeat payloads.
+- `internal/roles/file_management` - SYSTEM/root file-management browse, upload-conflict preflight, lightweight text editing, copy/cut/paste mutations, delete, mkdir, rename, move, upload pull, and download artifact transfer.
 - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`: process management, service management, software management, WireGuard, remote shell, VNC, tray UI, macros, and node screenshot.
 
 ## Agent Settings and Storage
