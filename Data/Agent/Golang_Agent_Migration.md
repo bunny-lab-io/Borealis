@@ -95,21 +95,21 @@ Back to Docs Index: ../../Docs/index.md
 53. Added Go Remote Shell role with WireGuard-scoped TCP listener, existing JSONL/base64 Engine bridge protocol, PowerShell/Bash subprocess execution, ready/keepalive pong handling, stdout correlation metadata, one active session replacement, log output, and heartbeat role health.
 54. Validated Go Remote Shell over WireGuard on real Windows/Linux targets and marked Remote Shell migration complete.
 55. Added Go VNC lifecycle and credential broker role for Windows UltraVNC always-on service management, runtime credential generation, UltraVNC config/password hash writing, Engine `/api/agent/vnc/ensure` bootstrap, `vnc_start`/`vnc_stop`/`vnc_refresh`/`vnc_credential_request` Socket.IO handling, firewall scope, listener readiness, logs, and role health.
+56. Validated Go VNC lifecycle and credential broker on a real Windows target and marked VNC migration complete.
 
 ## In Progress
 
 1. Validate Engine onboarding/update artifact contracts against a deployed Engine.
-2. Validate Go VNC lifecycle and credential broker on a real Windows target.
+2. Implement full release-channel update format and Engine artifact packaging for Go binaries.
 
 ## Pending
 
 1. Implement full Windows CURRENTUSER helper/tray broker in Go using same binary helper mode for richer session inventory and long-lived desktop helpers.
-2. Implement full release-channel update format and Engine artifact packaging for Go binaries.
-3. Implement Linux `Agent` deployment/bootstrap parity.
-4. Decide whether macros/node screenshot should be retired or ported.
-5. Rework tray UI/status as optional Go/native helper or external UI.
-6. Add fake Engine HTTP/Socket.IO harness coverage for live `connect_agent`, `quick_job_run`, `file_management_request`, `process_management_request`, `service_control_action`, `software_inventory_refresh_request`, `vpn_tunnel_start`, Remote Shell TCP bridge behavior, and VNC credential/start lifecycle behavior.
-7. Add Engine contract tests for onboarding/update artifact path changes.
+2. Implement Linux `Agent` deployment/bootstrap parity.
+3. Decide whether macros/node screenshot should be retired or ported.
+4. Rework tray UI/status as optional Go/native helper or external UI.
+5. Add fake Engine HTTP/Socket.IO harness coverage for live `connect_agent`, `quick_job_run`, `file_management_request`, `process_management_request`, `service_control_action`, `software_inventory_refresh_request`, `vpn_tunnel_start`, Remote Shell TCP bridge behavior, and VNC credential/start lifecycle behavior.
+6. Add Engine contract tests for onboarding/update artifact path changes.
 
 ## Release-Blocking Technical Debt
 
@@ -121,4 +121,3 @@ Back to Docs Index: ../../Docs/index.md
 6. Manual Linux acceptance has validated service install, fresh enrollment, root SYSTEM Bash execution, and root-owned `0600` config; update behavior decision remains open.
 7. Windows `config.json` ACL hardening is deferred because current install ACL changes blocked administrator repair/uninstall workflows during real-host testing.
 8. Software Management has Go unit coverage, Engine contract compatibility, and real-host Windows uninstall/icon validation; Linux uninstall acceptance remains opportunistic because package removal is operator-risky.
-9. Go VNC has unit/build coverage and Engine contract compatibility, but still needs real-host Windows VNC establish and credential validation over active WireGuard sessions.
