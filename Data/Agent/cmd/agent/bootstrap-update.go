@@ -25,9 +25,6 @@ type updateManifest struct {
 
 func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	startedAt := time.Now()
-	if err := copySelfToInstallRoot(cfg, logger); err != nil {
-		logger.Warnf("Agent.exe self-stage before update skipped: %v", err)
-	}
 	serverURL := strings.TrimRight(strings.TrimSpace(cfg.ServerURL), "/")
 	if serverURL == "" {
 		return fmt.Errorf("server URL missing")
@@ -55,6 +52,9 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	}
 	if installed != "" && strings.EqualFold(installed, target) {
 		logger.Infof("Agent update check: up to date (%s).", target)
+		if err := ensureAgentUpdaterTask(cfg, logger); err != nil {
+			logger.Warnf("AutoUpdater task reconciliation skipped: %v", err)
+		}
 		writeUpdateStatus(cfg, map[string]any{
 			"state":            "up_to_date",
 			"target_build_id":  target,
@@ -141,6 +141,9 @@ func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, install
 	}
 	if installed != "" && strings.EqualFold(installed, target) {
 		logger.Infof("Agent repo_ref update check: up to date (%s).", target)
+		if err := ensureAgentUpdaterTask(cfg, logger); err != nil {
+			logger.Warnf("AutoUpdater task reconciliation skipped: %v", err)
+		}
 		writeUpdateStatus(cfg, map[string]any{
 			"state":            "up_to_date",
 			"repo_ref":         ref,

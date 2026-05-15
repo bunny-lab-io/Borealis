@@ -139,8 +139,7 @@ func ensureAgentTasks(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if err := createOrReplaceTask(agentTaskName, taskAction, "ONSTART", logger); err != nil {
 		return err
 	}
-	updateAction := fmt.Sprintf(`"%s" --update-check --config-path "%s"`, agentExe, filepath.Join(cfg.InstallDir, "config.json"))
-	if err := createOrReplaceTask(agentUpdaterTaskName, updateAction, "HOURLY", logger); err != nil {
+	if err := ensureAgentUpdaterTask(cfg, logger); err != nil {
 		return err
 	}
 	if err := startScheduledTask(agentTaskName, logger); err != nil {
@@ -148,6 +147,16 @@ func ensureAgentTasks(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	}
 	logger.Tracef("Agent scheduled tasks ensured duration=%s.", time.Since(startedAt).Round(time.Millisecond))
 	return nil
+}
+
+func ensureAgentUpdaterTask(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	agentExe := filepath.Join(cfg.InstallDir, "Agent.exe")
+	logger.Tracef("Ensuring Agent AutoUpdater scheduled task: agent_exe=%s agent_exe_exists=%t", agentExe, fileExists(agentExe))
+	if !fileExists(agentExe) {
+		return fmt.Errorf("Agent.exe not found at %s", agentExe)
+	}
+	updateAction := fmt.Sprintf(`"%s" --update-check --config-path "%s"`, agentExe, filepath.Join(cfg.InstallDir, "config.json"))
+	return createOrReplaceTask(agentUpdaterTaskName, updateAction, "HOURLY", logger)
 }
 
 func createOrReplaceTask(name string, command string, schedule string, logger *BootstrapLogger) error {

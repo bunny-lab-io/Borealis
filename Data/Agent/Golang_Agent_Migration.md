@@ -101,6 +101,7 @@ Back to Docs Index: ../../Docs/index.md
 59. Added Linux deployment/bootstrap parity so a temp-downloaded `Agent` self-stages into `/opt/Borealis/Agent/Agent`, writes `config.json`, installs `borealis-agent.service`, and enables hourly update checks.
 60. Added Windows CURRENTUSER same-binary helper sentinel broker for active desktop session readiness while keeping signed quick-job execution brokered by SYSTEM `CreateProcessAsUser`.
 61. Retired legacy macros/node screenshot from the Go Agent migration scope by decision; no Go port will be implemented in this PR.
+62. Fixed Windows healthy-bootstrap update checks so the temp bootstrap executable no longer tries to overwrite a locked installed `Agent.exe` before stopping the runtime, and so the AutoUpdater task is reconciled even when the installed build is already current.
 
 ## In Progress
 
