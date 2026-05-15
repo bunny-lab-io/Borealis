@@ -120,6 +120,64 @@ func TestBuildSessionNormalizesAllowedPortsAndHostRoute(t *testing.T) {
 	}
 }
 
+func TestWindowsTunnelServiceIDMatchesConfigBasename(t *testing.T) {
+	manager := testManager(t)
+	manager.platform = "windows"
+
+	if got := manager.tunnelName(); got != "wireguard" {
+		t.Fatalf("unexpected tunnel name: %s", got)
+	}
+	if got := manager.tunnelServiceID(); got != "WireGuardTunnel$wireguard" {
+		t.Fatalf("unexpected tunnel service id: %s", got)
+	}
+}
+
+func TestWindowsApplySessionUsesServiceIDFromConfigBasename(t *testing.T) {
+	manager := testManager(t)
+	manager.platform = "windows"
+	manager.wireguardExe = "wireguard.exe"
+	session, err := manager.buildSession(testPayload(time.Now().Add(time.Hour).Unix()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	queryCount := 0
+	manager.runner = func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
+		call := name + " " + joinArgs(args)
+		calls = append(calls, call)
+		if strings.Contains(call, "WireGuardTunnel$Borealis") {
+			t.Fatalf("legacy Borealis tunnel service used: %#v", calls)
+		}
+		if name == "sc.exe" && len(args) >= 2 && args[0] == "query" {
+			if args[1] != "WireGuardTunnel$wireguard" {
+				t.Fatalf("unexpected service query target: %s", args[1])
+			}
+			queryCount++
+			if queryCount == 1 {
+				return commandResult{ExitCode: 1}, nil
+			}
+			return commandResult{ExitCode: 0, Stdout: "STATE              : 4  RUNNING"}, nil
+		}
+		return commandResult{ExitCode: 0}, nil
+	}
+
+	if err := manager.applyWindowsSession(context.Background(), session); err != nil {
+		t.Fatalf("applyWindowsSession returned error: %v", err)
+	}
+
+	expectedCalls := []string{
+		"wireguard.exe /installtunnelservice " + manager.configPathForPlatform(),
+		"sc.exe stop WireGuardTunnel$wireguard",
+		"sc.exe start WireGuardTunnel$wireguard",
+		"sc.exe config WireGuardTunnel$wireguard DisplayName= Borealis Agent - WireGuard",
+	}
+	for _, expected := range expectedCalls {
+		if !containsCall(calls, expected) {
+			t.Fatalf("missing call %q in %#v", expected, calls)
+		}
+	}
+}
+
 func TestValidateSignedTokenStoresServerSigningKey(t *testing.T) {
 	manager := testManager(t)
 	authClient := &fakeAuthClient{agentID: "agent-1"}

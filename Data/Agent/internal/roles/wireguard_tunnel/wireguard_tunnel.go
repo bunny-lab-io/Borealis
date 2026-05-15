@@ -24,9 +24,9 @@ import (
 )
 
 const (
-	tunnelName          = "Borealis"
-	tunnelServiceID     = "WireGuardTunnel$Borealis"
+	defaultTunnelName   = "wireguard"
 	tunnelDisplayName   = "Borealis Agent - WireGuard"
+	defaultInterface    = "borealis"
 	defaultInterfaceMTU = 1420
 	defaultKeepalive    = 30
 	defaultEnsureDelay  = 10 * time.Second
@@ -732,6 +732,23 @@ func (m *Manager) configPathForPlatform() string {
 	return filepath.Join(m.baseDir, "wireguard.conf")
 }
 
+func (m *Manager) tunnelName() string {
+	configPath := ""
+	if m != nil {
+		configPath = m.configPathForPlatform()
+	}
+	raw := strings.TrimSuffix(filepath.Base(configPath), filepath.Ext(configPath))
+	cleaned := strings.TrimSpace(raw)
+	if cleaned == "" || cleaned == "." || cleaned == string(filepath.Separator) {
+		cleaned = defaultTunnelName
+	}
+	return cleaned
+}
+
+func (m *Manager) tunnelServiceID() string {
+	return "WireGuardTunnel$" + m.tunnelName()
+}
+
 func (m *Manager) writeConfig(text string) error {
 	path := m.configPathForPlatform()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -743,7 +760,7 @@ func (m *Manager) writeConfig(text string) error {
 func (m *Manager) serviceState(ctx context.Context) string {
 	switch m.platform {
 	case "windows":
-		result, err := m.runner(ctx, commandTimeout, "sc.exe", "query", tunnelServiceID)
+		result, err := m.runner(ctx, commandTimeout, "sc.exe", "query", m.tunnelServiceID())
 		if err != nil || result.ExitCode != 0 {
 			return ""
 		}
@@ -775,12 +792,12 @@ func (m *Manager) serviceState(ctx context.Context) string {
 }
 
 func (m *Manager) windowsServiceExists(ctx context.Context) bool {
-	result, err := m.runner(ctx, commandTimeout, "sc.exe", "query", tunnelServiceID)
+	result, err := m.runner(ctx, commandTimeout, "sc.exe", "query", m.tunnelServiceID())
 	return err == nil && result.ExitCode == 0
 }
 
 func (m *Manager) windowsServiceConfigPath(ctx context.Context) string {
-	result, err := m.runner(ctx, commandTimeout, "sc.exe", "qc", tunnelServiceID)
+	result, err := m.runner(ctx, commandTimeout, "sc.exe", "qc", m.tunnelServiceID())
 	if err != nil || result.ExitCode != 0 {
 		return ""
 	}
@@ -800,16 +817,20 @@ func (m *Manager) uninstallWindowsService(ctx context.Context) error {
 	if strings.TrimSpace(m.wireguardExe) == "" {
 		return fmt.Errorf("wireguard.exe not found")
 	}
-	_, _ = m.runner(ctx, commandTimeout, "sc.exe", "stop", tunnelServiceID)
-	_, _ = m.runner(ctx, commandTimeout, m.wireguardExe, "/uninstalltunnelservice", tunnelName)
-	_, _ = m.runner(ctx, commandTimeout, "sc.exe", "delete", tunnelServiceID)
+	_, _ = m.runner(ctx, commandTimeout, "sc.exe", "stop", m.tunnelServiceID())
+	for _, name := range uniqueStrings([]string{m.tunnelName(), "Borealis", "borealis-wg"}) {
+		_, _ = m.runner(ctx, commandTimeout, m.wireguardExe, "/uninstalltunnelservice", name)
+	}
+	for _, serviceID := range uniqueStrings([]string{m.tunnelServiceID(), "WireGuardTunnel$Borealis", "WireGuardTunnel$borealis-wg"}) {
+		_, _ = m.runner(ctx, commandTimeout, "sc.exe", "delete", serviceID)
+	}
 	return nil
 }
 
 func (m *Manager) restartWindowsService(ctx context.Context) error {
-	_, _ = m.runner(ctx, commandTimeout, "sc.exe", "stop", tunnelServiceID)
+	_, _ = m.runner(ctx, commandTimeout, "sc.exe", "stop", m.tunnelServiceID())
 	time.Sleep(time.Second)
-	result, err := m.runner(ctx, commandTimeout, "sc.exe", "start", tunnelServiceID)
+	result, err := m.runner(ctx, commandTimeout, "sc.exe", "start", m.tunnelServiceID())
 	if err != nil {
 		return err
 	}
@@ -838,7 +859,7 @@ func (m *Manager) waitForWindowsState(ctx context.Context, timeout time.Duration
 }
 
 func (m *Manager) ensureWindowsServiceDisplayName(ctx context.Context) {
-	_, _ = m.runner(ctx, commandTimeout, "sc.exe", "config", tunnelServiceID, "DisplayName=", tunnelDisplayName)
+	_, _ = m.runner(ctx, commandTimeout, "sc.exe", "config", m.tunnelServiceID(), "DisplayName=", tunnelDisplayName)
 }
 
 func (m *Manager) ensureWindowsFirewall(ctx context.Context, allowedIPs string, allowedPorts string) {
@@ -977,6 +998,20 @@ func cloneMap(input map[string]any) map[string]any {
 	out := map[string]any{}
 	for key, value := range input {
 		out[key] = value
+	}
+	return out
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, value := range values {
+		cleaned := strings.TrimSpace(value)
+		if cleaned == "" || seen[cleaned] {
+			continue
+		}
+		seen[cleaned] = true
+		out = append(out, cleaned)
 	}
 	return out
 }
@@ -1210,11 +1245,11 @@ func interfaceMTU() int {
 func resolveInterfaceName() string {
 	raw := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_WIREGUARD_INTERFACE")))
 	if raw == "" {
-		raw = strings.ToLower(tunnelName)
+		raw = defaultInterface
 	}
 	cleaned := regexp.MustCompile(`[^a-z0-9_.-]`).ReplaceAllString(raw, "")
 	if cleaned == "" {
-		cleaned = "borealis"
+		cleaned = defaultInterface
 	}
 	if len(cleaned) > 15 {
 		cleaned = cleaned[:15]

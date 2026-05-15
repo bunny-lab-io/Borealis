@@ -72,6 +72,7 @@ func appendUninstallLog(path string, message string) {
 
 func removeBorealisOwnedServices(logger *BootstrapLogger) {
 	logger.Tracef("Removing Borealis-owned services.")
+	uninstallWireGuardTunnel("wireguard", logger)
 	uninstallWireGuardTunnel("Borealis", logger)
 	uninstallWireGuardTunnel("borealis-wg", logger)
 	services := removableServiceNames(logger)
@@ -104,6 +105,7 @@ func removableServiceNames(logger *BootstrapLogger) []string {
 		"UltraVNC":                      true,
 		"WinVNC":                        true,
 		"WireGuardManager":              true,
+		"WireGuardTunnel$wireguard":     true,
 		"WireGuardTunnel$Borealis":      true,
 		"WireGuardTunnel$borealis-wg":   true,
 	}
@@ -479,6 +481,7 @@ function Remove-BorealisServices {
     "${env:ProgramFiles(x86)}\WireGuard\wireguard.exe"
   )) {
     if (Test-Path -LiteralPath $wg) {
+      & $wg /uninstalltunnelservice wireguard *> $null
       & $wg /uninstalltunnelservice Borealis *> $null
       & $wg /uninstalltunnelservice borealis-wg *> $null
       & $wg /uninstallmanagerservice *> $null
@@ -491,6 +494,7 @@ function Remove-BorealisServices {
     'BorealisAgentUltraVNC',
     'BorealisWireGuardTunnel',
     'WireGuardManager',
+    'WireGuardTunnel$wireguard',
     'WireGuardTunnel$Borealis',
     'WireGuardTunnel$borealis-wg',
     'uvnc_service',
