@@ -33,29 +33,119 @@ type RoleHealth struct {
 	Details    map[string]any
 }
 
+type platformMetadata struct {
+	OperatingSystem string
+	LastReboot      string
+	LastUser        string
+	Manufacturer    string
+	SystemModelRaw  string
+	SystemModel     string
+	SystemSerial    string
+}
+
 func NewAuditor() *Auditor {
 	return &Auditor{}
+}
+
+func collectPlatformMetadata(ctx context.Context) platformMetadata {
+	switch runtime.GOOS {
+	case "windows":
+		return collectWindowsPlatformMetadata(ctx)
+	case "linux":
+		return collectLinuxPlatformMetadata()
+	default:
+		return platformMetadata{}
+	}
+}
+
+func collectWindowsPlatformMetadata(ctx context.Context) platformMetadata {
+	const script = `$ErrorActionPreference='SilentlyContinue'; $os=Get-CimInstance Win32_OperatingSystem; $cs=Get-CimInstance Win32_ComputerSystem; $bios=Get-CimInstance Win32_BIOS; $cv=Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; $logon=Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI'; $lastBoot=''; if($os -and $os.LastBootUpTime){ $lastBoot=$os.LastBootUpTime.ToString('MM/dd/yyyy @ hh:mmtt') }; [pscustomobject]@{ Caption=$os.Caption; DisplayVersion=$cv.DisplayVersion; ReleaseId=$cv.ReleaseId; BuildNumber=$os.BuildNumber; UBR=$cv.UBR; Version=$os.Version; LastBootUpTime=$lastBoot; UserName=$cs.UserName; LastLoggedOnSAMUser=$logon.LastLoggedOnSAMUser; LastLoggedOnUser=$logon.LastLoggedOnUser; ComputerName=$env:COMPUTERNAME; Domain=$cs.Domain; PartOfDomain=[bool]$cs.PartOfDomain; Manufacturer=$cs.Manufacturer; Model=$cs.Model; SerialNumber=$bios.SerialNumber } | ConvertTo-Json -Compress -Depth 4`
+	out, err := commandOutput(ctx, "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
+	if err != nil {
+		return platformMetadata{}
+	}
+	items := jsonObjects(out)
+	if len(items) == 0 {
+		return platformMetadata{}
+	}
+	item := items[0]
+	manufacturer := normalizeHardwareString(asString(item["Manufacturer"]))
+	modelRaw := normalizeHardwareString(asString(item["Model"]))
+	return platformMetadata{
+		OperatingSystem: formatWindowsOperatingSystem(
+			asString(item["Caption"]),
+			asString(item["DisplayVersion"]),
+			asString(item["ReleaseId"]),
+			asString(item["BuildNumber"]),
+			asInt(item["UBR"]),
+			asString(item["Version"]),
+		),
+		LastReboot:     strings.TrimSpace(asString(item["LastBootUpTime"])),
+		LastUser:       normalizeWindowsLastUser(item),
+		Manufacturer:   manufacturer,
+		SystemModelRaw: modelRaw,
+		SystemModel:    combineManufacturerModel(manufacturer, modelRaw),
+		SystemSerial:   normalizeHardwareString(asString(item["SerialNumber"])),
+	}
+}
+
+func collectLinuxPlatformMetadata() platformMetadata {
+	osRelease := parseOSRelease(readFile("/etc/os-release"))
+	manufacturer := normalizeHardwareString(firstNonEmpty(
+		readFile("/sys/class/dmi/id/sys_vendor"),
+		readFile("/sys/devices/virtual/dmi/id/sys_vendor"),
+	))
+	modelRaw := normalizeHardwareString(firstNonEmpty(
+		readFile("/sys/class/dmi/id/product_name"),
+		readFile("/sys/devices/virtual/dmi/id/product_name"),
+	))
+	serial := normalizeHardwareString(firstNonEmpty(
+		readFile("/sys/class/dmi/id/product_serial"),
+		readFile("/sys/devices/virtual/dmi/id/product_serial"),
+	))
+	return platformMetadata{
+		OperatingSystem: firstNonEmpty(osRelease["PRETTY_NAME"], osRelease["NAME"]),
+		LastUser:        currentUserName(),
+		Manufacturer:    manufacturer,
+		SystemModelRaw:  modelRaw,
+		SystemModel:     combineManufacturerModel(manufacturer, modelRaw),
+		SystemSerial:    serial,
+	}
 }
 
 func (a *Auditor) Collect(ctx context.Context) Snapshot {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	networkAdapters := collectNetwork()
+	platform := collectPlatformMetadata(ctx)
+	networkAdapters := collectNetwork(ctx)
 	internalIP := firstInternalIP(networkAdapters)
 	memoryEntries, memoryMetrics, memoryErr := collectMemory(ctx)
 	storageEntries, storageErr := collectStorage(ctx)
 	cpuPayload, cpuErr := collectCPU(ctx)
-	metrics := map[string]any{
-		"last_user": currentUserName(),
+	cpuPayload = addPlatformHardwareIdentity(cpuPayload, platform)
+	metrics := map[string]any{}
+	if platform.LastUser != "" {
+		metrics["last_user"] = platform.LastUser
+	} else if userName := currentUserName(); userName != "" {
+		metrics["last_user"] = userName
+	}
+	if platform.OperatingSystem != "" {
+		metrics["operating_system"] = platform.OperatingSystem
+	}
+	if platform.LastReboot != "" {
+		metrics["last_reboot"] = platform.LastReboot
 	}
 	for key, value := range memoryMetrics {
 		metrics[key] = value
 	}
 	if uptime := collectUptime(ctx); uptime > 0 {
 		metrics["uptime"] = uptime
+		if _, ok := metrics["last_reboot"]; !ok {
+			metrics["last_reboot"] = formatLastRebootFromUptime(uptime)
+		}
 	}
-	deviceType := detectDeviceType()
+	deviceType := detectDeviceType(platform.OperatingSystem)
 	errorsSeen := []string{}
 	for _, err := range []error{memoryErr, storageErr, cpuErr} {
 		if err != nil {
@@ -180,26 +270,34 @@ func collectMemory(ctx context.Context) ([]map[string]any, map[string]any, error
 func collectStorage(ctx context.Context) ([]map[string]any, error) {
 	switch runtime.GOOS {
 	case "windows":
-		out, err := commandOutput(ctx, "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "Get-CimInstance Win32_LogicalDisk -Filter \"DriveType=3\" | Select-Object DeviceID,Size,FreeSpace | ConvertTo-Json -Compress")
+		const script = `Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DriveType -in 2,3,5 } | Select-Object DeviceID,VolumeName,DriveType,Size,FreeSpace | ConvertTo-Json -Compress -Depth 4`
+		out, err := commandOutput(ctx, "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
 		if err != nil {
 			return nil, err
 		}
 		disks := []map[string]any{}
 		for _, item := range jsonObjects(out) {
+			driveType := asInt(item["DriveType"])
 			total := asInt64(item["Size"])
 			free := asInt64(item["FreeSpace"])
-			if total <= 0 {
+			if total <= 0 && driveType == 3 {
 				continue
 			}
-			used := total - free
-			disks = append(disks, map[string]any{
+			entry := map[string]any{
 				"drive":     fallbackString(asString(item["DeviceID"]), "disk"),
-				"disk_type": "Fixed Disk",
-				"usage":     roundPercent(float64(used) / float64(total) * 100),
-				"total":     total,
-				"free":      free,
-				"used":      used,
-			})
+				"disk_type": windowsDriveTypeName(driveType),
+			}
+			if volumeName := strings.TrimSpace(asString(item["VolumeName"])); volumeName != "" {
+				entry["volume_name"] = volumeName
+			}
+			if total > 0 {
+				used := total - free
+				entry["usage"] = roundPercent(float64(used) / float64(total) * 100)
+				entry["total"] = total
+				entry["free"] = free
+				entry["used"] = used
+			}
+			disks = append(disks, cleanMap(entry))
 		}
 		return disks, nil
 	case "linux":
@@ -213,7 +311,12 @@ func collectStorage(ctx context.Context) ([]map[string]any, error) {
 	}
 }
 
-func collectNetwork() []map[string]any {
+func collectNetwork(ctx context.Context) []map[string]any {
+	if runtime.GOOS == "windows" {
+		if adapters := collectWindowsNetwork(ctx); len(adapters) > 0 {
+			return adapters
+		}
+	}
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return nil
@@ -238,12 +341,39 @@ func collectNetwork() []map[string]any {
 		if len(ips) == 0 {
 			continue
 		}
+		linkSpeed := ""
+		if runtime.GOOS == "linux" {
+			linkSpeed = linuxInterfaceLinkSpeed(iface.Name)
+		}
 		adapters = append(adapters, map[string]any{
 			"adapter":    iface.Name,
 			"ips":        ips,
 			"mac":        fallbackString(iface.HardwareAddr.String(), "unknown"),
-			"link_speed": "",
+			"link_speed": fallbackString(linkSpeed, "unknown"),
 		})
+	}
+	return adapters
+}
+
+func collectWindowsNetwork(ctx context.Context) []map[string]any {
+	const script = `$ErrorActionPreference='SilentlyContinue'; $configs=Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled=True"; $rows=@(); foreach($cfg in $configs){ $adapter=Get-CimInstance Win32_NetworkAdapter -Filter "Index=$($cfg.Index)" -ErrorAction SilentlyContinue; $ips=@($cfg.IPAddress | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' }); if($ips.Count -eq 0){ continue }; $name=$adapter.NetConnectionID; if([string]::IsNullOrWhiteSpace($name)){ $name=$adapter.Name }; if([string]::IsNullOrWhiteSpace($name)){ $name=$cfg.Description }; $rows += [pscustomobject]@{ Adapter=$name; Description=$cfg.Description; MACAddress=$cfg.MACAddress; IPAddress=$ips; Speed=$adapter.Speed } }; $rows | ConvertTo-Json -Compress -Depth 4`
+	out, err := commandOutput(ctx, "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
+	if err != nil {
+		return nil
+	}
+	adapters := []map[string]any{}
+	for _, item := range jsonObjects(out) {
+		ips := asStringSlice(item["IPAddress"])
+		if len(ips) == 0 {
+			continue
+		}
+		adapters = append(adapters, cleanMap(map[string]any{
+			"adapter":     fallbackString(asString(item["Adapter"]), fallbackString(asString(item["Description"]), "Adapter")),
+			"description": strings.TrimSpace(asString(item["Description"])),
+			"ips":         ips,
+			"mac":         fallbackString(asString(item["MACAddress"]), "unknown"),
+			"link_speed":  fallbackString(formatBitsPerSecond(asInt64(item["Speed"])), "unknown"),
+		}))
 	}
 	return adapters
 }
@@ -275,14 +405,278 @@ func currentUserName() string {
 	return ""
 }
 
-func detectDeviceType() string {
+func detectDeviceType(osName string) string {
 	if runtime.GOOS == "windows" {
+		if strings.Contains(strings.ToLower(osName), "server") {
+			return "Server"
+		}
 		return "Workstation"
 	}
 	if runtime.GOOS == "linux" {
 		return "Server"
 	}
 	return strings.Title(runtime.GOOS)
+}
+
+func addPlatformHardwareIdentity(cpu map[string]any, platform platformMetadata) map[string]any {
+	if cpu == nil {
+		cpu = map[string]any{}
+	}
+	if platform.Manufacturer != "" {
+		cpu["system_manufacturer"] = platform.Manufacturer
+	}
+	if platform.SystemModelRaw != "" {
+		cpu["system_model_raw"] = platform.SystemModelRaw
+	}
+	if platform.SystemModel != "" {
+		cpu["system_model"] = platform.SystemModel
+	}
+	if platform.SystemSerial != "" {
+		cpu["system_serial_number"] = platform.SystemSerial
+		cpu["serial_number"] = platform.SystemSerial
+	}
+	return cpu
+}
+
+func formatWindowsOperatingSystem(caption string, displayVersion string, releaseID string, buildNumber string, ubr int, version string) string {
+	caption = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(caption), "Microsoft "))
+	displayVersion = firstNonEmpty(displayVersion, releaseID)
+	buildNumber = strings.TrimSpace(buildNumber)
+	if buildNumber == "" {
+		parts := strings.Split(strings.TrimSpace(version), ".")
+		if len(parts) >= 3 {
+			buildNumber = parts[2]
+		}
+	}
+	buildText := buildNumber
+	if buildText != "" && ubr > 0 {
+		buildText = fmt.Sprintf("%s.%d", buildText, ubr)
+	}
+	parts := []string{}
+	if caption != "" {
+		parts = append(parts, caption)
+	}
+	if displayVersion != "" && !strings.Contains(strings.ToLower(caption), strings.ToLower(displayVersion)) {
+		parts = append(parts, displayVersion)
+	}
+	if buildText != "" {
+		parts = append(parts, "Build "+buildText)
+	}
+	return strings.Join(parts, " ")
+}
+
+func normalizeWindowsLastUser(item map[string]any) string {
+	computerName := strings.TrimSpace(asString(item["ComputerName"]))
+	domainName := strings.TrimSpace(asString(item["Domain"]))
+	partOfDomain := asBool(item["PartOfDomain"])
+	currentRaw := asString(item["UserName"])
+	current := normalizeWindowsUserValue(currentRaw, computerName, domainName, partOfDomain)
+	if current != "" && (strings.Contains(currentRaw, `\`) || strings.Contains(currentRaw, "@")) {
+		return current
+	}
+	if sam := normalizeWindowsUserValue(asString(item["LastLoggedOnSAMUser"]), computerName, domainName, partOfDomain); sam != "" {
+		return sam
+	}
+	if current != "" {
+		return current
+	}
+	if last := normalizeWindowsUserValue(asString(item["LastLoggedOnUser"]), computerName, domainName, partOfDomain); last != "" {
+		return last
+	}
+	return ""
+}
+
+func normalizeWindowsUserValue(value string, computerName string, domainName string, partOfDomain bool) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, `.\`) {
+		name := strings.TrimSpace(strings.TrimPrefix(value, `.\`))
+		if isIgnoredWindowsUser(name) {
+			return ""
+		}
+		if computerName == "" {
+			return name
+		}
+		return computerName + `\` + name
+	}
+	if strings.Contains(value, `\`) {
+		parts := strings.SplitN(value, `\`, 2)
+		prefix := strings.TrimSpace(parts[0])
+		name := strings.TrimSpace(parts[1])
+		if isIgnoredWindowsUser(name) {
+			return ""
+		}
+		if prefix == "" || prefix == "." {
+			prefix = computerName
+		}
+		if prefix == "" {
+			prefix = preferredWindowsUserPrefix(computerName, domainName, partOfDomain)
+		}
+		if prefix == "" {
+			return name
+		}
+		return prefix + `\` + name
+	}
+	if strings.Contains(value, "@") {
+		if isIgnoredWindowsUser(strings.SplitN(value, "@", 2)[0]) {
+			return ""
+		}
+		return value
+	}
+	if isIgnoredWindowsUser(value) {
+		return ""
+	}
+	prefix := preferredWindowsUserPrefix(computerName, domainName, partOfDomain)
+	if prefix == "" {
+		return value
+	}
+	return prefix + `\` + value
+}
+
+func preferredWindowsUserPrefix(computerName string, domainName string, partOfDomain bool) string {
+	computerName = strings.TrimSpace(computerName)
+	domainName = strings.TrimSpace(domainName)
+	if partOfDomain && domainName != "" && !strings.EqualFold(domainName, computerName) {
+		return domainName
+	}
+	return computerName
+}
+
+func isIgnoredWindowsUser(name string) bool {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return true
+	}
+	upper := strings.ToUpper(trimmed)
+	return upper == "SYSTEM" || upper == "LOCAL SYSTEM" || upper == "NETWORK SERVICE" || upper == "LOCAL SERVICE" || strings.HasSuffix(upper, "$")
+}
+
+func normalizeHardwareString(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	lower := strings.ToLower(trimmed)
+	placeholders := []string{
+		"none",
+		"null",
+		"unknown",
+		"system product name",
+		"system serial number",
+		"to be filled by o.e.m.",
+		"to be filled by oem",
+		"default string",
+		"not specified",
+		"not available",
+		"not applicable",
+	}
+	for _, placeholder := range placeholders {
+		if lower == placeholder {
+			return ""
+		}
+	}
+	return trimmed
+}
+
+func combineManufacturerModel(manufacturer string, model string) string {
+	manufacturer = strings.TrimSpace(manufacturer)
+	model = strings.TrimSpace(model)
+	if manufacturer == "" {
+		return model
+	}
+	if model == "" {
+		return manufacturer
+	}
+	if strings.Contains(strings.ToLower(model), strings.ToLower(manufacturer)) {
+		return model
+	}
+	return manufacturer + " " + model
+}
+
+func formatLastRebootFromUptime(uptimeSeconds int64) string {
+	if uptimeSeconds <= 0 {
+		return ""
+	}
+	return time.Now().Add(-time.Duration(uptimeSeconds) * time.Second).Format("01/02/2006 @ 03:04PM")
+}
+
+func windowsDriveTypeName(driveType int) string {
+	switch driveType {
+	case 2:
+		return "Removable Disk"
+	case 3:
+		return "Fixed Disk"
+	case 4:
+		return "Network Drive"
+	case 5:
+		return "CD-ROM"
+	default:
+		return "Disk"
+	}
+}
+
+func linuxInterfaceLinkSpeed(name string) string {
+	value := strings.TrimSpace(readFile("/sys/class/net/" + name + "/speed"))
+	if value == "" || strings.HasPrefix(value, "-") {
+		return ""
+	}
+	mbps, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || mbps <= 0 {
+		return ""
+	}
+	return formatBitsPerSecond(mbps * 1000 * 1000)
+}
+
+func formatBitsPerSecond(bitsPerSecond int64) string {
+	if bitsPerSecond <= 0 {
+		return ""
+	}
+	units := []struct {
+		label string
+		value float64
+	}{
+		{"Tbps", 1000 * 1000 * 1000 * 1000},
+		{"Gbps", 1000 * 1000 * 1000},
+		{"Mbps", 1000 * 1000},
+		{"Kbps", 1000},
+	}
+	value := float64(bitsPerSecond)
+	for _, unit := range units {
+		if value >= unit.value {
+			rate := value / unit.value
+			if math.Abs(rate-math.Round(rate)) < 0.01 {
+				return fmt.Sprintf("%.0f %s", rate, unit.label)
+			}
+			return fmt.Sprintf("%.1f %s", rate, unit.label)
+		}
+	}
+	return fmt.Sprintf("%d bps", bitsPerSecond)
+}
+
+func parseOSRelease(text string) map[string]string {
+	out := map[string]string{}
+	for _, raw := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, "=") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		key := strings.TrimSpace(parts[0])
+		value := strings.Trim(strings.TrimSpace(parts[1]), `"`)
+		out[key] = value
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func commandOutput(ctx context.Context, name string, args ...string) (string, error) {
@@ -474,6 +868,39 @@ func asString(value any) string {
 	}
 }
 
+func asStringSlice(value any) []string {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case []string:
+		out := []string{}
+		for _, item := range typed {
+			if trimmed := strings.TrimSpace(item); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	case []any:
+		out := []string{}
+		for _, item := range typed {
+			if trimmed := strings.TrimSpace(asString(item)); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	case string:
+		if trimmed := strings.TrimSpace(typed); trimmed != "" {
+			return []string{trimmed}
+		}
+		return nil
+	default:
+		if trimmed := strings.TrimSpace(fmt.Sprint(typed)); trimmed != "" {
+			return []string{trimmed}
+		}
+		return nil
+	}
+}
+
 func asInt(value any) int {
 	switch typed := value.(type) {
 	case int:
@@ -503,6 +930,18 @@ func asInt64(value any) int64 {
 		return parsed
 	default:
 		return 0
+	}
+}
+
+func asBool(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		parsed, _ := strconv.ParseBool(strings.TrimSpace(typed))
+		return parsed
+	default:
+		return false
 	}
 }
 

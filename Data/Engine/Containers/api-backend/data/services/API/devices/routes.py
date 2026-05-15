@@ -395,6 +395,8 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             updates["last_user"] = str(metrics["last_user"])
         if metrics.get("operating_system"):
             updates["operating_system"] = str(metrics["operating_system"])
+        if metrics.get("last_reboot"):
+            updates["last_reboot"] = str(metrics["last_reboot"])
         if metrics.get("uptime") is not None:
             try:
                 updates["uptime"] = int(metrics["uptime"])

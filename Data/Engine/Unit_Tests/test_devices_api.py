@@ -1971,6 +1971,70 @@ def test_agent_heartbeat_returns_assigned_site(engine_harness: EngineTestHarness
     assert payload["site_id"] == 1
 
 
+def test_agent_heartbeat_persists_go_device_audit_fields(engine_harness: EngineTestHarness) -> None:
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/agent/heartbeat",
+        headers=_device_headers(),
+        json={
+            "hostname": "test-device",
+            "service_mode": "system",
+            "metrics": {
+                "last_user": r"BUNNY-LAB\nicole.rappe",
+                "operating_system": "Windows 11 Pro 25H2 Build 26200.8457",
+                "last_reboot": "05/14/2026 @ 10:05PM",
+                "uptime": 3600,
+            },
+            "inventory": {
+                "cpu": {
+                    "name": "Example CPU",
+                    "system_manufacturer": "Dell Inc.",
+                    "system_model_raw": "Latitude 5450",
+                    "system_model": "Dell Inc. Latitude 5450",
+                    "system_serial_number": "ABC1234",
+                },
+                "storage": [
+                    {"drive": "C:", "disk_type": "Fixed Disk", "total": 1000, "used": 400, "free": 600},
+                    {"drive": "D:", "disk_type": "CD-ROM"},
+                ],
+                "network": [
+                    {
+                        "adapter": "Ethernet",
+                        "ips": ["10.0.0.5"],
+                        "mac": "00:11:22:33:44:55",
+                        "link_speed": "1 Gbps",
+                    }
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        row = conn.execute(
+            """
+            SELECT last_user, operating_system, last_reboot, uptime, cpu, storage, network
+              FROM devices
+             WHERE hostname = ?
+            """,
+            ("test-device",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row[0] == r"BUNNY-LAB\nicole.rappe"
+    assert row[1] == "Windows 11 Pro 25H2 Build 26200.8457"
+    assert row[2] == "05/14/2026 @ 10:05PM"
+    assert row[3] == 3600
+    assert json.loads(row[4])["system_serial_number"] == "ABC1234"
+    storage = json.loads(row[5])
+    assert storage[1]["disk_type"] == "CD-ROM"
+    network = json.loads(row[6])
+    assert network[0]["link_speed"] == "1 Gbps"
+
+
 def test_agent_status_updates_startup_timeline_without_replacing_other_roles(
     engine_harness: EngineTestHarness,
 ) -> None:

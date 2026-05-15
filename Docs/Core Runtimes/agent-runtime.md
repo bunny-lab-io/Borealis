@@ -15,7 +15,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 ## Role Catalog (Go v1)
 - `internal/roles/systemcontext` - SYSTEM/root quick-job router and script execution for signed `quick_job_run` payloads.
 - `internal/roles/currentuser` - Windows CURRENTUSER direct session quick-job execution for active user sessions. Linux CURRENTUSER reports unsupported in first PR.
-- `internal/roles/deviceaudit` - core CPU, memory, storage, network, internal IP, device type, uptime, and last-user inventory published through heartbeat payloads.
+- `internal/roles/deviceaudit` - core CPU, memory, storage, removable media, network link speed, OS/build, hardware model/serial, last reboot, internal IP, device type, uptime, and last-user inventory published through heartbeat payloads.
 - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`: file management, process management, service management, software management, WireGuard, remote shell, VNC, tray UI, macros, and node screenshot.
 
 ## Agent Settings and Storage

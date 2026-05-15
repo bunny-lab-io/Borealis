@@ -196,7 +196,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Enrollment approvals: `Data/Engine/Containers/api-backend/data/services/API/devices/approval.py`.
 
 ### Inventory ingestion behavior
-- `/api/agent/heartbeat` updates `last_seen` and key metrics (last_user, OS, uptime).
+- `/api/agent/heartbeat` updates `last_seen` and key metrics (last_user, OS/build, last reboot, uptime).
 - `/api/agent/status` updates `last_seen`, upserts only the `system:system_heartbeat` role-health row, and emits `agent_status_changed` after commit.
 - `/api/agent/details` stores full inventory payloads for memory, network, storage, software, cpu, and services.
 - JSON blobs are serialized into PostgreSQL text columns and rehydrated for UI.
