@@ -138,3 +138,17 @@ func TestDescendantPIDsReturnsChildrenBeforeParent(t *testing.T) {
 		}
 	}
 }
+
+func TestBytesPerSecondHandlesCounterDeltas(t *testing.T) {
+	start := time.Unix(100, 0)
+	got := bytesPerSecond(
+		rateCounter{At: start, Total: 1_000},
+		rateCounter{At: start.Add(2 * time.Second), Total: 3_500},
+	)
+	if got != 1250 {
+		t.Fatalf("rate = %v, want 1250", got)
+	}
+	if bytesPerSecond(rateCounter{At: start, Total: 10}, rateCounter{At: start.Add(time.Second), Total: 5}) != 0 {
+		t.Fatalf("counter reset should produce zero")
+	}
+}

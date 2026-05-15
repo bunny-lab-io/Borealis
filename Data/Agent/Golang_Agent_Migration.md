@@ -76,11 +76,13 @@ Back to Docs Index: ../../Docs/index.md
 34. Added Go file management RPC role for browse, conflict preflight, lightweight text editing, mkdir, rename, move, copy/cut paste, delete, upload pull, and download artifact transfer.
 35. Validated Go File Management on real hosts for CRUD actions, uploads, downloads, and full-folder upload/download transfers.
 36. Added Go Process Management role for live process snapshots, cache reuse, parent/child metadata, and process termination.
+37. Validated Go Process Management task termination on real Windows/Linux targets and Linux CPU/memory reporting.
+38. Added process metric collectors for Windows CPU/disk activity plus Linux disk/network rate deltas and Windows TCP network rate deltas.
 
 ## In Progress
 
 1. Validate Engine onboarding/update artifact contracts against a deployed Engine.
-2. Validate Go Process Management on real Windows and Linux targets.
+2. Validate Go Process Management Windows CPU/disk/network metrics and Linux disk/network metrics after redeploy.
 
 ## Pending
 

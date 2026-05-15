@@ -22,10 +22,12 @@ const (
 )
 
 type Manager struct {
-	hostname string
-	mu       sync.Mutex
-	snapshot Snapshot
-	lastErr  string
+	hostname        string
+	mu              sync.Mutex
+	snapshot        Snapshot
+	lastErr         string
+	diskCounters    map[string]rateCounter
+	networkCounters map[string]rateCounter
 }
 
 type Snapshot struct {
@@ -67,6 +69,11 @@ type pmError struct {
 	Message string
 }
 
+type rateCounter struct {
+	At    time.Time
+	Total int64
+}
+
 func (e pmError) Error() string {
 	if strings.TrimSpace(e.Message) != "" {
 		return e.Message
@@ -82,6 +89,8 @@ func New(hostname string) *Manager {
 			RefreshIntervalMS: int(refreshIntervalSeconds * 1000),
 			Processes:         []Process{},
 		},
+		diskCounters:    map[string]rateCounter{},
+		networkCounters: map[string]rateCounter{},
 	}
 }
 
@@ -152,7 +161,7 @@ func (m *Manager) list(ctx context.Context, maxAgeSeconds float64) (map[string]a
 	if current.ReportedAt > 0 && time.Since(time.Unix(current.ReportedAt, 0)).Seconds() <= maxAgeSeconds {
 		return snapshotResponse(current), nil
 	}
-	snapshot, err := collectSnapshot(ctx)
+	snapshot, err := m.collectSnapshot(ctx)
 	if err != nil {
 		m.setLastError(err.Error())
 		return nil, err
@@ -173,7 +182,7 @@ func (m *Manager) terminate(ctx context.Context, pid int, includeChildren bool) 
 	}
 	targets := []int{pid}
 	if includeChildren {
-		if snapshot, err := collectSnapshot(ctx); err == nil {
+		if snapshot, err := m.collectSnapshot(ctx); err == nil {
 			targets = descendantPIDs(snapshot.Processes, pid)
 			targets = append(targets, pid)
 		}
@@ -184,7 +193,7 @@ func (m *Manager) terminate(ctx context.Context, pid int, includeChildren bool) 
 		return nil, err
 	}
 	time.Sleep(250 * time.Millisecond)
-	snapshot, err := collectSnapshot(ctx)
+	snapshot, err := m.collectSnapshot(ctx)
 	if err != nil {
 		m.setLastError(err.Error())
 		return nil, err
@@ -218,30 +227,49 @@ func (m *Manager) setLastError(value string) {
 	m.lastErr = strings.TrimSpace(value)
 }
 
-func collectSnapshot(ctx context.Context) (Snapshot, error) {
-	if runtime.GOOS == "windows" {
-		return collectWindowsSnapshot(ctx)
+func (m *Manager) collectSnapshot(ctx context.Context) (Snapshot, error) {
+	m.mu.Lock()
+	previousDisk := cloneCounters(m.diskCounters)
+	previousNetwork := cloneCounters(m.networkCounters)
+	m.mu.Unlock()
+	snapshot, nextDisk, nextNetwork, err := collectSnapshot(ctx, previousDisk, previousNetwork)
+	if err != nil {
+		return Snapshot{}, err
 	}
-	return collectPOSIXSnapshot(ctx)
+	m.mu.Lock()
+	m.diskCounters = nextDisk
+	m.networkCounters = nextNetwork
+	m.mu.Unlock()
+	return snapshot, nil
 }
 
-func collectWindowsSnapshot(ctx context.Context) (Snapshot, error) {
+func collectSnapshot(ctx context.Context, previousDisk map[string]rateCounter, previousNetwork map[string]rateCounter) (Snapshot, map[string]rateCounter, map[string]rateCounter, error) {
+	if runtime.GOOS == "windows" {
+		return collectWindowsSnapshot(ctx, previousNetwork)
+	}
+	return collectPOSIXSnapshot(ctx, previousDisk, previousNetwork)
+}
+
+func collectWindowsSnapshot(ctx context.Context, previousNetwork map[string]rateCounter) (Snapshot, map[string]rateCounter, map[string]rateCounter, error) {
 	command := `$os = Get-CimInstance Win32_OperatingSystem; $total = [double]$os.TotalVisibleMemorySize * 1024; ` +
+		`$cpu = [double]([Environment]::ProcessorCount); ` +
+		`$perf = @{}; Get-CimInstance Win32_PerfFormattedData_PerfProc_Process | Where-Object { $_.IDProcess -gt 0 -and $_.Name -ne '_Total' -and $_.Name -ne 'Idle' } | ForEach-Object { $perf[[int]$_.IDProcess] = $_ }; ` +
 		`$items = Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,ExecutablePath,WorkingSetSize,CreationDate; ` +
-		`$items | ForEach-Object { [pscustomobject]@{ ProcessId=$_.ProcessId; ParentProcessId=$_.ParentProcessId; Name=$_.Name; CommandLine=$_.CommandLine; ExecutablePath=$_.ExecutablePath; WorkingSetSize=$_.WorkingSetSize; CreationDate=$_.CreationDate; TotalMemory=$total } } | ConvertTo-Json -Depth 3 -Compress`
+		`$items | ForEach-Object { $p = $perf[[int]$_.ProcessId]; $cpuValue=0; $ioRead=0; $ioWrite=0; $ioData=0; if ($p) { $cpuValue=[double]$p.PercentProcessorTime; $ioRead=[double]$p.IOReadBytesPerSec; $ioWrite=[double]$p.IOWriteBytesPerSec; $ioData=[double]$p.IODataBytesPerSec }; [pscustomobject]@{ ProcessId=$_.ProcessId; ParentProcessId=$_.ParentProcessId; Name=$_.Name; CommandLine=$_.CommandLine; ExecutablePath=$_.ExecutablePath; WorkingSetSize=$_.WorkingSetSize; CreationDate=$_.CreationDate; TotalMemory=$total; CpuCount=$cpu; PercentProcessorTime=$cpuValue; IOReadBytesPerSec=$ioRead; IOWriteBytesPerSec=$ioWrite; IODataBytesPerSec=$ioData } } | ConvertTo-Json -Depth 3 -Compress`
 	output, err := runCommand(ctx, defaultCommandTimeout, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
 	if err != nil {
 		output, err = runCommand(ctx, defaultCommandTimeout, "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
 	}
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, nil, nil, err
 	}
 	var raw any
 	if err := json.Unmarshal([]byte(output), &raw); err != nil {
-		return Snapshot{}, newError("agent_error", err.Error())
+		return Snapshot{}, nil, nil, newError("agent_error", err.Error())
 	}
 	rows := mapSlice(raw)
 	now := time.Now().Unix()
+	networkRates, nextNetwork := collectPlatformNetworkRates(ctx, previousNetwork)
 	processes := make([]Process, 0, len(rows))
 	for _, row := range rows {
 		pid := asInt(row["ProcessId"])
@@ -263,36 +291,54 @@ func collectWindowsSnapshot(ctx context.Context) (Snapshot, error) {
 			commandLine = name
 		}
 		createdAt := windowsCIMTime(row["CreationDate"])
+		rawCPU := maxFloat(0, asFloat(row["PercentProcessorTime"], 0))
+		cpuCount := maxFloat(1, asFloat(row["CpuCount"], float64(runtime.NumCPU())))
+		diskRate := maxFloat(
+			maxFloat(0, asFloat(row["IOReadBytesPerSec"], 0))+maxFloat(0, asFloat(row["IOWriteBytesPerSec"], 0)),
+			maxFloat(0, asFloat(row["IODataBytesPerSec"], 0)),
+		)
+		networkRate := networkRates[pid]
 		processes = append(processes, Process{
 			ID:                 fmt.Sprintf("%d:%d", pid, int64(createdAt)),
 			PID:                pid,
 			ParentPID:          asInt(row["ParentProcessId"]),
 			Name:               name,
-			CPUPercent:         0,
-			RawCPUPercent:      0,
+			CPUPercent:         roundFloat(rawCPU/cpuCount, 2),
+			RawCPUPercent:      roundFloat(rawCPU, 2),
 			MemoryPercent:      memoryPercent(memoryBytes, totalMemory),
 			MemoryBytes:        memoryBytes,
-			DiskBytesPerSecond: 0,
-			CommandLine:        commandLine,
-			ExecutablePath:     executablePath,
-			Username:           "",
-			Status:             "",
-			CreatedAt:          createdAt,
-			CapturedAt:         now,
+			DiskBytesPerSecond: roundFloat(diskRate, 2),
+			NetworkBytesPerSecond: func() *float64 {
+				if networkRate > 0 {
+					value := roundFloat(networkRate, 2)
+					return &value
+				}
+				value := 0.0
+				return &value
+			}(),
+			CommandLine:    commandLine,
+			ExecutablePath: executablePath,
+			Username:       "",
+			Status:         "",
+			CreatedAt:      createdAt,
+			CapturedAt:     now,
 		})
 	}
 	finalizeProcessRows(processes)
-	return Snapshot{ReportedAt: now, RefreshIntervalMS: int(refreshIntervalSeconds * 1000), Processes: sortProcesses(processes)}, nil
+	return Snapshot{ReportedAt: now, RefreshIntervalMS: int(refreshIntervalSeconds * 1000), Processes: sortProcesses(processes)}, map[string]rateCounter{}, nextNetwork, nil
 }
 
-func collectPOSIXSnapshot(ctx context.Context) (Snapshot, error) {
+func collectPOSIXSnapshot(ctx context.Context, previousDisk map[string]rateCounter, previousNetwork map[string]rateCounter) (Snapshot, map[string]rateCounter, map[string]rateCounter, error) {
 	output, err := runCommand(ctx, defaultCommandTimeout, "ps", "-eo", "pid=,ppid=,pcpu=,rss=,user=,stat=,comm=,args=")
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, nil, nil, err
 	}
-	now := time.Now().Unix()
+	captured := time.Now()
+	now := captured.Unix()
 	totalMemory := totalMemoryBytes()
+	networkRates, nextNetwork := collectPlatformNetworkRates(ctx, previousNetwork)
 	processes := []Process{}
+	nextDisk := map[string]rateCounter{}
 	for _, line := range strings.Split(output, "\n") {
 		parts := strings.Fields(line)
 		if len(parts) < 7 {
@@ -317,8 +363,18 @@ func collectPOSIXSnapshot(ctx context.Context) (Snapshot, error) {
 		}
 		executablePath := resolveExecutablePath(pid)
 		createdAt := processStartTime(pid)
+		rateKey := fmt.Sprintf("%d:%d", pid, int64(createdAt))
+		diskTotal, hasDiskTotal := processDiskTotalBytes(pid)
+		diskRate := 0.0
+		if hasDiskTotal {
+			nextDisk[rateKey] = rateCounter{At: captured, Total: diskTotal}
+			if previous, ok := previousDisk[rateKey]; ok {
+				diskRate = bytesPerSecond(previous, nextDisk[rateKey])
+			}
+		}
+		networkRate := networkRates[pid]
 		processes = append(processes, Process{
-			ID:                 fmt.Sprintf("%d:%d", pid, int64(createdAt)),
+			ID:                 rateKey,
 			PID:                pid,
 			ParentPID:          ppid,
 			Name:               nameOrPID(name, pid),
@@ -326,17 +382,25 @@ func collectPOSIXSnapshot(ctx context.Context) (Snapshot, error) {
 			RawCPUPercent:      roundFloat(rawCPU, 2),
 			MemoryPercent:      memoryPercent(memoryBytes, float64(totalMemory)),
 			MemoryBytes:        memoryBytes,
-			DiskBytesPerSecond: 0,
-			CommandLine:        commandLine,
-			ExecutablePath:     executablePath,
-			Username:           username,
-			Status:             status,
-			CreatedAt:          createdAt,
-			CapturedAt:         now,
+			DiskBytesPerSecond: roundFloat(diskRate, 2),
+			NetworkBytesPerSecond: func() *float64 {
+				if networkRate > 0 {
+					value := roundFloat(networkRate, 2)
+					return &value
+				}
+				value := 0.0
+				return &value
+			}(),
+			CommandLine:    commandLine,
+			ExecutablePath: executablePath,
+			Username:       username,
+			Status:         status,
+			CreatedAt:      createdAt,
+			CapturedAt:     now,
 		})
 	}
 	finalizeProcessRows(processes)
-	return Snapshot{ReportedAt: now, RefreshIntervalMS: int(refreshIntervalSeconds * 1000), Processes: sortProcesses(processes)}, nil
+	return Snapshot{ReportedAt: now, RefreshIntervalMS: int(refreshIntervalSeconds * 1000), Processes: sortProcesses(processes)}, nextDisk, nextNetwork, nil
 }
 
 func terminateProcesses(ctx context.Context, pids []int) ([]int, error) {
@@ -558,6 +622,28 @@ func processStartTime(pid int) float64 {
 	return float64(info.ModTime().Unix())
 }
 
+func processDiskTotalBytes(pid int) (int64, bool) {
+	raw, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "io"))
+	if err != nil {
+		return 0, false
+	}
+	var readBytes int64
+	var writeBytes int64
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		switch strings.TrimSuffix(fields[0], ":") {
+		case "read_bytes":
+			readBytes = asInt64(fields[1])
+		case "write_bytes":
+			writeBytes = asInt64(fields[1])
+		}
+	}
+	return readBytes + writeBytes, true
+}
+
 func totalMemoryBytes() int64 {
 	raw, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
@@ -602,6 +688,22 @@ func nameOrPID(name string, pid int) string {
 		return strings.TrimSpace(name)
 	}
 	return fmt.Sprintf("PID %d", pid)
+}
+
+func cloneCounters(values map[string]rateCounter) map[string]rateCounter {
+	out := make(map[string]rateCounter, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func bytesPerSecond(previous rateCounter, current rateCounter) float64 {
+	elapsed := current.At.Sub(previous.At).Seconds()
+	if elapsed <= 0 || current.Total < previous.Total {
+		return 0
+	}
+	return float64(current.Total-previous.Total) / elapsed
 }
 
 func errorResponse(code string, message string) map[string]any {
