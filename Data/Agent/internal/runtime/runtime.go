@@ -17,6 +17,7 @@ import (
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/service_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/software_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/system_context"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/wireguard_tunnel"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/transport"
 )
 
@@ -43,6 +44,7 @@ type Agent struct {
 	processes  *processmanagement.Manager
 	services   *servicemanagement.Manager
 	software   *softwaremanagement.Manager
+	wireguard  *wireguardtunnel.Manager
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -81,7 +83,8 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	processManager := processmanagement.New(hostname)
 	serviceManager := servicemanagement.New(authClient, hostname, options.ServiceMode)
 	softwareManager := softwaremanagement.New(authClient, hostname, options.ServiceMode)
-	return &Agent{
+	wireGuardManager := wireguardtunnel.New(authClient, hostname, options.ServiceMode, configPath)
+	agent := &Agent{
 		options:    options,
 		configPath: configPath,
 		config:     cfg,
@@ -95,7 +98,12 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		processes:  processManager,
 		services:   serviceManager,
 		software:   softwareManager,
-	}, nil
+		wireguard:  wireGuardManager,
+	}
+	if agent.wireguard != nil {
+		agent.wireguard.SetStatusReporter(agent.postStatus)
+	}
+	return agent, nil
 }
 
 func (a *Agent) Run(ctx context.Context) error {
@@ -109,6 +117,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	if a.software != nil {
 		a.software.Start(ctx)
+	}
+	if a.wireguard != nil {
+		a.wireguard.Start(ctx)
 	}
 	if err := a.postStatus(ctx, "status_channel_online", "healthy", "Status channel online."); err != nil {
 		a.logger.Printf("status post failed: %v", err)
@@ -187,6 +198,11 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	if a.software != nil {
 		socket.On("software_inventory_refresh_request", a.software.HandleRefreshRequest)
 	}
+	if a.wireguard != nil {
+		socket.On("vpn_tunnel_start", a.wireguard.HandleStart)
+		socket.On("vpn_tunnel_stop", a.wireguard.HandleStop)
+		socket.On("vpn_tunnel_activity", a.wireguard.HandleActivity)
+	}
 	socket.OnConnected(func(ctx context.Context) error {
 		payload := map[string]any{
 			"agent_id":     a.authClient.AgentID(),
@@ -199,6 +215,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 				"process_management":  true,
 				"service_management":  true,
 				"software_management": true,
+				"wireguard_tunnel":    true,
 				"python_fallback":     false,
 				"linux_currentuser":   false,
 			},
@@ -209,6 +226,9 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 		}
 		if err := socket.Emit("connect_agent", payload); err != nil {
 			return err
+		}
+		if a.wireguard != nil {
+			a.wireguard.RequestEnsure("socket_connect")
 		}
 		_ = a.postStatus(ctx, "steady_state_online", "healthy", "Agent steady state online.")
 		return nil
@@ -308,6 +328,18 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	if a.software != nil {
 		softwareHealth = a.software.Health()
 	}
+	wireGuardHealth := wireguardtunnel.RoleHealth{
+		Status:     "unsupported",
+		StatusCode: "unsupported",
+		Detail:     "WireGuard tunnel role is unavailable.",
+		Details: map[string]any{
+			"running_status": "Unavailable",
+			"runtime":        "go",
+		},
+	}
+	if a.wireguard != nil {
+		wireGuardHealth = a.wireguard.Health()
+	}
 	metrics := map[string]any{
 		"service_mode":     auth.NormalizeServiceMode(a.options.ServiceMode),
 		"operating_system": operatingSystemName(),
@@ -405,6 +437,17 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 					"last_checked_at": time.Now().Unix(),
 					"details":         softwareHealth.Details,
 				},
+				{
+					"role_id":         "system:wireguard_tunnel",
+					"role_name":       "wireguard_tunnel",
+					"role_label":      "WireGuard VPN",
+					"context":         "system",
+					"status":          wireGuardHealth.Status,
+					"status_code":     wireGuardHealth.StatusCode,
+					"detail":          wireGuardHealth.Detail,
+					"last_checked_at": time.Now().Unix(),
+					"details":         wireGuardHealth.Details,
+				},
 			},
 		},
 	}
@@ -435,6 +478,8 @@ var startupMilestoneDefinitions = []startupMilestoneDefinition{
 	{Key: "authenticated", Label: "Engine authentication complete"},
 	{Key: "roles_loading", Label: "Agent role loading"},
 	{Key: "roles_ready", Label: "Agent roles ready"},
+	{Key: "wireguard_starting", Label: "WireGuard tunnel starting"},
+	{Key: "wireguard_online", Label: "WireGuard tunnel online"},
 	{Key: "status_channel_online", Label: "Status channel online"},
 	{Key: "socket_connecting", Label: "Engine socket connecting"},
 	{Key: "socket_connected", Label: "Engine socket connected"},

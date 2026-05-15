@@ -83,24 +83,25 @@ Back to Docs Index: ../../Docs/index.md
 41. Validated Go Service Management inventory and service start/stop/restart actions on real Windows/Linux targets and marked service management migration complete.
 42. Added Go Software Management role for Windows installed-app inventory, Linux dpkg/rpm inventory, Engine details publishing, refresh requests, role health, and post-uninstall inventory refresh through the SYSTEM quick-job lane.
 43. Added Go Software Management Windows icon extraction/cache payloads with Engine icon override support, matching the legacy installed-software icon pipeline.
+44. Validated Go Software Management inventory, icon cache payloads, and uninstall-triggered refresh behavior on a real Windows target and marked software management migration complete.
+45. Added Go WireGuard tunnel role for persistent `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, signed orchestration token validation, Windows tunnel-service apply, Linux `wg-quick` apply, firewall readiness, role health, and `/api/agent/vpn/ready` reporting.
 
 ## In Progress
 
 1. Validate Engine onboarding/update artifact contracts against a deployed Engine.
-2. Validate Go Software Management inventory and uninstall-triggered refresh behavior on real Windows/Linux targets after redeploy.
+2. Validate Go WireGuard tunnel lifecycle on real Windows/Linux targets after redeploy.
 
 ## Pending
 
 1. Implement full Windows CURRENTUSER helper/tray broker in Go using same binary helper mode for richer session inventory and long-lived desktop helpers.
-2. Implement WireGuard role in Go.
-3. Implement remote shell over WireGuard in Go.
-4. Implement VNC lifecycle and credential broker in Go.
-5. Implement full release-channel update format and Engine artifact packaging for Go binaries.
-6. Implement Linux `Agent` deployment/bootstrap parity.
-7. Decide whether macros/node screenshot should be retired or ported.
-8. Rework tray UI/status as optional Go/native helper or external UI.
-9. Add fake Engine HTTP/Socket.IO harness coverage for live `connect_agent`, `quick_job_run`, `file_management_request`, `process_management_request`, `service_control_action`, and `software_inventory_refresh_request`.
-10. Add Engine contract tests for onboarding/update artifact path changes.
+2. Implement remote shell over WireGuard in Go.
+3. Implement VNC lifecycle and credential broker in Go.
+4. Implement full release-channel update format and Engine artifact packaging for Go binaries.
+5. Implement Linux `Agent` deployment/bootstrap parity.
+6. Decide whether macros/node screenshot should be retired or ported.
+7. Rework tray UI/status as optional Go/native helper or external UI.
+8. Add fake Engine HTTP/Socket.IO harness coverage for live `connect_agent`, `quick_job_run`, `file_management_request`, `process_management_request`, `service_control_action`, `software_inventory_refresh_request`, and `vpn_tunnel_start`.
+9. Add Engine contract tests for onboarding/update artifact path changes.
 
 ## Release-Blocking Technical Debt
 
@@ -111,4 +112,4 @@ Back to Docs Index: ../../Docs/index.md
 5. Manual Windows acceptance has validated fresh enrollment, SYSTEM script execution, and CURRENTUSER PowerShell/Batch execution; update check validation and final config access-control decision remain open.
 6. Manual Linux acceptance has validated service install, fresh enrollment, root SYSTEM Bash execution, and root-owned `0600` config; update behavior decision remains open.
 7. Windows `config.json` ACL hardening is deferred because current install ACL changes blocked administrator repair/uninstall workflows during real-host testing.
-8. Software Management has Go unit coverage and Engine contract compatibility; live Windows/Linux acceptance still needs operator validation after redeploy.
+8. Software Management has Go unit coverage, Engine contract compatibility, and real-host Windows uninstall/icon validation; Linux uninstall acceptance remains opportunistic because package removal is operator-risky.

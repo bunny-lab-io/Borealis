@@ -20,7 +20,8 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `internal/roles/process_management` - SYSTEM/root live process snapshots, parent/child metadata, cache reuse, and operator-triggered process termination for the Device Summary `Processes` tab.
 - `internal/roles/service_management` - SYSTEM/root service inventory publishing plus operator-triggered start, stop, and restart through `service_control_action`.
 - `internal/roles/software_management` - SYSTEM/root Windows installed-app inventory with cached icon payloads, Linux dpkg/rpm inventory, refresh requests, and post-uninstall inventory refresh through the SYSTEM quick-job lane.
-- Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`: WireGuard, remote shell, VNC, tray UI, macros, and node screenshot.
+- `internal/roles/wireguard_tunnel` - SYSTEM/root persistent WireGuard reverse tunnel lifecycle, Engine `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, Windows tunnel-service apply, Linux `wg-quick` apply, and `/api/agent/vpn/ready` reporting.
+- Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`: remote shell, VNC, tray UI, macros, and node screenshot.
 
 ## Agent Settings and Storage
 - Installed configuration file: `config.json` beside `Agent.exe`.
@@ -132,7 +133,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 #### Scope and runtime paths
 - Purpose: outbound-only connectivity, device telemetry, scripting, UI helpers.
 - Bootstrap: `Agent.exe` owns deploy, repair, update check, config write, scheduled-task registration, and runtime. Windows onboarding stages the Go binary from `Data/Agent/dist/windows-amd64/Agent.exe`; the installed copy runs from `C:\Borealis\Agent.exe`.
-- Windows support dependencies: `Agent.exe` can still install UltraVNC and WireGuard from official installers for later role ports. It does not stage Python, create a venv, or call `launch_service.ps1`.
+- Windows support dependencies: `Agent.exe` can still install UltraVNC and WireGuard from official installers. It does not stage Python, create a venv, or call `launch_service.ps1`.
 - Existing Windows agents are repairable when `C:\Borealis\Agent.exe`, the `Borealis Agent` scheduled task, and an Engine-accepted token in `config.json` are present.
 - Linux first install: copy `Data/Agent/dist/linux-amd64/Agent` to `/opt/Borealis/Agent/Agent`, then run `/opt/Borealis/Agent/Agent --server-url <url> --site-enrollment-code <code> --install-service` as root.
 - Edit in `Data/Agent`, not `/Agent`; runtime copies are ephemeral and wiped regularly.
@@ -157,19 +158,19 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - WireGuard reverse VPN design and lifecycle are documented in `vpn-and-remote-access.md`.
 - The original references were `REVERSE_TUNNELS.md` and `Reverse_VPN_Tunnel_Deployment.md` (now consolidated into this knowledgebase).
 - Agent roles:
-  - `Data/Agent/Roles/role_system_wireguard.py` (tunnel lifecycle)
+  - `Data/Agent/internal/roles/wireguard_tunnel` (Go tunnel lifecycle)
   - `Data/Agent/Roles/role_system_remote_shell.py` (VPN remote shell TCP server)
 
 #### Execution contexts and roles
 - Go roles are explicit packages under `Data/Agent/internal/roles`.
-- First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER direct session PowerShell/Batch execution, core device audit inventory, SYSTEM/root file management, SYSTEM/root process management, SYSTEM/root service management, and SYSTEM/root software management.
+- First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER direct session PowerShell/Batch execution, core device audit inventory, SYSTEM/root file management, SYSTEM/root process management, SYSTEM/root service management, SYSTEM/root software management, and SYSTEM/root WireGuard tunnel lifecycle.
 - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`.
 - SYSTEM tasks depend on scheduled-task creation rights; failures should surface through Engine logging.
 
 #### Platform parity
 - Windows is the reference path and has the broadest tested feature surface.
 - Linux Go runtime builds as `Agent`, installs through systemd, and supports root/SYSTEM Bash quick jobs in first PR.
-- Linux CURRENTUSER, tray/helper UI, WireGuard, remote shell, and VNC are pending Go ports.
+- Linux CURRENTUSER, tray/helper UI, remote shell, and VNC are pending Go ports.
 
 #### Ansible support
 - The agent no longer hosts an Ansible playbook execution role.
