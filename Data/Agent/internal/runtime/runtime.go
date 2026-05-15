@@ -12,6 +12,7 @@ import (
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/currentuser"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/deviceaudit"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/filemanagement"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/systemcontext"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/transport"
 )
@@ -35,6 +36,7 @@ type Agent struct {
 	bootID     string
 	dispatcher *currentuser.Dispatcher
 	auditor    *deviceaudit.Auditor
+	files      *filemanagement.Manager
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -69,6 +71,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	}
 	dispatcher := currentuser.NewDispatcher()
 	auditor := deviceaudit.NewAuditor()
+	fileManager := filemanagement.New(authClient, hostname)
 	return &Agent{
 		options:    options,
 		configPath: configPath,
@@ -79,6 +82,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		bootID:     fmt.Sprintf("%d", time.Now().Unix()),
 		dispatcher: dispatcher,
 		auditor:    auditor,
+		files:      fileManager,
 	}, nil
 }
 
@@ -150,6 +154,9 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	role := systemcontext.New(socket, a.authClient, a.dispatcher)
 	role.Hostname = a.hostname
 	socket.On("quick_job_run", role.HandleQuickJob)
+	if a.files != nil {
+		socket.On("file_management_request", a.files.HandleRequest)
+	}
 	socket.OnConnected(func(ctx context.Context) error {
 		payload := map[string]any{
 			"agent_id":     a.authClient.AgentID(),
@@ -158,6 +165,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 			"capabilities": map[string]any{
 				"runtime":           "go",
 				"system_scripts":    true,
+				"file_management":   true,
 				"python_fallback":   false,
 				"linux_currentuser": false,
 			},
@@ -219,6 +227,18 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	if a.auditor != nil {
 		auditSnapshot = a.auditor.Collect(ctx)
 	}
+	fileHealth := filemanagement.RoleHealth{
+		Status:     "unsupported",
+		StatusCode: "unsupported",
+		Detail:     "File Management role is unavailable.",
+		Details: map[string]any{
+			"running_status": "Unavailable",
+			"runtime":        "go",
+		},
+	}
+	if a.files != nil {
+		fileHealth = a.files.Health()
+	}
 	metrics := map[string]any{
 		"service_mode":     auth.NormalizeServiceMode(a.options.ServiceMode),
 		"operating_system": operatingSystemName(),
@@ -271,6 +291,17 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 					"detail":          auditSnapshot.Health.Detail,
 					"last_checked_at": time.Now().Unix(),
 					"details":         auditSnapshot.Health.Details,
+				},
+				{
+					"role_id":         "system:file_management",
+					"role_name":       "file_management",
+					"role_label":      "File Management",
+					"context":         "system",
+					"status":          fileHealth.Status,
+					"status_code":     fileHealth.StatusCode,
+					"detail":          fileHealth.Detail,
+					"last_checked_at": time.Now().Unix(),
+					"details":         fileHealth.Details,
 				},
 			},
 		},
