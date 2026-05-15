@@ -99,7 +99,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 
 ### Core Agent files
 - WireGuard client role: `Data/Agent/internal/roles/wireguard_tunnel/`.
-- Remote shell role: pending Go migration.
+- Remote shell role: `Data/Agent/internal/roles/remote_shell/`.
 - VNC role: pending Go migration.
 
 ### Config paths
@@ -213,8 +213,8 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - Tunnel lifecycle: `Data/Agent/internal/roles/wireguard_tunnel/`
   - Validates orchestration tokens, starts WireGuard client service, keeps the tunnel persistent, and retries same-session service recovery when the watchdog finds the Windows WireGuard service stopped.
   - `Agent.exe` installs the official WireGuard Windows MSI system-wide, verifies the MSI checksum, and removes `WireGuardManager` by default so bootstrap stays headless. The tunnel role installs and controls `WireGuardTunnel$wireguard` on demand using the system `wireguard.exe`. Set `BOREALIS_WIREGUARD_INSTALL_MANAGER_SERVICE=1` only when explicitly testing manager-service behavior.
-- Shell server: pending Go migration.
-- TCP PowerShell server bound to `0.0.0.0:47002`, restricted to VPN subnet (10.255.x.x).
+- Shell server: `Data/Agent/internal/roles/remote_shell/`.
+- TCP PowerShell/Bash server bound to `0.0.0.0:47002`, restricted to VPN subnet (10.255.x.x).
 - Logging: `Agent/Logs/wireguard.log` (tunnel lifecycle) and `Agent/Logs/VPN_Tunnel/remote_shell.log` (shell I/O).
 
 #### 5) Security and auth
@@ -288,8 +288,8 @@ This section consolidates the troubleshooting context and environment notes for 
   - Adds readiness probes, idle shell keepalive pings, output timing diagnostics, and transport confirmations on shell output.
   - Tracks explicit close reasons (`close_request`, `superseded_sid`, `superseded_agent_session`, `ready_probe_failed`) so intentional closes no longer look like transport errors.
   - Replaces superseded shell sessions for the same browser SID or agent instead of allowing overlapping stale sessions to linger.
-- Data/Agent/Roles/role_system_remote_shell.py
-  - Replaces line-buffered Windows pipe reads with `PeekNamedPipe`-based chunk reads for interactive PowerShell output.
+- Data/Agent/internal/roles/remote_shell/
+  - Runs the Go TCP shell listener for PowerShell/Bash over WireGuard.
   - Propagates `session_id` into shell control and data frames for Engine/agent log correlation.
   - Logs readiness pongs and idle keepalive pongs separately and throttles idle keepalive log spam on the agent.
   - Closes superseded shell TCP sessions when a newer shell for the same agent connects.
@@ -308,7 +308,7 @@ Note: Data/Agent changes only apply after Agent.exe re-stages the agent under Ag
 
 #### Key paths
 - Agent WireGuard role: Data/Agent/internal/roles/wireguard_tunnel/
-- Agent VPN shell role: pending Go migration.
+- Agent VPN shell role: Data/Agent/internal/roles/remote_shell/
 - Engine WireGuard manager: Data/Engine/Containers/api-backend/data/services/VPN/wireguard_server.py
 - Engine tunnel service: Data/Engine/Containers/api-backend/data/services/VPN/vpn_tunnel_service.py
 - Engine shell bridge: Data/Engine/Containers/api-backend/data/services/WebSocket/vpn_shell.py
@@ -341,7 +341,7 @@ Note: Data/Agent changes only apply after Agent.exe re-stages the agent under Ag
   - Z:\Agent\wireguard.conf
 
 #### Current blockers and next steps
-1) Re-stage the agent runtime after `role_system_remote_shell.py`, `role_system_wireguard.py`, or `role_system_vnc.py` changes so the runtime copy matches `Data/Agent/`.
+1) Re-stage the agent runtime after `Data/Agent/internal/roles/remote_shell`, `Data/Agent/internal/roles/wireguard_tunnel`, or VNC role changes so the runtime copy matches `Data/Agent/`.
 2) For shell regressions, correlate `Engine/Services/api-backend/logs/VPN_Tunnel/remote_shell.log` with `Z:\Agent\Logs\VPN_Tunnel\remote_shell.log` by `session_id` before assuming browser-side buffering.
 3) For VNC regressions on weaker hosts, capture `vnc_connect_retry`, `vnc_backend_connect`, `vpn_transport_recovery_request`, and `vpn_transport_watchdog_recovery` from `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log` before changing shell code paths.
 4) If issues persist, confirm `Agent\wireguard.conf` still has a valid [Peer], verify `Test-NetConnection -ComputerName <agent_vpn_ip> -Port 47002`, and re-check WireGuard service state on both ends.

@@ -14,6 +14,7 @@ import (
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/device_audit"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/file_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/process_management"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/remote_shell"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/service_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/software_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/system_context"
@@ -31,20 +32,21 @@ type Options struct {
 }
 
 type Agent struct {
-	options    Options
-	configPath string
-	config     agentconfig.AgentConfig
-	authClient *auth.Client
-	logger     *log.Logger
-	hostname   string
-	bootID     string
-	dispatcher *currentuser.Dispatcher
-	auditor    *deviceaudit.Auditor
-	files      *filemanagement.Manager
-	processes  *processmanagement.Manager
-	services   *servicemanagement.Manager
-	software   *softwaremanagement.Manager
-	wireguard  *wireguardtunnel.Manager
+	options     Options
+	configPath  string
+	config      agentconfig.AgentConfig
+	authClient  *auth.Client
+	logger      *log.Logger
+	hostname    string
+	bootID      string
+	dispatcher  *currentuser.Dispatcher
+	auditor     *deviceaudit.Auditor
+	files       *filemanagement.Manager
+	processes   *processmanagement.Manager
+	remoteShell *remoteshell.Manager
+	services    *servicemanagement.Manager
+	software    *softwaremanagement.Manager
+	wireguard   *wireguardtunnel.Manager
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -81,24 +83,26 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	auditor := deviceaudit.NewAuditor()
 	fileManager := filemanagement.New(authClient, hostname)
 	processManager := processmanagement.New(hostname)
+	remoteShellManager := remoteshell.New(hostname, options.ServiceMode, configPath)
 	serviceManager := servicemanagement.New(authClient, hostname, options.ServiceMode)
 	softwareManager := softwaremanagement.New(authClient, hostname, options.ServiceMode)
 	wireGuardManager := wireguardtunnel.New(authClient, hostname, options.ServiceMode, configPath)
 	agent := &Agent{
-		options:    options,
-		configPath: configPath,
-		config:     cfg,
-		authClient: authClient,
-		logger:     logger,
-		hostname:   hostname,
-		bootID:     fmt.Sprintf("%d", time.Now().Unix()),
-		dispatcher: dispatcher,
-		auditor:    auditor,
-		files:      fileManager,
-		processes:  processManager,
-		services:   serviceManager,
-		software:   softwareManager,
-		wireguard:  wireGuardManager,
+		options:     options,
+		configPath:  configPath,
+		config:      cfg,
+		authClient:  authClient,
+		logger:      logger,
+		hostname:    hostname,
+		bootID:      fmt.Sprintf("%d", time.Now().Unix()),
+		dispatcher:  dispatcher,
+		auditor:     auditor,
+		files:       fileManager,
+		processes:   processManager,
+		remoteShell: remoteShellManager,
+		services:    serviceManager,
+		software:    softwareManager,
+		wireguard:   wireGuardManager,
 	}
 	if agent.wireguard != nil {
 		agent.wireguard.SetStatusReporter(agent.postWireGuardStatus)
@@ -123,6 +127,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	if a.wireguard != nil {
 		a.wireguard.Start(ctx)
+	}
+	if a.remoteShell != nil {
+		a.remoteShell.Start(ctx)
+		defer a.remoteShell.Stop(context.Background())
 	}
 	if err := a.postStatus(ctx, "status_channel_online", "healthy", "Status channel online."); err != nil {
 		a.logger.Printf("status post failed: %v", err)
@@ -216,6 +224,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 				"system_scripts":      true,
 				"file_management":     true,
 				"process_management":  true,
+				"remote_shell":        true,
 				"service_management":  true,
 				"software_management": true,
 				"wireguard_tunnel":    true,
@@ -321,6 +330,18 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	}
 	if a.processes != nil {
 		processHealth = a.processes.Health()
+	}
+	remoteShellHealth := remoteshell.RoleHealth{
+		Status:     "unsupported",
+		StatusCode: "unsupported",
+		Detail:     "Remote Shell role is unavailable.",
+		Details: map[string]any{
+			"running_status": "Unavailable",
+			"runtime":        "go",
+		},
+	}
+	if a.remoteShell != nil {
+		remoteShellHealth = a.remoteShell.Health()
 	}
 	serviceHealth := servicemanagement.RoleHealth{
 		Status:     "unsupported",
@@ -432,6 +453,17 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 					"detail":          processHealth.Detail,
 					"last_checked_at": time.Now().Unix(),
 					"details":         processHealth.Details,
+				},
+				{
+					"role_id":         "system:remote_shell",
+					"role_name":       "remote_shell",
+					"role_label":      "Remote Shell",
+					"context":         "system",
+					"status":          remoteShellHealth.Status,
+					"status_code":     remoteShellHealth.StatusCode,
+					"detail":          remoteShellHealth.Detail,
+					"last_checked_at": time.Now().Unix(),
+					"details":         remoteShellHealth.Details,
 				},
 				{
 					"role_id":         "system:service_management",

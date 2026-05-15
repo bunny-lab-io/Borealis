@@ -21,7 +21,8 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `internal/roles/service_management` - SYSTEM/root service inventory publishing plus operator-triggered start, stop, and restart through `service_control_action`.
 - `internal/roles/software_management` - SYSTEM/root Windows installed-app inventory with cached icon payloads, Linux dpkg/rpm inventory, refresh requests, and post-uninstall inventory refresh through the SYSTEM quick-job lane.
 - `internal/roles/wireguard_tunnel` - SYSTEM/root persistent WireGuard reverse tunnel lifecycle, Engine `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, Windows tunnel-service apply, Linux `wg-quick` apply, and `/api/agent/vpn/ready` reporting.
-- Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`: remote shell, VNC, tray UI, macros, and node screenshot.
+- `internal/roles/remote_shell` - SYSTEM/root WireGuard-scoped TCP shell listener for Engine `vpn_shell_*` bridge traffic, using PowerShell on Windows and Bash/sh on Linux.
+- Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`: VNC, tray UI, macros, and node screenshot.
 
 ## Agent Settings and Storage
 - Installed configuration file: `config.json` beside `Agent.exe`.
@@ -162,18 +163,18 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - The original references were `REVERSE_TUNNELS.md` and `Reverse_VPN_Tunnel_Deployment.md` (now consolidated into this knowledgebase).
 - Agent roles:
   - `Data/Agent/internal/roles/wireguard_tunnel` (Go tunnel lifecycle)
-  - `Data/Agent/Roles/role_system_remote_shell.py` (VPN remote shell TCP server)
+  - `Data/Agent/internal/roles/remote_shell` (Go VPN remote shell TCP server)
 
 #### Execution contexts and roles
 - Go roles are explicit packages under `Data/Agent/internal/roles`.
-- First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER direct session PowerShell/Batch execution, core device audit inventory, SYSTEM/root file management, SYSTEM/root process management, SYSTEM/root service management, SYSTEM/root software management, and SYSTEM/root WireGuard tunnel lifecycle.
+- First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER direct session PowerShell/Batch execution, core device audit inventory, SYSTEM/root file management, SYSTEM/root process management, SYSTEM/root service management, SYSTEM/root software management, SYSTEM/root WireGuard tunnel lifecycle, and SYSTEM/root Remote Shell over WireGuard.
 - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`.
 - SYSTEM tasks depend on scheduled-task creation rights; failures should surface through Engine logging.
 
 #### Platform parity
 - Windows is the reference path and has the broadest tested feature surface.
 - Linux Go runtime builds as `Agent`, installs through systemd, and supports root/SYSTEM Bash quick jobs in first PR.
-- Linux CURRENTUSER, tray/helper UI, remote shell, and VNC are pending Go ports.
+- Linux CURRENTUSER, tray/helper UI, and VNC are pending Go ports.
 
 #### Ansible support
 - The agent no longer hosts an Ansible playbook execution role.
