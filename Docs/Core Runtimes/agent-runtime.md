@@ -107,16 +107,18 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - When tokens are invalid or expired, the agent refreshes or re-enters enrollment.
 
 ### Logging
-- Primary log: `Logs/agent.log` with daily rotation.
-- Error log: `Logs/agent.error.log`.
-- WireGuard log: `Logs/wireguard.log`.
-- Remote shell log: `Logs/VPN_Tunnel/remote_shell.log`.
-- Role-specific logs may write to `Logs/<service>.log`.
-- Windows bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/bootstrap.log`; Windows bootstrap truncates this file at each start and always writes verbose trace/command output there while keeping console/GUI output minimal. Linux updater diagnostics: `<AgentInstallRoot>/Logs/bootstrap.log`.
+- Agent runtime log: `Logs/Agent/agent.log` with daily rotation.
+- Agent error log: `Logs/Agent/agent.error.log`.
+- Agent remote shell log: `Logs/Agent/remote_shell.log`.
+- Agent bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/Agent/bootstrap.log`; Windows bootstrap truncates this file at each start and always writes verbose trace/command output there while keeping console/GUI output minimal. Linux updater diagnostics use the same path.
+- WireGuard role log: `Logs/WireGuard/wireguard.log`.
+- WireGuard MSI install log: `Logs/WireGuard/wireguard-msi-install.log`.
+- UltraVNC role log: `Logs/UltraVNC/vnc.log`.
+- UltraVNC MSI install log: `Logs/UltraVNC/ultravnc-msi-install.log`.
 
 ### Troubleshooting flow
 - If enrollment fails, check:
-  - `Logs/agent.log` for enrollment errors.
+  - `Logs/Agent/agent.log` for enrollment errors.
   - `Engine/Services/api-backend/logs/engine.log` for approval or auth failures.
 - If current-user execution fails, confirm the SYSTEM broker is advertising helper capability, inspect session inventory for `helper_ready`, and expect `no_interactive_user_session` when no eligible user session exists.
 - If CURRENTUSER execution fails, inspect the Go helper broker migration status in `Data/Agent/Golang_Agent_Migration.md`.
@@ -134,7 +136,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
   - Check agent WireGuard role logs and confirm `/api/agent/vpn/ensure` succeeds.
   - Ensure the Engine has an active tunnel session and the WireGuard service is running.
 - If VNC fails:
-  - Check `Logs/wireguard.log` for tunnel lifecycle and WireGuard recovery events.
+  - Check `Logs/WireGuard/wireguard.log` for tunnel lifecycle and WireGuard recovery events.
   - Call `POST /api/agent/vnc/ensure` and inspect `ready`, `service_state`, `listener_state`, `detail`, and `last_ready_at`.
   - Confirm the active collaboration session still exists from the Engine side with `GET /api/vnc/sessions`.
 
@@ -151,10 +153,12 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Keep Linux Agent installation separate from deployed Engine runtime roots.
 
 #### Logging
-- Primary log: `Logs/agent.log` with daily rotation to `agent.log.YYYY-MM-DD` (never auto-delete rotated files).
-- Subsystems: log to `Logs/<service>.log` with the same rotation policy.
-- Install/diagnostics: `Logs/install.log`; keep ad-hoc traces (for example, `system_last.ps1`) under `Logs/` to keep runtime state self-contained.
-- Updater trace exception: `Agent.exe` writes bootstrap/update diagnostics to `<AgentInstallRoot>/Logs/bootstrap.log`; Windows bootstrap starts by truncating this file and keeps verbose output out of operator-facing stdout/stderr streams.
+- Primary log: `Logs/Agent/agent.log` with daily rotation to `agent.log.YYYY-MM-DD` (never auto-delete rotated files).
+- Agent support logs: `Logs/Agent/bootstrap.log` and `Logs/Agent/remote_shell.log`.
+- WireGuard logs: `Logs/WireGuard/wireguard.log` and `Logs/WireGuard/wireguard-msi-install.log`.
+- UltraVNC logs: `Logs/UltraVNC/vnc.log` and `Logs/UltraVNC/ultravnc-msi-install.log`.
+- Keep ad-hoc traces (for example, `system_last.ps1`) under `Logs/` to keep runtime state self-contained.
+- Updater trace exception: `Agent.exe` writes bootstrap/update diagnostics to `<AgentInstallRoot>/Logs/Agent/bootstrap.log`; Windows bootstrap starts by truncating this file and keeps verbose output out of operator-facing stdout/stderr streams.
 - Troubleshooting: prefix lines with `<timestamp>-<service-name>-<log-data>`; ask operators whether verbose logging should stay after resolution.
 
 #### Security
@@ -162,7 +166,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Refresh/access tokens are stored in `config.json` and bound to the device identity plus Engine-issued token state; mismatches force re-enrollment.
 - REST and Socket.IO traffic use the public Engine FQDN with normal CA + hostname validation.
 - Validates script payloads with backend-issued Ed25519 signatures before execution.
-- Outbound-only; API/WebSocket calls flow through the Go auth client for proactive refresh. Logs bootstrap, enrollment, token refresh, and signature events in `Logs/`.
+- Outbound-only; API/WebSocket calls flow through the Go auth client for proactive refresh. Logs bootstrap, enrollment, token refresh, and signature events under `Logs/Agent/`.
 - Helper processes inherit no Borealis token state and rely on the local SYSTEM broker for job delivery.
 
 #### Reverse VPN tunnels

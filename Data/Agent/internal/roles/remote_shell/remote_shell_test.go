@@ -6,10 +6,20 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestNewUsesAgentRemoteShellLogCategoryPath(t *testing.T) {
+	dir := t.TempDir()
+	manager := New("LAB-01", "system", filepath.Join(dir, "config.json"))
+
+	if got := manager.logPath; got != filepath.Join(dir, "Logs", "Agent", "remote_shell.log") {
+		t.Fatalf("unexpected log path: %s", got)
+	}
+}
 
 func TestAllowedShellRemoteRequiresWireGuardSubnet(t *testing.T) {
 	if !isAllowedShellRemote("10.255.0.1") {

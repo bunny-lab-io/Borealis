@@ -83,7 +83,7 @@ None on this page. See [API Reference](../Data%20and%20Schema/api-reference.md).
 - Edit Engine API source under `Data/Engine/Containers/api-backend/data/`, WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`, and Agent source under `Data/Agent/`; then re-run `Engine.sh` or `Data/Agent/build-agent.sh` as appropriate.
 
 ### What to read first when debugging
-- Start with logs: `Engine/Services/api-backend/logs/engine.log` and `Agent/Logs/agent.log`.
+- Start with logs: `Engine/Services/api-backend/logs/engine.log` and `Agent/Logs/Agent/agent.log`.
 - Check domain-specific logs (example: `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`).
 - Inspect active DB state in PostgreSQL (`engine.*` and `assemblies.*`) for device/job metadata.
 

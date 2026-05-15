@@ -152,8 +152,8 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 ### Logs to inspect
 - Engine tunnel log: `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`.
 - Engine shell log: `Engine/Services/api-backend/logs/VPN_Tunnel/remote_shell.log`.
-- Agent WireGuard log: `Agent/Logs/wireguard.log`.
-- Agent shell log: `Agent/Logs/VPN_Tunnel/remote_shell.log`.
+- Agent WireGuard log: `Agent/Logs/WireGuard/wireguard.log`.
+- Agent shell log: `Agent/Logs/Agent/remote_shell.log`.
 - Shell logs now carry a shared `session_id` plus distinct ready/keepalive pong entries, which makes it easier to line up one shell session across Engine and agent logs.
 - Useful recovery keywords include `shell_connect_retry`, `shell_keepalive`, `vnc_bootstrap`, `vnc_connect_retry`, `vnc_backend_connect`, `vpn_transport_watchdog_recovery`, and `vpn_shell_output_timing`.
 
@@ -217,7 +217,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - TCP PowerShell/Bash server bound to `0.0.0.0:47002`, restricted to VPN subnet (10.255.x.x).
 - VNC role: `Data/Agent/internal/roles/vnc/`.
   - Manages Windows UltraVNC as an always-on service after Engine firewall scope and runtime credentials are ready, handles `vnc_start`, `vnc_stop`, `vnc_refresh`, and `vnc_credential_request`, and reports service/listener readiness through role health.
-- Logging: `Agent/Logs/wireguard.log` (tunnel lifecycle), `Agent/Logs/VPN_Tunnel/remote_shell.log` (shell I/O), and `Agent/Logs/VPN_Tunnel/vnc.log` (VNC lifecycle).
+- Logging: `Agent/Logs/WireGuard/wireguard.log` (tunnel lifecycle), `Agent/Logs/Agent/remote_shell.log` (shell I/O), and `Agent/Logs/UltraVNC/vnc.log` (VNC lifecycle).
 
 #### 5) Security and auth
 - Agent HTTPS trust uses the public CA chain plus hostname validation for the Borealis FQDN.
@@ -320,8 +320,8 @@ Note: Data/Agent changes only apply after Agent.exe re-stages the agent under Ag
 - Engine shell bridge: Data/Engine/Containers/api-backend/data/services/WebSocket/vpn_shell.py
 - Engine VNC API: Data/Engine/Containers/api-backend/data/services/API/devices/vnc.py
 - Engine VNC proxy: Data/Engine/Containers/api-backend/data/services/RemoteDesktop/vnc_proxy.py
-- Agent WireGuard logs: Z:\Agent\Logs\wireguard.log
-- Agent shell logs: Z:\Agent\Logs\VPN_Tunnel\remote_shell.log
+- Agent WireGuard logs: Z:\Agent\Logs\WireGuard\wireguard.log
+- Agent shell logs: Z:\Agent\Logs\Agent\remote_shell.log
 - Engine tunnel logs: Engine\Logs\VPN_Tunnel\tunnel.log
 - Engine shell logs: Engine\Logs\VPN_Tunnel\remote_shell.log
 - Agent WireGuard config: Z:\Agent\wireguard.conf
@@ -342,13 +342,13 @@ Note: Data/Agent changes only apply after Agent.exe re-stages the agent under Ag
 - Engine WireGuard log tail:
   - `tail -f Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`
 - Agent tunnel state (remote, via Z:\ logs):
-  - Z:\Agent\Logs\wireguard.log
-  - Z:\Agent\Logs\VPN_Tunnel\remote_shell.log
+  - Z:\Agent\Logs\WireGuard\wireguard.log
+  - Z:\Agent\Logs\Agent\remote_shell.log
   - Z:\Agent\wireguard.conf
 
 #### Current blockers and next steps
 1) Re-stage the agent runtime after `Data/Agent/internal/roles/remote_shell`, `Data/Agent/internal/roles/wireguard_tunnel`, or VNC role changes so the runtime copy matches `Data/Agent/`.
-2) For shell regressions, correlate `Engine/Services/api-backend/logs/VPN_Tunnel/remote_shell.log` with `Z:\Agent\Logs\VPN_Tunnel\remote_shell.log` by `session_id` before assuming browser-side buffering.
+2) For shell regressions, correlate `Engine/Services/api-backend/logs/VPN_Tunnel/remote_shell.log` with `Z:\Agent\Logs\Agent\remote_shell.log` by `session_id` before assuming browser-side buffering.
 3) For VNC regressions on weaker hosts, capture `vnc_connect_retry`, `vnc_backend_connect`, `vpn_transport_recovery_request`, and `vpn_transport_watchdog_recovery` from `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log` before changing shell code paths.
 4) If issues persist, confirm `Agent\wireguard.conf` still has a valid [Peer], verify `Test-NetConnection -ComputerName <agent_vpn_ip> -Port 47002`, and re-check WireGuard service state on both ends.
 

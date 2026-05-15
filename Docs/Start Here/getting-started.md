@@ -92,7 +92,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 ### Agent install and enrollment notes
 - The Windows agent must run elevated to create services and scheduled tasks.
 - Enrollment requires an install code and operator approval (see `Docs/Operations and Remote Access/device-management.md`).
-- If enrollment fails, inspect `Agent/Logs/agent.log` and `Engine/Services/api-backend/logs/engine.log`.
+- If enrollment fails, inspect `Agent/Logs/Agent/agent.log` and `Engine/Services/api-backend/logs/engine.log`.
 
 ### Health verification
 - Use `GET /health` to confirm the API is alive.

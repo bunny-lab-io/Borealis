@@ -16,9 +16,10 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - Service logs: `Engine/Services/<role>/logs/` plus API per-domain logs under `Engine/Services/api-backend/logs/`.
 - Watchdog service log: `Engine/Services/api-backend/logs/watchdogs.log`.
 - VPN logs: `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`, `Engine/Services/api-backend/logs/VPN_Tunnel/remote_shell.log`, and WireGuard control logs under `Engine/Services/wireguard-tunnel/logs/control.log`.
-- Agent install log: `Logs/install.log` records Agent launcher actions such as enrollment state cleanup; package-manager output remains on the console.
-- Agent logs: `Logs/agent.log` and `Logs/agent.error.log` (daily rotation).
-- Agent bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/bootstrap.log`. Windows bootstrap truncates this file at each start so it contains only the latest run, and always writes verbose trace/command output there. Operator-facing console/GUI output stays limited to high-level steps, warnings, and errors.
+- Agent runtime logs: `Logs/Agent/agent.log`, `Logs/Agent/agent.error.log`, and `Logs/Agent/remote_shell.log` (daily rotation where supported).
+- Agent bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/Agent/bootstrap.log`. Windows bootstrap truncates this file at each start so it contains only the latest run, and always writes verbose trace/command output there. Operator-facing console/GUI output stays limited to high-level steps, warnings, and errors.
+- Agent WireGuard logs: `Logs/WireGuard/wireguard.log` and `Logs/WireGuard/wireguard-msi-install.log`.
+- Agent UltraVNC logs: `Logs/UltraVNC/vnc.log` and `Logs/UltraVNC/ultravnc-msi-install.log`.
 
 ## Log Retention
 - Retention is managed via `/api/server/logs` endpoints.
@@ -73,10 +74,10 @@ Describe Borealis operational logging, retention, and core runtime checks.
 
 ### Agent logging notes
 - Logs are scoped by context (SYSTEM vs CURRENTUSER) in prefixes.
-- Role-specific logs live under `Logs/<service>.log`.
-- WireGuard role logs are kept in `Logs/wireguard.log`.
-- VPN shell logs are kept in `Logs/VPN_Tunnel/`.
-- Cross-platform updater traces are written to `<AgentInstallRoot>/Logs/bootstrap.log`; Windows bootstrap starts by truncating this file and keeps verbose output out of operator-facing stdout/stderr streams.
+- Agent runtime, bootstrap, and remote shell logs live under `Logs/Agent/`.
+- WireGuard role and installer logs live under `Logs/WireGuard/`.
+- UltraVNC role and installer logs live under `Logs/UltraVNC/`.
+- Cross-platform updater traces are written to `<AgentInstallRoot>/Logs/Agent/bootstrap.log`; Windows bootstrap starts by truncating this file and keeps verbose output out of operator-facing stdout/stderr streams.
 
 ### Debug workflow
 - Start with the log file closest to the symptom.

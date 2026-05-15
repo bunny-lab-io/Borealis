@@ -216,7 +216,7 @@ func ensureUltraVNCSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) e
 	if _, err := ensureUltraVNCBootstrapConfig(cfg, logger); err != nil {
 		return err
 	}
-	logPath := filepath.Join(cfg.InstallDir, "Logs", "ultravnc-msi-install.log")
+	logPath := filepath.Join(cfg.InstallDir, "Logs", "UltraVNC", "ultravnc-msi-install.log")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
 		return err
 	}
@@ -676,7 +676,7 @@ func repairWireGuardMSIInstall(cfg BootstrapConfig, msiPath string, logger *Boot
 	if err := uninstallWireGuardMSIProduct(cfg, msiPath, logger); err != nil {
 		return err
 	}
-	retryLogPath := filepath.Join(cfg.InstallDir, "Logs", "wireguard-msi-install-retry.log")
+	retryLogPath := filepath.Join(cfg.InstallDir, "Logs", "WireGuard", "wireguard-msi-install-retry.log")
 	if err := os.MkdirAll(filepath.Dir(retryLogPath), 0755); err != nil {
 		return err
 	}
@@ -702,7 +702,7 @@ func repairWireGuardMSIInstall(cfg BootstrapConfig, msiPath string, logger *Boot
 
 func uninstallWireGuardMSIProduct(cfg BootstrapConfig, msiPath string, logger *BootstrapLogger) error {
 	prepareWireGuardMSIInstall(logger)
-	logPath := filepath.Join(cfg.InstallDir, "Logs", "wireguard-msi-uninstall.log")
+	logPath := filepath.Join(cfg.InstallDir, "Logs", "WireGuard", "wireguard-msi-uninstall.log")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
 		return err
 	}
@@ -765,7 +765,7 @@ func removeWireGuardManagerService(clientExe string, logger *BootstrapLogger) {
 }
 
 func wireGuardMSILogPath(cfg BootstrapConfig) string {
-	return filepath.Join(cfg.InstallDir, "Logs", "wireguard-msi-install.log")
+	return filepath.Join(cfg.InstallDir, "Logs", "WireGuard", "wireguard-msi-install.log")
 }
 
 func tailTextFile(path string, maxBytes int64) string {

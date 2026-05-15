@@ -250,6 +250,9 @@ func ensureBootstrapDirs(cfg BootstrapConfig) error {
 	paths := []string{
 		cfg.InstallDir,
 		filepath.Join(cfg.InstallDir, "Logs"),
+		filepath.Join(cfg.InstallDir, "Logs", "Agent"),
+		filepath.Join(cfg.InstallDir, "Logs", "UltraVNC"),
+		filepath.Join(cfg.InstallDir, "Logs", "WireGuard"),
 		filepath.Join(cfg.InstallDir, "Temp", "Onboarding"),
 	}
 	for _, path := range paths {

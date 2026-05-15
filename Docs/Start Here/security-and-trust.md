@@ -320,7 +320,7 @@ sequenceDiagram
 #### Operational notes
 - Short outages are tolerated: the 90-day sliding window resets on the first successful refresh after the Engine is back.
 - Long inactivity (more than 90 days without refresh) requires re-enrollment; the agent will reuse the last installer code if available, otherwise operator action is needed.
-- Logs for token activity live under `Agent/Logs/` (`agent.log`, `agent.error.log`). Engine-side changes are recorded in the Engine DB `refresh_tokens` table with `last_used_at` and `expires_at`.
+- Logs for token activity live under `Agent/Logs/Agent/` (`agent.log`, `agent.error.log`). Engine-side changes are recorded in the Engine DB `refresh_tokens` table with `last_used_at` and `expires_at`.
 
 #### Relevant files
 - Agent token lifecycle: `Data/Agent/internal/auth`.

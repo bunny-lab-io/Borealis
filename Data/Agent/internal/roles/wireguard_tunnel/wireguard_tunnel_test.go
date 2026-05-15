@@ -61,7 +61,7 @@ func testManager(t *testing.T) *Manager {
 		serviceMode:   "system",
 		configPath:    dir + "/config.json",
 		baseDir:       dir,
-		logPath:       dir + "/Logs/wireguard.log",
+		logPath:       filepath.Join(dir, "Logs", "WireGuard", "wireguard.log"),
 		platform:      "linux",
 		interfaceName: "wireguard",
 		wgQuick:       "wg-quick",
@@ -120,11 +120,11 @@ func TestBuildSessionNormalizesAllowedPortsAndHostRoute(t *testing.T) {
 	}
 }
 
-func TestNewUsesFlatWireGuardLogPath(t *testing.T) {
+func TestNewUsesWireGuardLogCategoryPath(t *testing.T) {
 	dir := t.TempDir()
 	manager := New(nil, "LAB-01", "system", filepath.Join(dir, "config.json"))
 
-	if got := manager.logPath; got != filepath.Join(dir, "Logs", "wireguard.log") {
+	if got := manager.logPath; got != filepath.Join(dir, "Logs", "WireGuard", "wireguard.log") {
 		t.Fatalf("unexpected log path: %s", got)
 	}
 }

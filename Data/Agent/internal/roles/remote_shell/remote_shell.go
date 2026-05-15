@@ -93,7 +93,7 @@ func New(hostname string, serviceMode string, configPath string) *Manager {
 		serviceMode: strings.TrimSpace(serviceMode),
 		configPath:  strings.TrimSpace(configPath),
 		baseDir:     baseDir,
-		logPath:     filepath.Join(baseDir, "Logs", "VPN_Tunnel", "remote_shell.log"),
+		logPath:     filepath.Join(baseDir, "Logs", "Agent", "remote_shell.log"),
 		platform:    runtime.GOOS,
 		host:        defaultShellHost,
 		port:        resolveShellPort(),

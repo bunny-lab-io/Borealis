@@ -102,7 +102,7 @@ func New(client *auth.Client, hostname string, serviceMode string, configPath st
 		serviceMode:        auth.NormalizeServiceMode(serviceMode),
 		configPath:         strings.TrimSpace(configPath),
 		baseDir:            baseDir,
-		logPath:            filepath.Join(baseDir, "Logs", "VPN_Tunnel", "vnc.log"),
+		logPath:            filepath.Join(baseDir, "Logs", "UltraVNC", "vnc.log"),
 		platform:           runtime.GOOS,
 		runner:             runCommand,
 		supported:          runtime.GOOS == "windows",

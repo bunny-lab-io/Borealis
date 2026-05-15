@@ -87,9 +87,9 @@ Back to Docs Index: ../../Docs/index.md
 45. Added Go WireGuard tunnel role for persistent `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, signed orchestration token validation, side-by-side `wireguard.conf`, Windows tunnel-service apply using the `WireGuardTunnel$wireguard` service derived from the config basename, Linux `wg-quick` apply, firewall readiness, role health, and `/api/agent/vpn/ready` reporting.
 46. Added startup cleanup of the install-root `Temp` directory so onboarding payload, state, and stdout leftovers do not persist after Agent runtime starts.
 47. Fixed Windows WireGuard role-health refresh, serialized concurrent tunnel applies, and corrected firewall port creation to pass PowerShell port arrays instead of quoted comma-separated strings.
-48. Moved Go WireGuard role logs from `Logs/VPN_Tunnel/tunnel.log` to `Logs/wireguard.log`.
-49. Changed Windows bootstrap logging so `Logs/bootstrap.log` is truncated at each bootstrap start and contains only the latest run.
-50. Split Windows bootstrap logging so `bootstrap.log` always receives verbose trace/marker output while console, stdout, and stderr show only operator-facing step/warn/error lines.
+48. Moved Go WireGuard role logs from `Logs/VPN_Tunnel/tunnel.log` to `Logs/WireGuard/wireguard.log`.
+49. Changed Windows bootstrap logging so `Logs/Agent/bootstrap.log` is truncated at each bootstrap start and contains only the latest run.
+50. Split Windows bootstrap logging so `Logs/Agent/bootstrap.log` always receives verbose trace/marker output while console, stdout, and stderr show only operator-facing step/warn/error lines.
 51. Fixed Linux WireGuard health checks to follow the side-by-side config basename interface (`wireguard`) and clean legacy `borealis` links during recovery.
 52. Validated Go WireGuard tunnel lifecycle on real Windows/Linux targets and marked WireGuard migration complete.
 53. Added Go Remote Shell role with WireGuard-scoped TCP listener, existing JSONL/base64 Engine bridge protocol, PowerShell/Bash subprocess execution, ready/keepalive pong handling, stdout correlation metadata, one active session replacement, log output, and heartbeat role health.
@@ -108,6 +108,7 @@ Back to Docs Index: ../../Docs/index.md
 66. Removed persistent `update_status.json`; update checks now use `config.json` for branch/build identity and delete any old updater status sidecar instead of writing state/update_available metadata.
 67. Changed Windows update cleanup so updater workspaces are removed immediately, full `C:\Borealis\Temp` cleanup is deferred until after bootstrap exits, and locked onboarding stdout handles no longer create operator-facing warnings.
 68. Moved Windows dependency version tracking for WireGuard and UltraVNC into `config.json` under `dependency_versions`, removed `installed_version.txt` dependency markers, and cleaned transient `Dependencies` installer folders after dependency reconciliation.
+69. Reorganized installed Agent logs into `Logs/Agent`, `Logs/WireGuard`, and `Logs/UltraVNC` category folders.
 
 ## In Progress
 
