@@ -12,15 +12,25 @@ import (
 
 func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	cfg := defaultBootstrapConfig()
+	configPath := agentruntime.ConfigPathForExecutable(filepath.Join(cfg.InstallDir, "Agent.exe"))
 	if strings.TrimSpace(options.ConfigPath) != "" {
 		cfg.InstallDir = filepath.Dir(options.ConfigPath)
+		configPath = options.ConfigPath
 	}
-	current, err := agentconfig.LoadOrCreate(agentruntime.ConfigPathForExecutable(filepath.Join(cfg.InstallDir, "Agent.exe")))
+	current, err := agentconfig.LoadOrCreate(configPath)
 	if err == nil {
 		cfg.ServerURL = current.ServerURL
+		cfg.RepoRef = agentconfig.NormalizeBranch(current.Agent.Branch)
 	}
 	if strings.TrimSpace(options.ServerURL) != "" {
 		cfg.ServerURL = options.ServerURL
+	}
+	if strings.TrimSpace(options.RepoRef) != "" {
+		cfg.RepoRef = agentconfig.NormalizeBranch(options.RepoRef)
+		if err == nil {
+			current.Agent.Branch = cfg.RepoRef
+			_ = agentconfig.Save(configPath, &current)
+		}
 	}
 	cfg.Verbose = options.Verbose
 	logger, closeLog, err := openBootstrapLogger(cfg, false)

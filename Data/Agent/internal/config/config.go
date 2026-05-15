@@ -13,6 +13,7 @@ import (
 const (
 	SchemaVersion = 1
 	FileName      = "config.json"
+	DefaultBranch = "main"
 )
 
 type AgentConfig struct {
@@ -28,6 +29,7 @@ type AgentConfig struct {
 type AgentSection struct {
 	GUID    string `json:"guid"`
 	AgentID string `json:"agent_id"`
+	Branch  string `json:"branch"`
 }
 
 type IdentitySection struct {
@@ -62,6 +64,14 @@ func PathFromBinary() (string, error) {
 func NormalizeServerURL(value string) string {
 	text := strings.TrimSpace(value)
 	text = strings.TrimRight(text, "/")
+	return text
+}
+
+func NormalizeBranch(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return DefaultBranch
+	}
 	return text
 }
 
@@ -154,6 +164,7 @@ func (c *AgentConfig) ApplyDefaults() {
 	if c.SchemaVersion == 0 {
 		c.SchemaVersion = SchemaVersion
 	}
+	c.Agent.Branch = NormalizeBranch(c.Agent.Branch)
 }
 
 func (c AgentConfig) Clone() AgentConfig {

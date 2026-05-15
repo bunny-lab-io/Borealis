@@ -27,6 +27,7 @@ type Options struct {
 	ConfigPath     string
 	ServerURL      string
 	EnrollmentCode string
+	RepoRef        string
 	ServiceMode    string
 	BuildID        string
 	Once           bool
@@ -70,6 +71,9 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	}
 	if strings.TrimSpace(options.EnrollmentCode) != "" {
 		cfg.EnrollmentCode = strings.TrimSpace(options.EnrollmentCode)
+	}
+	if strings.TrimSpace(options.RepoRef) != "" {
+		cfg.Agent.Branch = agentconfig.NormalizeBranch(options.RepoRef)
 	}
 	if err := agentconfig.Save(configPath, &cfg); err != nil {
 		return nil, err

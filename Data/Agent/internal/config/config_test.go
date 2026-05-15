@@ -15,6 +15,7 @@ func TestSaveLoadConfig(t *testing.T) {
 	cfg.ServerURL = "https://borealis.example.com/"
 	cfg.EnrollmentCode = "CODE"
 	cfg.Agent.GUID = "guid"
+	cfg.Agent.Branch = "feature/test"
 	cfg.Identity.PublicKeySPKIB64 = "pub"
 
 	if err := Save(path, &cfg); err != nil {
@@ -30,6 +31,9 @@ func TestSaveLoadConfig(t *testing.T) {
 	if loaded.ServerURL != "https://borealis.example.com" {
 		t.Fatalf("server url not normalized: %q", loaded.ServerURL)
 	}
+	if loaded.Agent.Branch != "feature/test" {
+		t.Fatalf("branch mismatch: %q", loaded.Agent.Branch)
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +42,14 @@ func TestSaveLoadConfig(t *testing.T) {
 		if strings.Contains(string(raw), unexpected) {
 			t.Fatalf("config contains unexpected field %s: %s", unexpected, string(raw))
 		}
+	}
+}
+
+func TestDefaultBranch(t *testing.T) {
+	cfg := Default()
+	cfg.ApplyDefaults()
+	if cfg.Agent.Branch != DefaultBranch {
+		t.Fatalf("default branch = %q, want %q", cfg.Agent.Branch, DefaultBranch)
 	}
 }
 

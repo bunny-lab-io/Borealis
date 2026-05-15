@@ -29,7 +29,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Installed configuration file: `config.json` beside `Agent.exe`.
 - WireGuard runtime configuration file: `wireguard.conf` beside `Agent.exe`/`Agent`, generated from Engine tunnel material.
 - Startup cleanup removes `Temp` under the Agent install root so onboarding payload/state files do not persist after service start.
-- `config.json` stores `schema_version`, `server_url`, `enrollment_code`, `agent.guid`, `agent.agent_id`, Ed25519 keys, access/refresh tokens, and Engine script-signing trust material.
+- `config.json` stores `schema_version`, `server_url`, `enrollment_code`, `agent.guid`, `agent.agent_id`, `agent.branch`, Ed25519 keys, access/refresh tokens, and Engine script-signing trust material.
 - Windows protection: ACL hardening is deferred in the current Go migration branch; files inherit permissions from `C:\Borealis`.
 - Linux protection: root-owned `0600` file with `0700` parent directory.
 - Writes are atomic temp-write + rename. No OS file-lock dependency is used.
@@ -122,6 +122,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - If CURRENTUSER execution fails, inspect the Go helper broker migration status in `Data/Agent/Golang_Agent_Migration.md`.
 - Operator-requested manual updates arrive over the SYSTEM Socket.IO channel as `agent_update_request` and start the local AutoUpdater task/service immediately so the same scheduler-owned update path is used for both manual and hourly runs.
 - Engine-managed release channels cache a Go Agent binary bundle containing `Data/Agent/dist/windows-amd64/Agent.exe` and `Data/Agent/dist/linux-amd64/Agent`. Agents download that authenticated bundle, verify SHA-256 when provided, stage the platform binary, and restart through the local service manager.
+- Branch installs persist the operator-selected branch in `config.json` as `agent.branch`; local update checks use that branch when it is not `main` so feature-branch agents do not jump release channels accidentally.
 - The scheduled AutoUpdater cadence is hourly on Windows and Linux.
 - If scripts do not run:
   - Confirm `quick_job_run` events and the correct role context.

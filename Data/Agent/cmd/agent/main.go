@@ -48,7 +48,7 @@ func run() int {
 	helperMode := flag.Bool("helper", false, "Run as current-user helper.")
 	flag.IntVar(&helperSessionID, "helper-session-id", 0, "Current-user helper session ID.")
 	flag.Parse()
-	_ = repoRef
+	options.RepoRef = repoRef
 	options.BuildID = version
 
 	if printVersion {
@@ -158,6 +158,9 @@ func persistInstallConfig(options agentruntime.Options) error {
 	}
 	if options.EnrollmentCode != "" {
 		cfg.EnrollmentCode = options.EnrollmentCode
+	}
+	if options.RepoRef != "" {
+		cfg.Agent.Branch = agentconfig.NormalizeBranch(options.RepoRef)
 	}
 	return agentconfig.Save(configPath, &cfg)
 }

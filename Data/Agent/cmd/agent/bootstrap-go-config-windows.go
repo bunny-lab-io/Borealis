@@ -23,12 +23,13 @@ func writeGoAgentConfig(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	}
 	current.ServerURL = agentconfig.NormalizeServerURL(cfg.ServerURL)
 	current.EnrollmentCode = strings.TrimSpace(cfg.SiteEnrollmentCode)
+	current.Agent.Branch = agentconfig.NormalizeBranch(cfg.RepoRef)
 	current.ApplyDefaults()
 	if err := agentconfig.Save(path, &current); err != nil {
 		return err
 	}
 	if logger != nil {
-		logger.Tracef("Go Agent config written: path=%s server_url_present=%t enrollment_present=%t", path, current.ServerURL != "", current.EnrollmentCode != "")
+		logger.Tracef("Go Agent config written: path=%s server_url_present=%t enrollment_present=%t branch=%s", path, current.ServerURL != "", current.EnrollmentCode != "", current.Agent.Branch)
 	}
 	return nil
 }
@@ -44,6 +45,9 @@ func mergeConfigJSONBootstrapInputs(cfg *BootstrapConfig) {
 	var parsed struct {
 		ServerURL      string `json:"server_url"`
 		EnrollmentCode string `json:"enrollment_code"`
+		Agent          struct {
+			Branch string `json:"branch"`
+		} `json:"agent"`
 	}
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return
@@ -53,6 +57,11 @@ func mergeConfigJSONBootstrapInputs(cfg *BootstrapConfig) {
 	}
 	if strings.TrimSpace(cfg.SiteEnrollmentCode) == "" {
 		cfg.SiteEnrollmentCode = strings.TrimSpace(parsed.EnrollmentCode)
+	}
+	if strings.TrimSpace(cfg.RepoRef) == "" || strings.EqualFold(strings.TrimSpace(cfg.RepoRef), defaultRepoRef) {
+		if branch := strings.TrimSpace(parsed.Agent.Branch); branch != "" {
+			cfg.RepoRef = branch
+		}
 	}
 }
 

@@ -9,7 +9,7 @@ Back to Docs Index: ../../Docs/index.md
 3. Windows `Agent.exe` owns bootstrap, deployment, repair, update checks, service task registration, and runtime execution.
 4. Linux `Agent` owns deployment, self-staging, runtime execution, systemd service install/uninstall, and update timer installation.
 5. Installed runtime uses one `config.json` beside `Agent.exe`.
-6. `config.json` stores keys, tokens, trust material, enrollment code, server URL, and agent identity only.
+6. `config.json` stores keys, tokens, trust material, enrollment code, server URL, agent identity, and agent branch only.
 7. `config.json` protection uses filesystem permissions only: Windows ACL hardening is deferred and Windows files inherit from `C:\` for now; Linux remains root-owned `0600` with parent `0700`.
 8. SQLite is not used in v1 because configuration is small, single-writer, and not query-heavy.
 9. No installed Agent runtime path may depend on Python.
@@ -19,7 +19,7 @@ Back to Docs Index: ../../Docs/index.md
 ## Numbered Feature Backlog
 
 1. Core binary, CLI flags, logging, bootstrap entrypoint, service install/uninstall.
-2. `config.json` schema, atomic load/save, Windows inherited permissions, Linux ownership/permissions.
+2. `config.json` schema, atomic load/save, Windows inherited permissions, Linux ownership/permissions, and branch persistence.
 3. Ed25519 identity, enrollment, token refresh, script-signing key persistence.
 4. Engine REST client and Socket.IO transport.
 5. Startup status, heartbeat, role-health payloads.
@@ -102,6 +102,7 @@ Back to Docs Index: ../../Docs/index.md
 60. Added Windows CURRENTUSER same-binary helper sentinel broker for active desktop session readiness while keeping signed quick-job execution brokered by SYSTEM `CreateProcessAsUser`.
 61. Retired legacy macros/node screenshot from the Go Agent migration scope by decision; no Go port will be implemented in this PR.
 62. Fixed Windows healthy-bootstrap update checks so the temp bootstrap executable no longer tries to overwrite a locked installed `Agent.exe` before stopping the runtime, and so the AutoUpdater task is reconciled even when the installed build is already current.
+63. Added `agent.branch` to `config.json` so Windows and Linux update checks remain pinned to the operator-selected install branch instead of falling back to Engine release-channel/main updates.
 
 ## In Progress
 

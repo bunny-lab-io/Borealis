@@ -49,6 +49,12 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	if strings.TrimSpace(options.ServerURL) != "" {
 		cfg.ServerURL = agentconfig.NormalizeServerURL(options.ServerURL)
 	}
+	if strings.TrimSpace(options.RepoRef) != "" {
+		cfg.Agent.Branch = agentconfig.NormalizeBranch(options.RepoRef)
+	}
+	if err := agentconfig.Save(configPath, &cfg); err != nil {
+		return err
+	}
 	client, err := auth.NewClient(configPath, &cfg, "system")
 	if err != nil {
 		return err
@@ -61,6 +67,10 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	installed := strings.TrimSpace(readFirstLine(filepath.Join(updaterDir(configPath), "installed_build_id.txt")))
 	if installed == "" {
 		installed = strings.TrimSpace(strings.ToLower(options.BuildID))
+	}
+	branch := agentconfig.NormalizeBranch(cfg.Agent.Branch)
+	if branch != "" && !strings.EqualFold(branch, agentconfig.DefaultBranch) {
+		return runLinuxRepoRefUpdateCheck(ctx, configPath, branch, installed)
 	}
 	manifest, err := fetchLinuxUpdateManifest(ctx, client, installed)
 	if err != nil {
@@ -163,6 +173,144 @@ func fetchLinuxUpdateManifest(ctx context.Context, client *auth.Client, installe
 	return manifest, nil
 }
 
+func runLinuxRepoRefUpdateCheck(ctx context.Context, configPath string, branch string, installed string) error {
+	target, err := resolveGithubRefSHA(ctx, branch)
+	if err != nil {
+		_ = writeLinuxUpdateStatus(configPath, map[string]any{
+			"state":           "failed",
+			"repo_ref":        branch,
+			"last_error":      err.Error(),
+			"last_checked_at": time.Now().Unix(),
+			"last_source":     "linux_repo_ref_updater",
+		})
+		return err
+	}
+	target = strings.TrimSpace(strings.ToLower(target))
+	if target == "" {
+		return fmt.Errorf("repo_ref %q resolved empty target build id", branch)
+	}
+	if installed != "" && strings.EqualFold(installed, target) {
+		return writeLinuxUpdateStatus(configPath, map[string]any{
+			"state":              "up_to_date",
+			"repo_ref":           branch,
+			"target_build_id":    target,
+			"installed_build_id": installed,
+			"last_checked_at":    time.Now().Unix(),
+			"last_source":        "linux_repo_ref_updater",
+			"update_available":   false,
+		})
+	}
+	downloadURL := linuxBranchAgentURL(branch)
+	binaryPath := filepath.Join(updaterDir(configPath), "Agent.branch")
+	if err := downloadRawFile(ctx, downloadURL, binaryPath); err != nil {
+		_ = writeLinuxUpdateStatus(configPath, map[string]any{
+			"state":           "failed",
+			"repo_ref":        branch,
+			"target_build_id": target,
+			"last_error":      err.Error(),
+			"last_checked_at": time.Now().Unix(),
+			"last_source":     "linux_repo_ref_updater",
+		})
+		return err
+	}
+	data, err := os.ReadFile(binaryPath)
+	if err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("repo_ref %q Linux Agent artifact is empty", branch)
+	}
+	if err := stageLinuxAgentBinary(configPath, data); err != nil {
+		return err
+	}
+	_ = writeFirstLine(filepath.Join(updaterDir(configPath), "installed_build_id.txt"), target)
+	_ = writeLinuxUpdateStatus(configPath, map[string]any{
+		"state":              "applied",
+		"repo_ref":           branch,
+		"target_build_id":    target,
+		"installed_build_id": target,
+		"last_checked_at":    time.Now().Unix(),
+		"last_source":        "linux_repo_ref_updater",
+		"update_available":   false,
+	})
+	_ = exec.Command("systemctl", "restart", "borealis-agent.service").Run()
+	return nil
+}
+
+func resolveGithubRefSHA(ctx context.Context, branch string) (string, error) {
+	apiURL := "https://api.github.com/repos/bunny-lab-io/Borealis/commits/" + url.PathEscape(branch)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("GitHub commit API HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var payload struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", err
+	}
+	sha := strings.TrimSpace(payload.SHA)
+	if sha == "" {
+		return "", fmt.Errorf("GitHub commit API returned empty sha")
+	}
+	return sha, nil
+}
+
+func linuxBranchAgentURL(branch string) string {
+	escapedBranch := strings.Trim(strings.ReplaceAll(branch, "\\", "/"), "/")
+	rawURL := url.URL{
+		Scheme: "https",
+		Host:   "raw.githubusercontent.com",
+		Path:   "/bunny-lab-io/Borealis/refs/heads/" + escapedBranch + "/Data/Agent/dist/linux-amd64/Agent",
+	}
+	return rawURL.String()
+}
+
+func downloadRawFile(ctx context.Context, rawURL string, destination string) error {
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("raw artifact HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	temp := destination + ".download"
+	out, err := os.OpenFile(temp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, resp.Body)
+	closeErr := out.Close()
+	if copyErr != nil {
+		_ = os.Remove(temp)
+		return copyErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(temp)
+		return closeErr
+	}
+	return os.Rename(temp, destination)
+}
+
 func downloadLinuxUpdateArtifact(ctx context.Context, client *auth.Client, rawURL string, authed bool, destination string) error {
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return err
@@ -208,6 +356,10 @@ func stageLinuxAgentUpdate(configPath string, archivePath string) error {
 	if err != nil {
 		return err
 	}
+	return stageLinuxAgentBinary(configPath, binary)
+}
+
+func stageLinuxAgentBinary(configPath string, binary []byte) error {
 	destination := filepath.Join(filepath.Dir(configPath), "Agent")
 	pending := destination + ".update"
 	if err := os.WriteFile(pending, binary, 0o700); err != nil {
