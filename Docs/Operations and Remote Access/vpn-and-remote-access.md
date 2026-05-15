@@ -162,7 +162,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - Confirm the agent successfully calls `/api/agent/vpn/ensure` after boot.
 - Confirm `/api/tunnel/status` returns `status=up` and `agent_socket=true` for a healthy tunnel, and inspect `listener_healthy` / `recovery_in_progress` when the transport is degraded.
 - On the Engine, verify peer-subnet routing lands on the WireGuard interface: `ip route get <agent_vpn_ip>` should resolve to `dev borealis-wg`, not the default LAN gateway.
-- Verify the WireGuard interface MTU is clamped to the expected value on both ends: `ip -d link show borealis-wg` (Engine) and `ip -d link show borealis` (Linux Agent) should normally report `mtu 1420` unless `BOREALIS_WIREGUARD_MTU` has been intentionally overridden.
+- Verify the WireGuard interface MTU is clamped to the expected value on both ends: `ip -d link show borealis-wg` (Engine) and `ip -d link show wireguard` (Linux Agent) should normally report `mtu 1420` unless `BOREALIS_WIREGUARD_MTU` has been intentionally overridden.
 - Verify `Agent/wireguard.conf` during an active session.
 - Test TCP shell reachability: `Test-NetConnection <agent_vpn_ip> -Port 47002`.
 

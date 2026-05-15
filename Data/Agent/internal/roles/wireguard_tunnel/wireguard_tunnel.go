@@ -26,7 +26,8 @@ import (
 const (
 	defaultTunnelName   = "wireguard"
 	tunnelDisplayName   = "Borealis Agent - WireGuard"
-	defaultInterface    = "borealis"
+	defaultInterface    = "wireguard"
+	legacyInterface     = "borealis"
 	defaultInterfaceMTU = 1420
 	defaultKeepalive    = 30
 	defaultEnsureDelay  = 10 * time.Second
@@ -893,7 +894,9 @@ func (m *Manager) linuxDown(ctx context.Context) error {
 		_, _ = m.runner(ctx, commandTimeout, m.wgQuick, "down", m.configPathForPlatform())
 	}
 	if m.ip != "" {
-		_, _ = m.runner(ctx, commandTimeout, m.ip, "link", "delete", "dev", m.interfaceName)
+		for _, interfaceName := range uniqueStrings([]string{m.interfaceName, legacyInterface}) {
+			_, _ = m.runner(ctx, commandTimeout, m.ip, "link", "delete", "dev", interfaceName)
+		}
 	}
 	return nil
 }

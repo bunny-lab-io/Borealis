@@ -63,7 +63,7 @@ func testManager(t *testing.T) *Manager {
 		baseDir:       dir,
 		logPath:       dir + "/Logs/wireguard.log",
 		platform:      "linux",
-		interfaceName: "borealis",
+		interfaceName: "wireguard",
 		wgQuick:       "wg-quick",
 		wg:            "wg",
 		ip:            "ip",
@@ -285,9 +285,10 @@ func TestLinuxStartSessionWritesConfigAndRunsWgQuick(t *testing.T) {
 	}
 	expectedCalls := []string{
 		"wg-quick down " + manager.configPathForPlatform(),
+		"ip link delete dev wireguard",
 		"ip link delete dev borealis",
 		"wg-quick up " + manager.configPathForPlatform(),
-		"ip link set dev borealis mtu 1420",
+		"ip link set dev wireguard mtu 1420",
 	}
 	for _, expected := range expectedCalls {
 		if !containsCall(calls, expected) {
@@ -307,7 +308,7 @@ func TestNotifyReadyPostsPayloadAndReportsStatus(t *testing.T) {
 	manager.session = session
 	manager.runner = func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
 		if name == "wg" {
-			return commandResult{ExitCode: 0, Stdout: "interface: borealis"}, nil
+			return commandResult{ExitCode: 0, Stdout: "interface: wireguard"}, nil
 		}
 		return commandResult{ExitCode: 0}, nil
 	}
@@ -331,6 +332,14 @@ func TestNotifyReadyPostsPayloadAndReportsStatus(t *testing.T) {
 	}
 	if len(statusPhases) != 1 || statusPhases[0] != "wireguard_online:complete" {
 		t.Fatalf("unexpected status phases: %#v", statusPhases)
+	}
+}
+
+func TestResolveInterfaceNameDefaultsToWireguardConfigBasename(t *testing.T) {
+	t.Setenv("BOREALIS_WIREGUARD_INTERFACE", "")
+
+	if got := resolveInterfaceName(); got != "wireguard" {
+		t.Fatalf("unexpected default interface name: %s", got)
 	}
 }
 
