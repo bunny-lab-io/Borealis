@@ -56,12 +56,6 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		if err := ensureAgentUpdaterTask(cfg, logger); err != nil {
 			logger.Warnf("AutoUpdater task reconciliation skipped: %v", err)
 		}
-		writeUpdateStatus(cfg, map[string]any{
-			"state":            "up_to_date",
-			"target_build_id":  target,
-			"last_checked_at":  time.Now().Unix(),
-			"update_available": false,
-		})
 		logger.Tracef("Agent update check complete: up_to_date duration=%s", time.Since(startedAt).Round(time.Millisecond))
 		return nil
 	}
@@ -113,12 +107,6 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		}
 	}
 	writeInstalledBuildID(cfg, target)
-	writeUpdateStatus(cfg, map[string]any{
-		"state":            "applied",
-		"target_build_id":  target,
-		"last_checked_at":  time.Now().Unix(),
-		"update_available": false,
-	})
 	logger.Infof("Agent update applied (%s).", target)
 	logger.Tracef("Agent update check complete: applied duration=%s", time.Since(startedAt).Round(time.Millisecond))
 	return nil
@@ -145,13 +133,6 @@ func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, install
 		if err := ensureAgentUpdaterTask(cfg, logger); err != nil {
 			logger.Warnf("AutoUpdater task reconciliation skipped: %v", err)
 		}
-		writeUpdateStatus(cfg, map[string]any{
-			"state":            "up_to_date",
-			"repo_ref":         ref,
-			"target_build_id":  target,
-			"last_checked_at":  time.Now().Unix(),
-			"update_available": false,
-		})
 		logger.Tracef("Agent update check complete: repo_ref_up_to_date duration=%s", time.Since(startedAt).Round(time.Millisecond))
 		return nil
 	}
@@ -172,13 +153,6 @@ func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, install
 		}
 	}
 	writeInstalledBuildID(cfg, target)
-	writeUpdateStatus(cfg, map[string]any{
-		"state":            "applied",
-		"repo_ref":         ref,
-		"target_build_id":  target,
-		"last_checked_at":  time.Now().Unix(),
-		"update_available": false,
-	})
 	logger.Infof("Agent repo_ref update applied (%s @ %s).", ref, target)
 	logger.Tracef("Agent update check complete: repo_ref_applied duration=%s", time.Since(startedAt).Round(time.Millisecond))
 	return nil
@@ -300,22 +274,6 @@ func writeInstalledBuildID(cfg BootstrapConfig, value string) {
 	_ = writeConfigInstalledBuildID(cfg, value)
 }
 
-func writeUpdateStatus(cfg BootstrapConfig, values map[string]any) {
-	path := filepath.Join(cfg.InstallDir, "Updater", "update_status.json")
-	_ = os.MkdirAll(filepath.Dir(path), 0755)
-	current := map[string]any{}
-	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &current)
-	}
-	for key, value := range values {
-		current[key] = value
-	}
-	data, err := json.MarshalIndent(current, "", "  ")
-	if err == nil {
-		_ = os.WriteFile(path, data, 0644)
-	}
-}
-
 func updateTempDir(cfg BootstrapConfig) string {
 	return filepath.Join(cfg.InstallDir, "Temp", "Updater")
 }
@@ -331,6 +289,7 @@ func cleanupAgentTemp(cfg BootstrapConfig, logger *BootstrapLogger) {
 	if err := removePathWithRetries(tempRoot, 3, time.Second, logger); err != nil && logger != nil {
 		logger.Warnf("Temp cleanup skipped or failed: %v", err)
 	}
+	_ = os.Remove(filepath.Join(cfg.InstallDir, "Updater", "update_status.json"))
 	legacyUpdateRoot := filepath.Join(cfg.InstallDir, "Agent")
 	if filepath.Base(legacyUpdateRoot) != "Agent" {
 		if logger != nil {

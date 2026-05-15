@@ -428,12 +428,11 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 		}
 	}
 	payload := map[string]any{
-		"hostname":            a.hostname,
-		"service_mode":        auth.NormalizeServiceMode(a.options.ServiceMode),
-		"metrics":             metrics,
-		"inventory":           auditSnapshot.Inventory,
-		"agent_build_id":      strings.TrimSpace(a.options.BuildID),
-		"agent_update_status": readUpdateStatus(a.configPath, a.options.BuildID),
+		"hostname":       a.hostname,
+		"service_mode":   auth.NormalizeServiceMode(a.options.ServiceMode),
+		"metrics":        metrics,
+		"inventory":      auditSnapshot.Inventory,
+		"agent_build_id": strings.TrimSpace(a.options.BuildID),
 		"agent_role_health": map[string]any{
 			"roles": []map[string]any{
 				{

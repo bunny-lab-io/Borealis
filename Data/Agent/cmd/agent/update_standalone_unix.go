@@ -74,12 +74,7 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	}
 	manifest, err := fetchLinuxUpdateManifest(ctx, client, installed)
 	if err != nil {
-		_ = writeLinuxUpdateStatus(configPath, map[string]any{
-			"state":           "failed",
-			"last_error":      err.Error(),
-			"last_checked_at": time.Now().Unix(),
-			"last_source":     "linux_updater",
-		})
+		removeLinuxUpdateStatus(configPath)
 		return err
 	}
 	target := strings.TrimSpace(strings.ToLower(manifest.TargetBuildID))
@@ -87,16 +82,8 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 		return fmt.Errorf("update manifest missing target_build_id")
 	}
 	if installed != "" && strings.EqualFold(installed, target) {
-		return writeLinuxUpdateStatus(configPath, map[string]any{
-			"state":              "up_to_date",
-			"target_build_id":    target,
-			"installed_build_id": installed,
-			"effective_channel":  manifest.EffectiveChannel,
-			"target_channel":     manifest.TargetChannel,
-			"last_checked_at":    time.Now().Unix(),
-			"last_source":        "linux_updater",
-			"update_available":   false,
-		})
+		removeLinuxUpdateStatus(configPath)
+		return nil
 	}
 	downloadURL := strings.TrimSpace(manifest.DownloadPath)
 	authed := true
@@ -127,16 +114,6 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 		return err
 	}
 	_ = writeLinuxInstalledBuildID(configPath, &cfg, target)
-	_ = writeLinuxUpdateStatus(configPath, map[string]any{
-		"state":              "applied",
-		"target_build_id":    target,
-		"installed_build_id": target,
-		"effective_channel":  manifest.EffectiveChannel,
-		"target_channel":     manifest.TargetChannel,
-		"last_checked_at":    time.Now().Unix(),
-		"last_source":        "linux_updater",
-		"update_available":   false,
-	})
 	_ = exec.Command("systemctl", "restart", "borealis-agent.service").Run()
 	return nil
 }
@@ -176,13 +153,7 @@ func fetchLinuxUpdateManifest(ctx context.Context, client *auth.Client, installe
 func runLinuxRepoRefUpdateCheck(ctx context.Context, configPath string, cfg *agentconfig.AgentConfig, branch string, installed string) error {
 	target, err := resolveGithubRefSHA(ctx, branch)
 	if err != nil {
-		_ = writeLinuxUpdateStatus(configPath, map[string]any{
-			"state":           "failed",
-			"repo_ref":        branch,
-			"last_error":      err.Error(),
-			"last_checked_at": time.Now().Unix(),
-			"last_source":     "linux_repo_ref_updater",
-		})
+		removeLinuxUpdateStatus(configPath)
 		return err
 	}
 	target = strings.TrimSpace(strings.ToLower(target))
@@ -190,27 +161,13 @@ func runLinuxRepoRefUpdateCheck(ctx context.Context, configPath string, cfg *age
 		return fmt.Errorf("repo_ref %q resolved empty target build id", branch)
 	}
 	if installed != "" && strings.EqualFold(installed, target) {
-		return writeLinuxUpdateStatus(configPath, map[string]any{
-			"state":              "up_to_date",
-			"repo_ref":           branch,
-			"target_build_id":    target,
-			"installed_build_id": installed,
-			"last_checked_at":    time.Now().Unix(),
-			"last_source":        "linux_repo_ref_updater",
-			"update_available":   false,
-		})
+		removeLinuxUpdateStatus(configPath)
+		return nil
 	}
 	downloadURL := linuxBranchAgentURL(branch)
 	binaryPath := filepath.Join(updaterDir(configPath), "Agent.branch")
 	if err := downloadRawFile(ctx, downloadURL, binaryPath); err != nil {
-		_ = writeLinuxUpdateStatus(configPath, map[string]any{
-			"state":           "failed",
-			"repo_ref":        branch,
-			"target_build_id": target,
-			"last_error":      err.Error(),
-			"last_checked_at": time.Now().Unix(),
-			"last_source":     "linux_repo_ref_updater",
-		})
+		removeLinuxUpdateStatus(configPath)
 		return err
 	}
 	data, err := os.ReadFile(binaryPath)
@@ -224,15 +181,6 @@ func runLinuxRepoRefUpdateCheck(ctx context.Context, configPath string, cfg *age
 		return err
 	}
 	_ = writeLinuxInstalledBuildID(configPath, cfg, target)
-	_ = writeLinuxUpdateStatus(configPath, map[string]any{
-		"state":              "applied",
-		"repo_ref":           branch,
-		"target_build_id":    target,
-		"installed_build_id": target,
-		"last_checked_at":    time.Now().Unix(),
-		"last_source":        "linux_repo_ref_updater",
-		"update_available":   false,
-	})
 	_ = exec.Command("systemctl", "restart", "borealis-agent.service").Run()
 	return nil
 }
@@ -406,26 +354,8 @@ func updaterDir(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), "Updater")
 }
 
-func writeLinuxUpdateStatus(configPath string, values map[string]any) error {
-	path := filepath.Join(updaterDir(configPath), "update_status.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	current := map[string]any{}
-	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &current)
-	}
-	for key, value := range values {
-		current[key] = value
-	}
-	data, err := json.MarshalIndent(current, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o644)
-}
-
 func writeLinuxInstalledBuildID(configPath string, cfg *agentconfig.AgentConfig, value string) error {
+	removeLinuxUpdateStatus(configPath)
 	buildID := agentconfig.NormalizeBuildID(value)
 	if buildID == "" || strings.EqualFold(buildID, "dev") {
 		return nil
@@ -442,6 +372,10 @@ func writeLinuxInstalledBuildID(configPath string, cfg *agentconfig.AgentConfig,
 		return err
 	}
 	return nil
+}
+
+func removeLinuxUpdateStatus(configPath string) {
+	_ = os.Remove(filepath.Join(updaterDir(configPath), "update_status.json"))
 }
 
 func sha256File(path string) (string, error) {

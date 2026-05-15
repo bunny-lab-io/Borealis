@@ -105,6 +105,7 @@ Back to Docs Index: ../../Docs/index.md
 63. Added `agent.branch` to `config.json` so Windows and Linux update checks remain pinned to the operator-selected install branch instead of falling back to Engine release-channel/main updates.
 64. Moved installed build tracking into `config.json` as `agent.installed_build_id`; the Go Agent no longer creates or reads an `installed_build_id.txt` sidecar.
 65. Moved Windows update archives and extracted repository payloads into `C:\Borealis\Temp\Updater`, cleaned `C:\Borealis\Temp` when update checks finish, and removed accidental legacy `C:\Borealis\Agent` update workspaces.
+66. Removed persistent `update_status.json`; update checks now use `config.json` for branch/build identity and delete any old updater status sidecar instead of writing state/update_available metadata.
 
 ## In Progress
 
