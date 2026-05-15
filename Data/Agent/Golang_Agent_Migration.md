@@ -61,15 +61,16 @@ Back to Docs Index: ../../Docs/index.md
 20. Validated Windows real-host enrollment, approval, startup timeline, and SYSTEM PowerShell quick-job execution.
 21. Validated Linux real-host systemd service install/start and root-owned `0600` `config.json`.
 22. Validated Linux real-host enrollment, online state, and SYSTEM Bash quick-job execution.
+23. Added Windows CURRENTUSER direct session launch for signed PowerShell and Batch quick jobs through the SYSTEM runtime.
 
 ## In Progress
 
 1. Validate Engine onboarding/update artifact contracts against a deployed Engine.
-2. Finish Windows CURRENTUSER helper broker in Go.
+2. Validate Windows CURRENTUSER PowerShell and Batch quick jobs on a real Windows target.
 
 ## Pending
 
-1. Implement Windows CURRENTUSER helper broker in Go using same binary helper mode. Until this lands, Go reports the CURRENTUSER role as unsupported/skipped instead of recovering.
+1. Implement full Windows CURRENTUSER helper/tray broker in Go using same binary helper mode for richer session inventory and long-lived desktop helpers.
 2. Implement device audit inventory role in Go.
 3. Implement file management RPC and transfer endpoints in Go.
 4. Implement process management role in Go.
@@ -87,7 +88,7 @@ Back to Docs Index: ../../Docs/index.md
 
 ## Release-Blocking Technical Debt
 
-1. Windows CURRENTUSER is still degraded until Go helper broker supports user-session script execution.
+1. Windows CURRENTUSER direct session quick-job execution is implemented, but full helper/tray broker parity is still pending.
 2. Linux CURRENTUSER is unsupported by design in first PR and must report explicit unsupported status.
 3. Release-channel updater requires prebuilt `Agent.exe` artifacts; source-zip self-build updates are not supported on installed hosts.
 4. Engine release-channel packaging must publish prebuilt Go Windows/Linux artifacts before fleet updates can use fresh Go binaries.

@@ -21,7 +21,7 @@ type SigningKeyStore interface {
 }
 
 type CurrentUserDispatcher interface {
-	DispatchCurrentUserQuickJob(ctx context.Context, payload map[string]any) (bool, string)
+	DispatchCurrentUserQuickJob(ctx context.Context, payload map[string]any) (scripts.Result, bool, string)
 }
 
 type Runner func(ctx context.Context, scriptType string, content []byte, envMap map[string]string, timeoutSeconds int) scripts.Result
@@ -74,14 +74,24 @@ func (r *Role) dispatchCurrentUser(ctx context.Context, payload map[string]any) 
 	if r.CurrentUserDispatcher == nil {
 		return nil, r.emitResult(jobID, "Failed", "", "Current-user dispatch broker is unavailable.", contextPayload)
 	}
-	accepted, detail := r.CurrentUserDispatcher.DispatchCurrentUserQuickJob(ctx, payload)
+	if failure := r.validateSignedScriptPayload(payload); failure != "" {
+		return nil, r.emitResult(jobID, "Failed", "", failure, contextPayload)
+	}
+	if err := r.emitProgress(jobID, "Running", payload); err != nil {
+		return nil, err
+	}
+	result, accepted, detail := r.CurrentUserDispatcher.DispatchCurrentUserQuickJob(ctx, payload)
 	if !accepted {
 		if detail == "" {
 			detail = "Current-user dispatch failed."
 		}
 		return nil, r.emitResult(jobID, "Failed", "", detail, contextPayload)
 	}
-	return nil, nil
+	status := "Failed"
+	if result.ReturnCode == 0 {
+		status = "Success"
+	}
+	return nil, r.emitResult(jobID, status, result.Stdout, result.Stderr, contextPayload)
 }
 
 func (r *Role) executeSystem(ctx context.Context, payload map[string]any, jobID any) error {
@@ -90,20 +100,8 @@ func (r *Role) executeSystem(ctx context.Context, payload map[string]any, jobID 
 	if !ok {
 		return r.emitResult(jobID, "Failed", "", "Invalid script payload (unable to decode)", contextPayload)
 	}
-	sigAlg := strings.ToLower(strings.TrimSpace(asString(payload["sig_alg"])))
-	if sigAlg == "" {
-		sigAlg = "ed25519"
-	}
-	if sigAlg != "ed25519" && sigAlg != "eddsa" {
-		return r.emitResult(jobID, "Failed", "", "Unsupported script signature algorithm: "+sigAlg, contextPayload)
-	}
-	signatureB64 := strings.TrimSpace(asString(payload["signature"]))
-	if signatureB64 == "" {
-		return r.emitResult(jobID, "Failed", "", "Missing script signature; rejecting payload", contextPayload)
-	}
-	signingKey := strings.TrimSpace(asString(payload["signing_key"]))
-	if !r.verifySignature(scriptBytes, signatureB64, signingKey) {
-		return r.emitResult(jobID, "Failed", "", "Rejected script payload due to invalid signature", contextPayload)
+	if failure := r.validateSignatureForScript(payload, scriptBytes); failure != "" {
+		return r.emitResult(jobID, "Failed", "", failure, contextPayload)
 	}
 	timeoutSeconds := asInt(payload["timeout_seconds"])
 	envMap := scripts.BuildEnvMap(mapStringAny(payload["environment"]), listMapStringAny(payload["variables"]))
@@ -120,6 +118,33 @@ func (r *Role) executeSystem(ctx context.Context, payload map[string]any, jobID 
 		status = "Success"
 	}
 	return r.emitResult(jobID, status, result.Stdout, result.Stderr, contextPayload)
+}
+
+func (r *Role) validateSignedScriptPayload(payload map[string]any) string {
+	scriptBytes, ok := scripts.DecodeScriptBytes(payload["script_content"], asString(payload["script_encoding"]))
+	if !ok {
+		return "Invalid script payload (unable to decode)"
+	}
+	return r.validateSignatureForScript(payload, scriptBytes)
+}
+
+func (r *Role) validateSignatureForScript(payload map[string]any, scriptBytes []byte) string {
+	sigAlg := strings.ToLower(strings.TrimSpace(asString(payload["sig_alg"])))
+	if sigAlg == "" {
+		sigAlg = "ed25519"
+	}
+	if sigAlg != "ed25519" && sigAlg != "eddsa" {
+		return "Unsupported script signature algorithm: " + sigAlg
+	}
+	signatureB64 := strings.TrimSpace(asString(payload["signature"]))
+	if signatureB64 == "" {
+		return "Missing script signature; rejecting payload"
+	}
+	signingKey := strings.TrimSpace(asString(payload["signing_key"]))
+	if !r.verifySignature(scriptBytes, signatureB64, signingKey) {
+		return "Rejected script payload due to invalid signature"
+	}
+	return ""
 }
 
 func (r *Role) verifySignature(scriptBytes []byte, signatureB64 string, signingKeyHint string) bool {

@@ -32,6 +32,7 @@ type Agent struct {
 	logger     *log.Logger
 	hostname   string
 	bootID     string
+	dispatcher *currentuser.Dispatcher
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -64,6 +65,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	dispatcher := currentuser.NewDispatcher()
 	return &Agent{
 		options:    options,
 		configPath: configPath,
@@ -72,6 +74,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		logger:     logger,
 		hostname:   hostname,
 		bootID:     fmt.Sprintf("%d", time.Now().Unix()),
+		dispatcher: dispatcher,
 	}, nil
 }
 
@@ -140,8 +143,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	}
 	headers := a.authClient.AuthHeaders()
 	socket := transport.NewClient(a.authClient.BaseURL(), headers)
-	dispatcher := currentuser.NewDispatcher()
-	role := systemcontext.New(socket, a.authClient, dispatcher)
+	role := systemcontext.New(socket, a.authClient, a.dispatcher)
 	role.Hostname = a.hostname
 	socket.On("quick_job_run", role.HandleQuickJob)
 	socket.OnConnected(func(ctx context.Context) error {
@@ -156,7 +158,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 				"linux_currentuser": false,
 			},
 		}
-		if dispatcher.SupportsCurrentUserDispatch() {
+		if a.dispatcher != nil && a.dispatcher.SupportsCurrentUserDispatch() {
 			payload["helper_contexts"] = []string{"currentuser"}
 			payload["capabilities"].(map[string]any)["helper_contexts"] = []string{"currentuser"}
 		}
@@ -185,6 +187,18 @@ func (a *Agent) postStatus(ctx context.Context, phase string, status string, mes
 }
 
 func (a *Agent) postHeartbeat(ctx context.Context) error {
+	currentUserHealth := currentuser.RoleHealth{
+		Status:     "unsupported",
+		StatusCode: "unsupported",
+		Detail:     "CURRENTUSER helper broker is unavailable.",
+		Details: map[string]any{
+			"running_status": "Unavailable",
+			"runtime":        "go",
+		},
+	}
+	if a.dispatcher != nil {
+		currentUserHealth = a.dispatcher.RoleHealth()
+	}
 	payload := map[string]any{
 		"hostname":     a.hostname,
 		"service_mode": auth.NormalizeServiceMode(a.options.ServiceMode),
@@ -214,14 +228,11 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 					"role_name":       "context_currentuser",
 					"role_label":      "Current User Context",
 					"context":         "currentuser",
-					"status":          "unsupported",
-					"status_code":     "unsupported",
-					"detail":          "Windows CURRENTUSER helper broker is pending Go migration.",
+					"status":          currentUserHealth.Status,
+					"status_code":     currentUserHealth.StatusCode,
+					"detail":          currentUserHealth.Detail,
 					"last_checked_at": time.Now().Unix(),
-					"details": map[string]any{
-						"running_status": "Pending Migration",
-						"runtime":        "go",
-					},
+					"details":         currentUserHealth.Details,
 				},
 			},
 		},

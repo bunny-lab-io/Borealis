@@ -32,6 +32,20 @@ func (f *fakeKeys) StoreServerSigningKey(value string) error {
 	return nil
 }
 
+type fakeCurrentUserDispatcher struct {
+	result   scripts.Result
+	accept   bool
+	detail   string
+	called   bool
+	received map[string]any
+}
+
+func (f *fakeCurrentUserDispatcher) DispatchCurrentUserQuickJob(ctx context.Context, payload map[string]any) (scripts.Result, bool, string) {
+	f.called = true
+	f.received = payload
+	return f.result, f.accept, f.detail
+}
+
 func TestHandleQuickJobSuccess(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -74,6 +88,49 @@ func TestHandleQuickJobSuccess(t *testing.T) {
 	result := emitter.payloads[1].(map[string]any)
 	if result["status"] != "Success" {
 		t.Fatalf("status = %#v", result)
+	}
+}
+
+func TestHandleQuickJobCurrentUserSuccess(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicDER, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scriptBytes := []byte("Write-Output $env:USERNAME")
+	signature := ed25519.Sign(priv, scriptBytes)
+	emitter := &fakeEmitter{}
+	dispatcher := &fakeCurrentUserDispatcher{
+		accept: true,
+		result: scripts.Result{ReturnCode: 0, Stdout: "nicole\r\n"},
+	}
+	role := New(emitter, &fakeKeys{}, dispatcher)
+	role.Hostname = "host"
+	_, err = role.HandleQuickJob(context.Background(), map[string]any{
+		"job_id":          11,
+		"target_hostname": "host",
+		"run_mode":        "currentuser",
+		"script_type":     "powershell",
+		"script_content":  base64.StdEncoding.EncodeToString(scriptBytes),
+		"script_encoding": "base64",
+		"signature":       base64.StdEncoding.EncodeToString(signature),
+		"signing_key":     base64.StdEncoding.EncodeToString(publicDER),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dispatcher.called {
+		t.Fatalf("dispatcher was not called")
+	}
+	if len(emitter.events) != 2 || emitter.events[0] != "quick_job_progress" || emitter.events[1] != "quick_job_result" {
+		t.Fatalf("events mismatch: %#v", emitter.events)
+	}
+	result := emitter.payloads[1].(map[string]any)
+	if result["status"] != "Success" || result["stdout"] != "nicole\r\n" {
+		t.Fatalf("result = %#v", result)
 	}
 }
 

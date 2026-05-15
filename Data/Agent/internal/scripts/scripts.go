@@ -146,7 +146,7 @@ func runPowerShell(ctx context.Context, content string, envMap map[string]string
 			binary = "powershell.exe"
 		}
 	}
-	wrapped := buildPowerShellScript(content, envMap)
+	wrapped := BuildPowerShellScript(content, envMap)
 	path, cleanup, err := writeTempScript("borealis-*.ps1", wrapped, 0o600)
 	if err != nil {
 		return Result{ReturnCode: -1, Stderr: err.Error()}
@@ -180,21 +180,21 @@ func runBash(ctx context.Context, content string, envMap map[string]string, time
 	return runCommand(ctx, timeoutSeconds, envMap, binary, path)
 }
 
-func buildPowerShellScript(content string, envMap map[string]string) string {
+func BuildPowerShellScript(content string, envMap map[string]string) string {
 	var lines []string
 	for key, value := range envMap {
 		if key == "" {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("try { [System.Environment]::SetEnvironmentVariable(%s, %s, 'Process') } catch {}", psLiteral(key), psLiteral(value)))
-		lines = append(lines, fmt.Sprintf("try { Set-Item -LiteralPath ([string]::Format('Env:{0}', %s)) -Value %s -ErrorAction Stop } catch {}", psLiteral(key), psLiteral(value)))
+		lines = append(lines, fmt.Sprintf("try { [System.Environment]::SetEnvironmentVariable(%s, %s, 'Process') } catch {}", PowerShellLiteral(key), PowerShellLiteral(value)))
+		lines = append(lines, fmt.Sprintf("try { Set-Item -LiteralPath ([string]::Format('Env:{0}', %s)) -Value %s -ErrorAction Stop } catch {}", PowerShellLiteral(key), PowerShellLiteral(value)))
 	}
 	lines = append(lines, "$__BorealisScript = {\n"+content+"\n}")
 	lines = append(lines, "& $__BorealisScript")
 	return strings.Join(lines, "\n") + "\n"
 }
 
-func psLiteral(value string) string {
+func PowerShellLiteral(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
