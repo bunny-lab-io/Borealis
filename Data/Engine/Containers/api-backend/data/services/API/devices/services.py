@@ -96,6 +96,13 @@ _WINDOWS_UNINSTALL_SCRIPT = textwrap.dedent(
     $quietUninstallString = [string]$env:QUIET_UNINSTALL_STRING
     $uninstallString = [string]$env:UNINSTALL_STRING
     $productCode = [string]$env:PRODUCT_CODE
+    $script:UninstallLog = New-Object System.Collections.Generic.List[string]
+
+    function Add-UninstallLog([string]$Message) {
+      if ($Message) {
+        [void]$script:UninstallLog.Add($Message)
+      }
+    }
 
     function Split-ExecutableAndArguments([string]$CommandLine) {
       $trimmed = ('' + $CommandLine).Trim()
@@ -154,7 +161,7 @@ _WINDOWS_UNINSTALL_SCRIPT = textwrap.dedent(
       foreach ($arg in ($ExtraArgs | Where-Object { $_ -and ('' + $_).Trim() })) {
         $argumentList += [string]$arg
       }
-      Write-Host ("Invoking {0} {1}" -f $parsed.FilePath, (($argumentList -join ' ').Trim()))
+      Add-UninstallLog ("Invoking {0} {1}" -f $parsed.FilePath, (($argumentList -join ' ').Trim()))
       $proc = Start-Process -FilePath $parsed.FilePath -ArgumentList $argumentList -Wait -PassThru -WindowStyle Hidden
       return [int]($proc.ExitCode)
     }
@@ -194,7 +201,7 @@ _WINDOWS_UNINSTALL_SCRIPT = textwrap.dedent(
           Remove-AppxPackage -Package $pkg.PackageFullName -ErrorAction Stop
         }
         $removed = $true
-        Write-Host ("Removed Appx package {0}" -f $pkg.PackageFullName)
+        Add-UninstallLog ("Removed Appx package {0}" -f $pkg.PackageFullName)
       }
 
       $provisioned = @()
@@ -211,7 +218,7 @@ _WINDOWS_UNINSTALL_SCRIPT = textwrap.dedent(
           continue
         }
         Remove-AppxProvisionedPackage -Online -PackageName $pkg.PackageName -ErrorAction SilentlyContinue | Out-Null
-        Write-Host ("Removed provisioned package {0}" -f $pkg.PackageName)
+        Add-UninstallLog ("Removed provisioned package {0}" -f $pkg.PackageName)
         $removed = $true
       }
 
@@ -238,7 +245,7 @@ _WINDOWS_UNINSTALL_SCRIPT = textwrap.dedent(
         $resolvedProductCode = Get-MsiProductCode $uninstallString
       }
       if ($resolvedProductCode) {
-        Write-Host ("Using MSI product code {0}" -f $resolvedProductCode)
+        Add-UninstallLog ("Using MSI product code {0}" -f $resolvedProductCode)
         $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/x', $resolvedProductCode, '/qn', '/norestart') -Wait -PassThru -WindowStyle Hidden
         return [int]($proc.ExitCode)
       }
@@ -258,7 +265,7 @@ _WINDOWS_UNINSTALL_SCRIPT = textwrap.dedent(
         return Start-QuietProcess $uninstallString
       }
       if ($exeName -like 'unins*.exe') {
-        Write-Host "Applying Inno Setup silent flags."
+        Add-UninstallLog "Applying Inno Setup silent flags."
         return Start-QuietProcess $uninstallString @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
       }
       if ($exeName -eq 'update.exe') {
@@ -269,7 +276,7 @@ _WINDOWS_UNINSTALL_SCRIPT = textwrap.dedent(
         if ($existingArgs -notmatch '(?i)(^|\s)(/s|-s|--silent|--quiet)(\s|$)') {
           $extraArgs += '--silent'
         }
-        Write-Host "Applying Squirrel-style silent flags."
+        Add-UninstallLog "Applying Squirrel-style silent flags."
         return Start-QuietProcess $uninstallString $extraArgs
       }
 
@@ -284,10 +291,24 @@ _WINDOWS_UNINSTALL_SCRIPT = textwrap.dedent(
     }
 
     Write-Output ("Starting silent uninstall for {0} {1}" -f $softwareName, $softwareVersion)
-    $exitCode = if ($softwareSource -eq 'windows_store') {
+    $rawExitCode = if ($softwareSource -eq 'windows_store') {
       Invoke-WindowsStoreUninstall
     } else {
       Invoke-LocalInstalledUninstall
+    }
+    $exitCodeCandidates = @(
+      $rawExitCode | Where-Object {
+        $_ -is [int] -or
+        $_ -is [long] -or
+        (('' + $_).Trim() -match '^-?\d+$')
+      }
+    )
+    if (-not $exitCodeCandidates.Count) {
+      throw ("Silent uninstall did not return a numeric exit code. Output: {0}" -f (($rawExitCode | ForEach-Object { '' + $_ }) -join '; '))
+    }
+    $exitCode = [int](('' + $exitCodeCandidates[-1]).Trim())
+    foreach ($line in $script:UninstallLog) {
+      Write-Output $line
     }
 
     if ($exitCode -in @(0, 1605, 1614, 3010)) {

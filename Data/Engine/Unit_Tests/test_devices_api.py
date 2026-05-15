@@ -1233,7 +1233,8 @@ def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHa
     )
     script_text = base64.b64decode(dispatched["script_content"]).decode("utf-8")
     assert "Invoke-LocalInstalledUninstall" in script_text
-    assert 'Write-Host ("Invoking {0} {1}"' in script_text
+    assert 'Add-UninstallLog ("Invoking {0} {1}"' in script_text
+    assert "$exitCodeCandidates" in script_text
     assert 'Write-Output ("Invoking {0} {1}"' not in script_text
     assert any(event_name == "device_activity_changed" for event_name, _payload, _to in socket_events)
 
