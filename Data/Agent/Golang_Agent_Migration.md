@@ -60,12 +60,12 @@ Back to Docs Index: ../../Docs/index.md
 19. Built Windows `Agent.exe` and Linux `Agent` artifacts under `Data/Agent/dist`.
 20. Validated Windows real-host enrollment, approval, startup timeline, and SYSTEM PowerShell quick-job execution.
 21. Validated Linux real-host systemd service install/start and root-owned `0600` `config.json`.
+22. Validated Linux real-host enrollment, online state, and SYSTEM Bash quick-job execution.
 
 ## In Progress
 
-1. Validate Linux enrollment approval, online status, startup timeline, and SYSTEM Bash quick-job execution on a real Linux target.
-3. Validate Engine onboarding/update artifact contracts against a deployed Engine.
-4. Finish Windows CURRENTUSER helper broker in Go.
+1. Validate Engine onboarding/update artifact contracts against a deployed Engine.
+2. Finish Windows CURRENTUSER helper broker in Go.
 
 ## Pending
 
@@ -92,5 +92,5 @@ Back to Docs Index: ../../Docs/index.md
 3. Release-channel updater requires prebuilt `Agent.exe` artifacts; source-zip self-build updates are not supported on installed hosts.
 4. Engine release-channel packaging must publish prebuilt Go Windows/Linux artifacts before fleet updates can use fresh Go binaries.
 5. Manual Windows acceptance needs fresh enrollment, SYSTEM script execution, CURRENTUSER behavior validation, update check validation, and final config access-control decision.
-6. Manual Linux acceptance needs fresh enrollment, root SYSTEM Bash execution, systemd service install, update behavior decision, and non-root config read denial.
+6. Manual Linux acceptance has validated service install, fresh enrollment, root SYSTEM Bash execution, and root-owned `0600` config; update behavior decision remains open.
 7. Windows `config.json` ACL hardening is deferred because current install ACL changes blocked administrator repair/uninstall workflows during real-host testing.
