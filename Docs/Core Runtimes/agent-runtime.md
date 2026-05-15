@@ -124,6 +124,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Engine-managed release channels cache a Go Agent binary bundle containing `Data/Agent/dist/windows-amd64/Agent.exe` and `Data/Agent/dist/linux-amd64/Agent`. Agents download that authenticated bundle, verify SHA-256 when provided, stage the platform binary, and restart through the local service manager.
 - Branch installs persist the operator-selected branch in `config.json` as `agent.branch`; local update checks use that branch when it is not `main` so feature-branch agents do not jump release channels accidentally.
 - Installed build tracking lives in `config.json` as `agent.installed_build_id`; the Go Agent does not create a standalone `installed_build_id.txt`.
+- Windows update archives and extracted repository payloads are staged under `C:\Borealis\Temp\Updater`; the updater removes `C:\Borealis\Temp` when it finishes and cleans old accidental `C:\Borealis\Agent` update workspaces.
 - The scheduled AutoUpdater cadence is hourly on Windows and Linux.
 - If scripts do not run:
   - Confirm `quick_job_run` events and the correct role context.

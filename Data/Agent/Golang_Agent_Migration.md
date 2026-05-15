@@ -104,6 +104,7 @@ Back to Docs Index: ../../Docs/index.md
 62. Fixed Windows healthy-bootstrap update checks so the temp bootstrap executable no longer tries to overwrite a locked installed `Agent.exe` before stopping the runtime, and so the AutoUpdater task is reconciled even when the installed build is already current.
 63. Added `agent.branch` to `config.json` so Windows and Linux update checks remain pinned to the operator-selected install branch instead of falling back to Engine release-channel/main updates.
 64. Moved installed build tracking into `config.json` as `agent.installed_build_id`; the Go Agent no longer creates or reads an `installed_build_id.txt` sidecar.
+65. Moved Windows update archives and extracted repository payloads into `C:\Borealis\Temp\Updater`, cleaned `C:\Borealis\Temp` when update checks finish, and removed accidental legacy `C:\Borealis\Agent` update workspaces.
 
 ## In Progress
 

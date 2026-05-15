@@ -25,6 +25,7 @@ type updateManifest struct {
 
 func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	startedAt := time.Now()
+	defer cleanupAgentTemp(cfg, logger)
 	serverURL := strings.TrimRight(strings.TrimSpace(cfg.ServerURL), "/")
 	if serverURL == "" {
 		return fmt.Errorf("server URL missing")
@@ -76,7 +77,7 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if strings.HasPrefix(downloadURL, "/") {
 		downloadURL = serverURL + downloadURL
 	}
-	archivePath := filepath.Join(agentSettingsDir(cfg.InstallDir), "Updater", "agent-update.zip")
+	archivePath := filepath.Join(updateTempDir(cfg), "agent-update.zip")
 	logger.Tracef("Agent update artifact download start: url=%s authed=%t archive=%s", downloadURL, authed, archivePath)
 	if err := downloadUpdateArtifact(downloadURL, token, authed, archivePath); err != nil {
 		return err
@@ -92,7 +93,7 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		}
 		logger.Tracef("Agent update checksum verified: sha256=%s", actual)
 	}
-	extractRoot := filepath.Join(agentSettingsDir(cfg.InstallDir), "Updater", "extract")
+	extractRoot := filepath.Join(updateTempDir(cfg), "extract")
 	_ = os.RemoveAll(extractRoot)
 	if err := unzipFileLogged(archivePath, extractRoot, logger); err != nil {
 		return err
@@ -188,12 +189,12 @@ func downloadRepoRefUpdateSource(cfg BootstrapConfig, logger *BootstrapLogger, r
 	if err != nil {
 		return "", err
 	}
-	archivePath := filepath.Join(agentSettingsDir(cfg.InstallDir), "Updater", "repo-ref-update.zip")
+	archivePath := filepath.Join(updateTempDir(cfg), "repo-ref-update.zip")
 	logger.Tracef("Agent repo_ref update archive download start: repo_ref=%s url=%s archive=%s", ref, archiveURL, archivePath)
 	if err := downloadFileLogged(context.Background(), archiveURL, archivePath, 180*time.Second, logger); err != nil {
 		return "", fmt.Errorf("download repo_ref %q update archive; refusing manifest fallback: %w", ref, err)
 	}
-	extractRoot := filepath.Join(agentSettingsDir(cfg.InstallDir), "Updater", "repo-ref-extract")
+	extractRoot := filepath.Join(updateTempDir(cfg), "repo-ref-extract")
 	_ = os.RemoveAll(extractRoot)
 	if err := unzipFileLogged(archivePath, extractRoot, logger); err != nil {
 		return "", err
@@ -300,7 +301,7 @@ func writeInstalledBuildID(cfg BootstrapConfig, value string) {
 }
 
 func writeUpdateStatus(cfg BootstrapConfig, values map[string]any) {
-	path := filepath.Join(agentSettingsDir(cfg.InstallDir), "Updater", "update_status.json")
+	path := filepath.Join(cfg.InstallDir, "Updater", "update_status.json")
 	_ = os.MkdirAll(filepath.Dir(path), 0755)
 	current := map[string]any{}
 	if data, err := os.ReadFile(path); err == nil {
@@ -312,5 +313,32 @@ func writeUpdateStatus(cfg BootstrapConfig, values map[string]any) {
 	data, err := json.MarshalIndent(current, "", "  ")
 	if err == nil {
 		_ = os.WriteFile(path, data, 0644)
+	}
+}
+
+func updateTempDir(cfg BootstrapConfig) string {
+	return filepath.Join(cfg.InstallDir, "Temp", "Updater")
+}
+
+func cleanupAgentTemp(cfg BootstrapConfig, logger *BootstrapLogger) {
+	tempRoot := filepath.Join(cfg.InstallDir, "Temp")
+	if filepath.Base(tempRoot) != "Temp" {
+		if logger != nil {
+			logger.Warnf("Skipping unexpected Temp cleanup path: %s", tempRoot)
+		}
+		return
+	}
+	if err := removePathWithRetries(tempRoot, 3, time.Second, logger); err != nil && logger != nil {
+		logger.Warnf("Temp cleanup skipped or failed: %v", err)
+	}
+	legacyUpdateRoot := filepath.Join(cfg.InstallDir, "Agent")
+	if filepath.Base(legacyUpdateRoot) != "Agent" {
+		if logger != nil {
+			logger.Warnf("Skipping unexpected legacy Agent cleanup path: %s", legacyUpdateRoot)
+		}
+		return
+	}
+	if err := removePathWithRetries(legacyUpdateRoot, 3, time.Second, logger); err != nil && logger != nil {
+		logger.Warnf("Legacy Agent update workspace cleanup skipped or failed: %v", err)
 	}
 }
