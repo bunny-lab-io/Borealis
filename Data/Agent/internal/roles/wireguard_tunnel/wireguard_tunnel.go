@@ -82,6 +82,7 @@ type Manager struct {
 	runner         commandRunner
 	statusReporter func(context.Context, string, string, string) error
 
+	sessionMu                sync.Mutex
 	mu                       sync.Mutex
 	started                  bool
 	loopRunning              bool
@@ -464,6 +465,8 @@ func (m *Manager) startSession(ctx context.Context, session *SessionConfig) erro
 	if session == nil {
 		return fmt.Errorf("nil session")
 	}
+	m.sessionMu.Lock()
+	defer m.sessionMu.Unlock()
 	if err := m.validateToken(session.Token); err != nil {
 		return err
 	}
@@ -872,12 +875,12 @@ func (m *Manager) ensureWindowsFirewall(ctx context.Context, allowedIPs string, 
 	if len(ports) == 0 {
 		ports = []int{22, 5900, 47002}
 	}
-	portText := formatPorts(ports)
+	portExpression := powerShellPortArray(ports)
 	for _, protocol := range []string{"TCP", "UDP"} {
 		rule := firewallRuleName + " (" + protocol + ")"
 		removeCommand := fmt.Sprintf("Get-NetFirewallRule -DisplayName %s -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue", powerShellLiteral(rule))
 		_, _ = m.runner(ctx, commandTimeout, "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", removeCommand)
-		addCommand := fmt.Sprintf("New-NetFirewallRule -DisplayName %s -Direction Inbound -Action Allow -Protocol %s -LocalPort %s -RemoteAddress %s -Profile Any | Out-Null", powerShellLiteral(rule), protocol, powerShellLiteral(portText), powerShellLiteral(remote))
+		addCommand := fmt.Sprintf("New-NetFirewallRule -DisplayName %s -Direction Inbound -Action Allow -Protocol %s -LocalPort %s -RemoteAddress %s -Profile Any | Out-Null", powerShellLiteral(rule), protocol, portExpression, powerShellLiteral(remote))
 		result, err := m.runner(ctx, commandTimeout, "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", addCommand)
 		if err != nil || result.ExitCode != 0 {
 			m.logf("WireGuard firewall rule create failed protocol=%s detail=%s err=%v", protocol, commandDetail(result), err)
@@ -1106,6 +1109,10 @@ func formatPorts(ports []int) string {
 		parts = append(parts, strconv.Itoa(port))
 	}
 	return strings.Join(parts, ",")
+}
+
+func powerShellPortArray(ports []int) string {
+	return "@(" + formatPorts(ports) + ")"
 }
 
 func firstValue(payload map[string]any, keys ...string) any {

@@ -101,7 +101,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		wireguard:  wireGuardManager,
 	}
 	if agent.wireguard != nil {
-		agent.wireguard.SetStatusReporter(agent.postStatus)
+		agent.wireguard.SetStatusReporter(agent.postWireGuardStatus)
 	}
 	return agent, nil
 }
@@ -251,6 +251,21 @@ func (a *Agent) postStatus(ctx context.Context, phase string, status string, mes
 		"milestones":   startupMilestones(phase, status, message, now),
 	}
 	_, err := a.authClient.PostJSON(ctx, "/api/agent/status", payload, nil)
+	return err
+}
+
+func (a *Agent) postWireGuardStatus(ctx context.Context, phase string, status string, message string) error {
+	err := a.postStatus(ctx, phase, status, message)
+	switch strings.TrimSpace(phase) {
+	case "wireguard_starting", "wireguard_online":
+		go func() {
+			heartbeatCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cancel()
+			if heartbeatErr := a.postHeartbeat(heartbeatCtx); heartbeatErr != nil {
+				a.logger.Printf("wireguard heartbeat refresh failed: %v", heartbeatErr)
+			}
+		}()
+	}
 	return err
 }
 

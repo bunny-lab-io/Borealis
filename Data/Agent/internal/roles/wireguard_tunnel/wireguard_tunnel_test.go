@@ -178,6 +178,35 @@ func TestWindowsApplySessionUsesServiceIDFromConfigBasename(t *testing.T) {
 	}
 }
 
+func TestWindowsFirewallUsesPowerShellPortArray(t *testing.T) {
+	manager := testManager(t)
+	manager.platform = "windows"
+	var addCommands []string
+	manager.runner = func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
+		if name == "powershell.exe" && len(args) > 0 {
+			command := args[len(args)-1]
+			if strings.Contains(command, "New-NetFirewallRule") {
+				addCommands = append(addCommands, command)
+			}
+		}
+		return commandResult{ExitCode: 0}, nil
+	}
+
+	manager.ensureWindowsFirewall(context.Background(), "10.255.0.1/32", "47002,22,5900")
+
+	if len(addCommands) != 2 {
+		t.Fatalf("expected two firewall add commands, got %#v", addCommands)
+	}
+	for _, command := range addCommands {
+		if !strings.Contains(command, "-LocalPort @(22,5900,47002)") {
+			t.Fatalf("firewall command did not use port array: %s", command)
+		}
+		if strings.Contains(command, "-LocalPort '22,5900,47002'") {
+			t.Fatalf("firewall command still quotes comma port string: %s", command)
+		}
+	}
+}
+
 func TestValidateSignedTokenStoresServerSigningKey(t *testing.T) {
 	manager := testManager(t)
 	authClient := &fakeAuthClient{agentID: "agent-1"}

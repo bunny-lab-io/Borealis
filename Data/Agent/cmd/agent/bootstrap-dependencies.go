@@ -685,7 +685,7 @@ func uninstallWireGuardMSIProduct(cfg BootstrapConfig, msiPath string, logger *B
 }
 
 func prepareWireGuardMSIInstall(logger *BootstrapLogger) {
-	for _, service := range []string{"WireGuardTunnel$Borealis", "WireGuardTunnel$borealis-wg"} {
+	for _, service := range []string{"WireGuardTunnel$wireguard", "WireGuardTunnel$Borealis", "WireGuardTunnel$borealis-wg"} {
 		stopServiceAndWait(service, 20*time.Second, logger)
 		deleteServiceAndWait(service, 20*time.Second, logger)
 	}
