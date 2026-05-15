@@ -37,14 +37,14 @@ func openBootstrapLogger(cfg BootstrapConfig, console bool) (*BootstrapLogger, f
 			cfg.ServerURL,
 		},
 	}
-	for _, path := range paths {
+	for index, path := range paths {
 		if strings.TrimSpace(path) == "" {
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			return nil, nil, err
 		}
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		file, err := os.OpenFile(path, bootstrapLogOpenFlags(index == 0), 0644)
 		if err != nil {
 			return nil, nil, err
 		}

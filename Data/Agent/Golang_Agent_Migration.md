@@ -88,6 +88,7 @@ Back to Docs Index: ../../Docs/index.md
 46. Added startup cleanup of the install-root `Temp` directory so onboarding payload, state, and stdout leftovers do not persist after Agent runtime starts.
 47. Fixed Windows WireGuard role-health refresh, serialized concurrent tunnel applies, and corrected firewall port creation to pass PowerShell port arrays instead of quoted comma-separated strings.
 48. Moved Go WireGuard role logs from `Logs/VPN_Tunnel/tunnel.log` to `Logs/wireguard.log`.
+49. Changed Windows bootstrap logging so `Logs/bootstrap.log` is truncated at each bootstrap start and contains only the latest run.
 
 ## In Progress
 

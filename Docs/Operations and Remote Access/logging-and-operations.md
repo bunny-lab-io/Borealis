@@ -18,7 +18,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - VPN logs: `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`, `Engine/Services/api-backend/logs/VPN_Tunnel/remote_shell.log`, and WireGuard control logs under `Engine/Services/wireguard-tunnel/logs/control.log`.
 - Agent install log: `Logs/install.log` records Agent launcher actions such as enrollment state cleanup; package-manager output remains on the console.
 - Agent logs: `Logs/agent.log` and `Logs/agent.error.log` (daily rotation).
-- Agent bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/bootstrap.log`. `Agent.exe` writes high-level step summaries by default and hides trace/command output unless run with `-verbose` or `--verbose`.
+- Agent bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/bootstrap.log`. Windows bootstrap truncates this file at each start so it contains only the latest run. `Agent.exe` writes high-level step summaries by default and hides trace/command output unless run with `-verbose` or `--verbose`.
 
 ## Log Retention
 - Retention is managed via `/api/server/logs` endpoints.
@@ -76,7 +76,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - Role-specific logs live under `Logs/<service>.log`.
 - WireGuard role logs are kept in `Logs/wireguard.log`.
 - VPN shell logs are kept in `Logs/VPN_Tunnel/`.
-- Cross-platform updater traces are written to `<AgentInstallRoot>/Logs/bootstrap.log`.
+- Cross-platform updater traces are written to `<AgentInstallRoot>/Logs/bootstrap.log`; Windows bootstrap starts by truncating this file.
 
 ### Debug workflow
 - Start with the log file closest to the symptom.

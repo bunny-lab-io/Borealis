@@ -108,7 +108,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - WireGuard log: `Logs/wireguard.log`.
 - Remote shell log: `Logs/VPN_Tunnel/remote_shell.log`.
 - Role-specific logs may write to `Logs/<service>.log`.
-- Windows bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/bootstrap.log`. Linux updater diagnostics: `<AgentInstallRoot>/Logs/bootstrap.log`.
+- Windows bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/bootstrap.log`; Windows bootstrap truncates this file at each start so it contains only the latest run. Linux updater diagnostics: `<AgentInstallRoot>/Logs/bootstrap.log`.
 
 ### Troubleshooting flow
 - If enrollment fails, check:
@@ -146,7 +146,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Primary log: `Logs/agent.log` with daily rotation to `agent.log.YYYY-MM-DD` (never auto-delete rotated files).
 - Subsystems: log to `Logs/<service>.log` with the same rotation policy.
 - Install/diagnostics: `Logs/install.log`; keep ad-hoc traces (for example, `system_last.ps1`) under `Logs/` to keep runtime state self-contained.
-- Updater trace exception: `Agent.exe` writes bootstrap/update diagnostics to `<AgentInstallRoot>/Logs/bootstrap.log`.
+- Updater trace exception: `Agent.exe` writes bootstrap/update diagnostics to `<AgentInstallRoot>/Logs/bootstrap.log`; Windows bootstrap starts by truncating this file.
 - Troubleshooting: prefix lines with `<timestamp>-<service-name>-<log-data>`; ask operators whether verbose logging should stay after resolution.
 
 #### Security
