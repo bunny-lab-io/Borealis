@@ -4,7 +4,10 @@ package currentuser
 
 import (
 	"context"
+	cryptoRand "crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,7 +25,79 @@ const (
 	infiniteWait        = 0xffffffff
 	maxCurrentUserWait  = 6 * time.Hour
 	waitPollMillisecond = 250
+	helperPollInterval  = 20 * time.Second
+	helperReadyWindow   = 45 * time.Second
+	createNewProcessGrp = 0x00000200
 )
+
+type helperStateFile struct {
+	SessionID int    `json:"session_id"`
+	PID       int    `json:"pid"`
+	Status    string `json:"status"`
+	BuildID   string `json:"build_id"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
+func (d *Dispatcher) Start(ctx context.Context, configPath string) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	if d.started {
+		d.mu.Unlock()
+		return
+	}
+	d.started = true
+	d.configPath = strings.TrimSpace(configPath)
+	d.stateDir = helperStateDir("")
+	if d.helperPIDs == nil {
+		d.helperPIDs = map[uint32]int{}
+	}
+	d.mu.Unlock()
+	go d.helperBrokerLoop(ctx)
+}
+
+func RunHelper(ctx context.Context, options HelperOptions) error {
+	stateDir := helperStateDir(options.StateDir)
+	sessionID := options.SessionID
+	if sessionID <= 0 {
+		sessionID = int(windows.WTSGetActiveConsoleSessionId())
+	}
+	if sessionID <= 0 || uint32(sessionID) == 0xffffffff {
+		sessionID = 0
+	}
+	pid := os.Getpid()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	writeHelperState(stateDir, helperStateFile{
+		SessionID: sessionID,
+		PID:       pid,
+		Status:    "ready",
+		BuildID:   strings.TrimSpace(options.BuildID),
+		UpdatedAt: time.Now().Unix(),
+	})
+	for {
+		select {
+		case <-ctx.Done():
+			writeHelperState(stateDir, helperStateFile{
+				SessionID: sessionID,
+				PID:       pid,
+				Status:    "stopped",
+				BuildID:   strings.TrimSpace(options.BuildID),
+				UpdatedAt: time.Now().Unix(),
+			})
+			return ctx.Err()
+		case <-ticker.C:
+			writeHelperState(stateDir, helperStateFile{
+				SessionID: sessionID,
+				PID:       pid,
+				Status:    "ready",
+				BuildID:   strings.TrimSpace(options.BuildID),
+				UpdatedAt: time.Now().Unix(),
+			})
+		}
+	}
+}
 
 func (d *Dispatcher) SupportsCurrentUserDispatch() bool {
 	return true
@@ -38,10 +113,11 @@ func (d *Dispatcher) RoleHealth() RoleHealth {
 			Details: map[string]any{
 				"running_status": "Recovering",
 				"runtime":        "go",
-				"broker_mode":    "direct_session_launch",
+				"broker_mode":    "helper_process_broker",
 			},
 		}
 	}
+	ready, pending := d.helperSessionLines(sessions)
 	if len(sessions) == 0 {
 		return RoleHealth{
 			Status:     "not_applicable",
@@ -50,21 +126,39 @@ func (d *Dispatcher) RoleHealth() RoleHealth {
 			Details: map[string]any{
 				"running_status": "No Active Session",
 				"runtime":        "go",
-				"broker_mode":    "direct_session_launch",
+				"broker_mode":    "helper_process_broker",
 				"ready_helpers":  "0",
+			},
+		}
+	}
+	if len(ready) == 0 {
+		return RoleHealth{
+			Status:     "recovering",
+			StatusCode: "recovering",
+			Detail:     "Interactive Windows user sessions are present, but helpers are still warming up.",
+			Details: map[string]any{
+				"running_status":          "Warming Up",
+				"runtime":                 "go",
+				"broker_mode":             "helper_process_broker",
+				"execution_context":       "CURRENTUSER",
+				"ready_helpers":           "0",
+				"loaded_helper_sessions":  strings.Join(ready, "\n"),
+				"pending_helper_sessions": strings.Join(pending, "\n"),
 			},
 		}
 	}
 	return RoleHealth{
 		Status:     "healthy",
 		StatusCode: "healthy",
-		Detail:     fmt.Sprintf("%d active Windows user session(s) available.", len(sessions)),
+		Detail:     fmt.Sprintf("%d current-user helper session(s) ready.", len(ready)),
 		Details: map[string]any{
-			"running_status":    "Ready",
-			"runtime":           "go",
-			"broker_mode":       "direct_session_launch",
-			"execution_context": "CURRENTUSER",
-			"ready_helpers":     strconv.Itoa(len(sessions)),
+			"running_status":          "Ready",
+			"runtime":                 "go",
+			"broker_mode":             "helper_process_broker",
+			"execution_context":       "CURRENTUSER",
+			"ready_helpers":           strconv.Itoa(len(ready)),
+			"loaded_helper_sessions":  strings.Join(ready, "\n"),
+			"pending_helper_sessions": strings.Join(pending, "\n"),
 		},
 	}
 }
@@ -492,4 +586,202 @@ func joinStderr(existing string, extra string) string {
 		return existing
 	}
 	return existing + "\n" + extra
+}
+
+func (d *Dispatcher) helperBrokerLoop(ctx context.Context) {
+	d.ensureHelpers(ctx)
+	ticker := time.NewTicker(helperPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			d.ensureHelpers(ctx)
+		}
+	}
+}
+
+func (d *Dispatcher) ensureHelpers(ctx context.Context) {
+	sessions, err := activeSessionIDs(0)
+	if err != nil {
+		return
+	}
+	active := map[uint32]bool{}
+	for _, sessionID := range sessions {
+		active[sessionID] = true
+		if d.helperReady(sessionID) {
+			continue
+		}
+		pid, err := launchHelperProcess(ctx, sessionID, d.helperStateDir())
+		if err != nil {
+			continue
+		}
+		d.mu.Lock()
+		if d.helperPIDs == nil {
+			d.helperPIDs = map[uint32]int{}
+		}
+		d.helperPIDs[sessionID] = pid
+		d.mu.Unlock()
+	}
+	d.mu.Lock()
+	for sessionID := range d.helperPIDs {
+		if !active[sessionID] {
+			delete(d.helperPIDs, sessionID)
+		}
+	}
+	d.mu.Unlock()
+}
+
+func (d *Dispatcher) helperSessionLines(sessions []uint32) ([]string, []string) {
+	ready := []string{}
+	pending := []string{}
+	for _, sessionID := range sessions {
+		state, ok := readHelperState(d.helperStateDir(), int(sessionID))
+		label := fmt.Sprintf("Session %d", sessionID)
+		if ok && state.PID > 0 {
+			label = fmt.Sprintf("Session %d (pid %d)", sessionID, state.PID)
+		}
+		if ok && strings.EqualFold(state.Status, "ready") && time.Since(time.Unix(state.UpdatedAt, 0)) <= helperReadyWindow {
+			ready = append(ready, label+" Loaded Successfully")
+		} else {
+			pending = append(pending, label+" Pending")
+		}
+	}
+	return ready, pending
+}
+
+func (d *Dispatcher) helperReady(sessionID uint32) bool {
+	state, ok := readHelperState(d.helperStateDir(), int(sessionID))
+	return ok && strings.EqualFold(state.Status, "ready") && time.Since(time.Unix(state.UpdatedAt, 0)) <= helperReadyWindow
+}
+
+func (d *Dispatcher) helperStateDir() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if strings.TrimSpace(d.stateDir) == "" {
+		d.stateDir = helperStateDir("")
+	}
+	return d.stateDir
+}
+
+func launchHelperProcess(ctx context.Context, sessionID uint32, stateDir string) (int, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return 0, err
+	}
+	token, err := tokenForSession(sessionID)
+	if err != nil {
+		return 0, err
+	}
+	defer token.Close()
+
+	var env *uint16
+	if err := windows.CreateEnvironmentBlock(&env, token, false); err != nil {
+		return 0, err
+	}
+	defer windows.DestroyEnvironmentBlock(env)
+
+	args := []string{
+		exe,
+		"--helper",
+		"--helper-session-id", strconv.Itoa(int(sessionID)),
+		"--helper-state-dir", stateDir,
+	}
+	desktop, _ := windows.UTF16PtrFromString(`winsta0\default`)
+	cwd := currentUserWorkingDirectory()
+	cwdPtr, _ := windows.UTF16PtrFromString(cwd)
+	appPtr, _ := windows.UTF16PtrFromString(exe)
+	cmdPtr, _ := windows.UTF16PtrFromString(windowsCommandLine(args))
+	startupInfo := &windows.StartupInfo{
+		Cb:      uint32(unsafe.Sizeof(windows.StartupInfo{})),
+		Desktop: desktop,
+	}
+	var processInfo windows.ProcessInformation
+	creationFlags := uint32(windows.CREATE_UNICODE_ENVIRONMENT | createNewProcessGrp | windows.CREATE_NO_WINDOW)
+	if err := windows.CreateProcessAsUser(token, appPtr, cmdPtr, nil, nil, false, creationFlags, env, cwdPtr, startupInfo, &processInfo); err != nil {
+		return 0, err
+	}
+	defer windows.CloseHandle(processInfo.Thread)
+	defer windows.CloseHandle(processInfo.Process)
+	return int(processInfo.ProcessId), nil
+}
+
+func tokenForSession(sessionID uint32) (windows.Token, error) {
+	var userToken windows.Token
+	if err := windows.WTSQueryUserToken(sessionID, &userToken); err != nil {
+		return 0, fmt.Errorf("query user token for session %d: %w", sessionID, err)
+	}
+	var primaryToken windows.Token
+	desiredAccess := uint32(windows.TOKEN_ASSIGN_PRIMARY | windows.TOKEN_DUPLICATE | windows.TOKEN_QUERY | windows.TOKEN_ADJUST_DEFAULT | windows.TOKEN_ADJUST_SESSIONID)
+	if err := windows.DuplicateTokenEx(userToken, desiredAccess, nil, windows.SecurityImpersonation, windows.TokenPrimary, &primaryToken); err != nil {
+		_ = userToken.Close()
+		return 0, fmt.Errorf("duplicate user token: %w", err)
+	}
+	_ = userToken.Close()
+	return primaryToken, nil
+}
+
+func helperStateDir(override string) string {
+	if strings.TrimSpace(override) != "" {
+		return filepath.Clean(override)
+	}
+	publicDir := strings.TrimSpace(os.Getenv("PUBLIC"))
+	if publicDir == "" {
+		publicDir = filepath.Join(os.Getenv("SystemDrive")+`\`, "Users", "Public")
+	}
+	if publicDir == "" || strings.HasPrefix(publicDir, `\`) {
+		publicDir = `C:\Users\Public`
+	}
+	return filepath.Join(publicDir, "Borealis", "CurrentUserHelpers")
+}
+
+func helperStatePath(stateDir string, sessionID int) string {
+	return filepath.Join(helperStateDir(stateDir), fmt.Sprintf("session-%d.json", sessionID))
+}
+
+func writeHelperState(stateDir string, state helperStateFile) {
+	if state.SessionID <= 0 {
+		return
+	}
+	dir := helperStateDir(stateDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return
+	}
+	path := helperStatePath(dir, state.SessionID)
+	temp := path + "." + randomHex(4) + ".tmp"
+	if err := os.WriteFile(temp, data, 0o644); err != nil {
+		return
+	}
+	_ = os.Rename(temp, path)
+}
+
+func readHelperState(stateDir string, sessionID int) (helperStateFile, bool) {
+	data, err := os.ReadFile(helperStatePath(stateDir, sessionID))
+	if err != nil {
+		return helperStateFile{}, false
+	}
+	var state helperStateFile
+	if err := json.Unmarshal(data, &state); err != nil {
+		return helperStateFile{}, false
+	}
+	if state.SessionID != sessionID {
+		return helperStateFile{}, false
+	}
+	return state, true
+}
+
+func randomHex(size int) string {
+	if size <= 0 {
+		size = 4
+	}
+	buffer := make([]byte, size)
+	if _, err := cryptoRand.Read(buffer); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 16)
+	}
+	return hex.EncodeToString(buffer)
 }

@@ -139,7 +139,7 @@ func ensureAgentTasks(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if err := createOrReplaceTask(agentTaskName, taskAction, "ONSTART", logger); err != nil {
 		return err
 	}
-	updateAction := fmt.Sprintf(`"%s"`, agentExe)
+	updateAction := fmt.Sprintf(`"%s" --update-check --config-path "%s"`, agentExe, filepath.Join(cfg.InstallDir, "config.json"))
 	if err := createOrReplaceTask(agentUpdaterTaskName, updateAction, "HOURLY", logger); err != nil {
 		return err
 	}

@@ -71,7 +71,6 @@ const INSTALL_OS_OPTIONS = [
   { id: "windows", label: "Windows" },
   { id: "linux", label: "Linux" },
 ];
-const LINUX_AGENT_INSTALL_DIR = "/opt/Borealis/Agent";
 
 const MAGIC_UI = {
   shellBg:
@@ -448,17 +447,12 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
   if (osId === "linux") {
     const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/linux-amd64/Agent");
     const urlArg = usesDefaultBranch ? agentUrl : quoteShellValue(agentUrl);
-    const installDir = quoteShellValue(LINUX_AGENT_INSTALL_DIR);
-    const agentPath = `${LINUX_AGENT_INSTALL_DIR}/Agent`;
-    const quotedAgentPath = quoteShellValue(agentPath);
     const launchArgs = `--server-url "${escapeShellDoubleQuoted(normalizedServerUrl)}" ` +
       `--repo-ref "${escapeShellDoubleQuoted(normalizedBranch)}" ` +
       `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}" --install-service`;
     return `curl -fsSL ${urlArg} -o /tmp/Borealis-Agent; ` +
       `chmod 700 /tmp/Borealis-Agent; ` +
-      `sudo mkdir -p ${installDir}; ` +
-      `sudo install -m 700 /tmp/Borealis-Agent ${quotedAgentPath}; ` +
-      `sudo ${quotedAgentPath} ${launchArgs}`;
+      `sudo /tmp/Borealis-Agent ${launchArgs}`;
   }
   return "";
 }

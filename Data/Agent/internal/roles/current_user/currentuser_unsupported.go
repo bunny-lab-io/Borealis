@@ -9,6 +9,13 @@ import (
 	"github.com/bunny-lab-io/borealis/go-agent/internal/scripts"
 )
 
+func (d *Dispatcher) Start(ctx context.Context, configPath string) {}
+
+func RunHelper(ctx context.Context, options HelperOptions) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func (d *Dispatcher) DispatchCurrentUserQuickJob(ctx context.Context, payload map[string]any) (scripts.Result, bool, string) {
 	if runtime.GOOS == "linux" {
 		return scripts.Result{}, false, "Linux CURRENTUSER execution is not implemented in the Go agent yet."
@@ -28,6 +35,7 @@ func (d *Dispatcher) RoleHealth() RoleHealth {
 		Details: map[string]any{
 			"running_status": "Unsupported",
 			"runtime":        "go",
+			"broker_mode":    "unsupported",
 		},
 	}
 }

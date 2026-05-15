@@ -2958,18 +2958,15 @@ class OnboardingSchedulerMixin:
                 "detected_os=\"$(uname -s 2>/dev/null || true)\"",
                 "if [ \"$detected_os\" != \"Linux\" ]; then echo \"__BOREALIS_UNSUPPORTED_OS__=${detected_os:-unknown}\" >&2; exit 42; fi",
                 "tmp_file=\"$(mktemp /tmp/borealis-agent.XXXXXX)\"",
-                "install_dir=\"/opt/Borealis/Agent\"",
-                "agent_path=\"$install_dir/Agent\"",
                 "cleanup() { rm -f \"$tmp_file\"; }",
                 "trap cleanup EXIT",
                 f"if command -v curl >/dev/null 2>&1; then curl -fsSL {quoted_url} -o \"$tmp_file\"; "
                 f"elif command -v wget >/dev/null 2>&1; then wget -qO \"$tmp_file\" {quoted_url}; "
                 "else echo 'curl_or_wget_required' >&2; exit 43; fi",
                 "chmod 700 \"$tmp_file\"",
-                f"if [ \"$(id -u)\" -eq 0 ]; then mkdir -p \"$install_dir\"; install -m 700 \"$tmp_file\" \"$agent_path\"; env {env_prefix} \"$agent_path\" {quoted_args}; "
+                f"if [ \"$(id -u)\" -eq 0 ]; then env {env_prefix} \"$tmp_file\" {quoted_args}; "
                 f"else command -v sudo >/dev/null 2>&1 || {{ echo 'sudo_required' >&2; exit 44; }}; "
-                f"sudo -S -p {shlex.quote(sudo_marker)} mkdir -p \"$install_dir\"; sudo -S -p {shlex.quote(sudo_marker)} install -m 700 \"$tmp_file\" \"$agent_path\"; "
-                f"sudo -S -p {shlex.quote(sudo_marker)} env {env_prefix} \"$agent_path\" {quoted_args}; fi",
+                f"sudo -S -p {shlex.quote(sudo_marker)} env {env_prefix} \"$tmp_file\" {quoted_args}; fi",
             ]
         )
 

@@ -7,7 +7,7 @@ Back to Docs Index: ../../Docs/index.md
 1. Agent source now lives under `Data/Agent`; legacy Python agent source moved to `Data/Agent_Old`.
 2. Fresh install runtime is one compiled Go binary named `Agent.exe`.
 3. Windows `Agent.exe` owns bootstrap, deployment, repair, update checks, service task registration, and runtime execution.
-4. Linux `Agent` owns runtime execution and systemd service install/uninstall; Linux bootstrap parity is tracked as pending.
+4. Linux `Agent` owns deployment, self-staging, runtime execution, systemd service install/uninstall, and update timer installation.
 5. Installed runtime uses one `config.json` beside `Agent.exe`.
 6. `config.json` stores keys, tokens, trust material, enrollment code, server URL, and agent identity only.
 7. `config.json` protection uses filesystem permissions only: Windows ACL hardening is deferred and Windows files inherit from `C:\` for now; Linux remains root-owned `0600` with parent `0700`.
@@ -35,7 +35,7 @@ Back to Docs Index: ../../Docs/index.md
 15. VNC lifecycle and credential broker.
 16. Agent self-update and release channels.
 17. Tray UI/status, optional later.
-18. Legacy macros/node screenshot, decide retire vs port.
+18. Legacy macros/node screenshot are retired from the Go Agent migration scope.
 19. Linux deployment/bootstrap parity with Windows `Agent.exe`.
 
 ## Completed
@@ -96,28 +96,27 @@ Back to Docs Index: ../../Docs/index.md
 54. Validated Go Remote Shell over WireGuard on real Windows/Linux targets and marked Remote Shell migration complete.
 55. Added Go VNC lifecycle and credential broker role for Windows UltraVNC always-on service management, runtime credential generation, UltraVNC config/password hash writing, Engine `/api/agent/vnc/ensure` bootstrap, `vnc_start`/`vnc_stop`/`vnc_refresh`/`vnc_credential_request` Socket.IO handling, firewall scope, listener readiness, logs, and role health.
 56. Validated Go VNC lifecycle and credential broker on a real Windows target and marked VNC migration complete.
+57. Added Engine release-channel packaging for Go Agent binary bundles containing prebuilt Windows and Linux agent artifacts, authenticated download manifests, SHA-256 validation, and release-channel UI wording.
+58. Added Go Agent update request handling, runtime build/update status heartbeat payloads, Windows `--update-check` AutoUpdater task action, Linux `--update-check` binary staging, and Linux systemd updater service/timer support.
+59. Added Linux deployment/bootstrap parity so a temp-downloaded `Agent` self-stages into `/opt/Borealis/Agent/Agent`, writes `config.json`, installs `borealis-agent.service`, and enables hourly update checks.
+60. Added Windows CURRENTUSER same-binary helper sentinel broker for active desktop session readiness while keeping signed quick-job execution brokered by SYSTEM `CreateProcessAsUser`.
+61. Retired legacy macros/node screenshot from the Go Agent migration scope by decision; no Go port will be implemented in this PR.
 
 ## In Progress
 
 1. Validate Engine onboarding/update artifact contracts against a deployed Engine.
-2. Implement full release-channel update format and Engine artifact packaging for Go binaries.
 
 ## Pending
 
-1. Implement full Windows CURRENTUSER helper/tray broker in Go using same binary helper mode for richer session inventory and long-lived desktop helpers.
-2. Implement Linux `Agent` deployment/bootstrap parity.
-3. Decide whether macros/node screenshot should be retired or ported.
-4. Rework tray UI/status as optional Go/native helper or external UI.
-5. Add fake Engine HTTP/Socket.IO harness coverage for live `connect_agent`, `quick_job_run`, `file_management_request`, `process_management_request`, `service_control_action`, `software_inventory_refresh_request`, `vpn_tunnel_start`, Remote Shell TCP bridge behavior, and VNC credential/start lifecycle behavior.
-6. Add Engine contract tests for onboarding/update artifact path changes.
+1. Rework tray UI/status as optional Go/native helper or external UI.
+2. Add fake Engine HTTP/Socket.IO harness coverage for live `connect_agent`, `quick_job_run`, `file_management_request`, `process_management_request`, `service_control_action`, `software_inventory_refresh_request`, `vpn_tunnel_start`, Remote Shell TCP bridge behavior, and VNC credential/start lifecycle behavior.
+3. Add broader Engine contract tests for onboarding/update artifact path changes.
 
 ## Release-Blocking Technical Debt
 
-1. Windows CURRENTUSER direct session quick-job execution is implemented, but full helper/tray broker parity is still pending.
+1. Windows CURRENTUSER direct session quick-job execution and same-binary helper sentinels are implemented, but tray UI/status remains pending.
 2. Linux CURRENTUSER is unsupported by design in first PR and must report explicit unsupported status.
-3. Release-channel updater requires prebuilt `Agent.exe` artifacts; source-zip self-build updates are not supported on installed hosts.
-4. Engine release-channel packaging must publish prebuilt Go Windows/Linux artifacts before fleet updates can use fresh Go binaries.
-5. Manual Windows acceptance has validated fresh enrollment, SYSTEM script execution, and CURRENTUSER PowerShell/Batch execution; update check validation and final config access-control decision remain open.
-6. Manual Linux acceptance has validated service install, fresh enrollment, root SYSTEM Bash execution, and root-owned `0600` config; update behavior decision remains open.
-7. Windows `config.json` ACL hardening is deferred because current install ACL changes blocked administrator repair/uninstall workflows during real-host testing.
-8. Software Management has Go unit coverage, Engine contract compatibility, and real-host Windows uninstall/icon validation; Linux uninstall acceptance remains opportunistic because package removal is operator-risky.
+3. Manual Windows acceptance has validated fresh enrollment, SYSTEM script execution, and CURRENTUSER PowerShell/Batch execution; update check validation and final config access-control decision remain open.
+4. Manual Linux acceptance has validated service install, fresh enrollment, root SYSTEM Bash execution, and root-owned `0600` config; Linux release-channel update behavior still needs real-host acceptance.
+5. Windows `config.json` ACL hardening is deferred because current install ACL changes blocked administrator repair/uninstall workflows during real-host testing.
+6. Software Management has Go unit coverage, Engine contract compatibility, and real-host Windows uninstall/icon validation; Linux uninstall acceptance remains opportunistic because package removal is operator-risky.

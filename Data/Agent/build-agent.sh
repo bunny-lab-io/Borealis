@@ -7,7 +7,7 @@ minimum_go_major=1
 minimum_go_minor=22
 go_version="${BOREALIS_GO_VERSION:-1.22.12}"
 go_install_root="${BOREALIS_GO_INSTALL_ROOT:-${repo_root}/Dependencies/Go/go${go_version}}"
-version_value="${BOREALIS_AGENT_VERSION:-$(git -C "${repo_root}" rev-parse --short=12 HEAD 2>/dev/null || echo dev)}"
+version_value="${BOREALIS_AGENT_VERSION:-$(git -C "${repo_root}" rev-parse HEAD 2>/dev/null || echo dev)}"
 output_root="${BOREALIS_GO_AGENT_OUTPUT_ROOT:-${script_dir}/dist}"
 windows_icon_source="${script_dir}/Agent.syso"
 windows_icon_target="${script_dir}/cmd/agent/agent_windows.syso"

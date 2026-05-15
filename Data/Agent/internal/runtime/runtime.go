@@ -28,6 +28,7 @@ type Options struct {
 	ServerURL      string
 	EnrollmentCode string
 	ServiceMode    string
+	BuildID        string
 	Once           bool
 	Verbose        bool
 }
@@ -116,8 +117,14 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 
 func (a *Agent) Run(ctx context.Context) error {
 	a.logger.Printf("agent starting service_mode=%s config=%s", auth.NormalizeServiceMode(a.options.ServiceMode), a.configPath)
+	if err := writeInstalledBuildID(a.configPath, a.options.BuildID); err != nil {
+		a.logger.Printf("record installed build failed: %v", err)
+	}
 	if err := cleanupStartupTemp(a.configPath, a.logger); err != nil {
 		a.logger.Printf("startup temp cleanup failed: %v", err)
+	}
+	if a.dispatcher != nil {
+		a.dispatcher.Start(ctx, a.configPath)
 	}
 	if err := a.authClient.EnsureAuthenticated(ctx); err != nil {
 		_ = a.postStatus(context.Background(), "authenticating", "unhealthy", err.Error())
@@ -228,6 +235,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 		socket.On("vnc_refresh", a.vnc.HandleRefresh)
 		socket.On("vnc_credential_request", a.vnc.HandleCredentialRequest)
 	}
+	socket.On("agent_update_request", a.handleUpdateRequest)
 	socket.OnConnected(func(ctx context.Context) error {
 		payload := map[string]any{
 			"agent_id":     a.authClient.AgentID(),
@@ -416,10 +424,13 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 		}
 	}
 	payload := map[string]any{
-		"hostname":     a.hostname,
-		"service_mode": auth.NormalizeServiceMode(a.options.ServiceMode),
-		"metrics":      metrics,
-		"inventory":    auditSnapshot.Inventory,
+		"hostname":            a.hostname,
+		"service_mode":        auth.NormalizeServiceMode(a.options.ServiceMode),
+		"metrics":             metrics,
+		"inventory":           auditSnapshot.Inventory,
+		"agent_build_id":      strings.TrimSpace(a.options.BuildID),
+		"installed_build_id":  strings.TrimSpace(a.options.BuildID),
+		"agent_update_status": readUpdateStatus(a.configPath, a.options.BuildID),
 		"agent_role_health": map[string]any{
 			"roles": []map[string]any{
 				{

@@ -1,6 +1,20 @@
 package currentuser
 
-type Dispatcher struct{}
+import "sync"
+
+type Dispatcher struct {
+	mu         sync.Mutex
+	configPath string
+	stateDir   string
+	helperPIDs map[uint32]int
+	started    bool
+}
+
+type HelperOptions struct {
+	SessionID int
+	StateDir  string
+	BuildID   string
+}
 
 type RoleHealth struct {
 	Status     string
@@ -10,5 +24,7 @@ type RoleHealth struct {
 }
 
 func NewDispatcher() *Dispatcher {
-	return &Dispatcher{}
+	return &Dispatcher{
+		helperPIDs: map[uint32]int{},
+	}
 }

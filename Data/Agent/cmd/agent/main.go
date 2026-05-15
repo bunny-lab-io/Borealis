@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/current_user"
 	agentruntime "github.com/bunny-lab-io/borealis/go-agent/internal/runtime"
 )
 
@@ -27,21 +28,28 @@ func run() int {
 	var installService bool
 	var uninstallService bool
 	var printVersion bool
+	var updateCheck bool
 	var repoRef string
+	var helperSessionID int
+	var helperStateDir string
 	flag.StringVar(&options.ConfigPath, "config-path", "", "Path to config.json. Defaults beside Agent.exe.")
 	flag.StringVar(&options.ServerURL, "server-url", "", "Borealis Engine public URL.")
 	flag.StringVar(&options.EnrollmentCode, "site-enrollment-code", "", "Site enrollment code.")
 	flag.StringVar(&options.EnrollmentCode, "enrollment-code", "", "Enrollment code.")
 	flag.StringVar(&repoRef, "repo-ref", "", "Borealis repository branch/ref used by bootstrap installers.")
+	flag.StringVar(&helperStateDir, "helper-state-dir", "", "Current-user helper state directory.")
 	flag.BoolVar(&options.Verbose, "verbose", false, "Mirror logs to stdout.")
 	flag.BoolVar(&options.Once, "once", false, "Run auth and heartbeat once, then exit.")
 	flag.BoolVar(&installService, "install-service", false, "Install and start Borealis Agent service.")
 	flag.BoolVar(&uninstallService, "uninstall-service", false, "Uninstall Borealis Agent service.")
+	flag.BoolVar(&updateCheck, "update-check", false, "Run one Agent release-channel update check.")
 	flag.BoolVar(&printVersion, "version", false, "Print version.")
 	systemService := flag.Bool("system-service", false, "Run as SYSTEM/root service.")
 	helperMode := flag.Bool("helper", false, "Run as current-user helper.")
+	flag.IntVar(&helperSessionID, "helper-session-id", 0, "Current-user helper session ID.")
 	flag.Parse()
 	_ = repoRef
+	options.BuildID = version
 
 	if printVersion {
 		fmt.Println(version)
@@ -53,12 +61,27 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "resolve executable: %v\n", err)
 		return 1
 	}
+	if updateCheck {
+		if err := runStandaloneUpdateCheck(options); err != nil {
+			fmt.Fprintf(os.Stderr, "update check: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	if installService {
+		serviceExePath, err := agentruntime.PrepareServiceExecutable(exePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "prepare service executable: %v\n", err)
+			return 1
+		}
+		if options.ConfigPath == "" {
+			options.ConfigPath = agentruntime.ConfigPathForExecutable(serviceExePath)
+		}
 		if err := persistInstallConfig(options); err != nil {
 			fmt.Fprintf(os.Stderr, "persist install config: %v\n", err)
 			return 1
 		}
-		if err := agentruntime.InstallService(exePath); err != nil {
+		if err := agentruntime.InstallService(serviceExePath); err != nil {
 			fmt.Fprintf(os.Stderr, "install service: %v\n", err)
 			return 1
 		}
@@ -73,7 +96,17 @@ func run() int {
 	}
 
 	if *helperMode {
-		options.ServiceMode = "currentuser"
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := currentuser.RunHelper(ctx, currentuser.HelperOptions{
+			SessionID: helperSessionID,
+			StateDir:  helperStateDir,
+			BuildID:   version,
+		}); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "helper stopped: %v\n", err)
+			return 1
+		}
+		return 0
 	} else if *systemService {
 		options.ServiceMode = "system"
 	} else {

@@ -7,6 +7,10 @@ import (
 	"os/exec"
 )
 
+func PrepareServiceExecutable(exePath string) (string, error) {
+	return exePath, nil
+}
+
 func InstallService(exePath string) error {
 	command := fmt.Sprintf(`"%s" --system-service`, exePath)
 	deleteTask("Borealis Agent")
