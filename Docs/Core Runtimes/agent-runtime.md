@@ -17,7 +17,8 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `internal/roles/current_user` - Windows CURRENTUSER direct session quick-job execution for active user sessions. Linux CURRENTUSER reports unsupported in first PR.
 - `internal/roles/device_audit` - core CPU, memory, storage media type, removable media, network link speed, OS/build, hardware model/serial with motherboard serial fallback, last reboot, internal IP, device type, uptime, and last-user inventory published through heartbeat payloads.
 - `internal/roles/file_management` - SYSTEM/root file-management browse, upload-conflict preflight, lightweight text editing, copy/cut/paste mutations, delete, mkdir, rename, move, upload pull, and download artifact transfer.
-- Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`: process management, service management, software management, WireGuard, remote shell, VNC, tray UI, macros, and node screenshot.
+- `internal/roles/process_management` - SYSTEM/root live process snapshots, parent/child metadata, cache reuse, and operator-triggered process termination for the Device Summary `Processes` tab.
+- Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`: service management, software management, WireGuard, remote shell, VNC, tray UI, macros, and node screenshot.
 
 ## Agent Settings and Storage
 - Installed configuration file: `config.json` beside `Agent.exe`.
@@ -157,14 +158,14 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 
 #### Execution contexts and roles
 - Go roles are explicit packages under `Data/Agent/internal/roles`.
-- First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER direct session PowerShell/Batch execution, core device audit inventory, and SYSTEM/root file management.
+- First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER direct session PowerShell/Batch execution, core device audit inventory, SYSTEM/root file management, and SYSTEM/root process management.
 - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`.
 - SYSTEM tasks depend on scheduled-task creation rights; failures should surface through Engine logging.
 
 #### Platform parity
 - Windows is the reference path and has the broadest tested feature surface.
 - Linux Go runtime builds as `Agent`, installs through systemd, and supports root/SYSTEM Bash quick jobs in first PR.
-- Linux CURRENTUSER, tray/helper UI, WireGuard, remote shell, service/process/software management, and VNC are pending Go ports.
+- Linux CURRENTUSER, tray/helper UI, WireGuard, remote shell, service/software management, and VNC are pending Go ports.
 
 #### Ansible support
 - The agent no longer hosts an Ansible playbook execution role.

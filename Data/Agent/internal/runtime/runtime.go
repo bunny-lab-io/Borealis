@@ -13,6 +13,7 @@ import (
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/current_user"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/device_audit"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/file_management"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/process_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/system_context"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/transport"
 )
@@ -37,6 +38,7 @@ type Agent struct {
 	dispatcher *currentuser.Dispatcher
 	auditor    *deviceaudit.Auditor
 	files      *filemanagement.Manager
+	processes  *processmanagement.Manager
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -72,6 +74,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	dispatcher := currentuser.NewDispatcher()
 	auditor := deviceaudit.NewAuditor()
 	fileManager := filemanagement.New(authClient, hostname)
+	processManager := processmanagement.New(hostname)
 	return &Agent{
 		options:    options,
 		configPath: configPath,
@@ -83,6 +86,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		dispatcher: dispatcher,
 		auditor:    auditor,
 		files:      fileManager,
+		processes:  processManager,
 	}, nil
 }
 
@@ -157,17 +161,21 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	if a.files != nil {
 		socket.On("file_management_request", a.files.HandleRequest)
 	}
+	if a.processes != nil {
+		socket.On("process_management_request", a.processes.HandleRequest)
+	}
 	socket.OnConnected(func(ctx context.Context) error {
 		payload := map[string]any{
 			"agent_id":     a.authClient.AgentID(),
 			"service_mode": auth.NormalizeServiceMode(a.options.ServiceMode),
 			"hostname":     a.hostname,
 			"capabilities": map[string]any{
-				"runtime":           "go",
-				"system_scripts":    true,
-				"file_management":   true,
-				"python_fallback":   false,
-				"linux_currentuser": false,
+				"runtime":            "go",
+				"system_scripts":     true,
+				"file_management":    true,
+				"process_management": true,
+				"python_fallback":    false,
+				"linux_currentuser":  false,
 			},
 		}
 		if a.dispatcher != nil && a.dispatcher.SupportsCurrentUserDispatch() {
@@ -239,6 +247,18 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	if a.files != nil {
 		fileHealth = a.files.Health()
 	}
+	processHealth := processmanagement.RoleHealth{
+		Status:     "unsupported",
+		StatusCode: "unsupported",
+		Detail:     "Process Management role is unavailable.",
+		Details: map[string]any{
+			"running_status": "Unavailable",
+			"runtime":        "go",
+		},
+	}
+	if a.processes != nil {
+		processHealth = a.processes.Health()
+	}
 	metrics := map[string]any{
 		"service_mode":     auth.NormalizeServiceMode(a.options.ServiceMode),
 		"operating_system": operatingSystemName(),
@@ -302,6 +322,17 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 					"detail":          fileHealth.Detail,
 					"last_checked_at": time.Now().Unix(),
 					"details":         fileHealth.Details,
+				},
+				{
+					"role_id":         "system:process_management",
+					"role_name":       "process_management",
+					"role_label":      "Process Management",
+					"context":         "system",
+					"status":          processHealth.Status,
+					"status_code":     processHealth.StatusCode,
+					"detail":          processHealth.Detail,
+					"last_checked_at": time.Now().Unix(),
+					"details":         processHealth.Details,
 				},
 			},
 		},
