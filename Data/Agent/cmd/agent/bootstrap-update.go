@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -279,25 +280,63 @@ func updateTempDir(cfg BootstrapConfig) string {
 }
 
 func cleanupAgentTemp(cfg BootstrapConfig, logger *BootstrapLogger) {
+	updaterRoot := updateTempDir(cfg)
+	if filepath.Base(updaterRoot) == "Updater" {
+		if err := removePathWithRetries(updaterRoot, 2, 250*time.Millisecond, nil); err != nil && logger != nil {
+			logger.Tracef("Updater workspace cleanup deferred/partial: %v", err)
+		}
+	} else if logger != nil {
+		logger.Tracef("Skipping unexpected updater cleanup path: %s", updaterRoot)
+	}
+	_ = os.Remove(filepath.Join(cfg.InstallDir, "Updater", "update_status.json"))
+	_ = os.Remove(filepath.Join(cfg.InstallDir, "Updater"))
+
+	legacyUpdateRoot := filepath.Join(cfg.InstallDir, "Agent")
+	if filepath.Base(legacyUpdateRoot) == "Agent" {
+		if err := removePathWithRetries(legacyUpdateRoot, 2, 250*time.Millisecond, nil); err != nil && logger != nil {
+			logger.Tracef("Legacy Agent update workspace cleanup deferred/partial: %v", err)
+		}
+	} else if logger != nil {
+		logger.Tracef("Skipping unexpected legacy Agent cleanup path: %s", legacyUpdateRoot)
+	}
+
 	tempRoot := filepath.Join(cfg.InstallDir, "Temp")
 	if filepath.Base(tempRoot) != "Temp" {
 		if logger != nil {
-			logger.Warnf("Skipping unexpected Temp cleanup path: %s", tempRoot)
+			logger.Tracef("Skipping unexpected Temp cleanup path: %s", tempRoot)
 		}
 		return
 	}
-	if err := removePathWithRetries(tempRoot, 3, time.Second, logger); err != nil && logger != nil {
-		logger.Warnf("Temp cleanup skipped or failed: %v", err)
-	}
-	_ = os.Remove(filepath.Join(cfg.InstallDir, "Updater", "update_status.json"))
-	legacyUpdateRoot := filepath.Join(cfg.InstallDir, "Agent")
-	if filepath.Base(legacyUpdateRoot) != "Agent" {
+	scheduleAgentTempCleanup(tempRoot, logger)
+}
+
+func scheduleAgentTempCleanup(tempRoot string, logger *BootstrapLogger) {
+	if filepath.Base(tempRoot) != "Temp" {
 		if logger != nil {
-			logger.Warnf("Skipping unexpected legacy Agent cleanup path: %s", legacyUpdateRoot)
+			logger.Tracef("Skipping unexpected deferred Temp cleanup path: %s", tempRoot)
 		}
 		return
 	}
-	if err := removePathWithRetries(legacyUpdateRoot, 3, time.Second, logger); err != nil && logger != nil {
-		logger.Warnf("Legacy Agent update workspace cleanup skipped or failed: %v", err)
+	command := fmt.Sprintf(
+		"Start-Sleep -Seconds 5; Remove-Item -LiteralPath %s -Recurse -Force -ErrorAction SilentlyContinue",
+		powershellSingleQuoted(tempRoot),
+	)
+	cmd := exec.Command(powershellPath(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
+	if err := cmd.Start(); err != nil {
+		if logger != nil {
+			logger.Tracef("Deferred Temp cleanup launch failed: %v", err)
+		}
+		return
 	}
+	if err := cmd.Process.Release(); err != nil && logger != nil {
+		logger.Tracef("Deferred Temp cleanup release failed: %v", err)
+		return
+	}
+	if logger != nil {
+		logger.Tracef("Deferred Temp cleanup scheduled: %s", tempRoot)
+	}
+}
+
+func powershellSingleQuoted(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
