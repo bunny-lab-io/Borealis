@@ -943,49 +943,18 @@ func (m *Manager) postDownloadArtifact(ctx context.Context, transferID string, a
 	if mimeType == "" {
 		mimeType = "application/octet-stream"
 	}
-	reader, writerPipe := io.Pipe()
-	formWriter := multipart.NewWriter(writerPipe)
-	req, err := m.authRequest(ctx, http.MethodPost, "/api/agent/files/transfers/"+transferID+"/content", reader)
+	body, contentType, contentLength, cleanup, err := m.buildMultipartArtifactBody(artifactPath, artifactName, mimeType)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", formWriter.FormDataContentType())
+	defer cleanup()
+	req, err := m.authRequest(ctx, http.MethodPost, "/api/agent/files/transfers/"+transferID+"/content", body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
-	go func() {
-		if err := formWriter.WriteField("archive_name", artifactName); err != nil {
-			_ = writerPipe.CloseWithError(err)
-			return
-		}
-		if err := formWriter.WriteField("mime_type", mimeType); err != nil {
-			_ = writerPipe.CloseWithError(err)
-			return
-		}
-		part, err := formWriter.CreateFormFile("artifact", artifactName)
-		if err != nil {
-			_ = writerPipe.CloseWithError(err)
-			return
-		}
-		file, err := os.Open(artifactPath)
-		if err != nil {
-			_ = writerPipe.CloseWithError(mapOSError(err, artifactPath))
-			return
-		}
-		_, copyErr := io.Copy(part, file)
-		closeErr := file.Close()
-		if copyErr != nil {
-			_ = writerPipe.CloseWithError(copyErr)
-			return
-		}
-		if closeErr != nil {
-			_ = writerPipe.CloseWithError(closeErr)
-			return
-		}
-		if err := formWriter.Close(); err != nil {
-			_ = writerPipe.CloseWithError(err)
-			return
-		}
-		_ = writerPipe.Close()
-	}()
+	req.ContentLength = contentLength
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return err
@@ -999,6 +968,67 @@ func (m *Manager) postDownloadArtifact(ctx context.Context, transferID string, a
 		return newError("transfer_failed", fmt.Sprintf("artifact upload failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))))
 	}
 	return nil
+}
+
+func (m *Manager) buildMultipartArtifactBody(artifactPath string, artifactName string, mimeType string) (*os.File, string, int64, func(), error) {
+	if strings.TrimSpace(artifactName) == "" {
+		artifactName = filepath.Base(artifactPath)
+	}
+	if err := os.MkdirAll(m.tempRoot, 0o700); err != nil {
+		return nil, "", 0, func() {}, mapOSError(err, m.tempRoot)
+	}
+	tempFile, err := os.CreateTemp(m.tempRoot, "download-artifact-*.multipart")
+	if err != nil {
+		return nil, "", 0, func() {}, mapOSError(err, m.tempRoot)
+	}
+	tempPath := tempFile.Name()
+	cleanup := func() {
+		_ = tempFile.Close()
+		_ = os.Remove(tempPath)
+	}
+	writer := multipart.NewWriter(tempFile)
+	if err := writer.WriteField("archive_name", artifactName); err != nil {
+		cleanup()
+		return nil, "", 0, func() {}, err
+	}
+	if err := writer.WriteField("mime_type", mimeType); err != nil {
+		cleanup()
+		return nil, "", 0, func() {}, err
+	}
+	part, err := writer.CreateFormFile("artifact", artifactName)
+	if err != nil {
+		cleanup()
+		return nil, "", 0, func() {}, err
+	}
+	artifact, err := os.Open(artifactPath)
+	if err != nil {
+		cleanup()
+		return nil, "", 0, func() {}, mapOSError(err, artifactPath)
+	}
+	_, copyErr := io.Copy(part, artifact)
+	closeErr := artifact.Close()
+	if copyErr != nil {
+		cleanup()
+		return nil, "", 0, func() {}, copyErr
+	}
+	if closeErr != nil {
+		cleanup()
+		return nil, "", 0, func() {}, closeErr
+	}
+	if err := writer.Close(); err != nil {
+		cleanup()
+		return nil, "", 0, func() {}, err
+	}
+	stat, err := tempFile.Stat()
+	if err != nil {
+		cleanup()
+		return nil, "", 0, func() {}, err
+	}
+	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
+		cleanup()
+		return nil, "", 0, func() {}, err
+	}
+	return tempFile, writer.FormDataContentType(), stat.Size(), cleanup, nil
 }
 
 func normalizeRequestedPath(value any) (string, error) {

@@ -3,6 +3,9 @@ package filemanagement
 import (
 	"archive/zip"
 	"context"
+	"io"
+	"mime"
+	"mime/multipart"
 	"os"
 	"path/filepath"
 	"testing"
@@ -190,6 +193,59 @@ func TestZipSelectionArchivesDirectory(t *testing.T) {
 		}
 	}
 	t.Fatalf("bundle/payload.txt not found in archive")
+}
+
+func TestBuildMultipartArtifactBodyIncludesArtifactAndContentLength(t *testing.T) {
+	root := t.TempDir()
+	artifactPath := filepath.Join(root, "download.zip")
+	if err := os.WriteFile(artifactPath, []byte("zip-payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manager := New(nil, "test-host")
+	manager.tempRoot = root
+
+	body, contentType, contentLength, cleanup, err := manager.buildMultipartArtifactBody(artifactPath, "download.zip", "application/zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if contentLength <= int64(len("zip-payload")) {
+		t.Fatalf("content length = %d, want multipart length", contentLength)
+	}
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mediaType != "multipart/form-data" {
+		t.Fatalf("media type = %s", mediaType)
+	}
+	reader := multipart.NewReader(body, params["boundary"])
+	form, err := reader.ReadForm(1 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if form.Value["archive_name"][0] != "download.zip" {
+		t.Fatalf("archive_name = %#v", form.Value["archive_name"])
+	}
+	if form.Value["mime_type"][0] != "application/zip" {
+		t.Fatalf("mime_type = %#v", form.Value["mime_type"])
+	}
+	files := form.File["artifact"]
+	if len(files) != 1 {
+		t.Fatalf("artifact files = %d, want 1", len(files))
+	}
+	file, err := files[0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(file)
+	_ = file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "zip-payload" {
+		t.Fatalf("artifact content = %#v", string(raw))
+	}
 }
 
 func request(t *testing.T, payload map[string]any) map[string]any {
