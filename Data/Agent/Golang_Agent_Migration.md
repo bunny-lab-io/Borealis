@@ -68,12 +68,12 @@ Back to Docs Index: ../../Docs/index.md
 26. Cleaned PowerShell CLIXML progress/error output from Go quick-job result streams.
 27. Simplified Site install commands and removed nonessential `config.json` runtime metadata.
 28. Added Go device audit inventory for CPU, memory, storage, network, internal IP, device type, uptime, and last user via heartbeat payloads.
+29. Validated Windows CURRENTUSER Batch quick-job execution on a real Windows target.
 
 ## In Progress
 
 1. Validate Engine onboarding/update artifact contracts against a deployed Engine.
-2. Validate Windows CURRENTUSER Batch quick jobs on a real Windows target.
-3. Validate Go device audit inventory on real Windows and Linux targets.
+2. Validate Go device audit inventory on real Windows and Linux targets.
 
 ## Pending
 
@@ -98,6 +98,6 @@ Back to Docs Index: ../../Docs/index.md
 2. Linux CURRENTUSER is unsupported by design in first PR and must report explicit unsupported status.
 3. Release-channel updater requires prebuilt `Agent.exe` artifacts; source-zip self-build updates are not supported on installed hosts.
 4. Engine release-channel packaging must publish prebuilt Go Windows/Linux artifacts before fleet updates can use fresh Go binaries.
-5. Manual Windows acceptance needs fresh enrollment, SYSTEM script execution, CURRENTUSER behavior validation, update check validation, and final config access-control decision.
+5. Manual Windows acceptance has validated fresh enrollment, SYSTEM script execution, and CURRENTUSER PowerShell/Batch execution; update check validation and final config access-control decision remain open.
 6. Manual Linux acceptance has validated service install, fresh enrollment, root SYSTEM Bash execution, and root-owned `0600` config; update behavior decision remains open.
 7. Windows `config.json` ACL hardening is deferred because current install ACL changes blocked administrator repair/uninstall workflows during real-host testing.
