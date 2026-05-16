@@ -111,6 +111,7 @@ Back to Docs Index: ../../Docs/index.md
 69. Reorganized installed Agent logs into `Logs/Agent`, `Logs/WireGuard`, and `Logs/UltraVNC` category folders.
 70. Ported Windows display topology collection into the Go VNC role and included display topology plus virtual bounds in VNC ensure, credential, and role-health payloads.
 71. Added `agent.release_channel` to `config.json`; `stable` update checks use Engine release manifests, while `source` update checks track current repository source from `agent.branch`. Engine release-channel changes are emitted to online Go agents so they commit the selected channel to local config.
+72. Added Device Summary branch control so admins can remotely set an agent source branch; Engine stores `agent_release_channel` and `agent_branch` on the device row and emits `agent_release_channel_changed` to online Go agents.
 
 ## In Progress
 

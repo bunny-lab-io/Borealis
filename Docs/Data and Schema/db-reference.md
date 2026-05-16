@@ -342,7 +342,7 @@ finally:
 #### `devices`
 - Status: Active (core inventory and identity table).
 - Purpose: Canonical device identity and inventory snapshot.
-- Columns: `guid`, `hostname`, `description`, `created_at`, `last_enrollment_at`, `agent_hash`, `agent_role_health`, `memory`, `network`, `software`, `storage`, `cpu`, `device_type`, `domain`, `external_ip`, `internal_ip`, `last_reboot`, `last_seen`, `last_user`, `operating_system`, `uptime`, `agent_id`, `connection_type`, `connection_endpoint`, `agent_vnc_password`, `ssl_key_fingerprint`, `token_version`, `status`, `key_added_at`.
+- Columns: `guid`, `hostname`, `description`, `created_at`, `last_enrollment_at`, `agent_hash`, `agent_role_health`, `memory`, `network`, `software`, `services`, `storage`, `cpu`, `sessions`, `processes`, `device_type`, `domain`, `external_ip`, `internal_ip`, `last_reboot`, `last_seen`, `cpu_percent`, `memory_percent`, `last_user`, `operating_system`, `uptime`, `agent_id`, `connection_type`, `connection_endpoint`, `agent_release_channel_override`, `agent_release_channel`, `agent_branch`, `agent_update_channel`, `agent_update_target_build_id`, `agent_update_state`, `agent_update_error`, `agent_update_source`, `agent_vnc_password`, `ssl_key_fingerprint`, `token_version`, `status`, `key_added_at`.
 - Constraints and indexes:
 - `guid` primary key.
 - `uq_devices_hostname` unique on `hostname`.
