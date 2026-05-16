@@ -33,6 +33,7 @@ const (
 	wireGuardInstallManagerServiceEnvVar = "BOREALIS_WIREGUARD_INSTALL_MANAGER_SERVICE"
 	wireGuardDownloadBaseURL             = "https://download.wireguard.com/windows-client"
 	wireGuardMSIVersion                  = "1.1"
+	wireGuardMSIProductCode              = "{99A54A94-4BE0-4374-B3A6-F504E826DDF8}"
 	wireGuardMSISHA256AMD64              = "6daa5d37a9e2950dfb8c48b95ab8e562cb2bad1c785d020f38f97bea4c6a5566"
 	wireGuardMSISHA256ARM64              = "a2a67fbb2db199525c35ce79ea6dd9031b116ba46561f2b993fb858668440131"
 	wireGuardMSISHA256X86                = "71811698d544607e6bd94bbfff14e936b186da53b2934ff74d736daa74105481"
@@ -622,6 +623,12 @@ func installWireGuardMSI(cfg BootstrapConfig, logger *BootstrapLogger) error {
 			return fmt.Errorf("WireGuard MSI checksum mismatch expected=%s actual=%s", msiSHA256, actual)
 		}
 	}
+	if resolveWireGuardClientExe() == "" && wireGuardMSIProductRegistered(logger) {
+		logger.Tracef("WireGuard MSI registration found but client executable is missing; cleaning stale registration before install.")
+		if err := uninstallWireGuardMSIProduct(cfg, msiPath, logger); err != nil {
+			logger.Tracef("WireGuard stale MSI registration cleanup returned error; continuing with normal install attempt: %v", err)
+		}
+	}
 	logger.Tracef("WireGuard MSI install command starting.")
 	prepareWireGuardMSIInstall(logger)
 	logPath := wireGuardMSILogPath(cfg)
@@ -698,6 +705,24 @@ func repairWireGuardMSIInstall(cfg BootstrapConfig, msiPath string, logger *Boot
 	}
 	logger.Tracef("WireGuard MSI clean reinstall complete. MSI log: %s", retryLogPath)
 	return nil
+}
+
+func wireGuardMSIProductRegistered(logger *BootstrapLogger) bool {
+	for _, key := range []string{
+		`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\` + wireGuardMSIProductCode,
+		`HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\` + wireGuardMSIProductCode,
+	} {
+		output, err := runCommandTimeout(logger, 15*time.Second, "reg.exe", "query", key, "/v", "DisplayName")
+		if err != nil {
+			logger.Tracef("WireGuard MSI registration probe missed: key=%s error=%v", key, err)
+			continue
+		}
+		if strings.Contains(strings.ToLower(output), "wireguard") {
+			logger.Tracef("WireGuard MSI registration present: key=%s", key)
+			return true
+		}
+	}
+	return false
 }
 
 func uninstallWireGuardMSIProduct(cfg BootstrapConfig, msiPath string, logger *BootstrapLogger) error {
