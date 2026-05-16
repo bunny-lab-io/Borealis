@@ -11,9 +11,11 @@ import (
 )
 
 const (
-	SchemaVersion = 1
-	FileName      = "config.json"
-	DefaultBranch = "main"
+	SchemaVersion        = 1
+	FileName             = "config.json"
+	DefaultBranch        = "main"
+	ReleaseChannelStable = "stable"
+	ReleaseChannelSource = "source"
 )
 
 type AgentConfig struct {
@@ -30,6 +32,7 @@ type AgentConfig struct {
 type AgentSection struct {
 	GUID             string `json:"guid"`
 	AgentID          string `json:"agent_id"`
+	ReleaseChannel   string `json:"release_channel"`
 	Branch           string `json:"branch"`
 	InstalledBuildID string `json:"installed_build_id"`
 }
@@ -80,6 +83,30 @@ func NormalizeBranch(value string) string {
 		return DefaultBranch
 	}
 	return text
+}
+
+func NormalizeReleaseChannel(value string) string {
+	text := strings.ToLower(strings.TrimSpace(value))
+	switch text {
+	case "", "stable", "release", "releases":
+		return ReleaseChannelStable
+	case "source", "sources", "branch", "repo", "repository", "unstable":
+		return ReleaseChannelSource
+	default:
+		return text
+	}
+}
+
+func ReleaseChannelForBranch(branch string) string {
+	normalizedBranch := NormalizeBranch(branch)
+	if strings.EqualFold(normalizedBranch, DefaultBranch) {
+		return ReleaseChannelStable
+	}
+	return ReleaseChannelSource
+}
+
+func UsesSourceReleaseChannel(value string) bool {
+	return NormalizeReleaseChannel(value) == ReleaseChannelSource
 }
 
 func NormalizeBuildID(value string) string {
@@ -179,6 +206,7 @@ func (c *AgentConfig) ApplyDefaults() {
 	if c.SchemaVersion == 0 {
 		c.SchemaVersion = SchemaVersion
 	}
+	c.Agent.ReleaseChannel = NormalizeReleaseChannel(c.Agent.ReleaseChannel)
 	c.Agent.Branch = NormalizeBranch(c.Agent.Branch)
 	c.Agent.InstalledBuildID = NormalizeBuildID(c.Agent.InstalledBuildID)
 	if c.DependencyVersions != nil {

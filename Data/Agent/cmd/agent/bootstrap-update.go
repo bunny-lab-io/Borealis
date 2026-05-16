@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 )
 
 type updateManifest struct {
@@ -22,6 +24,7 @@ type updateManifest struct {
 	DownloadPath     string `json:"download_path"`
 	EffectiveChannel string `json:"effective_channel"`
 	TargetChannel    string `json:"target_channel"`
+	Branch           string `json:"branch"`
 }
 
 func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
@@ -40,7 +43,7 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		return fmt.Errorf("access token missing")
 	}
 	installed := readConfigInstalledBuildID(cfg)
-	logger.Tracef("Agent update check start: installed_build_id=%s", installed)
+	logger.Tracef("Agent update check start: release_channel=%s repo_ref=%s installed_build_id=%s", cfg.ReleaseChannel, cfg.RepoRef, installed)
 	if shouldUseRepoRefUpdate(cfg) {
 		return runRepoRefUpdateCheck(cfg, logger, installed, startedAt)
 	}
@@ -49,10 +52,11 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		return err
 	}
 	target := strings.TrimSpace(strings.ToLower(manifest.TargetBuildID))
-	logger.Tracef("Agent update manifest: target_build_id=%s installed_build_id=%s artifact_sha256_present=%t fallback_url_present=%t download_path_present=%t effective_channel=%s target_channel=%s", target, installed, strings.TrimSpace(manifest.ArtifactSHA256) != "", strings.TrimSpace(manifest.FallbackURL) != "", strings.TrimSpace(manifest.DownloadPath) != "", manifest.EffectiveChannel, manifest.TargetChannel)
+	logger.Tracef("Agent update manifest: target_build_id=%s installed_build_id=%s artifact_sha256_present=%t fallback_url_present=%t download_path_present=%t effective_channel=%s target_channel=%s branch=%s", target, installed, strings.TrimSpace(manifest.ArtifactSHA256) != "", strings.TrimSpace(manifest.FallbackURL) != "", strings.TrimSpace(manifest.DownloadPath) != "", manifest.EffectiveChannel, manifest.TargetChannel, manifest.Branch)
 	if target == "" {
 		return fmt.Errorf("update manifest missing target_build_id")
 	}
+	writeConfigReleaseTarget(cfg, releaseChannelForUpdateManifest(manifest.EffectiveChannel, manifest.TargetChannel), manifest.Branch)
 	if installed != "" && strings.EqualFold(installed, target) {
 		logger.Infof("Agent update check: up to date (%s).", target)
 		if err := ensureAgentUpdaterTask(cfg, logger); err != nil {
@@ -117,9 +121,21 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	return nil
 }
 
+func releaseChannelForUpdateManifest(effective string, target string) string {
+	channel := strings.ToLower(strings.TrimSpace(effective))
+	if channel == "" {
+		channel = strings.ToLower(strings.TrimSpace(target))
+	}
+	switch channel {
+	case "unstable", "source", "branch":
+		return agentconfig.ReleaseChannelSource
+	default:
+		return agentconfig.ReleaseChannelStable
+	}
+}
+
 func shouldUseRepoRefUpdate(cfg BootstrapConfig) bool {
-	ref := strings.TrimSpace(cfg.RepoRef)
-	return ref != "" && !strings.EqualFold(ref, "main")
+	return agentconfig.UsesSourceReleaseChannel(cfg.ReleaseChannel)
 }
 
 func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, installed string, startedAt time.Time) error {

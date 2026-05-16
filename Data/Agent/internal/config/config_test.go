@@ -15,6 +15,7 @@ func TestSaveLoadConfig(t *testing.T) {
 	cfg.ServerURL = "https://borealis.example.com/"
 	cfg.EnrollmentCode = "CODE"
 	cfg.Agent.GUID = "guid"
+	cfg.Agent.ReleaseChannel = "Source"
 	cfg.Agent.Branch = "feature/test"
 	cfg.Agent.InstalledBuildID = "ABCDEF"
 	cfg.DependencyVersions = &DependencyVersionsSection{WireGuard: "1.1\r\n", UltraVNC: "1.8.2.1"}
@@ -35,6 +36,9 @@ func TestSaveLoadConfig(t *testing.T) {
 	}
 	if loaded.Agent.Branch != "feature/test" {
 		t.Fatalf("branch mismatch: %q", loaded.Agent.Branch)
+	}
+	if loaded.Agent.ReleaseChannel != ReleaseChannelSource {
+		t.Fatalf("release channel mismatch: %q", loaded.Agent.ReleaseChannel)
 	}
 	if loaded.Agent.InstalledBuildID != "abcdef" {
 		t.Fatalf("installed build id mismatch: %q", loaded.Agent.InstalledBuildID)
@@ -64,6 +68,9 @@ func TestDefaultBranch(t *testing.T) {
 	cfg.ApplyDefaults()
 	if cfg.Agent.Branch != DefaultBranch {
 		t.Fatalf("default branch = %q, want %q", cfg.Agent.Branch, DefaultBranch)
+	}
+	if cfg.Agent.ReleaseChannel != ReleaseChannelStable {
+		t.Fatalf("default release channel = %q, want %q", cfg.Agent.ReleaseChannel, ReleaseChannelStable)
 	}
 }
 

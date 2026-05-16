@@ -152,6 +152,16 @@ func (c *Client) StoreServerSigningKey(value string) error {
 	return agentconfig.Save(c.configPath, c.cfg)
 }
 
+func (c *Client) StoreAgentReleaseTarget(releaseChannel string, branch string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cfg.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(releaseChannel)
+	if strings.TrimSpace(branch) != "" {
+		c.cfg.Agent.Branch = agentconfig.NormalizeBranch(branch)
+	}
+	return agentconfig.Save(c.configPath, c.cfg)
+}
+
 func (c *Client) LoadServerSigningKey() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()

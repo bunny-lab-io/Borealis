@@ -31,6 +31,7 @@ type linuxUpdateManifest struct {
 	EffectiveChannel string `json:"effective_channel"`
 	TargetChannel    string `json:"target_channel"`
 	ArtifactFormat   string `json:"artifact_format"`
+	Branch           string `json:"branch"`
 }
 
 func runStandaloneUpdateCheck(options agentruntime.Options) error {
@@ -51,6 +52,10 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	}
 	if strings.TrimSpace(options.RepoRef) != "" {
 		cfg.Agent.Branch = agentconfig.NormalizeBranch(options.RepoRef)
+		cfg.Agent.ReleaseChannel = agentconfig.ReleaseChannelForBranch(cfg.Agent.Branch)
+	}
+	if strings.TrimSpace(options.ReleaseChannel) != "" {
+		cfg.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(options.ReleaseChannel)
 	}
 	if err := agentconfig.Save(configPath, &cfg); err != nil {
 		return err
@@ -69,7 +74,7 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 		installed = agentconfig.NormalizeBuildID(options.BuildID)
 	}
 	branch := agentconfig.NormalizeBranch(cfg.Agent.Branch)
-	if branch != "" && !strings.EqualFold(branch, agentconfig.DefaultBranch) {
+	if agentconfig.UsesSourceReleaseChannel(cfg.Agent.ReleaseChannel) {
 		return runLinuxRepoRefUpdateCheck(ctx, configPath, &cfg, branch, installed)
 	}
 	manifest, err := fetchLinuxUpdateManifest(ctx, client, installed)
@@ -81,6 +86,7 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	if target == "" {
 		return fmt.Errorf("update manifest missing target_build_id")
 	}
+	_ = writeLinuxReleaseTarget(configPath, &cfg, releaseChannelForLinuxUpdateManifest(manifest.EffectiveChannel, manifest.TargetChannel), manifest.Branch)
 	if installed != "" && strings.EqualFold(installed, target) {
 		removeLinuxUpdateStatus(configPath)
 		return nil
@@ -116,6 +122,19 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	_ = writeLinuxInstalledBuildID(configPath, &cfg, target)
 	_ = exec.Command("systemctl", "restart", "borealis-agent.service").Run()
 	return nil
+}
+
+func releaseChannelForLinuxUpdateManifest(effective string, target string) string {
+	channel := strings.ToLower(strings.TrimSpace(effective))
+	if channel == "" {
+		channel = strings.ToLower(strings.TrimSpace(target))
+	}
+	switch channel {
+	case "unstable", "source", "branch":
+		return agentconfig.ReleaseChannelSource
+	default:
+		return agentconfig.ReleaseChannelStable
+	}
 }
 
 func fetchLinuxUpdateManifest(ctx context.Context, client *auth.Client, installedBuildID string) (linuxUpdateManifest, error) {
@@ -372,6 +391,21 @@ func writeLinuxInstalledBuildID(configPath string, cfg *agentconfig.AgentConfig,
 		return err
 	}
 	return nil
+}
+
+func writeLinuxReleaseTarget(configPath string, cfg *agentconfig.AgentConfig, releaseChannel string, branch string) error {
+	if cfg == nil {
+		loaded, err := agentconfig.LoadOrCreate(configPath)
+		if err != nil {
+			return err
+		}
+		cfg = &loaded
+	}
+	cfg.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(releaseChannel)
+	if strings.TrimSpace(branch) != "" {
+		cfg.Agent.Branch = agentconfig.NormalizeBranch(branch)
+	}
+	return agentconfig.Save(configPath, cfg)
 }
 
 func removeLinuxUpdateStatus(configPath string) {

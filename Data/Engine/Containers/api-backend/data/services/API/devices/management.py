@@ -663,6 +663,18 @@ class DeviceManagementService:
         except Exception:
             self.logger.debug("Failed to emit device_inventory_changed for hostname=%s", normalized_hostname, exc_info=True)
 
+    def _emit_agent_release_channel_changed(self, hostname: str, payload: Dict[str, Any]) -> None:
+        normalized_hostname = _clean_device_str(hostname) or ""
+        if not normalized_hostname:
+            return
+        emitter = getattr(self.adapters.context, "emit_host_service_event", None)
+        if not callable(emitter):
+            return
+        try:
+            emitter(normalized_hostname, "system", "agent_release_channel_changed", payload)
+        except Exception:
+            self.logger.debug("Failed to emit agent_release_channel_changed for hostname=%s", normalized_hostname, exc_info=True)
+
     def _target_repo_config(self) -> Tuple[str, str]:
         repo_name = (os.environ.get("BOREALIS_UPDATE_REPO") or "bunny-lab-io/Borealis").strip()
         branch_name = (os.environ.get("BOREALIS_UPDATE_BRANCH") or "main").strip()
@@ -1618,12 +1630,35 @@ class DeviceManagementService:
             conn.close()
 
         effective_channel, target_build_id, target_published_at = self._resolve_agent_target(cleaned_override)
+        target_branch = ""
+        if self.agent_release_manager is not None:
+            try:
+                target = self.agent_release_manager.target_for_override(cleaned_override)
+                if isinstance(target, dict):
+                    target_branch = _clean_device_str(target.get("branch"))
+            except Exception:
+                target_branch = ""
+        release_channel = "source" if _clean_device_str(effective_channel).lower() == "unstable" else "stable"
+        self._emit_agent_release_channel_changed(
+            hostname,
+            {
+                "hostname": hostname,
+                "guid": normalized_guid,
+                "effective_channel": effective_channel,
+                "target_channel": effective_channel,
+                "release_channel": release_channel,
+                "branch": target_branch,
+                "target_build_id": target_build_id or "",
+            },
+        )
         return {
             "status": "ok",
             "guid": normalized_guid,
             "hostname": hostname,
             "agent_release_channel_override": stored_override,
             "agent_release_channel_effective": effective_channel,
+            "agent_release_channel": release_channel,
+            "agent_branch": target_branch,
             "agent_target_build_id": target_build_id or "",
             "agent_target_published_at": target_published_at or "",
         }, 200

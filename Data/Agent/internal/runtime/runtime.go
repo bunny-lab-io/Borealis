@@ -28,6 +28,7 @@ type Options struct {
 	ServerURL      string
 	EnrollmentCode string
 	RepoRef        string
+	ReleaseChannel string
 	ServiceMode    string
 	BuildID        string
 	Once           bool
@@ -74,6 +75,10 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	}
 	if strings.TrimSpace(options.RepoRef) != "" {
 		cfg.Agent.Branch = agentconfig.NormalizeBranch(options.RepoRef)
+		cfg.Agent.ReleaseChannel = agentconfig.ReleaseChannelForBranch(cfg.Agent.Branch)
+	}
+	if strings.TrimSpace(options.ReleaseChannel) != "" {
+		cfg.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(options.ReleaseChannel)
 	}
 	if err := agentconfig.Save(configPath, &cfg); err != nil {
 		return nil, err
@@ -240,6 +245,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 		socket.On("vnc_credential_request", a.vnc.HandleCredentialRequest)
 	}
 	socket.On("agent_update_request", a.handleUpdateRequest)
+	socket.On("agent_release_channel_changed", a.handleReleaseChannelChanged)
 	socket.OnConnected(func(ctx context.Context) error {
 		payload := map[string]any{
 			"agent_id":     a.authClient.AgentID(),
@@ -567,6 +573,8 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 		installedBuildID = agentconfig.NormalizeBuildID(a.options.BuildID)
 	}
 	payload["installed_build_id"] = installedBuildID
+	payload["agent_release_channel"] = agentconfig.NormalizeReleaseChannel(cfg.Agent.ReleaseChannel)
+	payload["agent_branch"] = agentconfig.NormalizeBranch(cfg.Agent.Branch)
 	_, err := a.authClient.PostJSON(ctx, "/api/agent/heartbeat", payload, nil)
 	return err
 }

@@ -9,7 +9,7 @@ Back to Docs Index: ../../Docs/index.md
 3. Windows `Agent.exe` owns bootstrap, deployment, repair, update checks, service task registration, and runtime execution.
 4. Linux `Agent` owns deployment, self-staging, runtime execution, systemd service install/uninstall, and update timer installation.
 5. Installed runtime uses one `config.json` beside `Agent.exe`.
-6. `config.json` stores keys, tokens, trust material, enrollment code, server URL, agent identity, agent branch, and installed build ID only.
+6. `config.json` stores keys, tokens, trust material, enrollment code, server URL, agent identity, agent release channel, agent branch, and installed build ID only.
 7. `config.json` protection uses filesystem permissions only: Windows ACL hardening is deferred and Windows files inherit from `C:\` for now; Linux remains root-owned `0600` with parent `0700`.
 8. SQLite is not used in v1 because configuration is small, single-writer, and not query-heavy.
 9. No installed Agent runtime path may depend on Python.
@@ -110,6 +110,7 @@ Back to Docs Index: ../../Docs/index.md
 68. Moved Windows dependency version tracking for WireGuard and UltraVNC into `config.json` under `dependency_versions`, removed `installed_version.txt` dependency markers, and cleaned transient `Dependencies` installer folders after dependency reconciliation.
 69. Reorganized installed Agent logs into `Logs/Agent`, `Logs/WireGuard`, and `Logs/UltraVNC` category folders.
 70. Ported Windows display topology collection into the Go VNC role and included display topology plus virtual bounds in VNC ensure, credential, and role-health payloads.
+71. Added `agent.release_channel` to `config.json`; `stable` update checks use Engine release manifests, while `source` update checks track current repository source from `agent.branch`. Engine release-channel changes are emitted to online Go agents so they commit the selected channel to local config.
 
 ## In Progress
 

@@ -20,6 +20,7 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	current, err := agentconfig.LoadOrCreate(configPath)
 	if err == nil {
 		cfg.ServerURL = current.ServerURL
+		cfg.ReleaseChannel = agentconfig.NormalizeReleaseChannel(current.Agent.ReleaseChannel)
 		cfg.RepoRef = agentconfig.NormalizeBranch(current.Agent.Branch)
 	}
 	if strings.TrimSpace(options.ServerURL) != "" {
@@ -27,8 +28,17 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	}
 	if strings.TrimSpace(options.RepoRef) != "" {
 		cfg.RepoRef = agentconfig.NormalizeBranch(options.RepoRef)
+		cfg.ReleaseChannel = agentconfig.ReleaseChannelForBranch(cfg.RepoRef)
 		if err == nil {
 			current.Agent.Branch = cfg.RepoRef
+			current.Agent.ReleaseChannel = cfg.ReleaseChannel
+			_ = agentconfig.Save(configPath, &current)
+		}
+	}
+	if strings.TrimSpace(options.ReleaseChannel) != "" {
+		cfg.ReleaseChannel = agentconfig.NormalizeReleaseChannel(options.ReleaseChannel)
+		if err == nil {
+			current.Agent.ReleaseChannel = cfg.ReleaseChannel
 			_ = agentconfig.Save(configPath, &current)
 		}
 	}

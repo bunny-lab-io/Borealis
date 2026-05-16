@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 )
 
 const (
@@ -33,6 +35,7 @@ type cliOptions struct {
 	ServerURL          string
 	SiteEnrollmentCode string
 	RepoRef            string
+	ReleaseChannel     string
 	Uninstall          bool
 	Verbose            bool
 }
@@ -44,6 +47,7 @@ type BootstrapConfig struct {
 	LegacyEnrollment    string `json:"enrollment_code"`
 	RepoURL             string `json:"repo_url"`
 	RepoRef             string `json:"repo_ref"`
+	ReleaseChannel      string `json:"release_channel"`
 	PayloadPath         string `json:"agent_bundle_path"`
 	PayloadSHA256       string `json:"agent_bundle_sha256"`
 	ManifestPath        string `json:"manifest_path"`
@@ -90,6 +94,12 @@ func parseCLI(args []string) (cliOptions, error) {
 			}
 			i++
 			opts.RepoRef = strings.TrimSpace(args[i])
+		case "--release-channel":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return opts, errors.New("--release-channel requires value")
+			}
+			i++
+			opts.ReleaseChannel = strings.TrimSpace(args[i])
 		case "-uninstall":
 			opts.Uninstall = true
 		case "-verbose", "--verbose":
@@ -128,6 +138,9 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 	}
 	if cli.RepoRef != "" {
 		cfg.RepoRef = cli.RepoRef
+	}
+	if cli.ReleaseChannel != "" {
+		cfg.ReleaseChannel = cli.ReleaseChannel
 	}
 	if cli.Verbose {
 		cfg.Verbose = true
@@ -198,6 +211,9 @@ func mergeBootstrapConfig(base *BootstrapConfig, incoming BootstrapConfig) {
 	if strings.TrimSpace(incoming.RepoRef) != "" {
 		base.RepoRef = incoming.RepoRef
 	}
+	if strings.TrimSpace(incoming.ReleaseChannel) != "" {
+		base.ReleaseChannel = incoming.ReleaseChannel
+	}
 	if strings.TrimSpace(incoming.PayloadPath) != "" {
 		base.PayloadPath = incoming.PayloadPath
 	}
@@ -252,6 +268,11 @@ func normalizeBootstrapConfig(cfg *BootstrapConfig) {
 	cfg.RepoRef = strings.TrimSpace(cfg.RepoRef)
 	if cfg.RepoRef == "" {
 		cfg.RepoRef = defaultRepoRef
+	}
+	if strings.TrimSpace(cfg.ReleaseChannel) == "" {
+		cfg.ReleaseChannel = agentconfig.ReleaseChannelForBranch(cfg.RepoRef)
+	} else {
+		cfg.ReleaseChannel = agentconfig.NormalizeReleaseChannel(cfg.ReleaseChannel)
 	}
 	if cfg.TimeoutSeconds <= 0 {
 		cfg.TimeoutSeconds = defaultTimeoutSeconds

@@ -40,6 +40,7 @@ func run() int {
 	flag.StringVar(&options.EnrollmentCode, "site-enrollment-code", "", "Site enrollment code.")
 	flag.StringVar(&options.EnrollmentCode, "enrollment-code", "", "Enrollment code.")
 	flag.StringVar(&repoRef, "repo-ref", "", "Borealis repository branch/ref used by bootstrap installers.")
+	flag.StringVar(&options.ReleaseChannel, "release-channel", "", "Agent release channel: stable or source.")
 	flag.StringVar(&helperStateDir, "helper-state-dir", "", "Current-user helper state directory.")
 	flag.BoolVar(&options.Verbose, "verbose", false, "Mirror logs to stdout.")
 	flag.BoolVar(&options.Once, "once", false, "Run auth and heartbeat once, then exit.")
@@ -182,6 +183,10 @@ func persistInstallConfig(options agentruntime.Options) error {
 	}
 	if options.RepoRef != "" {
 		cfg.Agent.Branch = agentconfig.NormalizeBranch(options.RepoRef)
+		cfg.Agent.ReleaseChannel = agentconfig.ReleaseChannelForBranch(cfg.Agent.Branch)
+	}
+	if options.ReleaseChannel != "" {
+		cfg.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(options.ReleaseChannel)
 	}
 	return agentconfig.Save(configPath, &cfg)
 }
