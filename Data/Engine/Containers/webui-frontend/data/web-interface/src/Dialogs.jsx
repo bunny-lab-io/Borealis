@@ -297,24 +297,80 @@ export function ConfirmDeleteDialog({
   );
 }
 
-export function DeleteDeviceDialog({ open, onCancel, onConfirm, busy = false, errorText = "" }) {
+export function DeleteDeviceDialog({ open, onCancel, onConfirm, busy = false, errorText = "", devices = [] }) {
+  const deviceRows = Array.isArray(devices) ? devices : [];
+  const previewNames = deviceRows
+    .map((device) => String(device?.hostname || device?.summary?.hostname || device?.agentGuid || device?.guid || "").trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  const remainingCount = Math.max(deviceRows.length - previewNames.length, 0);
+  const count = Math.max(deviceRows.length, 1);
+  const plural = count !== 1;
+  const title = plural ? `Purge ${count} Devices` : "Purge Device";
+  const confirmLabel = busy ? "Purging..." : plural ? `Purge ${count} Devices` : "Purge Device";
+
   return (
     <DialogFrame
       open={open}
       onClose={onCancel}
-      title="Purge Device"
+      title={title}
       actions={
         <>
           <Button onClick={onCancel} sx={DIALOG_BUTTON_SX} disabled={busy}>Cancel</Button>
           <Button onClick={onConfirm} sx={DIALOG_DANGER_BUTTON_SX} disabled={busy}>
-            {busy ? "Purging..." : "Purge Device"}
+            {confirmLabel}
           </Button>
         </>
       }
     >
       {errorText ? <Alert severity="error" sx={{ mb: 1.5 }}>{errorText}</Alert> : null}
+      {previewNames.length ? (
+        <Box
+          sx={{
+            mb: 1.5,
+            border: "1px solid rgba(148,163,184,0.28)",
+            borderRadius: 2,
+            background: "rgba(7,12,24,0.68)",
+            px: 1.4,
+            py: 1.2,
+          }}
+        >
+          <Typography sx={{ color: "#94a3b8", fontSize: "0.76rem", fontWeight: 800, letterSpacing: 0.7, textTransform: "uppercase" }}>
+            Selected Devices
+          </Typography>
+          <Box sx={{ mt: 0.9, display: "flex", flexWrap: "wrap", gap: 0.75 }}>
+            {previewNames.map((name, index) => (
+              <Box
+                key={`${name}-${index}`}
+                sx={{
+                  borderRadius: 999,
+                  border: "1px solid rgba(148,163,184,0.24)",
+                  background: "rgba(15,23,42,0.72)",
+                  px: 1,
+                  py: 0.45,
+                }}
+              >
+                <Typography sx={{ color: "#e2e8f0", fontSize: "0.8rem", fontWeight: 600 }}>{name}</Typography>
+              </Box>
+            ))}
+            {remainingCount > 0 ? (
+              <Box
+                sx={{
+                  borderRadius: 999,
+                  border: "1px solid rgba(248,113,113,0.28)",
+                  background: "rgba(76,5,25,0.38)",
+                  px: 1,
+                  py: 0.45,
+                }}
+              >
+                <Typography sx={{ color: "#fecdd3", fontSize: "0.8rem", fontWeight: 700 }}>+{remainingCount} more</Typography>
+              </Box>
+            ) : null}
+          </Box>
+        </Box>
+      ) : null}
       <DialogContentText sx={DIALOG_BODY_TEXT_SX}>
-          Borealis will permanently purge this device's identity, history, site assignment, keys and tokens, and scheduled-job references. If the same machine comes back, it will need fresh enrollment and approval.
+          Borealis will permanently purge {plural ? "these devices'" : "this device's"} identity, history, site assignment, keys and tokens, and scheduled-job references. If {plural ? "these machines come" : "the same machine comes"} back, {plural ? "they" : "it"} will need fresh enrollment and approval.
       </DialogContentText>
     </DialogFrame>
   );
