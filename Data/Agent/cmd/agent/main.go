@@ -29,6 +29,9 @@ func run() int {
 	var uninstallService bool
 	var printVersion bool
 	var updateCheck bool
+	var finalizeUpdate bool
+	var finalizeBuildID string
+	var finalizeExpectedSHA256 string
 	var repoRef string
 	var helperSessionID int
 	var helperStateDir string
@@ -43,6 +46,9 @@ func run() int {
 	flag.BoolVar(&installService, "install-service", false, "Install and start Borealis Agent service.")
 	flag.BoolVar(&uninstallService, "uninstall-service", false, "Uninstall Borealis Agent service.")
 	flag.BoolVar(&updateCheck, "update-check", false, "Run one Agent release-channel update check.")
+	flag.BoolVar(&finalizeUpdate, "finalize-update", false, "Finalize a deferred Agent binary replacement.")
+	flag.StringVar(&finalizeBuildID, "build-id", "", "Installed build ID for deferred update finalization.")
+	flag.StringVar(&finalizeExpectedSHA256, "expected-sha256", "", "Expected Agent binary SHA-256 for deferred update finalization.")
 	flag.BoolVar(&printVersion, "version", false, "Print version.")
 	systemService := flag.Bool("system-service", false, "Run as SYSTEM/root service.")
 	helperMode := flag.Bool("helper", false, "Run as current-user helper.")
@@ -60,6 +66,21 @@ func run() int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolve executable: %v\n", err)
 		return 1
+	}
+	if finalizeUpdate {
+		configPath := options.ConfigPath
+		if configPath == "" {
+			configPath, err = agentconfig.PathFromBinary()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "resolve config path: %v\n", err)
+				return 1
+			}
+		}
+		if err := finalizeDeferredUpdate(configPath, finalizeBuildID, finalizeExpectedSHA256); err != nil {
+			fmt.Fprintf(os.Stderr, "finalize update: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 	if updateCheck {
 		if err := runStandaloneUpdateCheck(options); err != nil {

@@ -72,6 +72,7 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 		return 1
 	}
 	logger.Tracef("Bootstrap directories ready.")
+	cleanupStaleAgentUpdateBinary(cfg, logger)
 
 	logger.Stepf("Checking Existing Agent Installation.")
 	health := assessInstallHealth(cfg, logger)

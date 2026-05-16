@@ -110,7 +110,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Agent runtime log: `Logs/Agent/agent.log` with daily rotation.
 - Agent error log: `Logs/Agent/agent.error.log`.
 - Agent remote shell log: `Logs/Agent/remote_shell.log`.
-- Agent bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/Agent/bootstrap.log`; Windows bootstrap truncates this file at each start and always writes verbose trace/command output there while keeping console/GUI output minimal. Linux updater diagnostics use the same path.
+- Agent bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/Agent/bootstrap.log`; Windows bootstrap truncates this file at each start and always writes verbose trace/command output there while keeping console/GUI output minimal. Deferred Windows self-replacement writes retry, hash verification, finalization, and task restart output to `Logs/Agent/updater.log`. Linux updater diagnostics use `bootstrap.log`.
 - WireGuard role log: `Logs/WireGuard/wireguard.log`.
 - WireGuard MSI install log: `Logs/WireGuard/wireguard-msi-install.log`.
 - UltraVNC role log: `Logs/UltraVNC/vnc.log`.
@@ -128,6 +128,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Installed build tracking lives in `config.json` as `agent.installed_build_id`; the Go Agent does not create a standalone `installed_build_id.txt`.
 - Update checks do not persist `update_status.json`; transient state such as `state`, `update_available`, and `last_checked_at` is intentionally not stored by the Go Agent.
 - Windows update archives and extracted repository payloads are staged under `C:\Borealis\Temp\Updater`; the updater removes update workspaces immediately, schedules full `C:\Borealis\Temp` cleanup after bootstrap exits so stdout/stderr handles are closed, and cleans old accidental `C:\Borealis\Agent` update workspaces.
+- Windows self-update stages `Agent.exe.update` beside `Agent.exe` only while replacing a running binary. The detached updater retries the move, verifies the installed `Agent.exe` SHA-256, then runs `Agent.exe --finalize-update` so `config.json` receives the new `agent.installed_build_id` only after verified replacement. Stale `Agent.exe.update` files are removed on later bootstrap/update starts when they match or are older than installed `Agent.exe`.
 - The scheduled AutoUpdater cadence is hourly on Windows and Linux.
 - If scripts do not run:
   - Confirm `quick_job_run` events and the correct role context.

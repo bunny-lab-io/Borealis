@@ -3,14 +3,18 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"time"
+	"unicode/utf16"
 )
 
-func stageAgentUpdateBinary(cfg BootstrapConfig, sourceRoot string, logger *BootstrapLogger) (bool, error) {
+func stageAgentUpdateBinary(cfg BootstrapConfig, sourceRoot string, buildID string, logger *BootstrapLogger) (bool, error) {
 	candidates := []string{
 		filepath.Join(sourceRoot, "Agent.exe"),
 		filepath.Join(sourceRoot, "Data", "Agent", "Agent.exe"),
@@ -26,17 +30,29 @@ func stageAgentUpdateBinary(cfg BootstrapConfig, sourceRoot string, logger *Boot
 		if logger != nil {
 			logger.Tracef("Staging Go Agent update binary: source=%s destination=%s", candidate, destination)
 		}
+		expectedSHA256, err := sha256File(candidate)
+		if err != nil {
+			return false, err
+		}
 		if err := copyFile(candidate, pending); err != nil {
+			return false, err
+		}
+		if err := verifyFileSHA256(pending, expectedSHA256); err != nil {
+			_ = os.Remove(pending)
 			return false, err
 		}
 		exe, _ := os.Executable()
 		if samePath(exe, destination) {
-			if err := scheduleAgentSelfReplacement(pending, destination, logger); err != nil {
+			if err := scheduleAgentSelfReplacement(cfg, pending, destination, buildID, expectedSHA256, logger); err != nil {
+				_ = os.Remove(pending)
 				return false, err
 			}
 			return true, nil
 		}
 		if err := copyFile(pending, destination); err != nil {
+			return false, err
+		}
+		if err := verifyFileSHA256(destination, expectedSHA256); err != nil {
 			return false, err
 		}
 		_ = os.Remove(pending)
@@ -48,21 +64,141 @@ func stageAgentUpdateBinary(cfg BootstrapConfig, sourceRoot string, logger *Boot
 	return false, fmt.Errorf("update artifact missing Agent.exe")
 }
 
-func scheduleAgentSelfReplacement(pending string, destination string, logger *BootstrapLogger) error {
+func scheduleAgentSelfReplacement(cfg BootstrapConfig, pending string, destination string, buildID string, expectedSHA256 string, logger *BootstrapLogger) error {
 	if logger != nil {
-		logger.Tracef("Scheduling Agent.exe self-replacement: pending=%s destination=%s", pending, destination)
+		logger.Tracef("Scheduling Agent.exe self-replacement: pending=%s destination=%s expected_sha256=%s", pending, destination, expectedSHA256)
 	}
-	command := fmt.Sprintf(
-		`ping -n 4 127.0.0.1 >NUL & move /Y "%s" "%s" >NUL & schtasks.exe /Run /TN "%s" >NUL 2>&1`,
-		pending,
-		destination,
-		agentTaskName,
+	script := deferredReplacementScript(cfg, pending, destination, buildID, expectedSHA256)
+	cmd := exec.Command(
+		"powershell.exe",
+		"-NoProfile",
+		"-ExecutionPolicy",
+		"Bypass",
+		"-EncodedCommand",
+		encodePowerShellCommand(script),
 	)
-	cmd := exec.Command("cmd.exe", "/C", command)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	return cmd.Process.Release()
+}
+
+func deferredReplacementScript(cfg BootstrapConfig, pending string, destination string, buildID string, expectedSHA256 string) string {
+	logPath := filepath.Join(cfg.InstallDir, "Logs", "Agent", "updater.log")
+	configPath := agentConfigPath(cfg.InstallDir)
+	return fmt.Sprintf(`
+$ErrorActionPreference = 'Continue'
+$logPath = %s
+$pending = %s
+$destination = %s
+$configPath = %s
+$buildId = %s
+$expectedSha256 = %s
+$agentTaskName = %s
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $logPath) | Out-Null
+function Write-UpdaterLog([string]$message) {
+  Add-Content -LiteralPath $logPath -Value ("[{0}] {1}" -f (Get-Date).ToString("s"), $message)
+}
+Write-UpdaterLog "Deferred Agent.exe replacement starting. pending=$pending destination=$destination build=$buildId expected_sha256=$expectedSha256"
+Start-Sleep -Seconds 3
+for ($attempt = 1; $attempt -le 20; $attempt++) {
+  try {
+    if (!(Test-Path -LiteralPath $pending)) {
+      Write-UpdaterLog "Attempt $attempt failed: pending binary missing."
+      Start-Sleep -Seconds 2
+      continue
+    }
+    schtasks.exe /End /TN $agentTaskName *> $null
+    Get-Process -Name Agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+    Move-Item -LiteralPath $pending -Destination $destination -Force -ErrorAction Stop
+    $actualSha256 = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualSha256 -ne $expectedSha256) {
+      Write-UpdaterLog "Attempt $attempt failed: hash mismatch actual=$actualSha256."
+      exit 1
+    }
+    $finalizeOutput = & $destination --finalize-update --config-path $configPath --build-id $buildId --expected-sha256 $expectedSha256 2>&1
+    foreach ($line in $finalizeOutput) { Write-UpdaterLog ("finalize: " + $line) }
+    if ($LASTEXITCODE -ne 0) {
+      Write-UpdaterLog "Attempt $attempt failed: finalize exited $LASTEXITCODE."
+      exit 1
+    }
+    schtasks.exe /Run /TN $agentTaskName *> $null
+    Write-UpdaterLog "Deferred Agent.exe replacement complete."
+    exit 0
+  } catch {
+    Write-UpdaterLog ("Attempt $attempt failed: " + $_.Exception.Message)
+    Start-Sleep -Seconds 2
+  }
+}
+Write-UpdaterLog "Deferred Agent.exe replacement failed after all attempts."
+exit 1
+`,
+		powershellSingleQuoted(logPath),
+		powershellSingleQuoted(pending),
+		powershellSingleQuoted(destination),
+		powershellSingleQuoted(configPath),
+		powershellSingleQuoted(agentconfigBuildID(buildID)),
+		powershellSingleQuoted(strings.ToLower(strings.TrimSpace(expectedSHA256))),
+		powershellSingleQuoted(agentTaskName),
+	)
+}
+
+func agentconfigBuildID(value string) string {
+	return strings.TrimSpace(strings.ToLower(value))
+}
+
+func encodePowerShellCommand(script string) string {
+	encoded := utf16.Encode([]rune(script))
+	raw := make([]byte, len(encoded)*2)
+	for i, item := range encoded {
+		raw[i*2] = byte(item)
+		raw[i*2+1] = byte(item >> 8)
+	}
+	return base64.StdEncoding.EncodeToString(raw)
+}
+
+func verifyFileSHA256(path string, expected string) error {
+	expected = strings.TrimSpace(strings.ToLower(expected))
+	if expected == "" {
+		return nil
+	}
+	actual, err := sha256File(path)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(actual, expected) {
+		return fmt.Errorf("Agent binary hash mismatch expected=%s actual=%s", expected, actual)
+	}
+	return nil
+}
+
+func cleanupStaleAgentUpdateBinary(cfg BootstrapConfig, logger *BootstrapLogger) {
+	destination := filepath.Join(cfg.InstallDir, "Agent.exe")
+	pending := destination + ".update"
+	pendingInfo, err := os.Stat(pending)
+	if err != nil || pendingInfo.IsDir() {
+		return
+	}
+	destinationInfo, err := os.Stat(destination)
+	if err != nil || destinationInfo.IsDir() {
+		return
+	}
+	pendingHash, pendingHashErr := sha256File(pending)
+	destinationHash, destinationHashErr := sha256File(destination)
+	if pendingHashErr == nil && destinationHashErr == nil && strings.EqualFold(pendingHash, destinationHash) {
+		_ = os.Remove(pending)
+		if logger != nil {
+			logger.Tracef("Removed stale Agent.exe.update: pending matches installed Agent.exe sha256=%s", pendingHash)
+		}
+		return
+	}
+	if !pendingInfo.ModTime().After(destinationInfo.ModTime().Add(1 * time.Second)) {
+		_ = os.Remove(pending)
+		if logger != nil {
+			logger.Tracef("Removed stale Agent.exe.update: pending_mtime=%s installed_mtime=%s", pendingInfo.ModTime().Format(time.RFC3339), destinationInfo.ModTime().Format(time.RFC3339))
+		}
+	}
 }
 
 func copyReaderToFile(reader io.Reader, destination string) error {

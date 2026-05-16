@@ -27,6 +27,7 @@ type updateManifest struct {
 func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	startedAt := time.Now()
 	defer cleanupAgentTemp(cfg, logger)
+	cleanupStaleAgentUpdateBinary(cfg, logger)
 	serverURL := strings.TrimRight(strings.TrimSpace(cfg.ServerURL), "/")
 	if serverURL == "" {
 		return fmt.Errorf("server URL missing")
@@ -97,15 +98,18 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	logger.Tracef("Agent update source resolved: %s", sourceRoot)
 	stopScheduledTask(agentTaskName, logger)
 	stopBorealisProcesses(cfg, logger)
-	deferred, err := stageAgentUpdateBinary(cfg, sourceRoot, logger)
+	deferred, err := stageAgentUpdateBinary(cfg, sourceRoot, target, logger)
 	if err != nil {
 		return err
 	}
-	if !deferred {
-		reconcileUltraVNCServiceAfterRuntimeStage(cfg, logger)
-		if err := ensureAgentTasks(cfg, logger); err != nil {
-			return err
-		}
+	if deferred {
+		logger.Infof("Agent update staged (%s); deferred replacement will finalize after Agent.exe exits.", target)
+		logger.Tracef("Agent update check complete: deferred duration=%s", time.Since(startedAt).Round(time.Millisecond))
+		return nil
+	}
+	reconcileUltraVNCServiceAfterRuntimeStage(cfg, logger)
+	if err := ensureAgentTasks(cfg, logger); err != nil {
+		return err
 	}
 	writeInstalledBuildID(cfg, target)
 	logger.Infof("Agent update applied (%s).", target)
@@ -143,15 +147,18 @@ func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, install
 	}
 	stopScheduledTask(agentTaskName, logger)
 	stopBorealisProcesses(cfg, logger)
-	deferred, err := stageAgentUpdateBinary(cfg, sourceRoot, logger)
+	deferred, err := stageAgentUpdateBinary(cfg, sourceRoot, target, logger)
 	if err != nil {
 		return err
 	}
-	if !deferred {
-		reconcileUltraVNCServiceAfterRuntimeStage(cfg, logger)
-		if err := ensureAgentTasks(cfg, logger); err != nil {
-			return err
-		}
+	if deferred {
+		logger.Infof("Agent repo_ref update staged (%s @ %s); deferred replacement will finalize after Agent.exe exits.", ref, target)
+		logger.Tracef("Agent update check complete: repo_ref_deferred duration=%s", time.Since(startedAt).Round(time.Millisecond))
+		return nil
+	}
+	reconcileUltraVNCServiceAfterRuntimeStage(cfg, logger)
+	if err := ensureAgentTasks(cfg, logger); err != nil {
+		return err
 	}
 	writeInstalledBuildID(cfg, target)
 	logger.Infof("Agent repo_ref update applied (%s @ %s).", ref, target)
