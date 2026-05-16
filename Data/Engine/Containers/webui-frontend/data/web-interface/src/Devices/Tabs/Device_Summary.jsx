@@ -1579,7 +1579,7 @@ export default function DeviceSummary() {
         });
         applyDeviceSummarySnapshot(snapshot, { silent: true });
         const resolvedChannel =
-          String(data?.agent_release_channel_effective || normalizedChannel || "stable")
+          String(data?.agent_release_channel || normalizedChannel || "stable")
             .trim()
             .toLowerCase() || "stable";
         const targetLabel = activityHostname || targetGuid;
@@ -1641,7 +1641,7 @@ export default function DeviceSummary() {
           method: "PUT",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ channel: "unstable", branch: normalizedBranch }),
+          body: JSON.stringify({ channel: "source", branch: normalizedBranch }),
         });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) {
@@ -2775,7 +2775,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       )
         .trim()
         .toLowerCase();
-      const effectiveChannel =
+      const rawEffectiveChannel =
         String(
           configuredReleaseChannel ||
             meta.agentReleaseChannelEffective ||
@@ -2786,6 +2786,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         )
           .trim()
           .toLowerCase() || "stable";
+      const effectiveChannel =
+        rawEffectiveChannel === "unstable" || rawEffectiveChannel === "branch" ? "source" : rawEffectiveChannel;
       const currentBranch =
         String(meta.agentBranch || summary.agent_branch || "").trim() || "main";
       const lastChannelUpdateValue = formatDateValue(
@@ -3338,11 +3340,22 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           Stable
         </MenuItem>
         <MenuItem
-          selected={String(meta.agentReleaseChannelOverride || summary.agent_release_channel_override || "").trim().toLowerCase() === "unstable"}
+          selected={
+            String(
+              meta.agentReleaseChannel ||
+                summary.agent_release_channel ||
+                meta.agentReleaseChannelOverride ||
+                summary.agent_release_channel_override ||
+                ""
+            )
+              .trim()
+              .toLowerCase() === "source" ||
+            String(meta.agentReleaseChannelOverride || summary.agent_release_channel_override || "").trim().toLowerCase() === "unstable"
+          }
           disabled={releaseChannelSaving}
-          onClick={() => handleReleaseChannelSelection("unstable")}
+          onClick={() => handleReleaseChannelSelection("source")}
         >
-          Unstable
+          Source
         </MenuItem>
       </Menu>
       <Menu

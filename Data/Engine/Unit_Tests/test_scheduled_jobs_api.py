@@ -1531,7 +1531,7 @@ def test_onboarding_failure_hint_prefers_actionable_output() -> None:
     hint = scheduled_job_module._onboarding_failure_hint(
         stdout=(
             "Warning: Permanently added '192.168.3.8' (ED25519) to the list of known hosts.\n"
-            "[2026-05-05T03:01:04] Launching /opt/Borealis/Agent.sh deploy --serverurl secret-url.\n"
+            "[2026-05-05T03:01:04] Launching /tmp/Borealis-Agent --server-url secret-url.\n"
             "/tmp/borealis-agent.64Rvmd: line 77: /dev/tty: No such device or address\n"
         ),
         stderr="nicole@192.168.3.8's password:",

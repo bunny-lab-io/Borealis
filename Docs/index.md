@@ -60,8 +60,8 @@ This page is the navigation hub for the Borealis documentation set. The knowledg
 - [README](../README.md)
 - [AGENTS.md](../AGENTS.md)
 - [Engine Unit Test Script](../Engine_Unit_Tests.sh)
-- [Linux Agent Unit Test Script](../Agent_Unit_Tests.sh)
-- [Windows Agent Unit Test Script](../Agent_Unit_Tests.ps1)
+- [Linux Agent Unit Test Script](../Data/Agent/Unit_Tests/Agent_Unit_Tests.sh)
+- [Windows Agent Unit Test Script](../Data/Agent/Unit_Tests/Agent_Unit_Tests.ps1)
 
 ## API Endpoints
 None. This index only links to other pages.

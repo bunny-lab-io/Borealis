@@ -9,7 +9,8 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="${BOREALIS_PROJECT_ROOT:-${SCRIPT_DIR}}"
+DEFAULT_PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+PROJECT_ROOT="${BOREALIS_PROJECT_ROOT:-${DEFAULT_PROJECT_ROOT}}"
 TIMESTAMP="$(date -u +"%Y%m%dT%H%M%SZ")"
 RESULT_DIR="${BOREALIS_UNIT_TEST_RESULTS_DIR:-${PROJECT_ROOT}/Unit_Test_Results/agent-${TIMESTAMP}}"
 REQUESTED_DOMAIN="${BOREALIS_AGENT_UNIT_TEST_DOMAIN:-all}"
@@ -17,17 +18,17 @@ LIST_DOMAINS=0
 
 usage() {
   cat <<'USAGE'
-Usage: ./Agent_Unit_Tests.sh [--domain DOMAIN] [--list-domains]
+Usage: ./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh [--domain DOMAIN] [--list-domains]
 
-Runs Agent Go unit/build checks. Legacy Python tests remain under Data/Agent_Old.
+Runs Agent Go unit/build checks.
 
 Default domain:
   all
 
 Examples:
-  ./Agent_Unit_Tests.sh
-  ./Agent_Unit_Tests.sh --domain go-agent
-  ./Agent_Unit_Tests.sh --list-domains
+  ./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh
+  ./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --domain go-agent
+  ./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --list-domains
 
 Environment overrides:
   BOREALIS_PROJECT_ROOT
@@ -171,7 +172,7 @@ fi
   echo "Borealis Agent unit test run"
   echo "Domain: ${REQUESTED_DOMAIN}"
   echo "Results: ${RESULT_DIR}"
-  echo "Python status: skipped (legacy source moved to Data/Agent_Old)"
+  echo "Python status: removed (Go Agent only)"
   echo "Go Agent status: ${status}"
   echo "Overall status: ${status}"
 } >"$SUMMARY_PATH"

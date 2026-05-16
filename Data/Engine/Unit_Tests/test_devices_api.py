@@ -39,7 +39,7 @@ from .support.devices import (
     set_seed_device_agent_id,
     set_seed_device_guid,
 )
-from .support.engine import admin_client
+from .support.engine import admin_client, fetch_one
 from .support.software_config import (
     isolate_software_icon_overrides,
     isolate_uninstall_blocklist,
@@ -610,6 +610,70 @@ def test_device_description_update(engine_harness: EngineTestHarness) -> None:
     assert response.status_code == 200
     detail = client.get("/api/device/details/test-device").get_json()
     assert detail["description"] == "Updated"
+
+
+def test_agent_release_channel_branch_update_persists_and_emits(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted: list[tuple[str, str, str, dict[str, Any]]] = []
+
+    def emit_host_service_event(hostname: str, service_mode: str, event: str, payload: dict[str, Any]) -> bool:
+        emitted.append((hostname, service_mode, event, payload))
+        return True
+
+    monkeypatch.setattr(engine_harness.context, "emit_host_service_event", emit_host_service_event, raising=False)
+
+    client = admin_client(engine_harness)
+    response = client.put(
+        "/api/devices/GUID-TEST-0001/agent-release-channel",
+        json={"channel": "source", "branch": "feature/rewrite-borealis-agent-in-golang"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["agent_release_channel_override"] == "unstable"
+    assert payload["agent_release_channel"] == "source"
+    assert payload["agent_branch"] == "feature/rewrite-borealis-agent-in-golang"
+
+    row = fetch_one(
+        engine_harness,
+        """
+        SELECT agent_release_channel_override, agent_release_channel, agent_branch
+          FROM devices
+         WHERE guid = ?
+        """,
+        ("GUID-TEST-0001",),
+    )
+    assert row == ("unstable", "source", "feature/rewrite-borealis-agent-in-golang")
+    assert emitted == [
+        (
+            "test-device",
+            "system",
+            "agent_release_channel_changed",
+            {
+                "hostname": "test-device",
+                "guid": "GUID-TEST-0001",
+                "effective_channel": "unstable",
+                "target_channel": "unstable",
+                "release_channel": "source",
+                "branch": "feature/rewrite-borealis-agent-in-golang",
+                "target_build_id": "",
+            },
+        )
+    ]
+
+
+def test_agent_release_channel_branch_update_rejects_blank_branch(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = admin_client(engine_harness)
+    response = client.put(
+        "/api/devices/GUID-TEST-0001/agent-release-channel",
+        json={"channel": "source", "branch": "  "},
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "invalid_branch"
 
 
 def test_agent_details_syncs_normalized_software_inventory(

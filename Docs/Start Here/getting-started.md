@@ -13,7 +13,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Linux production, local redeploy: `./Engine.sh deploy prod`.
 - Linux dev, local redeploy: `./Engine.sh deploy dev`.
 - Engine service action examples: `./Engine.sh --service api-backend restart`, `./Engine.sh --service webui-frontend rebuild dev`, `./Engine.sh --service traefik-edge reload`, and `./Engine.sh --service wireguard-tunnel reconcile`.
-- Updates: `./Update.sh -Engine` fast-forwards the current branch then runs `Engine.sh deploy`; Go Agent release-channel packaging is tracked in `Data/Agent/Golang_Agent_Migration.md`.
+- Updates from a cloned checkout: `git pull --ff-only` followed by `./Engine.sh deploy prod` or `./Engine.sh deploy dev`; Go Agent release-channel packaging is tracked in `Data/Agent/Golang_Agent_Migration.md`.
 - Production TLS is managed by the embedded Traefik edge; the Python Engine stays on loopback HTTP.
 - During Engine deployment, `Engine.sh` renders `Engine/Deploy/compose.env` for Compose interpolation, renders shared and WebUI mode-scoped service env files under `Engine/Deploy/`, builds changed local images as `borealis-engine/<service>:sha-<hash>`, and starts or updates the Compose project `borealis-engine`.
 - No-op Engine deploys skip unchanged image builds and skip Compose when the deploy manifest, env, image hashes, and running containers already match.

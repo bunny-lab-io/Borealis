@@ -4,7 +4,7 @@ Back to Docs Index: ../../Docs/index.md
 
 ## Decisions
 
-1. Agent source now lives under `Data/Agent`; legacy Python agent source moved to `Data/Agent_Old`.
+1. Agent source now lives under `Data/Agent`; legacy Python agent source has been removed from the active tree after Go feature parity.
 2. Fresh install runtime is one compiled Go binary named `Agent.exe`.
 3. Windows `Agent.exe` owns bootstrap, deployment, repair, update checks, service task registration, and runtime execution.
 4. Linux `Agent` owns deployment, self-staging, runtime execution, systemd service install/uninstall, and update timer installation.
@@ -40,7 +40,7 @@ Back to Docs Index: ../../Docs/index.md
 
 ## Completed
 
-1. Moved old agent codebase from `Data/Agent` to `Data/Agent_Old`.
+1. Moved old agent codebase from `Data/Agent` during migration, then removed the legacy Python source after Go parity validation.
 2. Added Go module under `Data/Agent`.
 3. Added `cmd/agent` runtime entrypoint with CLI flags.
 4. Added compiled role registry foundation under `internal/roles`.
@@ -112,6 +112,8 @@ Back to Docs Index: ../../Docs/index.md
 70. Ported Windows display topology collection into the Go VNC role and included display topology plus virtual bounds in VNC ensure, credential, and role-health payloads.
 71. Added `agent.release_channel` to `config.json`; `stable` update checks use Engine release manifests, while `source` update checks track current repository source from `agent.branch`. Engine release-channel changes are emitted to online Go agents so they commit the selected channel to local config.
 72. Added Device Summary branch control so admins can remotely set an agent source branch; Engine stores `agent_release_channel` and `agent_branch` on the device row and emits `agent_release_channel_changed` to online Go agents.
+73. Added initial regression coverage for Go Socket.IO ACK handling, release-channel event persistence, installed build config cleanup, and Engine release-channel/branch persistence plus socket emission.
+74. Moved Agent unit-test lane entrypoints under `Data/Agent/Unit_Tests` and removed archived Python Agent source.
 
 ## In Progress
 
@@ -120,14 +122,14 @@ Back to Docs Index: ../../Docs/index.md
 ## Pending
 
 1. Rework tray UI/status as optional Go/native helper or external UI.
-2. Add fake Engine HTTP/Socket.IO harness coverage for live `connect_agent`, `quick_job_run`, `file_management_request`, `process_management_request`, `service_control_action`, `software_inventory_refresh_request`, `vpn_tunnel_start`, Remote Shell TCP bridge behavior, and VNC credential/start lifecycle behavior.
+2. Expand fake Engine HTTP/Socket.IO harness coverage beyond initial ACK/event tests for live `connect_agent`, `quick_job_run`, `file_management_request`, `process_management_request`, `service_control_action`, `software_inventory_refresh_request`, `vpn_tunnel_start`, Remote Shell TCP bridge behavior, and VNC credential/start lifecycle behavior.
 3. Add broader Engine contract tests for onboarding/update artifact path changes.
 
 ## Release-Blocking Technical Debt
 
 1. Windows CURRENTUSER direct session quick-job execution and same-binary helper sentinels are implemented, but tray UI/status remains pending.
 2. Linux CURRENTUSER is unsupported by design in first PR and must report explicit unsupported status.
-3. Manual Windows acceptance has validated fresh enrollment, SYSTEM script execution, and CURRENTUSER PowerShell/Batch execution; update check validation and final config access-control decision remain open.
+3. Manual Windows acceptance has validated fresh enrollment, SYSTEM script execution, CURRENTUSER PowerShell/Batch execution, and update checks; final config access-control decision remains open.
 4. Manual Linux acceptance has validated service install, fresh enrollment, root SYSTEM Bash execution, and root-owned `0600` config; Linux release-channel update behavior still needs real-host acceptance.
 5. Windows `config.json` ACL hardening is deferred because current install ACL changes blocked administrator repair/uninstall workflows during real-host testing.
 6. Software Management has Go unit coverage, Engine contract compatibility, and real-host Windows uninstall/icon validation; Linux uninstall acceptance remains opportunistic because package removal is operator-risky.

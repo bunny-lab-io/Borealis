@@ -18,7 +18,7 @@ Use this file as entrypoint for Codex instructions. Full knowledgebase lives und
 
 ## Unit Testing
 - For codebase changes, use `Docs/index.md` to find unit testing guidance before choosing validation.
-- Use `Engine_Unit_Tests.sh`, `Agent_Unit_Tests.sh`, and `Agent_Unit_Tests.ps1` as the unit test entrypoints.
+- Use `Engine_Unit_Tests.sh`, `Data/Agent/Unit_Tests/Agent_Unit_Tests.sh`, and `Data/Agent/Unit_Tests/Agent_Unit_Tests.ps1` as the unit test entrypoints.
 - Use documented domain flags while iterating, then run full affected Engine or Agent lane before handoff when practical.
 
 ## Database Work

@@ -17,7 +17,8 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectRoot = if ($env:BOREALIS_PROJECT_ROOT) { $env:BOREALIS_PROJECT_ROOT } else { $ScriptRoot }
+$DefaultProjectRoot = (Resolve-Path (Join-Path $ScriptRoot "..\..\..")).Path
+$ProjectRoot = if ($env:BOREALIS_PROJECT_ROOT) { $env:BOREALIS_PROJECT_ROOT } else { $DefaultProjectRoot }
 $Timestamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
 if (-not $ResultsDir) {
     if ($env:BOREALIS_UNIT_TEST_RESULTS_DIR) {
@@ -126,7 +127,7 @@ if ($status -ne 0) {
     "Borealis Agent unit test run",
     "Domain: $RequestedDomain",
     "Results: $ResultsDir",
-    "Python status: skipped (legacy source moved to Data/Agent_Old)",
+    "Python status: removed (Go Agent only)",
     "Go Agent status: $status",
     "Overall status: $status"
 ) | Out-File -FilePath $SummaryPath -Encoding utf8

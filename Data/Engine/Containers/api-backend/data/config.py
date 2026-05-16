@@ -101,7 +101,6 @@ def _discover_project_root() -> Path:
         if (
             (candidate / "Agent.exe").is_file()
             or (candidate / "Engine.sh").is_file()
-            or (candidate / "Agent.sh").is_file()
         ):
             return candidate
 

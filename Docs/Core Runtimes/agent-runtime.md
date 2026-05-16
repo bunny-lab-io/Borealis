@@ -5,8 +5,7 @@
 Describe the Borealis agent runtime, its roles, service modes, and how it communicates with the Engine.
 
 ## Runtime Summary
-- Main entry: `Data/Agent/cmd/agent` builds one Go runtime binary named `Agent.exe`.
-- Legacy Python source lives under `Data/Agent_Old` for reference during migration and is not installed as runtime fallback.
+- Main entry: `Data/Agent/cmd/agent` builds one Go runtime binary named `Agent.exe` on Windows and `Agent` on Linux.
 - Service modes: SYSTEM/root plus same-binary helper mode. Windows CURRENTUSER tracks long-lived helper sentinels per active desktop session and executes signed quick jobs through SYSTEM-brokered `CreateProcessAsUser`. Linux CURRENTUSER reports unsupported until ported.
 - Role system: compiled Go role registry under `Data/Agent/internal/roles`.
 - Networking: SYSTEM/root runtime owns REST to Engine APIs plus the single Socket.IO connection.
@@ -58,10 +57,9 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 ## Codex Agent (Detailed)
 ### Source vs runtime
 - Edit only in `Data/Agent/`.
-- Legacy Python source is archived in `Data/Agent_Old/`.
 - Windows installed runtime is `C:\Borealis\Agent.exe` plus `C:\Borealis\config.json`.
 - Linux installed runtime is a single compiled `Agent` binary managed by systemd. `--install-service` self-stages temp downloads into `/opt/Borealis/Agent/Agent`, writes `config.json`, and installs the service plus updater timer.
-- `Update.sh -Agent` remains legacy for old Python-agent installs; Go Agent updates use Engine release channels.
+- Go Agent updates use Engine release channels and the local `--update-check` path.
 
 ### Service modes and context
 - SYSTEM mode is used for elevated tasks (scheduled tasks, VPN, system scripts).
@@ -75,7 +73,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 ### Role discovery and extension
 - Go roles are compiled under `Data/Agent/internal/roles`.
 - Add new role packages to the explicit registry in `cmd/agent`/runtime wiring instead of relying on dynamic Python module discovery.
-- Legacy role behavior can be referenced in `Data/Agent_Old/Roles` while porting.
+- Add regression coverage under package-local Go `*_test.go` files and run the lane through `Data/Agent/Unit_Tests/Agent_Unit_Tests.sh` or `Data/Agent/Unit_Tests/Agent_Unit_Tests.ps1`.
 
 ### Networking and authentication
 - All REST calls flow through the Go auth client in `Data/Agent/internal/auth`.

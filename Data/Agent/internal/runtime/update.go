@@ -57,6 +57,8 @@ func releaseChannelFromPayload(payload map[string]any) string {
 		return agentconfig.ReleaseChannelSource
 	case "stable", "release", "releases":
 		return agentconfig.ReleaseChannelStable
+	case "":
+		return ""
 	default:
 		return agentconfig.NormalizeReleaseChannel(effective)
 	}

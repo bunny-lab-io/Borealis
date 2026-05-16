@@ -63,7 +63,6 @@ None on this page. See [API Reference](../Data%20and%20Schema/api-reference.md).
 - Remote desktop proxy: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/` (VNC WebSocket proxy).
 - Filters and targeting: `Data/Engine/Containers/api-backend/data/services/filters/matcher.py` (used by scheduled jobs and filter counts).
 - Agent runtime: `Data/Agent/cmd/agent` plus packages under `Data/Agent/internal/`.
-- Legacy Agent reference source: `Data/Agent_Old/` while Go role ports continue.
 
 ### End-to-end flow examples (use these to debug)
 - Quick job:

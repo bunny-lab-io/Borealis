@@ -13,8 +13,6 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - UltraVNC Server 1.8.2.1 - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
 - Go toolchain (native Linux build helper installs official Go into `Dependencies/Go` when missing) - BSD-3-Clause - https://go.dev/LICENSE
 
-Legacy Python Agent dependencies live under `Data/Agent_Old` for migration reference only and are not part of the installed Go Agent runtime.
-
 ## Borealis Engine Dependencies
 
 - Docker Engine (Linux Engine deployment runtime; Docker Desktop not used) - Apache-2.0 - https://github.com/moby/moby/blob/master/LICENSE
