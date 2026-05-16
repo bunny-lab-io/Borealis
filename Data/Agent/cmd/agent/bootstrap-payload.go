@@ -370,6 +370,7 @@ func copyFile(source string, destination string) error {
 	}
 	_ = os.Remove(destination)
 	if err := os.Rename(tmp, destination); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	return nil

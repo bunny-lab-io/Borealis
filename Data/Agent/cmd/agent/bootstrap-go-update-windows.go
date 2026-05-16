@@ -50,7 +50,14 @@ func stageAgentUpdateBinary(cfg BootstrapConfig, sourceRoot string, buildID stri
 			return true, nil
 		}
 		if err := copyFile(pending, destination); err != nil {
-			return false, err
+			if logger != nil {
+				logger.Warnf("Agent.exe direct replacement failed; scheduling deferred replacement: %v", err)
+			}
+			if scheduleErr := scheduleAgentSelfReplacement(cfg, pending, destination, buildID, expectedSHA256, logger); scheduleErr != nil {
+				_ = os.Remove(pending)
+				return false, fmt.Errorf("replace Agent.exe: %w; schedule deferred replacement: %v", err, scheduleErr)
+			}
+			return true, nil
 		}
 		if err := verifyFileSHA256(destination, expectedSHA256); err != nil {
 			return false, err
@@ -105,8 +112,7 @@ for ($attempt = 1; $attempt -le 20; $attempt++) {
   try {
     if (!(Test-Path -LiteralPath $pending)) {
       Write-UpdaterLog "Attempt $attempt failed: pending binary missing."
-      Start-Sleep -Seconds 2
-      continue
+      exit 1
     }
     schtasks.exe /End /TN $agentTaskName *> $null
     Get-Process -Name Agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -131,7 +137,10 @@ for ($attempt = 1; $attempt -le 20; $attempt++) {
     Start-Sleep -Seconds 2
   }
 }
-Write-UpdaterLog "Deferred Agent.exe replacement failed after all attempts."
+Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath ($destination + '.tmp') -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath ($pending + '.tmp') -Force -ErrorAction SilentlyContinue
+Write-UpdaterLog "Deferred Agent.exe replacement failed after all attempts; staged update artifacts removed."
 exit 1
 `,
 		powershellSingleQuoted(logPath),
@@ -176,6 +185,28 @@ func verifyFileSHA256(path string, expected string) error {
 func cleanupStaleAgentUpdateBinary(cfg BootstrapConfig, logger *BootstrapLogger) {
 	destination := filepath.Join(cfg.InstallDir, "Agent.exe")
 	pending := destination + ".update"
+	now := time.Now()
+	for _, tempPath := range []string{destination + ".tmp", pending + ".tmp"} {
+		info, err := os.Stat(tempPath)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		if now.Sub(info.ModTime()) < 30*time.Second {
+			if logger != nil {
+				logger.Tracef("Leaving fresh Agent staging temp artifact in place: path=%s mtime=%s", tempPath, info.ModTime().Format(time.RFC3339))
+			}
+			continue
+		}
+		if err := os.Remove(tempPath); err != nil {
+			if logger != nil {
+				logger.Tracef("Agent staging temp artifact cleanup skipped: path=%s err=%v", tempPath, err)
+			}
+			continue
+		}
+		if logger != nil {
+			logger.Tracef("Removed stale Agent staging temp artifact: path=%s", tempPath)
+		}
+	}
 	pendingInfo, err := os.Stat(pending)
 	if err != nil || pendingInfo.IsDir() {
 		return
@@ -197,6 +228,13 @@ func cleanupStaleAgentUpdateBinary(cfg BootstrapConfig, logger *BootstrapLogger)
 		_ = os.Remove(pending)
 		if logger != nil {
 			logger.Tracef("Removed stale Agent.exe.update: pending_mtime=%s installed_mtime=%s", pendingInfo.ModTime().Format(time.RFC3339), destinationInfo.ModTime().Format(time.RFC3339))
+		}
+		return
+	}
+	if time.Since(pendingInfo.ModTime()) > 2*time.Minute {
+		_ = os.Remove(pending)
+		if logger != nil {
+			logger.Tracef("Removed abandoned Agent.exe.update: pending_mtime=%s age=%s", pendingInfo.ModTime().Format(time.RFC3339), time.Since(pendingInfo.ModTime()).Round(time.Second))
 		}
 	}
 }

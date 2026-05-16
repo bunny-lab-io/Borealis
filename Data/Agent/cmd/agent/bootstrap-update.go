@@ -324,9 +324,11 @@ func scheduleAgentTempCleanup(tempRoot string, logger *BootstrapLogger) {
 		}
 		return
 	}
+	logPath := filepath.Join(filepath.Dir(tempRoot), "Logs", "Agent", "updater.log")
 	command := fmt.Sprintf(
-		"Start-Sleep -Seconds 5; Remove-Item -LiteralPath %s -Recurse -Force -ErrorAction SilentlyContinue",
+		`$ErrorActionPreference='Continue'; $tempRoot=%s; $logPath=%s; New-Item -ItemType Directory -Force -Path (Split-Path -Parent $logPath) | Out-Null; function Write-CleanupLog([string]$m){ Add-Content -LiteralPath $logPath -Value ("[{0}] {1}" -f (Get-Date).ToString("s"), $m) }; Start-Sleep -Seconds 5; for ($attempt=1; $attempt -le 30; $attempt++) { if (!(Test-Path -LiteralPath $tempRoot)) { Write-CleanupLog "Temp cleanup complete: $tempRoot"; exit 0 }; try { Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction Stop; Write-CleanupLog "Temp cleanup complete: $tempRoot"; exit 0 } catch { Write-CleanupLog ("Temp cleanup attempt $attempt failed: " + $_.Exception.Message); Start-Sleep -Seconds 2 } }; Write-CleanupLog "Temp cleanup failed after all attempts: $tempRoot"; exit 1`,
 		powershellSingleQuoted(tempRoot),
+		powershellSingleQuoted(logPath),
 	)
 	cmd := exec.Command(powershellPath(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
 	if err := cmd.Start(); err != nil {
