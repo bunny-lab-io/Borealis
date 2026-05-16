@@ -63,27 +63,28 @@ type Manager struct {
 	platform    string
 	runner      commandRunner
 
-	mu                 sync.Mutex
-	started            bool
-	supported          bool
-	unsupportedReason  string
-	port               int
-	allowedIPs         string
-	removeWallpaper    bool
-	controllerPassword string
-	credentialRevision int64
-	credentialIssuedAt time.Time
-	activeSessionID    string
-	lastReadyAt        int64
-	lastError          string
-	lastEnsureAt       int64
-	lastServiceState   string
-	lastListenerState  string
-	lastReady          bool
-	serviceName        string
-	vncExe             string
-	displayCollector   func() []map[string]any
-	stop               context.CancelFunc
+	mu                  sync.Mutex
+	started             bool
+	supported           bool
+	unsupportedReason   string
+	port                int
+	allowedIPs          string
+	removeWallpaper     bool
+	controllerPassword  string
+	credentialRevision  int64
+	credentialIssuedAt  time.Time
+	activeSessionID     string
+	lastReadyAt         int64
+	lastError           string
+	lastEnsureAt        int64
+	lastServiceState    string
+	lastListenerState   string
+	lastReady           bool
+	serviceConfigLoaded bool
+	serviceName         string
+	vncExe              string
+	displayCollector    func() []map[string]any
+	stop                context.CancelFunc
 }
 
 type commandResult struct {
@@ -432,7 +433,9 @@ func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 	port := m.port
 	allowedIPs := m.allowedIPs
 	password := m.controllerPassword
+	revision := m.credentialRevision
 	removeWallpaper := m.removeWallpaper
+	serviceConfigLoaded := m.serviceConfigLoaded
 	m.mu.Unlock()
 	if password == "" {
 		return fmt.Errorf("VNC controller credential unavailable")
@@ -446,17 +449,30 @@ func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 	if m.vncExe == "" {
 		return fmt.Errorf("UltraVNC winvnc.exe not found")
 	}
+	serviceStateBefore := m.queryServiceState(ctx, m.serviceName)
+	m.logf("VNC ensure start reason=%s service=%s state=%s port=%d allowed_ips=%s credential_revision=%d remove_wallpaper=%t", reason, m.serviceName, displayServiceState(serviceStateBefore), port, allowedIPs, revision, removeWallpaper)
 	if err := m.ensureFirewall(ctx, allowedIPs, port); err != nil {
 		m.logf("VNC firewall ensure failed: %v", err)
 	}
-	if _, err := m.ensureConfig(port, password, removeWallpaper); err != nil {
+	configPath, configChanged, err := m.ensureConfig(port, password, removeWallpaper)
+	if err != nil {
 		m.setError(err.Error())
 		return err
 	}
-	if err := m.ensureService(ctx); err != nil {
+	m.logf("VNC config ensured path=%s changed=%t", configPath, configChanged)
+	reloadReason := ""
+	if configChanged {
+		reloadReason = "config_changed"
+	} else if !serviceConfigLoaded {
+		reloadReason = "initial_config_sync"
+	}
+	if err := m.ensureService(ctx, reloadReason); err != nil {
 		m.setError(err.Error())
 		return err
 	}
+	m.mu.Lock()
+	m.serviceConfigLoaded = true
+	m.mu.Unlock()
 	ready := m.waitForListener(port, 8*time.Second)
 	serviceState := m.queryServiceState(ctx, m.serviceName)
 	listenerState := "not_listening"
@@ -518,32 +534,40 @@ func (m *Manager) displaySnapshot() ([]map[string]any, map[string]any) {
 	return topology, displayVirtualBounds(topology)
 }
 
-func (m *Manager) ensureConfig(port int, password string, removeWallpaper bool) (string, error) {
+func (m *Manager) ensureConfig(port int, password string, removeWallpaper bool) (string, bool, error) {
 	configDir := resolveVNCConfigDir()
 	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return "", err
+		return "", false, err
 	}
 	configPath := filepath.Join(configDir, serviceName+".ini")
 	hashValue, err := ultraVNCPasswordHash(password)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	settings := ultraVNCSettings(port, hashValue, removeWallpaper, m.vncExe)
 	content := renderUltraVNCConfig(settings)
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
-		return "", err
+	changed, err := writeFileIfChanged(configPath, content)
+	if err != nil {
+		return "", false, fmt.Errorf("write UltraVNC config %s failed: %w", configPath, err)
 	}
 	legacyPath := filepath.Join(configDir, "ultravnc.ini")
 	if !samePath(configPath, legacyPath) {
-		_ = os.WriteFile(legacyPath, []byte(content), 0644)
+		legacyChanged, err := writeFileIfChanged(legacyPath, content)
+		if err != nil {
+			return "", false, fmt.Errorf("write UltraVNC legacy config %s failed: %w", legacyPath, err)
+		}
+		if legacyChanged {
+			changed = true
+		}
 	}
-	return configPath, nil
+	return configPath, changed, nil
 }
 
-func (m *Manager) ensureService(ctx context.Context) error {
+func (m *Manager) ensureService(ctx context.Context, reloadReason string) error {
 	service := m.serviceName
 	state := m.queryServiceState(ctx, service)
 	if state == "" {
+		m.logf("VNC service missing; creating service=%s exe=%s", service, m.vncExe)
 		if err := m.createService(ctx, service); err != nil {
 			return err
 		}
@@ -551,8 +575,16 @@ func (m *Manager) ensureService(ctx context.Context) error {
 	}
 	_ = m.configureService(ctx, service)
 	if state == "RUNNING" {
+		if strings.TrimSpace(reloadReason) != "" {
+			return m.restartService(ctx, service, reloadReason)
+		}
+		m.logf("VNC service already running service=%s reload_required=false", service)
 		return nil
 	}
+	return m.startService(ctx, service)
+}
+
+func (m *Manager) startService(ctx context.Context, service string) error {
 	result, err := m.runner(ctx, 30*time.Second, "sc.exe", "start", service)
 	if err != nil {
 		return err
@@ -561,7 +593,37 @@ func (m *Manager) ensureService(ctx context.Context) error {
 	if result.ExitCode != 0 && !strings.Contains(output, "1056") && !strings.Contains(strings.ToLower(output), "already running") {
 		return fmt.Errorf("UltraVNC service start failed: %s", output)
 	}
+	m.logf("VNC service start requested service=%s exit_code=%d output=%s", service, result.ExitCode, compactLogText(output))
 	return nil
+}
+
+func (m *Manager) restartService(ctx context.Context, service string, reason string) error {
+	m.logf("VNC service restart requested service=%s reason=%s", service, reason)
+	result, err := m.runner(ctx, 30*time.Second, "sc.exe", "stop", service)
+	if err != nil {
+		m.logf("VNC service stop command failed service=%s error=%v", service, err)
+	} else {
+		output := strings.TrimSpace(result.Stdout + "\n" + result.Stderr)
+		if result.ExitCode != 0 && !strings.Contains(output, "1062") && !strings.Contains(strings.ToLower(output), "not been started") {
+			m.logf("VNC service stop returned nonzero service=%s exit_code=%d output=%s", service, result.ExitCode, compactLogText(output))
+		} else {
+			m.logf("VNC service stop requested service=%s exit_code=%d output=%s", service, result.ExitCode, compactLogText(output))
+		}
+	}
+	m.waitForServiceNotRunning(ctx, service, 10*time.Second)
+	return m.startService(ctx, service)
+}
+
+func (m *Manager) waitForServiceNotRunning(ctx context.Context, service string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		state := m.queryServiceState(ctx, service)
+		if !isServiceRunning(state) {
+			return true
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return !isServiceRunning(m.queryServiceState(ctx, service))
 }
 
 func (m *Manager) createService(ctx context.Context, service string) error {
@@ -937,6 +999,28 @@ func cleanText(value any) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func writeFileIfChanged(path string, content string) (bool, error) {
+	raw, err := os.ReadFile(path)
+	if err == nil && string(raw) == content {
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func compactLogText(value string) string {
+	text := strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if len(text) <= 240 {
+		return text
+	}
+	return text[:237] + "..."
 }
 
 func boolInt(value bool) string {

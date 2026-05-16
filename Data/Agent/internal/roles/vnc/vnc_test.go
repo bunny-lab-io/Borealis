@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeVNCAuthClient struct {
@@ -215,4 +216,107 @@ func TestUltraVNCConfigIncludesSecurityAndCaptureSettings(t *testing.T) {
 			t.Fatalf("config missing %q:\n%s", expected, rendered)
 		}
 	}
+}
+
+func TestEnsureConfigReportsOnlyActualChanges(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BOREALIS_VNC_CONFIG_DIR", dir)
+	manager := &Manager{}
+
+	configPath, changed, err := manager.ensureConfig(5900, "bootpass", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configPath != filepath.Join(dir, serviceName+".ini") {
+		t.Fatalf("unexpected config path: %s", configPath)
+	}
+	if !changed {
+		t.Fatalf("expected first config write to report changed")
+	}
+
+	_, changed, err = manager.ensureConfig(5900, "bootpass", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatalf("expected identical config write to report unchanged")
+	}
+
+	_, changed, err = manager.ensureConfig(5900, "newpass", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatalf("expected password change to report changed")
+	}
+}
+
+func TestEnsureServiceRestartsRunningServiceWhenConfigChanged(t *testing.T) {
+	calls := []string{}
+	queryCount := 0
+	manager := &Manager{
+		serviceName: serviceName,
+		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+			call := name + " " + strings.Join(args, " ")
+			calls = append(calls, call)
+			if len(args) == 0 {
+				return commandResult{}, nil
+			}
+			switch args[0] {
+			case "query":
+				queryCount++
+				if queryCount == 1 {
+					return commandResult{Stdout: "STATE              : 4  RUNNING", ExitCode: 0}, nil
+				}
+				return commandResult{Stdout: "STATE              : 1  STOPPED", ExitCode: 0}, nil
+			case "config", "failure", "stop", "start":
+				return commandResult{Stdout: "ok", ExitCode: 0}, nil
+			default:
+				return commandResult{Stdout: "ok", ExitCode: 0}, nil
+			}
+		},
+	}
+
+	if err := manager.ensureService(context.Background(), "config_changed"); err != nil {
+		t.Fatal(err)
+	}
+
+	if !containsCall(calls, "sc.exe stop "+serviceName) {
+		t.Fatalf("expected service stop call, got %#v", calls)
+	}
+	if !containsCall(calls, "sc.exe start "+serviceName) {
+		t.Fatalf("expected service start call, got %#v", calls)
+	}
+}
+
+func TestEnsureServiceLeavesRunningServiceAloneWhenConfigUnchanged(t *testing.T) {
+	calls := []string{}
+	manager := &Manager{
+		serviceName: serviceName,
+		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+			call := name + " " + strings.Join(args, " ")
+			calls = append(calls, call)
+			if len(args) > 0 && args[0] == "query" {
+				return commandResult{Stdout: "STATE              : 4  RUNNING", ExitCode: 0}, nil
+			}
+			return commandResult{Stdout: "ok", ExitCode: 0}, nil
+		},
+	}
+
+	if err := manager.ensureService(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if containsCall(calls, "sc.exe stop "+serviceName) || containsCall(calls, "sc.exe start "+serviceName) {
+		t.Fatalf("expected no stop/start calls for unchanged config, got %#v", calls)
+	}
+}
+
+func containsCall(calls []string, expected string) bool {
+	for _, call := range calls {
+		if call == expected {
+			return true
+		}
+	}
+	return false
 }
