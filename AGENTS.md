@@ -33,7 +33,7 @@ Use this file as entrypoint for Codex instructions. Full knowledgebase lives und
 - If you add a patchy workaround, non-standard build step, or dev/prod behavior divergence, create or update a GitHub issue with the `Technical Debt` label.
 
 ## SBOM Maintenance
-- Keep `SBOM.md` in the repo root updated whenever Borealis adds, removes, vendors, or downloads third-party software for the Engine or Agent.
+- Keep `Docs/SBOM.md` updated whenever Borealis adds, removes, vendors, or downloads third-party software for the Engine or Agent.
 - Record each dependency with its software name, license identifier or license name, and a hyperlink to the governing license text.
 - Keep the inventory split into Engine and Agent sections so licensing reviews remain runtime-specific.
 - When scanning for new software, check bootstrap/runtime scripts as well as manifests under `Data/Engine/` and `Data/Agent/`.
