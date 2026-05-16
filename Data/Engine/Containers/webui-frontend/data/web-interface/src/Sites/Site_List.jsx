@@ -70,7 +70,6 @@ const RAW_BOREALIS_BASE_URL = "https://raw.githubusercontent.com/bunny-lab-io/Bo
 const INSTALL_OS_OPTIONS = [
   { id: "windows", label: "Windows" },
   { id: "linux", label: "Linux" },
-  { id: "macos", label: "MacOS" },
 ];
 
 const MAGIC_UI = {
@@ -437,23 +436,25 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
   }
 
   if (osId === "windows") {
-    const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/Bootstrap/Agent.exe");
+    const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/windows-amd64/Agent.exe");
     return `$borealisAgent = Join-Path $env:TEMP "Borealis-Agent.exe"; ` +
       `Invoke-WebRequest -UseBasicParsing -Uri ${quotePowerShellValue(agentUrl)} -OutFile $borealisAgent; ` +
       `& $borealisAgent --server-url ${quotePowerShellValue(normalizedServerUrl)} ` +
+      `--repo-ref ${quotePowerShellValue(normalizedBranch)} ` +
       `--site-enrollment-code ${quotePowerShellValue(normalizedEnrollmentCode)}`;
   }
 
-  const agentUrl = rawBorealisFileUrl(normalizedBranch, "Agent.sh");
-  const repoBranchArgs = usesDefaultBranch ? "" : `--repo-branch ${quoteShellValue(normalizedBranch)} `;
-  const urlArg = usesDefaultBranch ? agentUrl : quoteShellValue(agentUrl);
-  const launchArgs = `${repoBranchArgs}deploy --serverurl ` +
-    `"${escapeShellDoubleQuoted(normalizedServerUrl)}" --enrollmentcode ` +
-    `"${escapeShellDoubleQuoted(normalizedEnrollmentCode)}"`;
-  if (osId === "macos") {
-    return `curl -fsSL ${urlArg} | bash -s -- ${launchArgs}`;
+  if (osId === "linux") {
+    const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/linux-amd64/Agent");
+    const urlArg = usesDefaultBranch ? agentUrl : quoteShellValue(agentUrl);
+    const launchArgs = `--server-url "${escapeShellDoubleQuoted(normalizedServerUrl)}" ` +
+      `--repo-ref "${escapeShellDoubleQuoted(normalizedBranch)}" ` +
+      `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}" --install-service`;
+    return `curl -fsSL ${urlArg} -o /tmp/Borealis-Agent; ` +
+      `chmod 700 /tmp/Borealis-Agent; ` +
+      `sudo /tmp/Borealis-Agent ${launchArgs}`;
   }
-  return `curl -fsSL ${urlArg} | { if [ "$(id -u)" -eq 0 ]; then bash -s -- ${launchArgs}; else sudo bash -s -- ${launchArgs}; fi; }`;
+  return "";
 }
 
 function SiteDeleteDialog({ open, onCancel, onConfirm, sites }) {

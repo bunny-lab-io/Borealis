@@ -82,6 +82,8 @@ def _ensure_devices_table(conn: sqlite3.Connection) -> None:
         "connection_type": "TEXT",
         "connection_endpoint": "TEXT",
         "agent_release_channel_override": "TEXT",
+        "agent_release_channel": "TEXT",
+        "agent_branch": "TEXT",
         "agent_update_channel": "TEXT",
         "agent_update_target_build_id": "TEXT",
         "agent_update_state": "TEXT",
@@ -686,6 +688,8 @@ def _create_devices_table(cur: sqlite3.Cursor) -> None:
             connection_type TEXT,
             connection_endpoint TEXT,
             agent_release_channel_override TEXT,
+            agent_release_channel TEXT,
+            agent_branch TEXT,
             agent_update_channel TEXT,
             agent_update_target_build_id TEXT,
             agent_update_state TEXT,
@@ -759,11 +763,11 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
             network, software, services, storage, cpu, sessions, processes, device_type, domain, external_ip,
             internal_ip, last_reboot, last_seen, cpu_percent, memory_percent, last_user, operating_system,
             uptime, agent_id, connection_type, connection_endpoint,
-            agent_release_channel_override, agent_update_channel, agent_update_target_build_id,
+            agent_release_channel_override, agent_release_channel, agent_branch, agent_update_channel, agent_update_target_build_id,
             agent_update_state, agent_update_error, agent_update_source,
             agent_vnc_password, ssl_key_fingerprint, token_version, status, key_added_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guid) DO UPDATE SET
             hostname = EXCLUDED.hostname,
             description = EXCLUDED.description,
@@ -794,6 +798,8 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
             connection_type = EXCLUDED.connection_type,
             connection_endpoint = EXCLUDED.connection_endpoint,
             agent_release_channel_override = EXCLUDED.agent_release_channel_override,
+            agent_release_channel = EXCLUDED.agent_release_channel,
+            agent_branch = EXCLUDED.agent_branch,
             agent_update_channel = EXCLUDED.agent_update_channel,
             agent_update_target_build_id = EXCLUDED.agent_update_target_build_id,
             agent_update_state = EXCLUDED.agent_update_state,
@@ -852,6 +858,8 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
             record.get("connection_type"),
             record.get("connection_endpoint"),
             record.get("agent_release_channel_override"),
+            record.get("agent_release_channel"),
+            record.get("agent_branch"),
             record.get("agent_update_channel"),
             record.get("agent_update_target_build_id"),
             record.get("agent_update_state"),

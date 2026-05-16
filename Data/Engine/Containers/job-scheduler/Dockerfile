@@ -37,7 +37,6 @@ COPY Data/Engine/Containers/api-backend/data /opt/Borealis/Data/Engine
 RUN mkdir -p /opt/Borealis/Data/Engine/Containers
 COPY Data/Engine/Containers/compose.yaml /opt/Borealis/Data/Engine/Containers/compose.yaml
 COPY Data/Agent /opt/Borealis/Data/Agent
-COPY Data/Agent/Bootstrap/Agent.exe /opt/Borealis/Data/Agent/Bootstrap/Agent.exe
 COPY Data/Engine/Containers/job-scheduler/entrypoint.sh /usr/local/bin/borealis-job-scheduler
 COPY Data/Engine/Containers/job-scheduler/healthcheck.sh /usr/local/bin/borealis-job-scheduler-healthcheck
 

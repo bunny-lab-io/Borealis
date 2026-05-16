@@ -2088,7 +2088,7 @@ export default function ServerInfo() {
         </DialogTitle>
         <DialogContent sx={DIALOG_CONTENT_SX}>
           <Typography sx={DIALOG_BODY_TEXT_SX}>
-            Stable tracks the latest GitHub release source zip. Unstable tracks the default branch head and pushes new targets to connected SYSTEM agents as soon as Borealis has cached the artifact.
+            Stable tracks the latest GitHub release. Unstable tracks the default branch head. Borealis caches a Go agent binary bundle for Windows and Linux before connected SYSTEM agents can update.
           </Typography>
           <Stack spacing={2} sx={{ mt: 2 }}>
             <TextField

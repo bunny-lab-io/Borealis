@@ -47,11 +47,11 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Background pruning of expired enrollment codes and refresh tokens is not wired yet; a maintenance task is still needed.
 
 ### Agent
-- Generates device-wide Ed25519 key pairs on first launch, storing them under `Agent/Borealis/Certificates/Identity/` with DPAPI protection on Windows (chmod 600 elsewhere) and persisting the server-issued GUID alongside.
-- Stores refresh/access tokens encrypted (DPAPI) and re-enrolls on authentication failures.
+- Generates device-wide Ed25519 key pairs on first launch, storing PKCS8/SPKI base64 material in protected `config.json` beside `Agent.exe`.
+- Stores refresh/access tokens in protected `config.json` and re-enrolls on authentication failures.
 - Uses the system trust store and hostname validation for the public Engine FQDN instead of rotating a pinned public Engine certificate.
 - Treats every script payload as hostile until verified: only Ed25519 signatures from the server are accepted, missing or invalid signatures are logged and dropped, and the trusted signing key is updated only after successful verification between the agent and the server.
-- Operates outbound-only; there are no listener ports, and every API/WebSocket call flows through `AgentHttpClient.ensure_authenticated`, forcing token refresh logic before retrying.
+- Operates outbound-only; there are no listener ports, and every API/WebSocket call flows through the Go auth client, forcing token refresh logic before retrying.
 - Logs bootstrap, enrollment, token refresh, and signature events to daily-rotated files under `Agent/Logs`, giving operators visibility without leaking secrets outside the project root.
 - The SYSTEM broker can launch per-session helpers for current-user execution, but those helpers do not enroll, do not store tokens, and talk only to the local SYSTEM broker over local IPC.
 - Borealis treats direct Session 0 interaction as unsupported; helper launch into `winsta0\\default` is the supported path for user-visible interaction.
@@ -92,9 +92,9 @@ If you deploy the agent via Group Policy or another automation platform, you can
 ```
 **Linux**:
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Agent.sh" | { if [ "$(id -u)" -eq 0 ]; then bash -s -- deploy --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --newEngine; else sudo bash -s -- deploy --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --newEngine; fi; }
+/opt/Borealis/Agent/Agent --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --install-service
 ```
-Passing an enrollment code to `Agent.sh` refreshes stale Linux Agent enrollment state before the service starts so the supplied code wins over cached installer codes. Linux one-line installs do not require `sudo` in the pipe when run from a root shell; non-root launches still use `sudo bash` before script execution so password prompts work normally.
+Passing an enrollment code writes it into protected `config.json` before the service starts so the supplied code wins over cached installer codes.
 
 ### Automatic Local-Network Enrollment
 - Sites > Onboard Devices creates scheduler-backed enrollment jobs for local-network Linux and Windows targets.
@@ -120,7 +120,7 @@ sequenceDiagram
     Note over SYS,Server: Public CA validation plus hostname checks stop MITM
 
     SYS->>SYS: Generate Ed25519 identity key pair
-    Note right of SYS: Private key stored under Certificates/... protected by DPAPI or chmod 600
+    Note right of SYS: Private key stored in protected config.json
 
     SYS->>Server: Enrollment request (installer code, public key, fingerprint)
 
@@ -133,7 +133,7 @@ sequenceDiagram
     Note over Server,Operator: Server verifies signature and records GUID plus key fingerprint
 
     Server->>SYS: Issue GUID, short-lived token, refresh token, script-signing key
-    Note over SYS,Server: Agent stores GUID and DPAPI-encrypts refresh token
+    Note over SYS,Server: Agent stores GUID and tokens in protected config.json
     Note over Server,Operator: Database keeps refresh token hash, key fingerprint, audit trail
 
     loop Secure Sessions
@@ -191,7 +191,7 @@ sequenceDiagram
     end
 
     Server->>Server: Record results and logs alongside job metadata
-    Note over SYS,HELPER: Public CA validated HTTPS, signed payloads, DPAPI-protected secrets, and helper-local IPC defend against tampering and replay
+    Note over SYS,HELPER: Public CA validated HTTPS, signed payloads, protected config.json secrets, and helper-local IPC defend against tampering and replay
 ```
 
 ## API Endpoints
@@ -244,8 +244,7 @@ sequenceDiagram
 - Script signing keys: `Engine/Services/api-backend/secrets/Certificates/Code-Signing/borealis-script-ed25519.key` and `.pub`.
 
 ### Key material locations (Agent)
-- Identity keys: `Agent/Borealis/Certificates/Identity/agent_identity_private.ed25519` and `agent_identity_public.ed25519`.
-- Tokens and GUID: `Agent/Borealis/Settings/` (refresh.token, access.jwt, Agent_GUID.txt).
+- Identity keys, tokens, GUID, agent ID, enrollment code, and signing trust: protected `config.json` beside installed `Agent.exe`.
 
 ### Enrollment sequence (step-by-step)
 1) Agent generates Ed25519 key pair and a fingerprint.
@@ -284,7 +283,7 @@ sequenceDiagram
 ### Agent Refresh Tokens (Full)
 #### What a refresh token is
 - A long-lived credential the agent gets during enrollment; it represents device trust and is bound to the agent's identity fingerprint.
-- Stored locally under the agent settings directory as an encrypted blob (`refresh.token`) alongside token metadata (`access.meta.json`) and the agent GUID.
+- Stored locally in protected `config.json` alongside token metadata and the agent GUID.
 - Not presented to normal APIs; it is only sent to the Engine to mint new short-lived access tokens.
 
 #### How the agent obtains it
@@ -295,7 +294,7 @@ sequenceDiagram
      - `access_token` (EdDSA JWT, about 15 minutes)
      - `refresh_token` (random urlsafe string)
      - Engine signing key
-   - The agent persists the GUID, access token, refresh token, and expiry metadata via `AgentKeyStore` (`Data/Agent/security.py`).
+   - The agent persists the GUID, access token, refresh token, and expiry metadata through `Data/Agent/internal/config`.
 
 #### How long it lasts (sliding expiry)
 - Base TTL: 90 days (Engine stores `expires_at = now + 90 days`).
@@ -307,7 +306,7 @@ sequenceDiagram
 - Refresh tokens: used only to obtain new access tokens. If missing or invalid, the agent re-enrolls.
 
 #### How the agent uses it
-- All authenticated calls pass through `AgentHttpClient.ensure_authenticated()` (`Data/Agent/agent.py`).
+- All authenticated calls pass through the Go auth client (`Data/Agent/internal/auth`).
 - If no GUID/refresh token, the agent triggers enrollment.
 - If the access token is missing or near expiry, the agent posts `{guid, refresh_token}` to `/api/agent/token/refresh`.
 - On success, it stores the new access token and updated expiry metadata.
@@ -321,11 +320,11 @@ sequenceDiagram
 #### Operational notes
 - Short outages are tolerated: the 90-day sliding window resets on the first successful refresh after the Engine is back.
 - Long inactivity (more than 90 days without refresh) requires re-enrollment; the agent will reuse the last installer code if available, otherwise operator action is needed.
-- Logs for token activity live under `Agent/Logs/` (`agent.log`, `agent.error.log`). Engine-side changes are recorded in the Engine DB `refresh_tokens` table with `last_used_at` and `expires_at`.
+- Logs for token activity live under `Agent/Logs/Agent/` (`agent.log`, `agent.error.log`). Engine-side changes are recorded in the Engine DB `refresh_tokens` table with `last_used_at` and `expires_at`.
 
 #### Relevant files
-- Agent token lifecycle: `Data/Agent/agent.py` (`AgentHttpClient`).
-- Token storage: `Data/Agent/security.py` (`AgentKeyStore`).
+- Agent token lifecycle: `Data/Agent/internal/auth`.
+- Token storage: `Data/Agent/internal/config`.
 - Refresh API: `Data/Engine/Containers/api-backend/data/services/API/tokens/routes.py`.
 - Enrollment API: `Data/Engine/Containers/api-backend/data/services/API/enrollment/routes.py`.
 - JWT issuance: `Data/Engine/Containers/api-backend/data/auth/jwt_service.py`.

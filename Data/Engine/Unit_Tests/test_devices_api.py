@@ -39,7 +39,7 @@ from .support.devices import (
     set_seed_device_agent_id,
     set_seed_device_guid,
 )
-from .support.engine import admin_client
+from .support.engine import admin_client, fetch_one
 from .support.software_config import (
     isolate_software_icon_overrides,
     isolate_uninstall_blocklist,
@@ -610,6 +610,70 @@ def test_device_description_update(engine_harness: EngineTestHarness) -> None:
     assert response.status_code == 200
     detail = client.get("/api/device/details/test-device").get_json()
     assert detail["description"] == "Updated"
+
+
+def test_agent_release_channel_branch_update_persists_and_emits(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted: list[tuple[str, str, str, dict[str, Any]]] = []
+
+    def emit_host_service_event(hostname: str, service_mode: str, event: str, payload: dict[str, Any]) -> bool:
+        emitted.append((hostname, service_mode, event, payload))
+        return True
+
+    monkeypatch.setattr(engine_harness.context, "emit_host_service_event", emit_host_service_event, raising=False)
+
+    client = admin_client(engine_harness)
+    response = client.put(
+        "/api/devices/GUID-TEST-0001/agent-release-channel",
+        json={"channel": "source", "branch": "feature/rewrite-borealis-agent-in-golang"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["agent_release_channel_override"] == "unstable"
+    assert payload["agent_release_channel"] == "source"
+    assert payload["agent_branch"] == "feature/rewrite-borealis-agent-in-golang"
+
+    row = fetch_one(
+        engine_harness,
+        """
+        SELECT agent_release_channel_override, agent_release_channel, agent_branch
+          FROM devices
+         WHERE guid = ?
+        """,
+        ("GUID-TEST-0001",),
+    )
+    assert row == ("unstable", "source", "feature/rewrite-borealis-agent-in-golang")
+    assert emitted == [
+        (
+            "test-device",
+            "system",
+            "agent_release_channel_changed",
+            {
+                "hostname": "test-device",
+                "guid": "GUID-TEST-0001",
+                "effective_channel": "unstable",
+                "target_channel": "unstable",
+                "release_channel": "source",
+                "branch": "feature/rewrite-borealis-agent-in-golang",
+                "target_build_id": "",
+            },
+        )
+    ]
+
+
+def test_agent_release_channel_branch_update_rejects_blank_branch(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = admin_client(engine_harness)
+    response = client.put(
+        "/api/devices/GUID-TEST-0001/agent-release-channel",
+        json={"channel": "source", "branch": "  "},
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "invalid_branch"
 
 
 def test_agent_details_syncs_normalized_software_inventory(
@@ -1231,7 +1295,11 @@ def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHa
         dispatched["environment"]["QUIET_UNINSTALL_STRING"]
         == '"C:\\Program Files\\Google\\Chrome\\Application\\124.0.6367.92\\Installer\\setup.exe" --uninstall --multi-install --chrome --system-level --force-uninstall'
     )
-    assert "Invoke-LocalInstalledUninstall" in base64.b64decode(dispatched["script_content"]).decode("utf-8")
+    script_text = base64.b64decode(dispatched["script_content"]).decode("utf-8")
+    assert "Invoke-LocalInstalledUninstall" in script_text
+    assert 'Add-UninstallLog ("Invoking {0} {1}"' in script_text
+    assert "$exitCodeCandidates" in script_text
+    assert 'Write-Output ("Invoking {0} {1}"' not in script_text
     assert any(event_name == "device_activity_changed" for event_name, _payload, _to in socket_events)
 
     conn = sqlite3.connect(str(engine_harness.db_path))
@@ -1969,6 +2037,70 @@ def test_agent_heartbeat_returns_assigned_site(engine_harness: EngineTestHarness
     assert payload["status"] == "ok"
     assert payload["site_name"] == "Main Lab"
     assert payload["site_id"] == 1
+
+
+def test_agent_heartbeat_persists_go_device_audit_fields(engine_harness: EngineTestHarness) -> None:
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/agent/heartbeat",
+        headers=_device_headers(),
+        json={
+            "hostname": "test-device",
+            "service_mode": "system",
+            "metrics": {
+                "last_user": r"BUNNY-LAB\nicole.rappe",
+                "operating_system": "Windows 11 Pro 25H2 Build 26200.8457",
+                "last_reboot": "05/14/2026 @ 10:05PM",
+                "uptime": 3600,
+            },
+            "inventory": {
+                "cpu": {
+                    "name": "Example CPU",
+                    "system_manufacturer": "Dell Inc.",
+                    "system_model_raw": "Latitude 5450",
+                    "system_model": "Dell Inc. Latitude 5450",
+                    "system_serial_number": "ABC1234",
+                },
+                "storage": [
+                    {"drive": "C:", "disk_type": "Fixed Disk", "total": 1000, "used": 400, "free": 600},
+                    {"drive": "D:", "disk_type": "CD-ROM"},
+                ],
+                "network": [
+                    {
+                        "adapter": "Ethernet",
+                        "ips": ["10.0.0.5"],
+                        "mac": "00:11:22:33:44:55",
+                        "link_speed": "1 Gbps",
+                    }
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        row = conn.execute(
+            """
+            SELECT last_user, operating_system, last_reboot, uptime, cpu, storage, network
+              FROM devices
+             WHERE hostname = ?
+            """,
+            ("test-device",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row[0] == r"BUNNY-LAB\nicole.rappe"
+    assert row[1] == "Windows 11 Pro 25H2 Build 26200.8457"
+    assert row[2] == "05/14/2026 @ 10:05PM"
+    assert row[3] == 3600
+    assert json.loads(row[4])["system_serial_number"] == "ABC1234"
+    storage = json.loads(row[5])
+    assert storage[1]["disk_type"] == "CD-ROM"
+    network = json.loads(row[6])
+    assert network[0]["link_speed"] == "1 Gbps"
 
 
 def test_agent_status_updates_startup_timeline_without_replacing_other_roles(

@@ -5,39 +5,40 @@
 Describe the Borealis agent runtime, its roles, service modes, and how it communicates with the Engine.
 
 ## Runtime Summary
-- Main entry: `Data/Agent/agent.py` (Python agent service).
-- Service modes: SYSTEM plus a local helper mode launched into user sessions by the SYSTEM broker.
-- Role system: `Data/Agent/role_manager.py` auto-loads `Data/Agent/Roles/role_*.py`.
-- Session broker: `Data/Agent/session_runtime.py` launches and tracks per-session helpers, local IPC, and helper readiness.
-- Desktop helper UI: `Data/Agent/Roles/role_currentuser_context.py` owns the current-user tray popup, using `Data/Agent/qt_compat.py` to prefer PySide6 while keeping the existing asyncio/Qt integration path.
-- Networking: the SYSTEM runtime owns REST to Engine APIs plus the single Socket.IO connection; helpers use local IPC only.
-- Security: Ed25519 identity keys, public CA + hostname validation for the Engine FQDN, signed script payloads, encrypted token storage.
+- Main entry: `Data/Agent/cmd/agent` builds one Go runtime binary named `Agent.exe` on Windows and `Agent` on Linux.
+- Service modes: SYSTEM/root plus same-binary helper mode. Windows CURRENTUSER tracks long-lived helper sentinels per active desktop session and executes signed quick jobs through SYSTEM-brokered `CreateProcessAsUser`. Linux CURRENTUSER reports unsupported until ported.
+- Role system: compiled Go role registry under `Data/Agent/internal/roles`.
+- Networking: SYSTEM/root runtime owns REST to Engine APIs plus the single Socket.IO connection.
+- Security: Ed25519 identity keys, public CA + hostname validation for the Engine FQDN, signed script payloads, and `config.json` token/key storage.
 
-## Role Catalog (Current)
-- `role_system_context.py` (ROLE_NAME: `context_system`) - canonical SYSTEM task router for `quick_job_run`, `service_control_action`, and `agent_update_request`, with per-device task lanes for `software_management`, `scheduled_job_system`, `service_management`, and `agent_update`.
-- `role_currentuser_context.py` (ROLE_NAME: `context_currentuser`) - interactive device-local script execution plus the current-user helper tray/status UI.
-- `role_system_device_auditor.py` (ROLE_NAME: `device_auditor`) - summary, memory, storage, network, session, and process inventory.
-- `role_system_file_management.py` (ROLE_NAME: `file_management`) - remote filesystem browse, lightweight text read/write, copy, cut, paste, create-folder, rename, move, delete, upload, folder-upload manifest replay, and download orchestration over the SYSTEM socket plus device-authenticated transfer endpoints.
-- `role_system_service_management.py` (ROLE_NAME: `service_management`) - system service inventory and start/stop/restart control.
-- `role_system_process_management.py` (ROLE_NAME: `process_management`) - live process snapshots, per-process CPU/memory/command-line metadata, parent-child process relationships, and operator-triggered process termination.
-- `role_system_software_management.py` (ROLE_NAME: `software_management`) - installed software inventory, Windows icon payload publication, and software refresh boosts after software-management work.
-- `role_system_heartbeat.py` (ROLE_NAME: `system_heartbeat`) - earliest SYSTEM startup timeline reporter. It is imported before normal role loading, buffers milestones until device auth is available, then publishes `system:system_heartbeat` status to the Engine.
-- `role_system_remote_shell.py` (ROLE_NAME: `remote_shell`) - remote shell server over WireGuard (PowerShell on Windows, Bash on Linux).
-- `role_system_vnc.py` (ROLE_NAME: `vnc`) - always-on UltraVNC server lifecycle.
-- `role_system_wireguard.py` (ROLE_NAME: `wireguard`) - WireGuard client lifecycle.
-- `role_currentuser_macros.py` and `role_currentuser_node_screenshot.py` remain legacy interactive-only roles and are not part of the supported helper-backed Windows runtime path.
+## Role Catalog (Go v1)
+- `internal/roles/system_context` - SYSTEM/root quick-job router and script execution for signed `quick_job_run` payloads.
+- `internal/roles/current_user` - Windows CURRENTUSER helper sentinel broker, active-session health, direct signed quick-job execution for active user sessions, and Windows tray/status UI. Linux CURRENTUSER reports unsupported in first PR.
+- `internal/roles/device_audit` - core CPU, memory, storage media type, removable media, network link speed, OS/build, hardware model/serial with motherboard serial fallback, last reboot, internal IP, device type, uptime, and last-user inventory published through heartbeat payloads.
+- `internal/roles/file_management` - SYSTEM/root file-management browse, upload-conflict preflight, lightweight text editing, copy/cut/paste mutations, delete, mkdir, rename, move, upload pull, and download artifact transfer.
+- `internal/roles/process_management` - SYSTEM/root live process snapshots, parent/child metadata, cache reuse, and operator-triggered process termination for the Device Summary `Processes` tab.
+- `internal/roles/service_management` - SYSTEM/root service inventory publishing plus operator-triggered start, stop, and restart through `service_control_action`.
+- `internal/roles/software_management` - SYSTEM/root Windows installed-app inventory with cached icon payloads, Linux dpkg/rpm inventory, refresh requests, and post-uninstall inventory refresh through the SYSTEM quick-job lane.
+- `internal/roles/wireguard_tunnel` - SYSTEM/root persistent WireGuard reverse tunnel lifecycle, Engine `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, Windows tunnel-service apply, Linux `wg-quick` apply, and `/api/agent/vpn/ready` reporting.
+- `internal/roles/remote_shell` - SYSTEM/root WireGuard-scoped TCP shell listener for Engine `vpn_shell_*` bridge traffic, using PowerShell on Windows and Bash/sh on Linux.
+- `internal/roles/vnc` - Windows UltraVNC always-on lifecycle, runtime credential broker, Engine `/api/agent/vnc/ensure` bootstrap, Socket.IO credential/start events, firewall scope, and listener readiness reporting. Linux VNC reports unsupported.
+- Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`; Linux current-user/tray UI remains pending.
 
 ## Agent Settings and Storage
-- Settings root: `Agent/Borealis/Settings/` (runtime).
-- Server URL: `Agent/Borealis/Settings/server_url.txt`.
-- GUID and token storage: `Agent/Borealis/Settings/Agent_GUID.txt`, `access.jwt`, `refresh.token`.
+- Installed configuration file: `config.json` beside `Agent.exe`.
+- WireGuard runtime configuration file: `wireguard.conf` beside `Agent.exe`/`Agent`, generated from Engine tunnel material.
+- Startup cleanup removes `Temp` under the Agent install root so onboarding payload/state files do not persist after service start.
+- `config.json` stores `schema_version`, `server_url`, `enrollment_code`, `agent.guid`, `agent.agent_id`, `agent.branch`, `agent.installed_build_id`, `dependency_versions.wireguard`, `dependency_versions.ultravnc`, Ed25519 keys, access/refresh tokens, and Engine script-signing trust material.
+- Windows protection: ACL hardening is deferred in the current Go migration branch; files inherit permissions from `C:\Borealis`.
+- Linux protection: root-owned `0600` file with `0700` parent directory.
+- Writes are atomic temp-write + rename. No OS file-lock dependency is used.
 
 ## API Endpoints (Engine-facing)
 - `POST /api/agent/enroll/request` (No Authentication) - start enrollment.
 - `POST /api/agent/enroll/poll` (No Authentication) - finalize enrollment after approval.
 - `POST /api/agent/token/refresh` (Refresh Token) - mint a new access token.
 - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
-- `POST /api/agent/status` (Device Authenticated) - startup phase, boot ID, milestone timeline, and last-error telemetry for `system:system_heartbeat`.
+- `POST /api/agent/status` (Device Authenticated) - startup phase, boot ID, milestone timeline, and last-error telemetry for `startup:system_heartbeat`.
 - `POST /api/agent/details` (Device Authenticated) - hardware, inventory, and cached service payloads.
 - `POST /api/agent/script/request` (Device Authenticated) - request work or receive idle signal.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
@@ -56,74 +57,77 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 ## Codex Agent (Detailed)
 ### Source vs runtime
 - Edit only in `Data/Agent/`.
-- Linux runtime copy lives in `Agent/` and is regenerated by `Agent.sh deploy`.
-- Windows runtime copy is regenerated by `Agent.exe`.
-- `Update.sh -Agent` preserves the current agent updater flow, then hands off to `Agent.sh deploy`.
+- Windows installed runtime is `C:\Borealis\Agent.exe` plus `C:\Borealis\config.json`.
+- Linux installed runtime is a single compiled `Agent` binary managed by systemd. `--install-service` self-stages temp downloads into `/opt/Borealis/Agent/Agent`, writes `config.json`, and installs the service plus updater timer.
+- Go Agent updates use Engine release channels and the local `--update-check` path.
 
 ### Service modes and context
 - SYSTEM mode is used for elevated tasks (scheduled tasks, VPN, system scripts).
 - The SYSTEM runtime is the only Borealis process that authenticates to the Engine, enrolls, refreshes tokens, or opens a Socket.IO connection.
-- Interactive user work now runs in helper mode, launched by the SYSTEM broker into active or locked user sessions and reached over local IPC.
+- Interactive user quick jobs now run through the SYSTEM broker by launching signed PowerShell/Batch payloads into active Windows user sessions. Same-binary helper sentinels run in active desktop sessions so role health can report ready helper sessions without exposing Engine tokens to user context.
 - Direct Session 0 UI is not supported; Borealis keeps the Engine-facing socket in SYSTEM and bridges into desktop sessions when current-user interaction is required.
-- The helper tray UI now opens a dedicated bottom-right status popup from tray icon clicks instead of using a right-click context menu, and that popup is the supported user-facing control surface for helper restart/status actions.
+- Windows same-binary helpers host the Borealis tray icon. The right-click menu shows each role as `Role Name: Healthy` or `Role Name: Unhealthy`, plus `Restart Agent` and `Check For Updates`; it does not open a local webpage or expose diagnostics/Engine links. Remote access remains silent in this first UI version; the UI does not add remote-session banners, notifications, or consent prompts.
 - The agent still labels Engine traffic with `X-Borealis-Agent-Context`, but the supported Windows service path no longer relies on a standalone CURRENTUSER Engine identity.
 - Headless Linux agents without an active graphical desktop report desktop-only health surfaces as `No Desktop Environment Active` instead of unhealthy/recovering. This applies to Current User Context helper dispatch and UI-side UltraVNC presentation so server-class Linux hosts do not look broken for missing desktop roles.
 
 ### Role discovery and extension
-- Roles are discovered dynamically from `Data/Agent/Roles/`.
-- Each role must define:
-  - `ROLE_NAME` (string)
-  - `ROLE_CONTEXTS` (list: `['system']`, `['interactive']`, `['helper']`, or combinations as needed)
-  - `Role` class with optional `register_events`, `on_config`, and `stop_all`.
-- To add a role:
-  1) Create `Data/Agent/Roles/role_<context>_<purpose>.py`.
-  2) Export `ROLE_NAME`, `ROLE_CONTEXTS`, and `Role`.
-  3) Re-stage the agent runtime (`Agent.exe`).
+- Go roles are compiled under `Data/Agent/internal/roles`.
+- Add new role packages to the explicit registry in `cmd/agent`/runtime wiring instead of relying on dynamic Python module discovery.
+- Add regression coverage under package-local Go `*_test.go` files and run the lane through `Data/Agent/Unit_Tests/Agent_Unit_Tests.sh` or `Data/Agent/Unit_Tests/Agent_Unit_Tests.ps1`.
 
 ### Networking and authentication
-- All REST calls flow through `AgentHttpClient` in `Data/Agent/agent.py`.
-- `AgentHttpClient.ensure_authenticated()` handles enrollment and refresh.
+- All REST calls flow through the Go auth client in `Data/Agent/internal/auth`.
+- `EnsureAuthenticated` handles identity generation, enrollment, approval polling, and token refresh.
 - Socket.IO is used by the SYSTEM runtime for:
-  - `quick_job_run` dispatch (system jobs plus helper-backed current-user jobs).
+  - `quick_job_run` dispatch (system jobs plus broker-backed current-user jobs).
   - `file_management_request` browse, upload-conflict preflight, lightweight text-edit, copy/cut/paste mutate, and transfer orchestration for the Device Summary `File Management` tab.
   - `process_management_request` live process snapshots and process termination for the Device Summary `Processes` tab.
+  - `service_control_action` start, stop, and restart requests for services discovered by the Service Management role.
+  - `software_inventory_refresh_request` operator-triggered software inventory refresh after icon/override or software action changes.
   - `vpn_tunnel_start` (WireGuard lifecycle; tunnels are persistent and ignore stop events).
+  - `vnc_start`, `vnc_stop`, `vnc_refresh`, and `vnc_credential_request` for Windows UltraVNC lifecycle and runtime password delivery.
+  - `agent_update_request` to start the local platform updater path.
   - `connect_agent` registration (agent socket registry).
 - The SYSTEM socket advertises `helper_contexts=["currentuser"]` when the session broker is running so the Engine can route logical current-user work through the same socket.
-- Helper processes never enroll, never refresh tokens, never open Socket.IO, and never talk to the Engine directly.
-- SYSTEM-to-helper communication uses per-session local IPC keyed by Windows `session_id`; the helper trusts `broker_verified` payloads from the local broker and still validates signed payloads if used outside that path.
+- Helper processes never enroll, never refresh tokens, never open Socket.IO, and never talk to the Engine directly. Tray UI reads redacted role-health status from a local state file and writes file-based `agent.restart` / `agent.update_check` action requests that the SYSTEM runtime polls; no local web server or listener is created for the tray UI.
+- Current Go Windows CURRENTUSER support uses same-binary helper sentinels for session readiness, direct `CreateProcessAsUser` session launch from SYSTEM for signed quick jobs, and the Windows tray/status UI. Real-host PowerShell Desktop canary validation passed, including denial when the user context attempted to write to root `C:\`; tray UI real-host acceptance remains pending.
 - WireGuard tunnels are ensured via `POST /api/agent/vpn/ensure` on boot and refreshed periodically.
 - The ensure loop re-establishes the tunnel automatically after network hiccups.
-- `role_system_heartbeat.py` starts before `AgentHttpClient.ensure_authenticated()`, normal `RoleManager.load()`, and the Socket.IO connect loop. It records process start, server config, identity, auth, status channel, socket, role load, helper broker, WireGuard, inventory, steady-state, and failure milestones.
-- Heartbeats/details also carry per-role health snapshots so the Device Details `Agent Health` tab can show current role/service status with last-checked timestamps. Startup status uses `POST /api/agent/status` so the timeline can update before the full role-health heartbeat cycle. The SYSTEM runtime also refreshes startup/status telemetry every five minutes after initial boot so graceful restarts or missed startup flushes do not leave Agent Health stuck on empty startup telemetry.
-- The VNC role generates one shared UltraVNC password when the role starts, rotates it again every 24 hours by default (`BOREALIS_VNC_CREDENTIAL_ROTATION_SECONDS`), keeps it in memory only, and returns it to the Engine only through live Agent Socket.IO `vnc_credential_request` calls. The Agent does not probe UltraVNC auth locally by default because each loopback auth probe consumes an UltraVNC login attempt and can trip lockout before Guacamole connects. Set `BOREALIS_VNC_LOCAL_AUTH_VERIFY=1` only for focused diagnostics. The role keeps UltraVNC continuously running once it has the Engine /32 firewall scope, writes UltraVNC config under `%ProgramData%\UltraVNC\` with loopback allowed for local diagnostics, and reports `ready`, `service_state`, `listener_state`, and `last_ready_at` through agent role health even when no operator is currently connected.
+- Go startup posts full timeline milestones before entering the Socket.IO connect loop and keeps heartbeat/status telemetry on the SYSTEM/root runtime.
+- Heartbeats/details also carry per-role health snapshots so the Device Details `Agent Health` tab can show current role/service status with last-checked timestamps. Startup status uses `POST /api/agent/status` under the separate `startup` context so later SYSTEM role-health heartbeats do not erase the timeline row.
+- The VNC role generates one shared UltraVNC password when the role starts, rotates it again every 24 hours by default (`BOREALIS_VNC_CREDENTIAL_ROTATION_SECONDS`), keeps it in memory only, and returns it to the Engine only through live Agent Socket.IO `vnc_credential_request` calls. The Agent does not probe UltraVNC auth locally by default because each loopback auth probe consumes an UltraVNC login attempt and can trip lockout before Guacamole connects. Set `BOREALIS_VNC_LOCAL_AUTH_VERIFY=1` only for focused diagnostics. The role keeps UltraVNC continuously running once it has the Engine /32 firewall scope, writes UltraVNC config under `%ProgramData%\UltraVNC\` with loopback allowed for local diagnostics, and reports `ready`, `service_state`, `listener_state`, `last_ready_at`, Windows `display_topology`, and Windows `display_virtual_bounds` through VNC ensure, credential, and role-health payloads even when no operator is currently connected.
 - VNC role trace logs (`vnc_trace ...`) are disabled by default because the always-on health loop can otherwise produce high-volume logs during normal operation. Set `BOREALIS_VNC_TRACE=1` only for short diagnostic captures.
 - The UltraVNC config writer enables capture performance flags (`TurboMode`, full-screen polling defaults, `EnableDriver`, and `EnableHook`) when the official UltraVNC helper DLLs are present beside `winvnc.exe`.
 
 ### Token storage
-- Refresh tokens are stored encrypted (DPAPI on Windows) in `refresh.token`.
-- Access tokens are stored in `access.jwt` with expiry metadata.
-- GUID is stored in `Agent_GUID.txt`.
-- When tokens are invalid or expired, the agent re-enrolls.
+- Refresh/access tokens are stored in `config.json`.
+- Device GUID and Engine agent ID are stored in `config.json`.
+- When tokens are invalid or expired, the agent refreshes or re-enters enrollment.
 
 ### Logging
-- Primary log: `Agent/Logs/agent.log` with daily rotation.
-- Error log: `Agent/Logs/agent.error.log`.
-- VPN logs: `Agent/Logs/VPN_Tunnel/tunnel.log` and `remote_shell.log`.
-- Role-specific logs may write to `Agent/Logs/<service>.log`.
-- Windows bootstrap/update diagnostics: `<ProjectRoot>/Agent/Logs/bootstrap.log`. Linux updater diagnostics: `<ProjectRoot>/Updater.log`.
+- Agent runtime log: `Logs/Agent/agent.log` with daily rotation.
+- Agent error log: `Logs/Agent/agent.error.log`.
+- Agent remote shell log: `Logs/Agent/remote_shell.log`.
+- Agent bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/Agent/bootstrap.log`; Windows bootstrap truncates this file at each start and always writes verbose trace/command output there while keeping console/GUI output minimal. Deferred Windows self-replacement writes retry, hash verification, finalization, and task restart output to `Logs/Agent/updater.log`. Linux updater diagnostics use `bootstrap.log`.
+- WireGuard role log: `Logs/WireGuard/wireguard.log`.
+- WireGuard MSI install log: `Logs/WireGuard/wireguard-msi-install.log`.
+- UltraVNC role log: `Logs/UltraVNC/vnc.log`.
+- UltraVNC MSI install log: `Logs/UltraVNC/ultravnc-msi-install.log`.
 
 ### Troubleshooting flow
 - If enrollment fails, check:
-  - `Agent/Logs/agent.log` for enrollment errors.
+  - `Logs/Agent/agent.log` for enrollment errors.
   - `Engine/Services/api-backend/logs/engine.log` for approval or auth failures.
 - If current-user execution fails, confirm the SYSTEM broker is advertising helper capability, inspect session inventory for `helper_ready`, and expect `no_interactive_user_session` when no eligible user session exists.
-- If a helper never appears after logon/unlock, inspect the broker reconcile loop in `Data/Agent/session_runtime.py` and confirm the legacy `Borealis Agent (UserHelper)` task has been removed rather than still competing with the broker-launched helper.
-- The updater helper (`Data/Agent/update_helper.py`) requires a configured public HTTPS FQDN and uses normal CA + hostname validation only.
+- If CURRENTUSER execution fails, inspect the Go helper broker migration status in `Data/Agent/Golang_Agent_Migration.md`.
 - Operator-requested manual updates arrive over the SYSTEM Socket.IO channel as `agent_update_request` and start the local AutoUpdater task/service immediately so the same scheduler-owned update path is used for both manual and hourly runs.
-- Engine-managed release channels still decide what build the agent should adopt, but the agent now discovers and applies those targets during its scheduled updater cadence instead of reacting to live Engine push events.
-- The scheduled AutoUpdater cadence is hourly with up to 15 minutes of random delay on normal timer-driven runs so fleets do not all recheck at once.
-- Linux updater service runs `Update.sh -Agent` through `borealis-agent-updater.service`; `Agent.sh deploy` detects that service context and does not stop the active updater while refreshing the agent runtime.
+- Engine-managed release channels cache a Go Agent binary bundle containing `Data/Agent/dist/windows-amd64/Agent.exe` and `Data/Agent/dist/linux-amd64/Agent`. Agents download that authenticated bundle, verify SHA-256 when provided, stage the platform binary, and restart through the local service manager.
+- Branch installs persist the operator-selected branch in `config.json` as `agent.branch`; local update checks use that branch when it is not `main` so feature-branch agents do not jump release channels accidentally.
+- Installed build tracking lives in `config.json` as `agent.installed_build_id`; the Go Agent does not create a standalone `installed_build_id.txt`.
+- Update checks do not persist `update_status.json`; transient state such as `state`, `update_available`, and `last_checked_at` is intentionally not stored by the Go Agent.
+- Windows update archives and extracted repository payloads are staged under `C:\Borealis\Temp\Updater`; the updater removes update workspaces immediately, schedules full `C:\Borealis\Temp` cleanup after bootstrap exits so stdout/stderr handles are closed, and cleans old accidental `C:\Borealis\Agent` update workspaces.
+- Windows self-update stages `Agent.exe.update` beside `Agent.exe` only while replacing a running binary. The detached updater retries the move, verifies the installed `Agent.exe` SHA-256, then runs `Agent.exe --finalize-update` so `config.json` receives the new `agent.installed_build_id` only after verified replacement. Failed deferred replacements remove their staged files, and later bootstrap/update starts remove stale `Agent.exe.tmp`, `Agent.exe.update.tmp`, and abandoned `Agent.exe.update` artifacts.
+- The scheduled AutoUpdater cadence is hourly on Windows and Linux.
 - If scripts do not run:
   - Confirm `quick_job_run` events and the correct role context.
   - Verify signatures with `signature_utils` logs.
@@ -131,7 +135,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
   - Check agent WireGuard role logs and confirm `/api/agent/vpn/ensure` succeeds.
   - Ensure the Engine has an active tunnel session and the WireGuard service is running.
 - If VNC fails:
-  - Check `Agent/Logs/VPN_Tunnel/tunnel.log` for `vnc_start` / `vnc_stop` reconciliation events.
+  - Check `Logs/WireGuard/wireguard.log` for tunnel lifecycle and WireGuard recovery events.
   - Call `POST /api/agent/vnc/ensure` and inspect `ready`, `service_state`, `listener_state`, `detail`, and `last_ready_at`.
   - Confirm the active collaboration session still exists from the Engine side with `GET /api/vnc/sessions`.
 
@@ -140,50 +144,48 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 
 #### Scope and runtime paths
 - Purpose: outbound-only connectivity, device telemetry, scripting, UI helpers.
-- Bootstrap: `Agent.exe` preps dependencies, installs UltraVNC and WireGuard from their official Windows installers, activates or repairs the agent venv, stages the Python runtime, keeps the SYSTEM startup task, registers the hourly `Borealis Agent (AutoUpdater)` task to call `C:\Borealis\Agent.exe`, removes legacy user-helper task state, and removes stale Windows Engine WireGuard listener services such as `WireGuardTunnel$borealis-wg` on install/update. WireGuard is installed system-wide but the `WireGuardManager` GUI/service is removed by default; the Python WireGuard role owns `WireGuardTunnel$Borealis` on demand. Remote Windows onboarding stages `Agent.exe` from `Data/Agent/Bootstrap/`; that native entrypoint handles SCM/service semantics, existing-agent repair checks, hostname reporting, dependency setup, state/events, timeout logging, and process cleanup before handing off to the Python agent. Default bootstrap output is high-level task summaries plus warnings/errors; use `Agent.exe -verbose` or `Agent.exe --verbose` for command output and trace detail. Existing Windows agents are treated as repairable only when the `Borealis Agent` scheduled task exists/runs and the Engine accepts the local access token; missing tasks or rejected tokens trigger re-deployment.
-- Windows install hardens `Agent/Borealis/Settings/Tray` permissions during `Configure Agent Settings`; stale `*.tmp` tray status files are cleaned first, and remaining volatile temp-file ACL denials are logged without failing onboarding.
-- Linux first install: `Agent.sh deploy` installs dependencies and stages the runtime.
-- Raw one-line or repo-option `Agent.sh` runs sync first, then re-execs the installed `Agent.sh`; root shells do not need `sudo` in the pipe, and generated non-root commands still use `sudo bash` before script execution. Local non-root `Agent.sh deploy` self-escalates through `sudo` when available and uses existing on-disk source without updating git.
+- Bootstrap: `Agent.exe` owns deploy, repair, update check, config write, scheduled-task registration, and runtime. Windows onboarding stages the Go binary from `Data/Agent/dist/windows-amd64/Agent.exe`; the installed copy runs from `C:\Borealis\Agent.exe`.
+- Windows support dependencies: `Agent.exe` can still install UltraVNC and WireGuard from official installers. Installed dependency versions live in `config.json` under `dependency_versions`, and transient installer payloads under `C:\Borealis\Dependencies` are removed after dependency reconciliation. It does not stage Python, create a venv, or call `launch_service.ps1`.
+- Existing Windows agents are repairable when `C:\Borealis\Agent.exe`, the `Borealis Agent` scheduled task, and an Engine-accepted token in `config.json` are present.
+- Linux first install: download `Data/Agent/dist/linux-amd64/Agent` to any temp path, then run it as root with `--server-url <url> --site-enrollment-code <code> --install-service`; the binary self-stages into `/opt/Borealis/Agent/Agent`, writes `config.json`, installs `borealis-agent.service`, and enables `borealis-agent-updater.timer`.
 - Edit in `Data/Agent`, not `/Agent`; runtime copies are ephemeral and wiped regularly.
-- Linux Agent installation is blocked when the install root contains deployed Engine runtime markers such as `Engine/Deploy/` or `Engine/Services/api-backend/`. The synced repository source under `Data/Engine/` is expected during Agent bootstrap and must not block first install.
+- Keep Linux Agent installation separate from deployed Engine runtime roots.
 
 #### Logging
-- Primary log: `Agent/Logs/agent.log` with daily rotation to `agent.log.YYYY-MM-DD` (never auto-delete rotated files).
-- Subsystems: log to `Agent/Logs/<service>.log` with the same rotation policy.
-- Install/diagnostics: `Agent/Logs/install.log`; keep ad-hoc traces (for example, `system_last.ps1`) under `Agent/Logs/` to keep runtime state self-contained.
-- Updater trace exception: Windows `Agent.exe` writes bootstrap/update diagnostics to `<ProjectRoot>/Agent/Logs/bootstrap.log`; Linux `Update.sh` recreates centralized diagnostics in `<ProjectRoot>/Updater.log` at the start of each run.
+- Primary log: `Logs/Agent/agent.log` with daily rotation to `agent.log.YYYY-MM-DD` (never auto-delete rotated files).
+- Agent support logs: `Logs/Agent/bootstrap.log` and `Logs/Agent/remote_shell.log`.
+- WireGuard logs: `Logs/WireGuard/wireguard.log` and `Logs/WireGuard/wireguard-msi-install.log`.
+- UltraVNC logs: `Logs/UltraVNC/vnc.log` and `Logs/UltraVNC/ultravnc-msi-install.log`.
+- Keep ad-hoc traces (for example, `system_last.ps1`) under `Logs/` to keep runtime state self-contained.
+- Updater trace exception: `Agent.exe` writes bootstrap/update diagnostics to `<AgentInstallRoot>/Logs/Agent/bootstrap.log`; Windows bootstrap starts by truncating this file and keeps verbose output out of operator-facing stdout/stderr streams.
 - Troubleshooting: prefix lines with `<timestamp>-<service-name>-<log-data>`; ask operators whether verbose logging should stay after resolution.
 
 #### Security
-- Generates device-wide Ed25519 keys on first launch (`Agent/Borealis/Certificates/Identity/`; DPAPI on Windows, `chmod 600` elsewhere).
-- Refresh/access tokens are encrypted and bound to the device identity plus Engine-issued token state; mismatches force re-enrollment.
+- Generates device-wide Ed25519 keys on first launch and stores PKCS8/SPKI base64 in `config.json`.
+- Refresh/access tokens are stored in `config.json` and bound to the device identity plus Engine-issued token state; mismatches force re-enrollment.
 - REST and Socket.IO traffic use the public Engine FQDN with normal CA + hostname validation.
 - Validates script payloads with backend-issued Ed25519 signatures before execution.
-- Outbound-only; API/WebSocket calls flow through `AgentHttpClient.ensure_authenticated` for proactive refresh. Logs bootstrap, enrollment, token refresh, and signature events in `Agent/Logs/`.
+- Outbound-only; API/WebSocket calls flow through the Go auth client for proactive refresh. Logs bootstrap, enrollment, token refresh, and signature events under `Logs/Agent/`.
 - Helper processes inherit no Borealis token state and rely on the local SYSTEM broker for job delivery.
 
 #### Reverse VPN tunnels
 - WireGuard reverse VPN design and lifecycle are documented in `vpn-and-remote-access.md`.
 - The original references were `REVERSE_TUNNELS.md` and `Reverse_VPN_Tunnel_Deployment.md` (now consolidated into this knowledgebase).
 - Agent roles:
-  - `Data/Agent/Roles/role_system_wireguard.py` (tunnel lifecycle)
-  - `Data/Agent/Roles/role_system_remote_shell.py` (VPN remote shell TCP server)
+  - `Data/Agent/internal/roles/wireguard_tunnel` (Go tunnel lifecycle)
+  - `Data/Agent/internal/roles/remote_shell` (Go VPN remote shell TCP server)
+  - `Data/Agent/internal/roles/vnc` (Go Windows UltraVNC lifecycle and credential broker)
 
 #### Execution contexts and roles
-- Auto-discovers roles from `Data/Agent/Roles/`; no loader changes needed.
-- Naming: `role_<context>_<purpose>.py` with `ROLE_NAME`, `ROLE_CONTEXTS`, and optional hooks (`register_events`, `on_config`, `stop_all`).
-- Standard supported one-socket roles: `role_system_context.py`, `role_currentuser_context.py`, `role_system_device_auditor.py`, `role_system_service_management.py`, `role_system_process_management.py`, `role_system_software_management.py`, `role_system_remote_shell.py`, `role_system_vnc.py`, `role_system_wireguard.py`.
-- The remote filesystem surface now also includes `role_system_file_management.py`, which serializes transfer-heavy and inline text-edit work through the `file_management` lane, replays folder-upload manifests one file at a time into the requested destination tree, honors operator cancel requests during upload/download/archive work, and keeps browse/mutate requests on the SYSTEM socket.
-- `role_currentuser_macros.py` and `role_currentuser_node_screenshot.py` remain legacy interactive-only implementations and are not part of the supported helper-backed Windows runtime path.
+- Go roles are explicit packages under `Data/Agent/internal/roles`.
+- First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER helper session health plus direct session PowerShell/Batch execution, core device audit inventory, SYSTEM/root file management, SYSTEM/root process management, SYSTEM/root service management, SYSTEM/root software management, SYSTEM/root WireGuard tunnel lifecycle, SYSTEM/root Remote Shell over WireGuard, Windows VNC lifecycle/credential brokerage over WireGuard, and Go release-channel self-update.
+- Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`.
 - SYSTEM tasks depend on scheduled-task creation rights; failures should surface through Engine logging.
 
 #### Platform parity
 - Windows is the reference path and has the broadest tested feature surface.
-- Linux agents run from the script-staged Python runtime through `Agent.sh deploy`, not shipped binaries.
-- Linux agents load the standard Agent roles and currently support WireGuard VPN, remote Bash/script execution, file/folder interaction, and Engine-side Ansible reachability to remote Linux devices.
-- Linux does not have a system tray/helper UI yet, and remote desktop remains Windows-only through the UltraVNC/Apache Guacamole path.
-- Linux agents probe for an active desktop environment through environment variables, display-manager state, display sockets, and common desktop processes. If none is active, desktop-only roles return `not_applicable`/`No Desktop Environment Active`.
-- Linux service control, process management, and software management code paths exist but need validation before they should be described as parity features.
+- Linux Go runtime builds as `Agent`, self-stages during `--install-service`, installs through systemd, enables an hourly updater timer, and supports root/SYSTEM Bash quick jobs in first PR.
+- Linux CURRENTUSER and tray UI are pending Go ports. Linux VNC is explicitly unsupported in the current Go role.
 
 #### Ansible support
 - The agent no longer hosts an Ansible playbook execution role.

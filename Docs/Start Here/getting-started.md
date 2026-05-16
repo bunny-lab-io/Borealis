@@ -13,25 +13,22 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Linux production, local redeploy: `./Engine.sh deploy prod`.
 - Linux dev, local redeploy: `./Engine.sh deploy dev`.
 - Engine service action examples: `./Engine.sh --service api-backend restart`, `./Engine.sh --service webui-frontend rebuild dev`, `./Engine.sh --service traefik-edge reload`, and `./Engine.sh --service wireguard-tunnel reconcile`.
-- Updates: `./Update.sh -Engine` fast-forwards the current branch then runs `Engine.sh deploy`; `./Update.sh -Agent` preserves the Agent updater flow then runs `Agent.sh deploy`.
+- Updates from a cloned checkout: `git pull --ff-only` followed by `./Engine.sh deploy prod` or `./Engine.sh deploy dev`; Go Agent release-channel packaging is tracked in `Data/Agent/Golang_Agent_Migration.md`.
 - Production TLS is managed by the embedded Traefik edge; the Python Engine stays on loopback HTTP.
 - During Engine deployment, `Engine.sh` renders `Engine/Deploy/compose.env` for Compose interpolation, renders shared and WebUI mode-scoped service env files under `Engine/Deploy/`, builds changed local images as `borealis-engine/<service>:sha-<hash>`, and starts or updates the Compose project `borealis-engine`.
 - No-op Engine deploys skip unchanged image builds and skip Compose when the deploy manifest, env, image hashes, and running containers already match.
 - Storage is displayed during profile detection as an advisory guideline only. It does not change which Engine profile gets selected.
 
 ## Optional: Install the Agent (Windows)
-- Run in elevated PowerShell from a checkout: `.\Data\Agent\Bootstrap\Agent.exe`.
-- Build or refresh Windows bootstrap binary from Linux when source changes: `Data/Agent/Bootstrap/build-agent.sh`.
+- Build or refresh Go Agent binaries from Linux when source changes: `Data/Agent/build-agent.sh`.
+- Run in elevated PowerShell from a checkout: `.\Data\Agent\dist\windows-amd64\Agent.exe`.
 - Automated enrollment example:
-  `.\Data\Agent\Bootstrap\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
+  `.\Data\Agent\dist\windows-amd64\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Non-interactive server URL + enrollment example:
   `C:\Borealis\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
-- Linux agents run from the same script-staged Python runtime model as the rest of Borealis, not shipped binaries. The Linux Agent path can be installed with `./Agent.sh deploy`; current parity notes live in `Docs/Core Runtimes/agent-runtime.md`.
+- Linux Go Agent builds to `Data/Agent/dist/linux-amd64/Agent`; install commands stage it as `/opt/Borealis/Agent/Agent` before running `--install-service`.
 - Linux Agent one-line installs use a root check: root shells pipe to `bash`; non-root shells use `sudo bash` before the script starts.
-- Do not install the Linux Agent into a deployed Engine runtime root. `Agent.sh deploy` blocks same-root installs when Engine deploy/runtime markers are present, but the synced `Data/Engine/` source tree is expected and does not block Agent first install.
-- Linux Agent branch bootstrap example:
-  `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/feature/containerize-all-borealis-services/Agent.sh | { if [ "$(id -u)" -eq 0 ]; then bash -s -- --repo-branch feature/containerize-all-borealis-services deploy --serverurl "https://borealis.bunny-lab.io" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --newEngine; else sudo bash -s -- --repo-branch feature/containerize-all-borealis-services deploy --serverurl "https://borealis.bunny-lab.io" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --newEngine; fi; }`
-- When `Agent.sh` receives an explicit enrollment code, it treats that as a fresh enrollment request, clears stale GUID/token/server-signing-key/installer-cache state, and starts the Linux service with the supplied code.
+- Do not install the Linux Agent into a deployed Engine runtime root. Keep the installed Agent binary and `config.json` in a dedicated Agent install directory.
 
 ## First Run Checklist
 - Open the Engine URL and confirm the login page loads.
@@ -63,15 +60,13 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Agent source code lives in `Data/Agent/`.
 - Runtime copies are staged to `Engine/` and `Agent/` every launch; these are disposable.
 - Engine container source lives in `Data/Engine/Containers/`; generated runtime state lives under `Engine/Deploy/` and sparse service-owned folders under `Engine/Services/<role>/`.
-- Edit durable source under `Data/` and re-run the appropriate launcher to apply changes: `Engine.sh` for Linux Engine first install and redeploys, `Agent.sh` for Linux Agent first install and redeploys, and `Agent.exe` for the Windows agent. For rapid WebUI HMR testing, edit `Engine/Services/webui-frontend/data/web-interface/` while running `Engine.sh deploy dev`.
+- Edit durable source under `Data/` and re-run the appropriate launcher/build: `Engine.sh` for Linux Engine first install and redeploys, `Data/Agent/build-agent.sh` for Go Agent binaries, and `Agent.exe` for installed Agent service control. For rapid WebUI HMR testing, edit `Engine/Services/webui-frontend/data/web-interface/` while running `Engine.sh deploy dev`.
 
 ### Launch mechanics
 - `Engine.sh` is the Linux Engine first-run and redeploy path. When run from a raw one-liner or with repo options, it syncs source first; local `Engine.sh deploy` uses existing on-disk source.
 - `Engine.sh deploy` installs missing Engine OS dependencies, defaults to production, and runs Docker Compose with project name `borealis-engine`.
 - `Engine.sh deploy dev` runs the same service set but sets the WebUI frontend to Vite HMR behind Traefik. Switching between prod and dev should only recreate WebUI after the stack is already current.
-- `Agent.sh` is the Linux Agent first-run and redeploy path. When run from a raw one-liner or with repo options, it syncs source first; local `Agent.sh deploy` uses existing on-disk source.
-- `Agent.sh deploy` installs missing Agent OS dependencies and stages the Linux Agent runtime.
-- `Agent.exe` handles dependency setup, runtime staging, repair, update checks, and uninstall for Windows Agent installs.
+- `Agent.exe` handles dependency setup, runtime staging, repair, update checks, service install/uninstall, and runtime for Agent installs.
 - Dev mode (`Engine.sh deploy dev`) uses Vite for the WebUI behind the Traefik edge container, while the Engine API stays on loopback.
 - Production (`Engine.sh deploy prod`) runs the Engine API on loopback HTTP, serves the static WebUI from the WebUI frontend container, and publishes the app through Traefik.
 - Engine and Agent dependency checks live in their domain launchers.
@@ -97,7 +92,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 ### Agent install and enrollment notes
 - The Windows agent must run elevated to create services and scheduled tasks.
 - Enrollment requires an install code and operator approval (see `Docs/Operations and Remote Access/device-management.md`).
-- If enrollment fails, inspect `Agent/Logs/agent.log` and `Engine/Services/api-backend/logs/engine.log`.
+- If enrollment fails, inspect `Agent/Logs/Agent/agent.log` and `Engine/Services/api-backend/logs/engine.log`.
 
 ### Health verification
 - Use `GET /health` to confirm the API is alive.

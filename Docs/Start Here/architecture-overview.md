@@ -8,7 +8,7 @@ Explain how Borealis is structured and how the core components interact end to e
 - Engine API backend: Flask + Socket.IO runtime that hosts APIs, scheduled jobs, VPN orchestration, VNC WebSocket proxy, and Engine-side Ansible execution.
 - WebUI frontend: React single page app served by the WebUI container (Vite in dev, static build in prod).
 - Traefik edge: public HTTP/HTTPS edge, ACME, and same-origin routing for UI, `/api`, `/socket.io`, and `/remote-desktop/vnc`.
-- Agent: Python runtime that enrolls, reports inventory, executes scripts, and opens VPN tunnels.
+- Agent: Go runtime binary (`Agent.exe`) that enrolls, reports heartbeat/status, executes scripts, and owns bootstrap/repair/update/runtime on installed hosts.
 - PostgreSQL database: container-owned PostgreSQL state under `Engine/Services/postgres-db/state`; stores devices, approvals, schedules, activity history, tokens, configuration records, and assemblies.
 - Assemblies: script definitions stored in PostgreSQL `assemblies.*` tables, with Aurora as the official authoring repo and a bundled seed snapshot kept in the Borealis repo.
 - Remote access: WireGuard reverse VPN, remote PowerShell, and VNC via Apache Guacamole.
@@ -62,8 +62,7 @@ None on this page. See [API Reference](../Data%20and%20Schema/api-reference.md).
 - VPN orchestration: `Data/Engine/Containers/api-backend/data/services/VPN/` (WireGuard server and tunnel lifecycle).
 - Remote desktop proxy: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/` (VNC WebSocket proxy).
 - Filters and targeting: `Data/Engine/Containers/api-backend/data/services/filters/matcher.py` (used by scheduled jobs and filter counts).
-- Agent broker/runtime split: `Data/Agent/agent.py` (SYSTEM socket owner) plus `Data/Agent/session_runtime.py` (per-session helper broker and local IPC).
-- Agent roles: `Data/Agent/Roles/` (script exec, device audit, WireGuard tunnel, remote shell, VNC, and legacy interactive-only roles).
+- Agent runtime: `Data/Agent/cmd/agent` plus packages under `Data/Agent/internal/`.
 
 ### End-to-end flow examples (use these to debug)
 - Quick job:
@@ -80,10 +79,10 @@ None on this page. See [API Reference](../Data%20and%20Schema/api-reference.md).
 
 ### Runtime boundaries
 - Do not edit `Engine/` or `Agent/` directly. They are recreated on each launch.
-- Edit Engine API source under `Data/Engine/Containers/api-backend/data/`, WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`, and Agent source under `Data/Agent/`; then re-run the appropriate launcher: `Engine.sh` or `Agent.sh`.
+- Edit Engine API source under `Data/Engine/Containers/api-backend/data/`, WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`, and Agent source under `Data/Agent/`; then re-run `Engine.sh` or `Data/Agent/build-agent.sh` as appropriate.
 
 ### What to read first when debugging
-- Start with logs: `Engine/Services/api-backend/logs/engine.log` and `Agent/Logs/agent.log`.
+- Start with logs: `Engine/Services/api-backend/logs/engine.log` and `Agent/Logs/Agent/agent.log`.
 - Check domain-specific logs (example: `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`).
 - Inspect active DB state in PostgreSQL (`engine.*` and `assemblies.*`) for device/job metadata.
 

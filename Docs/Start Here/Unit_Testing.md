@@ -2,7 +2,7 @@
 [Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
-This page is the testing entrypoint for humans and Codex agents. Use the root scripts first. They set the expected environment, write reports to one location, and keep Borealis-authored tests inside `Unit_Tests` folders.
+This page is the testing entrypoint for humans and Codex agents. Use the documented lane scripts first. They set the expected environment, write reports to one location, and keep Borealis-authored test entrypoints inside `Unit_Tests` folders.
 
 ## What Unit Tests Mean Here
 - Unit tests check focused Borealis behavior with fake inputs, temporary files, mocks, and isolated helper objects.
@@ -19,16 +19,16 @@ Run from the repository root.
 Runs every Engine Python unit test plus staged Engine WebUI unit tests.
 
 ```bash
-./Agent_Unit_Tests.sh
+./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh
 ```
 
-Runs every Agent Python unit test from Linux or another POSIX shell.
+Runs Go Agent unit tests and Windows/Linux build checks from Linux or another POSIX shell.
 
 ```powershell
-.\Agent_Unit_Tests.ps1
+.\Data\Agent\Unit_Tests\Agent_Unit_Tests.ps1
 ```
 
-Runs every Agent Python unit test from Windows PowerShell.
+Runs Go Agent unit tests and Windows/Linux build checks from Windows PowerShell.
 
 ## Domain Commands
 Use domain runs while iterating. Run full Engine or full Agent lane before handoff when change is broad, risky, or PR-ready.
@@ -40,21 +40,20 @@ Use domain runs while iterating. Run full Engine or full Agent lane before hando
 ```
 
 ```bash
-./Agent_Unit_Tests.sh --list-domains
-./Agent_Unit_Tests.sh --domain roles
-./Agent_Unit_Tests.sh --domain wireguard
+./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --list-domains
+./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --domain go-agent
 ```
 
 ```powershell
-.\Agent_Unit_Tests.ps1 -ListDomains
-.\Agent_Unit_Tests.ps1 -Domain wireguard
+.\Data\Agent\Unit_Tests\Agent_Unit_Tests.ps1 -ListDomains
+.\Data\Agent\Unit_Tests\Agent_Unit_Tests.ps1 -Domain go-agent
 ```
 
 Environment variables can also select domains:
 
 ```bash
 BOREALIS_ENGINE_UNIT_TEST_DOMAIN=scheduler ./Engine_Unit_Tests.sh
-BOREALIS_AGENT_UNIT_TEST_DOMAIN=tokens ./Agent_Unit_Tests.sh
+BOREALIS_AGENT_UNIT_TEST_DOMAIN=go-agent ./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh
 ```
 
 ## Engine Domains
@@ -81,30 +80,20 @@ BOREALIS_AGENT_UNIT_TEST_DOMAIN=tokens ./Agent_Unit_Tests.sh
 ## Agent Domains
 | Domain | Purpose |
 | --- | --- |
-| `all` | All Agent Python tests. |
-| `device-audit` | Device audit role behavior. |
-| `file-management` | System file-management role behavior. |
-| `heartbeat` | System heartbeat role behavior. |
-| `remote-shell` | Remote shell role behavior. |
-| `roles` | All role-focused tests plus system script and software behavior. |
-| `runtime` | Runtime copy, socket supervisor, runtime paths, and session runtime behavior. |
-| `scripts` | Current-user and system script execution behavior. |
-| `software` | System software-management role and helper behavior. |
-| `tokens` | Refresh-token storage and refresh behavior. |
-| `tray` | Tray restart and tray state behavior. |
-| `updates` | Agent update helper behavior. |
-| `vnc` | VNC role behavior. |
-| `wireguard` | WireGuard tunnel role behavior. |
+| `all` | Go Agent tests and Windows/Linux build checks. |
+| `go-agent` | Go Agent tests and Windows/Linux build checks. |
 
 ## Test Locations
 - Engine Python unit tests: `Data/Engine/Unit_Tests/`.
 - Engine assembly unit tests: `Data/Engine/Unit_Tests/assemblies/`.
-- Agent Python unit tests: `Data/Agent/Unit_Tests/`.
+- Agent test lane entrypoints: `Data/Agent/Unit_Tests/`.
+- Agent Go unit tests: package-local `*_test.go` files under `Data/Agent/cmd` and `Data/Agent/internal`.
 - WebUI unit tests: `Data/Engine/Containers/webui-frontend/data/web-interface/Unit_Tests/`.
 - Runtime WebUI unit test cache, when prepared for tests: `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests/`.
 
 ## Results
 - Results write to `Unit_Test_Results/<runtime>-<timestamp>/`.
+- Go Agent lane writes `agent-go.log`.
 - Python lanes write `*-pytest.log` and `*-pytest.xml`.
 - Engine Python writes per-file JUnit XML under `engine-pytest-junit/`.
 - WebUI writes `engine-webui-vitest.log` and, when Vitest reaches report generation, `engine-webui-vitest.xml`.
@@ -114,24 +103,21 @@ BOREALIS_AGENT_UNIT_TEST_DOMAIN=tokens ./Agent_Unit_Tests.sh
 ## Expected Setup
 - Run scripts from repo root.
 - Engine tests prefer `Engine/bin/python` when available because Engine venv includes pytest.
-- Agent tests use first Python interpreter with pytest available, checking Agent runtime, Engine runtime, and system Python in that order.
+- Agent tests use Go 1.22+; `Data/Agent/build-agent.sh` installs a native Go toolchain under `Dependencies/Go` on Linux when missing.
 - WebUI tests require a prepared runtime cache at `Engine/Services/webui-frontend/cache/web-interface` with `node_modules` and `Unit_Tests`. Container deploys also seed editable dev/HMR source under `Engine/Services/webui-frontend/data/web-interface/`, but that source folder is not the test dependency cache.
 - Do not run npm or Vite from `Data/Engine/Containers/webui-frontend/data/web-interface`; use a prepared runtime cache, the dev/HMR runtime source, or defer UI runtime validation to the operator redeploying the WebUI container.
 - Container launcher/static validation should start with shell and Compose checks before broader unit lanes:
 ```bash
 bash -n Engine.sh
-bash -n Agent.sh
-bash -n Update.sh
 docker compose -f Data/Engine/Containers/compose.yaml config
 ```
 
 ## Shared Helpers
 - Engine helpers live under `Data/Engine/Unit_Tests/support/`.
-- Agent helpers live under `Data/Agent/Unit_Tests/support/`.
 - `support/engine.py` builds isolated Engine test harnesses and authenticated clients.
 - `support/devices.py` creates fake devices, services, and inventory defaults.
 - `support/software_config.py` isolates icon override, uninstall override, and uninstall blocklist JSON.
-- `support/roles.py` builds Agent Role objects with fake status hooks and runtime state.
+- Go tests should prefer package-local fakes and `httptest`/fake Socket.IO harnesses.
 
 Prefer small helpers with clear names: fake Engine, fake devices, fake Role hooks, fake config files. Avoid one giant fake Borealis environment because it hides behavior and makes failures harder to read.
 
@@ -143,15 +129,15 @@ Prefer small helpers with clear names: fake Engine, fake devices, fake Role hook
 
 ## Codex Agent
 - Read this page before choosing validation for codebase changes.
-- Use root scripts as testing entrypoint. Do not start with raw `pytest`, `npm`, or `vitest` unless diagnosing runner failure.
-- For container deployment changes, run shell syntax checks for `Engine.sh`, `Agent.sh`, and `Update.sh`, then validate `Data/Engine/Containers/compose.yaml` through `docker compose -f Data/Engine/Containers/compose.yaml config`.
-- Pick narrow domain runs while iterating, then run full affected lane when practical: Engine change gets `./Engine_Unit_Tests.sh`; Agent change gets `./Agent_Unit_Tests.sh` or `.\Agent_Unit_Tests.ps1`; cross-runtime change gets both.
+- Use documented lane scripts as testing entrypoint. Do not start with raw `pytest`, `npm`, or `vitest` unless diagnosing runner failure.
+- For container deployment changes, run shell syntax checks for `Engine.sh`, then validate `Data/Engine/Containers/compose.yaml` through `docker compose -f Data/Engine/Containers/compose.yaml config`.
+- Pick narrow domain runs while iterating, then run full affected lane when practical: Engine change gets `./Engine_Unit_Tests.sh`; Agent change gets `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh` or `.\Data\Agent\Unit_Tests\Agent_Unit_Tests.ps1`; cross-runtime change gets both.
 - For WebUI unit tests, use `./Engine_Unit_Tests.sh --domain webui`. Do not run npm or vite from `Data/Engine/Containers/webui-frontend/data/web-interface`; staging source is not the runtime test location.
 - Keep reports under `Unit_Test_Results/`. Do not write `.pytest_cache`, `__pycache__`, JUnit XML, or Vitest output under `Data/Engine`, `Data/Agent`, or `Data/Engine/Containers/webui-frontend/data/web-interface`.
-- When adding tests, place them under the nearest `Unit_Tests` folder and reuse helpers before inventing new setup code.
+- When adding Python or WebUI tests, place them under the nearest `Unit_Tests` folder and reuse helpers before inventing new setup code. When adding Go Agent tests, keep them package-local as `*_test.go` files and run them through the Agent lane scripts under `Data/Agent/Unit_Tests`.
 - When a test needs fake Engine, fake device, fake config, or fake Role state, add helper capability under nearest `support/` package first, then call it from individual tests.
 - Keep helper defaults realistic for Borealis code paths, and expose test-specific changes through keyword overrides.
-- If domain membership changes, update this page and the matching root script in same commit.
+- If domain membership changes, update this page and the matching lane script in same commit.
 
 ## Related Documentation
 - [Testing Regressions](testing-regressions.md)

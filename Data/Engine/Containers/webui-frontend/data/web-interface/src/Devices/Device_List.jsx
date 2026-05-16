@@ -20,6 +20,7 @@ import ViewColumnIcon from "@mui/icons-material/ViewColumn";
 import AddIcon from "@mui/icons-material/Add";
 import CachedIcon from "@mui/icons-material/Cached";
 import DevicesOtherIcon from "@mui/icons-material/DevicesOther";
+import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { DeleteDeviceDialog, CreateCustomViewDialog, RenameCustomViewDialog } from "../Dialogs.jsx";
@@ -124,6 +125,12 @@ const resolveDeviceId = (device) =>
   device?.hostname ||
   device?.id ||
   null;
+
+const resolveDevicePurgeGuid = (device) =>
+  String(device?.agentGuid || device?.agent_guid || device?.summary?.agent_guid || device?.guid || "").trim();
+
+const getDeviceDisplayLabel = (device) =>
+  String(device?.hostname || device?.summary?.hostname || device?.agentGuid || device?.guid || "Unknown Device").trim();
 
 const alphaSortCollator = new Intl.Collator(undefined, {
   numeric: true,
@@ -592,6 +599,7 @@ export default function DeviceList({
   const [deleteError, setDeleteError] = useState("");
   // Track selection by agent id to avoid duplicate hostname collisions
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [deleteTargetIds, setDeleteTargetIds] = useState(() => new Set());
   const canLaunchQuickJob = selectedIds.size > 0;
   const [quickJobOpen, setQuickJobOpen] = useState(false);
   const [quickJobHostnames, setQuickJobHostnames] = useState([]);
@@ -1248,6 +1256,52 @@ export default function DeviceList({
     [replaceFilters]
   );
 
+  const selectedDeviceRows = useMemo(
+    () => rows.filter((row) => row?.id != null && selectedIds.has(row.id)),
+    [rows, selectedIds]
+  );
+
+  const deleteTargetRows = useMemo(
+    () => rows.filter((row) => row?.id != null && deleteTargetIds.has(row.id)),
+    [deleteTargetIds, rows]
+  );
+
+  const closeMenu = useCallback(() => setMenuAnchor(null), []);
+
+  const openMenu = useCallback((event, row) => {
+    setDeleteError("");
+    setMenuAnchor(event.currentTarget);
+    setSelected(row);
+  }, []);
+
+  const openPurgeDialog = useCallback((targetRows) => {
+    const ids = new Set(
+      (targetRows || [])
+        .map((row) => row?.id)
+        .filter((id) => id !== undefined && id !== null)
+    );
+    if (!ids.size) return;
+    setDeleteError("");
+    setDeleteTargetIds(ids);
+    setConfirmOpen(true);
+  }, []);
+
+  const confirmDelete = useCallback(() => {
+    setDeleteError("");
+    closeMenu();
+    const contextTargets =
+      selected?.id != null && selectedIds.has(selected.id) && selectedDeviceRows.length
+        ? selectedDeviceRows
+        : selected
+          ? [selected]
+          : selectedDeviceRows;
+    openPurgeDialog(contextTargets);
+  }, [closeMenu, openPurgeDialog, selected, selectedDeviceRows, selectedIds]);
+
+  const openSelectedPurgeDialog = useCallback(() => {
+    openPurgeDialog(selectedDeviceRows);
+  }, [openPurgeDialog, selectedDeviceRows]);
+
   const pageHeaderActions = useMemo(
     () => [
       {
@@ -1272,9 +1326,22 @@ export default function DeviceList({
         disabled: !canLaunchQuickJob,
         onClick: () => {
           if (!canLaunchQuickJob) return;
-          const selectedRows = rows.filter((row) => selectedIds.has(row.id));
-          handleQuickJobLaunch(selectedRows);
+          handleQuickJobLaunch(selectedDeviceRows);
         },
+      },
+      {
+        id: "device-purge-selected",
+        label: "Purge Selected",
+        icon: <DeleteRoundedIcon />,
+        tone: "danger",
+        disabled: !isAdmin || !selectedDeviceRows.length || deleteBusy,
+        loading: deleteBusy,
+        tooltip: !isAdmin
+          ? "Only administrators can purge devices"
+          : !selectedDeviceRows.length
+            ? "Select one or more devices to purge"
+            : undefined,
+        onClick: openSelectedPurgeDialog,
       },
       ...(derivedShowAddButton
         ? [
@@ -1299,8 +1366,10 @@ export default function DeviceList({
       fetchDevices,
       loading,
       handleQuickJobLaunch,
-      rows,
-      selectedIds,
+      isAdmin,
+      deleteBusy,
+      openSelectedPurgeDialog,
+      selectedDeviceRows,
     ]
   );
 
@@ -1321,77 +1390,86 @@ export default function DeviceList({
     setSelectedIds(new Set(ids));
   }, []);
 
-  const openMenu = useCallback((event, row) => {
-    setDeleteError("");
-    setMenuAnchor(event.currentTarget);
-    setSelected(row);
-  }, []);
-
-  const closeMenu = useCallback(() => setMenuAnchor(null), []);
-
-  const confirmDelete = useCallback(() => {
-    setDeleteError("");
-    closeMenu();
-    setConfirmOpen(true);
-  }, [closeMenu]);
-
   const handleDelete = useCallback(async () => {
-    if (!selected || deleteBusy) return;
+    if (!deleteTargetRows.length || deleteBusy) return;
     if (!isAdmin) {
       setDeleteError("Only administrators can purge devices.");
       return;
     }
-    const targetGuid =
-      (selected.agentGuid || selected.summary?.agent_guid || selected.guid || "").trim();
-    if (!targetGuid) {
-      setDeleteError("This device is missing a GUID and cannot be purged.");
-      return;
-    }
-    const selectedId = selected.id;
     setDeleteBusy(true);
     setDeleteError("");
+    const purgedRows = [];
+    const failedRows = [];
+    let updatedJobs = 0;
+    let deletedJobs = 0;
     try {
-      const response = await fetch(`/api/devices/${encodeURIComponent(targetGuid)}/purge`, {
-        method: "POST",
-        credentials: "include",
-      });
-      const payload = await response.json().catch(() => null);
-      if (!response.ok) {
-        const message =
-          payload?.message ||
-          payload?.error ||
-          `Failed to purge device (${response.status})`;
-        throw new Error(message);
+      for (const row of deleteTargetRows) {
+        const targetGuid = resolveDevicePurgeGuid(row);
+        const label = getDeviceDisplayLabel(row);
+        if (!targetGuid) {
+          failedRows.push({ row, label, message: "Missing GUID" });
+          continue;
+        }
+        const response = await fetch(`/api/devices/${encodeURIComponent(targetGuid)}/purge`, {
+          method: "POST",
+          credentials: "include",
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          const message =
+            payload?.message ||
+            payload?.error ||
+            `HTTP ${response.status}`;
+          failedRows.push({ row, label, message });
+          continue;
+        }
+        purgedRows.push({ row, payload });
+        updatedJobs += Number(payload?.scheduled_jobs?.updated || 0);
+        deletedJobs += Number(payload?.scheduled_jobs?.deleted || 0);
       }
-      const targetHostname =
-        (payload?.hostname || selected.hostname || selected.summary?.hostname || "the selected device").trim();
-      const updatedJobs = Number(payload?.scheduled_jobs?.updated || 0);
-      const deletedJobs = Number(payload?.scheduled_jobs?.deleted || 0);
-      setRows((existingRows) => existingRows.filter((row) => row.id !== selectedId));
+
+      if (!purgedRows.length && failedRows.length) {
+        throw new Error(
+          failedRows.length === 1
+            ? `${failedRows[0].label}: ${failedRows[0].message}`
+            : `${failedRows.length} device purge(s) failed.`
+        );
+      }
+
+      const purgedIds = new Set(purgedRows.map(({ row }) => row.id));
+      setRows((existingRows) => existingRows.filter((row) => !purgedIds.has(row.id)));
       setSelectedIds((prev) => {
-        if (!prev.has(selectedId)) return prev;
         const next = new Set(prev);
-        next.delete(selectedId);
+        purgedIds.forEach((id) => next.delete(id));
         return next;
       });
-      setConfirmOpen(false);
-      setSelected(null);
+      if (failedRows.length) {
+        setDeleteTargetIds(new Set(failedRows.map(({ row }) => row.id).filter((id) => id !== undefined && id !== null)));
+        setDeleteError(
+          `${purgedRows.length} purged; ${failedRows.length} failed. ` +
+          failedRows.slice(0, 3).map((item) => `${item.label}: ${item.message}`).join("; ")
+        );
+      } else {
+        setConfirmOpen(false);
+        setDeleteTargetIds(new Set());
+        setSelected(null);
+      }
       await notifyOperator({
-        title: "Device Purged",
+        title: purgedRows.length === 1 ? "Device Purged" : "Devices Purged",
         message:
-          `Borealis permanently purged ${targetHostname}. ` +
+          `Borealis permanently purged ${purgedRows.length} device${purgedRows.length === 1 ? "" : "s"}. ` +
           `Updated ${updatedJobs} scheduled job(s) and deleted ${deletedJobs} empty job(s).`,
         icon: "device",
-        variant: "success",
+        variant: failedRows.length ? "warning" : "success",
       });
       await fetchDevices({ showLoading: false });
     } catch (error) {
-      console.warn("Failed to purge device", error);
-      setDeleteError(error instanceof Error ? error.message : "Failed to purge device.");
+      console.warn("Failed to purge device(s)", error);
+      setDeleteError(error instanceof Error ? error.message : "Failed to purge device(s).");
     } finally {
       setDeleteBusy(false);
     }
-  }, [deleteBusy, fetchDevices, isAdmin, notifyOperator, selected]);
+  }, [deleteBusy, deleteTargetRows, fetchDevices, isAdmin, notifyOperator]);
 
   const hostnameCellRenderer = useCallback(
     (params) => {
@@ -2321,7 +2399,11 @@ export default function DeviceList({
           setAssignSiteId(null);
           setAssignDialogOpen(true);
         }}>Move to Another Site</MenuItem>
-        {isAdmin ? <MenuItem onClick={confirmDelete} sx={{ color: '#ff8a8a' }}>Delete</MenuItem> : null}
+        {isAdmin ? (
+          <MenuItem onClick={confirmDelete} sx={{ color: '#ff8a8a' }}>
+            {selected?.id != null && selectedIds.has(selected.id) && selectedDeviceRows.length > 1 ? "Purge Selected" : "Purge"}
+          </MenuItem>
+        ) : null}
       </Menu>
       <DeleteDeviceDialog
         open={confirmOpen}
@@ -2329,10 +2411,12 @@ export default function DeviceList({
           if (deleteBusy) return;
           setConfirmOpen(false);
           setDeleteError("");
+          setDeleteTargetIds(new Set());
         }}
         onConfirm={handleDelete}
         busy={deleteBusy}
         errorText={deleteError}
+        devices={deleteTargetRows}
       />
 
       {assignDialogOpen && (

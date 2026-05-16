@@ -20,17 +20,11 @@ DEFAULT_AGENT_RELEASE_CHANNEL = "stable"
 DEFAULT_REFRESH_INTERVAL_SECONDS = 60
 _ARTIFACT_ID_PATTERN = re.compile(r"[^a-z0-9._-]+")
 _SETTINGS_PATH_ENV = "BOREALIS_AGENT_RELEASE_CHANNELS_PATH"
-_REQUIRED_UPDATE_STATE_MARKERS = (
-    "def clear_pending_update(",
-    "def read_pending_update(",
-    "def read_update_status(",
-    "def write_pending_update(",
-    "def write_update_status(",
-)
-_REQUIRED_UPDATE_HELPER_MARKERS = (
-    'add_parser("prepare-update"',
-    'add_parser("finalize-update"',
-)
+_GO_AGENT_ARTIFACT_FORMAT = "borealis-go-agent-v1"
+_REQUIRED_GO_AGENT_ARTIFACTS = {
+    "windows-amd64": "Data/Agent/dist/windows-amd64/Agent.exe",
+    "linux-amd64": "Data/Agent/dist/linux-amd64/Agent",
+}
 
 
 def _project_root() -> Path:
@@ -138,6 +132,18 @@ def _archive_member_text(archive: zipfile.ZipFile, suffix: str) -> str:
             with archive.open(name) as handle:
                 return handle.read().decode("utf-8", errors="ignore")
     return ""
+
+
+def _archive_member_bytes(archive: zipfile.ZipFile, suffix: str) -> bytes:
+    normalized_suffix = suffix.replace("\\", "/").lstrip("/")
+    for name in archive.namelist():
+        normalized_name = str(name or "").replace("\\", "/").strip("/")
+        if not normalized_name:
+            continue
+        if normalized_name == normalized_suffix or normalized_name.endswith(f"/{normalized_suffix}"):
+            with archive.open(name) as handle:
+                return handle.read()
+    return b""
 
 
 class AgentReleaseChannelManager:
@@ -511,25 +517,56 @@ class AgentReleaseChannelManager:
     def _validate_cached_artifact(self, artifact_path: Path) -> None:
         try:
             with zipfile.ZipFile(artifact_path) as archive:
-                update_state_text = _archive_member_text(archive, "Data/Agent/update_state.py")
-                update_helper_text = _archive_member_text(archive, "Data/Agent/update_helper.py")
+                missing = [
+                    relative_path
+                    for relative_path in _REQUIRED_GO_AGENT_ARTIFACTS.values()
+                    if not _archive_member_bytes(archive, relative_path)
+                ]
+                manifest_text = _archive_member_text(archive, "manifest.json")
         except zipfile.BadZipFile as exc:
             raise RuntimeError(f"cached artifact is not a valid zip: {exc}") from exc
 
-        if not update_state_text or not update_helper_text:
-            raise RuntimeError("artifact is missing Data/Agent/update_state.py or Data/Agent/update_helper.py")
+        if missing:
+            raise RuntimeError("artifact missing prebuilt Go Agent binaries: " + ", ".join(missing))
+        if manifest_text:
+            try:
+                manifest_payload = json.loads(manifest_text)
+            except Exception as exc:
+                raise RuntimeError(f"artifact manifest is invalid JSON: {exc}") from exc
+            if _clean_text(manifest_payload.get("artifact_format")) != _GO_AGENT_ARTIFACT_FORMAT:
+                raise RuntimeError("artifact manifest has unsupported format")
 
-        missing_state = [marker for marker in _REQUIRED_UPDATE_STATE_MARKERS if marker not in update_state_text]
-        if missing_state:
-            missing_names = [marker.replace("def ", "").replace("(", "") for marker in missing_state]
-            raise RuntimeError(
-                "artifact predates the Engine-managed updater interface "
-                f"(missing update_state APIs: {', '.join(missing_names)})"
-            )
+    def _package_go_agent_artifact(
+        self,
+        *,
+        source_archive_path: Path,
+        destination_path: Path,
+        manifest: Dict[str, Any],
+    ) -> None:
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with zipfile.ZipFile(source_archive_path) as source_archive:
+                binaries = {
+                    platform: _archive_member_bytes(source_archive, relative_path)
+                    for platform, relative_path in _REQUIRED_GO_AGENT_ARTIFACTS.items()
+                }
+        except zipfile.BadZipFile as exc:
+            raise RuntimeError(f"downloaded artifact is not a valid zip: {exc}") from exc
 
-        missing_helper = [marker for marker in _REQUIRED_UPDATE_HELPER_MARKERS if marker not in update_helper_text]
-        if missing_helper:
-            raise RuntimeError("artifact predates the Engine-managed updater commands required by release channels")
+        missing = [relative_path for platform, relative_path in _REQUIRED_GO_AGENT_ARTIFACTS.items() if not binaries.get(platform)]
+        if missing:
+            raise RuntimeError("downloaded artifact missing prebuilt Go Agent binaries: " + ", ".join(missing))
+
+        temp_path = destination_path.with_suffix(destination_path.suffix + ".tmp")
+        payload = dict(manifest)
+        payload["artifact_format"] = _GO_AGENT_ARTIFACT_FORMAT
+        payload["platform_artifacts"] = dict(_REQUIRED_GO_AGENT_ARTIFACTS)
+        with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            bundle.writestr("manifest.json", json.dumps(payload, indent=2, sort_keys=True))
+            for platform, relative_path in _REQUIRED_GO_AGENT_ARTIFACTS.items():
+                bundle.writestr(relative_path, binaries[platform])
+        self._validate_cached_artifact(temp_path)
+        temp_path.replace(destination_path)
 
     def _validated_prior_target(self, target: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not isinstance(target, dict):
@@ -608,19 +645,43 @@ class AgentReleaseChannelManager:
                 artifact_size = 0
         else:
             artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            source_path = artifact_path.with_suffix(".source.zip")
             temp_path = artifact_path.with_suffix(".download")
             payload = self._download_bytes(_clean_text(candidate.get("download_url")))
-            temp_path.write_bytes(payload)
-            self._validate_cached_artifact(temp_path)
-            artifact_sha256 = _safe_sha_file(temp_path)
-            artifact_size = int(temp_path.stat().st_size)
-            temp_path.replace(artifact_path)
+            source_path.write_bytes(payload)
+            try:
+                self._package_go_agent_artifact(
+                    source_archive_path=source_path,
+                    destination_path=temp_path,
+                    manifest={
+                        "channel": channel,
+                        "repo": repo,
+                        "build_id": build_id,
+                        "download_url": _clean_text(candidate.get("download_url")),
+                        "fallback_url": _clean_text(candidate.get("fallback_url")),
+                        "version_label": _clean_text(candidate.get("version_label")),
+                        "release_tag": _clean_text(candidate.get("release_tag")),
+                        "release_name": _clean_text(candidate.get("release_name")),
+                        "published_at": _clean_text(candidate.get("published_at")),
+                        "branch": _clean_text(candidate.get("branch")),
+                    },
+                )
+                artifact_sha256 = _safe_sha_file(temp_path)
+                artifact_size = int(temp_path.stat().st_size)
+                temp_path.replace(artifact_path)
+            finally:
+                try:
+                    source_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
         self._validate_cached_artifact(artifact_path)
 
         manifest = {
             "channel": channel,
             "repo": repo,
+            "artifact_format": _GO_AGENT_ARTIFACT_FORMAT,
+            "platform_artifacts": dict(_REQUIRED_GO_AGENT_ARTIFACTS),
             "build_id": build_id,
             "artifact_id": artifact_id,
             "artifact_path": str(artifact_path),
@@ -711,6 +772,8 @@ class AgentReleaseChannelManager:
             "artifact_id": artifact_id,
             "artifact_sha256": _clean_text(target.get("artifact_sha256")),
             "artifact_size": int(target.get("artifact_size") or 0),
+            "artifact_format": _clean_text(target.get("artifact_format")) or _GO_AGENT_ARTIFACT_FORMAT,
+            "platform_artifacts": target.get("platform_artifacts") if isinstance(target.get("platform_artifacts"), dict) else dict(_REQUIRED_GO_AGENT_ARTIFACTS),
             "download_path": f"/api/agent/update/download/{artifact_id}",
             "fallback_url": _clean_text(target.get("fallback_url")),
             "release_tag": _clean_text(target.get("release_tag")),

@@ -456,6 +456,16 @@ function normalizeDeviceSummarySnapshot(detailData, { device = {}, deviceId = ""
       normalizedSummary.agent_release_channel_override ||
       detailData?.details?.summary?.agent_release_channel_override ||
       "",
+    agentReleaseChannel:
+      detailData?.agent_release_channel ||
+      normalizedSummary.agent_release_channel ||
+      detailData?.details?.summary?.agent_release_channel ||
+      "",
+    agentBranch:
+      detailData?.agent_branch ||
+      normalizedSummary.agent_branch ||
+      detailData?.details?.summary?.agent_branch ||
+      "",
     agentReleaseChannelEffective:
       detailData?.agent_release_channel_effective ||
       normalizedSummary.agent_release_channel_effective ||
@@ -1024,9 +1034,12 @@ export default function DeviceSummary() {
   const [tunnelInfo, setTunnelInfo] = useState(TUNNEL_INFO_IDLE);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [releaseChannelMenuPosition, setReleaseChannelMenuPosition] = useState(null);
+  const [agentBranchMenuPosition, setAgentBranchMenuPosition] = useState(null);
+  const [agentBranchDraft, setAgentBranchDraft] = useState("");
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [updateAgentBusy, setUpdateAgentBusy] = useState(false);
   const [releaseChannelSaving, setReleaseChannelSaving] = useState(false);
+  const [agentBranchSaving, setAgentBranchSaving] = useState(false);
   const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
   const softwareRefreshTimersRef = useRef([]);
   // Snapshotted status for the lifetime of this page
@@ -1513,6 +1526,35 @@ export default function DeviceSummary() {
     setReleaseChannelMenuPosition(null);
   }, []);
 
+  const openAgentBranchMenu = useCallback(
+    (event) => {
+      if (!isAdmin || agentBranchSaving) return;
+      if (event?.preventDefault) event.preventDefault();
+      if (event?.stopPropagation) event.stopPropagation();
+      setAgentBranchDraft(
+        String(meta.agentBranch || summary.agent_branch || "main").trim() || "main"
+      );
+      const rect = event?.currentTarget?.getBoundingClientRect?.();
+      if (rect) {
+        setAgentBranchMenuPosition({
+          top: Math.round(rect.bottom + 4),
+          left: Math.round(rect.left),
+        });
+        return;
+      }
+      setAgentBranchMenuPosition(
+        typeof event?.clientX === "number" && typeof event?.clientY === "number"
+          ? { top: Math.round(event.clientY + 4), left: Math.round(event.clientX) }
+          : null
+      );
+    },
+    [agentBranchSaving, isAdmin, meta.agentBranch, summary.agent_branch]
+  );
+
+  const closeAgentBranchMenu = useCallback(() => {
+    setAgentBranchMenuPosition(null);
+  }, []);
+
   const applyAgentReleaseChannelOverride = useCallback(
     async (channel) => {
       const targetGuid = meta.agentGuid || summary.agent_guid || device?.agent_guid || device?.guid || "";
@@ -1537,7 +1579,7 @@ export default function DeviceSummary() {
         });
         applyDeviceSummarySnapshot(snapshot, { silent: true });
         const resolvedChannel =
-          String(data?.agent_release_channel_effective || normalizedChannel || "stable")
+          String(data?.agent_release_channel || normalizedChannel || "stable")
             .trim()
             .toLowerCase() || "stable";
         const targetLabel = activityHostname || targetGuid;
@@ -1577,6 +1619,89 @@ export default function DeviceSummary() {
       applyAgentReleaseChannelOverride(channel);
     },
     [applyAgentReleaseChannelOverride, closeReleaseChannelMenu]
+  );
+
+  const applyAgentBranchOverride = useCallback(
+    async () => {
+      const targetGuid = meta.agentGuid || summary.agent_guid || device?.agent_guid || device?.guid || "";
+      const normalizedBranch = String(agentBranchDraft || "").trim();
+      if (!isAdmin || !targetGuid || agentBranchSaving) return;
+      if (!normalizedBranch) {
+        await notifyOperator({
+          title: "Agent Branch Required",
+          message: "Enter a source branch before applying the agent branch change.",
+          icon: "error",
+          variant: "error",
+        });
+        return;
+      }
+      setAgentBranchSaving(true);
+      try {
+        const resp = await fetch(`/api/devices/${encodeURIComponent(targetGuid)}/agent-release-channel`, {
+          method: "PUT",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channel: "source", branch: normalizedBranch }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
+        }
+        setAgentBranchMenuPosition(null);
+        const snapshot = await fetchDeviceSummarySnapshot({
+          device,
+          deviceId,
+          includeAgents: false,
+        });
+        applyDeviceSummarySnapshot(snapshot, { silent: true });
+        const resolvedBranch = String(data?.agent_branch || normalizedBranch).trim() || normalizedBranch;
+        setMeta((prev) => ({
+          ...(prev || {}),
+          agentBranch: resolvedBranch,
+          agentReleaseChannel: data?.agent_release_channel || "source",
+          agentReleaseChannelOverride: data?.agent_release_channel_override || "unstable",
+          agentReleaseChannelEffective: data?.agent_release_channel_effective || "unstable",
+        }));
+        setDetails((prev) => ({
+          ...(prev || {}),
+          summary: {
+            ...(prev?.summary || {}),
+            agent_branch: resolvedBranch,
+            agent_release_channel: data?.agent_release_channel || "source",
+            agent_release_channel_override: data?.agent_release_channel_override || "unstable",
+            agent_release_channel_effective: data?.agent_release_channel_effective || "unstable",
+          },
+        }));
+        const targetLabel = activityHostname || targetGuid;
+        await notifyOperator({
+          title: "Agent Branch Updated",
+          message: `<b>${targetLabel}</b> Source Branch changed to <b>${resolvedBranch}</b>`,
+          icon: "info",
+          variant: "success",
+        });
+      } catch (err) {
+        await notifyOperator({
+          title: "Agent Branch Update Failed",
+          message: `Could not update the agent source branch: ${String(err?.message || err)}`,
+          icon: "error",
+          variant: "error",
+        });
+      } finally {
+        setAgentBranchSaving(false);
+      }
+    },
+    [
+      activityHostname,
+      agentBranchDraft,
+      agentBranchSaving,
+      applyDeviceSummarySnapshot,
+      device,
+      deviceId,
+      isAdmin,
+      meta.agentGuid,
+      notifyOperator,
+      summary.agent_guid,
+    ]
   );
 
   const saveDescription = async () => {
@@ -2643,9 +2768,17 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   const borealisAgentRows = useMemo(
     () => {
-      const effectiveChannel =
+      const configuredReleaseChannel = String(
+        meta.agentReleaseChannel ||
+          summary.agent_release_channel ||
+          ""
+      )
+        .trim()
+        .toLowerCase();
+      const rawEffectiveChannel =
         String(
-          meta.agentReleaseChannelEffective ||
+          configuredReleaseChannel ||
+            meta.agentReleaseChannelEffective ||
             summary.agent_release_channel_effective ||
             meta.agentReleaseChannelOverride ||
             summary.agent_release_channel_override ||
@@ -2653,6 +2786,10 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         )
           .trim()
           .toLowerCase() || "stable";
+      const effectiveChannel =
+        rawEffectiveChannel === "unstable" || rawEffectiveChannel === "branch" ? "source" : rawEffectiveChannel;
+      const currentBranch =
+        String(meta.agentBranch || summary.agent_branch || "").trim() || "main";
       const lastChannelUpdateValue = formatDateValue(
         meta.agentTargetPublishedAt || summary.agent_target_published_at || "",
         "unknown"
@@ -2676,6 +2813,14 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           value: effectiveChannel,
           changeActionVisible: Boolean(isAdmin),
           changeActionText: releaseChannelSaving ? "[saving...]" : "[change]",
+        },
+        {
+          id: "agent-branch",
+          label: "Source Branch",
+          value: currentBranch,
+          changeActionVisible: Boolean(isAdmin),
+          changeActionKind: "branch",
+          changeActionText: agentBranchSaving ? "[saving...]" : "[change]",
         },
         {
           id: "agent-last-channel-update",
@@ -2710,8 +2855,10 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     [
       meta.agentGuid,
       meta.agentVersionStatus,
+      meta.agentReleaseChannel,
       meta.agentReleaseChannelEffective,
       meta.agentReleaseChannelOverride,
+      meta.agentBranch,
       meta.agentTargetBuildId,
       meta.agentTargetPublishedAt,
       meta.agentUpdateState,
@@ -2720,10 +2867,13 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       meta.created,
       isAdmin,
       releaseChannelSaving,
+      agentBranchSaving,
       summary.agent_guid,
       summary.agent_version_status,
+      summary.agent_release_channel,
       summary.agent_release_channel_effective,
       summary.agent_release_channel_override,
+      summary.agent_branch,
       summary.agent_target_build_id,
       summary.agent_target_published_at,
       summary.agent_update_state,
@@ -2807,7 +2957,10 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     (params) => {
       const row = params?.data && typeof params.data === "object" ? params.data : {};
       const value = String(params?.value ?? row?.value ?? "").trim() || "unknown";
-      if (row?.id === "agent-channel") {
+      if (row?.id === "agent-channel" || row?.id === "agent-branch") {
+        const isBranchAction = row?.changeActionKind === "branch";
+        const actionBusy = isBranchAction ? agentBranchSaving : releaseChannelSaving;
+        const actionHandler = isBranchAction ? openAgentBranchMenu : openReleaseChannelMenu;
         return (
           <Box
             sx={{
@@ -2835,8 +2988,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
               <Box
                 component="button"
                 type="button"
-                disabled={releaseChannelSaving}
-                onClick={openReleaseChannelMenu}
+                disabled={actionBusy}
+                onClick={actionHandler}
                 sx={{
                   display: "inline-flex",
                   alignItems: "center",
@@ -2845,13 +2998,13 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                   border: 0,
                   background: "transparent",
                   color: BOREALIS_LINK_COLOR,
-                  cursor: releaseChannelSaving ? "default" : "pointer",
+                  cursor: actionBusy ? "default" : "pointer",
                   font: "inherit",
                   fontSize: "0.82rem",
                   lineHeight: 1.45,
                   textDecoration: "none",
                   transition: "color 160ms ease, opacity 160ms ease",
-                  "&:hover": releaseChannelSaving
+                  "&:hover": actionBusy
                     ? undefined
                     : {
                         color: BOREALIS_LINK_HOVER_COLOR,
@@ -2891,7 +3044,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         </Box>
       );
     },
-    [openReleaseChannelMenu, releaseChannelSaving]
+    [agentBranchSaving, openAgentBranchMenu, openReleaseChannelMenu, releaseChannelSaving]
   );
 
   const topLevelSplitColumnDefs = useMemo(
@@ -3187,12 +3340,80 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           Stable
         </MenuItem>
         <MenuItem
-          selected={String(meta.agentReleaseChannelOverride || summary.agent_release_channel_override || "").trim().toLowerCase() === "unstable"}
+          selected={
+            String(
+              meta.agentReleaseChannel ||
+                summary.agent_release_channel ||
+                meta.agentReleaseChannelOverride ||
+                summary.agent_release_channel_override ||
+                ""
+            )
+              .trim()
+              .toLowerCase() === "source" ||
+            String(meta.agentReleaseChannelOverride || summary.agent_release_channel_override || "").trim().toLowerCase() === "unstable"
+          }
           disabled={releaseChannelSaving}
-          onClick={() => handleReleaseChannelSelection("unstable")}
+          onClick={() => handleReleaseChannelSelection("source")}
         >
-          Unstable
+          Source
         </MenuItem>
+      </Menu>
+      <Menu
+        anchorReference="anchorPosition"
+        anchorPosition={agentBranchMenuPosition || undefined}
+        open={Boolean(agentBranchMenuPosition)}
+        onClose={closeAgentBranchMenu}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+        PaperProps={{
+          sx: {
+            bgcolor: "rgba(8,12,24,0.96)",
+            color: "#fff",
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            p: 1.25,
+          },
+        }}
+      >
+        <Box sx={{ width: 340, maxWidth: "calc(100vw - 48px)" }}>
+          <TextField
+            autoFocus
+            fullWidth
+            size="small"
+            label="Source Branch"
+            value={agentBranchDraft}
+            disabled={agentBranchSaving}
+            onChange={(event) => setAgentBranchDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                applyAgentBranchOverride();
+              }
+            }}
+            sx={{
+              "& .MuiInputBase-root": {
+                color: MAGIC_UI.textBright,
+              },
+              "& .MuiInputLabel-root": {
+                color: MAGIC_UI.textMuted,
+              },
+              "& .MuiOutlinedInput-notchedOutline": {
+                borderColor: MAGIC_UI.panelBorder,
+              },
+            }}
+          />
+          <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1.25 }}>
+            <Button size="small" onClick={closeAgentBranchMenu} disabled={agentBranchSaving}>
+              Cancel
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              onClick={applyAgentBranchOverride}
+              disabled={agentBranchSaving || !String(agentBranchDraft || "").trim()}
+            >
+              Apply
+            </Button>
+          </Stack>
+        </Box>
       </Menu>
       <QuickJobDialog
         open={quickJobOpen}

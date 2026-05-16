@@ -1,0 +1,144 @@
+package auth
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"testing"
+	"time"
+
+	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
+)
+
+func TestEnrollmentHandshake(t *testing.T) {
+	_, signingPub, _ := fakeSigningKey(t)
+	var requestSeen bool
+	var pollSeen bool
+	serverNonce := []byte("server-nonce")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/agent/enroll/request":
+			requestSeen = true
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["enrollment_code"] != "CODE" {
+				t.Fatalf("bad enrollment code: %v", payload["enrollment_code"])
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status":             "pending",
+				"approval_reference": "ref",
+				"server_nonce":       base64.StdEncoding.EncodeToString(serverNonce),
+				"poll_after_ms":      1,
+				"signing_key":        signingPub,
+			})
+		case "/api/agent/enroll/poll":
+			pollSeen = true
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status":        "approved",
+				"guid":          "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+				"access_token":  "access",
+				"refresh_token": "refresh",
+				"expires_in":    900,
+				"signing_key":   signingPub,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, agentconfig.FileName)
+	cfg := agentconfig.Default()
+	cfg.ServerURL = server.URL
+	cfg.EnrollmentCode = "CODE"
+	if err := agentconfig.Save(path, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(path, &cfg, "system", WithHTTPClient(server.Client()), WithHostname("host"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := client.EnsureAuthenticated(ctx); err != nil {
+		t.Fatalf("EnsureAuthenticated failed: %v", err)
+	}
+	if !requestSeen || !pollSeen {
+		t.Fatalf("expected request and poll")
+	}
+	loaded, err := agentconfig.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Agent.GUID != "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE" {
+		t.Fatalf("guid mismatch: %q", loaded.Agent.GUID)
+	}
+	if loaded.Tokens.RefreshToken != "refresh" {
+		t.Fatalf("refresh token not saved")
+	}
+	if loaded.Trust.ServerSigningKeySPKIB64 != signingPub {
+		t.Fatalf("signing key not saved")
+	}
+}
+
+func TestRefreshToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/token/refresh" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer old" {
+			t.Fatalf("missing authorization")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "new",
+			"expires_in":   900,
+		})
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, agentconfig.FileName)
+	cfg := agentconfig.Default()
+	cfg.ServerURL = server.URL
+	cfg.Agent.GUID = "GUID"
+	cfg.Tokens.AccessToken = "old"
+	cfg.Tokens.AccessExpiresAt = time.Now().Add(-time.Minute).Unix()
+	cfg.Tokens.RefreshToken = "refresh"
+	if err := agentconfig.Save(path, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(path, &cfg, "system", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.EnsureAuthenticated(context.Background()); err != nil {
+		t.Fatalf("EnsureAuthenticated failed: %v", err)
+	}
+	loaded, _ := agentconfig.Load(path)
+	if loaded.Tokens.AccessToken != "new" {
+		t.Fatalf("access token = %q", loaded.Tokens.AccessToken)
+	}
+}
+
+func fakeSigningKey(t *testing.T) (ed25519.PrivateKey, string, []byte) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return priv, base64.StdEncoding.EncodeToString(der), der
+}

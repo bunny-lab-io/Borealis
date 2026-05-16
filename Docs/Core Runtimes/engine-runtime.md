@@ -87,7 +87,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 ### One-shot legacy migration helpers
 - `Data/Engine/Containers/sterilize-systemd-runtime.sh`: migration-only helper that stops/removes legacy Borealis systemd units, disables host PostgreSQL units, best-effort removes old `borealis-wg` state, dumps the legacy `borealis` database when reachable, and renames `Engine/` to `Engine.old/`.
 - `Data/Engine/Containers/import-legacy-postgres-dump.sh <dump.sql>`: migration-only helper that imports a preserved logical dump into container PostgreSQL after deployment.
-- These helpers are not called by `Engine.sh` or `Update.sh`.
+- These helpers are not called by `Engine.sh`.
 
 ### EngineContext and lifecycle
 - `Data/Engine/Containers/api-backend/data/server.py` builds an `EngineContext` that includes:

@@ -9,6 +9,7 @@
 # - GET /api/devices/search (Token Authenticated) - Returns hostname search matches scoped to the operator's assigned sites unless the operator is an admin.
 # - GET /api/devices/<guid> (Token Authenticated) - Retrieves a single device record by GUID, including summary fields.
 # - POST /api/devices/<guid>/purge (Token Authenticated (Admin)) - Holistically purges a device, its trust records, and scheduled-job references.
+# - PUT /api/devices/<guid>/agent-release-channel (Token Authenticated (Admin)) - Updates an agent release channel override and optional source branch.
 # - GET /api/device/details/<hostname> (Token Authenticated) - Returns full device details keyed by hostname.
 # - POST /api/device/description/<hostname> (Token Authenticated) - Updates the human-readable description for a device.
 # - GET /api/device_list_views (Token Authenticated) - Lists saved device table view definitions.
@@ -267,6 +268,30 @@ def _clean_device_str(value: Any) -> Optional[str]:
     return text or None
 
 
+def _normalize_agent_branch(value: Any) -> Optional[str]:
+    text = _clean_device_str(value)
+    if not text:
+        return None
+    if len(text) > 160:
+        return None
+    if any(ord(ch) < 32 or ch.isspace() for ch in text):
+        return None
+    if (
+        text.startswith(("/", "."))
+        or text.endswith(("/", "."))
+        or ".." in text
+        or "//" in text
+        or "@{" in text
+        or "\\" in text
+        or ":" in text
+    ):
+        return None
+    allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-")
+    if any(ch not in allowed for ch in text):
+        return None
+    return text
+
+
 def _normalize_software_source(value: Any) -> str:
     text = _clean_device_str(value)
     if not text:
@@ -375,6 +400,16 @@ def _extract_device_columns(details: Dict[str, Any]) -> Dict[str, Any]:
         or summary.get("external_ip")
         or summary.get("internal_ip")
     )
+    payload["agent_release_channel"] = _clean_device_str(
+        summary.get("agent_release_channel")
+        or summary.get("release_channel")
+    )
+    payload["agent_branch"] = _normalize_agent_branch(
+        summary.get("agent_branch")
+        or summary.get("branch")
+        or summary.get("repo_ref")
+        or summary.get("repo_branch")
+    )
     payload["agent_update_channel"] = _clean_device_str(
         summary.get("agent_update_channel")
         or summary.get("target_channel")
@@ -455,12 +490,14 @@ def _device_upsert(
             agent_id,
             connection_type,
             connection_endpoint,
+            agent_release_channel,
+            agent_branch,
             agent_update_channel,
             agent_update_target_build_id,
             agent_update_state,
             agent_update_error,
             agent_update_source
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(hostname) DO UPDATE SET
             description=excluded.description,
             created_at=COALESCE({DEVICE_TABLE}.created_at, excluded.created_at),
@@ -489,6 +526,8 @@ def _device_upsert(
             agent_id=COALESCE(NULLIF(excluded.agent_id, ''), {DEVICE_TABLE}.agent_id),
             connection_type=COALESCE(NULLIF(excluded.connection_type, ''), {DEVICE_TABLE}.connection_type),
             connection_endpoint=COALESCE(NULLIF(excluded.connection_endpoint, ''), {DEVICE_TABLE}.connection_endpoint),
+            agent_release_channel=COALESCE(NULLIF(excluded.agent_release_channel, ''), {DEVICE_TABLE}.agent_release_channel),
+            agent_branch=COALESCE(NULLIF(excluded.agent_branch, ''), {DEVICE_TABLE}.agent_branch),
             agent_update_channel=COALESCE(NULLIF(excluded.agent_update_channel, ''), {DEVICE_TABLE}.agent_update_channel),
             agent_update_target_build_id=COALESCE(NULLIF(excluded.agent_update_target_build_id, ''), {DEVICE_TABLE}.agent_update_target_build_id),
             agent_update_state=COALESCE(NULLIF(excluded.agent_update_state, ''), {DEVICE_TABLE}.agent_update_state),
@@ -525,6 +564,8 @@ def _device_upsert(
         column_values.get("agent_id"),
         column_values.get("connection_type"),
         column_values.get("connection_endpoint"),
+        column_values.get("agent_release_channel"),
+        column_values.get("agent_branch"),
         column_values.get("agent_update_channel"),
         column_values.get("agent_update_target_build_id"),
         column_values.get("agent_update_state"),
@@ -568,6 +609,8 @@ class DeviceManagementService:
         "connection_type",
         "connection_endpoint",
         "agent_release_channel_override",
+        "agent_release_channel",
+        "agent_branch",
         "agent_update_channel",
         "agent_update_target_build_id",
         "agent_update_state",
@@ -663,6 +706,18 @@ class DeviceManagementService:
         except Exception:
             self.logger.debug("Failed to emit device_inventory_changed for hostname=%s", normalized_hostname, exc_info=True)
 
+    def _emit_agent_release_channel_changed(self, hostname: str, payload: Dict[str, Any]) -> None:
+        normalized_hostname = _clean_device_str(hostname) or ""
+        if not normalized_hostname:
+            return
+        emitter = getattr(self.adapters.context, "emit_host_service_event", None)
+        if not callable(emitter):
+            return
+        try:
+            emitter(normalized_hostname, "system", "agent_release_channel_changed", payload)
+        except Exception:
+            self.logger.debug("Failed to emit agent_release_channel_changed for hostname=%s", normalized_hostname, exc_info=True)
+
     def _target_repo_config(self) -> Tuple[str, str]:
         repo_name = (os.environ.get("BOREALIS_UPDATE_REPO") or "bunny-lab-io/Borealis").strip()
         branch_name = (os.environ.get("BOREALIS_UPDATE_BRANCH") or "main").strip()
@@ -738,6 +793,15 @@ class DeviceManagementService:
         payload["agent_target_build_id"] = target_build_id or ""
         payload["agent_target_published_at"] = target_published_at or ""
         payload["agent_release_channel_override"] = channel_override or None
+        payload["agent_release_channel"] = (
+            _clean_device_str(payload.get("agent_release_channel"))
+            or _clean_device_str(summary.get("agent_release_channel"))
+            or ""
+        )
+        payload["agent_branch"] = _normalize_agent_branch(
+            payload.get("agent_branch")
+            or summary.get("agent_branch")
+        ) or ""
         payload["agent_release_channel_effective"] = effective_channel or (
             _clean_device_str(summary.get("agent_release_channel_effective"))
             or _clean_device_str(payload.get("agent_release_channel_effective"))
@@ -749,6 +813,8 @@ class DeviceManagementService:
             summary["agent_target_build_id"] = target_build_id or ""
             summary["agent_target_published_at"] = target_published_at or ""
             summary["agent_release_channel_override"] = channel_override or None
+            summary["agent_release_channel"] = payload.get("agent_release_channel") or ""
+            summary["agent_branch"] = payload.get("agent_branch") or ""
             if payload.get("agent_release_channel_effective"):
                 summary["agent_release_channel_effective"] = payload.get("agent_release_channel_effective")
             if installed_build_id and not summary.get("agent_build_id"):
@@ -761,6 +827,8 @@ class DeviceManagementService:
                 detail_summary["agent_target_build_id"] = target_build_id or ""
                 detail_summary["agent_target_published_at"] = target_published_at or ""
                 detail_summary["agent_release_channel_override"] = channel_override or None
+                detail_summary["agent_release_channel"] = payload.get("agent_release_channel") or ""
+                detail_summary["agent_branch"] = payload.get("agent_branch") or ""
                 if payload.get("agent_release_channel_effective"):
                     detail_summary["agent_release_channel_effective"] = payload.get("agent_release_channel_effective")
                 if installed_build_id and not detail_summary.get("agent_build_id"):
@@ -874,6 +942,8 @@ class DeviceManagementService:
             "connection_type": mapping.get("connection_type") or "",
             "connection_endpoint": mapping.get("connection_endpoint") or "",
             "agent_release_channel_override": mapping.get("agent_release_channel_override") or "",
+            "agent_release_channel": mapping.get("agent_release_channel") or "",
+            "agent_branch": mapping.get("agent_branch") or "",
             "agent_update_channel": mapping.get("agent_update_channel") or "",
             "agent_update_target_build_id": mapping.get("agent_update_target_build_id") or "",
             "agent_update_state": mapping.get("agent_update_state") or "",
@@ -937,6 +1007,8 @@ class DeviceManagementService:
             "connection_type": summary["connection_type"],
             "connection_endpoint": summary["connection_endpoint"],
             "agent_release_channel_override": summary["agent_release_channel_override"],
+            "agent_release_channel": summary["agent_release_channel"],
+            "agent_branch": summary["agent_branch"],
             "agent_update_channel": summary["agent_update_channel"],
             "agent_update_target_build_id": summary["agent_update_target_build_id"],
             "agent_update_state": summary["agent_update_state"],
@@ -1298,6 +1370,14 @@ class DeviceManagementService:
         )
         if not isinstance(incoming_update_status, dict):
             incoming_update_status = {}
+        incoming_agent_release_channel = _clean_device_str(
+            payload.get("agent_release_channel")
+            or (details.get("summary") or {}).get("agent_release_channel")
+        )
+        incoming_agent_branch = _normalize_agent_branch(
+            payload.get("agent_branch")
+            or (details.get("summary") or {}).get("agent_branch")
+        )
 
         raw_guid = getattr(ctx, "guid", None)
         try:
@@ -1396,6 +1476,10 @@ class DeviceManagementService:
             if agent_hash:
                 incoming_summary["agent_hash"] = agent_hash
                 incoming_summary["agent_build_id"] = agent_hash
+            if incoming_agent_release_channel:
+                incoming_summary["agent_release_channel"] = incoming_agent_release_channel
+            if incoming_agent_branch:
+                incoming_summary["agent_branch"] = incoming_agent_branch
             if incoming_update_status:
                 update_channel = _clean_device_str(
                     incoming_update_status.get("target_channel")
@@ -1578,14 +1662,50 @@ class DeviceManagementService:
             self.logger.debug("Failed to load device details", exc_info=True)
             return {"error": str(exc)}, 500
 
-    def set_agent_release_channel_override(self, guid: str, channel_override: Any) -> Tuple[Dict[str, Any], int]:
+    def set_agent_release_channel_override(
+        self,
+        guid: str,
+        channel_override: Any,
+        branch_override: Any = None,
+    ) -> Tuple[Dict[str, Any], int]:
         normalized_guid = normalize_guid(guid) if _clean_device_str(guid) else ""
         if not normalized_guid:
             return {"error": "invalid_guid"}, 400
 
-        cleaned_override = _clean_device_str(channel_override).lower()
+        raw_override = (_clean_device_str(channel_override) or "").lower()
+        if raw_override in {"release", "releases"}:
+            cleaned_override = "stable"
+        elif raw_override in {"source", "branch", "repo", "repository"}:
+            cleaned_override = "unstable"
+        else:
+            cleaned_override = raw_override
         if cleaned_override not in {"", "stable", "unstable"}:
             return {"error": "invalid_channel"}, 400
+
+        branch_supplied = branch_override is not None
+        supplied_branch = _normalize_agent_branch(branch_override) if branch_supplied else None
+        if branch_supplied and not supplied_branch:
+            return {"error": "invalid_branch"}, 400
+
+        target_branch = ""
+        target_build_id = ""
+        target_published_at = ""
+        if supplied_branch:
+            cleaned_override = "unstable"
+            effective_channel = "unstable"
+            release_channel = "source"
+            target_branch = supplied_branch
+        else:
+            effective_channel, target_build_id, target_published_at = self._resolve_agent_target(cleaned_override)
+            if self.agent_release_manager is not None:
+                try:
+                    target = self.agent_release_manager.target_for_override(cleaned_override)
+                    if isinstance(target, dict):
+                        target_branch = _normalize_agent_branch(target.get("branch")) or ""
+                except Exception:
+                    target_branch = ""
+            release_channel = "source" if (_clean_device_str(effective_channel) or "").lower() == "unstable" else "stable"
+
         stored_override = cleaned_override or None
 
         conn = self._db_conn()
@@ -1595,10 +1715,12 @@ class DeviceManagementService:
             cur.execute(
                 """
                 UPDATE devices
-                   SET agent_release_channel_override = ?
+                   SET agent_release_channel_override = ?,
+                       agent_release_channel = ?,
+                       agent_branch = ?
                  WHERE UPPER(guid) = ?
                 """,
-                (stored_override, normalized_guid),
+                (stored_override, release_channel, target_branch, normalized_guid),
             )
             if cur.rowcount == 0:
                 conn.rollback()
@@ -1617,13 +1739,26 @@ class DeviceManagementService:
         finally:
             conn.close()
 
-        effective_channel, target_build_id, target_published_at = self._resolve_agent_target(cleaned_override)
+        self._emit_agent_release_channel_changed(
+            hostname,
+            {
+                "hostname": hostname,
+                "guid": normalized_guid,
+                "effective_channel": effective_channel,
+                "target_channel": effective_channel,
+                "release_channel": release_channel,
+                "branch": target_branch,
+                "target_build_id": target_build_id or "",
+            },
+        )
         return {
             "status": "ok",
             "guid": normalized_guid,
             "hostname": hostname,
             "agent_release_channel_override": stored_override,
             "agent_release_channel_effective": effective_channel,
+            "agent_release_channel": release_channel,
+            "agent_branch": target_branch,
             "agent_target_build_id": target_build_id or "",
             "agent_target_published_at": target_published_at or "",
         }, 200
@@ -2933,7 +3068,7 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
             payload, status = requirement
             return jsonify(payload), status
         body = request.get_json(silent=True) or {}
-        payload, status = service.set_agent_release_channel_override(guid, body.get("channel"))
+        payload, status = service.set_agent_release_channel_override(guid, body.get("channel"), body.get("branch"))
         return jsonify(payload), status
 
     @blueprint.route("/api/device/details/<hostname>", methods=["GET"])

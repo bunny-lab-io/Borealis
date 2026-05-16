@@ -260,6 +260,8 @@ JOB_KIND_ONBOARDING = "onboarding"
 ONBOARDING_COMPONENT_KIND = "device_onboarding"
 AGENT_EXE_NAME = "Agent.exe"
 DEFAULT_BOREALIS_REPO_GIT_URL = "https://github.com/bunny-lab-io/Borealis.git"
+WINDOWS_AGENT_DIST_REPO_PATH = "Data/Agent/dist/windows-amd64/Agent.exe"
+LINUX_AGENT_DIST_REPO_PATH = "Data/Agent/dist/linux-amd64/Agent"
 ONBOARDING_COMPONENT_NAME = "Device Onboarding"
 ONBOARDING_STATUS_PENDING = "pending"
 ONBOARDING_STATUS_RUNNING = "running"
@@ -281,6 +283,13 @@ ONBOARDING_WINDOWS_METHODS = (
     ONBOARDING_WINDOWS_METHOD_WMI_DCOM,
     ONBOARDING_WINDOWS_METHOD_WINRM,
 )
+
+
+def _github_raw_file_url(branch: str, repo_path: str) -> str:
+    branch_ref = str(branch or "main").strip() or "main"
+    encoded_branch = urllib.parse.quote(branch_ref, safe="/")
+    normalized_path = str(repo_path or "").strip().lstrip("/")
+    return f"https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/{encoded_branch}/{normalized_path}"
 
 
 def _onboarding_failure_hint(*, stdout: Any = "", stderr: Any = "", redactions: Optional[Sequence[Any]] = None) -> str:
@@ -377,15 +386,24 @@ def _windows_onboarding_methods_with_required_fallbacks(methods: Sequence[str]) 
 
 def _windows_onboarding_skip_detail(*, stdout: Any = "", stderr: Any = "") -> str:
     combined = f"{stdout or ''}\n{stderr or ''}"
+    normalized = combined.lower()
     if "__BOREALIS_ONBOARDING_ALREADY_RUNNING__=1" in combined:
+        return "Another Borealis onboarding deployment is already running on this target."
+    if "another borealis onboarding deployment is already running" in normalized:
         return "Another Borealis onboarding deployment is already running on this target."
     if "__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1" in combined:
         return "Existing Borealis Agent is already enrolled and active."
+    if "existing borealis agent is already enrolled and active" in normalized or "existing agent healthy" in normalized:
+        return "Existing Borealis Agent is already enrolled and active."
     if "__BOREALIS_ONBOARDING_AGENT_REPAIRED__=1" in combined:
+        return "Existing Borealis Agent repaired and started."
+    if "existing borealis agent repaired and started" in normalized or "repairing existing agent scheduled task" in normalized:
         return "Existing Borealis Agent repaired and started."
     if "__BOREALIS_ONBOARDING_ALREADY_PENDING__=1" in combined:
         if re.search(r"__BOREALIS_ONBOARDING_ALREADY_PENDING__=1[^\r\n]*status=running\b", combined, re.IGNORECASE):
             return ""
+        return "Previous Borealis onboarding attempt is already pending approval on this target."
+    if "previous borealis onboarding attempt is already pending approval" in normalized or "state=already_pending" in normalized:
         return "Previous Borealis onboarding attempt is already pending approval on this target."
     return ""
 
@@ -408,7 +426,8 @@ def _onboarding_target_without_port(value: Any) -> str:
 
 def _windows_onboarding_repair_succeeded(*, stdout: Any = "", stderr: Any = "") -> bool:
     combined = f"{stdout or ''}\n{stderr or ''}"
-    return "__BOREALIS_ONBOARDING_AGENT_REPAIRED__=1" in combined
+    normalized = combined.lower()
+    return "__BOREALIS_ONBOARDING_AGENT_REPAIRED__=1" in combined or "existing borealis agent repaired and started" in normalized or "repairing existing agent scheduled task" in normalized
 
 
 def _windows_onboarding_local_bootstrap_completed(*, stdout: Any = "", stderr: Any = "", detail: Any = "") -> bool:
@@ -2923,7 +2942,7 @@ class OnboardingSchedulerMixin:
         run_id: int,
         target: str,
     ) -> str:
-        agent_url = f"https://raw.githubusercontent.com/bunny-lab-io/Borealis/{branch}/Agent.sh"
+        agent_url = _github_raw_file_url(branch, LINUX_AGENT_DIST_REPO_PATH)
         env_parts = [
             f"BOREALIS_ONBOARDING_JOB_ID={shlex.quote(str(int(job_id)))}",
             f"BOREALIS_ONBOARDING_RUN_ID={shlex.quote(str(int(run_id)))}",
@@ -2932,14 +2951,11 @@ class OnboardingSchedulerMixin:
             "BOREALIS_AGENT_NO_TTY=1",
         ]
         args = [
-            "--repo-branch",
-            branch,
-            "deploy",
-            "--serverurl",
+            "--server-url",
             server_url,
-            "--enrollmentcode",
+            "--site-enrollment-code",
             enrollment_code,
-            "--newEngine",
+            "--install-service",
         ]
         quoted_args = " ".join(shlex.quote(str(arg)) for arg in args)
         quoted_url = shlex.quote(agent_url)
@@ -2957,9 +2973,9 @@ class OnboardingSchedulerMixin:
                 f"elif command -v wget >/dev/null 2>&1; then wget -qO \"$tmp_file\" {quoted_url}; "
                 "else echo 'curl_or_wget_required' >&2; exit 43; fi",
                 "chmod 700 \"$tmp_file\"",
-                f"if [ \"$(id -u)\" -eq 0 ]; then env {env_prefix} bash \"$tmp_file\" {quoted_args}; "
+                f"if [ \"$(id -u)\" -eq 0 ]; then env {env_prefix} \"$tmp_file\" {quoted_args}; "
                 f"else command -v sudo >/dev/null 2>&1 || {{ echo 'sudo_required' >&2; exit 44; }}; "
-                f"sudo -S -p {shlex.quote(sudo_marker)} env {env_prefix} bash \"$tmp_file\" {quoted_args}; fi",
+                f"sudo -S -p {shlex.quote(sudo_marker)} env {env_prefix} \"$tmp_file\" {quoted_args}; fi",
             ]
         )
 
@@ -3987,7 +4003,7 @@ class OnboardingSchedulerMixin:
         if exit_code != 0:
             detail = f"Agent install failed with exit code {exit_code}."
             if exit_code == 43:
-                detail = "Target needs curl or wget to download Agent.sh."
+                detail = "Target needs curl or wget to download Agent.exe."
             elif exit_code == 44:
                 detail = "Target user needs root or sudo for agent deployment."
             elif exit_code == 45:
@@ -4189,23 +4205,74 @@ class OnboardingSchedulerMixin:
             candidate = Path(override).expanduser()
             if candidate.is_file():
                 return candidate
-        current = Path(__file__).resolve()
-        roots: List[Path] = []
-        for parent in [current.parent, *current.parents]:
-            if parent not in roots:
-                roots.append(parent)
-        env_root = str(os.environ.get("BOREALIS_PROJECT_ROOT") or "").strip()
-        if env_root:
-            roots.insert(0, Path(env_root).expanduser())
+        roots = self._local_project_roots()
         for root in roots:
             for candidate in (
-                root / "Data" / "Agent" / "Bootstrap" / AGENT_EXE_NAME,
-                root / "Engine" / "Services" / "api-backend" / "data" / "Data" / "Agent" / "Bootstrap" / AGENT_EXE_NAME,
+                root / "Data" / "Agent" / "dist" / "windows-amd64" / AGENT_EXE_NAME,
+                root / "Data" / "Agent" / AGENT_EXE_NAME,
+                root / "Engine" / "Services" / "api-backend" / "data" / "Data" / "Agent" / "dist" / "windows-amd64" / AGENT_EXE_NAME,
                 root / "Engine" / "Services" / "api-backend" / "data" / AGENT_EXE_NAME,
             ):
                 if candidate.is_file():
                     return candidate
         return None
+
+    def _local_project_roots(self) -> List[Path]:
+        current = Path(__file__).resolve()
+        roots: List[Path] = []
+        env_root = str(os.environ.get("BOREALIS_PROJECT_ROOT") or "").strip()
+        if env_root:
+            roots.append(Path(env_root).expanduser())
+        for parent in [current.parent, *current.parents]:
+            if parent not in roots:
+                roots.append(parent)
+        return roots
+
+    def _local_agent_source_root(self) -> Tuple[Optional[Path], Optional[Path]]:
+        for candidate in self._local_project_roots():
+            for probe in (
+                candidate / "Data" / "Agent",
+                candidate / "Engine" / "Services" / "api-backend" / "data" / "Data" / "Agent",
+            ):
+                if (probe / "go.mod").is_file() or (probe / "cmd" / "agent" / "main.go").is_file():
+                    return probe, candidate
+        return None, None
+
+    def _download_windows_agent_exe(self, branch: str) -> Tuple[Path, Path]:
+        branch_ref = str(branch or "main").strip() or "main"
+        url = _github_raw_file_url(branch_ref, WINDOWS_AGENT_DIST_REPO_PATH)
+        temp_dir = Path(tempfile.mkdtemp(prefix="borealis-agent-exe-"))
+        exe_path = temp_dir / AGENT_EXE_NAME
+        try:
+            with urllib.request.urlopen(url, timeout=180) as response:
+                status = getattr(response, "status", 200)
+                if status < 200 or status >= 300:
+                    raise RuntimeError(f"Windows Agent.exe download failed for {branch_ref}: HTTP {status}")
+                payload = response.read()
+            if not payload:
+                raise RuntimeError(f"Windows Agent.exe download returned empty payload for {branch_ref}")
+            if not payload.startswith(b"MZ"):
+                raise RuntimeError(f"Windows Agent.exe download for {branch_ref} is not a PE executable")
+            exe_path.write_bytes(payload)
+            return exe_path, temp_dir
+        except Exception:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
+
+    def _windows_agent_exe_for_branch(self, branch: str = "main") -> Tuple[Path, Optional[Path]]:
+        branch_ref = str(branch or "main").strip() or "main"
+        local_path = self._windows_agent_exe_path()
+        _source_root, project_root = self._local_agent_source_root()
+        local_branch = self._local_project_branch(project_root)
+        needs_branch_download = bool(branch_ref) and (
+            (local_branch and local_branch.lower() != branch_ref.lower())
+            or (not local_branch and branch_ref.lower() != "main")
+        )
+        if needs_branch_download:
+            return self._download_windows_agent_exe(branch_ref)
+        if local_path is None:
+            return self._download_windows_agent_exe(branch_ref)
+        return local_path, None
 
     def _windows_agent_exe_unavailable_result(self) -> Dict[str, Any]:
         return {
@@ -4213,7 +4280,7 @@ class OnboardingSchedulerMixin:
             "stdout": "",
             "stderr": (
                 f"{AGENT_EXE_NAME} unavailable. Build "
-                "Data/Agent/Bootstrap/Agent.exe, or set "
+                "Data/Agent/dist/windows-amd64/Agent.exe, or set "
                 "BOREALIS_WINDOWS_AGENT_EXE."
             ),
         }
@@ -4238,50 +4305,41 @@ class OnboardingSchedulerMixin:
 
     def _windows_create_agent_payload_bundle(self, branch: str = "main") -> Tuple[Path, str]:
         branch_ref = str(branch or "main").strip() or "main"
-        current = Path(__file__).resolve()
-        source_root = None
-        project_root = None
-        env_root = str(os.environ.get("BOREALIS_PROJECT_ROOT") or "").strip()
-        candidates = []
-        if env_root:
-            candidates.append(Path(env_root).expanduser())
-        candidates.extend([current.parent, *current.parents])
-        for candidate in candidates:
-            probe = candidate / "Data" / "Agent"
-            if (probe / "agent.py").is_file():
-                source_root = probe
-                project_root = candidate
-                break
-            probe = candidate / "Data" / "Engine" / "Data" / "Agent"
-            if (probe / "agent.py").is_file():
-                source_root = probe
-                project_root = candidate
-                break
+        source_root, project_root = self._local_agent_source_root()
         if source_root is None:
-            raise FileNotFoundError("Data/Agent/agent.py")
-        if not (source_root / "agent.py").is_file():
-            raise FileNotFoundError("Data/Agent/agent.py")
+            raise FileNotFoundError("Data/Agent/go.mod")
+        if not ((source_root / "go.mod").is_file() or (source_root / "cmd" / "agent" / "main.go").is_file()):
+            raise FileNotFoundError("Data/Agent/go.mod")
         local_branch = self._local_project_branch(project_root)
+        downloaded_source_root: Optional[Path] = None
         if branch_ref and (
             (local_branch and local_branch.lower() != branch_ref.lower())
             or (not local_branch and branch_ref.lower() != "main")
         ):
             source_root = self._download_windows_agent_payload_source(branch_ref)
+            downloaded_source_root = source_root
         temp_dir = Path(tempfile.mkdtemp(prefix="borealis-agent-payload-"))
         bundle_path = temp_dir / "agent-payload.zip"
-        excluded_dirs = {"Unit_Tests", "Bootstrap", "Logs", "__pycache__", ".pytest_cache"}
+        excluded_dirs = {"Logs", "dist", "__pycache__", ".pytest_cache"}
         excluded_files: set[str] = set()
-        with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for path in source_root.rglob("*"):
-                rel_to_agent = path.relative_to(source_root)
-                if any(part in excluded_dirs for part in rel_to_agent.parts):
-                    continue
-                if path.name in excluded_files:
-                    continue
-                arcname = Path("Data") / "Agent" / rel_to_agent
-                if path.is_dir():
-                    continue
-                archive.write(path, arcname.as_posix())
+        try:
+            with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                for path in source_root.rglob("*"):
+                    rel_to_agent = path.relative_to(source_root)
+                    if any(part in excluded_dirs for part in rel_to_agent.parts):
+                        continue
+                    if path.name in excluded_files:
+                        continue
+                    arcname = Path("Data") / "Agent" / rel_to_agent
+                    if path.is_dir():
+                        continue
+                    archive.write(path, arcname.as_posix())
+        finally:
+            if downloaded_source_root is not None:
+                for parent in downloaded_source_root.parents:
+                    if parent.name.startswith("borealis-agent-branch-"):
+                        shutil.rmtree(parent, ignore_errors=True)
+                        break
         digest = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
         return bundle_path, digest
 
@@ -4300,7 +4358,7 @@ class OnboardingSchedulerMixin:
 
     def _download_windows_agent_payload_source(self, branch: str) -> Path:
         branch_ref = str(branch or "main").strip() or "main"
-        encoded_branch = urllib.parse.quote(branch_ref, safe="")
+        encoded_branch = urllib.parse.quote(branch_ref, safe="/")
         archive_url = f"https://codeload.github.com/bunny-lab-io/Borealis/zip/refs/heads/{encoded_branch}"
         temp_dir = Path(tempfile.mkdtemp(prefix="borealis-agent-branch-"))
         archive_path = temp_dir / "borealis-source.zip"
@@ -4313,9 +4371,9 @@ class OnboardingSchedulerMixin:
             archive.extractall(extract_root)
         for child in extract_root.iterdir():
             candidate = child / "Data" / "Agent"
-            if (candidate / "agent.py").is_file():
+            if (candidate / "go.mod").is_file() or (candidate / "cmd" / "agent" / "main.go").is_file():
                 return candidate
-        raise FileNotFoundError(f"Data/Agent/agent.py missing from branch {branch_ref}")
+        raise FileNotFoundError(f"Data/Agent/go.mod missing from branch {branch_ref}")
 
     def _windows_smb_stage_agent_exe(
         self,
@@ -4330,10 +4388,8 @@ class OnboardingSchedulerMixin:
         timeout_seconds: float,
         service_name: str = "",
     ) -> Tuple[str, str, str]:
-        agent_exe_path = self._windows_agent_exe_path()
-        if agent_exe_path is None:
-            raise FileNotFoundError(AGENT_EXE_NAME)
         branch_ref = str(branch or "main").strip() or "main"
+        agent_exe_path, agent_exe_temp_dir = self._windows_agent_exe_for_branch(branch_ref)
         for remote_dir in ("Borealis", "Borealis\\Temp", "Borealis\\Temp\\Onboarding"):
             try:
                 smb.createDirectory("C$", remote_dir)
@@ -4351,7 +4407,16 @@ class OnboardingSchedulerMixin:
         output_abs = f"C:\\{output_path}"
         state_abs = "C:\\Borealis\\Temp\\Onboarding\\state.json"
         events_abs = "C:\\Borealis\\Temp\\Onboarding\\events.jsonl"
-        bundle_path, bundle_sha256 = self._windows_create_agent_payload_bundle(branch_ref)
+        bundle_path: Optional[Path] = None
+        try:
+            bundle_path, bundle_sha256 = self._windows_create_agent_payload_bundle(branch_ref)
+        except Exception:
+            if agent_exe_temp_dir is not None:
+                try:
+                    shutil.rmtree(agent_exe_temp_dir)
+                except Exception:
+                    pass
+            raise
         config = {
             "install_dir": "C:\\Borealis",
             "repo_url": DEFAULT_BOREALIS_REPO_GIT_URL,
@@ -4393,13 +4458,18 @@ class OnboardingSchedulerMixin:
                 smb.putFile("C$", payload_path, handle.read)
             config_bytes = io.BytesIO(json.dumps(config, separators=(",", ":")).encode("utf-8"))
             manifest_bytes = io.BytesIO(json.dumps(manifest, separators=(",", ":")).encode("utf-8"))
-            output_bytes = io.BytesIO(b"__BOREALIS_AGENT_EXE_STAGED__=1\r\n")
+            output_bytes = io.BytesIO(b"")
             events_bytes = io.BytesIO(b"")
             smb.putFile("C$", config_path, config_bytes.read)
             smb.putFile("C$", manifest_path, manifest_bytes.read)
             smb.putFile("C$", output_path, output_bytes.read)
             smb.putFile("C$", "Borealis\\Temp\\Onboarding\\events.jsonl", events_bytes.read)
         finally:
+            if agent_exe_temp_dir is not None:
+                try:
+                    shutil.rmtree(agent_exe_temp_dir)
+                except Exception:
+                    pass
             try:
                 shutil.rmtree(bundle_path.parent)
             except Exception:
@@ -4477,12 +4547,11 @@ class OnboardingSchedulerMixin:
         def _windows_diagnostic_bundle(reason: str) -> str:
             parts = [reason]
             for path, label in (
-                ("Borealis\\Agent\\Logs\\bootstrap.log", "bootstrap.log"),
-                ("Borealis\\Agent\\Logs\\agent.error.log", "agent.error.log"),
-                ("Borealis\\Agent\\Logs\\agent.log", "agent.log"),
-                ("Borealis\\Agent\\Logs\\service_wrapper.log", "service_wrapper.log"),
-                ("Borealis\\Agent\\Logs\\service.out.log", "service.out.log"),
-                ("Borealis\\Agent\\Logs\\service.err.log", "service.err.log"),
+                ("Borealis\\Logs\\Agent\\bootstrap.log", "bootstrap.log"),
+                ("Borealis\\Logs\\Agent\\agent.log", "agent.log"),
+                ("Borealis\\Logs\\Agent\\remote_shell.log", "remote_shell.log"),
+                ("Borealis\\Logs\\WireGuard\\wireguard.log", "wireguard.log"),
+                ("Borealis\\Logs\\UltraVNC\\vnc.log", "vnc.log"),
                 ("Borealis\\Temp\\Onboarding\\state.json", "onboarding state.json"),
                 ("Borealis\\Temp\\Onboarding\\events.jsonl", "onboarding events.jsonl"),
             ):
@@ -4590,9 +4659,9 @@ class OnboardingSchedulerMixin:
                 if stdout:
                     stdout += "\n"
                 if state_status == "already_enrolled":
-                    stdout += "__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1"
+                    stdout += "Existing Borealis Agent is already enrolled and active."
                 else:
-                    stdout += f"__BOREALIS_ONBOARDING_ALREADY_PENDING__=1 status={state_status}"
+                    stdout += "Previous Borealis onboarding attempt is already pending approval on this target."
                 return {"exit_code": 73, "stdout": stdout, "stderr": "", "state": state, "events": events, "target_hostname": reported_hostname}
             if state_status == "failed":
                 stdout = last_output
@@ -4691,8 +4760,6 @@ class OnboardingSchedulerMixin:
             from impacket.dcerpc.v5 import scmr, transport  # type: ignore
         except Exception as exc:
             return {"exit_code": 127, "stdout": "", "stderr": f"impacket_scm_unavailable:{exc}"}
-        if self._windows_agent_exe_path() is None:
-            return self._windows_agent_exe_unavailable_result()
         smb = None
         dce = None
         service_handle = None
@@ -4817,8 +4884,6 @@ class OnboardingSchedulerMixin:
             from impacket.dcerpc.v5.dtypes import NULL  # type: ignore
         except Exception as exc:
             return {"exit_code": 127, "stdout": "", "stderr": f"impacket_tsch_unavailable:{exc}"}
-        if self._windows_agent_exe_path() is None:
-            return self._windows_agent_exe_unavailable_result()
         smb = None
         dce = None
         task_path = f"\\BorealisAgentBootstrapper{uuid.uuid4().hex[:12]}"
@@ -4913,8 +4978,6 @@ class OnboardingSchedulerMixin:
             from impacket.dcerpc.v5.dtypes import NULL  # type: ignore
         except Exception as exc:
             return {"exit_code": 127, "stdout": "", "stderr": f"impacket_wmi_unavailable:{exc}"}
-        if self._windows_agent_exe_path() is None:
-            return self._windows_agent_exe_unavailable_result()
         domain, username, password = _parse_windows_credential_parts(credential)
         smb = None
         dcom = None
@@ -5059,16 +5122,12 @@ class OnboardingSchedulerMixin:
             import winrm  # type: ignore
         except Exception as exc:
             return {"exit_code": 127, "stdout": "", "stderr": f"pywinrm_unavailable:{exc}"}
-        if self._windows_agent_exe_path() is None:
-            return self._windows_agent_exe_unavailable_result()
-        agent_exe_path = self._windows_agent_exe_path()
-        if agent_exe_path is None:
-            return self._windows_agent_exe_unavailable_result()
         metadata = credential.get("metadata") if isinstance(credential.get("metadata"), dict) else {}
         transport_mode = str(metadata.get("winrm_transport") or "ntlm").strip().lower() or "ntlm"
         scheme = "https" if int(port) == 5986 or transport_mode in {"ssl", "credssp"} else "http"
         endpoint = f"{scheme}://{host}:{int(port)}/wsman"
         bundle_path: Optional[Path] = None
+        agent_exe_temp_dir: Optional[Path] = None
         try:
             session = winrm.Session(
                 endpoint,
@@ -5081,6 +5140,7 @@ class OnboardingSchedulerMixin:
             if callable(status_update):
                 status_update("Windows WinRM connection established.")
             branch_ref = str(branch or "main").strip() or "main"
+            agent_exe_path, agent_exe_temp_dir = self._windows_agent_exe_for_branch(branch_ref)
             exe_abs = f"C:\\Borealis\\Temp\\Onboarding\\Agent-{int(run_id)}-{uuid.uuid4().hex[:8]}.exe"
             config_abs = "C:\\Borealis\\Temp\\Onboarding\\bootstrapper-config.json"
             payload_abs = "C:\\Borealis\\Temp\\Onboarding\\agent-payload.zip"
@@ -5158,6 +5218,11 @@ class OnboardingSchedulerMixin:
         except Exception as exc:
             return {"exit_code": 1, "stdout": "", "stderr": str(exc)}
         finally:
+            if agent_exe_temp_dir is not None:
+                try:
+                    shutil.rmtree(agent_exe_temp_dir)
+                except Exception:
+                    pass
             if bundle_path is not None:
                 try:
                     shutil.rmtree(bundle_path.parent)
@@ -5452,7 +5517,7 @@ class OnboardingSchedulerMixin:
             skip_detail = _windows_onboarding_skip_detail(stdout=stdout, stderr=stderr)
             if skip_detail:
                 repaired = _windows_onboarding_repair_succeeded(stdout=stdout, stderr=stderr)
-                already_enrolled = "__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1" in f"{stdout}\n{stderr}"
+                already_enrolled = "already enrolled and active" in f"{stdout}\n{stderr}".lower()
                 terminal_status = "already_enrolled" if already_enrolled else ("completed" if repaired else ONBOARDING_STATUS_SKIPPED)
                 self._update_onboarding_target_row(
                     row_id,

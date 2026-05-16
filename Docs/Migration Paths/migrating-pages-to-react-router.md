@@ -200,5 +200,5 @@ function openQuickJob(hostnames) {
 - Prefer smaller, route-complete migrations over half-converted pages.
 - If a page still needs the adapter bridge, keep the bridge thin and obvious.
 - Preserve deep-link refresh behavior before cleaning up internal code style.
-- When a migration adds dependencies or changes shell ownership, update docs and `SBOM.md` in the same change.
+- When a migration adds dependencies or changes shell ownership, update docs and `Docs/SBOM.md` in the same change.
 - For buffered routes, verify the old page remains visible while the next route loader is pending and that the page does not render an empty-shell first paint before its critical loader data arrives.
