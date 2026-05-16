@@ -114,9 +114,9 @@ Back to Docs Index: ../../Docs/index.md
 72. Added Device Summary branch control so admins can remotely set an agent source branch; Engine stores `agent_release_channel` and `agent_branch` on the device row and emits `agent_release_channel_changed` to online Go agents.
 73. Added initial regression coverage for Go Socket.IO ACK handling, release-channel event persistence, installed build config cleanup, and Engine release-channel/branch persistence plus socket emission.
 74. Moved Agent unit-test lane entrypoints under `Data/Agent/Unit_Tests` and removed archived Python Agent source.
-75. Added Windows Go Agent tray/status UI to the existing CURRENTUSER helper path with a loopback-only embedded status page, role-health display, Engine Web UI link, diagnostics copy, restart-agent action, and update-check action.
-76. Added tokenized loopback SYSTEM UI broker for helper-to-SYSTEM commands (`status.get`, `agent.restart`, `agent.update_check`, and `diagnostics.copy_summary`) with redacted status payloads and no Engine credentials in user context.
-77. Added regression coverage for local UI broker authorization, command dispatch, broker state round-trip, and diagnostics redaction shape.
+75. Added Windows Go Agent tray/status UI to the existing CURRENTUSER helper path with right-click role-health rows plus restart-agent and update-check actions.
+76. Added file-based SYSTEM-to-helper tray state and helper-to-SYSTEM action requests for `agent.restart` and `agent.update_check`, with redacted role-health status payloads and no Engine credentials in user context.
+77. Added regression coverage for tray status snapshot persistence and file-based command dispatch.
 
 ## In Progress
 

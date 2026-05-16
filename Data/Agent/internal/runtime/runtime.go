@@ -137,7 +137,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := cleanupStartupTemp(a.configPath, a.logger); err != nil {
 		a.logger.Printf("startup temp cleanup failed: %v", err)
 	}
-	a.startUIBrokerIfSupported(ctx)
+	a.startTrayBridgeIfSupported(ctx)
 	if a.dispatcher != nil {
 		a.dispatcher.Start(ctx, a.configPath)
 	}

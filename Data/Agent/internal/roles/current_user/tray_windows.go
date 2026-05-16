@@ -4,16 +4,11 @@ package currentuser
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf16"
 	"unsafe"
 
 	"github.com/bunny-lab-io/borealis/go-agent/internal/localui"
@@ -21,11 +16,10 @@ import (
 )
 
 const (
-	wmDestroy       = 0x0002
-	wmRButtonUp     = 0x0205
-	wmLButtonDblClk = 0x0203
-	wmApp           = 0x8000
-	wmTrayCallback  = wmApp + 74
+	wmDestroy      = 0x0002
+	wmRButtonUp    = 0x0205
+	wmApp          = 0x8000
+	wmTrayCallback = wmApp + 74
 
 	nimAdd     = 0x00000000
 	nimDelete  = 0x00000002
@@ -34,20 +28,17 @@ const (
 	nifTip     = 0x00000004
 
 	mfString       = 0x00000000
+	mfGrayed       = 0x00000001
+	mfDisabled     = 0x00000002
 	mfSeparator    = 0x00000800
 	tpmRightButton = 0x0002
 	tpmReturnCmd   = 0x0100
 
 	idiApplication = 32512
-	cfUnicodeText  = 13
-	gmemMoveable   = 0x0002
 
-	menuOpenAgent       = 1001
-	menuOpenEngine      = 1002
-	menuRestartAgent    = 1003
-	menuUpdateCheck     = 1004
-	menuCopyDiagnostics = 1005
-	menuExitTray        = 1006
+	menuRestartAgent = 1001
+	menuUpdateCheck  = 1002
+	menuRoleBase     = 2000
 )
 
 var (
@@ -69,22 +60,13 @@ var (
 	procDestroyMenu         = user32.NewProc("DestroyMenu")
 	procGetCursorPos        = user32.NewProc("GetCursorPos")
 	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
-	procOpenClipboard       = user32.NewProc("OpenClipboard")
-	procEmptyClipboard      = user32.NewProc("EmptyClipboard")
-	procSetClipboardData    = user32.NewProc("SetClipboardData")
-	procCloseClipboard      = user32.NewProc("CloseClipboard")
 	procShellNotifyIconW    = shell32.NewProc("Shell_NotifyIconW")
 	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
-	procGlobalAlloc         = kernel32.NewProc("GlobalAlloc")
-	procGlobalLock          = kernel32.NewProc("GlobalLock")
-	procGlobalUnlock        = kernel32.NewProc("GlobalUnlock")
-	procGlobalFree          = kernel32.NewProc("GlobalFree")
 	trayMu                  sync.Mutex
 	activeTray              *trayApp
 )
 
 type trayOptions struct {
-	UIURL     string
 	StateDir  string
 	SessionID int
 	BuildID   string
@@ -144,9 +126,6 @@ type notifyIconData struct {
 }
 
 func runTray(ctx context.Context, options trayOptions) {
-	if strings.TrimSpace(options.UIURL) == "" {
-		return
-	}
 	app := &trayApp{options: options}
 	trayMu.Lock()
 	activeTray = app
@@ -211,11 +190,6 @@ func trayWndProc(hwnd uintptr, message uint32, wParam uintptr, lParam uintptr) u
 	switch message {
 	case wmTrayCallback:
 		switch uint32(lParam) {
-		case wmLButtonDblClk:
-			if app != nil {
-				app.openAgentUI()
-			}
-			return 0
 		case wmRButtonUp:
 			if app != nil {
 				app.showMenu()
@@ -256,14 +230,10 @@ func (a *trayApp) showMenu() {
 		return
 	}
 	defer procDestroyMenu.Call(menu)
-	appendMenu(menu, mfString, menuOpenAgent, "Open Borealis Agent")
-	appendMenu(menu, mfString, menuOpenEngine, "Open Engine Web UI")
+	appendRoleHealthItems(menu, a.statusSnapshot())
 	appendMenu(menu, mfSeparator, 0, "")
 	appendMenu(menu, mfString, menuRestartAgent, "Restart Agent")
 	appendMenu(menu, mfString, menuUpdateCheck, "Check For Updates")
-	appendMenu(menu, mfString, menuCopyDiagnostics, "Copy Diagnostics")
-	appendMenu(menu, mfSeparator, 0, "")
-	appendMenu(menu, mfString, menuExitTray, "Exit Tray UI")
 	var cursor point
 	procGetCursorPos.Call(uintptr(unsafe.Pointer(&cursor)))
 	procSetForegroundWindow.Call(a.hwnd)
@@ -273,78 +243,65 @@ func (a *trayApp) showMenu() {
 
 func (a *trayApp) handleMenuCommand(command uint32) {
 	switch command {
-	case menuOpenAgent:
-		a.openAgentUI()
-	case menuOpenEngine:
-		if url := a.engineURL(); url != "" {
-			openURL(url)
-		} else {
-			a.openAgentUI()
-		}
 	case menuRestartAgent:
-		a.sendBrokerCommand(localui.CommandAgentRestart)
+		a.sendTrayCommand(localui.CommandAgentRestart)
 	case menuUpdateCheck:
-		a.sendBrokerCommand(localui.CommandAgentUpdate)
-	case menuCopyDiagnostics:
-		if text := a.diagnosticsText(); text != "" {
-			_ = setClipboardText(text)
-		}
-	case menuExitTray:
-		procDestroyWindow.Call(a.hwnd)
-		go func() {
-			time.Sleep(200 * time.Millisecond)
-			os.Exit(0)
-		}()
+		a.sendTrayCommand(localui.CommandAgentUpdate)
 	}
 }
 
-func (a *trayApp) openAgentUI() {
-	openURL(a.options.UIURL)
-}
-
-func (a *trayApp) sendBrokerCommand(command string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+func (a *trayApp) sendTrayCommand(command string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, _ = localui.DoCommand(ctx, &http.Client{Timeout: 12 * time.Second}, a.options.StateDir, localui.CommandRequest{Command: command})
-}
-
-func (a *trayApp) engineURL() string {
-	snapshot := a.statusSnapshot()
-	return strings.TrimSpace(snapshot.ServerURL)
-}
-
-func (a *trayApp) diagnosticsText() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	response, err := localui.DoCommand(ctx, &http.Client{Timeout: 12 * time.Second}, a.options.StateDir, localui.CommandRequest{Command: localui.CommandDiagnosticsCopy})
-	if err != nil {
-		return ""
+	select {
+	case <-ctx.Done():
+		return
+	default:
+		_, _ = localui.WriteCommandRequest(a.options.StateDir, localui.CommandRequest{Command: command})
 	}
-	data, ok := response.Data.(map[string]any)
-	if !ok {
-		encoded, _ := json.Marshal(response.Data)
-		_ = json.Unmarshal(encoded, &data)
-	}
-	if data == nil {
-		return ""
-	}
-	return strings.TrimSpace(fmt.Sprint(data["diagnostics_text"]))
 }
 
 func (a *trayApp) statusSnapshot() localui.StatusSnapshot {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	response, err := localui.DoCommand(ctx, &http.Client{Timeout: 8 * time.Second}, a.options.StateDir, localui.CommandRequest{Command: localui.CommandStatusGet})
-	if err != nil {
+	select {
+	case <-ctx.Done():
 		return localui.StatusSnapshot{}
+	default:
 	}
-	var snapshot localui.StatusSnapshot
-	encoded, err := json.Marshal(response.Data)
-	if err != nil {
-		return snapshot
-	}
-	_ = json.Unmarshal(encoded, &snapshot)
+	snapshot, _ := localui.ReadStatusSnapshot(a.options.StateDir)
 	return snapshot
+}
+
+func appendRoleHealthItems(menu uintptr, snapshot localui.StatusSnapshot) {
+	roleFlags := uint32(mfString | mfDisabled | mfGrayed)
+	if len(snapshot.Roles) == 0 {
+		appendMenu(menu, roleFlags, menuRoleBase, "Role Health: Unhealthy")
+		return
+	}
+	for index, role := range snapshot.Roles {
+		label := strings.TrimSpace(role.RoleLabel)
+		if label == "" {
+			label = strings.TrimSpace(role.RoleName)
+		}
+		if label == "" {
+			label = "Role"
+		}
+		appendMenu(menu, roleFlags, menuRoleBase+uint32(index), label+": "+simpleHealth(role))
+	}
+}
+
+func simpleHealth(role localui.RoleHealth) string {
+	status := strings.ToLower(strings.TrimSpace(role.StatusCode))
+	if status == "" {
+		status = strings.ToLower(strings.TrimSpace(role.Status))
+	}
+	switch status {
+	case "healthy", "ok", "ready", "complete":
+		return "Healthy"
+	default:
+		return "Unhealthy"
+	}
 }
 
 func appendMenu(menu uintptr, flags uint32, id uint32, label string) {
@@ -356,14 +313,6 @@ func appendMenu(menu uintptr, flags uint32, id uint32, label string) {
 	procAppendMenuW.Call(menu, uintptr(flags), uintptr(id), labelPtr)
 }
 
-func openURL(url string) {
-	url = strings.TrimSpace(url)
-	if url == "" || url == "#" {
-		return
-	}
-	_ = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", url).Start()
-}
-
 func copyUTF16(dst []uint16, value string) {
 	encoded := windows.StringToUTF16(value)
 	if len(encoded) > len(dst) {
@@ -371,35 +320,4 @@ func copyUTF16(dst []uint16, value string) {
 		encoded[len(encoded)-1] = 0
 	}
 	copy(dst, encoded)
-}
-
-func setClipboardText(value string) error {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-	utf16Text := utf16.Encode([]rune(value + "\x00"))
-	size := uintptr(len(utf16Text) * 2)
-	handle, _, err := procGlobalAlloc.Call(gmemMoveable, size)
-	if handle == 0 {
-		return err
-	}
-	locked, _, err := procGlobalLock.Call(handle)
-	if locked == 0 {
-		procGlobalFree.Call(handle)
-		return err
-	}
-	copy((*[1 << 24]uint16)(unsafe.Pointer(locked))[:len(utf16Text)], utf16Text)
-	procGlobalUnlock.Call(handle)
-	if opened, _, err := procOpenClipboard.Call(0); opened == 0 {
-		procGlobalFree.Call(handle)
-		return err
-	}
-	defer procCloseClipboard.Call()
-	procEmptyClipboard.Call()
-	if result, _, err := procSetClipboardData.Call(cfUnicodeText, handle); result == 0 {
-		procGlobalFree.Call(handle)
-		return err
-	}
-	return nil
 }

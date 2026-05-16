@@ -2,77 +2,65 @@ package localui
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestBrokerStateRoundTrip(t *testing.T) {
+func TestStatusSnapshotRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	err := WriteBrokerState(dir, BrokerState{
-		URL:   "http://127.0.0.1:12345/",
-		Token: "secret",
-	})
-	if err != nil {
-		t.Fatalf("write broker state: %v", err)
-	}
-	state, err := ReadBrokerState(dir)
-	if err != nil {
-		t.Fatalf("read broker state: %v", err)
-	}
-	if state.URL != "http://127.0.0.1:12345" {
-		t.Fatalf("unexpected URL: %q", state.URL)
-	}
-	if state.Token != "secret" {
-		t.Fatalf("unexpected token: %q", state.Token)
-	}
-	if !strings.HasSuffix(BrokerStatePath(dir), filepath.Join(dir, BrokerStateFile)) {
-		t.Fatalf("broker state path did not use override dir: %s", BrokerStatePath(dir))
-	}
-}
-
-func TestDoCommandWithStateSendsToken(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(TokenHeader) != "secret" {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"status":"error","detail":"unauthorized"}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"status":"ok","data":{"hostname":"LAB"}}`))
-	}))
-	defer server.Close()
-
-	response, err := DoCommandWithState(context.Background(), server.Client(), BrokerState{
-		URL:   server.URL,
-		Token: "secret",
-	}, CommandRequest{Command: CommandStatusGet})
-	if err != nil {
-		t.Fatalf("command failed: %v", err)
-	}
-	if response.Status != "ok" {
-		t.Fatalf("unexpected status: %s", response.Status)
-	}
-}
-
-func TestDiagnosticsTextRedactedShape(t *testing.T) {
-	text := DiagnosticsText(StatusSnapshot{
-		Hostname:       "LAB-OPERATOR-01",
-		ServerURL:      "https://borealis.example.test",
-		EngineState:    "Online",
-		ReleaseChannel: "source",
-		Branch:         "feature/demo",
+	err := WriteStatusSnapshot(dir, StatusSnapshot{
+		Hostname:    "LAB",
+		ServerURL:   "https://borealis.example.test",
+		EngineState: "Online",
 		Roles: []RoleHealth{
-			{RoleLabel: "SYSTEM Context", Context: "system", StatusCode: "healthy", Detail: "Ready."},
+			{RoleLabel: "SYSTEM Context", StatusCode: "healthy"},
 		},
 	})
-	if !strings.Contains(text, "LAB-OPERATOR-01") || !strings.Contains(text, "SYSTEM Context") {
-		t.Fatalf("diagnostics missing expected safe fields: %s", text)
+	if err != nil {
+		t.Fatalf("write status snapshot: %v", err)
 	}
-	for _, forbidden := range []string{"access_token", "refresh_token", "private_key", "enrollment_code"} {
-		if strings.Contains(strings.ToLower(text), forbidden) {
-			t.Fatalf("diagnostics contained forbidden field marker %q: %s", forbidden, text)
-		}
+	snapshot, err := ReadStatusSnapshot(dir)
+	if err != nil {
+		t.Fatalf("read status snapshot: %v", err)
+	}
+	if snapshot.Hostname != "LAB" || len(snapshot.Roles) != 1 {
+		t.Fatalf("unexpected snapshot: %+v", snapshot)
+	}
+	if !strings.HasSuffix(StatusPath(dir), filepath.Join(dir, StatusFile)) {
+		t.Fatalf("status path did not use override dir: %s", StatusPath(dir))
+	}
+}
+
+func TestCommandRequestRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	id, err := WriteCommandRequest(dir, CommandRequest{Command: CommandAgentUpdate})
+	if err != nil {
+		t.Fatalf("write command request: %v", err)
+	}
+	if id == "" {
+		t.Fatalf("command id empty")
+	}
+	requests, err := ReadCommandRequests(context.Background(), dir, time.Minute)
+	if err != nil {
+		t.Fatalf("read command requests: %v", err)
+	}
+	if len(requests) != 1 || requests[0].Command != CommandAgentUpdate {
+		t.Fatalf("unexpected requests: %+v", requests)
+	}
+	requests, err = ReadCommandRequests(context.Background(), dir, time.Minute)
+	if err != nil {
+		t.Fatalf("read command requests after consume: %v", err)
+	}
+	if len(requests) != 0 {
+		t.Fatalf("command request was not consumed: %+v", requests)
+	}
+}
+
+func TestCommandRequestRejectsUnsupportedCommand(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := WriteCommandRequest(dir, CommandRequest{Command: "config.dump"}); err == nil {
+		t.Fatalf("unsupported command was accepted")
 	}
 }

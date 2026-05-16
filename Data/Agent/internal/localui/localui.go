@@ -1,12 +1,10 @@
 package localui
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,30 +12,18 @@ import (
 )
 
 const (
-	BrokerStateFile = "ui-broker.json"
-	TokenHeader     = "X-Borealis-UI-Token"
+	CommandAgentRestart = "agent.restart"
+	CommandAgentUpdate  = "agent.update_check"
 
-	CommandStatusGet       = "status.get"
-	CommandAgentRestart    = "agent.restart"
-	CommandAgentUpdate     = "agent.update_check"
-	CommandDiagnosticsCopy = "diagnostics.copy_summary"
+	StatusFile = "tray-status.json"
+	CommandDir = "Commands"
 )
 
-type BrokerState struct {
-	URL       string `json:"url"`
-	Token     string `json:"token"`
-	UpdatedAt int64  `json:"updated_at"`
-}
-
 type CommandRequest struct {
-	Command string         `json:"command"`
-	Params  map[string]any `json:"params,omitempty"`
-}
-
-type CommandResponse struct {
-	Status string `json:"status"`
-	Detail string `json:"detail,omitempty"`
-	Data   any    `json:"data,omitempty"`
+	Command   string         `json:"command"`
+	Params    map[string]any `json:"params,omitempty"`
+	ID        string         `json:"id,omitempty"`
+	CreatedAt int64          `json:"created_at,omitempty"`
 }
 
 type StatusSnapshot struct {
@@ -88,148 +74,124 @@ func StateDir(override string) string {
 	return filepath.Join(publicDir, "Borealis", "CurrentUserHelpers")
 }
 
-func BrokerStatePath(stateDir string) string {
-	return filepath.Join(StateDir(stateDir), BrokerStateFile)
+func StatusPath(stateDir string) string {
+	return filepath.Join(StateDir(stateDir), StatusFile)
 }
 
-func WriteBrokerState(stateDir string, state BrokerState) error {
-	state.URL = strings.TrimSpace(state.URL)
-	state.Token = strings.TrimSpace(state.Token)
-	if state.URL == "" || state.Token == "" {
-		return errors.New("broker URL and token are required")
-	}
-	if state.UpdatedAt <= 0 {
-		state.UpdatedAt = time.Now().Unix()
-	}
+func CommandPath(stateDir string, id string) string {
+	return filepath.Join(StateDir(stateDir), CommandDir, strings.TrimSpace(id)+".json")
+}
+
+func WriteStatusSnapshot(stateDir string, snapshot StatusSnapshot) error {
 	dir := StateDir(stateDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	payload, err := json.MarshalIndent(state, "", "  ")
+	payload, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return err
 	}
 	payload = append(payload, '\n')
-	path := BrokerStatePath(dir)
-	tmp := path + ".tmp"
+	path := StatusPath(dir)
+	tmp := path + "." + randomID() + ".tmp"
 	if err := os.WriteFile(tmp, payload, 0o644); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
 }
 
-func ReadBrokerState(stateDir string) (BrokerState, error) {
-	data, err := os.ReadFile(BrokerStatePath(stateDir))
+func ReadStatusSnapshot(stateDir string) (StatusSnapshot, error) {
+	data, err := os.ReadFile(StatusPath(stateDir))
 	if err != nil {
-		return BrokerState{}, err
+		return StatusSnapshot{}, err
 	}
-	var state BrokerState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return BrokerState{}, err
+	var snapshot StatusSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return StatusSnapshot{}, err
 	}
-	state.URL = strings.TrimRight(strings.TrimSpace(state.URL), "/")
-	state.Token = strings.TrimSpace(state.Token)
-	if state.URL == "" || state.Token == "" {
-		return BrokerState{}, errors.New("broker state is incomplete")
-	}
-	return state, nil
+	return snapshot, nil
 }
 
-func DoCommand(ctx context.Context, httpClient *http.Client, stateDir string, request CommandRequest) (CommandResponse, error) {
-	state, err := ReadBrokerState(stateDir)
-	if err != nil {
-		return CommandResponse{}, err
-	}
-	return DoCommandWithState(ctx, httpClient, state, request)
-}
-
-func DoCommandWithState(ctx context.Context, httpClient *http.Client, state BrokerState, request CommandRequest) (CommandResponse, error) {
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 10 * time.Second}
-	}
+func WriteCommandRequest(stateDir string, request CommandRequest) (string, error) {
 	request.Command = strings.TrimSpace(request.Command)
 	if request.Command == "" {
-		return CommandResponse{}, errors.New("command is required")
+		return "", errors.New("command is required")
 	}
-	body, err := json.Marshal(request)
+	switch request.Command {
+	case CommandAgentRestart, CommandAgentUpdate:
+	default:
+		return "", fmt.Errorf("unsupported command %q", request.Command)
+	}
+	if strings.TrimSpace(request.ID) == "" {
+		request.ID = randomID()
+	}
+	if request.CreatedAt <= 0 {
+		request.CreatedAt = time.Now().Unix()
+	}
+	dir := filepath.Join(StateDir(stateDir), CommandDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	payload, err := json.MarshalIndent(request, "", "  ")
 	if err != nil {
-		return CommandResponse{}, err
+		return "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(state.URL, "/")+"/command", bytes.NewReader(body))
-	if err != nil {
-		return CommandResponse{}, err
+	payload = append(payload, '\n')
+	path := CommandPath(stateDir, request.ID)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, payload, 0o644); err != nil {
+		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set(TokenHeader, strings.TrimSpace(state.Token))
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return CommandResponse{}, err
+	if err := os.Rename(tmp, path); err != nil {
+		return "", err
 	}
-	defer resp.Body.Close()
-	var response CommandResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return CommandResponse{}, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if response.Detail == "" {
-			response.Detail = fmt.Sprintf("broker HTTP %d", resp.StatusCode)
-		}
-		return response, errors.New(response.Detail)
-	}
-	return response, nil
+	return request.ID, nil
 }
 
-func DiagnosticsText(snapshot StatusSnapshot) string {
-	var out strings.Builder
-	write := func(format string, args ...any) {
-		out.WriteString(fmt.Sprintf(format, args...))
-		out.WriteByte('\n')
+func ReadCommandRequests(ctx context.Context, stateDir string, maxAge time.Duration) ([]CommandRequest, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
 	}
-	write("Borealis Agent Diagnostics")
-	write("Hostname: %s", emptyAs(snapshot.Hostname, "Unknown"))
-	write("Engine: %s", emptyAs(snapshot.ServerURL, "Unknown"))
-	write("Agent ID: %s", emptyAs(snapshot.AgentID, "Pending"))
-	write("Build: %s", emptyAs(firstNonEmpty(snapshot.InstalledBuildID, snapshot.BuildID), "Unknown"))
-	write("Release: %s / %s", emptyAs(snapshot.ReleaseChannel, "stable"), emptyAs(snapshot.Branch, "main"))
-	write("Engine State: %s", emptyAs(snapshot.EngineState, "Unknown"))
-	if snapshot.LastHeartbeatAt > 0 {
-		write("Last Heartbeat: %s", time.Unix(snapshot.LastHeartbeatAt, 0).Format(time.RFC3339))
-	}
-	if snapshot.LastStatusAt > 0 {
-		write("Last Status: %s %s %s", snapshot.LastStatusPhase, snapshot.LastStatus, time.Unix(snapshot.LastStatusAt, 0).Format(time.RFC3339))
-	}
-	write("")
-	write("Role Health:")
-	for _, role := range snapshot.Roles {
-		write("- %s [%s]: %s", emptyAs(role.RoleLabel, role.RoleName), emptyAs(role.Context, "system"), emptyAs(firstNonEmpty(role.StatusCode, role.Status), "unknown"))
-		if strings.TrimSpace(role.Detail) != "" {
-			write("  %s", role.Detail)
+	dir := filepath.Join(StateDir(stateDir), CommandDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
 		}
+		return nil, err
 	}
-	write("")
-	write("Logs:")
-	for _, logPath := range snapshot.Logs {
-		if strings.TrimSpace(logPath.Path) != "" {
-			write("- %s: %s", emptyAs(logPath.Label, "Log"), logPath.Path)
+	now := time.Now()
+	requests := []CommandRequest{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
+			continue
 		}
+		path := filepath.Join(dir, entry.Name())
+		info, err := entry.Info()
+		if err == nil && maxAge > 0 && now.Sub(info.ModTime()) > maxAge {
+			_ = os.Remove(path)
+			continue
+		}
+		data, err := os.ReadFile(path)
+		_ = os.Remove(path)
+		if err != nil {
+			continue
+		}
+		var request CommandRequest
+		if err := json.Unmarshal(data, &request); err != nil {
+			continue
+		}
+		request.Command = strings.TrimSpace(request.Command)
+		if request.Command == "" {
+			continue
+		}
+		requests = append(requests, request)
 	}
-	return out.String()
+	return requests, nil
 }
 
-func emptyAs(value string, fallback string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return fallback
-	}
-	return value
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
+func randomID() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano())
 }

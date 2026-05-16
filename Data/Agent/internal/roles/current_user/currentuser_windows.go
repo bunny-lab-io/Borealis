@@ -77,7 +77,11 @@ func RunHelper(ctx context.Context, options HelperOptions) error {
 		BuildID:   strings.TrimSpace(options.BuildID),
 		UpdatedAt: time.Now().Unix(),
 	})
-	startHelperUI(ctx, stateDir, sessionID, strings.TrimSpace(options.BuildID))
+	go runTray(ctx, trayOptions{
+		StateDir:  stateDir,
+		SessionID: sessionID,
+		BuildID:   strings.TrimSpace(options.BuildID),
+	})
 	for {
 		select {
 		case <-ctx.Done():

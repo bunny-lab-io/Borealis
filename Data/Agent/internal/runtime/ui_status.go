@@ -12,23 +12,56 @@ import (
 	"github.com/bunny-lab-io/borealis/go-agent/internal/localui"
 )
 
-func (a *Agent) startUIBrokerIfSupported(ctx context.Context) {
+func (a *Agent) startTrayBridgeIfSupported(ctx context.Context) {
 	if a == nil || goruntime.GOOS != "windows" || a.options.Once {
 		return
 	}
-	broker, err := startUIBroker(ctx, uiBrokerOptions{
-		StateDir:        localui.StateDir(""),
-		Logger:          a.logger,
-		Status:          a.UISnapshot,
-		StartUpdate:     func() error { return startLocalUpdater(a.configPath) },
-		RestartAgent:    restartLocalAgent,
-		DiagnosticsText: func() string { return localui.DiagnosticsText(a.UISnapshot()) },
-	})
-	if err != nil {
-		a.logger.Printf("local UI broker start failed: %v", err)
-		return
+	a.writeUIStatusSnapshot()
+	go a.trayStatusLoop(ctx)
+	go a.trayCommandLoop(ctx)
+	a.logger.Printf("local tray status bridge started state_dir=%s", localui.StateDir(""))
+}
+
+func (a *Agent) trayStatusLoop(ctx context.Context) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.writeUIStatusSnapshot()
+		}
 	}
-	a.logger.Printf("local UI broker started url=%s", broker.url)
+}
+
+func (a *Agent) trayCommandLoop(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			requests, err := localui.ReadCommandRequests(ctx, "", 2*time.Minute)
+			if err != nil {
+				a.logger.Printf("tray command read failed: %v", err)
+				continue
+			}
+			for _, request := range requests {
+				switch strings.TrimSpace(request.Command) {
+				case localui.CommandAgentUpdate:
+					if err := startLocalUpdater(a.configPath); err != nil {
+						a.logger.Printf("tray update request failed: %v", err)
+					}
+				case localui.CommandAgentRestart:
+					if err := restartLocalAgent(); err != nil {
+						a.logger.Printf("tray restart request failed: %v", err)
+					}
+				}
+			}
+		}
+	}
 }
 
 func (a *Agent) UISnapshot() localui.StatusSnapshot {
@@ -47,13 +80,15 @@ func (a *Agent) updateUIStatus(phase string, status string, message string) {
 	now := time.Now().Unix()
 	cfg := a.authClient.Config()
 	a.uiMu.Lock()
-	defer a.uiMu.Unlock()
 	a.applyUIConfigLocked(cfg)
 	a.uiSnapshot.LastStatusPhase = strings.TrimSpace(phase)
 	a.uiSnapshot.LastStatus = strings.TrimSpace(status)
 	a.uiSnapshot.LastStatusMessage = strings.TrimSpace(message)
 	a.uiSnapshot.LastStatusAt = now
 	a.uiSnapshot.EngineState = engineStateFromStatus(status, phase)
+	a.uiMu.Unlock()
+	a.writeUIStatusSnapshot()
+	return
 }
 
 func (a *Agent) updateUIHeartbeat(payload map[string]any) {
@@ -62,11 +97,22 @@ func (a *Agent) updateUIHeartbeat(payload map[string]any) {
 	}
 	cfg := a.authClient.Config()
 	a.uiMu.Lock()
-	defer a.uiMu.Unlock()
 	a.applyUIConfigLocked(cfg)
 	a.uiSnapshot.LastHeartbeatAt = time.Now().Unix()
 	a.uiSnapshot.EngineState = "Online"
 	a.uiSnapshot.Roles = rolesFromHeartbeat(payload)
+	a.uiMu.Unlock()
+	a.writeUIStatusSnapshot()
+	return
+}
+
+func (a *Agent) writeUIStatusSnapshot() {
+	if a == nil || goruntime.GOOS != "windows" {
+		return
+	}
+	if err := localui.WriteStatusSnapshot("", a.UISnapshot()); err != nil && a.logger != nil {
+		a.logger.Printf("tray status write failed: %v", err)
+	}
 }
 
 func (a *Agent) applyUIConfigLocked(cfg agentconfig.AgentConfig) {
