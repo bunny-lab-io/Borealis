@@ -34,7 +34,8 @@ const (
 	tpmRightButton = 0x0002
 	tpmReturnCmd   = 0x0100
 
-	idiApplication = 32512
+	agentIconResourceID = 1
+	idiApplication      = 32512
 
 	menuRestartAgent = 1001
 	menuUpdateCheck  = 1002
@@ -162,7 +163,7 @@ func runTray(ctx context.Context, options trayOptions) {
 		return
 	}
 	app.hwnd = hwnd
-	hicon, _, _ := procLoadIconW.Call(0, idiApplication)
+	hicon := loadTrayIcon(instance)
 	app.hicon = hicon
 	app.addIcon()
 	defer app.deleteIcon()
@@ -181,6 +182,17 @@ func runTray(ctx context.Context, options trayOptions) {
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&message)))
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&message)))
 	}
+}
+
+func loadTrayIcon(instance uintptr) uintptr {
+	if instance != 0 {
+		hicon, _, _ := procLoadIconW.Call(instance, uintptr(agentIconResourceID))
+		if hicon != 0 {
+			return hicon
+		}
+	}
+	hicon, _, _ := procLoadIconW.Call(0, idiApplication)
+	return hicon
 }
 
 func trayWndProc(hwnd uintptr, message uint32, wParam uintptr, lParam uintptr) uintptr {
