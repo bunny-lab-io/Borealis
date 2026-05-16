@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import socket
 import sys
 import zipfile
@@ -15,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from Data.Engine.services.API.scheduled_jobs import job_scheduler as scheduled_job_module
+from Data.Engine.services.API.scheduled_jobs import onboarding as onboarding_module
 from Data.Engine.services.API.scheduled_jobs.onboarding import parse_onboarding_scope
 from Data.Engine.services.API.scheduled_jobs.targets import normalize_targets_for_save
 from Data.Engine.services.auth import UserSiteAccessManager
@@ -1418,6 +1420,7 @@ def test_onboarding_remote_command_marks_agent_noninteractive(engine_harness: En
     assert "BOREALIS_AGENT_NONINTERACTIVE=1" in command
     assert "BOREALIS_AGENT_NO_TTY=1" in command
     assert "BOREALIS_ONBOARDING_TARGET=192.168.3.8" in command
+    assert "/refs/heads/feature/test/Data/Agent/dist/linux-amd64/Agent" in command
 
 
 def test_windows_agent_payload_bundle_uses_selected_non_main_branch(
@@ -1427,9 +1430,13 @@ def test_windows_agent_payload_bundle_uses_selected_non_main_branch(
 ) -> None:
     _client, scheduler = _scheduled_jobs_client(engine_harness)
     source_root = tmp_path / "branch-source" / "Data" / "Agent"
-    source_root.mkdir(parents=True)
-    (source_root / "agent.py").write_text("print('branch payload')\n", encoding="utf-8")
-    (source_root / "branch-marker.txt").write_text("feature/test\n", encoding="utf-8")
+    (source_root / "cmd" / "agent").mkdir(parents=True)
+    (source_root / "internal" / "reference").mkdir(parents=True)
+    (source_root / "dist" / "windows-amd64").mkdir(parents=True)
+    (source_root / "go.mod").write_text("module borealis-agent-test\n", encoding="utf-8")
+    (source_root / "cmd" / "agent" / "main.go").write_text("package main\nfunc main() {}\n", encoding="utf-8")
+    (source_root / "internal" / "reference" / "branch-marker.txt").write_text("feature/test\n", encoding="utf-8")
+    (source_root / "dist" / "windows-amd64" / "Agent.exe").write_bytes(b"MZdist")
     calls = []
 
     monkeypatch.setattr(scheduler, "_local_project_branch", lambda _project_root: "main")
@@ -1446,8 +1453,78 @@ def test_windows_agent_payload_bundle_uses_selected_non_main_branch(
     assert digest
     with zipfile.ZipFile(bundle_path, "r") as archive:
         names = set(archive.namelist())
-    assert "Data/Agent/agent.py" in names
-    assert "Data/Agent/branch-marker.txt" in names
+    assert "Data/Agent/go.mod" in names
+    assert "Data/Agent/cmd/agent/main.go" in names
+    assert "Data/Agent/internal/reference/branch-marker.txt" in names
+    assert "Data/Agent/dist/windows-amd64/Agent.exe" not in names
+
+
+def test_windows_agent_exe_path_ignores_legacy_bootstrap(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    project_root = tmp_path / "repo"
+    legacy_path = project_root / "Data" / "Agent" / "Bootstrap" / "Agent.exe"
+    dist_path = project_root / "Data" / "Agent" / "dist" / "windows-amd64" / "Agent.exe"
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_bytes(b"MZlegacy")
+    monkeypatch.setenv("BOREALIS_PROJECT_ROOT", str(project_root))
+
+    assert scheduler._windows_agent_exe_path() is None
+
+    dist_path.parent.mkdir(parents=True)
+    dist_path.write_bytes(b"MZgo")
+
+    assert scheduler._windows_agent_exe_path() == dist_path
+
+
+def test_windows_agent_exe_for_branch_downloads_selected_branch_binary(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+    project_root = tmp_path / "repo"
+    local_exe = project_root / "Data" / "Agent" / "dist" / "windows-amd64" / "Agent.exe"
+    local_source = project_root / "Data" / "Agent" / "cmd" / "agent" / "main.go"
+    head_path = project_root / ".git" / "HEAD"
+    local_exe.parent.mkdir(parents=True)
+    local_source.parent.mkdir(parents=True)
+    head_path.parent.mkdir(parents=True)
+    local_exe.write_bytes(b"MZlocal")
+    local_source.write_text("package main\nfunc main() {}\n", encoding="utf-8")
+    head_path.write_text("ref: refs/heads/main\n", encoding="utf-8")
+    monkeypatch.setenv("BOREALIS_PROJECT_ROOT", str(project_root))
+
+    calls: list[str] = []
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b"MZbranch"
+
+    def fake_urlopen(url, timeout=0):
+        calls.append(str(url))
+        assert timeout == 180
+        return FakeResponse()
+
+    monkeypatch.setattr(onboarding_module.urllib.request, "urlopen", fake_urlopen)
+
+    exe_path, temp_dir = scheduler._windows_agent_exe_for_branch("feature/test")
+    try:
+        assert exe_path.read_bytes() == b"MZbranch"
+        assert "/refs/heads/feature/test/Data/Agent/dist/windows-amd64/Agent.exe" in calls[0]
+    finally:
+        shutil.rmtree(temp_dir)
 
 
 def test_onboarding_failure_hint_prefers_actionable_output() -> None:

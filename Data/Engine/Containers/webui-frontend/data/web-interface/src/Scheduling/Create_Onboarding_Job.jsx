@@ -829,10 +829,13 @@ function normalizeOnboardingProgressTask(task, status = "") {
   }
   if (
     normalizedTask.includes("transferring agent.exe") ||
+    normalizedTask.includes("transferring agent binary") ||
     normalizedTask.includes("transferring agent installation files") ||
-    normalizedTask.includes("uploading agent.exe")
+    normalizedTask.includes("uploading agent.exe") ||
+    normalizedTask.includes("uploading agent binary") ||
+    normalizedTask.includes("staging borealis agent.exe")
   ) {
-    return "Uploading Agent.exe to Remote Device";
+    return "Uploading Agent Binary to Remote Device";
   }
   if (normalizedTask.includes("creating windows service")) {
     if (normalizedTask.includes("using")) {
