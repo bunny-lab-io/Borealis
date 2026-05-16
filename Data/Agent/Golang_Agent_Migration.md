@@ -114,6 +114,9 @@ Back to Docs Index: ../../Docs/index.md
 72. Added Device Summary branch control so admins can remotely set an agent source branch; Engine stores `agent_release_channel` and `agent_branch` on the device row and emits `agent_release_channel_changed` to online Go agents.
 73. Added initial regression coverage for Go Socket.IO ACK handling, release-channel event persistence, installed build config cleanup, and Engine release-channel/branch persistence plus socket emission.
 74. Moved Agent unit-test lane entrypoints under `Data/Agent/Unit_Tests` and removed archived Python Agent source.
+75. Added Windows Go Agent tray/status UI to the existing CURRENTUSER helper path with a loopback-only embedded status page, role-health display, Engine Web UI link, diagnostics copy, restart-agent action, and update-check action.
+76. Added tokenized loopback SYSTEM UI broker for helper-to-SYSTEM commands (`status.get`, `agent.restart`, `agent.update_check`, and `diagnostics.copy_summary`) with redacted status payloads and no Engine credentials in user context.
+77. Added regression coverage for local UI broker authorization, command dispatch, broker state round-trip, and diagnostics redaction shape.
 
 ## In Progress
 
@@ -121,13 +124,13 @@ Back to Docs Index: ../../Docs/index.md
 
 ## Pending
 
-1. Rework tray UI/status as optional Go/native helper or external UI.
-2. Expand fake Engine HTTP/Socket.IO harness coverage beyond initial ACK/event tests for live `connect_agent`, `quick_job_run`, `file_management_request`, `process_management_request`, `service_control_action`, `software_inventory_refresh_request`, `vpn_tunnel_start`, Remote Shell TCP bridge behavior, and VNC credential/start lifecycle behavior.
-3. Add broader Engine contract tests for onboarding/update artifact path changes.
+1. Expand fake Engine HTTP/Socket.IO harness coverage beyond initial ACK/event tests for live `connect_agent`, `quick_job_run`, `file_management_request`, `process_management_request`, `service_control_action`, `software_inventory_refresh_request`, `vpn_tunnel_start`, Remote Shell TCP bridge behavior, and VNC credential/start lifecycle behavior.
+2. Add broader Engine contract tests for onboarding/update artifact path changes.
+3. Add Linux current-user/tray UI support if Linux desktop-agent support becomes a release goal.
 
 ## Release-Blocking Technical Debt
 
-1. Windows CURRENTUSER direct session quick-job execution and same-binary helper sentinels are implemented, but tray UI/status remains pending.
+1. Windows CURRENTUSER direct session quick-job execution and same-binary helper sentinels are implemented; Windows tray/status UI now needs real-host visual and action acceptance.
 2. Linux CURRENTUSER is unsupported by design in first PR and must report explicit unsupported status.
 3. Manual Windows acceptance has validated fresh enrollment, SYSTEM script execution, CURRENTUSER PowerShell/Batch execution, and update checks; final config access-control decision remains open.
 4. Manual Linux acceptance has validated service install, fresh enrollment, root SYSTEM Bash execution, and root-owned `0600` config; Linux release-channel update behavior still needs real-host acceptance.

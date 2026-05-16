@@ -17,6 +17,7 @@ import (
 	"unicode/utf16"
 	"unsafe"
 
+	"github.com/bunny-lab-io/borealis/go-agent/internal/localui"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/scripts"
 	"golang.org/x/sys/windows"
 )
@@ -76,6 +77,7 @@ func RunHelper(ctx context.Context, options HelperOptions) error {
 		BuildID:   strings.TrimSpace(options.BuildID),
 		UpdatedAt: time.Now().Unix(),
 	})
+	startHelperUI(ctx, stateDir, sessionID, strings.TrimSpace(options.BuildID))
 	for {
 		select {
 		case <-ctx.Done():
@@ -723,17 +725,7 @@ func tokenForSession(sessionID uint32) (windows.Token, error) {
 }
 
 func helperStateDir(override string) string {
-	if strings.TrimSpace(override) != "" {
-		return filepath.Clean(override)
-	}
-	publicDir := strings.TrimSpace(os.Getenv("PUBLIC"))
-	if publicDir == "" {
-		publicDir = filepath.Join(os.Getenv("SystemDrive")+`\`, "Users", "Public")
-	}
-	if publicDir == "" || strings.HasPrefix(publicDir, `\`) {
-		publicDir = `C:\Users\Public`
-	}
-	return filepath.Join(publicDir, "Borealis", "CurrentUserHelpers")
+	return localui.StateDir(override)
 }
 
 func helperStatePath(stateDir string, sessionID int) string {

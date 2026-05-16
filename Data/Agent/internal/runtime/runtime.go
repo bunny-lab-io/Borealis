@@ -6,10 +6,12 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bunny-lab-io/borealis/go-agent/internal/auth"
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/localui"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/current_user"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/device_audit"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/file_management"
@@ -52,6 +54,8 @@ type Agent struct {
 	software    *softwaremanagement.Manager
 	vnc         *vncrole.Manager
 	wireguard   *wireguardtunnel.Manager
+	uiMu        sync.RWMutex
+	uiSnapshot  localui.StatusSnapshot
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -126,12 +130,14 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 
 func (a *Agent) Run(ctx context.Context) error {
 	a.logger.Printf("agent starting service_mode=%s config=%s", auth.NormalizeServiceMode(a.options.ServiceMode), a.configPath)
+	a.updateUIStatus("process_start", "starting", "Agent process starting.")
 	if err := writeInstalledBuildID(a.configPath, a.options.BuildID); err != nil {
 		a.logger.Printf("record installed build failed: %v", err)
 	}
 	if err := cleanupStartupTemp(a.configPath, a.logger); err != nil {
 		a.logger.Printf("startup temp cleanup failed: %v", err)
 	}
+	a.startUIBrokerIfSupported(ctx)
 	if a.dispatcher != nil {
 		a.dispatcher.Start(ctx, a.configPath)
 	}
@@ -292,6 +298,7 @@ func (a *Agent) postStatus(ctx context.Context, phase string, status string, mes
 		"boot_id":      a.bootID,
 		"milestones":   startupMilestones(phase, status, message, now),
 	}
+	a.updateUIStatus(phase, status, message)
 	_, err := a.authClient.PostJSON(ctx, "/api/agent/status", payload, nil)
 	return err
 }
@@ -575,6 +582,7 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	payload["installed_build_id"] = installedBuildID
 	payload["agent_release_channel"] = agentconfig.NormalizeReleaseChannel(cfg.Agent.ReleaseChannel)
 	payload["agent_branch"] = agentconfig.NormalizeBranch(cfg.Agent.Branch)
+	a.updateUIHeartbeat(payload)
 	_, err := a.authClient.PostJSON(ctx, "/api/agent/heartbeat", payload, nil)
 	return err
 }

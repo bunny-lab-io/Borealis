@@ -13,7 +13,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 
 ## Role Catalog (Go v1)
 - `internal/roles/system_context` - SYSTEM/root quick-job router and script execution for signed `quick_job_run` payloads.
-- `internal/roles/current_user` - Windows CURRENTUSER helper sentinel broker, active-session health, and direct signed quick-job execution for active user sessions. Linux CURRENTUSER reports unsupported in first PR.
+- `internal/roles/current_user` - Windows CURRENTUSER helper sentinel broker, active-session health, direct signed quick-job execution for active user sessions, and Windows tray/status UI. Linux CURRENTUSER reports unsupported in first PR.
 - `internal/roles/device_audit` - core CPU, memory, storage media type, removable media, network link speed, OS/build, hardware model/serial with motherboard serial fallback, last reboot, internal IP, device type, uptime, and last-user inventory published through heartbeat payloads.
 - `internal/roles/file_management` - SYSTEM/root file-management browse, upload-conflict preflight, lightweight text editing, copy/cut/paste mutations, delete, mkdir, rename, move, upload pull, and download artifact transfer.
 - `internal/roles/process_management` - SYSTEM/root live process snapshots, parent/child metadata, cache reuse, and operator-triggered process termination for the Device Summary `Processes` tab.
@@ -22,7 +22,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `internal/roles/wireguard_tunnel` - SYSTEM/root persistent WireGuard reverse tunnel lifecycle, Engine `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, Windows tunnel-service apply, Linux `wg-quick` apply, and `/api/agent/vpn/ready` reporting.
 - `internal/roles/remote_shell` - SYSTEM/root WireGuard-scoped TCP shell listener for Engine `vpn_shell_*` bridge traffic, using PowerShell on Windows and Bash/sh on Linux.
 - `internal/roles/vnc` - Windows UltraVNC always-on lifecycle, runtime credential broker, Engine `/api/agent/vnc/ensure` bootstrap, Socket.IO credential/start events, firewall scope, and listener readiness reporting. Linux VNC reports unsupported.
-- Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`: tray UI/status.
+- Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`; Linux current-user/tray UI remains pending.
 
 ## Agent Settings and Storage
 - Installed configuration file: `config.json` beside `Agent.exe`.
@@ -66,7 +66,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - The SYSTEM runtime is the only Borealis process that authenticates to the Engine, enrolls, refreshes tokens, or opens a Socket.IO connection.
 - Interactive user quick jobs now run through the SYSTEM broker by launching signed PowerShell/Batch payloads into active Windows user sessions. Same-binary helper sentinels run in active desktop sessions so role health can report ready helper sessions without exposing Engine tokens to user context.
 - Direct Session 0 UI is not supported; Borealis keeps the Engine-facing socket in SYSTEM and bridges into desktop sessions when current-user interaction is required.
-- Go tray UI/status remains pending. Current same-binary helpers are headless sentinels for desktop-session readiness.
+- Windows same-binary helpers host the Borealis tray icon and a loopback-only local status UI. The UI shows safe agent status, role health, update/restart actions, diagnostics copy, and an Engine Web UI link while keeping the helper tokenless and free of Engine credentials. Remote access remains silent in this first UI version; the UI does not add remote-session banners, notifications, or consent prompts.
 - The agent still labels Engine traffic with `X-Borealis-Agent-Context`, but the supported Windows service path no longer relies on a standalone CURRENTUSER Engine identity.
 - Headless Linux agents without an active graphical desktop report desktop-only health surfaces as `No Desktop Environment Active` instead of unhealthy/recovering. This applies to Current User Context helper dispatch and UI-side UltraVNC presentation so server-class Linux hosts do not look broken for missing desktop roles.
 
@@ -89,8 +89,8 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
   - `agent_update_request` to start the local platform updater path.
   - `connect_agent` registration (agent socket registry).
 - The SYSTEM socket advertises `helper_contexts=["currentuser"]` when the session broker is running so the Engine can route logical current-user work through the same socket.
-- Helper processes never enroll, never refresh tokens, never open Socket.IO, and never talk to the Engine directly.
-- Current Go Windows CURRENTUSER support uses same-binary helper sentinels for session readiness and direct `CreateProcessAsUser` session launch from SYSTEM for signed quick jobs. Real-host PowerShell Desktop canary validation passed, including denial when the user context attempted to write to root `C:\`. Full tray UI remains pending.
+- Helper processes never enroll, never refresh tokens, never open Socket.IO, and never talk to the Engine directly. Tray UI actions go through a tokenized loopback SYSTEM broker that exposes only `status.get`, `agent.restart`, `agent.update_check`, and `diagnostics.copy_summary`.
+- Current Go Windows CURRENTUSER support uses same-binary helper sentinels for session readiness, direct `CreateProcessAsUser` session launch from SYSTEM for signed quick jobs, and the Windows tray/status UI. Real-host PowerShell Desktop canary validation passed, including denial when the user context attempted to write to root `C:\`; tray UI real-host acceptance remains pending.
 - WireGuard tunnels are ensured via `POST /api/agent/vpn/ensure` on boot and refreshed periodically.
 - The ensure loop re-establishes the tunnel automatically after network hiccups.
 - Go startup posts full timeline milestones before entering the Socket.IO connect loop and keeps heartbeat/status telemetry on the SYSTEM/root runtime.
