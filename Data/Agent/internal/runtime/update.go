@@ -109,6 +109,12 @@ func writeInstalledBuildID(configPath string, buildID string) error {
 	if err != nil {
 		return err
 	}
+	if agentconfig.UsesSourceReleaseChannel(cfg.Agent.ReleaseChannel) {
+		currentBuildID := agentconfig.NormalizeBuildID(cfg.Agent.InstalledBuildID)
+		if currentBuildID != "" && !strings.EqualFold(currentBuildID, buildID) {
+			return nil
+		}
+	}
 	cfg.Agent.InstalledBuildID = buildID
 	if err := agentconfig.Save(configPath, &cfg); err != nil {
 		return err

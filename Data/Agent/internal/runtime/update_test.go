@@ -128,3 +128,38 @@ func TestWriteInstalledBuildIDStoresConfigAndRemovesLegacyStatus(t *testing.T) {
 		t.Fatalf("legacy update_status.json still exists or unexpected stat error: %v", err)
 	}
 }
+
+func TestWriteInstalledBuildIDPreservesSourceTargetBuildID(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, agentconfig.FileName)
+	cfg := agentconfig.Default()
+	cfg.ServerURL = "https://borealis.example.com"
+	cfg.Agent.ReleaseChannel = agentconfig.ReleaseChannelSource
+	cfg.Agent.Branch = "feature/windows-patch-management"
+	cfg.Agent.InstalledBuildID = "branchsha"
+	if err := agentconfig.Save(configPath, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	statusPath := filepath.Join(root, "Updater", "update_status.json")
+	if err := os.MkdirAll(filepath.Dir(statusPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statusPath, []byte(`{"state":"old"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeInstalledBuildID(configPath, "binarysha"); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := agentconfig.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Agent.InstalledBuildID != "branchsha" {
+		t.Fatalf("installed_build_id overwritten: %q", loaded.Agent.InstalledBuildID)
+	}
+	if _, err := os.Stat(statusPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy update_status.json still exists or unexpected stat error: %v", err)
+	}
+}
