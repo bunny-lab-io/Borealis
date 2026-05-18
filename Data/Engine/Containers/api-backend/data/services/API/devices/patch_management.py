@@ -286,9 +286,9 @@ def _update_key(update: Dict[str, Any]) -> Tuple[str, int]:
 
 
 def _is_pending_install(update: Dict[str, Any]) -> bool:
-    return _bool(update.get("is_downloaded") or update.get("downloaded")) and not _bool(
-        update.get("is_installed") or update.get("installed")
-    )
+    if _bool(update.get("is_installed") or update.get("installed")):
+        return False
+    return _bool(update.get("approved")) or _bool(update.get("is_downloaded") or update.get("downloaded"))
 
 
 def _state_from_update(update: Dict[str, Any]) -> str:
@@ -303,8 +303,6 @@ def _state_from_update(update: Dict[str, Any]) -> str:
         return "failed"
     if _is_pending_install(update):
         return "pending_install"
-    if _bool(update.get("approved")):
-        return "missing"
     return "available"
 
 

@@ -27,7 +27,7 @@ Document Borealis Windows patch management across Agent, Engine API, database, a
 ## WUA Behavior
 - Scan criteria: missing and non-hidden updates through `IUpdateSearcher::Search`.
 - Inventory fields include update ID, revision, KBs, title, classification, categories, severity, update type, size, support URL, installed/downloaded/hidden state, HRESULT, result code, and reboot flags.
-- Downloaded but not installed updates are stored as `pending_install` and displayed as `Pending Install`; compliance counts still treat them as missing until install completes.
+- Approved or downloaded updates that are not installed are stored as `pending_install` and displayed as `Pending Install`; compliance counts still treat them as missing until install completes.
 - Install flow batches approved updates first. If batch install fails, Agent retries each selected update individually so Catalog and device state show exact failed update.
 - Pending reboot uses WUA install result plus local Windows pending-reboot indicators.
 - Agent sends reports to Engine after scans and installs.
