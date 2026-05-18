@@ -147,6 +147,14 @@ const BASE_NAV_SECTIONS = Object.freeze([
         navKey: "jobs",
         to: APP_PATHS.jobs,
       },
+      { kind: "subheader", label: "Patch Management" },
+      {
+        icon: PatchIcon,
+        label: "Patch Management",
+        navKey: "patch-management",
+        to: APP_PATHS.patchManagement,
+        indent: 1,
+      },
       {
         icon: WatchdogIcon,
         label: "Watchdogs",
@@ -170,12 +178,6 @@ const BASE_NAV_SECTIONS = Object.freeze([
         label: "Software Audit",
         navKey: "software",
         to: APP_PATHS.software,
-      },
-      {
-        icon: PatchIcon,
-        label: "Patch Management",
-        navKey: "patch-management",
-        to: APP_PATHS.patchManagement,
       },
     ],
   },
