@@ -100,7 +100,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	dispatcher := currentuser.NewDispatcher()
 	auditor := deviceaudit.NewAuditor()
 	fileManager := filemanagement.New(authClient, hostname)
-	patchManager := patchmanagement.New(authClient, hostname, options.ServiceMode)
+	patchManager := patchmanagement.New(authClient, hostname, options.ServiceMode, configPath)
 	processManager := processmanagement.New(hostname)
 	remoteShellManager := remoteshell.New(hostname, options.ServiceMode, configPath)
 	serviceManager := servicemanagement.New(authClient, hostname, options.ServiceMode)

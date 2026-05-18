@@ -15,6 +15,7 @@ Document Borealis Windows patch management across Agent, Engine API, database, a
 - Runtime context: SYSTEM only for WUA COM access, download, install, and reboot.
 - Windows adapter uses WUA COM through `github.com/go-ole/go-ole`.
 - Non-Windows adapter reports unsupported state without failing rest of Agent.
+- Agent log path: `C:\Borealis\Logs\Agent\patch_management.log` on standard Windows installs.
 - Socket.IO event: `patch_management_request`.
 - Supported actions:
   - `scan` - run immediate WUA scan and upload report.

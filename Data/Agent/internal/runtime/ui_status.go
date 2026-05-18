@@ -180,6 +180,7 @@ func safeLogPaths(configPath string) []localui.LogPath {
 		{Label: "Bootstrap", Path: filepath.Join(root, "Logs", "Agent", "bootstrap.log")},
 		{Label: "Updater", Path: filepath.Join(root, "Logs", "Agent", "updater.log")},
 		{Label: "Remote Shell", Path: filepath.Join(root, "Logs", "Agent", "remote_shell.log")},
+		{Label: "Patch Management", Path: filepath.Join(root, "Logs", "Agent", "patch_management.log")},
 		{Label: "WireGuard", Path: filepath.Join(root, "Logs", "WireGuard", "wireguard.log")},
 		{Label: "UltraVNC", Path: filepath.Join(root, "Logs", "UltraVNC", "vnc.log")},
 	}

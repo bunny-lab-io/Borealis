@@ -114,6 +114,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Agent runtime log: `Logs/Agent/agent.log` with daily rotation.
 - Agent error log: `Logs/Agent/agent.error.log`.
 - Agent remote shell log: `Logs/Agent/remote_shell.log`.
+- Agent patch-management log: `Logs/Agent/patch_management.log`.
 - Agent bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/Agent/bootstrap.log`; Windows bootstrap truncates this file at each start and always writes verbose trace/command output there while keeping console/GUI output minimal. Deferred Windows self-replacement writes retry, hash verification, finalization, and task restart output to `Logs/Agent/updater.log`. Linux updater diagnostics use `bootstrap.log`.
 - WireGuard role log: `Logs/WireGuard/wireguard.log`.
 - WireGuard MSI install log: `Logs/WireGuard/wireguard-msi-install.log`.

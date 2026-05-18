@@ -1,6 +1,11 @@
 package patchmanagement
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestApplyPolicyClassTogglesAndHolds(t *testing.T) {
 	policy := defaultPolicy()
@@ -44,5 +49,24 @@ func TestSelectInstallTargetsSkipsHeldHiddenInstalled(t *testing.T) {
 func TestNonWindowsUnsupportedAdapter(t *testing.T) {
 	if detect, _ := detectSupport(); detect && defaultWUAAdapter() == nil {
 		t.Fatalf("supported platform returned nil adapter")
+	}
+}
+
+func TestPatchManagementLogPathAndWrite(t *testing.T) {
+	root := t.TempDir()
+	manager := New(nil, "host1", "system", filepath.Join(root, "config.json"))
+
+	expected := filepath.Join(root, "Logs", "Agent", "patch_management.log")
+	if manager.logPath != expected {
+		t.Fatalf("logPath = %q, want %q", manager.logPath, expected)
+	}
+
+	manager.logf("scan test update_count=%d", 3)
+	content, err := os.ReadFile(expected)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if !strings.Contains(string(content), "[patch-management] scan test update_count=3") {
+		t.Fatalf("unexpected log content: %s", string(content))
 	}
 }
