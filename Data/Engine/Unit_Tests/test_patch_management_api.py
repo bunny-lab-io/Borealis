@@ -159,7 +159,7 @@ def test_patch_report_ingests_catalog_device_state_and_holds(
                 "categories": ["Windows 11"],
                 "msrc_severity": "Critical",
                 "update_type": "Software",
-                "size_bytes": 123456,
+                "size_bytes": 5_000_000_000,
                 "support_url": "https://support.example/KB5000001",
                 "approved": True,
                 "downloaded": True,
@@ -191,12 +191,13 @@ def test_patch_report_ingests_catalog_device_state_and_holds(
 
     catalog_row = fetch_one(
         engine_harness,
-        "SELECT title, kb_articles_json FROM patch_catalog WHERE update_id = ? AND revision_number = ?",
+        "SELECT title, kb_articles_json, size_bytes FROM patch_catalog WHERE update_id = ? AND revision_number = ?",
         ("update-test-1", 2),
     )
     assert catalog_row is not None
     assert catalog_row[0] == "2026-05 Cumulative Update for Windows 11"
     assert json.loads(catalog_row[1]) == ["KB5000001"]
+    assert catalog_row[2] == 5_000_000_000
 
     state_row = fetch_one(
         engine_harness,

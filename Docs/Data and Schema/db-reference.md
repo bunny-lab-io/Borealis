@@ -60,7 +60,7 @@ sites (id) -------------------< user_site_assignments (site_id)
 ## Patch Management Tables
 - `patch_policies` stores Windows patch policy definitions, class toggles, and reboot policy JSON.
 - `patch_policy_bindings` assigns one policy to global, site, or device scope. Effective policy is selected by device, then site, then global; rows are not merged.
-- `patch_catalog` stores fleet-wide WUA update metadata by `update_id` and `revision_number`.
+- `patch_catalog` stores fleet-wide WUA update metadata by `update_id` and `revision_number`; `size_bytes` uses a 64-bit integer because Windows cumulative update packages can exceed 32-bit integer range.
 - `device_patch_state` stores per-device status, approval/hold flags, result code, HRESULT, reboot-required state, policy ID/version, and raw metadata.
 - `patch_holds` stores global and policy-scoped holds plus release metadata.
 - `patch_action_history` stores operator dispatches and agent-reported scan/install actions.

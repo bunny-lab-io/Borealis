@@ -947,7 +947,7 @@ def _ensure_patch_management(conn: sqlite3.Connection, *, logger: Optional[loggi
                 categories_json TEXT NOT NULL,
                 msrc_severity TEXT,
                 update_type TEXT,
-                size_bytes INTEGER NOT NULL DEFAULT 0,
+                size_bytes BIGINT NOT NULL DEFAULT 0,
                 support_url TEXT,
                 first_seen_at INTEGER NOT NULL,
                 last_seen_at INTEGER NOT NULL,
@@ -1072,6 +1072,7 @@ def _ensure_patch_management(conn: sqlite3.Connection, *, logger: Optional[loggi
                 ON patch_reboot_deferrals(device_guid, updated_at)
             """
         )
+        _ensure_postgres_bigint_columns(cur)
         cur.execute("SELECT id FROM patch_policies ORDER BY id LIMIT 1")
         if cur.fetchone() is None:
             class_toggles = (
@@ -1105,6 +1106,32 @@ def _ensure_patch_management(conn: sqlite3.Connection, *, logger: Optional[loggi
             raise
     finally:
         cur.close()
+
+
+def _ensure_postgres_bigint_columns(cur) -> None:
+    connection = getattr(cur, "connection", None)
+    if getattr(connection, "_dialect", "") != "postgresql":
+        return
+    for table_name, column_name in (
+        ("patch_catalog", "size_bytes"),
+    ):
+        cur.execute(
+            """
+            SELECT c.data_type
+              FROM information_schema.columns AS c
+             WHERE c.table_schema = ANY (current_schemas(false))
+               AND c.table_name = ?
+               AND c.column_name = ?
+             LIMIT 1
+            """,
+            (table_name, column_name),
+        )
+        row = cur.fetchone()
+        if row and str(row[0] or "").lower() == "bigint":
+            continue
+        cur.execute(
+            f"ALTER TABLE {table_name} ALTER COLUMN {column_name} TYPE BIGINT USING {column_name}::BIGINT"
+        )
 
 
 def _ensure_scheduled_jobs(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
