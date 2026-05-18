@@ -29,7 +29,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Logs: `Engine/Services/<role>/logs/`; api-backend writes API and domain logs under `Engine/Services/api-backend/logs/`.
 - Ansible runtime: `Engine/Services/api-backend/cache/Ansible/` (staged manifest, installed collections, generated execution workspaces).
 - Certificates: `Engine/Services/api-backend/secrets/Certificates/` (TLS bundle + code signing keys).
-- WebUI source is packaged into the `webui-frontend` image and seeded into `Engine/Services/webui-frontend/data/web-interface/` for dev-mode host editing. Normal deploys do not overwrite an existing runtime copy; set `BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE=1` to reseed from committed source.
+- WebUI source is packaged into the `webui-frontend` image and seeded into `Engine/Services/webui-frontend/data/web-interface/` for dev-mode host editing. `Engine.sh deploy dev` resyncs that runtime source from committed source so Vite bind mounts reflect the selected branch. Production deploys preserve an existing runtime copy unless `BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE=1` is set.
 - Bundled official assemblies: `Data/Engine/Containers/api-backend/data/Official_Assemblies/` (generated seed snapshot).
 - Aurora checkout: `Engine/Services/api-backend/cache/Aurora/`.
 
@@ -68,7 +68,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - `api-backend` runs the Python Engine API, Socket.IO, live operator sessions, workflow APIs, and VNC WebSocket proxy. It binds `127.0.0.1:5000`.
 - `job-scheduler` owns the scheduled-job tick loop, Postgres work leases, Docker-backed service actions, and `site-worker-<uuid>` lifecycle. It owns the host Docker socket in container mode.
 - Site workers execute site-scoped pressure work such as automatic local-network onboarding outside the API process. They do not mount the Docker socket.
-- `webui-frontend` serves the production WebUI or Vite HMR on stable loopback port `127.0.0.1:8000`. Dev mode bind-mounts `Engine/Services/webui-frontend/data/web-interface/` into the container for host-side UI edits.
+- `webui-frontend` serves the production WebUI or Vite HMR on stable loopback port `127.0.0.1:8000`. Dev mode resyncs and bind-mounts `Engine/Services/webui-frontend/data/web-interface/` into the container for host-side UI edits.
 - `traefik-edge` owns public HTTP/HTTPS on `80/443`, ACME storage, Traefik config, UI/API/Socket.IO/VNC routing, and edge logs.
 - `postgres-db` owns PostgreSQL state under `Engine/Services/postgres-db/state` and binds `127.0.0.1:5432`.
 - `remote-desktop-guacd` runs VNC-only `guacd` on `127.0.0.1:4822`.

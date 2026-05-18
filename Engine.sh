@@ -557,8 +557,9 @@ ensure_service_tree() {
 }
 
 seed_webui_runtime_source() {
+  local mode="${1:-prod}"
   [[ -d "${WEBUI_STAGED_SOURCE_DIR}" ]] || die "WebUI staged source missing: ${WEBUI_STAGED_SOURCE_DIR}"
-  if [[ -f "${WEBUI_RUNTIME_SOURCE_DIR}/package.json" && "${BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE:-0}" != "1" ]]; then
+  if [[ -f "${WEBUI_RUNTIME_SOURCE_DIR}/package.json" && "${BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE:-0}" != "1" && "${mode}" != "dev" ]]; then
     return 0
   fi
   if [[ "${BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE:-0}" == "1" && -d "${WEBUI_RUNTIME_SOURCE_DIR}" ]]; then
@@ -576,6 +577,10 @@ seed_webui_runtime_source() {
       "${WEBUI_STAGED_SOURCE_DIR}/" \
       "${WEBUI_RUNTIME_SOURCE_DIR}/"
     return 0
+  fi
+  if [[ "${mode}" == "dev" && -d "${WEBUI_RUNTIME_SOURCE_DIR}" ]]; then
+    rm -rf "${WEBUI_RUNTIME_SOURCE_DIR}"
+    mkdir -p "${WEBUI_RUNTIME_SOURCE_DIR}"
   fi
   (
     cd "${WEBUI_STAGED_SOURCE_DIR}"
@@ -1445,7 +1450,7 @@ validate_build_role() {
 prepare_runtime() {
   local mode="$1"
   ensure_service_tree
-  seed_webui_runtime_source
+  seed_webui_runtime_source "${mode}"
   prune_empty_legacy_runtime_paths
   load_existing_image_tags
   local public_host
