@@ -114,6 +114,36 @@ export default function DevicePatchManagementTab({ device }) {
     };
   }, [hostname, load]);
 
+  const getRowId = useCallback((params) => `${params.data?.update_id || ""}:${params.data?.revision_number || 0}`, []);
+
+  const rowSelection = useMemo(
+    () => ({
+      mode: "multiRow",
+      checkboxes: true,
+      headerCheckbox: true,
+      enableClickSelection: false,
+    }),
+    []
+  );
+
+  const selectionColumnDef = useMemo(
+    () => ({
+      headerName: "",
+      width: 52,
+      maxWidth: 52,
+      minWidth: 52,
+      pinned: "left",
+      resizable: false,
+      sortable: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      suppressMovable: true,
+      lockPinned: true,
+      lockPosition: true,
+    }),
+    []
+  );
+
   const columns = useMemo(
     () => [
       { field: "title", headerName: "Update", minWidth: 420, flex: 1.8 },
@@ -149,6 +179,7 @@ export default function DevicePatchManagementTab({ device }) {
 
   const missingCount = (payload.updates || []).filter((row) => ["missing", "pending_install"].includes(row.status)).length;
   const rebootCount = (payload.updates || []).filter((row) => row.reboot_required).length;
+  const installButtonLabel = selectedRows.length > 0 ? "Install Selected Updates" : "Install All Updates";
   const policy = payload.policy || {};
 
   return (
@@ -171,7 +202,7 @@ export default function DevicePatchManagementTab({ device }) {
               Reboot Now
             </Button>
             <Button startIcon={<SystemUpdateAltRoundedIcon />} disabled={loading} onClick={() => runAction("install")} sx={PRIMARY_BUTTON_SX}>
-              Install Updates
+              {installButtonLabel}
             </Button>
           </Stack>
         </Stack>
@@ -181,7 +212,9 @@ export default function DevicePatchManagementTab({ device }) {
             rowData={payload.updates || []}
             columnDefs={columns}
             defaultColDef={DEFAULT_GRID_COL_DEF}
-            rowSelection="multiple"
+            getRowId={getRowId}
+            rowSelection={rowSelection}
+            selectionColumnDef={selectionColumnDef}
             onSelectionChanged={(event) => setSelectedRows(event.api.getSelectedRows() || [])}
             pagination
             paginationPageSize={50}
