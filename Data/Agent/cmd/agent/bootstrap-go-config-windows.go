@@ -35,6 +35,34 @@ func writeGoAgentConfig(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	return nil
 }
 
+func writeExplicitGoAgentReleaseTarget(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	path := agentConfigPath(cfg.InstallDir)
+	current, err := agentconfig.Load(path)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfg.ServerURL) != "" {
+		current.ServerURL = agentconfig.NormalizeServerURL(cfg.ServerURL)
+	}
+	if strings.TrimSpace(cfg.SiteEnrollmentCode) != "" {
+		current.EnrollmentCode = strings.TrimSpace(cfg.SiteEnrollmentCode)
+	}
+	if cfg.CLIChannelExplicit || cfg.CLIRepoRefExplicit {
+		current.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(cfg.ReleaseChannel)
+	}
+	if cfg.CLIRepoRefExplicit {
+		current.Agent.Branch = agentconfig.NormalizeBranch(cfg.RepoRef)
+	}
+	current.ApplyDefaults()
+	if err := agentconfig.Save(path, &current); err != nil {
+		return err
+	}
+	if logger != nil {
+		logger.Tracef("Go Agent release target written: path=%s release_channel=%s branch=%s", path, current.Agent.ReleaseChannel, current.Agent.Branch)
+	}
+	return nil
+}
+
 func mergeConfigJSONBootstrapInputs(cfg *BootstrapConfig) {
 	if cfg == nil {
 		return

@@ -66,6 +66,8 @@ type BootstrapConfig struct {
 	Interactive         bool   `json:"-"`
 	ConfigPath          string `json:"-"`
 	ResolvedPayloadRoot string `json:"-"`
+	CLIRepoRefExplicit  bool   `json:"-"`
+	CLIChannelExplicit  bool   `json:"-"`
 }
 
 func parseCLI(args []string) (cliOptions, error) {
@@ -138,9 +140,11 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 	}
 	if cli.RepoRef != "" {
 		cfg.RepoRef = cli.RepoRef
+		cfg.CLIRepoRefExplicit = true
 	}
 	if cli.ReleaseChannel != "" {
 		cfg.ReleaseChannel = cli.ReleaseChannel
+		cfg.CLIChannelExplicit = true
 	}
 	if cli.Verbose {
 		cfg.Verbose = true

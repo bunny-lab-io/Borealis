@@ -11,6 +11,11 @@ import {
   Tooltip,
   Typography,
   Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  CircularProgress,
   Menu,
   MenuItem,
   TextField,
@@ -41,7 +46,7 @@ import RemoteFileManagementTab from "./Remote_File_Management.jsx";
 import ProcessManagementTab from "./Process_Management.jsx";
 import DevicePatchManagementTab from "./Patch_Management.jsx";
 import AgentHealthTab from "./Agent_Health.jsx";
-import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
+import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily, iconFontFamily } from "./Shared.jsx";
 import ServiceList from "./Service_List.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
@@ -130,6 +135,46 @@ const SUMMARY_SECTION_ACTIVE_BG =
   "linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)";
 const BOREALIS_LINK_COLOR = "#7db7ff";
 const BOREALIS_LINK_HOVER_COLOR = "#a8d4ff";
+const DEFAULT_AGENT_BRANCH = "main";
+const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
+const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
+
+const DEVICE_DIALOG_PAPER_SX = {
+  borderRadius: 3,
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  bgcolor: "rgba(8,12,24,0.98)",
+  color: MAGIC_UI.textBright,
+  boxShadow: "0 24px 70px rgba(0,0,0,0.58)",
+};
+
+const DEVICE_DIALOG_TITLE_SX = {
+  borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
+  px: 2.4,
+  py: 1.8,
+};
+
+const DEVICE_DIALOG_CONTENT_SX = {
+  px: 2.4,
+  py: 2,
+  bgcolor: "rgba(5,9,20,0.92)",
+};
+
+const DEVICE_DIALOG_ACTIONS_SX = {
+  borderTop: `1px solid ${MAGIC_UI.panelBorder}`,
+  px: 2.4,
+  py: 1.4,
+  bgcolor: "rgba(8,12,24,0.98)",
+};
+
+const DEVICE_DIALOG_BUTTON_SX = {
+  color: MAGIC_UI.textBright,
+  borderColor: MAGIC_UI.panelBorder,
+  textTransform: "none",
+  "&:hover": {
+    borderColor: MAGIC_UI.accentA,
+    backgroundColor: "rgba(125,211,252,0.12)",
+  },
+};
 
 const BASE_GRID_HEIGHTS = {
   topLevel: 300,
@@ -265,6 +310,10 @@ function statusFromHeartbeat(tsSec, offlineAfter = 300) {
   if (!tsSec) return "Offline";
   const now = Date.now() / 1000;
   return now - tsSec <= offlineAfter ? "Online" : "Offline";
+}
+
+function normalizeAgentBranch(value) {
+  return String(value || DEFAULT_AGENT_BRANCH).trim() || DEFAULT_AGENT_BRANCH;
 }
 
 function formatDeviceSummaryUtcTimestamp(dateObj) {
@@ -830,6 +879,176 @@ const SummaryGridPlaceholder = React.memo(function SummaryGridPlaceholder({ heig
   );
 });
 
+function AgentBranchDialog({
+  open,
+  rows,
+  loading,
+  error,
+  draftBranch,
+  saving,
+  onDraftBranchChange,
+  onRefresh,
+  onCancel,
+  onApply,
+}) {
+  const branchGridRef = useRef(null);
+  const branchGridApiRef = useRef(null);
+  const normalizedDraftBranch = normalizeAgentBranch(draftBranch);
+
+  const selectDraftBranch = useCallback(() => {
+    const api = branchGridApiRef.current || branchGridRef.current?.api;
+    if (!api || typeof api.forEachNode !== "function") return;
+    api.forEachNode((node) => {
+      const name = String(node?.data?.name || "");
+      node.setSelected?.(name === normalizedDraftBranch);
+    });
+  }, [normalizedDraftBranch]);
+
+  useEffect(() => {
+    if (!open) {
+      branchGridApiRef.current = null;
+      return undefined;
+    }
+    const handle = setTimeout(selectDraftBranch, 0);
+    return () => clearTimeout(handle);
+  }, [open, rows, selectDraftBranch]);
+
+  const branchColumnDefs = useMemo(() => [
+    {
+      headerName: "Branch",
+      field: "name",
+      minWidth: 260,
+      flex: 1,
+      cellStyle: {
+        display: "flex",
+        alignItems: "center",
+      },
+      cellRenderer: (params) => (
+        <Typography sx={{ color: SUMMARY_FIELD_TEXT_COLOR, fontSize: "0.88rem", fontWeight: 600, lineHeight: 1.2 }}>
+          {params.value}
+        </Typography>
+      ),
+    },
+    {
+      headerName: "Commit",
+      field: "sha",
+      minWidth: 130,
+      maxWidth: 150,
+      valueFormatter: (params) => String(params.value || "").slice(0, 12),
+    },
+  ], []);
+
+  const branchDefaultColDef = useMemo(() => ({
+    sortable: true,
+    filter: "agTextColumnFilter",
+    resizable: true,
+  }), []);
+
+  const branchRowSelection = useMemo(
+    () => ({
+      mode: "singleRow",
+      checkboxes: true,
+      headerCheckbox: false,
+      enableClickSelection: true,
+    }),
+    []
+  );
+
+  const branchSelectionColumnDef = useMemo(
+    () => ({
+      headerName: "",
+      minWidth: 52,
+      width: 52,
+      maxWidth: 52,
+      pinned: "left",
+      sortable: false,
+      resizable: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      suppressMovable: true,
+      lockPinned: true,
+      lockPosition: true,
+    }),
+    []
+  );
+
+  return (
+    <Dialog open={open} onClose={onCancel} maxWidth="md" fullWidth PaperProps={{ sx: DEVICE_DIALOG_PAPER_SX }}>
+      <DialogTitle sx={DEVICE_DIALOG_TITLE_SX}>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography sx={{ fontWeight: 700, fontSize: "1rem", lineHeight: 1.2, color: MAGIC_UI.textBright }}>
+            Switch Branch
+          </Typography>
+          <Typography sx={{ mt: 0.55, fontSize: "0.84rem", lineHeight: 1.45, color: MAGIC_UI.textMuted }}>
+            Selected branch: {normalizedDraftBranch}
+          </Typography>
+        </Box>
+      </DialogTitle>
+      <DialogContent sx={DEVICE_DIALOG_CONTENT_SX}>
+        {error ? (
+          <Alert severity="error" sx={{ mb: 1.5 }}>
+            {error}
+          </Alert>
+        ) : null}
+        {loading ? (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5, color: MAGIC_UI.textMuted }}>
+            <CircularProgress size={16} color="inherit" />
+            <Typography sx={{ fontSize: "0.84rem", color: "inherit" }}>Loading branches</Typography>
+          </Box>
+        ) : null}
+        <GridShell
+          sx={{
+            height: 440,
+            minHeight: 320,
+            boxShadow: "none",
+            "--ag-font-family": gridFontFamily,
+            "--ag-icon-font-family": iconFontFamily,
+            "& .ag-root-wrapper": {
+              borderRadius: 2,
+            },
+          }}
+        >
+          <AgGridReact
+            ref={branchGridRef}
+            rowData={rows}
+            columnDefs={branchColumnDefs}
+            defaultColDef={branchDefaultColDef}
+            rowSelection={branchRowSelection}
+            selectionColumnDef={branchSelectionColumnDef}
+            suppressCellFocus
+            pagination
+            paginationPageSize={20}
+            paginationPageSizeSelector={[20, 50, 100]}
+            animateRows
+            getRowId={(params) => String(params.data?.name || "")}
+            onGridReady={(params) => {
+              branchGridApiRef.current = params.api;
+              selectDraftBranch();
+            }}
+            onFirstDataRendered={selectDraftBranch}
+            onRowDataUpdated={selectDraftBranch}
+            onSelectionChanged={() => {
+              const api = branchGridApiRef.current || branchGridRef.current?.api;
+              const selected = api?.getSelectedRows?.()?.[0]?.name;
+              if (selected) {
+                onDraftBranchChange(selected);
+              }
+            }}
+            theme={DEVICE_DETAILS_GRID_THEME}
+          />
+        </GridShell>
+      </DialogContent>
+      <DialogActions sx={DEVICE_DIALOG_ACTIONS_SX}>
+        <Button onClick={onRefresh} disabled={loading || saving} sx={DEVICE_DIALOG_BUTTON_SX}>Refresh</Button>
+        <Button onClick={onCancel} disabled={saving} sx={DEVICE_DIALOG_BUTTON_SX}>Cancel</Button>
+        <Button onClick={onApply} disabled={!normalizedDraftBranch || loading || saving} sx={DEVICE_DIALOG_BUTTON_SX}>
+          Apply
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 const SummarySectionsNav = React.memo(function SummarySectionsNav({ onSelectSection }) {
   const [activeSectionKey, setActiveSectionKey] = useState(SUMMARY_SECTIONS[0]?.key || "top-level");
   const observerEventCountRef = useRef(0);
@@ -1040,8 +1259,11 @@ export default function DeviceSummary() {
   const [tunnelInfo, setTunnelInfo] = useState(TUNNEL_INFO_IDLE);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [releaseChannelMenuPosition, setReleaseChannelMenuPosition] = useState(null);
-  const [agentBranchMenuPosition, setAgentBranchMenuPosition] = useState(null);
   const [agentBranchDraft, setAgentBranchDraft] = useState("");
+  const [agentBranchDialogOpen, setAgentBranchDialogOpen] = useState(false);
+  const [agentBranchRows, setAgentBranchRows] = useState([]);
+  const [agentBranchesLoading, setAgentBranchesLoading] = useState(false);
+  const [agentBranchLoadError, setAgentBranchLoadError] = useState("");
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [updateAgentBusy, setUpdateAgentBusy] = useState(false);
   const [releaseChannelSaving, setReleaseChannelSaving] = useState(false);
@@ -1506,6 +1728,72 @@ export default function DeviceSummary() {
     }
   }, [activityHostname, notifyOperator, updateAgentBusy]);
 
+  const fetchAgentBranches = useCallback(async () => {
+    setAgentBranchesLoading(true);
+    setAgentBranchLoadError("");
+    try {
+      const tokenRes = await fetch("/api/github/token", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const tokenData = await tokenRes.json().catch(() => ({}));
+      if (!tokenRes.ok) {
+        const message = tokenData?.message || tokenData?.error || `GitHub token lookup failed (HTTP ${tokenRes.status}).`;
+        throw new Error(message);
+      }
+      const githubToken = String(tokenData?.token || "").trim();
+      if (!githubToken) {
+        throw new Error(tokenData?.message || "GitHub API token is unavailable.");
+      }
+
+      const nextRows = [];
+      for (let page = 1; page <= 10; page += 1) {
+        const branchRes = await fetch(`${GITHUB_BRANCHES_API_URL}?per_page=100&page=${page}`, {
+          cache: "no-store",
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${githubToken}`,
+          },
+        });
+        if (!branchRes.ok) {
+          const body = await branchRes.text().catch(() => "");
+          throw new Error(`GitHub branch lookup failed (HTTP ${branchRes.status})${body ? `: ${body.slice(0, 180)}` : ""}`);
+        }
+        const pageRows = await branchRes.json().catch(() => []);
+        if (!Array.isArray(pageRows)) {
+          throw new Error("GitHub branch lookup returned an unexpected payload.");
+        }
+        pageRows.forEach((branch) => {
+          const name = String(branch?.name || "").trim();
+          if (!name) return;
+          nextRows.push({
+            name,
+            sha: String(branch?.commit?.sha || "").trim(),
+            protected: Boolean(branch?.protected),
+            default: name === DEFAULT_AGENT_BRANCH,
+          });
+        });
+        if (pageRows.length < 100) {
+          break;
+        }
+      }
+      nextRows.sort((a, b) => {
+        if (a.name === DEFAULT_AGENT_BRANCH) return -1;
+        if (b.name === DEFAULT_AGENT_BRANCH) return 1;
+        return a.name.localeCompare(b.name);
+      });
+      setAgentBranchRows(nextRows);
+      if (!nextRows.length) {
+        setAgentBranchLoadError("No GitHub branches returned.");
+      }
+    } catch (error) {
+      setAgentBranchRows([]);
+      setAgentBranchLoadError(error instanceof Error ? error.message : "GitHub branch lookup failed.");
+    } finally {
+      setAgentBranchesLoading(false);
+    }
+  }, []);
+
   const openReleaseChannelMenu = useCallback(
     (event) => {
       if (!isAdmin || releaseChannelSaving) return;
@@ -1532,34 +1820,26 @@ export default function DeviceSummary() {
     setReleaseChannelMenuPosition(null);
   }, []);
 
-  const openAgentBranchMenu = useCallback(
+  const openAgentBranchDialog = useCallback(
     (event) => {
       if (!isAdmin || agentBranchSaving) return;
       if (event?.preventDefault) event.preventDefault();
       if (event?.stopPropagation) event.stopPropagation();
       setAgentBranchDraft(
-        String(meta.agentBranch || summary.agent_branch || "main").trim() || "main"
+        normalizeAgentBranch(meta.agentBranch || summary.agent_branch || DEFAULT_AGENT_BRANCH)
       );
-      const rect = event?.currentTarget?.getBoundingClientRect?.();
-      if (rect) {
-        setAgentBranchMenuPosition({
-          top: Math.round(rect.bottom + 4),
-          left: Math.round(rect.left),
-        });
-        return;
-      }
-      setAgentBranchMenuPosition(
-        typeof event?.clientX === "number" && typeof event?.clientY === "number"
-          ? { top: Math.round(event.clientY + 4), left: Math.round(event.clientX) }
-          : null
-      );
+      setAgentBranchDialogOpen(true);
+      void fetchAgentBranches();
     },
-    [agentBranchSaving, isAdmin, meta.agentBranch, summary.agent_branch]
+    [agentBranchSaving, fetchAgentBranches, isAdmin, meta.agentBranch, summary.agent_branch]
   );
 
-  const closeAgentBranchMenu = useCallback(() => {
-    setAgentBranchMenuPosition(null);
-  }, []);
+  const closeAgentBranchDialog = useCallback(() => {
+    setAgentBranchDialogOpen(false);
+    setAgentBranchDraft(
+      normalizeAgentBranch(meta.agentBranch || summary.agent_branch || DEFAULT_AGENT_BRANCH)
+    );
+  }, [meta.agentBranch, summary.agent_branch]);
 
   const applyAgentReleaseChannelOverride = useCallback(
     async (channel) => {
@@ -1630,7 +1910,7 @@ export default function DeviceSummary() {
   const applyAgentBranchOverride = useCallback(
     async () => {
       const targetGuid = meta.agentGuid || summary.agent_guid || device?.agent_guid || device?.guid || "";
-      const normalizedBranch = String(agentBranchDraft || "").trim();
+      const normalizedBranch = normalizeAgentBranch(agentBranchDraft);
       if (!isAdmin || !targetGuid || agentBranchSaving) return;
       if (!normalizedBranch) {
         await notifyOperator({
@@ -1653,7 +1933,7 @@ export default function DeviceSummary() {
         if (!resp.ok) {
           throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
         }
-        setAgentBranchMenuPosition(null);
+        setAgentBranchDialogOpen(false);
         const snapshot = await fetchDeviceSummarySnapshot({
           device,
           deviceId,
@@ -2808,7 +3088,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       const effectiveChannel =
         rawEffectiveChannel === "unstable" || rawEffectiveChannel === "branch" ? "source" : rawEffectiveChannel;
       const currentBranch =
-        String(meta.agentBranch || summary.agent_branch || "").trim() || "main";
+        String(meta.agentBranch || summary.agent_branch || "").trim() || DEFAULT_AGENT_BRANCH;
       const lastChannelUpdateValue = formatDateValue(
         meta.agentTargetPublishedAt || summary.agent_target_published_at || "",
         "unknown"
@@ -2979,7 +3259,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       if (row?.id === "agent-channel" || row?.id === "agent-branch") {
         const isBranchAction = row?.changeActionKind === "branch";
         const actionBusy = isBranchAction ? agentBranchSaving : releaseChannelSaving;
-        const actionHandler = isBranchAction ? openAgentBranchMenu : openReleaseChannelMenu;
+        const actionHandler = isBranchAction ? openAgentBranchDialog : openReleaseChannelMenu;
         return (
           <Box
             sx={{
@@ -3063,7 +3343,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         </Box>
       );
     },
-    [agentBranchSaving, openAgentBranchMenu, openReleaseChannelMenu, releaseChannelSaving]
+    [agentBranchSaving, openAgentBranchDialog, openReleaseChannelMenu, releaseChannelSaving]
   );
 
   const topLevelSplitColumnDefs = useMemo(
@@ -3378,63 +3658,18 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           Source
         </MenuItem>
       </Menu>
-      <Menu
-        anchorReference="anchorPosition"
-        anchorPosition={agentBranchMenuPosition || undefined}
-        open={Boolean(agentBranchMenuPosition)}
-        onClose={closeAgentBranchMenu}
-        transformOrigin={{ vertical: "top", horizontal: "left" }}
-        PaperProps={{
-          sx: {
-            bgcolor: "rgba(8,12,24,0.96)",
-            color: "#fff",
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            p: 1.25,
-          },
-        }}
-      >
-        <Box sx={{ width: 340, maxWidth: "calc(100vw - 48px)" }}>
-          <TextField
-            autoFocus
-            fullWidth
-            size="small"
-            label="Source Branch"
-            value={agentBranchDraft}
-            disabled={agentBranchSaving}
-            onChange={(event) => setAgentBranchDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                applyAgentBranchOverride();
-              }
-            }}
-            sx={{
-              "& .MuiInputBase-root": {
-                color: MAGIC_UI.textBright,
-              },
-              "& .MuiInputLabel-root": {
-                color: MAGIC_UI.textMuted,
-              },
-              "& .MuiOutlinedInput-notchedOutline": {
-                borderColor: MAGIC_UI.panelBorder,
-              },
-            }}
-          />
-          <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1.25 }}>
-            <Button size="small" onClick={closeAgentBranchMenu} disabled={agentBranchSaving}>
-              Cancel
-            </Button>
-            <Button
-              size="small"
-              variant="contained"
-              onClick={applyAgentBranchOverride}
-              disabled={agentBranchSaving || !String(agentBranchDraft || "").trim()}
-            >
-              Apply
-            </Button>
-          </Stack>
-        </Box>
-      </Menu>
+      <AgentBranchDialog
+        open={agentBranchDialogOpen}
+        rows={agentBranchRows}
+        loading={agentBranchesLoading}
+        error={agentBranchLoadError}
+        draftBranch={agentBranchDraft}
+        saving={agentBranchSaving}
+        onDraftBranchChange={setAgentBranchDraft}
+        onRefresh={() => void fetchAgentBranches()}
+        onCancel={closeAgentBranchDialog}
+        onApply={applyAgentBranchOverride}
+      />
       <QuickJobDialog
         open={quickJobOpen}
         onClose={() => setQuickJobOpen(false)}

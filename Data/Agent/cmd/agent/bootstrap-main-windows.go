@@ -108,6 +108,11 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 	case actionAlreadyHealthy:
 		logger.Stepf("Existing Agent Healthy; Checking For Updates.")
 		logger.Tracef("Existing Agent healthy. Running update check then exiting skipped.")
+		if err := persistExplicitBootstrapReleaseTarget(cfg, logger); err != nil {
+			logger.Errorf("Agent config update failed: %v", err)
+			writeState(cfg, "failed", 1, err.Error())
+			return 1
+		}
 		logger.Marker("__BOREALIS_ONBOARDING_ALREADY_ENROLLED__=1")
 		writeTimeline(cfg, "skipped", "Already Enrolled and Active", "Existing Borealis Agent is already enrolled and active.", 73)
 		writeState(cfg, "already_enrolled", 73, "Existing Borealis Agent is already enrolled and active.")
@@ -120,6 +125,11 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 	case actionRepairOnly:
 		logger.Stepf("Repairing Existing Agent Scheduled Task.")
 		logger.Tracef("Existing Agent repaired by starting scheduled task. Running update check then exiting skipped.")
+		if err := persistExplicitBootstrapReleaseTarget(cfg, logger); err != nil {
+			logger.Errorf("Agent config update failed: %v", err)
+			writeState(cfg, "failed", 1, err.Error())
+			return 1
+		}
 		writeTimeline(cfg, "running", "Successfully Repaired Agent", "Existing Borealis Agent task was repaired.", 0)
 		writeState(cfg, "already_enrolled", 73, "Existing Borealis Agent was repaired and is active.")
 		if err := runAgentUpdateCheck(cfg, logger); err != nil {
@@ -155,6 +165,23 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 		writeState(cfg, "failed", 1, err.Error())
 		return 1
 	}
+}
+
+func persistExplicitBootstrapReleaseTarget(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	if !cfg.CLIRepoRefExplicit && !cfg.CLIChannelExplicit {
+		return nil
+	}
+	if logger != nil {
+		logger.Tracef("Persisting explicit bootstrap release target: repo_ref=%s release_channel=%s", cfg.RepoRef, cfg.ReleaseChannel)
+		writeTimeline(cfg, "running", "Updating Agent Release Target", "Writing explicit Agent release channel and branch to config.json.", 1)
+	}
+	if err := writeExplicitGoAgentReleaseTarget(cfg, logger); err != nil {
+		return err
+	}
+	if logger != nil {
+		logger.Tracef("Explicit bootstrap release target persisted.")
+	}
+	return nil
 }
 
 func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error {

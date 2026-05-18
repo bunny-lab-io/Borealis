@@ -95,6 +95,30 @@ def _normalize_status_code(value: Any) -> str:
     return normalized if normalized in {"healthy", "recovering", "unhealthy", "pending", "unknown"} else "recovering"
 
 
+def _clean_agent_string(value: Any) -> str:
+    try:
+        return str(value or "").strip()
+    except Exception:
+        return ""
+
+
+def _normalize_agent_branch(value: Any) -> str:
+    text = _clean_agent_string(value)
+    for prefix in ("refs/heads/", "origin/"):
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+    return text
+
+
+def _normalize_agent_release_channel(value: Any) -> str:
+    text = _clean_agent_string(value).lower()
+    if text in {"source", "sources", "branch", "repo", "repository", "unstable"}:
+        return "source"
+    if text in {"stable", "release", "releases"}:
+        return "stable"
+    return text
+
+
 def _upsert_single_role_health(existing_raw: Any, role: Dict[str, Any]) -> str:
     normalized = normalize_agent_role_health(existing_raw)
     role_id = str(role.get("role_id") or "").strip()
@@ -420,6 +444,20 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         agent_build_id = payload.get("agent_build_id") or payload.get("installed_build_id") or payload.get("agent_hash")
         if isinstance(agent_build_id, str) and agent_build_id.strip():
             updates["agent_hash"] = agent_build_id.strip()
+        agent_release_channel = _normalize_agent_release_channel(
+            payload.get("agent_release_channel")
+            or payload.get("release_channel")
+        )
+        if agent_release_channel:
+            updates["agent_release_channel"] = agent_release_channel
+        agent_branch = _normalize_agent_branch(
+            payload.get("agent_branch")
+            or payload.get("branch")
+            or payload.get("repo_ref")
+            or payload.get("repo_branch")
+        )
+        if agent_branch:
+            updates["agent_branch"] = agent_branch
         incoming_update_status = payload.get("agent_update_status") if isinstance(payload.get("agent_update_status"), dict) else {}
         if incoming_update_status:
             update_channel = (
