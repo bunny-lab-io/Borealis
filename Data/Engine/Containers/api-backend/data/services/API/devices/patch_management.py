@@ -733,6 +733,7 @@ def register_patch_management(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify(payload), status
         user = _current_user(app) or {}
         site_clause, params = _site_clause_for_user(site_access, user)
+        query_params = ["%windows%", *params]
         conn = adapters.db_conn_factory()
         try:
             cur = conn.cursor()
@@ -749,11 +750,11 @@ def register_patch_management(app, adapters: "EngineServiceAdapters") -> None:
              LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
              LEFT JOIN sites AS s ON s.id = ds.site_id
              LEFT JOIN device_patch_state AS ps ON ps.device_guid = d.guid
-                 WHERE LOWER(COALESCE(d.operating_system, '')) LIKE '%windows%' {site_clause}
+                 WHERE LOWER(COALESCE(d.operating_system, '')) LIKE ? {site_clause}
               GROUP BY d.guid, d.hostname, s.name, d.operating_system, d.last_seen
               ORDER BY missing_count DESC, d.hostname ASC
                 """,
-                params,
+                query_params,
             )
             devices = [
                 {
