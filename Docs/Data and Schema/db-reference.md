@@ -44,10 +44,27 @@ watchdogs (id) ---------------< watchdog_device_overrides (watchdog_id)
 watchdogs (id) ---------------< watchdog_device_state (watchdog_id)
 watchdogs (id) ---------------< watchdog_incidents (watchdog_id)
 
+patch_policies (id) ----------< patch_policy_bindings (policy_id)
+patch_policies (id) ----------< patch_holds (policy_id, optional)
+patch_catalog (update_id, revision_number)
+                             < device_patch_state (update_id, revision_number)
+devices (guid) ---------------< device_patch_state (device_guid)
+devices (guid) ---------------< patch_action_history (device_guid)
+devices (guid) ---------------< patch_reboot_deferrals (device_guid)
+
 users (id/username) ----------< device_approvals.approved_by_user_id (soft relation)
 users (id) -------------------< user_site_assignments (user_id)
 sites (id) -------------------< user_site_assignments (site_id)
 ```
+
+## Patch Management Tables
+- `patch_policies` stores Windows patch policy definitions, class toggles, and reboot policy JSON.
+- `patch_policy_bindings` assigns one policy to global, site, or device scope. Effective policy is selected by device, then site, then global; rows are not merged.
+- `patch_catalog` stores fleet-wide WUA update metadata by `update_id` and `revision_number`.
+- `device_patch_state` stores per-device status, approval/hold flags, result code, HRESULT, reboot-required state, policy ID/version, and raw metadata.
+- `patch_holds` stores global and policy-scoped holds plus release metadata.
+- `patch_action_history` stores operator dispatches and agent-reported scan/install actions.
+- `patch_reboot_deferrals` stores reboot deferral deadlines for patch reboot UX.
 
 ## Important PostgreSQL Behavior
 - Borealis uses PostgreSQL as the live Engine database, so engine troubleshooting should focus on server-side constraints, indexes, sequences, and transaction boundaries.
@@ -1000,6 +1017,7 @@ ORDER BY xact_start NULLS LAST;
 - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
 - [Security and Trust](../Start%20Here/security-and-trust.md)
 - [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
+- [Patch Management](../Patch-Management.md)
 - [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
 - [Assemblies and Quick Jobs](../Automation%20and%20Execution/assemblies.md)
 - [Security and Trust](../Start%20Here/security-and-trust.md)

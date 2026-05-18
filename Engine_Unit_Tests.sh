@@ -220,6 +220,7 @@ engine_python_files_for_domain() {
         "${test_root}/test_device_filters_api.py" \
         "${test_root}/test_device_purge_api.py" \
         "${test_root}/test_devices_api.py" \
+        "${test_root}/test_patch_management_api.py" \
         "${test_root}/test_session_inventory.py"
       ;;
     enrollment)

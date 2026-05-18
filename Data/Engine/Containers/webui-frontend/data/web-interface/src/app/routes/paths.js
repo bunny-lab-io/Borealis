@@ -12,6 +12,7 @@ export const APP_PATHS = {
   sites: "/sites",
   devices: "/devices",
   software: "/software",
+  patchManagement: "/patch-management",
   deviceApprovals: "/devices/approvals",
   agentDevices: "/devices/agents",
   sshDevices: "/devices/ssh",

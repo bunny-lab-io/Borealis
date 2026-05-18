@@ -185,6 +185,16 @@ export function buildAppRoutes() {
               lazy: lazyNamed(() => import("../route-modules/softwareRoutes.jsx"), "SoftwareListRoute"),
             },
             {
+              path: "patch-management",
+              handle: {
+                title: "Patch Management",
+                breadcrumb: "Patch Management",
+                navKey: "patch-management",
+                pageKey: "patch-management",
+              },
+              lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchManagementRoute"),
+            },
+            {
               path: "filters",
               element: <RootShell />,
               handle: {

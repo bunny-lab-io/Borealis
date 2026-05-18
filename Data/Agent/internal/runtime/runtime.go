@@ -15,6 +15,7 @@ import (
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/current_user"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/device_audit"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/file_management"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/patch_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/process_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/remote_shell"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/service_management"
@@ -48,6 +49,7 @@ type Agent struct {
 	dispatcher  *currentuser.Dispatcher
 	auditor     *deviceaudit.Auditor
 	files       *filemanagement.Manager
+	patches     *patchmanagement.Manager
 	processes   *processmanagement.Manager
 	remoteShell *remoteshell.Manager
 	services    *servicemanagement.Manager
@@ -98,6 +100,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	dispatcher := currentuser.NewDispatcher()
 	auditor := deviceaudit.NewAuditor()
 	fileManager := filemanagement.New(authClient, hostname)
+	patchManager := patchmanagement.New(authClient, hostname, options.ServiceMode)
 	processManager := processmanagement.New(hostname)
 	remoteShellManager := remoteshell.New(hostname, options.ServiceMode, configPath)
 	serviceManager := servicemanagement.New(authClient, hostname, options.ServiceMode)
@@ -115,6 +118,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		dispatcher:  dispatcher,
 		auditor:     auditor,
 		files:       fileManager,
+		patches:     patchManager,
 		processes:   processManager,
 		remoteShell: remoteShellManager,
 		services:    serviceManager,
@@ -150,6 +154,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	if a.software != nil {
 		a.software.Start(ctx)
+	}
+	if a.patches != nil {
+		a.patches.Start(ctx)
 	}
 	if a.wireguard != nil {
 		a.wireguard.Start(ctx)
@@ -233,6 +240,9 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	if a.processes != nil {
 		socket.On("process_management_request", a.processes.HandleRequest)
 	}
+	if a.patches != nil {
+		socket.On("patch_management_request", a.patches.HandleRequest)
+	}
 	if a.services != nil {
 		socket.On("service_control_action", a.services.HandleControlAction)
 	}
@@ -262,6 +272,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 				"system_scripts":      true,
 				"file_management":     true,
 				"process_management":  true,
+				"patch_management":    true,
 				"remote_shell":        true,
 				"service_management":  true,
 				"software_management": true,
@@ -370,6 +381,18 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	}
 	if a.processes != nil {
 		processHealth = a.processes.Health()
+	}
+	patchHealth := patchmanagement.RoleHealth{
+		Status:     "unsupported",
+		StatusCode: "unsupported",
+		Detail:     "Patch Management role is unavailable.",
+		Details: map[string]any{
+			"running_status": "Unavailable",
+			"runtime":        "go",
+		},
+	}
+	if a.patches != nil {
+		patchHealth = a.patches.Health()
 	}
 	remoteShellHealth := remoteshell.RoleHealth{
 		Status:     "unsupported",
@@ -506,6 +529,17 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 					"detail":          processHealth.Detail,
 					"last_checked_at": time.Now().Unix(),
 					"details":         processHealth.Details,
+				},
+				{
+					"role_id":         "system:patch_management",
+					"role_name":       "patch_management",
+					"role_label":      "Windows Patch Management",
+					"context":         "system",
+					"status":          patchHealth.Status,
+					"status_code":     patchHealth.StatusCode,
+					"detail":          patchHealth.Detail,
+					"last_checked_at": time.Now().Unix(),
+					"details":         patchHealth.Details,
 				},
 				{
 					"role_id":         "system:remote_shell",

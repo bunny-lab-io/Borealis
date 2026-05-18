@@ -30,6 +30,7 @@ import SpeedRoundedIcon from "@mui/icons-material/SpeedRounded";
 import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
 import FolderRoundedIcon from "@mui/icons-material/FolderRounded";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
+import SystemUpdateAltRoundedIcon from "@mui/icons-material/SystemUpdateAltRounded";
 import { ClearDeviceActivityDialog } from "../../Dialogs.jsx";
 import { AgGridReact } from "ag-grid-react";
 import ActivityHistoryTab from "./Activity_History.jsx";
@@ -38,6 +39,7 @@ import DeviceWatchdogsTab from "./Device_Watchdogs.jsx";
 import RemoteShellTab from "./Remote_Shell.jsx";
 import RemoteFileManagementTab from "./Remote_File_Management.jsx";
 import ProcessManagementTab from "./Process_Management.jsx";
+import DevicePatchManagementTab from "./Patch_Management.jsx";
 import AgentHealthTab from "./Agent_Health.jsx";
 import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
 import ServiceList from "./Service_List.jsx";
@@ -152,6 +154,7 @@ const TOP_TABS = [
   { key: "software", label: "Installed Software", icon: AppsRoundedIcon },
   { key: "services", label: "Services", icon: SettingsRoundedIcon },
   { key: "process_management", label: "Processes", icon: AccountTreeRoundedIcon },
+  { key: "patch_management", label: "Patch Management", icon: SystemUpdateAltRoundedIcon },
   { key: "watchdogs", label: "Watchdogs", icon: PolicyIcon },
   { key: "activity", label: "Activity History", icon: ListAltRoundedIcon },
   { key: "shell", label: "Remote Shell", icon: TerminalRoundedIcon },
@@ -163,6 +166,7 @@ const DEVICE_DETAILS_TAB_URL_BY_KEY = Object.freeze({
   software: "installed_software",
   services: "services",
   process_management: "process_management",
+  patch_management: "patch_management",
   watchdogs: "watchdogs",
   activity: "activity_history",
   shell: "remote_shell",
@@ -177,6 +181,8 @@ const DEVICE_DETAILS_TAB_KEY_BY_URL = Object.freeze({
   services: "services",
   process_management: "process_management",
   processes: "process_management",
+  patch_management: "patch_management",
+  patches: "patch_management",
   watchdogs: "watchdogs",
   activity_history: "activity",
   activity: "activity",
@@ -2460,6 +2466,19 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     </Box>
   );
 
+  const renderPatchManagementTab = () => (
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        flexGrow: 1,
+        minHeight: 0,
+      }}
+    >
+      <DevicePatchManagementTab device={tunnelDevice} />
+    </Box>
+  );
+
   const renderRemoteShellTab = () => (
     <Box
       sx={{
@@ -3217,6 +3236,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     software: renderSoftware,
     services: renderServicesTab,
     process_management: renderProcessManagementTab,
+    patch_management: renderPatchManagementTab,
     watchdogs: renderWatchdogsTab,
     activity: renderHistory,
     shell: renderRemoteShellTab,

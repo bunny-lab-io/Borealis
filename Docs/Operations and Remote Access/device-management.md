@@ -71,6 +71,13 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - The WebUI polls the live process endpoint according to the selected refresh rate while the tab is open. The agent-side `process_management` role keeps a short active polling window and cached snapshots so multiple UI refreshes reuse recent process data instead of forcing duplicate process walks.
 - Right-click row actions use the Borealis context-menu model and currently include `Copy Location to Clipboard`, `Copy Command to Clipboard`, and `End Task`.
 
+## Device Patch Management
+- Device Summary exposes a `Patch Management` tab for Windows devices.
+- The tab shows effective policy, policy precedence reason, missing/failed/installed update state, pending reboot state, last scan, and manual scan/install/reboot controls.
+- Manual scan and install actions dispatch `patch_management_request` to the SYSTEM Go Agent and still honor effective policy toggles plus active holds.
+- Patch inventory and install results come from WUA through the Agent role, then persist into fleet Catalog and per-device state tables.
+- Pending reboot is reported from WUA install results plus local Windows pending-reboot indicators.
+
 ## Device List Views
 - Operators can save custom table views for the device list UI.
 - Views are stored per operator and exposed via `/api/device_list_views`.
@@ -115,6 +122,8 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service.
 - `GET /api/device/processes/<hostname>?max_age_seconds=<seconds>` (Token Authenticated) - return a live process snapshot for an in-scope device, optionally forcing a fresher agent snapshot for live polling.
 - `POST /api/device/processes/<hostname>/terminate` (Token Authenticated) - request process termination on an in-scope device.
+- `GET /api/device/patches/<hostname>` (Token Authenticated) - return effective patch policy and per-device Windows update state.
+- `POST /api/device/patches/<hostname>/action` (Token Authenticated) - dispatch scan, install, policy refresh, reboot, or deferral action for an in-scope device.
 - `POST /api/device/software/<hostname>/refresh` (Token Authenticated) - request an immediate software inventory refresh on the device.
 - `POST /api/device/software/<hostname>/icon-override` (Token Authenticated) - create or replace a hotloaded global icon override for a software row.
 - `POST /api/device/software/<hostname>/uninstall-override` (Token Authenticated) - create or replace a hotloaded global uninstall override for a software row.
@@ -185,6 +194,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - [Device Alerts](device-alerts.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
 - [API Reference](../Data%20and%20Schema/api-reference.md)
+- [Patch Management](../Patch-Management.md)
 - [Software Icon Overrides](../Software%20Management/adding-software-to-icon-overrides.md)
 - [Software Uninstall Overrides](../Software%20Management/adding-software-to-uninstall-overrides.md)
 - [Software Uninstall Blocklist](../Software%20Management/adding-software-to-uninstall-blocklist.md)
@@ -192,6 +202,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 ## Codex Agent (Detailed)
 ### Key files and services
 - Device APIs: `Data/Engine/Containers/api-backend/data/services/API/devices/` (management, approval, services, tunnel, vnc, routes).
+- Patch APIs: `Data/Engine/Containers/api-backend/data/services/API/devices/patch_management.py`.
 - Filters: `Data/Engine/Containers/api-backend/data/services/filters/matcher.py` and `Data/Engine/Containers/api-backend/data/services/API/filters/management.py`.
 - Enrollment approvals: `Data/Engine/Containers/api-backend/data/services/API/devices/approval.py`.
 
@@ -208,6 +219,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Service inventory is cached in the `devices.services` JSON blob and merged with pending operator actions until a fresh agent snapshot confirms the desired state.
 - Process Management uses the device SYSTEM Socket.IO channel with ACK responses under `process_management_request` for live process snapshots and process termination. It does not replace the slower cached `devices.processes` watchdog inventory, which remains name/count oriented.
 - Manual agent update requests from the Device Summary action menu call `POST /api/device/update-agent/<hostname>` and are delivered over the device's SYSTEM Socket.IO channel as `agent_update_request`.
+- Manual patch requests from Device Summary call `POST /api/device/patches/<hostname>/action` and are delivered over the device's SYSTEM Socket.IO channel as `patch_management_request`.
 - The agent starts the local AutoUpdater scheduler path for that request. Windows uses the `Borealis Agent (AutoUpdater)` scheduled task; Linux uses `borealis-agent-updater.service` plus the hourly `borealis-agent-updater.timer`. Both paths consume the Engine cached Go binary bundle.
 - Device Summary admins can change an agent's release channel and source branch. The WebUI calls `PUT /api/devices/<guid>/agent-release-channel`; the Engine stores `agent_release_channel` and `agent_branch` on the device row and emits `agent_release_channel_changed` to the online SYSTEM agent so the next update uses that target.
 - File Management browse and mutation requests use the device SYSTEM Socket.IO channel with Socket.IO ACK responses under the `file_management_request` event instead of piggybacking on quick-job stdout/stderr.

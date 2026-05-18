@@ -38,6 +38,7 @@ This page is the navigation hub for the Borealis documentation set. The knowledg
 - [Logging and Operations](Operations%20and%20Remote%20Access/logging-and-operations.md)
 
 ### Software Management
+- [Patch Management](Patch-Management.md)
 - [Software Icon Overrides](Software%20Management/adding-software-to-icon-overrides.md)
 - [Software Uninstall Blocklist](Software%20Management/adding-software-to-uninstall-blocklist.md)
 - [Software Uninstall Overrides](Software%20Management/adding-software-to-uninstall-overrides.md)
@@ -77,6 +78,7 @@ None. This index only links to other pages.
 - Use `Docs/Data and Schema/db-reference.md` for PostgreSQL table ownership, relationships, and DB lifecycle guardrails.
 - Use `Docs/Automation and Execution/assemblies.md`, `Docs/Automation and Execution/flow-editor-and-nodes.md`, `Docs/Automation and Execution/scheduled-jobs.md`, `Docs/Automation and Execution/SSH_Connection_Logic.md`, and `Docs/Automation and Execution/watchdogs.md` for automation authoring and execution behavior.
 - Use `Docs/Operations and Remote Access/device-management.md`, `Docs/Operations and Remote Access/device-alerts.md`, `Docs/Operations and Remote Access/logging-and-operations.md`, and `Docs/Operations and Remote Access/vpn-and-remote-access.md` for operational workflows, incident handling, and remote access behavior.
+- Use `Docs/Patch-Management.md` for Windows Update Agent orchestration, patch policy precedence, patch holds, Catalog UI behavior, and one-`Agent.exe` patch-management constraints.
 - Use `Docs/Start Here/ui-and-notifications.md` for MagicUI, AG Grid, toast notification, and shared UI rules.
 - Use `Docs/Migration Paths/migrating-pages-to-react-router.md` when moving legacy WebUI pages onto the shared router and app shell.
 - Use `Docs/Data and Schema/api-reference.md` and `Docs/Data and Schema/integrations.md` for API surfaces and external service behavior.

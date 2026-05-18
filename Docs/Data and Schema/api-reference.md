@@ -59,6 +59,8 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/agent/details` (Device Authenticated) - full hardware, inventory, and cached service payload.
 - `POST /api/agent/script/request` (Device Authenticated) - request work or idle signal.
 - `GET /api/agent/software-management/overrides` (Device Authenticated) - file-backed software icon override rules used by the agent `software_management` role during inventory refresh.
+- `POST /api/agent/patch-management/policy` (Device Authenticated) - return effective Windows patch policy, active holds, and policy precedence reason for the authenticated device.
+- `POST /api/agent/patch-management/report` (Device Authenticated) - ingest Windows patch scan/install results into Catalog, per-device patch state, and action history.
 - `GET /api/agent/files/transfers/<transfer_id>/upload-item/<item_id>` (Device Authenticated) - fetch one staged File Management upload item from the Engine.
 - `GET /api/agent/files/transfers/<transfer_id>/status` (Device Authenticated) - fetch one File Management transfer control snapshot so the agent can honor cancellation while streaming or archiving.
 - `POST /api/agent/files/transfers/<transfer_id>/progress` (Device Authenticated) - update Engine-side File Management transfer progress.
@@ -76,6 +78,15 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service on an in-scope device.
 - `GET /api/device/processes/<hostname>?max_age_seconds=<seconds>` (Token Authenticated) - return a live process snapshot for an in-scope device, optionally forcing a fresher agent snapshot for live polling.
 - `POST /api/device/processes/<hostname>/terminate` (Token Authenticated) - request process termination on an in-scope device.
+- `GET /api/patch-management/catalog` (Token Authenticated) - list RBAC-scoped Windows patch Catalog rows with fleet counts and hold state.
+- `GET /api/patch-management/policies` (Token Authenticated) - list Windows patch policies and bindings.
+- `POST /api/patch-management/policies` (Token Authenticated) - create a Windows patch policy and optional binding.
+- `POST /api/patch-management/catalog/hold` (Token Authenticated) - add global or policy-scoped hold for an update or KB.
+- `POST /api/patch-management/catalog/release` (Token Authenticated) - release matching active holds.
+- `GET /api/patch-management/devices` (Token Authenticated) - list RBAC-scoped Windows device patch compliance rows.
+- `GET /api/patch-management/history` (Token Authenticated) - list recent patch action history.
+- `GET /api/device/patches/<hostname>` (Token Authenticated) - return effective policy and patch state for one in-scope device.
+- `POST /api/device/patches/<hostname>/action` (Token Authenticated) - dispatch scan, install, policy refresh, reboot, or deferral action to an in-scope device.
 - `POST /api/device/software/<hostname>/refresh` (Token Authenticated) - request an immediate software inventory refresh over the device SYSTEM socket.
 - `POST /api/device/software/<hostname>/icon-override` (Token Authenticated) - persist a hotloaded global software icon override for the selected software row and request a software refresh.
 - `POST /api/device/software/<hostname>/uninstall-override` (Token Authenticated) - persist a hotloaded global software uninstall override for the selected software row.
@@ -228,6 +239,7 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
 - [Database Reference](db-reference.md)
 - [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
+- [Patch Management](../Patch-Management.md)
 - [Watchdogs](../Automation%20and%20Execution/watchdogs.md)
 - [Device Alerts](../Operations%20and%20Remote%20Access/device-alerts.md)
 - [Assemblies and Quick Jobs](../Automation%20and%20Execution/assemblies.md)

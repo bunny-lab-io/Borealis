@@ -55,6 +55,7 @@ def initialise_engine_database(database_url: str, *, logger: Optional[logging.Lo
         _ensure_device_filters(conn, logger=logger)
         _ensure_device_filter_sites(conn, logger=logger)
         _ensure_device_software_inventory(conn, logger=logger)
+        _ensure_patch_management(conn, logger=logger)
         _ensure_scheduled_jobs(conn, logger=logger)
         _ensure_scheduled_job_support_tables(conn, logger=logger)
         ensure_job_scheduler_tables(conn)
@@ -891,6 +892,215 @@ def _ensure_device_software_inventory(conn: sqlite3.Connection, *, logger: Optio
     except Exception as exc:
         if logger:
             logger.error("Failed to ensure device_software_inventory table: %s", exc, exc_info=True)
+        else:
+            raise
+    finally:
+        cur.close()
+
+
+def _ensure_patch_management(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
+    cur = conn.cursor()
+    now = int(time.time())
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patch_policies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                class_toggles_json TEXT NOT NULL,
+                reboot_policy_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patch_policy_bindings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                policy_id INTEGER NOT NULL,
+                scope_type TEXT NOT NULL,
+                site_id INTEGER,
+                device_guid TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                FOREIGN KEY(policy_id) REFERENCES patch_policies(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_patch_policy_bindings_scope
+                ON patch_policy_bindings(scope_type, site_id, device_guid)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patch_catalog (
+                update_id TEXT NOT NULL,
+                revision_number INTEGER NOT NULL DEFAULT 0,
+                title TEXT NOT NULL,
+                kb_articles_json TEXT NOT NULL,
+                classifications_json TEXT NOT NULL,
+                categories_json TEXT NOT NULL,
+                msrc_severity TEXT,
+                update_type TEXT,
+                size_bytes INTEGER NOT NULL DEFAULT 0,
+                support_url TEXT,
+                first_seen_at INTEGER NOT NULL,
+                last_seen_at INTEGER NOT NULL,
+                PRIMARY KEY(update_id, revision_number)
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_patch_catalog_last_seen
+                ON patch_catalog(last_seen_at)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_patch_state (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_guid TEXT NOT NULL,
+                hostname TEXT NOT NULL,
+                update_id TEXT NOT NULL,
+                revision_number INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                approved INTEGER NOT NULL DEFAULT 0,
+                held INTEGER NOT NULL DEFAULT 0,
+                hold_reason TEXT,
+                installed INTEGER NOT NULL DEFAULT 0,
+                downloaded INTEGER NOT NULL DEFAULT 0,
+                hidden INTEGER NOT NULL DEFAULT 0,
+                reboot_required INTEGER NOT NULL DEFAULT 0,
+                result_code TEXT,
+                hresult TEXT,
+                policy_id TEXT,
+                policy_version TEXT,
+                last_seen_at INTEGER NOT NULL,
+                installed_at INTEGER,
+                metadata_json TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_device_patch_state_unique
+                ON device_patch_state(device_guid, update_id, revision_number)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_device_patch_state_update
+                ON device_patch_state(update_id, revision_number)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_device_patch_state_host
+                ON device_patch_state(hostname)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patch_holds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope TEXT NOT NULL,
+                policy_id INTEGER,
+                update_id TEXT,
+                revision_number INTEGER,
+                kb TEXT,
+                title TEXT,
+                reason TEXT,
+                created_by TEXT,
+                created_at INTEGER NOT NULL,
+                released_at INTEGER,
+                released_by TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_patch_holds_active
+                ON patch_holds(scope, policy_id, update_id, kb, released_at)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patch_action_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_guid TEXT,
+                hostname TEXT,
+                action TEXT NOT NULL,
+                status TEXT NOT NULL,
+                requested_by TEXT,
+                requested_at INTEGER NOT NULL,
+                started_at INTEGER,
+                finished_at INTEGER,
+                detail TEXT,
+                metadata_json TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_patch_action_history_host
+                ON patch_action_history(hostname, requested_at)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patch_reboot_deferrals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_guid TEXT NOT NULL,
+                hostname TEXT NOT NULL,
+                defer_until INTEGER,
+                deadline_ts INTEGER,
+                requested_by TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_patch_reboot_deferrals_device
+                ON patch_reboot_deferrals(device_guid, updated_at)
+            """
+        )
+        cur.execute("SELECT id FROM patch_policies ORDER BY id LIMIT 1")
+        if cur.fetchone() is None:
+            class_toggles = (
+                '{"security":true,"critical":true,"cumulative":true,"definition":true,'
+                '"driver":true,"feature":true,"optional":true,"service_pack":true,'
+                '"update_rollup":true,"updates":true}'
+            )
+            reboot_policy = (
+                '{"mode":"maintenance_window","maintenance_window_start":"22:00",'
+                '"maintenance_window_end":"05:00","deferral_deadline_hours":72,"user_prompt":true}'
+            )
+            cur.execute(
+                """
+                INSERT INTO patch_policies(name, description, enabled, class_toggles_json, reboot_policy_json, created_at, updated_at)
+                VALUES (?, ?, 1, ?, ?, ?, ?)
+                """,
+                ("Global Default", "Default Borealis Windows patch policy.", class_toggles, reboot_policy, now, now),
+            )
+            policy_id = int(cur.lastrowid)
+            cur.execute(
+                """
+                INSERT INTO patch_policy_bindings(policy_id, scope_type, site_id, device_guid, created_at, updated_at)
+                VALUES (?, 'global', NULL, NULL, ?, ?)
+                """,
+                (policy_id, now, now),
+            )
+    except Exception as exc:
+        if logger:
+            logger.error("Failed to ensure patch management tables: %s", exc, exc_info=True)
         else:
             raise
     finally:

@@ -19,6 +19,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `internal/roles/process_management` - SYSTEM/root live process snapshots, parent/child metadata, cache reuse, and operator-triggered process termination for the Device Summary `Processes` tab.
 - `internal/roles/service_management` - SYSTEM/root service inventory publishing plus operator-triggered start, stop, and restart through `service_control_action`.
 - `internal/roles/software_management` - SYSTEM/root Windows installed-app inventory with cached icon payloads, Linux dpkg/rpm inventory, refresh requests, and post-uninstall inventory refresh through the SYSTEM quick-job lane.
+- `internal/roles/patch_management` - SYSTEM Windows Update Agent scan, policy fetch, download/install, per-update failure reporting, pending-reboot detection, and operator patch/reboot requests through the same compiled `Agent.exe`. Non-Windows reports unsupported.
 - `internal/roles/wireguard_tunnel` - SYSTEM/root persistent WireGuard reverse tunnel lifecycle, Engine `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, Windows tunnel-service apply, Linux `wg-quick` apply, and `/api/agent/vpn/ready` reporting.
 - `internal/roles/remote_shell` - SYSTEM/root WireGuard-scoped TCP shell listener for Engine `vpn_shell_*` bridge traffic, using PowerShell on Windows and Bash/sh on Linux.
 - `internal/roles/vnc` - Windows UltraVNC always-on lifecycle, runtime credential broker, Engine `/api/agent/vnc/ensure` bootstrap, Socket.IO credential/start events, firewall scope, and listener readiness reporting. Linux VNC reports unsupported.
@@ -48,10 +49,13 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `GET /api/agent/files/transfers/<transfer_id>/status` (Device Authenticated) - fetch one File Management transfer control snapshot so the agent can honor cancel requests mid-transfer.
 - `POST /api/agent/files/transfers/<transfer_id>/progress` (Device Authenticated) - update Engine-side File Management transfer progress.
 - `POST /api/agent/files/transfers/<transfer_id>/content` (Device Authenticated) - upload a completed File Management download artifact back to the Engine.
+- `POST /api/agent/patch-management/policy` (Device Authenticated) - fetch effective Windows patch policy, policy precedence reason, and active holds.
+- `POST /api/agent/patch-management/report` (Device Authenticated) - upload Windows patch scan/install state and action results.
 
 ## Related Documentation
 - [Security and Trust](../Start%20Here/security-and-trust.md)
 - [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
+- [Patch Management](../Patch-Management.md)
 - [VPN and Remote Access](../Operations%20and%20Remote%20Access/vpn-and-remote-access.md)
 
 ## Codex Agent (Detailed)
@@ -84,6 +88,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
   - `process_management_request` live process snapshots and process termination for the Device Summary `Processes` tab.
   - `service_control_action` start, stop, and restart requests for services discovered by the Service Management role.
   - `software_inventory_refresh_request` operator-triggered software inventory refresh after icon/override or software action changes.
+  - `patch_management_request` scan, install, policy refresh, and reboot actions for the Windows Patch Management role.
   - `vpn_tunnel_start` (WireGuard lifecycle; tunnels are persistent and ignore stop events).
   - `vnc_start`, `vnc_stop`, `vnc_refresh`, and `vnc_credential_request` for Windows UltraVNC lifecycle and runtime password delivery.
   - `agent_update_request` to start the local platform updater path.
@@ -95,6 +100,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - The ensure loop re-establishes the tunnel automatically after network hiccups.
 - Go startup posts full timeline milestones before entering the Socket.IO connect loop and keeps heartbeat/status telemetry on the SYSTEM/root runtime.
 - Heartbeats/details also carry per-role health snapshots so the Device Details `Agent Health` tab can show current role/service status with last-checked timestamps. Startup status uses `POST /api/agent/status` under the separate `startup` context so later SYSTEM role-health heartbeats do not erase the timeline row.
+- Windows patch management role health appears as `system:patch_management` and reports last scan, missing count, failed count, pending reboot, last HRESULT/error, and policy version. WUA scan/install/reporting stays inside the compiled Agent binary.
 - The VNC role generates one shared UltraVNC password when the role starts, rotates it again every 24 hours by default (`BOREALIS_VNC_CREDENTIAL_ROTATION_SECONDS`), keeps it in memory only, and returns it to the Engine only through live Agent Socket.IO `vnc_credential_request` calls. The Agent does not probe UltraVNC auth locally by default because each loopback auth probe consumes an UltraVNC login attempt and can trip lockout before Guacamole connects. Set `BOREALIS_VNC_LOCAL_AUTH_VERIFY=1` only for focused diagnostics. The role keeps UltraVNC continuously running once it has the Engine /32 firewall scope, writes UltraVNC config under `%ProgramData%\UltraVNC\` with loopback allowed for local diagnostics, and reports `ready`, `service_state`, `listener_state`, `last_ready_at`, Windows `display_topology`, and Windows `display_virtual_bounds` through VNC ensure, credential, and role-health payloads even when no operator is currently connected.
 - VNC role trace logs (`vnc_trace ...`) are disabled by default because the always-on health loop can otherwise produce high-volume logs during normal operation. Set `BOREALIS_VNC_TRACE=1` only for short diagnostic captures.
 - The UltraVNC config writer enables capture performance flags (`TurboMode`, full-screen polling defaults, `EnableDriver`, and `EnableHook`) when the official UltraVNC helper DLLs are present beside `winvnc.exe`.
@@ -179,6 +185,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 #### Execution contexts and roles
 - Go roles are explicit packages under `Data/Agent/internal/roles`.
 - First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER helper session health plus direct session PowerShell/Batch execution, core device audit inventory, SYSTEM/root file management, SYSTEM/root process management, SYSTEM/root service management, SYSTEM/root software management, SYSTEM/root WireGuard tunnel lifecycle, SYSTEM/root Remote Shell over WireGuard, Windows VNC lifecycle/credential brokerage over WireGuard, and Go release-channel self-update.
+- Windows patch management is a SYSTEM-only role in the same Go Agent binary. It uses WUA COM directly and does not stage PowerShell modules, sidecar updaters, or separate patch services.
 - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`.
 - SYSTEM tasks depend on scheduled-task creation rights; failures should surface through Engine logging.
 

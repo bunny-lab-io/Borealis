@@ -17,6 +17,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - Navigation: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Navigation_Sidebar.jsx`.
 - Watchdog authoring: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Automation/Watchdogs/`.
 - Alerts queue: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Alerting/Active_Alerts.jsx`.
+- Patch Management: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patch_Management/Patch_Management.jsx`.
 - Page style template reference: `Data/Engine/Containers/webui-frontend/data/web-interface/src/DevTools/Page_Style_Template.jsx` (layout only).
 
 ## Operator Bootstrap Gate
@@ -88,6 +89,14 @@ Treat this document as the single source of truth for Borealis WebUI design rule
   - duplicate upload conflicts should use an explorer-style `Replace or Skip Files` decision dialog rather than a generic confirmation modal
 - Real-time refresh uses `watchdog_incidents_changed` and `device_watchdogs_changed` on the shared `window.BorealisSocket`.
 
+## Patch Management UX
+- Sidebar placement: Alerting & Reporting > Patch Management.
+- Route: `/patch-management`.
+- Page tabs: Patch Catalog, Device Compliance, Policies, Run History.
+- Patch Catalog is the primary operator view and uses AG Grid rows keyed by WUA update ID/revision with KBs, class, affected device count, installed/missing/failed/pending-reboot counts, hold state, and last-seen age.
+- Device Summary includes a `Patch Management` tab for per-device effective policy, patch rows, pending reboot state, and manual scan/install/reboot actions.
+- Patch pages listen for `patch_management_changed` on `window.BorealisSocket` so Catalog, compliance, and device state refresh after reports, holds, and dispatches.
+
 ## API Endpoints
 - `POST /api/notifications/notify` (Token Authenticated) - broadcast a toast to all connected operators.
 - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - shared header device search, scoped to the current operator's visible sites unless the operator is an admin.
@@ -113,6 +122,11 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - `GET /api/device/processes/<hostname>?max_age_seconds=<seconds>` (Token Authenticated) - hydrate the Device Summary `Processes` tab with a live process snapshot.
 - `POST /api/device/processes/<hostname>/terminate` (Token Authenticated) - end one process from the Device Summary `Processes` context menu.
 - `POST /api/agent/status` (Device Authenticated) - agent startup status source for the Device Summary Agent Health timeline.
+- `GET /api/patch-management/catalog` (Token Authenticated) - hydrate Patch Catalog.
+- `GET /api/patch-management/devices` (Token Authenticated) - hydrate Device Compliance.
+- `GET /api/patch-management/policies` (Token Authenticated) - hydrate policy editor/list.
+- `GET /api/patch-management/history` (Token Authenticated) - hydrate Run History.
+- `GET /api/device/patches/<hostname>` (Token Authenticated) - hydrate Device Summary Patch Management tab.
 
 ## Related Documentation
 - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
@@ -124,6 +138,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - [Migrating Pages to React Router](../Migration%20Paths/migrating-pages-to-react-router.md)
 - [Watchdogs](../Automation%20and%20Execution/watchdogs.md)
 - [Device Alerts](../Operations%20and%20Remote%20Access/device-alerts.md)
+- [Patch Management](../Patch-Management.md)
 - [Software Icon Overrides](../Software%20Management/adding-software-to-icon-overrides.md)
 - [Software Uninstall Overrides](../Software%20Management/adding-software-to-uninstall-overrides.md)
 - [Software Uninstall Blocklist](../Software%20Management/adding-software-to-uninstall-blocklist.md)

@@ -339,6 +339,7 @@ def _register_devices(app: Flask, adapters: EngineServiceAdapters) -> None:
     from .devices.approval import register_admin_endpoints
     from .devices.file_management import register_file_management
     from .devices.management import register_management
+    from .devices.patch_management import register_patch_management
     from .devices.processes import register_processes
     from .devices.services import register_services
     from .devices.shell import register_shell
@@ -352,6 +353,7 @@ def _register_devices(app: Flask, adapters: EngineServiceAdapters) -> None:
     register_vnc(app, adapters)
     register_shell(app, adapters)
     register_services(app, adapters)
+    register_patch_management(app, adapters)
     register_file_management(app, adapters)
     register_processes(app, adapters)
 

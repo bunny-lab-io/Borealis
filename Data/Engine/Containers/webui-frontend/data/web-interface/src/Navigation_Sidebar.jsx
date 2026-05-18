@@ -20,6 +20,7 @@ import {
   ChevronRight as ChevronRightIcon,
   Devices as DevicesIcon,
   Inventory2Rounded as SoftwareIcon,
+  SystemUpdateAltRounded as PatchIcon,
   FilterAlt as FilterIcon,
   Schedule as ScheduleIcon,
   Apps as AssembliesIcon,
@@ -58,6 +59,7 @@ const SITE_SCOPED_NAV_KEYS = new Set([
   "watchdogs",
   "jobs",
   "software",
+  "patch-management",
 ]);
 
 function buildSiteScopedPath(path, siteId, extraParams = {}) {
@@ -168,6 +170,12 @@ const BASE_NAV_SECTIONS = Object.freeze([
         label: "Software Audit",
         navKey: "software",
         to: APP_PATHS.software,
+      },
+      {
+        icon: PatchIcon,
+        label: "Patch Management",
+        navKey: "patch-management",
+        to: APP_PATHS.patchManagement,
       },
     ],
   },

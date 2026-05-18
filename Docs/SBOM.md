@@ -8,6 +8,7 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 
 - Go standard library/runtime (compiled into `Agent.exe`) - BSD-3-Clause - https://go.dev/LICENSE
 - github.com/gorilla/websocket v1.5.3 - BSD-2-Clause - https://github.com/gorilla/websocket/blob/main/LICENSE
+- github.com/go-ole/go-ole v1.3.0 - MIT - https://github.com/go-ole/go-ole/blob/master/LICENSE
 - golang.org/x/sys v0.28.0 - BSD-3-Clause - https://cs.opensource.google/go/x/sys/+/master:LICENSE
 - WireGuard (Windows MSI package 1.1 / client 0.5.3 and Linux `wireguard-tools`) - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
 - UltraVNC Server 1.8.2.1 - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
