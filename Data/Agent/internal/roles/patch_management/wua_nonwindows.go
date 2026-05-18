@@ -13,6 +13,10 @@ func defaultWUAAdapter() WUAAdapter {
 	return unsupportedAdapter{}
 }
 
+func defaultWUAAdapterWithLogger(func(string, ...any)) WUAAdapter {
+	return unsupportedAdapter{}
+}
+
 func (unsupportedAdapter) Scan(context.Context) ([]Update, error) {
 	return nil, fmt.Errorf("Windows Update Agent is unavailable on this platform")
 }

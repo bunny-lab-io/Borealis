@@ -4,6 +4,7 @@ package patchmanagement
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -14,13 +15,27 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-type wuaCOMAdapter struct{}
+type wuaLogger func(string, ...any)
+
+type wuaCOMAdapter struct {
+	logger wuaLogger
+}
 
 func defaultWUAAdapter() WUAAdapter {
 	return wuaCOMAdapter{}
 }
 
-func (wuaCOMAdapter) Scan(ctx context.Context) ([]Update, error) {
+func defaultWUAAdapterWithLogger(logf func(string, ...any)) WUAAdapter {
+	return wuaCOMAdapter{logger: logf}
+}
+
+func (w wuaCOMAdapter) log(format string, args ...any) {
+	if w.logger != nil {
+		w.logger(format, args...)
+	}
+}
+
+func (w wuaCOMAdapter) Scan(ctx context.Context) ([]Update, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -39,7 +54,7 @@ func (wuaCOMAdapter) Scan(ctx context.Context) ([]Update, error) {
 	return updatesFromCollection(updates)
 }
 
-func (wuaCOMAdapter) Install(ctx context.Context, updates []Update) (InstallSummary, error) {
+func (w wuaCOMAdapter) Install(ctx context.Context, updates []Update) (InstallSummary, error) {
 	startedAt := time.Now().Unix()
 	summary := InstallSummary{StartedAt: startedAt, ResultCode: "not_started"}
 	if len(updates) == 0 {
@@ -47,8 +62,10 @@ func (wuaCOMAdapter) Install(ctx context.Context, updates []Update) (InstallSumm
 		summary.ResultCode = "no_updates"
 		return summary, nil
 	}
+	w.log("install wua_session_start requested_updates=%d", len(updates))
 	session, cleanup, err := newUpdateSession()
 	if err != nil {
+		w.log("install wua_session_failed error=%v", err)
 		return summary, err
 	}
 	defer cleanup()
@@ -56,25 +73,37 @@ func (wuaCOMAdapter) Install(ctx context.Context, updates []Update) (InstallSumm
 	for _, update := range updates {
 		selected[updateKey(update)] = update
 	}
+	w.log("install wua_live_scan_start")
 	liveUpdates, cleanupLiveUpdates, err := searchUpdateCollection(session)
 	if err != nil {
+		w.log("install wua_live_scan_failed error=%v", err)
 		return summary, err
 	}
 	defer cleanupLiveUpdates()
+	w.log("install wua_live_scan_complete updates=%d", int(getIntProperty(liveUpdates, "Count")))
 	collection, collectionCleanup, candidates, err := buildSelectedUpdateCollection(liveUpdates, selected)
 	if err != nil {
+		w.log("install wua_collection_failed error=%v", err)
 		return summary, err
 	}
 	defer collectionCleanup()
+	w.log("install wua_collection_ready candidates=%d collection_count=%d", len(candidates), int(getIntProperty(collection, "Count")))
 	if len(candidates) == 0 {
 		summary.FinishedAt = time.Now().Unix()
 		summary.ResultCode = "no_matching_updates"
+		w.log("install wua_no_matching_updates requested_updates=%d", len(updates))
 		return summary, nil
 	}
-	downloaded, err := downloadAndInstall(ctx, session, collection, candidates, false)
+	for _, candidate := range candidates {
+		w.log("install wua_candidate update_id=%s revision=%d downloaded=%t kbs=%s title=%q", candidate.UpdateID, candidate.Revision, candidate.IsDownloaded, strings.Join(candidate.KBArticleIDs, ","), candidate.Title)
+	}
+	w.log("install wua_batch_start candidates=%d", len(candidates))
+	downloaded, err := downloadAndInstall(ctx, session, collection, candidates, false, w.log)
 	if err == nil && !strings.EqualFold(downloaded.ResultCode, "failed") {
+		w.log("install wua_batch_complete result=%s hresult=%s reboot_required=%t results=%d", downloaded.ResultCode, downloaded.HResult, downloaded.RebootRequired, len(downloaded.Results))
 		return downloaded, nil
 	}
+	w.log("install wua_batch_failed result=%s hresult=%s error=%v", downloaded.ResultCode, downloaded.HResult, err)
 	individual := InstallSummary{
 		StartedAt:  startedAt,
 		FinishedAt: time.Now().Unix(),
@@ -84,18 +113,21 @@ func (wuaCOMAdapter) Install(ctx context.Context, updates []Update) (InstallSumm
 	}
 	var firstErr error = err
 	for _, update := range candidates {
+		w.log("install wua_individual_start update_id=%s revision=%d kbs=%s", update.UpdateID, update.Revision, strings.Join(update.KBArticleIDs, ","))
 		singleCollection, singleCleanup, singleRows, buildErr := buildSelectedUpdateCollection(liveUpdates, map[string]Update{updateKey(update): update})
 		if buildErr != nil {
+			w.log("install wua_individual_collection_failed update_id=%s revision=%d error=%v", update.UpdateID, update.Revision, buildErr)
 			if firstErr == nil {
 				firstErr = buildErr
 			}
 			continue
 		}
-		result, oneErr := downloadAndInstall(ctx, session, singleCollection, singleRows, true)
+		result, oneErr := downloadAndInstall(ctx, session, singleCollection, singleRows, true, w.log)
 		singleCleanup()
 		if oneErr != nil && firstErr == nil {
 			firstErr = oneErr
 		}
+		w.log("install wua_individual_complete update_id=%s revision=%d result=%s hresult=%s reboot_required=%t error=%v", update.UpdateID, update.Revision, result.ResultCode, result.HResult, result.RebootRequired, oneErr)
 		individual.RebootRequired = individual.RebootRequired || result.RebootRequired
 		individual.Results = append(individual.Results, result.Results...)
 		if result.HResult != "" {
@@ -106,6 +138,7 @@ func (wuaCOMAdapter) Install(ctx context.Context, updates []Update) (InstallSumm
 	if firstErr != nil {
 		individual.ResultCode = "failed"
 	}
+	w.log("install wua_individual_retry_complete result=%s hresult=%s reboot_required=%t results=%d error=%v", individual.ResultCode, individual.HResult, individual.RebootRequired, len(individual.Results), firstErr)
 	return individual, firstErr
 }
 
@@ -262,9 +295,13 @@ func updateFromDispatch(update *ole.IDispatch) Update {
 	return row
 }
 
-func downloadAndInstall(ctx context.Context, session *ole.IDispatch, collection *ole.IDispatch, updates []Update, individual bool) (InstallSummary, error) {
+func downloadAndInstall(ctx context.Context, session *ole.IDispatch, collection *ole.IDispatch, updates []Update, individual bool, log wuaLogger) (InstallSummary, error) {
 	startedAt := time.Now().Unix()
 	summary := InstallSummary{StartedAt: startedAt, ResultCode: "running"}
+	mode := "batch"
+	if individual {
+		mode = "individual"
+	}
 	select {
 	case <-ctx.Done():
 		summary.FinishedAt = time.Now().Unix()
@@ -272,37 +309,59 @@ func downloadAndInstall(ctx context.Context, session *ole.IDispatch, collection 
 		return summary, ctx.Err()
 	default:
 	}
+	logWUA(log, "install wua_eula_accept_start mode=%s updates=%d", mode, len(updates))
+	acceptedEULAs, err := acceptEULAs(collection)
+	if err != nil {
+		summary.FinishedAt = time.Now().Unix()
+		summary.ResultCode = "failed"
+		summary.HResult = fmt.Sprintf("%#x", hresult(err))
+		summary.Results = markResults(updates, "eula_failed", summary.HResult)
+		logWUA(log, "install wua_eula_accept_failed mode=%s hresult=%s error=%v", mode, summary.HResult, err)
+		return summary, err
+	}
+	logWUA(log, "install wua_eula_accept_complete mode=%s accepted=%d", mode, acceptedEULAs)
+	logWUA(log, "install wua_downloader_create_start mode=%s", mode)
 	downloaderVar, err := oleutil.CallMethod(session, "CreateUpdateDownloader")
 	if err != nil {
+		logWUA(log, "install wua_downloader_create_failed mode=%s error=%v", mode, err)
 		return summary, err
 	}
 	defer downloaderVar.Clear()
 	downloader := downloaderVar.ToIDispatch()
 	if _, err = oleutil.PutProperty(downloader, "Updates", collection); err != nil {
+		logWUA(log, "install wua_downloader_set_updates_failed mode=%s error=%v", mode, err)
 		return summary, err
 	}
+	logWUA(log, "install wua_download_start mode=%s updates=%d", mode, len(updates))
 	if _, err = oleutil.CallMethod(downloader, "Download"); err != nil {
 		summary.FinishedAt = time.Now().Unix()
 		summary.ResultCode = "failed"
 		summary.HResult = fmt.Sprintf("%#x", hresult(err))
 		summary.Results = markResults(updates, "download_failed", summary.HResult)
+		logWUA(log, "install wua_download_failed mode=%s hresult=%s error=%v", mode, summary.HResult, err)
 		return summary, err
 	}
+	logWUA(log, "install wua_download_complete mode=%s updates=%d", mode, len(updates))
+	logWUA(log, "install wua_installer_create_start mode=%s", mode)
 	installerVar, err := oleutil.CallMethod(session, "CreateUpdateInstaller")
 	if err != nil {
+		logWUA(log, "install wua_installer_create_failed mode=%s error=%v", mode, err)
 		return summary, err
 	}
 	defer installerVar.Clear()
 	installer := installerVar.ToIDispatch()
 	if _, err = oleutil.PutProperty(installer, "Updates", collection); err != nil {
+		logWUA(log, "install wua_installer_set_updates_failed mode=%s error=%v", mode, err)
 		return summary, err
 	}
+	logWUA(log, "install wua_install_start mode=%s updates=%d", mode, len(updates))
 	resultVar, err := oleutil.CallMethod(installer, "Install")
 	if err != nil {
 		summary.FinishedAt = time.Now().Unix()
 		summary.ResultCode = "failed"
 		summary.HResult = fmt.Sprintf("%#x", hresult(err))
 		summary.Results = markResults(updates, "install_failed", summary.HResult)
+		logWUA(log, "install wua_install_failed mode=%s hresult=%s error=%v", mode, summary.HResult, err)
 		return summary, err
 	}
 	defer resultVar.Clear()
@@ -315,7 +374,46 @@ func downloadAndInstall(ctx context.Context, session *ole.IDispatch, collection 
 	if individual && len(summary.Results) == 0 {
 		summary.Results = markResults(updates, summary.ResultCode, summary.HResult)
 	}
+	logWUA(log, "install wua_install_complete mode=%s result=%s hresult=%s reboot_required=%t results=%d", mode, summary.ResultCode, summary.HResult, summary.RebootRequired, len(summary.Results))
 	return summary, nil
+}
+
+func logWUA(log wuaLogger, format string, args ...any) {
+	if log != nil {
+		log(format, args...)
+	}
+}
+
+func acceptEULAs(collection *ole.IDispatch) (int, error) {
+	if collection == nil {
+		return 0, fmt.Errorf("nil update collection")
+	}
+	count := int(getIntProperty(collection, "Count"))
+	accepted := 0
+	for index := 0; index < count; index++ {
+		itemVar, err := oleutil.GetProperty(collection, "Item", index)
+		if err != nil {
+			return accepted, fmt.Errorf("read update %d for EULA acceptance: %w", index, err)
+		}
+		update := itemVar.ToIDispatch()
+		if update == nil {
+			itemVar.Clear()
+			continue
+		}
+		if !getBoolProperty(update, "EulaAccepted") {
+			acceptedVar, err := oleutil.CallMethod(update, "AcceptEula")
+			if acceptedVar != nil {
+				acceptedVar.Clear()
+			}
+			if err != nil {
+				itemVar.Clear()
+				return accepted, fmt.Errorf("accept update %d EULA: %w", index, err)
+			}
+			accepted++
+		}
+		itemVar.Clear()
+	}
+	return accepted, nil
 }
 
 func newUpdateCollection() (*ole.IDispatch, func(), error) {
@@ -548,7 +646,8 @@ func hresult(err error) int64 {
 	if err == nil {
 		return 0
 	}
-	if oleErr, ok := err.(*ole.OleError); ok {
+	var oleErr *ole.OleError
+	if errors.As(err, &oleErr) {
 		return int64(oleErr.Code())
 	}
 	return 0

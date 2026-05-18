@@ -139,12 +139,12 @@ func New(authClient *auth.Client, hostname string, serviceMode string, configPat
 		hostname:          strings.TrimSpace(hostname),
 		serviceMode:       auth.NormalizeServiceMode(serviceMode),
 		logPath:           filepath.Join(baseDir, "Logs", "Agent", "patch_management.log"),
-		adapter:           defaultWUAAdapter(),
 		httpClient:        &http.Client{Timeout: 45 * time.Second},
 		wakeup:            make(chan struct{}, 1),
 		supported:         supported,
 		unsupportedReason: reason,
 	}
+	manager.adapter = defaultWUAAdapterWithLogger(manager.logf)
 	return manager
 }
 
