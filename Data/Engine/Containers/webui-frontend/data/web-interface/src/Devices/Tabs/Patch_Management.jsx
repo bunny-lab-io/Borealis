@@ -28,17 +28,29 @@ const PRIMARY_BUTTON_SX = {
   background: "linear-gradient(90deg, rgba(14,165,233,0.78), rgba(147,51,234,0.72))",
 };
 
-function ts(value) {
-  const parsed = Number(value || 0);
-  if (!parsed) return "";
-  return new Date(parsed * 1000).toLocaleString();
-}
-
 function statusLabel(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "pending_install") return "Pending Install";
   if (!normalized) return "";
   return normalized.replace(/_/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function ResultCell(params) {
+  const result = statusLabel(params.value);
+  const hresult = String(params.data?.hresult || "").trim();
+  if (!result && !hresult) return "";
+  return (
+    <Box component="span" sx={{ display: "inline-flex", alignItems: "center", minWidth: 0 }}>
+      <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {result || "Unknown"}
+      </Box>
+      {hresult && (
+        <Box component="span" sx={{ ml: 0.55, color: "rgba(100,116,139,0.9)", whiteSpace: "nowrap" }}>
+          - {hresult}
+        </Box>
+      )}
+    </Box>
+  );
 }
 
 async function apiJson(path, options = {}) {
@@ -96,16 +108,14 @@ export default function DevicePatchManagementTab({ device }) {
 
   const columns = useMemo(
     () => [
-      { field: "title", headerName: "Update", minWidth: 320, flex: 2 },
-      { field: "kb_article_ids", headerName: "KBs", valueFormatter: ({ value }) => (value || []).join(", "), minWidth: 150 },
-      { field: "classifications", headerName: "Class", valueFormatter: ({ value }) => (value || []).join(", "), minWidth: 180 },
-      { field: "status", headerName: "Status", valueFormatter: ({ value }) => statusLabel(value), width: 150 },
-      { field: "approved", headerName: "Approved", width: 120 },
-      { field: "held", headerName: "Held", width: 100 },
-      { field: "reboot_required", headerName: "Reboot", width: 110 },
-      { field: "result_code", headerName: "Result", width: 160 },
-      { field: "hresult", headerName: "HRESULT", width: 130 },
-      { field: "last_seen_at", headerName: "Last Seen", valueFormatter: ({ value }) => ts(value), minWidth: 170 },
+      { field: "title", headerName: "Update", minWidth: 420, flex: 1.8 },
+      { field: "kb_article_ids", headerName: "KB", valueFormatter: ({ value }) => (value || []).join(", "), width: 120, minWidth: 105, flex: 0 },
+      { field: "classifications", headerName: "Class", valueFormatter: ({ value }) => (value || []).join(", "), width: 180, minWidth: 150, flex: 0 },
+      { field: "status", headerName: "Status", valueFormatter: ({ value }) => statusLabel(value), width: 150, minWidth: 125, flex: 0 },
+      { field: "approved", headerName: "Approved", width: 108, minWidth: 96, flex: 0, cellStyle: { textAlign: "center" } },
+      { field: "held", headerName: "Blocked", width: 90, minWidth: 84, flex: 0, cellStyle: { textAlign: "center" } },
+      { field: "reboot_required", headerName: "Pending Reboot", width: 140, minWidth: 132, flex: 0, cellStyle: { textAlign: "center" } },
+      { field: "result_code", headerName: "Result", width: 170, minWidth: 150, flex: 0, cellRenderer: ResultCell },
     ],
     []
   );
