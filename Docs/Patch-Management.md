@@ -28,6 +28,7 @@ Document Borealis Windows patch management across Agent, Engine API, database, a
 - Scan criteria: missing and non-hidden updates through `IUpdateSearcher::Search`.
 - Inventory fields include update ID, revision, KBs, title, classification, categories, severity, update type, size, support URL, installed/downloaded/hidden state, HRESULT, result code, and reboot flags.
 - Approved or downloaded updates that are not installed are stored as `pending_install` and displayed as `Pending Install`; compliance counts still treat them as missing until install completes.
+- Each successful scan is treated as the current non-installed WUA snapshot for the device. Non-installed rows absent from the latest snapshot are pruned, while installed rows remain for install history. This prevents fast-moving Defender definition versions from stacking as duplicate pending rows.
 - Install flow batches approved updates first. If batch install fails, Agent retries each selected update individually so Catalog and device state show exact failed update.
 - Pending reboot uses WUA install result plus local Windows pending-reboot indicators.
 - Agent sends reports to Engine after scans and installs.
@@ -68,7 +69,7 @@ Document Borealis Windows patch management across Agent, Engine API, database, a
 - `patch_policies` stores policy definitions.
 - `patch_policy_bindings` stores global, site, and device policy assignment.
 - `patch_catalog` stores fleet-wide update metadata by update ID and revision.
-- `device_patch_state` stores per-device update status.
+- `device_patch_state` stores current per-device update status. Engine prunes non-installed rows absent from the latest successful scan and retains installed rows for history.
 - `patch_holds` stores global or policy scoped holds and release metadata.
 - `patch_action_history` stores scan, install, reboot, and dispatch history.
 - `patch_reboot_deferrals` stores operator/user deferrals and deadlines.

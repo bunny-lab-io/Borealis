@@ -21,7 +21,7 @@ import pytest
 from Data.Engine.auth import jwt_service as jwt_service_module
 
 from .conftest import EngineTestHarness
-from .support.engine import admin_client, db_connection, fetch_one
+from .support.engine import admin_client, db_connection, fetch_all, fetch_one
 
 
 def _device_headers(guid: str = "GUID-TEST-0001") -> dict[str, str]:
@@ -289,6 +289,94 @@ def test_patch_report_marks_approved_updates_pending_install(
         item for item in catalog_response.get_json()["updates"] if item["update_id"] == "update-pending-install"
     )
     assert update["missing_count"] == 1
+
+
+def test_patch_report_prunes_absent_noninstalled_updates(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = engine_harness.app.test_client()
+    first_report = {
+        "hostname": "test-device",
+        "policy_id": "1",
+        "policy_version": "v1",
+        "scan_started_at": 1_800_003_000,
+        "scan_completed_at": 1_800_003_030,
+        "updates": [
+            {
+                "update_id": "defender-version-675",
+                "revision_number": 1,
+                "title": "Security Intelligence Update for Microsoft Defender Antivirus - KB2267602 (Version 1.449.675.0)",
+                "kb_article_ids": ["KB2267602"],
+                "classifications": ["Definition Updates"],
+                "approved": True,
+                "installed": False,
+            },
+            {
+                "update_id": "msrt-installed",
+                "revision_number": 1,
+                "title": "Windows Malicious Software Removal Tool x64 - KB890830",
+                "kb_article_ids": ["KB890830"],
+                "classifications": ["Update Rollups"],
+                "installed": True,
+                "result_code": "success",
+                "hresult": "0x0",
+            },
+        ],
+    }
+    response = client.post(
+        "/api/agent/patch-management/report",
+        headers=_device_headers(),
+        json=first_report,
+    )
+    assert response.status_code == 200
+
+    second_report = {
+        "hostname": "test-device",
+        "policy_id": "1",
+        "policy_version": "v1",
+        "scan_started_at": 1_800_003_100,
+        "scan_completed_at": 1_800_003_130,
+        "updates": [
+            {
+                "update_id": "defender-version-676",
+                "revision_number": 1,
+                "title": "Security Intelligence Update for Microsoft Defender Antivirus - KB2267602 (Version 1.449.676.0)",
+                "kb_article_ids": ["KB2267602"],
+                "classifications": ["Definition Updates"],
+                "approved": True,
+                "installed": False,
+            }
+        ],
+    }
+    response = client.post(
+        "/api/agent/patch-management/report",
+        headers=_device_headers(),
+        json=second_report,
+    )
+    assert response.status_code == 200
+
+    rows = fetch_all(
+        engine_harness,
+        """
+        SELECT update_id, status
+          FROM device_patch_state
+         WHERE device_guid = ?
+      ORDER BY update_id
+        """,
+        ("GUID-TEST-0001",),
+    )
+    assert rows == [
+        ("defender-version-676", "pending_install"),
+        ("msrt-installed", "installed"),
+    ]
+
+    operator = admin_client(engine_harness)
+    catalog_response = operator.get("/api/patch-management/catalog")
+    assert catalog_response.status_code == 200
+    update_ids = {item["update_id"] for item in catalog_response.get_json()["updates"]}
+    assert "defender-version-675" not in update_ids
+    assert "defender-version-676" in update_ids
+    assert "msrt-installed" in update_ids
 
 
 def test_patch_device_action_dispatches_socket_and_records_history(

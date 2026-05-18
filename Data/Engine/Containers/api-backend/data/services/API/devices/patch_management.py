@@ -306,6 +306,29 @@ def _state_from_update(update: Dict[str, Any]) -> str:
     return "available"
 
 
+def _prune_absent_device_updates(cur: Any, device_guid: str, seen_update_keys: set[Tuple[str, int]]) -> int:
+    cur.execute(
+        """
+        SELECT id, update_id, revision_number, status, installed
+          FROM device_patch_state
+         WHERE device_guid = ?
+        """,
+        (device_guid,),
+    )
+    stale_ids = []
+    for row in cur.fetchall():
+        key = (normalize_text(row[1]).lower(), _int(row[2]))
+        status = normalize_text(row[3]).lower()
+        if key in seen_update_keys:
+            continue
+        if _bool(row[4]) or status == "installed":
+            continue
+        stale_ids.append(row[0])
+    for stale_id in stale_ids:
+        cur.execute("DELETE FROM device_patch_state WHERE id = ?", (stale_id,))
+    return len(stale_ids)
+
+
 def register_patch_management(app, adapters: "EngineServiceAdapters") -> None:
     blueprint = Blueprint("patch_management", __name__)
     logger = adapters.context.logger.getChild("patch_management.api")
@@ -406,6 +429,8 @@ def register_patch_management(app, adapters: "EngineServiceAdapters") -> None:
         install = payload.get("install") if isinstance(payload.get("install"), dict) else {}
         install_results = install.get("results") if isinstance(install.get("results"), list) else []
         result_by_key = {_update_key(item): item for item in install_results if isinstance(item, dict)}
+        has_update_snapshot = isinstance(payload.get("updates"), list) and (bool(updates) or not payload.get("error"))
+        seen_update_keys = set()
         conn = adapters.db_conn_factory()
         try:
             cur = conn.cursor()
@@ -420,6 +445,7 @@ def register_patch_management(app, adapters: "EngineServiceAdapters") -> None:
                 if not update_id:
                     continue
                 revision = _int(item.get("revision_number") or item.get("revision"))
+                seen_update_keys.add((update_id.lower(), revision))
                 overlay = result_by_key.get((update_id.lower(), revision), {})
                 merged = {**item, **(overlay if isinstance(overlay, dict) else {})}
                 kb_articles = _list_text(merged.get("kb_article_ids"))
@@ -503,6 +529,8 @@ def register_patch_management(app, adapters: "EngineServiceAdapters") -> None:
                         _json_dumps(merged),
                     ),
                 )
+            if has_update_snapshot:
+                _prune_absent_device_updates(cur, ctx.guid, seen_update_keys)
             if install or payload.get("error"):
                 cur.execute(
                     """
@@ -565,6 +593,7 @@ def register_patch_management(app, adapters: "EngineServiceAdapters") -> None:
                     ON ds.device_hostname = d.hostname
                  WHERE 1=1 {site_clause}
               GROUP BY c.update_id, c.revision_number
+                HAVING COUNT(DISTINCT s.device_guid) > 0
               ORDER BY affected_devices DESC, c.last_seen_at DESC
                 """,
                 params,
