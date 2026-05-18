@@ -7,15 +7,16 @@ import { AgGridReact } from "ag-grid-react";
 import { DEFAULT_GRID_COL_DEF, DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI } from "./Shared.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 
-const ACTION_BUTTON_SX = {
+const SECONDARY_BUTTON_SX = {
   minHeight: 34,
   borderRadius: 999,
   px: 1.6,
   textTransform: "none",
   fontWeight: 650,
   color: MAGIC_UI.textBright,
-  border: "1px solid rgba(148,163,184,0.36)",
-  background: "rgba(5,10,24,0.82)",
+  whiteSpace: "nowrap",
+  border: "1px solid rgba(148,163,184,0.4)",
+  background: "rgba(5,10,24,0.64)",
   "&:hover": {
     background: "rgba(9,16,34,0.94)",
     borderColor: "rgba(125,211,252,0.46)",
@@ -23,9 +24,16 @@ const ACTION_BUTTON_SX = {
 };
 
 const PRIMARY_BUTTON_SX = {
-  ...ACTION_BUTTON_SX,
+  ...SECONDARY_BUTTON_SX,
   border: "1px solid rgba(125,211,252,0.42)",
-  background: "linear-gradient(90deg, rgba(14,165,233,0.78), rgba(147,51,234,0.72))",
+  background: "linear-gradient(90deg, #7dd3fc, #c084fc)",
+  color: "#06111f",
+  boxShadow: "none",
+  "&:hover": {
+    background: "linear-gradient(90deg, #bae6fd, #d8b4fe)",
+    borderColor: "rgba(186,230,253,0.72)",
+    boxShadow: "none",
+  },
 };
 
 function statusLabel(value) {
@@ -156,14 +164,14 @@ export default function DevicePatchManagementTab({ device }) {
             <Typography sx={{ color: MAGIC_UI.textMuted }}>Pending Reboot: {rebootCount}</Typography>
           </Stack>
           <Stack direction="row" spacing={1} flexWrap="wrap">
-            <Button startIcon={<RefreshRoundedIcon />} disabled={loading} onClick={() => runAction("scan")} sx={ACTION_BUTTON_SX}>
-              Scan
+            <Button startIcon={<RefreshRoundedIcon />} disabled={loading} onClick={() => runAction("scan")} sx={SECONDARY_BUTTON_SX}>
+              Scan for Updates
+            </Button>
+            <Button startIcon={<RestartAltRoundedIcon />} disabled={loading} onClick={() => runAction("reboot")} sx={SECONDARY_BUTTON_SX}>
+              Reboot Now
             </Button>
             <Button startIcon={<SystemUpdateAltRoundedIcon />} disabled={loading} onClick={() => runAction("install")} sx={PRIMARY_BUTTON_SX}>
-              Install
-            </Button>
-            <Button startIcon={<RestartAltRoundedIcon />} disabled={loading} onClick={() => runAction("reboot")} sx={ACTION_BUTTON_SX}>
-              Reboot
+              Install Updates
             </Button>
           </Stack>
         </Stack>
