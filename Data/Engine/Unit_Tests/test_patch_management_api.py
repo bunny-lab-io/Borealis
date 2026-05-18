@@ -239,6 +239,58 @@ def test_patch_report_ingests_catalog_device_state_and_holds(
     assert release_response.get_json()["changed"] == 1
 
 
+def test_patch_report_marks_downloaded_updates_pending_install(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client = engine_harness.app.test_client()
+    report = {
+        "hostname": "test-device",
+        "policy_id": "1",
+        "policy_version": "v1",
+        "scan_started_at": 1_800_002_000,
+        "scan_completed_at": 1_800_002_030,
+        "updates": [
+            {
+                "update_id": "update-pending-install",
+                "revision_number": 1,
+                "title": "Downloaded Cumulative Update",
+                "kb_article_ids": ["KB5000002"],
+                "classifications": ["Security Updates"],
+                "categories": ["Windows 11"],
+                "approved": True,
+                "downloaded": True,
+                "installed": False,
+            }
+        ],
+    }
+
+    response = client.post(
+        "/api/agent/patch-management/report",
+        headers=_device_headers(),
+        json=report,
+    )
+    assert response.status_code == 200
+
+    state_row = fetch_one(
+        engine_harness,
+        """
+        SELECT status, approved, downloaded, installed
+          FROM device_patch_state
+         WHERE device_guid = ? AND update_id = ? AND revision_number = ?
+        """,
+        ("GUID-TEST-0001", "update-pending-install", 1),
+    )
+    assert state_row == ("pending_install", 1, 1, 0)
+
+    operator = admin_client(engine_harness)
+    catalog_response = operator.get("/api/patch-management/catalog")
+    assert catalog_response.status_code == 200
+    update = next(
+        item for item in catalog_response.get_json()["updates"] if item["update_id"] == "update-pending-install"
+    )
+    assert update["missing_count"] == 1
+
+
 def test_patch_device_action_dispatches_socket_and_records_history(
     engine_harness: EngineTestHarness,
     monkeypatch: pytest.MonkeyPatch,

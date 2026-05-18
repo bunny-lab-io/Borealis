@@ -34,6 +34,13 @@ function ts(value) {
   return new Date(parsed * 1000).toLocaleString();
 }
 
+function statusLabel(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "pending_install") return "Pending Install";
+  if (!normalized) return "";
+  return normalized.replace(/_/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
 async function apiJson(path, options = {}) {
   const response = await fetch(path, {
     credentials: "include",
@@ -92,7 +99,7 @@ export default function DevicePatchManagementTab({ device }) {
       { field: "title", headerName: "Update", minWidth: 320, flex: 2 },
       { field: "kb_article_ids", headerName: "KBs", valueFormatter: ({ value }) => (value || []).join(", "), minWidth: 150 },
       { field: "classifications", headerName: "Class", valueFormatter: ({ value }) => (value || []).join(", "), minWidth: 180 },
-      { field: "status", headerName: "Status", width: 130 },
+      { field: "status", headerName: "Status", valueFormatter: ({ value }) => statusLabel(value), width: 150 },
       { field: "approved", headerName: "Approved", width: 120 },
       { field: "held", headerName: "Held", width: 100 },
       { field: "reboot_required", headerName: "Reboot", width: 110 },
@@ -122,7 +129,7 @@ export default function DevicePatchManagementTab({ device }) {
     [hostname, load, notifyOperator, selectedRows]
   );
 
-  const missingCount = (payload.updates || []).filter((row) => row.status === "missing").length;
+  const missingCount = (payload.updates || []).filter((row) => ["missing", "pending_install"].includes(row.status)).length;
   const rebootCount = (payload.updates || []).filter((row) => row.reboot_required).length;
   const policy = payload.policy || {};
 

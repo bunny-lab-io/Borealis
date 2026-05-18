@@ -285,6 +285,12 @@ def _update_key(update: Dict[str, Any]) -> Tuple[str, int]:
     return normalize_text(update.get("update_id")).lower(), _int(update.get("revision_number") or update.get("revision"))
 
 
+def _is_pending_install(update: Dict[str, Any]) -> bool:
+    return _bool(update.get("is_downloaded") or update.get("downloaded")) and not _bool(
+        update.get("is_installed") or update.get("installed")
+    )
+
+
 def _state_from_update(update: Dict[str, Any]) -> str:
     if _bool(update.get("is_installed") or update.get("installed")):
         return "installed"
@@ -295,6 +301,8 @@ def _state_from_update(update: Dict[str, Any]) -> str:
     result = normalize_text(update.get("result_code")).lower()
     if result in {"failed", "install_failed", "download_failed"}:
         return "failed"
+    if _is_pending_install(update):
+        return "pending_install"
     if _bool(update.get("approved")):
         return "missing"
     return "available"
@@ -545,7 +553,7 @@ def register_patch_management(app, adapters: "EngineServiceAdapters") -> None:
                 SELECT c.update_id, c.revision_number, c.title, c.kb_articles_json, c.classifications_json, c.categories_json,
                        c.msrc_severity, c.update_type, c.size_bytes, c.support_url, c.first_seen_at, c.last_seen_at,
                        COUNT(DISTINCT s.device_guid) AS affected_devices,
-                       SUM(CASE WHEN s.status = 'missing' THEN 1 ELSE 0 END) AS missing_count,
+                       SUM(CASE WHEN s.status IN ('missing', 'pending_install') THEN 1 ELSE 0 END) AS missing_count,
                        SUM(CASE WHEN s.status = 'installed' THEN 1 ELSE 0 END) AS installed_count,
                        SUM(CASE WHEN s.status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
                        SUM(CASE WHEN s.reboot_required = 1 THEN 1 ELSE 0 END) AS pending_reboot_count,
@@ -741,7 +749,7 @@ def register_patch_management(app, adapters: "EngineServiceAdapters") -> None:
                 f"""
                 SELECT d.guid, d.hostname, s.name AS site_name, d.operating_system, d.last_seen,
                        COUNT(ps.id) AS total_updates,
-                       SUM(CASE WHEN ps.status = 'missing' THEN 1 ELSE 0 END) AS missing_count,
+                       SUM(CASE WHEN ps.status IN ('missing', 'pending_install') THEN 1 ELSE 0 END) AS missing_count,
                        SUM(CASE WHEN ps.status = 'installed' THEN 1 ELSE 0 END) AS installed_count,
                        SUM(CASE WHEN ps.status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
                        SUM(CASE WHEN ps.reboot_required = 1 THEN 1 ELSE 0 END) AS pending_reboot_count,
