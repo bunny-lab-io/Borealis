@@ -147,13 +147,13 @@ export default function DevicePatchManagementTab({ device }) {
   const columns = useMemo(
     () => [
       { field: "title", headerName: "Update", minWidth: 420, flex: 1.8 },
-      { field: "kb_article_ids", headerName: "KB", valueFormatter: ({ value }) => (value || []).join(", "), width: 120, minWidth: 105, flex: 0 },
+      { field: "kb_article_ids", headerName: "KB", valueFormatter: ({ value }) => (value || []).join(", "), width: 100, minWidth: 100, flex: 0 },
       { field: "classifications", headerName: "Class", valueFormatter: ({ value }) => (value || []).join(", "), width: 180, minWidth: 150, flex: 0 },
       { field: "status", headerName: "Status", valueFormatter: ({ value }) => statusLabel(value), width: 150, minWidth: 125, flex: 0 },
-      { field: "approved", headerName: "Approved", width: 108, minWidth: 96, flex: 0, cellStyle: { textAlign: "center" } },
-      { field: "held", headerName: "Blocked", width: 90, minWidth: 84, flex: 0, cellStyle: { textAlign: "center" } },
-      { field: "reboot_required", headerName: "Pending Reboot", width: 140, minWidth: 132, flex: 0, cellStyle: { textAlign: "center" } },
-      { field: "result_code", headerName: "Result", width: 170, minWidth: 150, flex: 0, cellRenderer: ResultCell },
+      { field: "approved", headerName: "Approved", width: 120, minWidth: 120, flex: 0, cellStyle: { textAlign: "center" } },
+      { field: "held", headerName: "Blocked", width: 110, minWidth: 110, flex: 0, cellStyle: { textAlign: "center" } },
+      { field: "reboot_required", headerName: "Pending Reboot", width: 160, minWidth: 160, flex: 0, cellStyle: { textAlign: "center" } },
+      { field: "result_code", headerName: "Result", width: 180, minWidth: 180, flex: 0, cellRenderer: ResultCell },
     ],
     []
   );

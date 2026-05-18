@@ -34,6 +34,10 @@ type linuxUpdateManifest struct {
 	Branch           string `json:"branch"`
 }
 
+var restartLinuxAgentService = func() error {
+	return exec.Command("systemctl", "restart", "borealis-agent.service").Run()
+}
+
 func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	configPath := strings.TrimSpace(options.ConfigPath)
 	if configPath == "" {
@@ -170,17 +174,31 @@ func fetchLinuxUpdateManifest(ctx context.Context, client *auth.Client, installe
 }
 
 func runLinuxRepoRefUpdateCheck(ctx context.Context, configPath string, cfg *agentconfig.AgentConfig, branch string, installed string) error {
-	target, err := resolveGithubRefSHA(ctx, branch)
+	return runLinuxRepoRefUpdateCheckWithResolver(ctx, configPath, cfg, branch, installed, func(candidate string) (string, error) {
+		return resolveGithubRefSHA(ctx, candidate)
+	})
+}
+
+func runLinuxRepoRefUpdateCheckWithResolver(ctx context.Context, configPath string, cfg *agentconfig.AgentConfig, branch string, installed string, resolve func(string) (string, error)) error {
+	branch = agentconfig.NormalizeBranch(branch)
+	effectiveBranch, target, fellBack, err := resolveRepoRefUpdateTarget(branch, resolve)
 	if err != nil {
 		removeLinuxUpdateStatus(configPath)
 		return err
 	}
+	branch = effectiveBranch
 	target = strings.TrimSpace(strings.ToLower(target))
 	if target == "" {
 		return fmt.Errorf("repo_ref %q resolved empty target build id", branch)
 	}
+	if fellBack {
+		_ = writeLinuxReleaseTarget(configPath, cfg, agentconfig.ReleaseChannelSource, branch)
+	}
 	if installed != "" && strings.EqualFold(installed, target) {
 		removeLinuxUpdateStatus(configPath)
+		if fellBack {
+			return restartLinuxAgentService()
+		}
 		return nil
 	}
 	downloadURL := linuxBranchAgentURL(branch)
@@ -200,7 +218,7 @@ func runLinuxRepoRefUpdateCheck(ctx context.Context, configPath string, cfg *age
 		return err
 	}
 	_ = writeLinuxInstalledBuildID(configPath, cfg, target)
-	_ = exec.Command("systemctl", "restart", "borealis-agent.service").Run()
+	_ = restartLinuxAgentService()
 	return nil
 }
 
@@ -218,7 +236,7 @@ func resolveGithubRefSHA(ctx context.Context, branch string) (string, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return "", fmt.Errorf("GitHub commit API HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return "", &githubRefHTTPError{Ref: branch, StatusCode: resp.StatusCode, Body: string(body)}
 	}
 	var payload struct {
 		SHA string `json:"sha"`

@@ -117,6 +117,7 @@ Back to Docs Index: ../../Docs/index.md
 75. Added Windows Go Agent tray/status UI to the existing CURRENTUSER helper path with right-click role-health rows plus restart-agent and update-check actions.
 76. Added file-based SYSTEM-to-helper tray state and helper-to-SYSTEM action requests for `agent.restart` and `agent.update_check`, with redacted role-health status payloads and no Engine credentials in user context.
 77. Added regression coverage for tray status snapshot persistence and file-based command dispatch.
+78. Added source-branch update fallback so Windows and Linux updaters switch `source` agents to `main` and restart the runtime when needed after the configured GitHub branch returns a missing-ref response.
 
 ## In Progress
 

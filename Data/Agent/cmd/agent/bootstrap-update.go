@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -139,20 +140,36 @@ func shouldUseRepoRefUpdate(cfg BootstrapConfig) bool {
 }
 
 func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, installed string, startedAt time.Time) error {
-	ref := strings.TrimSpace(cfg.RepoRef)
-	target, err := resolveGithubRefSHA(cfg.RepoURL, ref)
+	ref := agentconfig.NormalizeBranch(cfg.RepoRef)
+	effectiveRef, target, fellBack, err := resolveRepoRefUpdateTarget(ref, func(candidate string) (string, error) {
+		return resolveGithubRefSHA(cfg.RepoURL, candidate)
+	})
 	if err != nil {
 		return fmt.Errorf("resolve repo_ref %q update target; refusing manifest fallback: %w", ref, err)
 	}
+	ref = effectiveRef
 	target = strings.TrimSpace(strings.ToLower(target))
 	logger.Tracef("Agent repo_ref update target: repo_ref=%s target_build_id=%s installed_build_id=%s", ref, target, installed)
 	if target == "" {
 		return fmt.Errorf("repo_ref %q resolved empty target build id", ref)
 	}
+	if fellBack {
+		logger.Warnf("Agent repo_ref %q no longer exists; falling back to repo_ref %q.", cfg.RepoRef, effectiveRef)
+		cfg.RepoRef = effectiveRef
+		writeConfigReleaseTarget(cfg, agentconfig.ReleaseChannelSource, effectiveRef)
+	}
 	if installed != "" && strings.EqualFold(installed, target) {
 		logger.Infof("Agent repo_ref update check: up to date (%s).", target)
-		if err := ensureAgentUpdaterTask(cfg, logger); err != nil {
-			logger.Warnf("AutoUpdater task reconciliation skipped: %v", err)
+		if fellBack {
+			logger.Tracef("Restarting Agent after repo_ref fallback so runtime reloads config.json.")
+			stopScheduledTask(agentTaskName, logger)
+			if err := ensureAgentTasks(cfg, logger); err != nil {
+				return fmt.Errorf("restart Agent after repo_ref fallback: %w", err)
+			}
+		} else {
+			if err := ensureAgentUpdaterTask(cfg, logger); err != nil {
+				logger.Warnf("AutoUpdater task reconciliation skipped: %v", err)
+			}
 		}
 		logger.Tracef("Agent update check complete: repo_ref_up_to_date duration=%s", time.Since(startedAt).Round(time.Millisecond))
 		return nil
@@ -224,7 +241,8 @@ func resolveGithubRefSHA(repoURL string, ref string) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("GitHub commit API HTTP %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", &githubRefHTTPError{Ref: ref, StatusCode: resp.StatusCode, Body: string(body)}
 	}
 	var payload struct {
 		SHA string `json:"sha"`
