@@ -73,7 +73,7 @@ Document Borealis Windows patch management across Agent, Engine API, database, a
 
 ## WebUI
 - Main route: `/patch-management`.
-- Sidebar placement: Automation > Patch Management > Patch Management, below Scheduled Jobs and above Watchdogs.
+- Sidebar placement: Automation > Patch Management, below Scheduled Jobs and above Watchdogs.
 - Main page tabs:
   - Patch Catalog
   - Device Compliance

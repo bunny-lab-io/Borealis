@@ -90,7 +90,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - Real-time refresh uses `watchdog_incidents_changed` and `device_watchdogs_changed` on the shared `window.BorealisSocket`.
 
 ## Patch Management UX
-- Sidebar placement: Automation > Patch Management > Patch Management, below Scheduled Jobs and above Watchdogs.
+- Sidebar placement: Automation > Patch Management, below Scheduled Jobs and above Watchdogs.
 - Route: `/patch-management`.
 - Page tabs: Patch Catalog, Device Compliance, Policies, Run History.
 - Patch Catalog is the primary operator view and uses AG Grid rows keyed by WUA update ID/revision with KBs, class, affected device count, installed/missing/failed/pending-reboot counts, hold state, and last-seen age.
