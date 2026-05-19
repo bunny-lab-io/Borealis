@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bunny-lab-io/borealis/go-agent/internal/auth"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/logutil"
 )
 
 const (
@@ -772,16 +773,13 @@ func (m *Manager) logf(format string, args ...any) {
 	if m == nil {
 		return
 	}
-	line := fmt.Sprintf("[%s] [vnc] %s\n", time.Now().Format("2006-01-02T15:04:05"), fmt.Sprintf(format, args...))
-	if err := os.MkdirAll(filepath.Dir(m.logPath), 0755); err != nil {
-		return
-	}
-	file, err := os.OpenFile(m.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		return
-	}
-	defer file.Close()
-	_, _ = file.WriteString(line)
+	logutil.Append(
+		m.logPath,
+		logutil.RetentionDaysFromConfig(m.configPath),
+		"[%s] [vnc] %s",
+		time.Now().Format("2006-01-02T15:04:05"),
+		fmt.Sprintf(format, args...),
+	)
 }
 
 func runCommand(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {

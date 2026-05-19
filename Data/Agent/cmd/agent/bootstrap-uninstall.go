@@ -96,6 +96,7 @@ func removableServiceNames(logger *BootstrapLogger) []string {
 		"Borealis Agent - UltraVNC":     true,
 		"Borealis Agent - WireGuard":    true,
 		"BorealisOnboarding":            true,
+		"BorealisAgent":                 true,
 		"BorealisAgentBootstrap":        true,
 		"BorealisAgentBootstrapper":     true,
 		"BorealisAgentUltraVNC":         true,
@@ -297,8 +298,9 @@ func queryServiceState(name string) (string, bool) {
 func removeBorealisScheduledTasks(logger *BootstrapLogger) {
 	logger.Tracef("Removing Borealis scheduled tasks.")
 	taskNames := map[string]bool{
-		agentTaskName:        true,
-		agentUpdaterTaskName: true,
+		legacyAgentTaskName:   true,
+		agentUpdaterTaskName:  true,
+		agentWatchdogTaskName: true,
 	}
 	for _, taskName := range queryBorealisScheduledTasks(logger) {
 		if strings.TrimSpace(taskName) != "" {

@@ -56,6 +56,11 @@ type Agent struct {
 	wireguard   *wireguardtunnel.Manager
 	uiMu        sync.RWMutex
 	uiSnapshot  localui.StatusSnapshot
+	auditMu     sync.Mutex
+	auditCache  deviceaudit.Snapshot
+	auditAt     time.Time
+	roleMu      sync.Mutex
+	roleStates  map[string]string
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -121,6 +126,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		software:    softwareManager,
 		vnc:         vncManager,
 		wireguard:   wireGuardManager,
+		roleStates:  map[string]string{},
 	}
 	if agent.wireguard != nil {
 		agent.wireguard.SetStatusReporter(agent.postWireGuardStatus)
@@ -131,6 +137,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 func (a *Agent) Run(ctx context.Context) error {
 	a.logger.Printf("agent starting service_mode=%s config=%s", auth.NormalizeServiceMode(a.options.ServiceMode), a.configPath)
 	a.updateUIStatus("process_start", "starting", "Agent process starting.")
+	a.startLivenessLoop(ctx.Done())
 	if err := writeInstalledBuildID(a.configPath, a.options.BuildID); err != nil {
 		a.logger.Printf("record installed build failed: %v", err)
 	}
@@ -141,8 +148,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	if a.dispatcher != nil {
 		a.dispatcher.Start(ctx, a.configPath)
 	}
-	if err := a.authClient.EnsureAuthenticated(ctx); err != nil {
-		_ = a.postStatus(context.Background(), "authenticating", "unhealthy", err.Error())
+	if err := a.waitAuthenticated(ctx); err != nil {
 		return err
 	}
 	if a.services != nil {
@@ -175,19 +181,58 @@ func (a *Agent) Run(ctx context.Context) error {
 	return a.socketLoop(ctx)
 }
 
-func (a *Agent) heartbeatLoop(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
+func (a *Agent) waitAuthenticated(ctx context.Context) error {
+	backoff := 5 * time.Second
 	for {
 		select {
 		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		a.updateUIStatus("authenticating", "recovering", "Engine authentication starting.")
+		if err := a.authClient.EnsureAuthenticated(ctx); err != nil {
+			a.logger.Printf("authentication failed; retrying: %v", err)
+			a.logRecovery("runtime", "startup:auth", "authenticate", "retry", "auth_failed", err)
+			a.updateUIStatus("authenticating", "recovering", err.Error())
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			if backoff < time.Minute {
+				backoff *= 2
+				if backoff > time.Minute {
+					backoff = time.Minute
+				}
+			}
+			continue
+		}
+		a.updateUIStatus("authenticated", "healthy", "Engine authentication complete.")
+		a.logRecovery("runtime", "startup:auth", "authenticate", "success", "authenticated", nil)
+		return nil
+	}
+}
+
+func (a *Agent) heartbeatLoop(ctx context.Context) {
+	for {
+		waitFor := heartbeatIntervalWithJitter(time.Now())
+		timer := time.NewTimer(waitFor)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			if err := a.postHeartbeat(ctx); err != nil {
 				a.logger.Printf("heartbeat failed: %v", err)
 			}
 		}
 	}
+}
+
+func heartbeatIntervalWithJitter(now time.Time) time.Duration {
+	base := 60 * time.Second
+	jitter := time.Duration(now.UnixNano() % int64(15*time.Second))
+	return base + jitter
 }
 
 func (a *Agent) socketLoop(ctx context.Context) error {
@@ -199,6 +244,7 @@ func (a *Agent) socketLoop(ctx context.Context) error {
 		default:
 		}
 		if err := a.connectSocket(ctx); err != nil {
+			a.recordSocketState("disconnected")
 			a.logger.Printf("socket disconnected: %v", err)
 			if err := a.postStatus(context.Background(), "socket_disconnected", "degraded", err.Error()); err != nil {
 				a.logger.Printf("status post failed: %v", err)
@@ -216,6 +262,7 @@ func (a *Agent) socketLoop(ctx context.Context) error {
 }
 
 func (a *Agent) connectSocket(ctx context.Context) error {
+	a.recordSocketState("connecting")
 	if err := a.postStatus(ctx, "socket_connecting", "healthy", "Engine socket connecting."); err != nil {
 		a.logger.Printf("status post failed: %v", err)
 	}
@@ -278,6 +325,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 		if err := socket.Emit("connect_agent", payload); err != nil {
 			return err
 		}
+		a.recordSocketState("connected")
 		if a.wireguard != nil {
 			a.wireguard.RequestEnsure("socket_connect")
 		}
@@ -331,22 +379,7 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	if a.dispatcher != nil {
 		currentUserHealth = a.dispatcher.RoleHealth()
 	}
-	auditSnapshot := deviceaudit.Snapshot{
-		Inventory: map[string]any{},
-		Metrics:   map[string]any{},
-		Health: deviceaudit.RoleHealth{
-			Status:     "recovering",
-			StatusCode: "recovering",
-			Detail:     "Device audit inventory has not run.",
-			Details: map[string]any{
-				"running_status": "Starting",
-				"runtime":        "go",
-			},
-		},
-	}
-	if a.auditor != nil {
-		auditSnapshot = a.auditor.Collect(ctx)
-	}
+	auditSnapshot := a.cachedAuditSnapshot(ctx)
 	fileHealth := filemanagement.RoleHealth{
 		Status:     "unsupported",
 		StatusCode: "unsupported",
@@ -583,8 +616,91 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	payload["agent_release_channel"] = agentconfig.NormalizeReleaseChannel(cfg.Agent.ReleaseChannel)
 	payload["agent_branch"] = agentconfig.NormalizeBranch(cfg.Agent.Branch)
 	a.updateUIHeartbeat(payload)
+	a.recordRoleHealthTransitions(payload)
+	a.recordHeartbeatAttempt()
 	_, err := a.authClient.PostJSON(ctx, "/api/agent/heartbeat", payload, nil)
+	a.recordHeartbeatResult(err)
 	return err
+}
+
+func (a *Agent) cachedAuditSnapshot(ctx context.Context) deviceaudit.Snapshot {
+	fallback := deviceaudit.Snapshot{
+		Inventory: map[string]any{},
+		Metrics:   map[string]any{},
+		Health: deviceaudit.RoleHealth{
+			Status:     "recovering",
+			StatusCode: "recovering",
+			Detail:     "Device audit inventory has not run.",
+			Details: map[string]any{
+				"running_status": "Starting",
+				"runtime":        "go",
+			},
+		},
+	}
+	if a.auditor == nil {
+		return fallback
+	}
+	a.auditMu.Lock()
+	if !a.auditAt.IsZero() && time.Since(a.auditAt) < 5*time.Minute {
+		snapshot := a.auditCache
+		a.auditMu.Unlock()
+		return snapshot
+	}
+	a.auditMu.Unlock()
+	snapshot := a.auditor.Collect(ctx)
+	a.auditMu.Lock()
+	a.auditCache = snapshot
+	a.auditAt = time.Now()
+	a.auditMu.Unlock()
+	return snapshot
+}
+
+func (a *Agent) recordRoleHealthTransitions(payload map[string]any) {
+	rawHealth, _ := payload["agent_role_health"].(map[string]any)
+	rawRoles, _ := rawHealth["roles"].([]map[string]any)
+	if len(rawRoles) == 0 {
+		if anyRoles, ok := rawHealth["roles"].([]any); ok {
+			for _, item := range anyRoles {
+				if mapped, ok := item.(map[string]any); ok {
+					a.recordOneRoleHealth(mapped)
+				}
+			}
+		}
+		return
+	}
+	for _, role := range rawRoles {
+		a.recordOneRoleHealth(role)
+	}
+}
+
+func (a *Agent) recordOneRoleHealth(role map[string]any) {
+	roleID := strings.TrimSpace(fmt.Sprint(role["role_id"]))
+	status := strings.TrimSpace(fmt.Sprint(firstNonNil(role["status_code"], role["status"])))
+	detail := strings.TrimSpace(fmt.Sprint(role["detail"]))
+	if roleID == "" || status == "" {
+		return
+	}
+	a.roleMu.Lock()
+	previous := a.roleStates[roleID]
+	if previous != status {
+		a.roleStates[roleID] = status
+	}
+	a.roleMu.Unlock()
+	if previous != "" && previous != status {
+		a.logRecovery("role_supervisor", roleID, "status_transition", status, detail, nil)
+	}
+	if status == "unhealthy" || status == "recovering" || status == "failed" {
+		a.logRecovery("role_supervisor", roleID, "health_check", status, detail, nil)
+	}
+}
+
+func firstNonNil(values ...any) any {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return ""
 }
 
 type startupMilestoneDefinition struct {

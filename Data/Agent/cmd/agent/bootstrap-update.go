@@ -15,6 +15,8 @@ import (
 	"time"
 
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/logutil"
+	agentruntime "github.com/bunny-lab-io/borealis/go-agent/internal/runtime"
 )
 
 type updateManifest struct {
@@ -29,6 +31,11 @@ type updateManifest struct {
 
 func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	startedAt := time.Now()
+	_ = logutil.RotateAndPrune(
+		filepath.Join(cfg.InstallDir, "Logs", "Agent", "updater.log"),
+		logutil.RetentionDaysFromConfig(filepath.Join(cfg.InstallDir, agentconfig.FileName)),
+		startedAt,
+	)
 	defer cleanupAgentTemp(cfg, logger)
 	cleanupStaleAgentUpdateBinary(cfg, logger)
 	serverURL := strings.TrimRight(strings.TrimSpace(cfg.ServerURL), "/")
@@ -100,7 +107,7 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	}
 	sourceRoot := resolveSourceRoot(extractRoot)
 	logger.Tracef("Agent update source resolved: %s", sourceRoot)
-	stopScheduledTask(agentTaskName, logger)
+	stopServiceAndWait(agentruntime.WindowsServiceName, 30*time.Second, logger)
 	stopBorealisProcesses(cfg, logger)
 	deferred, err := stageAgentUpdateBinary(cfg, sourceRoot, target, logger)
 	if err != nil {
@@ -161,7 +168,7 @@ func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, install
 	if err != nil {
 		return err
 	}
-	stopScheduledTask(agentTaskName, logger)
+	stopServiceAndWait(agentruntime.WindowsServiceName, 30*time.Second, logger)
 	stopBorealisProcesses(cfg, logger)
 	deferred, err := stageAgentUpdateBinary(cfg, sourceRoot, target, logger)
 	if err != nil {

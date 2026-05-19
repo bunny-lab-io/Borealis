@@ -37,7 +37,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%s
-ExecStart=%s --system-service --config-path %s
+ExecStart=%s --service --config-path %s
 Restart=always
 RestartSec=5
 

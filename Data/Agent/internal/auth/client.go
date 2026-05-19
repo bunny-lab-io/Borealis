@@ -382,12 +382,14 @@ func (c *Client) refreshLocked(ctx context.Context) error {
 		ExpiresIn   int64  `json:"expires_in"`
 	}
 	if _, err := c.doJSON(ctx, http.MethodPost, "/api/agent/token/refresh", payload, &response, true); err != nil {
-		c.mu.Lock()
-		c.cfg.Tokens.AccessToken = ""
-		c.cfg.Tokens.RefreshToken = ""
-		c.cfg.Tokens.AccessExpiresAt = 0
-		_ = agentconfig.Save(c.configPath, c.cfg)
-		c.mu.Unlock()
+		if permanentRefreshFailure(err) {
+			c.mu.Lock()
+			c.cfg.Tokens.AccessToken = ""
+			c.cfg.Tokens.RefreshToken = ""
+			c.cfg.Tokens.AccessExpiresAt = 0
+			_ = agentconfig.Save(c.configPath, c.cfg)
+			c.mu.Unlock()
+		}
 		if strings.TrimSpace(enrollmentCode) != "" {
 			return c.performEnrollmentLocked(ctx)
 		}
@@ -405,4 +407,27 @@ func (c *Client) refreshLocked(ctx context.Context) error {
 	c.cfg.Tokens.AccessToken = strings.TrimSpace(response.AccessToken)
 	c.cfg.Tokens.AccessExpiresAt = time.Now().Unix() + expiresIn - 5
 	return agentconfig.Save(c.configPath, c.cfg)
+}
+
+func permanentRefreshFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	if strings.Contains(text, "http 401") || strings.Contains(text, "http 403") {
+		return true
+	}
+	for _, marker := range []string{
+		"invalid_refresh",
+		"refresh_token_expired",
+		"device_purged",
+		"fingerprint_mismatch",
+		"token_version",
+		"revoked",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }

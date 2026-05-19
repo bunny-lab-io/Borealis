@@ -43,6 +43,9 @@ func TestSaveLoadConfig(t *testing.T) {
 	if loaded.Agent.InstalledBuildID != "abcdef" {
 		t.Fatalf("installed build id mismatch: %q", loaded.Agent.InstalledBuildID)
 	}
+	if loaded.Agent.LogRetentionDays != DefaultLogRetentionDays {
+		t.Fatalf("log retention default = %d, want %d", loaded.Agent.LogRetentionDays, DefaultLogRetentionDays)
+	}
 	if loaded.DependencyVersions == nil {
 		t.Fatal("dependency_versions missing")
 	}
@@ -60,6 +63,49 @@ func TestSaveLoadConfig(t *testing.T) {
 		if strings.Contains(string(raw), unexpected) {
 			t.Fatalf("config contains unexpected field %s: %s", unexpected, string(raw))
 		}
+	}
+}
+
+func TestFileNameIsAgentJSONOnly(t *testing.T) {
+	if FileName != "agent.json" {
+		t.Fatalf("FileName = %q, want agent.json", FileName)
+	}
+}
+
+func TestLoadDoesNotFallbackToConfigJSON(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"schema_version":1,"server_url":"https://old.example","agent":{},"identity":{},"tokens":{},"trust":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(filepath.Join(dir, FileName))
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if loaded.ServerURL != "" {
+		t.Fatalf("loaded server_url from config.json fallback: %q", loaded.ServerURL)
+	}
+}
+
+func TestLivenessUpdatePersistsAtomically(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	cfg := Default()
+	if err := Save(path, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := Update(path, func(cfg *AgentConfig) {
+		cfg.Agent.Liveness.PID = 123
+		cfg.Agent.Liveness.BootID = "boot-1"
+		cfg.Agent.Liveness.LastLocalTickAt = 456
+	}); err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Agent.Liveness.PID != 123 || loaded.Agent.Liveness.BootID != "boot-1" || loaded.Agent.Liveness.LastLocalTickAt != 456 {
+		t.Fatalf("liveness not persisted: %#v", loaded.Agent.Liveness)
 	}
 }
 

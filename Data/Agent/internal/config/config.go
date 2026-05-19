@@ -8,15 +8,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 const (
-	SchemaVersion        = 1
-	FileName             = "config.json"
-	DefaultBranch        = "main"
-	ReleaseChannelStable = "stable"
-	ReleaseChannelSource = "source"
+	SchemaVersion           = 1
+	FileName                = "agent.json"
+	DefaultBranch           = "main"
+	ReleaseChannelStable    = "stable"
+	ReleaseChannelSource    = "source"
+	DefaultLogRetentionDays = 1
 )
+
+var fileMu sync.Mutex
 
 type AgentConfig struct {
 	SchemaVersion      int                        `json:"schema_version"`
@@ -30,11 +34,28 @@ type AgentConfig struct {
 }
 
 type AgentSection struct {
-	GUID             string `json:"guid"`
-	AgentID          string `json:"agent_id"`
-	ReleaseChannel   string `json:"release_channel"`
-	Branch           string `json:"branch"`
-	InstalledBuildID string `json:"installed_build_id"`
+	GUID             string               `json:"guid"`
+	AgentID          string               `json:"agent_id"`
+	ReleaseChannel   string               `json:"release_channel"`
+	Branch           string               `json:"branch"`
+	InstalledBuildID string               `json:"installed_build_id"`
+	LogRetentionDays int                  `json:"log_retention_days"`
+	Liveness         AgentLivenessSection `json:"liveness"`
+}
+
+type AgentLivenessSection struct {
+	PID                    int    `json:"pid,omitempty"`
+	BootID                 string `json:"boot_id,omitempty"`
+	StartedAt              int64  `json:"started_at,omitempty"`
+	LastLocalTickAt        int64  `json:"last_local_tick_at,omitempty"`
+	LastHeartbeatAttemptAt int64  `json:"last_heartbeat_attempt_at,omitempty"`
+	LastHeartbeatSuccessAt int64  `json:"last_heartbeat_success_at,omitempty"`
+	LastHeartbeatError     string `json:"last_heartbeat_error,omitempty"`
+	LastSocketState        string `json:"last_socket_state,omitempty"`
+	LastSocketStateAt      int64  `json:"last_socket_state_at,omitempty"`
+	LastWatchdogCheckAt    int64  `json:"last_watchdog_check_at,omitempty"`
+	LastRecoveryAction     string `json:"last_recovery_action,omitempty"`
+	LastRecoveryAt         int64  `json:"last_recovery_at,omitempty"`
 }
 
 type IdentitySection struct {
@@ -154,6 +175,12 @@ func LoadOrCreate(path string) (AgentConfig, error) {
 }
 
 func Save(path string, cfg *AgentConfig) error {
+	fileMu.Lock()
+	defer fileMu.Unlock()
+	return saveUnlocked(path, cfg)
+}
+
+func saveUnlocked(path string, cfg *AgentConfig) error {
 	if cfg == nil {
 		return errors.New("nil config")
 	}
@@ -202,6 +229,19 @@ func Save(path string, cfg *AgentConfig) error {
 	return RestrictFile(path)
 }
 
+func Update(path string, update func(*AgentConfig)) error {
+	fileMu.Lock()
+	defer fileMu.Unlock()
+	cfg, err := Load(path)
+	if err != nil {
+		return err
+	}
+	if update != nil {
+		update(&cfg)
+	}
+	return saveUnlocked(path, &cfg)
+}
+
 func (c *AgentConfig) ApplyDefaults() {
 	if c.SchemaVersion == 0 {
 		c.SchemaVersion = SchemaVersion
@@ -209,6 +249,9 @@ func (c *AgentConfig) ApplyDefaults() {
 	c.Agent.ReleaseChannel = NormalizeReleaseChannel(c.Agent.ReleaseChannel)
 	c.Agent.Branch = NormalizeBranch(c.Agent.Branch)
 	c.Agent.InstalledBuildID = NormalizeBuildID(c.Agent.InstalledBuildID)
+	if c.Agent.LogRetentionDays <= 0 {
+		c.Agent.LogRetentionDays = DefaultLogRetentionDays
+	}
 	if c.DependencyVersions != nil {
 		c.DependencyVersions.WireGuard = NormalizeDependencyVersion(c.DependencyVersions.WireGuard)
 		c.DependencyVersions.UltraVNC = NormalizeDependencyVersion(c.DependencyVersions.UltraVNC)

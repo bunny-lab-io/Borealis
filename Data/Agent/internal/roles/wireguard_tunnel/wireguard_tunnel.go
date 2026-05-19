@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/bunny-lab-io/borealis/go-agent/internal/auth"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/logutil"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/scripts"
 )
 
@@ -963,19 +964,10 @@ func (m *Manager) clearError() {
 func (m *Manager) logf(format string, args ...any) {
 	message := fmt.Sprintf(format, args...)
 	ts := time.Now().Format("2006-01-02T15:04:05")
-	line := fmt.Sprintf("[%s] [wg-client] %s\n", ts, message)
 	if m == nil || m.logPath == "" {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(m.logPath), 0o700); err != nil {
-		return
-	}
-	f, err := os.OpenFile(m.logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_, _ = f.WriteString(line)
+	logutil.Append(m.logPath, logutil.RetentionDaysFromConfig(m.configPath), "[%s] [wg-client] %s", ts, message)
 }
 
 func sessionEquivalent(left *SessionConfig, right *SessionConfig) bool {

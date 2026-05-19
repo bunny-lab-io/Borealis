@@ -106,7 +106,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - Engine WireGuard config: `Engine/Services/wireguard-tunnel/config/borealis-wg.conf`.
 - Agent WireGuard config: `Agent/wireguard.conf`.
 - Engine WireGuard keys: `Engine/Services/wireguard-tunnel/secrets/`.
-- Agent WireGuard keys: managed through Engine-issued tunnel material and `config.json`.
+- Agent WireGuard keys: managed through Engine-issued tunnel material and `agent.json`.
 
 ### Service names
 - Engine container service: `wireguard-tunnel`.

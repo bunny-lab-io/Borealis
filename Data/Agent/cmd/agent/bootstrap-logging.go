@@ -9,6 +9,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/logutil"
 )
 
 type BootstrapLogger struct {
@@ -40,6 +43,8 @@ func openBootstrapLogger(cfg BootstrapConfig, console bool) (*BootstrapLogger, f
 		if strings.TrimSpace(path) == "" {
 			continue
 		}
+		retentionDays := logutil.RetentionDaysFromConfig(filepath.Join(cfg.InstallDir, agentconfig.FileName))
+		_ = logutil.RotateAndPrune(path, retentionDays, time.Now())
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			return nil, nil, err
 		}

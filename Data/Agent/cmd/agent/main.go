@@ -30,12 +30,14 @@ func run() int {
 	var printVersion bool
 	var updateCheck bool
 	var finalizeUpdate bool
+	var service bool
+	var watchdogCheck bool
 	var finalizeBuildID string
 	var finalizeExpectedSHA256 string
 	var repoRef string
 	var helperSessionID int
 	var helperStateDir string
-	flag.StringVar(&options.ConfigPath, "config-path", "", "Path to config.json. Defaults beside Agent.exe.")
+	flag.StringVar(&options.ConfigPath, "config-path", "", "Path to agent.json. Defaults beside Agent.exe.")
 	flag.StringVar(&options.ServerURL, "server-url", "", "Borealis Engine public URL.")
 	flag.StringVar(&options.EnrollmentCode, "site-enrollment-code", "", "Site enrollment code.")
 	flag.StringVar(&options.EnrollmentCode, "enrollment-code", "", "Enrollment code.")
@@ -47,11 +49,12 @@ func run() int {
 	flag.BoolVar(&installService, "install-service", false, "Install and start Borealis Agent service.")
 	flag.BoolVar(&uninstallService, "uninstall-service", false, "Uninstall Borealis Agent service.")
 	flag.BoolVar(&updateCheck, "update-check", false, "Run one Agent release-channel update check.")
+	flag.BoolVar(&watchdogCheck, "watchdog-check", false, "Run one local Agent watchdog check.")
 	flag.BoolVar(&finalizeUpdate, "finalize-update", false, "Finalize a deferred Agent binary replacement.")
 	flag.StringVar(&finalizeBuildID, "build-id", "", "Installed build ID for deferred update finalization.")
 	flag.StringVar(&finalizeExpectedSHA256, "expected-sha256", "", "Expected Agent binary SHA-256 for deferred update finalization.")
 	flag.BoolVar(&printVersion, "version", false, "Print version.")
-	systemService := flag.Bool("system-service", false, "Run as SYSTEM/root service.")
+	flag.BoolVar(&service, "service", false, "Run as managed Agent service.")
 	helperMode := flag.Bool("helper", false, "Run as current-user helper.")
 	flag.IntVar(&helperSessionID, "helper-session-id", 0, "Current-user helper session ID.")
 	flag.Parse()
@@ -86,6 +89,21 @@ func run() int {
 	if updateCheck {
 		if err := runStandaloneUpdateCheck(options); err != nil {
 			fmt.Fprintf(os.Stderr, "update check: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if watchdogCheck {
+		configPath := options.ConfigPath
+		if configPath == "" {
+			configPath, err = agentconfig.PathFromBinary()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "resolve agent path: %v\n", err)
+				return 1
+			}
+		}
+		if err := agentruntime.RunWatchdogCheck(configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "watchdog check: %v\n", err)
 			return 1
 		}
 		return 0
@@ -129,7 +147,7 @@ func run() int {
 			return 1
 		}
 		return 0
-	} else if *systemService {
+	} else if service {
 		options.ServiceMode = "system"
 	} else {
 		options.ServiceMode = "system"
@@ -146,15 +164,22 @@ func run() int {
 	logger, closeLogger := agentruntime.OpenLogger(configPath, options.Verbose)
 	defer closeLogger()
 
-	agent, err := agentruntime.New(options, logger)
-	if err != nil {
-		logger.Printf("agent init failed: %v", err)
-		fmt.Fprintf(os.Stderr, "agent init failed: %v\n", err)
-		return 1
+	runAgent := func(ctx context.Context) error {
+		agent, err := agentruntime.New(options, logger)
+		if err != nil {
+			logger.Printf("agent init failed: %v", err)
+			return err
+		}
+		return agent.Run(ctx)
+	}
+	if service {
+		if code, handled := agentruntime.RunServiceIfNeeded(logger, runAgent); handled {
+			return code
+		}
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := agent.Run(ctx); err != nil && ctx.Err() == nil {
+	if err := runAgent(ctx); err != nil && ctx.Err() == nil {
 		logger.Printf("agent stopped: %v", err)
 		fmt.Fprintf(os.Stderr, "agent stopped: %v\n", err)
 		return 1

@@ -59,7 +59,7 @@ func testManager(t *testing.T) *Manager {
 		authClient:    &fakeAuthClient{agentID: "agent-1"},
 		hostname:      "LAB-01",
 		serviceMode:   "system",
-		configPath:    dir + "/config.json",
+		configPath:    dir + "/agent.json",
 		baseDir:       dir,
 		logPath:       filepath.Join(dir, "Logs", "WireGuard", "wireguard.log"),
 		platform:      "linux",
@@ -122,7 +122,7 @@ func TestBuildSessionNormalizesAllowedPortsAndHostRoute(t *testing.T) {
 
 func TestNewUsesWireGuardLogCategoryPath(t *testing.T) {
 	dir := t.TempDir()
-	manager := New(nil, "LAB-01", "system", filepath.Join(dir, "config.json"))
+	manager := New(nil, "LAB-01", "system", filepath.Join(dir, "agent.json"))
 
 	if got := manager.logPath; got != filepath.Join(dir, "Logs", "WireGuard", "wireguard.log") {
 		t.Fatalf("unexpected log path: %s", got)

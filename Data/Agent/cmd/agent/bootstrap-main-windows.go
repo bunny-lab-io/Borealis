@@ -80,7 +80,7 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 		logger.Marker("__BOREALIS_ONBOARDING_HOSTNAME__=" + health.Hostname)
 	}
 	action := decideBootstrapAction(cfg, health, logger)
-	logger.Tracef("Bootstrap decision: action=%s health_exists=%t agent_exe=%t task_exists=%t task_state=%s task_running=%t task_started=%t engine_valid=%t validation=%s", action, health.Exists, health.AgentExeExists, health.TaskExists, health.TaskState, health.TaskRunning, health.TaskStarted, health.EngineValid, health.ValidationText)
+	logger.Tracef("Bootstrap decision: action=%s health_exists=%t agent_exe=%t service_exists=%t service_state=%s service_running=%t service_started=%t engine_valid=%t validation=%s", action, health.Exists, health.AgentExeExists, health.ServiceExists, health.ServiceState, health.ServiceRunning, health.ServiceStarted, health.EngineValid, health.ValidationText)
 	if action == actionMissingInput {
 		missing := missingBootstrapInputs(cfg)
 		detail := "Missing required bootstrap input: " + strings.Join(missing, ", ")
@@ -118,9 +118,9 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 		logger.Tracef("Bootstrap completed action=%s duration=%s exit_code=73", action, time.Since(startedAt).Round(time.Millisecond))
 		return 73
 	case actionRepairOnly:
-		logger.Stepf("Repairing Existing Agent Scheduled Task.")
-		logger.Tracef("Existing Agent repaired by starting scheduled task. Running update check then exiting skipped.")
-		writeTimeline(cfg, "running", "Successfully Repaired Agent", "Existing Borealis Agent task was repaired.", 0)
+		logger.Stepf("Repairing Existing Agent Service.")
+		logger.Tracef("Existing Agent repaired by starting service. Running update check then exiting skipped.")
+		writeTimeline(cfg, "running", "Successfully Repaired Agent", "Existing Borealis Agent service was repaired.", 0)
 		writeState(cfg, "already_enrolled", 73, "Existing Borealis Agent was repaired and is active.")
 		if err := runAgentUpdateCheck(cfg, logger); err != nil {
 			logger.Warnf("Update check skipped or failed: %v", err)
@@ -178,12 +178,12 @@ func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error 
 	if err := writeGoAgentConfig(cfg, logger); err != nil {
 		return err
 	}
-	logger.Tracef("Agent config.json ready.")
-	logger.Stepf("Creating Scheduled Tasks And Starting Agent.")
+	logger.Tracef("Agent agent.json ready.")
+	logger.Stepf("Creating Agent Service And Support Tasks.")
 	if err := ensureAgentTasks(cfg, logger); err != nil {
 		return err
 	}
-	logger.Tracef("Agent scheduled tasks ready.")
+	logger.Tracef("Agent service and support tasks ready.")
 	writeState(cfg, "pending_approval", 0, "Agent.exe completed; device approval pending operator action.")
 	writeTimeline(cfg, "running", "Agent Ready and Awaiting Approval", "Agent.exe completed; device approval pending operator action.", 0)
 	logger.Stepf("Agent Ready And Awaiting Approval.")

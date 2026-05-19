@@ -4,7 +4,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 )
 
 func TestStartupMilestonesSteadyStateComplete(t *testing.T) {
@@ -65,24 +69,127 @@ func TestCleanupStartupTempRemovesOnlyAgentTemp(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tempDir, "Onboarding", "state.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "config.json"), []byte("{}"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "agent.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := cleanupStartupTemp(filepath.Join(root, "config.json"), log.New(os.Stdout, "", 0)); err != nil {
+	if err := cleanupStartupTemp(filepath.Join(root, "agent.json"), log.New(os.Stdout, "", 0)); err != nil {
 		t.Fatalf("cleanupStartupTemp returned error: %v", err)
 	}
 	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
 		t.Fatalf("Temp still exists or stat failed with unexpected error: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "config.json")); err != nil {
-		t.Fatalf("config.json was touched: %v", err)
+	if _, err := os.Stat(filepath.Join(root, "agent.json")); err != nil {
+		t.Fatalf("agent.json was touched: %v", err)
 	}
 }
 
 func TestCleanupStartupTempNoopsWhenMissing(t *testing.T) {
 	root := t.TempDir()
-	if err := cleanupStartupTemp(filepath.Join(root, "config.json"), nil); err != nil {
+	if err := cleanupStartupTemp(filepath.Join(root, "agent.json"), nil); err != nil {
 		t.Fatalf("cleanupStartupTemp returned error: %v", err)
+	}
+}
+
+func TestHeartbeatIntervalUsesSixtySecondJitterWindow(t *testing.T) {
+	first := heartbeatIntervalWithJitter(time.Unix(0, 0))
+	second := heartbeatIntervalWithJitter(time.Unix(0, int64(14_999*time.Millisecond)))
+	if first < 60*time.Second || first >= 75*time.Second {
+		t.Fatalf("heartbeat interval outside jitter window: %s", first)
+	}
+	if second < 60*time.Second || second >= 75*time.Second {
+		t.Fatalf("heartbeat interval outside jitter window: %s", second)
+	}
+	if first == second {
+		t.Fatalf("heartbeat interval should jitter, both were %s", first)
+	}
+}
+
+func TestAgentLivenessWriteUpdatesAgentJSON(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, agentconfig.FileName)
+	cfg := agentconfig.Default()
+	if err := agentconfig.Save(configPath, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	agent := &Agent{configPath: configPath, bootID: "boot-test", logger: log.New(os.Stdout, "", 0)}
+	agent.updateLiveness(func(l *agentconfig.AgentLivenessSection) {
+		l.PID = 99
+		l.BootID = agent.bootID
+		l.LastSocketState = "connected"
+	})
+	loaded, err := agentconfig.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Agent.Liveness.PID != 99 || loaded.Agent.Liveness.BootID != "boot-test" || loaded.Agent.Liveness.LastSocketState != "connected" {
+		t.Fatalf("liveness not written: %#v", loaded.Agent.Liveness)
+	}
+}
+
+func TestRecoveryLogWritesRoleRecoveryLog(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, agentconfig.FileName)
+	cfg := agentconfig.Default()
+	if err := agentconfig.Save(configPath, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	agent := &Agent{configPath: configPath}
+	agent.logRecovery("role_supervisor", "system:vnc", "restart", "success", "test", nil)
+	raw, err := os.ReadFile(filepath.Join(root, "Logs", "Agent", "role_recovery.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, "component=role_supervisor") || !strings.Contains(text, "role_id=system:vnc") || !strings.Contains(text, "action=restart") {
+		t.Fatalf("role recovery log missing fields: %s", text)
+	}
+}
+
+func TestWatchdogDecisionMatrix(t *testing.T) {
+	now := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name  string
+		input watchdogDecisionInput
+		want  watchdogDecision
+	}{
+		{
+			name:  "missing service",
+			input: watchdogDecisionInput{Now: now},
+			want:  watchdogDecision{Action: "repair_service", Outcome: "missing", Reason: "service_missing"},
+		},
+		{
+			name:  "stopped service",
+			input: watchdogDecisionInput{ServiceExists: true, Now: now},
+			want:  watchdogDecision{Action: "start_service", Outcome: "needed", Reason: "service_stopped"},
+		},
+		{
+			name:  "unknown liveness",
+			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, Now: now},
+			want:  watchdogDecision{Action: "check_liveness", Outcome: "unknown", Reason: "no_local_tick"},
+		},
+		{
+			name:  "healthy liveness",
+			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, LastLocalTickAt: now.Add(-60 * time.Second).Unix(), Now: now},
+			want:  watchdogDecision{Action: "check_liveness", Outcome: "healthy", Reason: "age=1m0s"},
+		},
+		{
+			name:  "stale liveness update active",
+			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, LastLocalTickAt: now.Add(-181 * time.Second).Unix(), Now: now, UpdateActive: true},
+			want:  watchdogDecision{Action: "restart_service", Outcome: "skipped", Reason: "update_active"},
+		},
+		{
+			name:  "stale liveness restart",
+			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, LastLocalTickAt: now.Add(-181 * time.Second).Unix(), Now: now},
+			want:  watchdogDecision{Action: "restart_service", Outcome: "needed", Reason: "stale_liveness_age=3m1s"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := decideWatchdogRecovery(test.input)
+			if got != test.want {
+				t.Fatalf("decision = %#v, want %#v", got, test.want)
+			}
+		})
 	}
 }

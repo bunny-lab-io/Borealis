@@ -68,7 +68,7 @@ func sampleDisplayTopology() []map[string]any {
 
 func TestNewUsesUltraVNCLogCategoryPath(t *testing.T) {
 	dir := t.TempDir()
-	manager := New(nil, "LAB-01", "system", filepath.Join(dir, "config.json"))
+	manager := New(nil, "LAB-01", "system", filepath.Join(dir, "agent.json"))
 
 	if got := manager.logPath; got != filepath.Join(dir, "Logs", "UltraVNC", "vnc.log") {
 		t.Fatalf("unexpected log path: %s", got)

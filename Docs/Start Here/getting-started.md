@@ -28,7 +28,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
   `C:\Borealis\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Linux Go Agent builds to `Data/Agent/dist/linux-amd64/Agent`; install commands stage it as `/opt/Borealis/Agent/Agent` before running `--install-service`.
 - Linux Agent one-line installs use a root check: root shells pipe to `bash`; non-root shells use `sudo bash` before the script starts.
-- Do not install the Linux Agent into a deployed Engine runtime root. Keep the installed Agent binary and `config.json` in a dedicated Agent install directory.
+- Do not install the Linux Agent into a deployed Engine runtime root. Keep the installed Agent binary and `agent.json` in a dedicated Agent install directory.
 
 ## First Run Checklist
 - Open the Engine URL and confirm the login page loads.
@@ -90,7 +90,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - The Python Engine is not a direct public TLS endpoint in production.
 
 ### Agent install and enrollment notes
-- The Windows agent must run elevated to create services and scheduled tasks.
+- The Windows agent must run elevated to create the `BorealisAgent` service plus AutoUpdater/Watchdog scheduled tasks.
 - Enrollment requires an install code and operator approval (see `Docs/Operations and Remote Access/device-management.md`).
 - If enrollment fails, inspect `Agent/Logs/Agent/agent.log` and `Engine/Services/api-backend/logs/engine.log`.
 

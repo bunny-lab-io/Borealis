@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+
+	agentruntime "github.com/bunny-lab-io/borealis/go-agent/internal/runtime"
 )
 
 func stageAgentUpdateBinary(cfg BootstrapConfig, sourceRoot string, buildID string, logger *BootstrapLogger) (bool, error) {
@@ -101,7 +103,7 @@ $destination = %s
 $configPath = %s
 $buildId = %s
 $expectedSha256 = %s
-$agentTaskName = %s
+$agentServiceName = %s
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $logPath) | Out-Null
 function Write-UpdaterLog([string]$message) {
   Add-Content -LiteralPath $logPath -Value ("[{0}] {1}" -f (Get-Date).ToString("s"), $message)
@@ -114,7 +116,7 @@ for ($attempt = 1; $attempt -le 20; $attempt++) {
       Write-UpdaterLog "Attempt $attempt failed: pending binary missing."
       exit 1
     }
-    schtasks.exe /End /TN $agentTaskName *> $null
+    sc.exe stop $agentServiceName *> $null
     Get-Process -Name Agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 500
     Move-Item -LiteralPath $pending -Destination $destination -Force -ErrorAction Stop
@@ -129,7 +131,7 @@ for ($attempt = 1; $attempt -le 20; $attempt++) {
       Write-UpdaterLog "Attempt $attempt failed: finalize exited $LASTEXITCODE."
       exit 1
     }
-    schtasks.exe /Run /TN $agentTaskName *> $null
+    sc.exe start $agentServiceName *> $null
     Write-UpdaterLog "Deferred Agent.exe replacement complete."
     exit 0
   } catch {
@@ -149,7 +151,7 @@ exit 1
 		powershellSingleQuoted(configPath),
 		powershellSingleQuoted(agentconfigBuildID(buildID)),
 		powershellSingleQuoted(strings.ToLower(strings.TrimSpace(expectedSHA256))),
-		powershellSingleQuoted(agentTaskName),
+		powershellSingleQuoted(agentruntime.WindowsServiceName),
 	)
 }
 

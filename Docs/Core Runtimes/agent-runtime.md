@@ -9,7 +9,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Service modes: SYSTEM/root plus same-binary helper mode. Windows CURRENTUSER tracks long-lived helper sentinels per active desktop session and executes signed quick jobs through SYSTEM-brokered `CreateProcessAsUser`. Linux CURRENTUSER reports unsupported until ported.
 - Role system: compiled Go role registry under `Data/Agent/internal/roles`.
 - Networking: SYSTEM/root runtime owns REST to Engine APIs plus the single Socket.IO connection.
-- Security: Ed25519 identity keys, public CA + hostname validation for the Engine FQDN, signed script payloads, and `config.json` token/key storage.
+- Security: Ed25519 identity keys, public CA + hostname validation for the Engine FQDN, signed script payloads, and `agent.json` token/key storage.
 
 ## Role Catalog (Go v1)
 - `internal/roles/system_context` - SYSTEM/root quick-job router and script execution for signed `quick_job_run` payloads.
@@ -25,10 +25,10 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`; Linux current-user/tray UI remains pending.
 
 ## Agent Settings and Storage
-- Installed configuration file: `config.json` beside `Agent.exe`.
+- Installed configuration file: `agent.json` beside `Agent.exe`.
 - WireGuard runtime configuration file: `wireguard.conf` beside `Agent.exe`/`Agent`, generated from Engine tunnel material.
 - Startup cleanup removes `Temp` under the Agent install root so onboarding payload/state files do not persist after service start.
-- `config.json` stores `schema_version`, `server_url`, `enrollment_code`, `agent.guid`, `agent.agent_id`, `agent.branch`, `agent.installed_build_id`, `dependency_versions.wireguard`, `dependency_versions.ultravnc`, Ed25519 keys, access/refresh tokens, and Engine script-signing trust material.
+- `agent.json` stores `schema_version`, `server_url`, `enrollment_code`, `agent.guid`, `agent.agent_id`, `agent.branch`, `agent.installed_build_id`, `agent.log_retention_days`, `agent.liveness`, `dependency_versions.wireguard`, `dependency_versions.ultravnc`, Ed25519 keys, access/refresh tokens, and Engine script-signing trust material.
 - Windows protection: ACL hardening is deferred in the current Go migration branch; files inherit permissions from `C:\Borealis`.
 - Linux protection: root-owned `0600` file with `0700` parent directory.
 - Writes are atomic temp-write + rename. No OS file-lock dependency is used.
@@ -57,12 +57,12 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 ## Codex Agent (Detailed)
 ### Source vs runtime
 - Edit only in `Data/Agent/`.
-- Windows installed runtime is `C:\Borealis\Agent.exe` plus `C:\Borealis\config.json`.
-- Linux installed runtime is a single compiled `Agent` binary managed by systemd. `--install-service` self-stages temp downloads into `/opt/Borealis/Agent/Agent`, writes `config.json`, and installs the service plus updater timer.
+- Windows installed runtime is `C:\Borealis\Agent.exe` plus `C:\Borealis\agent.json`, managed by the native `BorealisAgent` Windows service.
+- Linux installed runtime is a single compiled `Agent` binary managed by systemd. `--install-service` self-stages temp downloads into `/opt/Borealis/Agent/Agent`, writes `agent.json`, and installs the service plus updater timer.
 - Go Agent updates use Engine release channels and the local `--update-check` path.
 
 ### Service modes and context
-- SYSTEM mode is used for elevated tasks (scheduled tasks, VPN, system scripts).
+- Service mode is used for elevated tasks (Windows service runtime, support scheduled tasks, VPN, system scripts).
 - The SYSTEM runtime is the only Borealis process that authenticates to the Engine, enrolls, refreshes tokens, or opens a Socket.IO connection.
 - Interactive user quick jobs now run through the SYSTEM broker by launching signed PowerShell/Batch payloads into active Windows user sessions. Same-binary helper sentinels run in active desktop sessions so role health can report ready helper sessions without exposing Engine tokens to user context.
 - Direct Session 0 UI is not supported; Borealis keeps the Engine-facing socket in SYSTEM and bridges into desktop sessions when current-user interaction is required.
@@ -100,14 +100,16 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - The UltraVNC config writer enables capture performance flags (`TurboMode`, full-screen polling defaults, `EnableDriver`, and `EnableHook`) when the official UltraVNC helper DLLs are present beside `winvnc.exe`.
 
 ### Token storage
-- Refresh/access tokens are stored in `config.json`.
-- Device GUID and Engine agent ID are stored in `config.json`.
+- Refresh/access tokens are stored in `agent.json`.
+- Device GUID and Engine agent ID are stored in `agent.json`.
 - When tokens are invalid or expired, the agent refreshes or re-enters enrollment.
 
 ### Logging
 - Agent runtime log: `Logs/Agent/agent.log` with daily rotation.
 - Agent error log: `Logs/Agent/agent.error.log`.
 - Agent remote shell log: `Logs/Agent/remote_shell.log`.
+- Agent role/watchdog recovery log: `Logs/Agent/role_recovery.log`.
+- Agent log retention defaults to `agent.log_retention_days: 1`; all Agent logs rotate daily and old rotated logs are pruned on the next write/start using that value.
 - Agent bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/Agent/bootstrap.log`; Windows bootstrap truncates this file at each start and always writes verbose trace/command output there while keeping console/GUI output minimal. Deferred Windows self-replacement writes retry, hash verification, finalization, and task restart output to `Logs/Agent/updater.log`. Linux updater diagnostics use `bootstrap.log`.
 - WireGuard role log: `Logs/WireGuard/wireguard.log`.
 - WireGuard MSI install log: `Logs/WireGuard/wireguard-msi-install.log`.
@@ -120,14 +122,14 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
   - `Engine/Services/api-backend/logs/engine.log` for approval or auth failures.
 - If current-user execution fails, confirm the SYSTEM broker is advertising helper capability, inspect session inventory for `helper_ready`, and expect `no_interactive_user_session` when no eligible user session exists.
 - If CURRENTUSER execution fails, inspect the Go helper broker migration status in `Data/Agent/Golang_Agent_Migration.md`.
-- Operator-requested manual updates arrive over the SYSTEM Socket.IO channel as `agent_update_request` and start the local AutoUpdater task/service immediately so the same scheduler-owned update path is used for both manual and hourly runs.
+- Operator-requested manual updates arrive over the SYSTEM Socket.IO channel as `agent_update_request` and start the local AutoUpdater path immediately so the same updater-owned path is used for both manual and hourly runs.
 - Engine-managed release channels cache a Go Agent binary bundle containing `Data/Agent/dist/windows-amd64/Agent.exe` and `Data/Agent/dist/linux-amd64/Agent`. Agents download that authenticated bundle, verify SHA-256 when provided, stage the platform binary, and restart through the local service manager.
-- Branch installs persist the operator-selected branch in `config.json` as `agent.branch`; local update checks use that branch when it is not `main` so feature-branch agents do not jump release channels accidentally.
-- Installed build tracking lives in `config.json` as `agent.installed_build_id`; the Go Agent does not create a standalone `installed_build_id.txt`.
+- Branch installs persist the operator-selected branch in `agent.json` as `agent.branch`; local update checks use that branch when it is not `main` so feature-branch agents do not jump release channels accidentally.
+- Installed build tracking lives in `agent.json` as `agent.installed_build_id`; the Go Agent does not create a standalone `installed_build_id.txt`.
 - Update checks do not persist `update_status.json`; transient state such as `state`, `update_available`, and `last_checked_at` is intentionally not stored by the Go Agent.
 - Windows update archives and extracted repository payloads are staged under `C:\Borealis\Temp\Updater`; the updater removes update workspaces immediately, schedules full `C:\Borealis\Temp` cleanup after bootstrap exits so stdout/stderr handles are closed, and cleans old accidental `C:\Borealis\Agent` update workspaces.
-- Windows self-update stages `Agent.exe.update` beside `Agent.exe` only while replacing a running binary. The detached updater retries the move, verifies the installed `Agent.exe` SHA-256, then runs `Agent.exe --finalize-update` so `config.json` receives the new `agent.installed_build_id` only after verified replacement. Failed deferred replacements remove their staged files, and later bootstrap/update starts remove stale `Agent.exe.tmp`, `Agent.exe.update.tmp`, and abandoned `Agent.exe.update` artifacts.
-- The scheduled AutoUpdater cadence is hourly on Windows and Linux.
+- Windows self-update stages `Agent.exe.update` beside `Agent.exe` only while replacing a running binary. The detached updater retries the move, verifies the installed `Agent.exe` SHA-256, then runs `Agent.exe --finalize-update` so `agent.json` receives the new `agent.installed_build_id` only after verified replacement. Failed deferred replacements remove their staged files, and later bootstrap/update starts remove stale `Agent.exe.tmp`, `Agent.exe.update.tmp`, and abandoned `Agent.exe.update` artifacts.
+- The scheduled AutoUpdater cadence is hourly on Windows and Linux. Windows also registers `Borealis Agent (Watchdog)` every minute to repair a missing/stopped `BorealisAgent` service and restart stale liveness when no update is active.
 - If scripts do not run:
   - Confirm `quick_job_run` events and the correct role context.
   - Verify signatures with `signature_utils` logs.
@@ -144,16 +146,16 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 
 #### Scope and runtime paths
 - Purpose: outbound-only connectivity, device telemetry, scripting, UI helpers.
-- Bootstrap: `Agent.exe` owns deploy, repair, update check, config write, scheduled-task registration, and runtime. Windows onboarding stages the Go binary from `Data/Agent/dist/windows-amd64/Agent.exe`; the installed copy runs from `C:\Borealis\Agent.exe`.
-- Windows support dependencies: `Agent.exe` can still install UltraVNC and WireGuard from official installers. Installed dependency versions live in `config.json` under `dependency_versions`, and transient installer payloads under `C:\Borealis\Dependencies` are removed after dependency reconciliation. It does not stage Python, create a venv, or call `launch_service.ps1`.
-- Existing Windows agents are repairable when `C:\Borealis\Agent.exe`, the `Borealis Agent` scheduled task, and an Engine-accepted token in `config.json` are present.
-- Linux first install: download `Data/Agent/dist/linux-amd64/Agent` to any temp path, then run it as root with `--server-url <url> --site-enrollment-code <code> --install-service`; the binary self-stages into `/opt/Borealis/Agent/Agent`, writes `config.json`, installs `borealis-agent.service`, and enables `borealis-agent-updater.timer`.
+- Bootstrap: `Agent.exe` owns deploy, repair, update check, config write, native service registration, support-task registration, and runtime. Windows onboarding stages the Go binary from `Data/Agent/dist/windows-amd64/Agent.exe`; the installed copy runs from `C:\Borealis\Agent.exe`.
+- Windows support dependencies: `Agent.exe` can still install UltraVNC and WireGuard from official installers. Installed dependency versions live in `agent.json` under `dependency_versions`, and transient installer payloads under `C:\Borealis\Dependencies` are removed after dependency reconciliation. It does not stage Python, create a venv, or call `launch_service.ps1`.
+- Existing Windows agents are repairable when `C:\Borealis\Agent.exe`, the `BorealisAgent` service, and an Engine-accepted token in `agent.json` are present.
+- Linux first install: download `Data/Agent/dist/linux-amd64/Agent` to any temp path, then run it as root with `--server-url <url> --site-enrollment-code <code> --install-service`; the binary self-stages into `/opt/Borealis/Agent/Agent`, writes `agent.json`, installs `borealis-agent.service`, and enables `borealis-agent-updater.timer`.
 - Edit in `Data/Agent`, not `/Agent`; runtime copies are ephemeral and wiped regularly.
 - Keep Linux Agent installation separate from deployed Engine runtime roots.
 
 #### Logging
-- Primary log: `Logs/Agent/agent.log` with daily rotation to `agent.log.YYYY-MM-DD` (never auto-delete rotated files).
-- Agent support logs: `Logs/Agent/bootstrap.log` and `Logs/Agent/remote_shell.log`.
+- Primary log: `Logs/Agent/agent.log` with daily rotation to `agent.log.YYYY-MM-DD`; retention defaults to one day through `agent.log_retention_days`.
+- Agent support logs: `Logs/Agent/bootstrap.log`, `Logs/Agent/remote_shell.log`, and `Logs/Agent/role_recovery.log`.
 - WireGuard logs: `Logs/WireGuard/wireguard.log` and `Logs/WireGuard/wireguard-msi-install.log`.
 - UltraVNC logs: `Logs/UltraVNC/vnc.log` and `Logs/UltraVNC/ultravnc-msi-install.log`.
 - Keep ad-hoc traces (for example, `system_last.ps1`) under `Logs/` to keep runtime state self-contained.
@@ -161,8 +163,8 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Troubleshooting: prefix lines with `<timestamp>-<service-name>-<log-data>`; ask operators whether verbose logging should stay after resolution.
 
 #### Security
-- Generates device-wide Ed25519 keys on first launch and stores PKCS8/SPKI base64 in `config.json`.
-- Refresh/access tokens are stored in `config.json` and bound to the device identity plus Engine-issued token state; mismatches force re-enrollment.
+- Generates device-wide Ed25519 keys on first launch and stores PKCS8/SPKI base64 in `agent.json`.
+- Refresh/access tokens are stored in `agent.json` and bound to the device identity plus Engine-issued token state; mismatches force re-enrollment.
 - REST and Socket.IO traffic use the public Engine FQDN with normal CA + hostname validation.
 - Validates script payloads with backend-issued Ed25519 signatures before execution.
 - Outbound-only; API/WebSocket calls flow through the Go auth client for proactive refresh. Logs bootstrap, enrollment, token refresh, and signature events under `Logs/Agent/`.
@@ -180,7 +182,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Go roles are explicit packages under `Data/Agent/internal/roles`.
 - First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER helper session health plus direct session PowerShell/Batch execution, core device audit inventory, SYSTEM/root file management, SYSTEM/root process management, SYSTEM/root service management, SYSTEM/root software management, SYSTEM/root WireGuard tunnel lifecycle, SYSTEM/root Remote Shell over WireGuard, Windows VNC lifecycle/credential brokerage over WireGuard, and Go release-channel self-update.
 - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`.
-- SYSTEM tasks depend on scheduled-task creation rights; failures should surface through Engine logging.
+- Service tasks depend on Windows service and scheduled-task creation rights; failures should surface through Engine logging and `Logs/Agent/role_recovery.log`.
 
 #### Platform parity
 - Windows is the reference path and has the broadest tested feature surface.
