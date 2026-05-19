@@ -74,7 +74,7 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 		installed = agentconfig.NormalizeBuildID(options.BuildID)
 	}
 	branch := agentconfig.NormalizeBranch(cfg.Agent.Branch)
-	if agentconfig.UsesSourceReleaseChannel(cfg.Agent.ReleaseChannel) {
+	if agentconfig.UsesUnstableReleaseChannel(cfg.Agent.ReleaseChannel) {
 		return runLinuxRepoRefUpdateCheck(ctx, configPath, &cfg, branch, installed)
 	}
 	manifest, err := fetchLinuxUpdateManifest(ctx, client, installed)
@@ -131,7 +131,7 @@ func releaseChannelForLinuxUpdateManifest(effective string, target string) strin
 	}
 	switch channel {
 	case "unstable", "source", "branch":
-		return agentconfig.ReleaseChannelSource
+		return agentconfig.ReleaseChannelUnstable
 	default:
 		return agentconfig.ReleaseChannelStable
 	}

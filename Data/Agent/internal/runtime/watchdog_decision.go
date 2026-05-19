@@ -19,6 +19,7 @@ type watchdogDecisionInput struct {
 	LastSocketStateAt      int64
 	Now                    time.Time
 	UpdateActive           bool
+	UpdateExpired          bool
 }
 
 const (
@@ -34,6 +35,9 @@ type watchdogDecision struct {
 }
 
 func decideWatchdogRecovery(input watchdogDecisionInput) watchdogDecision {
+	if input.UpdateActive && !input.UpdateExpired {
+		return watchdogDecision{Action: "check_liveness", Outcome: "skipped", Reason: "update_active"}
+	}
 	if !input.ServiceExists {
 		return watchdogDecision{Action: "repair_service", Outcome: "missing", Reason: "service_missing"}
 	}
@@ -72,7 +76,7 @@ func decideWatchdogRecovery(input watchdogDecisionInput) watchdogDecision {
 }
 
 func restartWatchdogDecision(input watchdogDecisionInput, reason string) watchdogDecision {
-	if input.UpdateActive {
+	if input.UpdateActive && !input.UpdateExpired {
 		return watchdogDecision{Action: "restart_service", Outcome: "skipped", Reason: "update_active"}
 	}
 	return watchdogDecision{Action: "restart_service", Outcome: "needed", Reason: reason}

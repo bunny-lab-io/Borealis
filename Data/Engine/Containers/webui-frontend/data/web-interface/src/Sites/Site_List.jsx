@@ -46,6 +46,12 @@ import {
   rethrowIfRouteRedirect,
 } from "../app/routes/routeData.js";
 import { APP_PATHS } from "../app/routes/paths.js";
+import AgentBranchChannelDialog, {
+  DEFAULT_AGENT_BRANCH,
+  fetchAgentBranchRows,
+  normalizeAgentBranch,
+  normalizeAgentReleaseChannel,
+} from "../AgentBranchChannelDialog.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -63,9 +69,7 @@ const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 
 const AUTO_SIZE_COLUMNS = ["device_count", "enrollment_code"];
-const DEFAULT_INSTALL_BRANCH = "main";
-const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
-const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
+const DEFAULT_INSTALL_BRANCH = DEFAULT_AGENT_BRANCH;
 const RAW_BOREALIS_BASE_URL = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads";
 const INSTALL_OS_OPTIONS = [
   { id: "windows", label: "Windows" },
@@ -426,10 +430,11 @@ function quotePowerShellValue(value) {
   return `"${escapePowerShellDoubleQuoted(value)}"`;
 }
 
-export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DEFAULT_INSTALL_BRANCH) {
+export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DEFAULT_INSTALL_BRANCH, releaseChannel = "stable") {
   const normalizedServerUrl = normalizeInstallServerUrl(serverUrl);
   const normalizedEnrollmentCode = String(enrollmentCode || "").trim();
-  const normalizedBranch = normalizeInstallBranch(branch);
+  const normalizedChannel = normalizeAgentReleaseChannel(releaseChannel);
+  const normalizedBranch = normalizeAgentBranch(normalizedChannel, branch);
   if (!normalizedServerUrl || !normalizedEnrollmentCode) {
     return "";
   }
@@ -438,6 +443,7 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
     const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/windows-amd64/Agent.exe");
     return `Invoke-WebRequest -UseBasicParsing -Uri ${quotePowerShellValue(agentUrl)} -OutFile ".\\Borealis-Agent.exe"; ` +
       `& ".\\Borealis-Agent.exe" --server-url ${quotePowerShellValue(normalizedServerUrl)} ` +
+      `--release-channel ${quotePowerShellValue(normalizedChannel)} ` +
       `--repo-ref ${quotePowerShellValue(normalizedBranch)} ` +
       `--site-enrollment-code ${quotePowerShellValue(normalizedEnrollmentCode)}`;
   }
@@ -445,6 +451,7 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
   if (osId === "linux") {
     const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/linux-amd64/Agent");
     const launchArgs = `--server-url "${escapeShellDoubleQuoted(normalizedServerUrl)}" ` +
+      `--release-channel "${escapeShellDoubleQuoted(normalizedChannel)}" ` +
       `--repo-ref "${escapeShellDoubleQuoted(normalizedBranch)}" ` +
       `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}"`;
     return `curl -fsSL ${quoteShellValue(agentUrl)} -o Borealis-Agent && ` +
@@ -738,7 +745,9 @@ export default function SiteList() {
   const [siteContextMenu, setSiteContextMenu] = useState({ open: false, top: 0, left: 0, row: null });
   const [installMenuAnchorEl, setInstallMenuAnchorEl] = useState(null);
   const [installMenuSite, setInstallMenuSite] = useState(null);
+  const [selectedInstallChannel, setSelectedInstallChannel] = useState("stable");
   const [selectedInstallBranch, setSelectedInstallBranch] = useState(DEFAULT_INSTALL_BRANCH);
+  const [draftInstallChannel, setDraftInstallChannel] = useState("stable");
   const [draftInstallBranch, setDraftInstallBranch] = useState(DEFAULT_INSTALL_BRANCH);
   const [branchDialogOpen, setBranchDialogOpen] = useState(false);
   const [branchRows, setBranchRows] = useState([]);
@@ -824,56 +833,7 @@ export default function SiteList() {
     setBranchesLoading(true);
     setBranchLoadError("");
     try {
-      const tokenRes = await fetch("/api/github/token", {
-        credentials: "include",
-        cache: "no-store",
-      });
-      const tokenData = await tokenRes.json().catch(() => ({}));
-      if (!tokenRes.ok) {
-        const message = tokenData?.message || tokenData?.error || `GitHub token lookup failed (HTTP ${tokenRes.status}).`;
-        throw new Error(message);
-      }
-      const githubToken = String(tokenData?.token || "").trim();
-      if (!githubToken) {
-        throw new Error(tokenData?.message || "GitHub API token is unavailable.");
-      }
-
-      const nextRows = [];
-      for (let page = 1; page <= 10; page += 1) {
-        const branchRes = await fetch(`${GITHUB_BRANCHES_API_URL}?per_page=100&page=${page}`, {
-          cache: "no-store",
-          headers: {
-            Accept: "application/vnd.github+json",
-            Authorization: `Bearer ${githubToken}`,
-          },
-        });
-        if (!branchRes.ok) {
-          const body = await branchRes.text().catch(() => "");
-          throw new Error(`GitHub branch lookup failed (HTTP ${branchRes.status})${body ? `: ${body.slice(0, 180)}` : ""}`);
-        }
-        const pageRows = await branchRes.json().catch(() => []);
-        if (!Array.isArray(pageRows)) {
-          throw new Error("GitHub branch lookup returned an unexpected payload.");
-        }
-        pageRows.forEach((branch) => {
-          const name = String(branch?.name || "").trim();
-          if (!name) return;
-          nextRows.push({
-            name,
-            sha: String(branch?.commit?.sha || "").trim(),
-            protected: Boolean(branch?.protected),
-            default: name === DEFAULT_INSTALL_BRANCH,
-          });
-        });
-        if (pageRows.length < 100) {
-          break;
-        }
-      }
-      nextRows.sort((a, b) => {
-        if (a.name === DEFAULT_INSTALL_BRANCH) return -1;
-        if (b.name === DEFAULT_INSTALL_BRANCH) return 1;
-        return a.name.localeCompare(b.name);
-      });
+      const nextRows = await fetchAgentBranchRows();
       setBranchRows(nextRows);
       if (!nextRows.length) {
         setBranchLoadError("No GitHub branches returned.");
@@ -980,35 +940,40 @@ export default function SiteList() {
   }, []);
 
   const handleOpenBranchDialog = useCallback(() => {
+    setDraftInstallChannel(selectedInstallChannel);
     setDraftInstallBranch(selectedInstallBranch);
     setBranchDialogOpen(true);
     handleCloseInstallMenu();
     void fetchInstallBranches();
-  }, [fetchInstallBranches, handleCloseInstallMenu, selectedInstallBranch]);
+  }, [fetchInstallBranches, handleCloseInstallMenu, selectedInstallBranch, selectedInstallChannel]);
 
   const handleCloseBranchDialog = useCallback(() => {
     setBranchDialogOpen(false);
+    setDraftInstallChannel(selectedInstallChannel);
     setDraftInstallBranch(selectedInstallBranch);
-  }, [selectedInstallBranch]);
+  }, [selectedInstallBranch, selectedInstallChannel]);
 
   const handleApplyInstallBranch = useCallback(async () => {
-    const nextBranch = normalizeInstallBranch(draftInstallBranch);
+    const nextChannel = normalizeAgentReleaseChannel(draftInstallChannel);
+    const nextBranch = normalizeAgentBranch(nextChannel, draftInstallBranch);
+    setSelectedInstallChannel(nextChannel);
     setSelectedInstallBranch(nextBranch);
+    setDraftInstallChannel(nextChannel);
     setDraftInstallBranch(nextBranch);
     setBranchDialogOpen(false);
     await sendNotification({
-      title: "Install Branch Updated",
-      message: `Agent install commands now target <b>${nextBranch}</b>.`,
+      title: "Install Branch/Channel Updated",
+      message: `Agent install commands now target <b>${nextChannel} - ${nextBranch}</b>.`,
       icon: "done",
       variant: "info",
     });
-  }, [draftInstallBranch, sendNotification]);
+  }, [draftInstallBranch, draftInstallChannel, sendNotification]);
 
   const handleCopyInstallCommand = useCallback(async (osId, site) => {
     const siteName = String(site?.name || "Unknown Site").trim() || "Unknown Site";
     const enrollmentCode = String(site?.enrollment_code || "").trim();
     const osLabel = INSTALL_OS_OPTIONS.find((option) => option.id === osId)?.label || "Agent";
-    const command = buildInstallCommand(osId, installServerUrl, enrollmentCode, selectedInstallBranch);
+    const command = buildInstallCommand(osId, installServerUrl, enrollmentCode, selectedInstallBranch, selectedInstallChannel);
 
     if (!command) {
       await sendNotification({
@@ -1037,7 +1002,7 @@ export default function SiteList() {
       icon: "warning",
       variant: "warning",
     });
-  }, [copyTextToClipboard, installServerUrl, selectedInstallBranch, sendNotification]);
+  }, [copyTextToClipboard, installServerUrl, selectedInstallBranch, selectedInstallChannel, sendNotification]);
 
   const handleSelectInstallOs = useCallback(async (osId) => {
     const activeSite = installMenuSite;
@@ -1508,10 +1473,10 @@ export default function SiteList() {
           <AltRouteRoundedIcon sx={{ mt: 0.15, fontSize: 18, color: "rgba(226,232,240,0.92)" }} />
           <Box sx={{ minWidth: 0 }}>
             <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.92rem", fontWeight: 700, lineHeight: 1.2 }}>
-              Switch Branch
+              Switch Agent Branch/Channel
             </Typography>
             <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.72rem", lineHeight: 1.25, mt: 0.25 }}>
-              Current: {selectedInstallBranch}
+              Current: {selectedInstallChannel} - {selectedInstallBranch}
             </Typography>
           </Box>
         </MenuItem>
@@ -1853,16 +1818,21 @@ export default function SiteList() {
         </DialogActions>
       </Dialog>
 
-      <InstallBranchDialog
+      <AgentBranchChannelDialog
         open={branchDialogOpen}
+        title="Switch Agent Branch/Channel"
+        subtitle="Install commands use this branch and channel for new agents."
         rows={branchRows}
         loading={branchesLoading}
         error={branchLoadError}
-        draftBranch={draftInstallBranch}
-        onDraftBranchChange={setDraftInstallBranch}
+        channel={draftInstallChannel}
+        branch={draftInstallBranch}
+        onChannelChange={setDraftInstallChannel}
+        onBranchChange={setDraftInstallBranch}
         onRefresh={() => void fetchInstallBranches()}
         onCancel={handleCloseBranchDialog}
         onApply={() => void handleApplyInstallBranch()}
+        gridTheme={myTheme}
       />
     </Paper>
   );

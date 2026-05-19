@@ -27,11 +27,14 @@ import random
 import re
 import textwrap
 import time
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Blueprint, jsonify, request, send_file
 
 from ...auth import UserSiteAccessManager
+from ....auth.guid_utils import normalize_guid
+from ...activity_history import insert_activity_history_row, update_activity_history_row
 from ..assemblies.execution import dispatch_inline_quick_job
 from .software_icons import (
     canonicalize_software_icon_override_resource,
@@ -507,6 +510,259 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
                     conn.close()
                 except Exception:
                     pass
+
+    def _normalize_agent_channel(value: Any) -> str:
+        text = normalize_text(value).lower()
+        if text in {"source", "branch", "repo", "repository", "unstable"}:
+            return "unstable"
+        if text in {"release", "releases", "stable", ""}:
+            return "stable"
+        return text
+
+    def _normalize_agent_branch_for_channel(channel: Any, branch: Any) -> str:
+        normalized_channel = _normalize_agent_channel(channel)
+        if normalized_channel != "unstable":
+            return "main"
+        return normalize_text(branch) or "main"
+
+    def _load_agent_maintenance_devices(user: Dict[str, Any], raw_guids: Any) -> List[Dict[str, Any]]:
+        guid_values = raw_guids if isinstance(raw_guids, list) else [raw_guids]
+        normalized_guids: List[str] = []
+        seen: set[str] = set()
+        for value in guid_values:
+            guid = normalize_guid(normalize_text(value))
+            if not guid:
+                continue
+            lowered = guid.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            normalized_guids.append(guid)
+        if not normalized_guids:
+            return []
+        placeholders = ",".join("?" for _ in normalized_guids)
+        conn = adapters.db_conn_factory()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT d.guid,
+                       d.hostname,
+                       d.agent_id,
+                       d.agent_release_channel,
+                       d.agent_branch,
+                       ds.site_id,
+                       s.name
+                  FROM devices d
+             LEFT JOIN device_sites ds ON ds.device_hostname = d.hostname
+             LEFT JOIN sites s ON s.id = ds.site_id
+                 WHERE UPPER(d.guid) IN ({placeholders})
+              ORDER BY d.hostname ASC
+                """,
+                tuple(g.upper() for g in normalized_guids),
+            )
+            rows = cur.fetchall() or []
+        finally:
+            conn.close()
+        devices: List[Dict[str, Any]] = []
+        for row in rows:
+            hostname = normalize_text(row[1])
+            if not hostname or not site_access.user_can_access_hostname(user, hostname):
+                continue
+            devices.append(
+                {
+                    "guid": normalize_guid(row[0]) or normalize_text(row[0]),
+                    "hostname": hostname,
+                    "agent_id": normalize_text(row[2]),
+                    "agent_release_channel": _normalize_agent_channel(row[3]),
+                    "agent_branch": _normalize_agent_branch_for_channel(row[3], row[4]),
+                    "site_id": row[5],
+                    "site_name": normalize_text(row[6]),
+                }
+            )
+        return devices
+
+    def _create_agent_maintenance_job(
+        *,
+        devices: List[Dict[str, Any]],
+        action: str,
+        channel: str,
+        branch: str,
+        operator_id: str,
+    ) -> Tuple[int, Dict[str, int]]:
+        now = int(time.time())
+        job_name = "Switch Agent Branch/Channel" if action == "switch_branch_channel" else "Update Borealis Agent"
+        component = {
+            "kind": "agent_maintenance",
+            "action": action,
+            "release_channel": channel,
+            "branch": branch,
+        }
+        targets = [
+            {
+                "kind": "device",
+                "device_guid": device.get("guid") or "",
+                "hostname": device.get("hostname") or "",
+                "site_id": device.get("site_id"),
+                "site_name": device.get("site_name") or "",
+            }
+            for device in devices
+        ]
+        conn = adapters.db_conn_factory()
+        run_ids: Dict[str, int] = {}
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO scheduled_jobs(
+                    name, components_json, targets_json, schedule_type, start_ts,
+                    duration_stop_enabled, expiration, execution_context, credential_id,
+                    use_service_account, job_kind, enabled, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    job_name,
+                    json.dumps([component]),
+                    json.dumps(targets),
+                    "immediately",
+                    now,
+                    0,
+                    "no_expire",
+                    "system",
+                    None,
+                    1,
+                    "agent_maintenance",
+                    0,
+                    now,
+                    now,
+                ),
+            )
+            job_id = int(cur.lastrowid or 0)
+            for device in devices:
+                hostname = device.get("hostname") or ""
+                cur.execute(
+                    """
+                    INSERT INTO scheduled_job_runs(
+                        job_id, target_hostname, scheduled_ts, started_ts, status,
+                        created_at, updated_at, component_index, component_kind, component_name
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (job_id, hostname, now, now, "Pending", now, now, 0, "agent_maintenance", job_name),
+                )
+                run_id = int(cur.lastrowid or 0)
+                run_ids[hostname.lower()] = run_id
+                cur.execute(
+                    """
+                    INSERT INTO scheduled_job_run_targets(
+                        run_id, device_guid, hostname, site_id, resolution_status, resolution_reason, created_at
+                    ) VALUES (?,?,?,?,?,?,?)
+                    """,
+                    (run_id, device.get("guid") or "", hostname, device.get("site_id"), "pending", "", now),
+                )
+                activity_id = insert_activity_history_row(
+                    conn,
+                    hostname=hostname,
+                    script_path="Internal/Agent_Maintenance",
+                    script_name=job_name,
+                    script_type="agent_maintenance",
+                    ran_at=now,
+                    status="Queued",
+                    stdout=f"Requested action={action} release_channel={channel} branch={branch}\n",
+                    stderr="",
+                    queue_lane="agent_maintenance",
+                    activity_kind="scheduled_job",
+                    metadata={
+                        "scheduled_job_id": job_id,
+                        "scheduled_job_run_id": run_id,
+                        "component_kind": "agent_maintenance",
+                        "operation_id": "",
+                        "requested_by": operator_id,
+                        "target_release_channel": channel,
+                        "target_branch": branch,
+                    },
+                    updated_at=now,
+                )
+                if activity_id:
+                    cur.execute(
+                        """
+                        INSERT INTO scheduled_job_run_activity(
+                            run_id, activity_id, component_kind, script_type, component_path, component_name, created_at
+                        ) VALUES (?,?,?,?,?,?,?)
+                        """,
+                        (run_id, activity_id, "agent_maintenance", "agent_maintenance", "Internal/Agent_Maintenance", job_name, now),
+                    )
+            conn.commit()
+            return job_id, run_ids
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _update_agent_maintenance_run(
+        *,
+        run_id: int,
+        status: str,
+        stdout: str = "",
+        stderr: str = "",
+        operation_id: str = "",
+    ) -> None:
+        now = int(time.time())
+        conn = adapters.db_conn_factory()
+        try:
+            cur = conn.cursor()
+            finished = now if status in {"Success", "Failed", "Skipped"} else None
+            cur.execute(
+                """
+                UPDATE scheduled_job_runs
+                   SET status=?, updated_at=?, finished_ts=COALESCE(?, finished_ts), error=?
+                 WHERE id=?
+                """,
+                (status, now, finished, stderr[:512], run_id),
+            )
+            cur.execute(
+                """
+                UPDATE scheduled_job_run_targets
+                   SET resolution_status=?, resolution_reason=?
+                 WHERE run_id=?
+                """,
+                ("eligible" if status != "Failed" else "unresolved", stderr[:512], run_id),
+            )
+            cur.execute(
+                """
+                SELECT s.activity_id, h.metadata_json
+                  FROM scheduled_job_run_activity s
+             LEFT JOIN activity_history h ON h.id = s.activity_id
+                 WHERE s.run_id=?
+                 LIMIT 1
+                """,
+                (run_id,),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                metadata = {}
+                try:
+                    metadata = json.loads(row[1] or "{}")
+                except Exception:
+                    metadata = {}
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                if operation_id:
+                    metadata["operation_id"] = operation_id
+                update_activity_history_row(
+                    conn,
+                    row[0],
+                    status=status,
+                    stdout=stdout,
+                    stderr=stderr,
+                    append_output=True,
+                    metadata=metadata,
+                    updated_at=now,
+                    finished_at=finished,
+                )
+            conn.commit()
+        finally:
+            conn.close()
 
     def _resolve_software_request_context(hostname: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, Optional[Tuple[Dict[str, Any], int]]]:
         user = _current_user(app) or {}
@@ -1781,5 +2037,134 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
             ),
             200,
         )
+
+    @blueprint.route("/api/devices/agent-maintenance", methods=["POST"])
+    def agent_maintenance_bulk():
+        requirement = _require_login(app)
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+
+        user = _current_user(app) or {}
+        operator_id = normalize_text(user.get("username"))
+        body = request.get_json(silent=True) or {}
+        action = normalize_text(body.get("action") or body.get("kind") or "update_now").lower()
+        if action in {"switch", "switch_channel", "switch_branch", "switch_branch_channel"}:
+            action = "switch_branch_channel"
+        elif action in {"update", "update_agent", "update_now"}:
+            action = "update_now"
+        else:
+            return jsonify({"error": "invalid_action"}), 400
+
+        if action == "switch_branch_channel" and normalize_text(user.get("role")).lower() != "admin":
+            return jsonify({"error": "forbidden"}), 403
+
+        devices = _load_agent_maintenance_devices(user, body.get("guids") or body.get("device_guids") or body.get("devices") or [])
+        if not devices:
+            return jsonify({"error": "no_devices_targeted"}), 400
+
+        requested_channel = _normalize_agent_channel(body.get("release_channel") or body.get("channel"))
+        requested_branch = _normalize_agent_branch_for_channel(requested_channel, body.get("branch"))
+        if requested_channel not in {"stable", "unstable"}:
+            return jsonify({"error": "invalid_channel"}), 400
+
+        job_id, run_ids = _create_agent_maintenance_job(
+            devices=devices,
+            action=action,
+            channel=requested_channel,
+            branch=requested_branch,
+            operator_id=operator_id,
+        )
+
+        call_host_service_event = getattr(adapters.context, "call_host_service_event", None)
+        emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
+        queued: List[Dict[str, Any]] = []
+        errors: List[Dict[str, Any]] = []
+        for device in devices:
+            hostname = device.get("hostname") or ""
+            run_id = run_ids.get(hostname.lower()) or 0
+            operation_id = str(uuid.uuid4())
+            target_channel = requested_channel
+            target_branch = requested_branch
+            if action == "update_now":
+                target_channel = _normalize_agent_channel(device.get("agent_release_channel") or requested_channel)
+                target_branch = _normalize_agent_branch_for_channel(target_channel, device.get("agent_branch") or requested_branch)
+            else:
+                target_guid = normalize_guid(device.get("guid") or "")
+                if not target_guid:
+                    stderr = "Device GUID unavailable for branch/channel switch.\n"
+                    _update_agent_maintenance_run(run_id=run_id, status="Failed", stderr=stderr, operation_id=operation_id)
+                    errors.append({"hostname": hostname, "guid": device.get("guid") or "", "error": "missing_guid", "run_id": run_id})
+                    continue
+                conn = adapters.db_conn_factory()
+                try:
+                    cur = conn.cursor()
+                    cur.execute(
+                        """
+                        UPDATE devices
+                           SET agent_release_channel_override=?,
+                               agent_release_channel=?,
+                               agent_branch=?
+                         WHERE UPPER(guid)=?
+                        """,
+                        (target_channel, target_channel, target_branch, target_guid.upper()),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+
+            event_payload = {
+                "operation_id": operation_id,
+                "kind": action,
+                "action": action,
+                "hostname": hostname,
+                "guid": device.get("guid") or "",
+                "release_channel": target_channel,
+                "channel": target_channel,
+                "target_channel": target_channel,
+                "branch": target_branch,
+                "requested_at": int(time.time()),
+                "requested_by": operator_id,
+                "scheduled_job_id": job_id,
+                "scheduled_job_run_id": run_id,
+            }
+            response: Any = None
+            emitted = False
+            if callable(call_host_service_event):
+                try:
+                    response = call_host_service_event(hostname, "system", "agent_maintenance_request", event_payload, timeout=20.0)
+                    emitted = isinstance(response, dict) and normalize_text(response.get("status")).lower() == "ok"
+                except Exception:
+                    response = None
+                    emitted = False
+            if not emitted and callable(emit_host_service_event):
+                try:
+                    emitted = bool(emit_host_service_event(hostname, "system", "agent_maintenance_request", event_payload))
+                except Exception:
+                    emitted = False
+            if emitted:
+                stdout = (
+                    f"Agent accepted operation_id={operation_id} "
+                    f"release_channel={target_channel} branch={target_branch}\n"
+                )
+                _update_agent_maintenance_run(run_id=run_id, status="Running", stdout=stdout, operation_id=operation_id)
+                queued.append({"hostname": hostname, "guid": device.get("guid") or "", "operation_id": operation_id, "run_id": run_id})
+            else:
+                stderr = "Agent SYSTEM socket unavailable or did not acknowledge maintenance request.\n"
+                _update_agent_maintenance_run(run_id=run_id, status="Failed", stderr=stderr, operation_id=operation_id)
+                errors.append({"hostname": hostname, "guid": device.get("guid") or "", "error": "agent_unavailable", "run_id": run_id})
+
+        _agent_update_log_event(
+            "agent_maintenance_request action={0} job_id={1} queued={2} errors={3} operator={4} remote={5}".format(
+                action,
+                job_id,
+                len(queued),
+                len(errors),
+                operator_id or "-",
+                _request_remote() or "-",
+            )
+        )
+        status_code = 200 if queued else 409
+        return jsonify({"status": "queued" if queued else "failed", "job_id": job_id, "queued": queued, "errors": errors}), status_code
 
     app.register_blueprint(blueprint)

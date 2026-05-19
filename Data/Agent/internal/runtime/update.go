@@ -6,25 +6,51 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 )
+
+var startLocalUpdaterForRequest = startLocalUpdater
 
 func (a *Agent) handleUpdateRequest(ctx context.Context, payload any) (any, error) {
 	if a == nil {
 		return map[string]any{"status": "error", "detail": "agent unavailable"}, nil
 	}
-	if err := startLocalUpdater(a.configPath); err != nil {
+	body, _ := payload.(map[string]any)
+	cfg := a.authClient.Config()
+	operation, err := a.authClient.StoreAgentUpdateOperation(
+		stringFromPayload(body, "operation_id", "request_id"),
+		"update_now",
+		cfg.Agent.ReleaseChannel,
+		cfg.Agent.Branch,
+	)
+	if err != nil {
+		a.logger.Printf("update operation state failed: %v", err)
+		return map[string]any{"status": "error", "detail": err.Error()}, nil
+	}
+	if err := startLocalUpdaterForRequest(a.configPath); err != nil {
+		markUpdateOperationStatus(a.configPath, "failed", err.Error())
 		a.logger.Printf("local updater start failed: %v", err)
 		return map[string]any{
 			"status": "error",
 			"detail": err.Error(),
 		}, nil
 	}
-	return map[string]any{"status": "ok"}, nil
+	markUpdateOperationStatus(a.configPath, "updater_started", "")
+	return map[string]any{
+		"status":          "ok",
+		"operation_id":    operation.OperationID,
+		"release_channel": operation.TargetChannel,
+		"branch":          operation.TargetBranch,
+	}, nil
 }
 
 func (a *Agent) handleReleaseChannelChanged(ctx context.Context, payload any) (any, error) {
+	return a.handleAgentMaintenanceRequest(ctx, payload)
+}
+
+func (a *Agent) handleAgentMaintenanceRequest(ctx context.Context, payload any) (any, error) {
 	if a == nil {
 		return map[string]any{"status": "error", "detail": "agent unavailable"}, nil
 	}
@@ -34,15 +60,32 @@ func (a *Agent) handleReleaseChannelChanged(ctx context.Context, payload any) (a
 	if releaseChannel == "" {
 		return map[string]any{"status": "error", "detail": "release_channel missing"}, nil
 	}
-	if err := a.authClient.StoreAgentReleaseTarget(releaseChannel, branch); err != nil {
+	kind := stringFromPayload(body, "kind", "action")
+	if kind == "" {
+		kind = "switch_branch_channel"
+	}
+	operation, err := a.authClient.StoreAgentUpdateOperation(
+		stringFromPayload(body, "operation_id", "request_id"),
+		kind,
+		releaseChannel,
+		branch,
+	)
+	if err != nil {
 		a.logger.Printf("release channel update failed: %v", err)
 		return map[string]any{"status": "error", "detail": err.Error()}, nil
 	}
-	a.logger.Printf("release channel updated release_channel=%s branch=%s", releaseChannel, branch)
+	if err := startLocalUpdaterForRequest(a.configPath); err != nil {
+		markUpdateOperationStatus(a.configPath, "failed", err.Error())
+		a.logger.Printf("local updater start failed after release channel change: %v", err)
+		return map[string]any{"status": "error", "detail": err.Error()}, nil
+	}
+	markUpdateOperationStatus(a.configPath, "updater_started", "")
+	a.logger.Printf("release channel updated release_channel=%s branch=%s operation_id=%s", operation.TargetChannel, operation.TargetBranch, operation.OperationID)
 	return map[string]any{
 		"status":          "ok",
-		"release_channel": releaseChannel,
-		"branch":          branch,
+		"operation_id":    operation.OperationID,
+		"release_channel": operation.TargetChannel,
+		"branch":          operation.TargetBranch,
 	}, nil
 }
 
@@ -54,7 +97,7 @@ func releaseChannelFromPayload(payload map[string]any) string {
 	effective := strings.ToLower(stringFromPayload(payload, "effective_channel", "target_channel", "channel"))
 	switch effective {
 	case "unstable", "source", "branch":
-		return agentconfig.ReleaseChannelSource
+		return agentconfig.ReleaseChannelUnstable
 	case "stable", "release", "releases":
 		return agentconfig.ReleaseChannelStable
 	case "":
@@ -110,8 +153,34 @@ func writeInstalledBuildID(configPath string, buildID string) error {
 		return err
 	}
 	cfg.Agent.InstalledBuildID = buildID
+	if cfg.Agent.Update.OperationID != "" {
+		now := time.Now().Unix()
+		cfg.Agent.Update.Status = "success"
+		cfg.Agent.Update.UpdatedAt = now
+		cfg.Agent.Update.CompletedAt = now
+		cfg.Agent.Update.LastError = ""
+	}
 	if err := agentconfig.Save(configPath, &cfg); err != nil {
 		return err
 	}
 	return nil
+}
+
+func markUpdateOperationStatus(configPath string, status string, detail string) {
+	status = strings.ToLower(strings.TrimSpace(status))
+	if status == "" {
+		return
+	}
+	_ = agentconfig.UpdateWithWriter(configPath, "runtime:update_operation", func(cfg *agentconfig.AgentConfig) {
+		if strings.TrimSpace(cfg.Agent.Update.OperationID) == "" {
+			return
+		}
+		now := time.Now().Unix()
+		cfg.Agent.Update.Status = status
+		cfg.Agent.Update.UpdatedAt = now
+		cfg.Agent.Update.LastError = strings.TrimSpace(detail)
+		if status == "success" || status == "failed" {
+			cfg.Agent.Update.CompletedAt = now
+		}
+	})
 }

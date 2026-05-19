@@ -306,7 +306,12 @@ func TestWatchdogDecisionMatrix(t *testing.T) {
 		{
 			name:  "stale liveness update active",
 			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, LastLocalTickAt: now.Add(-181 * time.Second).Unix(), Now: now, UpdateActive: true},
-			want:  watchdogDecision{Action: "restart_service", Outcome: "skipped", Reason: "update_active"},
+			want:  watchdogDecision{Action: "check_liveness", Outcome: "skipped", Reason: "update_active"},
+		},
+		{
+			name:  "stale liveness update expired",
+			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, LastLocalTickAt: now.Add(-181 * time.Second).Unix(), Now: now, UpdateActive: true, UpdateExpired: true},
+			want:  watchdogDecision{Action: "restart_service", Outcome: "needed", Reason: "stale_liveness_age=3m1s"},
 		},
 		{
 			name:  "stale liveness restart",

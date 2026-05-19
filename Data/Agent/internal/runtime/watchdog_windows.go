@@ -29,6 +29,21 @@ func RunWatchdogCheck(configPath string) error {
 		cfg.Agent.Liveness.LastWatchdogCheckAt = now.Unix()
 	})
 	cfg, _ := agentconfig.Load(configPath)
+	updateState := watchdogUpdateState(configPath, cfg, now)
+	if updateState.Active && !updateState.Expired {
+		logWatchdog(configPath, "watchdog", "check_liveness", "skipped", "update_active", nil)
+		return nil
+	}
+	if updateState.Active && updateState.Expired {
+		if handled, recoverErr := recoverExpiredUpdateOperation(configPath, cfg, now); handled {
+			if recoverErr != nil {
+				logWatchdog(configPath, "watchdog", "update_recovery", "failed", updateState.Reason, recoverErr)
+				return recoverErr
+			}
+			logWatchdog(configPath, "watchdog", "update_recovery", "started", updateState.Reason, nil)
+			return nil
+		}
+	}
 
 	manager, err := mgr.Connect()
 	if err != nil {
@@ -68,7 +83,8 @@ func RunWatchdogCheck(configPath string) error {
 		LastSocketState:        cfg.Agent.Liveness.LastSocketState,
 		LastSocketStateAt:      cfg.Agent.Liveness.LastSocketStateAt,
 		Now:                    now,
-		UpdateActive:           updateActive(configPath),
+		UpdateActive:           updateState.Active,
+		UpdateExpired:          updateState.Expired,
 	})
 	if decision.Action == "start_service" {
 		if err := service.Start(); err != nil && !strings.Contains(strings.ToLower(err.Error()), "already running") {
@@ -124,7 +140,96 @@ func restartStaleService(service *mgr.Service, pid uint32) error {
 	return service.Start()
 }
 
-func updateActive(configPath string) bool {
+type watchdogUpdateActivity struct {
+	Active  bool
+	Expired bool
+	Reason  string
+}
+
+func watchdogUpdateState(configPath string, cfg agentconfig.AgentConfig, now time.Time) watchdogUpdateActivity {
+	if updateOperationActive(cfg.Agent.Update) {
+		deadline := cfg.Agent.Update.DeadlineAt
+		if deadline <= 0 {
+			base := cfg.Agent.Update.UpdatedAt
+			if base <= 0 {
+				base = cfg.Agent.Update.StartedAt
+			}
+			deadline = base + int64(15*time.Minute/time.Second)
+		}
+		expired := deadline > 0 && now.Unix() > deadline
+		return watchdogUpdateActivity{
+			Active:  true,
+			Expired: expired,
+			Reason:  fmt.Sprintf("operation_status=%s", cfg.Agent.Update.Status),
+		}
+	}
+	if updateFilesActive(configPath, now) {
+		return watchdogUpdateActivity{Active: true, Expired: false, Reason: "update_files_active"}
+	}
+	return watchdogUpdateActivity{}
+}
+
+func updateOperationActive(update agentconfig.AgentUpdateSection) bool {
+	switch strings.ToLower(strings.TrimSpace(update.Status)) {
+	case "requested", "config_written", "updater_started", "running", "staging", "restarting", "verifying", "rollback_requested", "rollback_started", "factory_reset_requested", "factory_reset_started":
+		return strings.TrimSpace(update.OperationID) != ""
+	default:
+		return false
+	}
+}
+
+func recoverExpiredUpdateOperation(configPath string, cfg agentconfig.AgentConfig, now time.Time) (bool, error) {
+	update := cfg.Agent.Update
+	status := strings.ToLower(strings.TrimSpace(update.Status))
+	previousChannel := agentconfig.NormalizeReleaseChannel(update.PreviousChannel)
+	previousBranch := agentconfig.NormalizeBranch(update.PreviousBranch)
+	if previousChannel == "" {
+		previousChannel = agentconfig.ReleaseChannelStable
+	}
+	if previousChannel == agentconfig.ReleaseChannelStable {
+		previousBranch = agentconfig.DefaultBranch
+	}
+	targetChannel := agentconfig.NormalizeReleaseChannel(update.TargetChannel)
+	targetBranch := agentconfig.NormalizeBranch(update.TargetBranch)
+	if targetChannel == agentconfig.ReleaseChannelStable {
+		targetBranch = agentconfig.DefaultBranch
+	}
+
+	if !strings.HasPrefix(status, "rollback_") && !strings.HasPrefix(status, "factory_reset_") && (previousChannel != targetChannel || !strings.EqualFold(previousBranch, targetBranch)) {
+		if err := requestWatchdogUpdateTarget(configPath, "rollback_started", previousChannel, previousBranch, now); err != nil {
+			return true, err
+		}
+		return true, startLocalUpdater(configPath)
+	}
+	if strings.HasPrefix(status, "rollback_") || (previousChannel == targetChannel && strings.EqualFold(previousBranch, targetBranch)) {
+		if err := requestWatchdogUpdateTarget(configPath, "factory_reset_started", agentconfig.ReleaseChannelStable, agentconfig.DefaultBranch, now); err != nil {
+			return true, err
+		}
+		return true, startLocalUpdater(configPath)
+	}
+	return false, nil
+}
+
+func requestWatchdogUpdateTarget(configPath string, status string, channel string, branch string, now time.Time) error {
+	return agentconfig.UpdateWithWriter(configPath, "watchdog:update_recovery", func(cfg *agentconfig.AgentConfig) {
+		targetChannel := agentconfig.NormalizeReleaseChannel(channel)
+		targetBranch := agentconfig.NormalizeBranch(branch)
+		if targetChannel == agentconfig.ReleaseChannelStable {
+			targetBranch = agentconfig.DefaultBranch
+		}
+		cfg.Agent.ReleaseChannel = targetChannel
+		cfg.Agent.Branch = targetBranch
+		cfg.Agent.Update.Status = strings.ToLower(strings.TrimSpace(status))
+		cfg.Agent.Update.UpdatedAt = now.Unix()
+		cfg.Agent.Update.DeadlineAt = now.Add(15 * time.Minute).Unix()
+		cfg.Agent.Update.TargetChannel = targetChannel
+		cfg.Agent.Update.TargetBranch = targetBranch
+		cfg.Agent.Update.LastError = ""
+		cfg.Agent.Update.RecoveryAttempts++
+	})
+}
+
+func updateFilesActive(configPath string, now time.Time) bool {
 	root := filepath.Dir(configPath)
 	for _, candidate := range []string{
 		filepath.Join(root, "Agent.exe.update"),
@@ -132,7 +237,10 @@ func updateActive(configPath string) bool {
 		filepath.Join(root, "Agent.exe.tmp"),
 		filepath.Join(root, "Temp", "Updater"),
 	} {
-		if _, err := os.Stat(candidate); err == nil {
+		if info, err := os.Stat(candidate); err == nil {
+			if now.Sub(info.ModTime()) > 15*time.Minute {
+				continue
+			}
 			return true
 		}
 	}

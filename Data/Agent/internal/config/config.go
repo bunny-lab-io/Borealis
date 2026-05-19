@@ -17,7 +17,7 @@ const (
 	FileName                = "agent.json"
 	DefaultBranch           = "main"
 	ReleaseChannelStable    = "stable"
-	ReleaseChannelSource    = "source"
+	ReleaseChannelUnstable  = "unstable"
 	DefaultLogRetentionDays = 1
 )
 
@@ -42,6 +42,7 @@ type AgentSection struct {
 	InstalledBuildID string                            `json:"installed_build_id"`
 	LogRetentionDays int                               `json:"log_retention_days"`
 	State            AgentStateSection                 `json:"state"`
+	Update           AgentUpdateSection                `json:"update,omitempty"`
 	Liveness         AgentLivenessSection              `json:"liveness"`
 	DependencyState  map[string]DependencyStateSection `json:"dependency_state,omitempty"`
 }
@@ -50,6 +51,22 @@ type AgentStateSection struct {
 	Revision    int64  `json:"revision"`
 	Writer      string `json:"writer"`
 	LastWriteAt int64  `json:"last_write_at"`
+}
+
+type AgentUpdateSection struct {
+	OperationID      string `json:"operation_id,omitempty"`
+	Kind             string `json:"kind,omitempty"`
+	Status           string `json:"status,omitempty"`
+	StartedAt        int64  `json:"started_at,omitempty"`
+	UpdatedAt        int64  `json:"updated_at,omitempty"`
+	CompletedAt      int64  `json:"completed_at,omitempty"`
+	DeadlineAt       int64  `json:"deadline_at,omitempty"`
+	PreviousChannel  string `json:"previous_channel,omitempty"`
+	PreviousBranch   string `json:"previous_branch,omitempty"`
+	TargetChannel    string `json:"target_channel,omitempty"`
+	TargetBranch     string `json:"target_branch,omitempty"`
+	LastError         string `json:"last_error,omitempty"`
+	RecoveryAttempts int    `json:"recovery_attempts,omitempty"`
 }
 
 type AgentLivenessSection struct {
@@ -132,7 +149,7 @@ func NormalizeReleaseChannel(value string) string {
 	case "", "stable", "release", "releases":
 		return ReleaseChannelStable
 	case "source", "sources", "branch", "repo", "repository", "unstable":
-		return ReleaseChannelSource
+		return ReleaseChannelUnstable
 	default:
 		return text
 	}
@@ -143,11 +160,11 @@ func ReleaseChannelForBranch(branch string) string {
 	if strings.EqualFold(normalizedBranch, DefaultBranch) {
 		return ReleaseChannelStable
 	}
-	return ReleaseChannelSource
+	return ReleaseChannelUnstable
 }
 
-func UsesSourceReleaseChannel(value string) bool {
-	return NormalizeReleaseChannel(value) == ReleaseChannelSource
+func UsesUnstableReleaseChannel(value string) bool {
+	return NormalizeReleaseChannel(value) == ReleaseChannelUnstable
 }
 
 func NormalizeBuildID(value string) string {
@@ -209,6 +226,7 @@ func SaveWithWriter(path string, writer string, cfg *AgentConfig) error {
 		if cfg != nil {
 			if current, err := loadUnlocked(path); err == nil {
 				mergeNewerLiveness(&cfg.Agent.Liveness, current.Agent.Liveness)
+				mergeNewerUpdateState(&cfg.Agent.Update, current.Agent.Update)
 				mergeNewerDependencyState(&cfg.Agent.DependencyState, current.Agent.DependencyState)
 				if current.Agent.State.Revision > cfg.Agent.State.Revision {
 					cfg.Agent.State.Revision = current.Agent.State.Revision
@@ -402,6 +420,15 @@ func mergeNewerDependencyState(target *map[string]DependencyStateSection, curren
 	}
 }
 
+func mergeNewerUpdateState(target *AgentUpdateSection, current AgentUpdateSection) {
+	if target == nil {
+		return
+	}
+	if current.UpdatedAt > target.UpdatedAt {
+		*target = current
+	}
+}
+
 func dependencyStateTimestamp(state DependencyStateSection) int64 {
 	if state.LastSuccessAt > state.LastAttemptAt {
 		return state.LastSuccessAt
@@ -415,7 +442,11 @@ func (c *AgentConfig) ApplyDefaults() {
 	}
 	c.Agent.ReleaseChannel = NormalizeReleaseChannel(c.Agent.ReleaseChannel)
 	c.Agent.Branch = NormalizeBranch(c.Agent.Branch)
+	if c.Agent.ReleaseChannel == ReleaseChannelStable {
+		c.Agent.Branch = DefaultBranch
+	}
 	c.Agent.InstalledBuildID = NormalizeBuildID(c.Agent.InstalledBuildID)
+	c.Agent.Update = normalizeUpdateSection(c.Agent.Update)
 	if c.Agent.LogRetentionDays <= 0 {
 		c.Agent.LogRetentionDays = DefaultLogRetentionDays
 	}
@@ -435,6 +466,24 @@ func (c *AgentConfig) ApplyDefaults() {
 		}
 		c.Agent.DependencyState = normalized
 	}
+}
+
+func normalizeUpdateSection(update AgentUpdateSection) AgentUpdateSection {
+	update.OperationID = strings.TrimSpace(update.OperationID)
+	update.Kind = strings.TrimSpace(update.Kind)
+	update.Status = strings.ToLower(strings.TrimSpace(update.Status))
+	update.PreviousChannel = NormalizeReleaseChannel(update.PreviousChannel)
+	update.PreviousBranch = NormalizeBranch(update.PreviousBranch)
+	update.TargetChannel = NormalizeReleaseChannel(update.TargetChannel)
+	update.TargetBranch = NormalizeBranch(update.TargetBranch)
+	if update.PreviousChannel == ReleaseChannelStable {
+		update.PreviousBranch = DefaultBranch
+	}
+	if update.TargetChannel == ReleaseChannelStable {
+		update.TargetBranch = DefaultBranch
+	}
+	update.LastError = strings.TrimSpace(update.LastError)
+	return update
 }
 
 func (c *AgentConfig) EnsureDependencyVersions() *DependencyVersionsSection {

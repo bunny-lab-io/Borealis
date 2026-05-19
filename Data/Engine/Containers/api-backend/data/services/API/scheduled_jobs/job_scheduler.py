@@ -118,6 +118,7 @@ CREDENTIAL_RESET_REQUIRED_MESSAGE = (
     "Aegis Cipher being reset, please update the credential with the data it is missing."
 )
 JOB_KIND_AUTOMATION = "automation"
+JOB_KIND_AGENT_MAINTENANCE = "agent_maintenance"
 
 
 def _now_ts() -> int:
@@ -187,6 +188,8 @@ def _normalize_job_kind(value: Any) -> str:
     normalized = str(value or JOB_KIND_AUTOMATION).strip().lower()
     if normalized in {"device_onboarding", "automatic_onboarding", "ssh_onboarding", JOB_KIND_ONBOARDING}:
         return JOB_KIND_ONBOARDING
+    if normalized in {"agent_maintenance", "agent_update", "agent_channel_switch"}:
+        return JOB_KIND_AGENT_MAINTENANCE
     return JOB_KIND_AUTOMATION
 
 
@@ -5502,6 +5505,8 @@ class JobScheduler(OnboardingSchedulerMixin):
                     components = []
 
                 normalized_job_kind = _normalize_job_kind(job_kind)
+                if normalized_job_kind == JOB_KIND_AGENT_MAINTENANCE:
+                    continue
                 if normalized_job_kind == JOB_KIND_ONBOARDING:
                     occurrence_ts = self._resolve_occurrence_for_tick(
                         job_id=int(job_id),

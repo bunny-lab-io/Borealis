@@ -45,7 +45,7 @@ func run() int {
 	flag.StringVar(&options.EnrollmentCode, "site-enrollment-code", "", "Site enrollment code.")
 	flag.StringVar(&options.EnrollmentCode, "enrollment-code", "", "Enrollment code.")
 	flag.StringVar(&repoRef, "repo-ref", "", "Borealis repository branch/ref used by bootstrap installers.")
-	flag.StringVar(&options.ReleaseChannel, "release-channel", "", "Agent release channel: stable or source.")
+	flag.StringVar(&options.ReleaseChannel, "release-channel", "", "Agent release channel: stable or unstable.")
 	flag.StringVar(&helperStateDir, "helper-state-dir", "", "Current-user helper state directory.")
 	flag.BoolVar(&options.Verbose, "verbose", false, "Mirror logs to stdout.")
 	flag.BoolVar(&options.Once, "once", false, "Run auth and heartbeat once, then exit.")
@@ -91,10 +91,17 @@ func run() int {
 		return 0
 	}
 	if updateCheck {
+		updateConfigPath := options.ConfigPath
+		if updateConfigPath == "" {
+			updateConfigPath, _ = agentconfig.PathFromBinary()
+		}
+		markConfigUpdateOperation(updateConfigPath, "running", "")
 		if err := runStandaloneUpdateCheck(options); err != nil {
+			markConfigUpdateOperation(updateConfigPath, "failed", err.Error())
 			fmt.Fprintf(os.Stderr, "update check: %v\n", err)
 			return 1
 		}
+		markConfigUpdateOperationSuccess(updateConfigPath)
 		return 0
 	}
 	if watchdogCheck {

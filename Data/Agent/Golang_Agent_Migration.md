@@ -110,7 +110,7 @@ Back to Docs Index: ../../Docs/index.md
 68. Moved Windows dependency version tracking for WireGuard and UltraVNC into `agent.json` under `dependency_versions`, removed `installed_version.txt` dependency markers, and cleaned transient `Dependencies` installer folders after dependency reconciliation.
 69. Reorganized installed Agent logs into `Logs/Agent`, `Logs/WireGuard`, and `Logs/UltraVNC` category folders.
 70. Ported Windows display topology collection into the Go VNC role and included display topology plus virtual bounds in VNC ensure, credential, and role-health payloads.
-71. Added `agent.release_channel` to `agent.json`; `stable` update checks use Engine release manifests, while `source` update checks track current repository source from `agent.branch`. Engine release-channel changes are emitted to online Go agents so they commit the selected channel to local config.
+71. Added `agent.release_channel` to `agent.json`; `stable` update checks use Engine release manifests, while `unstable` update checks track current repository source from `agent.branch`. Engine release-channel changes are emitted to online Go agents so they commit the selected channel to local config.
 72. Added Device Summary branch control so admins can remotely set an agent source branch; Engine stores `agent_release_channel` and `agent_branch` on the device row and emits `agent_release_channel_changed` to online Go agents.
 73. Added initial regression coverage for Go Socket.IO ACK handling, release-channel event persistence, installed build config cleanup, and Engine release-channel/branch persistence plus socket emission.
 74. Moved Agent unit-test lane entrypoints under `Data/Agent/Unit_Tests` and removed archived Python Agent source.

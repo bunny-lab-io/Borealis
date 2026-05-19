@@ -155,11 +155,52 @@ func (c *Client) StoreServerSigningKey(value string) error {
 func (c *Client) StoreAgentReleaseTarget(releaseChannel string, branch string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.cfg.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(releaseChannel)
-	if strings.TrimSpace(branch) != "" {
-		c.cfg.Agent.Branch = agentconfig.NormalizeBranch(branch)
+	channel := agentconfig.NormalizeReleaseChannel(releaseChannel)
+	targetBranch := agentconfig.NormalizeBranch(branch)
+	if channel == agentconfig.ReleaseChannelStable {
+		targetBranch = agentconfig.DefaultBranch
 	}
+	c.cfg.Agent.ReleaseChannel = channel
+	c.cfg.Agent.Branch = targetBranch
 	return agentconfig.Save(c.configPath, c.cfg)
+}
+
+func (c *Client) StoreAgentUpdateOperation(operationID string, kind string, releaseChannel string, branch string) (agentconfig.AgentUpdateSection, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now().Unix()
+	channel := agentconfig.NormalizeReleaseChannel(releaseChannel)
+	targetBranch := agentconfig.NormalizeBranch(branch)
+	if channel == agentconfig.ReleaseChannelStable {
+		targetBranch = agentconfig.DefaultBranch
+	}
+	previousChannel := agentconfig.NormalizeReleaseChannel(c.cfg.Agent.ReleaseChannel)
+	previousBranch := agentconfig.NormalizeBranch(c.cfg.Agent.Branch)
+	if previousChannel == agentconfig.ReleaseChannelStable {
+		previousBranch = agentconfig.DefaultBranch
+	}
+	if strings.TrimSpace(operationID) == "" {
+		operationID = fmt.Sprintf("%d", now)
+	}
+	operation := agentconfig.AgentUpdateSection{
+		OperationID:     strings.TrimSpace(operationID),
+		Kind:            strings.TrimSpace(kind),
+		Status:          "config_written",
+		StartedAt:       now,
+		UpdatedAt:       now,
+		DeadlineAt:      now + int64(15*time.Minute/time.Second),
+		PreviousChannel: previousChannel,
+		PreviousBranch:  previousBranch,
+		TargetChannel:   channel,
+		TargetBranch:    targetBranch,
+	}
+	c.cfg.Agent.ReleaseChannel = channel
+	c.cfg.Agent.Branch = targetBranch
+	c.cfg.Agent.Update = operation
+	if err := agentconfig.Save(c.configPath, c.cfg); err != nil {
+		return agentconfig.AgentUpdateSection{}, err
+	}
+	return operation, nil
 }
 
 func (c *Client) LoadServerSigningKey() string {

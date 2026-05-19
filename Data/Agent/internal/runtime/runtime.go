@@ -329,6 +329,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	}
 	socket.On("agent_update_request", a.handleUpdateRequest)
 	socket.On("agent_release_channel_changed", a.handleReleaseChannelChanged)
+	socket.On("agent_maintenance_request", a.handleAgentMaintenanceRequest)
 	socket.OnConnected(func(ctx context.Context) error {
 		payload := map[string]any{
 			"agent_id":     a.authClient.AgentID(),
@@ -558,6 +559,22 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	payload["installed_build_id"] = installedBuildID
 	payload["agent_release_channel"] = agentconfig.NormalizeReleaseChannel(cfg.Agent.ReleaseChannel)
 	payload["agent_branch"] = agentconfig.NormalizeBranch(cfg.Agent.Branch)
+	if strings.TrimSpace(cfg.Agent.Update.OperationID) != "" {
+		payload["agent_update_status"] = map[string]any{
+			"operation_id":     cfg.Agent.Update.OperationID,
+			"kind":             cfg.Agent.Update.Kind,
+			"state":            cfg.Agent.Update.Status,
+			"target_channel":   cfg.Agent.Update.TargetChannel,
+			"target_branch":    cfg.Agent.Update.TargetBranch,
+			"previous_channel": cfg.Agent.Update.PreviousChannel,
+			"previous_branch":  cfg.Agent.Update.PreviousBranch,
+			"started_at":       cfg.Agent.Update.StartedAt,
+			"updated_at":       cfg.Agent.Update.UpdatedAt,
+			"completed_at":     cfg.Agent.Update.CompletedAt,
+			"deadline_at":      cfg.Agent.Update.DeadlineAt,
+			"last_error":       cfg.Agent.Update.LastError,
+		}
+	}
 	a.updateUIHeartbeat(payload)
 	a.recordHeartbeatAttempt()
 	_, err := a.authClient.PostJSON(ctx, "/api/agent/heartbeat", payload, nil)

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 )
@@ -41,6 +42,13 @@ func finalizeDeferredUpdate(configPath string, buildID string, expectedSHA256 st
 		return err
 	}
 	current.Agent.InstalledBuildID = normalizedBuildID
+	if current.Agent.Update.OperationID != "" {
+		now := time.Now().Unix()
+		current.Agent.Update.Status = "success"
+		current.Agent.Update.UpdatedAt = now
+		current.Agent.Update.CompletedAt = now
+		current.Agent.Update.LastError = ""
+	}
 	if strings.TrimSpace(current.Agent.Branch) == "" {
 		current.Agent.Branch = agentconfig.NormalizeBranch("main")
 	}

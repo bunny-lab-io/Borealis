@@ -16,7 +16,7 @@ func TestPersistInstallConfigRewritesAgentJSONWithFlatReleaseChannel(t *testing.
 	raw := `{
   "schema_version": 1,
   "server_url": "https://old.example",
-  "release_channel": "source",
+  "release_channel": "unstable",
   "agent": {
     "branch": "old-branch"
   },
@@ -53,7 +53,7 @@ func TestPersistInstallConfigRewritesAgentJSONWithFlatReleaseChannel(t *testing.
 	if loaded.Agent.Branch != "feature/linux-install" {
 		t.Fatalf("branch = %q", loaded.Agent.Branch)
 	}
-	if loaded.Agent.ReleaseChannel != agentconfig.ReleaseChannelSource {
+	if loaded.Agent.ReleaseChannel != agentconfig.ReleaseChannelUnstable {
 		t.Fatalf("release_channel = %q", loaded.Agent.ReleaseChannel)
 	}
 	rewritten, err := os.ReadFile(configPath)
