@@ -31,8 +31,7 @@ func TestUltraVNCInnoInstallArgsSuppressFileInUsePrompts(t *testing.T) {
 	for _, expected := range []string{
 		"/VERYSILENT",
 		"/SUPPRESSMSGBOXES",
-		"/CLOSEAPPLICATIONS",
-		"/FORCECLOSEAPPLICATIONS",
+		"/NOCLOSEAPPLICATIONS",
 		"/NOCANCEL",
 		"/NORESTART",
 		"/NORESTARTAPPLICATIONS",

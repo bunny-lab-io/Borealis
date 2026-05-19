@@ -16,6 +16,7 @@ func agentConfigPath(installDir string) string {
 }
 
 func writeGoAgentConfig(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	removeLegacyConfigJSON(cfg.InstallDir, logger)
 	path := agentConfigPath(cfg.InstallDir)
 	current, err := agentconfig.Load(path)
 	if err != nil {
@@ -33,6 +34,22 @@ func writeGoAgentConfig(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		logger.Tracef("Go Agent config written: path=%s server_url_present=%t enrollment_present=%t release_channel=%s branch=%s", path, current.ServerURL != "", current.EnrollmentCode != "", current.Agent.ReleaseChannel, current.Agent.Branch)
 	}
 	return nil
+}
+
+func removeLegacyConfigJSON(installDir string, logger *BootstrapLogger) {
+	legacyPath := filepath.Join(installDir, "config.json")
+	if _, err := os.Stat(legacyPath); err != nil {
+		return
+	}
+	if err := os.Remove(legacyPath); err != nil {
+		if logger != nil {
+			logger.Warnf("Failed to remove legacy config.json: path=%s error=%v", legacyPath, err)
+		}
+		return
+	}
+	if logger != nil {
+		logger.Tracef("Removed legacy config.json: path=%s", legacyPath)
+	}
 }
 
 func mergeConfigJSONBootstrapInputs(cfg *BootstrapConfig) {

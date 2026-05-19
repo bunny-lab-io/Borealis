@@ -28,8 +28,7 @@ func ultraVNCInnoInstallArgs(logPath string) []string {
 	return []string{
 		"/VERYSILENT",
 		"/SUPPRESSMSGBOXES",
-		"/CLOSEAPPLICATIONS",
-		"/FORCECLOSEAPPLICATIONS",
+		"/NOCLOSEAPPLICATIONS",
 		"/NOCANCEL",
 		"/NORESTART",
 		"/NORESTARTAPPLICATIONS",

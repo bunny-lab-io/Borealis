@@ -29,7 +29,6 @@ func RunWatchdogCheck(configPath string) error {
 		cfg.Agent.Liveness.LastWatchdogCheckAt = now.Unix()
 	})
 	cfg, _ := agentconfig.Load(configPath)
-	logWatchdog(configPath, "watchdog", "check", "start", "service_state", nil)
 
 	manager, err := mgr.Connect()
 	if err != nil {
@@ -74,7 +73,9 @@ func RunWatchdogCheck(configPath string) error {
 		return nil
 	}
 	if decision.Action == "check_liveness" {
-		logWatchdog(configPath, "watchdog", decision.Action, decision.Outcome, decision.Reason, nil)
+		if decision.Outcome != "healthy" {
+			logWatchdog(configPath, "watchdog", decision.Action, decision.Outcome, decision.Reason, nil)
+		}
 		return nil
 	}
 	if decision.Action == "restart_service" && decision.Outcome == "skipped" {

@@ -587,15 +587,27 @@ func (m *Manager) ensureService(ctx context.Context, reloadReason string) error 
 
 func (m *Manager) startService(ctx context.Context, service string) error {
 	result, err := m.runner(ctx, 30*time.Second, "sc.exe", "start", service)
-	if err != nil {
+	output := strings.TrimSpace(result.Stdout + "\n" + result.Stderr)
+	if err != nil && !isServiceAlreadyRunning(result, output, err) {
 		return err
 	}
-	output := strings.TrimSpace(result.Stdout + "\n" + result.Stderr)
-	if result.ExitCode != 0 && !strings.Contains(output, "1056") && !strings.Contains(strings.ToLower(output), "already running") {
+	if result.ExitCode != 0 && !isServiceAlreadyRunning(result, output, err) {
 		return fmt.Errorf("UltraVNC service start failed: %s", output)
 	}
 	m.logf("VNC service start requested service=%s exit_code=%d output=%s", service, result.ExitCode, compactLogText(output))
 	return nil
+}
+
+func isServiceAlreadyRunning(result commandResult, output string, err error) bool {
+	lowerOutput := strings.ToLower(output)
+	if result.ExitCode == 1056 || strings.Contains(output, "1056") || strings.Contains(lowerOutput, "already running") {
+		return true
+	}
+	if err != nil {
+		lowerError := strings.ToLower(err.Error())
+		return strings.Contains(lowerError, "exit status 1056") || strings.Contains(lowerError, "already running")
+	}
+	return false
 }
 
 func (m *Manager) restartService(ctx context.Context, service string, reason string) error {

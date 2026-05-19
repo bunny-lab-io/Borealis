@@ -61,6 +61,7 @@ type Agent struct {
 	auditAt     time.Time
 	roleMu      sync.Mutex
 	roleStates  map[string]string
+	roleDetails map[string]string
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -127,6 +128,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		vnc:         vncManager,
 		wireguard:   wireGuardManager,
 		roleStates:  map[string]string{},
+		roleDetails: map[string]string{},
 	}
 	if agent.wireguard != nil {
 		agent.wireguard.SetStatusReporter(agent.postWireGuardStatus)
@@ -681,15 +683,25 @@ func (a *Agent) recordOneRoleHealth(role map[string]any) {
 		return
 	}
 	a.roleMu.Lock()
+	if a.roleStates == nil {
+		a.roleStates = map[string]string{}
+	}
+	if a.roleDetails == nil {
+		a.roleDetails = map[string]string{}
+	}
 	previous := a.roleStates[roleID]
+	previousDetail := a.roleDetails[roleID]
 	if previous != status {
 		a.roleStates[roleID] = status
+	}
+	if previousDetail != detail {
+		a.roleDetails[roleID] = detail
 	}
 	a.roleMu.Unlock()
 	if previous != "" && previous != status {
 		a.logRecovery("role_supervisor", roleID, "status_transition", status, detail, nil)
 	}
-	if status == "unhealthy" || status == "recovering" || status == "failed" {
+	if (status == "unhealthy" || status == "recovering" || status == "failed") && (previous != status || previousDetail != detail) {
 		a.logRecovery("role_supervisor", roleID, "health_check", status, detail, nil)
 	}
 }

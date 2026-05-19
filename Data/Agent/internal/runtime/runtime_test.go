@@ -146,6 +146,41 @@ func TestRecoveryLogWritesRoleRecoveryLog(t *testing.T) {
 	}
 }
 
+func TestRoleRecoveryLogSuppressesRepeatedHealthChecks(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, agentconfig.FileName)
+	cfg := agentconfig.Default()
+	if err := agentconfig.Save(configPath, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	agent := &Agent{configPath: configPath}
+	role := map[string]any{
+		"role_id":     "system:vnc",
+		"status_code": "recovering",
+		"detail":      "BorealisAgentUltraVNC is STOP_PENDING.",
+	}
+	agent.recordOneRoleHealth(role)
+	agent.recordOneRoleHealth(role)
+
+	raw, err := os.ReadFile(filepath.Join(root, "Logs", "Agent", "role_recovery.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(raw), "action=health_check"); count != 1 {
+		t.Fatalf("health_check count = %d, want 1; log=%s", count, string(raw))
+	}
+
+	role["detail"] = "BorealisAgentUltraVNC is STOP_PENDING; listener is not_listening."
+	agent.recordOneRoleHealth(role)
+	raw, err = os.ReadFile(filepath.Join(root, "Logs", "Agent", "role_recovery.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(raw), "action=health_check"); count != 2 {
+		t.Fatalf("health_check count after detail change = %d, want 2; log=%s", count, string(raw))
+	}
+}
+
 func TestWatchdogDecisionMatrix(t *testing.T) {
 	now := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
 	tests := []struct {

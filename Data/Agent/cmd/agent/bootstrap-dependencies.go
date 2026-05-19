@@ -188,14 +188,12 @@ func ensureUltraVNCSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) e
 	}
 	if exePath != "" {
 		fileVersion := readWindowsFileVersion(exePath, logger)
-		if fileVersion == "" || dependencyVersionAtLeast(fileVersion, ultraVNCVersion) {
-			logger.Tracef("UltraVNC executable already present at %s; config version=%s file_version=%s. Skipping MSI reinstall.", exePath, installedVersion, dependencyFallbackText(fileVersion, "unknown"))
-			if err := writeConfigDependencyVersion(cfg, dependencyNameUltraVNC, dependencyFallbackText(fileVersion, ultraVNCVersion)); err != nil {
-				logger.Warnf("UltraVNC dependency version write failed: %v", err)
-			}
-			return nil
+		version := dependencyFallbackText(fileVersion, dependencyFallbackText(installedVersion, ultraVNCVersion))
+		logger.Tracef("UltraVNC executable already present at %s; config version=%s file_version=%s. Skipping setup reinstall.", exePath, installedVersion, dependencyFallbackText(fileVersion, "unknown"))
+		if err := writeConfigDependencyVersion(cfg, dependencyNameUltraVNC, version); err != nil {
+			logger.Warnf("UltraVNC dependency version write failed: %v", err)
 		}
-		logger.Tracef("UltraVNC executable present but older than desired: path=%s file_version=%s desired=%s", exePath, fileVersion, ultraVNCVersion)
+		return nil
 	}
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return err
@@ -229,7 +227,7 @@ func ensureUltraVNCSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) e
 		return err
 	}
 	prepareUltraVNCMSIInstall(logger)
-	logPath := filepath.Join(cfg.InstallDir, "Logs", "UltraVNC", "ultravnc-msi-install.log")
+	logPath := filepath.Join(cfg.InstallDir, "Logs", "UltraVNC", "ultravnc-setup.log")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
 		return err
 	}
@@ -244,7 +242,7 @@ func ensureUltraVNCSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) e
 	}
 	exePath = resolveUltraVNCInstalledExe()
 	if exePath == "" {
-		return fmt.Errorf("UltraVNC winvnc.exe not found after MSI install")
+		return fmt.Errorf("UltraVNC winvnc.exe not found after setup install")
 	}
 	if err := writeConfigDependencyVersion(cfg, dependencyNameUltraVNC, ultraVNCVersion); err != nil {
 		logger.Warnf("UltraVNC dependency version write failed: %v", err)

@@ -3,6 +3,7 @@ package vnc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -309,6 +310,19 @@ func TestEnsureServiceLeavesRunningServiceAloneWhenConfigUnchanged(t *testing.T)
 
 	if containsCall(calls, "sc.exe stop "+serviceName) || containsCall(calls, "sc.exe start "+serviceName) {
 		t.Fatalf("expected no stop/start calls for unchanged config, got %#v", calls)
+	}
+}
+
+func TestStartServiceTreatsAlreadyRunningErrorAsSuccess(t *testing.T) {
+	manager := &Manager{
+		serviceName: serviceName,
+		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+			return commandResult{Stdout: "[SC] StartService FAILED 1056:\n\nAn instance of the service is already running.", ExitCode: 1056}, errors.New("exit status 1056")
+		},
+	}
+
+	if err := manager.startService(context.Background(), serviceName); err != nil {
+		t.Fatalf("startService returned error for already-running service: %v", err)
 	}
 }
 
