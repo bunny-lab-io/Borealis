@@ -1020,7 +1020,7 @@ class WatchdogRuntimeService:
             if not device:
                 continue
             services_payload = normalize_device_services(row[2], default_captured_at=_coerce_int(row[4], 0))
-            role_health_payload = normalize_agent_role_health(row[3])
+            role_health_payload = normalize_agent_role_health(row[3], mark_stale=True, now_ts=int(time.time()))
             installed_hash = _clean_text(row[6]).lower()
             target_build_id = self._resolve_device_target_build_id(row[14])
             agent_version_status = "Up-to-Date" if installed_hash and target_build_id and installed_hash == target_build_id else "Needs Updated"

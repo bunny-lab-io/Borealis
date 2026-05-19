@@ -33,8 +33,10 @@ const RUNTIME_STATUS_COLOR_BY_CODE = Object.freeze({
   healthy: MAGIC_UI.accentC,
   loaded: MAGIC_UI.accentC,
   recovering: "#ffb347",
+  stale: "#ffb347",
   pending: MAGIC_UI.accentA,
   unhealthy: "#ff7b89",
+  failed: "#ff7b89",
   unsupported: "rgba(176, 184, 200, 0.74)",
   not_applicable: "rgba(176, 184, 200, 0.74)",
   unknown: "rgba(176, 184, 200, 0.74)",
@@ -45,7 +47,7 @@ export function normalizeMilestoneState(value) {
   if (["complete", "active", "failed", "pending", "skipped"].includes(normalized)) return normalized;
   if (normalized === "healthy") return "complete";
   if (normalized === "recovering") return "active";
-  if (normalized === "unhealthy") return "failed";
+  if (normalized === "unhealthy" || normalized === "failed") return "failed";
   return "pending";
 }
 
@@ -60,7 +62,7 @@ function buildMilestoneLookup(milestones) {
 function normalizeRuntimeHealthState(statusCode) {
   const normalized = String(statusCode || "").trim().toLowerCase();
   if (normalized === "healthy" || normalized === "loaded") return "complete";
-  if (normalized === "recovering" || normalized === "pending") return "active";
+  if (normalized === "recovering" || normalized === "pending" || normalized === "stale") return "active";
   if (normalized === "unhealthy") return "failed";
   if (normalized === "unsupported" || normalized === "not_applicable" || normalized === "no_desktop_environment_active") return "skipped";
   return "pending";

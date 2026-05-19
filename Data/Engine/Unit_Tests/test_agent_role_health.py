@@ -147,3 +147,29 @@ def test_normalize_agent_role_health_preserves_supervisor_fields() -> None:
     assert role["last_success_at"] == 250
     assert role["last_error"] == "listener warming"
     assert role["recovery_attempts"] == 2
+
+
+def test_normalize_agent_role_health_marks_stale_when_requested() -> None:
+    normalized = normalize_agent_role_health(
+        {
+            "reported_at": 100,
+            "roles": [
+                {
+                    "role_name": "wireguard_tunnel",
+                    "context": "system",
+                    "status_code": "healthy",
+                    "last_checked_at": 100,
+                }
+            ],
+        },
+        mark_stale=True,
+        now_ts=250,
+        stale_after_seconds=90,
+    )
+
+    role = normalized["roles"][0]
+    assert role["status_code"] == "stale"
+    assert role["status"] == "Stale"
+    assert role["observed_state"] == "stale"
+    assert role["details"]["previous_status_code"] == "healthy"
+    assert role["details"]["stale_age_seconds"] == "150"

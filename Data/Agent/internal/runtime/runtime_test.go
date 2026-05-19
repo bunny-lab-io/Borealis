@@ -193,6 +193,39 @@ func TestRoleSupervisorAddsSourceOfTruthFields(t *testing.T) {
 	}
 }
 
+func TestRoleSupervisorSchedulesRecoveryHandlerWithCooldown(t *testing.T) {
+	recovered := make(chan RoleSnapshot, 2)
+	supervisor := NewRoleSupervisor(nil)
+	supervisor.RegisterRecoveryHandler("system:vnc", func(snapshot RoleSnapshot) {
+		recovered <- snapshot
+	})
+	snapshot := RoleSnapshot{
+		RoleID:     "system:vnc",
+		RoleName:   "vnc",
+		RoleLabel:  "UltraVNC Service",
+		Context:    "system",
+		Status:     "Recovering",
+		StatusCode: "recovering",
+		Detail:     "listener warming",
+		CheckedAt:  time.Now().Unix(),
+	}
+	supervisor.Update([]RoleSnapshot{snapshot})
+	select {
+	case got := <-recovered:
+		if got.RoleID != "system:vnc" {
+			t.Fatalf("recovered role = %s, want system:vnc", got.RoleID)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for recovery handler")
+	}
+	supervisor.Update([]RoleSnapshot{snapshot})
+	select {
+	case <-recovered:
+		t.Fatalf("recovery handler bypassed cooldown")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestRoleRecoveryLogSuppressesRepeatedHealthChecks(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, agentconfig.FileName)

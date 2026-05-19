@@ -146,6 +146,7 @@ func (m *Manager) Stop(ctx context.Context) {
 	listener := m.listener
 	m.listener = nil
 	m.listening = false
+	m.started = false
 	m.lastCheckedAt = time.Now().Unix()
 	m.mu.Unlock()
 	if listener != nil {
@@ -156,6 +157,19 @@ func (m *Manager) Stop(ctx context.Context) {
 	case <-ctx.Done():
 	default:
 	}
+}
+
+func (m *Manager) Restart(ctx context.Context, reason string) {
+	if m == nil {
+		return
+	}
+	cleanReason := strings.TrimSpace(reason)
+	if cleanReason == "" {
+		cleanReason = "role_supervisor_recovery"
+	}
+	m.logf("Remote shell restart requested reason=%s", cleanReason)
+	m.Stop(context.Background())
+	m.Start(ctx)
 }
 
 func (m *Manager) Health() RoleHealth {

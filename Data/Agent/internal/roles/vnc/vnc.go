@@ -149,6 +149,25 @@ func (m *Manager) Start(ctx context.Context) {
 	go m.ensureFromEngine(context.Background(), "agent_startup")
 }
 
+func (m *Manager) RequestEnsure(reason string) {
+	if m == nil {
+		return
+	}
+	cleanReason := cleanText(reason)
+	if cleanReason == "" {
+		cleanReason = "role_supervisor_recovery"
+	}
+	go func() {
+		if err := m.ensureFromEngine(context.Background(), cleanReason); err != nil {
+			m.mu.Lock()
+			m.lastError = err.Error()
+			m.lastEnsureAt = time.Now().Unix()
+			m.mu.Unlock()
+			m.logf("VNC recovery ensure failed reason=%s error=%v", cleanReason, err)
+		}
+	}()
+}
+
 func (m *Manager) Stop(ctx context.Context) {
 	if m == nil {
 		return

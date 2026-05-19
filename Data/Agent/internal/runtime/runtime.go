@@ -133,10 +133,35 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		roleDetails: map[string]string{},
 	}
 	agent.supervisor.logRecovery = agent.logRecovery
+	agent.registerRoleRecoveryHandlers()
 	if agent.wireguard != nil {
 		agent.wireguard.SetStatusReporter(agent.postWireGuardStatus)
 	}
 	return agent, nil
+}
+
+func (a *Agent) registerRoleRecoveryHandlers() {
+	if a == nil || a.supervisor == nil {
+		return
+	}
+	if a.vnc != nil {
+		a.supervisor.RegisterRecoveryHandler("system:vnc", func(snapshot RoleSnapshot) {
+			a.logRecovery("role_supervisor", snapshot.RoleID, "recover", "start", "vnc_ensure", nil)
+			a.vnc.RequestEnsure("role_supervisor_recovery")
+		})
+	}
+	if a.wireguard != nil {
+		a.supervisor.RegisterRecoveryHandler("system:wireguard_tunnel", func(snapshot RoleSnapshot) {
+			a.logRecovery("role_supervisor", snapshot.RoleID, "recover", "start", "wireguard_ensure", nil)
+			a.wireguard.RequestEnsure("role_supervisor_recovery")
+		})
+	}
+	if a.remoteShell != nil {
+		a.supervisor.RegisterRecoveryHandler("system:remote_shell", func(snapshot RoleSnapshot) {
+			a.logRecovery("role_supervisor", snapshot.RoleID, "recover", "start", "remote_shell_restart", nil)
+			a.remoteShell.Restart(context.Background(), "role_supervisor_recovery")
+		})
+	}
 }
 
 func (a *Agent) Run(ctx context.Context) error {

@@ -147,6 +147,7 @@ export default function AgentHealthTab({
   onRequestRefresh = null,
 }) {
   const refreshTimerRef = useRef(null);
+  const refreshIntervalRef = useRef(null);
   const payload = agentRoleHealth && typeof agentRoleHealth === "object" ? agentRoleHealth : {};
   const items = Array.isArray(payload?.roles) ? payload.roles : [];
 
@@ -270,7 +271,9 @@ export default function AgentHealthTab({
       const payloadHost = String(eventPayload?.hostname || "").trim().toLowerCase();
       if (payloadHost && payloadHost !== expectedHost) return;
       if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current);
-      refreshTimerRef.current = window.setTimeout(() => onRequestRefresh({ silent: true, includeAgents: false }), 250);
+      refreshTimerRef.current = window.setTimeout(() => {
+        void onRequestRefresh({ silent: true, includeAgents: false });
+      }, 250);
     };
     socket.on("agent_status_changed", handler);
     return () => {
@@ -278,6 +281,17 @@ export default function AgentHealthTab({
       socket.off("agent_status_changed", handler);
     };
   }, [hostname, onRequestRefresh]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof onRequestRefresh !== "function") return undefined;
+    refreshIntervalRef.current = window.setInterval(() => {
+      void onRequestRefresh({ silent: true, includeAgents: false });
+    }, 20000);
+    return () => {
+      if (refreshIntervalRef.current) window.clearInterval(refreshIntervalRef.current);
+      refreshIntervalRef.current = null;
+    };
+  }, [onRequestRefresh]);
 
   return (
     <Box

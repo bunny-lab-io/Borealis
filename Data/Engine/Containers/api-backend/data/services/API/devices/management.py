@@ -914,7 +914,11 @@ class DeviceManagementService:
         created_at = mapping.get("created_at") or 0
         last_enrollment_at = mapping.get("last_enrollment_at") or created_at or 0
         last_seen = mapping.get("last_seen") or 0
-        role_health = normalize_agent_role_health(mapping.get("agent_role_health"))
+        role_health = normalize_agent_role_health(
+            mapping.get("agent_role_health"),
+            mark_stale=True,
+            now_ts=int(time.time()),
+        )
         services_payload = normalize_device_services(mapping.get("services"))
         sessions_payload = normalize_device_sessions(mapping.get("sessions"))
         processes_payload = normalize_device_processes(mapping.get("processes"))

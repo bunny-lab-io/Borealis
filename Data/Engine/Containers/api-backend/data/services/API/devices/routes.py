@@ -304,7 +304,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             row = cur.fetchone()
             if not row or row[0] in (None, ""):
                 return dict(default_payload)
-            normalized = normalize_agent_role_health(row[0])
+            normalized = normalize_agent_role_health(row[0], mark_stale=True, now_ts=int(time.time()))
             for role in normalized.get("roles") or []:
                 if str(role.get("role_name") or "").strip().lower() != "vnc":
                     continue

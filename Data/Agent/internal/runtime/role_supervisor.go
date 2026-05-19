@@ -22,12 +22,13 @@ type RoleSnapshot struct {
 }
 
 type supervisedRoleState struct {
-	snapshot         RoleSnapshot
-	lastStatus       string
-	lastDetail       string
-	lastSuccessAt    int64
-	lastError        string
-	recoveryAttempts int
+	snapshot              RoleSnapshot
+	lastStatus            string
+	lastDetail            string
+	lastSuccessAt         int64
+	lastError             string
+	recoveryAttempts      int
+	lastRecoveryAttemptAt int64
 }
 
 type RoleSupervisor struct {
@@ -40,9 +41,22 @@ type RoleSupervisor struct {
 
 func NewRoleSupervisor(logRecovery func(component string, roleID string, action string, outcome string, reason string, err error)) *RoleSupervisor {
 	return &RoleSupervisor{
-		roles:       map[string]supervisedRoleState{},
-		logRecovery: logRecovery,
+		roles:        map[string]supervisedRoleState{},
+		logRecovery:  logRecovery,
+		recoveryPlan: map[string]func(RoleSnapshot){},
 	}
+}
+
+func (s *RoleSupervisor) RegisterRecoveryHandler(roleID string, handler func(RoleSnapshot)) {
+	if s == nil || strings.TrimSpace(roleID) == "" || handler == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.recoveryPlan == nil {
+		s.recoveryPlan = map[string]func(RoleSnapshot){}
+	}
+	s.recoveryPlan[strings.TrimSpace(roleID)] = handler
 }
 
 func (s *RoleSupervisor) Update(snapshots []RoleSnapshot) map[string]any {
@@ -51,12 +65,12 @@ func (s *RoleSupervisor) Update(snapshots []RoleSnapshot) map[string]any {
 	}
 	now := time.Now().Unix()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.roles == nil {
 		s.roles = map[string]supervisedRoleState{}
 	}
 	s.revision++
 	out := make([]map[string]any, 0, len(snapshots))
+	recoveryActions := []func(){}
 	for _, snapshot := range snapshots {
 		normalized := normalizeRoleSnapshot(snapshot, now)
 		state := s.roles[normalized.RoleID]
@@ -77,15 +91,47 @@ func (s *RoleSupervisor) Update(snapshots []RoleSnapshot) map[string]any {
 				state.recoveryAttempts++
 			}
 		}
+		if s.shouldRecover(normalized, state, now) {
+			state.lastRecoveryAttemptAt = now
+			if handler := s.recoveryPlan[normalized.RoleID]; handler != nil {
+				if s.logRecovery != nil {
+					s.logRecovery("role_supervisor", normalized.RoleID, "recover", "scheduled", normalized.Detail, nil)
+				}
+				recoverySnapshot := normalized
+				recoveryActions = append(recoveryActions, func() {
+					handler(recoverySnapshot)
+				})
+			}
+		}
 		s.roles[normalized.RoleID] = state
 		s.logRoleTransition(previousStatus, previousDetail, normalized, state)
 		out = append(out, roleSnapshotMap(normalized, state, s.revision))
 	}
-	return map[string]any{
+	payload := map[string]any{
 		"roles":               out,
 		"reported_at":         now,
 		"supervisor_revision": s.revision,
 	}
+	s.mu.Unlock()
+	for _, action := range recoveryActions {
+		go action()
+	}
+	return payload
+}
+
+func (s *RoleSupervisor) shouldRecover(snapshot RoleSnapshot, state supervisedRoleState, now int64) bool {
+	if s == nil || s.recoveryPlan == nil || s.recoveryPlan[snapshot.RoleID] == nil {
+		return false
+	}
+	switch snapshot.StatusCode {
+	case "recovering", "unhealthy", "failed":
+	default:
+		return false
+	}
+	if now-state.lastRecoveryAttemptAt < 60 {
+		return false
+	}
+	return true
 }
 
 func (s *RoleSupervisor) logRoleTransition(previousStatus string, previousDetail string, snapshot RoleSnapshot, state supervisedRoleState) {
@@ -150,20 +196,21 @@ func roleSnapshotMap(snapshot RoleSnapshot, state supervisedRoleState, revision 
 	details["observed_state"] = snapshot.ObservedState
 	details["supervisor_revision"] = revision
 	return map[string]any{
-		"role_id":           snapshot.RoleID,
-		"role_name":         snapshot.RoleName,
-		"role_label":        snapshot.RoleLabel,
-		"context":           snapshot.Context,
-		"status":            snapshot.Status,
-		"status_code":       snapshot.StatusCode,
-		"detail":            snapshot.Detail,
-		"desired_state":     snapshot.DesiredState,
-		"observed_state":    snapshot.ObservedState,
-		"last_checked_at":   snapshot.CheckedAt,
-		"last_success_at":   state.lastSuccessAt,
-		"last_error":        state.lastError,
-		"recovery_attempts": state.recoveryAttempts,
-		"details":           details,
+		"role_id":                  snapshot.RoleID,
+		"role_name":                snapshot.RoleName,
+		"role_label":               snapshot.RoleLabel,
+		"context":                  snapshot.Context,
+		"status":                   snapshot.Status,
+		"status_code":              snapshot.StatusCode,
+		"detail":                   snapshot.Detail,
+		"desired_state":            snapshot.DesiredState,
+		"observed_state":           snapshot.ObservedState,
+		"last_checked_at":          snapshot.CheckedAt,
+		"last_success_at":          state.lastSuccessAt,
+		"last_error":               state.lastError,
+		"recovery_attempts":        state.recoveryAttempts,
+		"last_recovery_attempt_at": state.lastRecoveryAttemptAt,
+		"details":                  details,
 	}
 }
 
