@@ -25,9 +25,9 @@ const (
 	ultraVNCServiceName                  = "BorealisAgentUltraVNC"
 	ultraVNCServiceDisplayName           = "Borealis Agent - UltraVNC"
 	ultraVNCVersion                      = "1.8.2.1"
-	ultraVNCMSIName                      = "UltraVNC_1821_x64_Setup.msi"
-	ultraVNCMSIURL                       = "https://uvnc.eu/download/1800/UltraVNC_1821_x64_Setup.msi"
-	ultraVNCMSISHA256                    = "cc7a41d546523dc5e33324b12a23d2fbb2d0a9b0b9f7c08b0e242ebe5da3c2b9"
+	ultraVNCInstallerName                = "UltraVNC_1821_x64_Setup.exe"
+	ultraVNCInstallerURL                 = "https://uvnc.eu/download/1800/UltraVNC_1821_x64_Setup.exe"
+	ultraVNCInstallerSHA256              = "7c12518b05a25f5cd502fa21818c7271c766cacff312cbc47bc3942468b14919"
 	wireGuardManagerServiceName          = "WireGuardManager"
 	wireGuardManagerDisplayName          = "Borealis Agent - WireGuard Manager"
 	wireGuardInstallManagerServiceEnvVar = "BOREALIS_WIREGUARD_INSTALL_MANAGER_SERVICE"
@@ -200,29 +200,29 @@ func ensureUltraVNCSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) e
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return err
 	}
-	msiPath := filepath.Join(root, ultraVNCMSIName)
-	if !fileExists(msiPath) {
-		logger.Tracef("UltraVNC MSI missing; downloading to %s", msiPath)
-		if err := downloadFileLogged(context.Background(), ultraVNCMSIURL, msiPath, 240*time.Second, logger); err != nil {
+	installerPath := filepath.Join(root, ultraVNCInstallerName)
+	if !fileExists(installerPath) {
+		logger.Tracef("UltraVNC installer missing; downloading to %s", installerPath)
+		if err := downloadFileLogged(context.Background(), ultraVNCInstallerURL, installerPath, 240*time.Second, logger); err != nil {
 			return err
 		}
 	}
-	actual, err := sha256File(msiPath)
+	actual, err := sha256File(installerPath)
 	if err != nil {
 		return err
 	}
-	if !strings.EqualFold(actual, ultraVNCMSISHA256) {
-		_ = os.Remove(msiPath)
-		logger.Warnf("UltraVNC MSI checksum mismatch expected=%s actual=%s; redownloading.", ultraVNCMSISHA256, actual)
-		if err := downloadFileLogged(context.Background(), ultraVNCMSIURL, msiPath, 240*time.Second, logger); err != nil {
+	if !strings.EqualFold(actual, ultraVNCInstallerSHA256) {
+		_ = os.Remove(installerPath)
+		logger.Warnf("UltraVNC installer checksum mismatch expected=%s actual=%s; redownloading.", ultraVNCInstallerSHA256, actual)
+		if err := downloadFileLogged(context.Background(), ultraVNCInstallerURL, installerPath, 240*time.Second, logger); err != nil {
 			return err
 		}
-		actual, err = sha256File(msiPath)
+		actual, err = sha256File(installerPath)
 		if err != nil {
 			return err
 		}
-		if !strings.EqualFold(actual, ultraVNCMSISHA256) {
-			return fmt.Errorf("UltraVNC MSI checksum mismatch expected=%s actual=%s", ultraVNCMSISHA256, actual)
+		if !strings.EqualFold(actual, ultraVNCInstallerSHA256) {
+			return fmt.Errorf("UltraVNC installer checksum mismatch expected=%s actual=%s", ultraVNCInstallerSHA256, actual)
 		}
 	}
 	if _, err := ensureUltraVNCBootstrapConfig(cfg, logger); err != nil {
@@ -233,14 +233,14 @@ func ensureUltraVNCSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) e
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
 		return err
 	}
-	logger.Tracef("UltraVNC MSI install command starting: version=%s msi=%s", ultraVNCVersion, msiPath)
+	logger.Tracef("UltraVNC installer command starting: version=%s installer=%s", ultraVNCVersion, installerPath)
 	if _, err := runCommandTimeout(
 		logger,
 		4*time.Minute,
-		"msiexec.exe",
-		msiInstallArgs(msiPath, logPath, ultraVNCMSIProperties()...)...,
+		installerPath,
+		ultraVNCInnoInstallArgs(logPath)...,
 	); err != nil {
-		return fmt.Errorf("UltraVNC MSI install failed: %w", err)
+		return fmt.Errorf("UltraVNC installer failed: %w", err)
 	}
 	exePath = resolveUltraVNCInstalledExe()
 	if exePath == "" {
