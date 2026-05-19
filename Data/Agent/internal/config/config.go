@@ -177,7 +177,14 @@ func LoadOrCreate(path string) (AgentConfig, error) {
 func Save(path string, cfg *AgentConfig) error {
 	fileMu.Lock()
 	defer fileMu.Unlock()
-	return saveUnlocked(path, cfg)
+	return withProcessFileLock(path, func() error {
+		if cfg != nil {
+			if current, err := loadUnlocked(path); err == nil {
+				mergeNewerLiveness(&cfg.Agent.Liveness, current.Agent.Liveness)
+			}
+		}
+		return saveUnlocked(path, cfg)
+	})
 }
 
 func saveUnlocked(path string, cfg *AgentConfig) error {
@@ -232,14 +239,90 @@ func saveUnlocked(path string, cfg *AgentConfig) error {
 func Update(path string, update func(*AgentConfig)) error {
 	fileMu.Lock()
 	defer fileMu.Unlock()
-	cfg, err := Load(path)
+	return withProcessFileLock(path, func() error {
+		cfg, err := loadUnlocked(path)
+		if err != nil {
+			return err
+		}
+		if update != nil {
+			update(&cfg)
+		}
+		return saveUnlocked(path, &cfg)
+	})
+}
+
+func loadUnlocked(path string) (AgentConfig, error) {
+	var cfg AgentConfig
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			cfg = Default()
+			return cfg, nil
+		}
+		return cfg, err
+	}
+	if len(data) == 0 {
+		cfg = Default()
+		return cfg, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cfg); err != nil {
+		return cfg, fmt.Errorf("parse config: %w", err)
+	}
+	cfg.ApplyDefaults()
+	return cfg, nil
+}
+
+func withProcessFileLock(path string, fn func() error) error {
+	if strings.TrimSpace(path) == "" {
+		return errors.New("config path missing")
+	}
+	parent := filepath.Dir(path)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return err
+	}
+	lock, err := acquireProcessFileLock(path + ".lock")
 	if err != nil {
 		return err
 	}
-	if update != nil {
-		update(&cfg)
+	defer lock.Close()
+	if fn == nil {
+		return nil
 	}
-	return saveUnlocked(path, &cfg)
+	return fn()
+}
+
+func mergeNewerLiveness(target *AgentLivenessSection, current AgentLivenessSection) {
+	if target == nil {
+		return
+	}
+	if current.LastLocalTickAt > target.LastLocalTickAt {
+		target.PID = current.PID
+		target.BootID = current.BootID
+		target.StartedAt = current.StartedAt
+		target.LastLocalTickAt = current.LastLocalTickAt
+	}
+	if current.LastHeartbeatAttemptAt > target.LastHeartbeatAttemptAt {
+		target.LastHeartbeatAttemptAt = current.LastHeartbeatAttemptAt
+	}
+	if current.LastHeartbeatSuccessAt > target.LastHeartbeatSuccessAt {
+		target.LastHeartbeatSuccessAt = current.LastHeartbeatSuccessAt
+	}
+	if current.LastHeartbeatError != "" && current.LastHeartbeatAttemptAt >= target.LastHeartbeatAttemptAt {
+		target.LastHeartbeatError = current.LastHeartbeatError
+	}
+	if current.LastSocketStateAt > target.LastSocketStateAt {
+		target.LastSocketState = current.LastSocketState
+		target.LastSocketStateAt = current.LastSocketStateAt
+	}
+	if current.LastWatchdogCheckAt > target.LastWatchdogCheckAt {
+		target.LastWatchdogCheckAt = current.LastWatchdogCheckAt
+	}
+	if current.LastRecoveryAt > target.LastRecoveryAt {
+		target.LastRecoveryAction = current.LastRecoveryAction
+		target.LastRecoveryAt = current.LastRecoveryAt
+	}
 }
 
 func (c *AgentConfig) ApplyDefaults() {

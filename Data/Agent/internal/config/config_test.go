@@ -109,6 +109,50 @@ func TestLivenessUpdatePersistsAtomically(t *testing.T) {
 	}
 }
 
+func TestSavePreservesNewerLivenessFromDisk(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	stale := Default()
+	stale.ServerURL = "https://old.example"
+	if err := Save(path, &stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := Update(path, func(cfg *AgentConfig) {
+		cfg.Agent.Liveness.PID = 456
+		cfg.Agent.Liveness.BootID = "boot-live"
+		cfg.Agent.Liveness.LastLocalTickAt = 200
+		cfg.Agent.Liveness.LastSocketState = "connected"
+		cfg.Agent.Liveness.LastSocketStateAt = 300
+		cfg.Agent.Liveness.LastHeartbeatSuccessAt = 400
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stale.ServerURL = "https://new.example"
+	stale.Agent.Liveness.LastSocketState = "disconnected"
+	stale.Agent.Liveness.LastSocketStateAt = 100
+	if err := Save(path, &stale); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ServerURL != "https://new.example" {
+		t.Fatalf("server_url = %q", loaded.ServerURL)
+	}
+	if loaded.Agent.Liveness.LastSocketState != "connected" || loaded.Agent.Liveness.LastSocketStateAt != 300 {
+		t.Fatalf("newer socket liveness was clobbered: %#v", loaded.Agent.Liveness)
+	}
+	if loaded.Agent.Liveness.PID != 456 || loaded.Agent.Liveness.BootID != "boot-live" || loaded.Agent.Liveness.LastLocalTickAt != 200 {
+		t.Fatalf("newer process liveness was clobbered: %#v", loaded.Agent.Liveness)
+	}
+	if loaded.Agent.Liveness.LastHeartbeatSuccessAt != 400 {
+		t.Fatalf("newer heartbeat liveness was clobbered: %#v", loaded.Agent.Liveness)
+	}
+}
+
 func TestDefaultBranch(t *testing.T) {
 	cfg := Default()
 	cfg.ApplyDefaults()
