@@ -9,6 +9,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Service modes: SYSTEM/root plus same-binary helper mode. Windows CURRENTUSER tracks long-lived helper sentinels per active desktop session and executes signed quick jobs through SYSTEM-brokered `CreateProcessAsUser`. Linux CURRENTUSER reports unsupported until ported.
 - Role system: compiled Go role registry under `Data/Agent/internal/roles`.
 - Networking: SYSTEM/root runtime owns REST to Engine APIs plus the single Socket.IO connection.
+- Windows recovery: installed agents create `Borealis Agent`, `Borealis Agent (AutoUpdater)`, and `Borealis Agent (Watchdog)` scheduled tasks. The watchdog runs every 5 minutes and restarts the Agent task when the last Engine-accepted heartbeat is stale.
 - Security: Ed25519 identity keys, public CA + hostname validation for the Engine FQDN, signed script payloads, and `config.json` token/key storage.
 
 ## Role Catalog (Go v1)
@@ -82,6 +83,8 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 ### Networking and authentication
 - All REST calls flow through the Go auth client in `Data/Agent/internal/auth`.
 - `EnsureAuthenticated` handles identity generation, enrollment, approval polling, and token refresh.
+- Auth refresh and enrollment are serialized inside the Agent process so concurrent heartbeat/status paths cannot start overlapping enrollment handshakes.
+- Token refresh preserves the refresh token on transient transport failures, HTTP 429, and HTTP 5xx responses. The Agent clears credentials only for explicit refresh-token/device invalidation responses, then requires fresh enrollment input.
 - Socket.IO is used by the SYSTEM runtime for:
   - `quick_job_run` dispatch (system jobs plus broker-backed current-user jobs).
   - `file_management_request` browse, upload-conflict preflight, lightweight text-edit, copy/cut/paste mutate, and transfer orchestration for the Device Summary `File Management` tab.
@@ -116,6 +119,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Agent remote shell log: `Logs/Agent/remote_shell.log`.
 - Agent patch-management log: `Logs/Agent/patch_management.log`.
 - Agent bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/Agent/bootstrap.log`; Windows bootstrap truncates this file at each start and always writes verbose trace/command output there while keeping console/GUI output minimal. Deferred Windows self-replacement writes retry, hash verification, finalization, and task restart output to `Logs/Agent/updater.log`. Linux updater diagnostics use `bootstrap.log`.
+- Windows local watchdog diagnostics: `<AgentInstallRoot>/Logs/Agent/watchdog.log`; restart cooldown state: `Logs/Agent/watchdog-state.json`; last Engine-accepted heartbeat marker: `Logs/Agent/heartbeat-success.json`.
 - WireGuard role log: `Logs/WireGuard/wireguard.log`.
 - WireGuard MSI install log: `Logs/WireGuard/wireguard-msi-install.log`.
 - UltraVNC role log: `Logs/UltraVNC/vnc.log`.
@@ -136,6 +140,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Windows update archives and extracted repository payloads are staged under `C:\Borealis\Temp\Updater`; the updater removes update workspaces immediately, schedules full `C:\Borealis\Temp` cleanup after bootstrap exits so stdout/stderr handles are closed, and cleans old accidental `C:\Borealis\Agent` update workspaces.
 - Windows self-update stages `Agent.exe.update` beside `Agent.exe` only while replacing a running binary. The detached updater retries the move, verifies the installed `Agent.exe` SHA-256, then runs `Agent.exe --finalize-update` so `config.json` receives the new `agent.installed_build_id` only after verified replacement. Failed deferred replacements remove their staged files, and later bootstrap/update starts remove stale `Agent.exe.tmp`, `Agent.exe.update.tmp`, and abandoned `Agent.exe.update` artifacts.
 - The scheduled AutoUpdater cadence is hourly on Windows and Linux.
+- Windows watchdog cadence is every 5 minutes. It checks the Agent scheduled task and the last successful heartbeat marker, skips restarts while updates are active, and applies a 30-minute restart cooldown to prevent loops during Engine outages.
 - If scripts do not run:
   - Confirm `quick_job_run` events and the correct role context.
   - Verify signatures with `signature_utils` logs.

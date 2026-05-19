@@ -114,6 +114,76 @@ def test_enrollment_request_creates_pending_approval(engine_harness: EngineTestH
     assert fingerprint == expected_fingerprint
 
 
+def test_enrollment_request_supersedes_pending_nonce_without_mismatch(engine_harness: EngineTestHarness) -> None:
+    harness = engine_harness
+    client: FlaskClient = harness.app.test_client()
+
+    install_code = "INSTALL-CODE-RACE"
+    _seed_install_code(harness.db_path, install_code)
+    private_key, _public_der, public_b64 = _generate_agent_material()
+    first_nonce = os.urandom(32)
+    second_nonce = os.urandom(32)
+    first_nonce_b64 = base64.b64encode(first_nonce).decode("ascii")
+    second_nonce_b64 = base64.b64encode(second_nonce).decode("ascii")
+
+    first_response = client.post(
+        "/api/agent/enroll/request",
+        json={
+            "hostname": "agent-node-race",
+            "enrollment_code": install_code,
+            "agent_pubkey": public_b64,
+            "client_nonce": first_nonce_b64,
+        },
+    )
+    assert first_response.status_code == 200
+    first_payload = first_response.get_json()
+    first_reference = first_payload["approval_reference"]
+    first_server_nonce = first_payload["server_nonce"]
+
+    second_response = client.post(
+        "/api/agent/enroll/request",
+        json={
+            "hostname": "agent-node-race",
+            "enrollment_code": install_code,
+            "agent_pubkey": public_b64,
+            "client_nonce": second_nonce_b64,
+        },
+    )
+    assert second_response.status_code == 200
+    second_payload = second_response.get_json()
+    assert second_payload["approval_reference"] != first_reference
+
+    message = base64.b64decode(first_server_nonce, validate=True) + first_reference.encode("utf-8") + first_nonce
+    proof_sig_b64 = base64.b64encode(private_key.sign(message)).decode("ascii")
+    poll_response = client.post(
+        "/api/agent/enroll/poll",
+        json={
+            "approval_reference": first_reference,
+            "client_nonce": first_nonce_b64,
+            "proof_sig": proof_sig_b64,
+        },
+    )
+
+    assert poll_response.status_code == 200
+    assert poll_response.get_json()["status"] == "expired"
+
+    with sqlite3.connect(str(harness.db_path)) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT status FROM device_approvals WHERE approval_reference = ?",
+            (first_reference,),
+        )
+        first_status = cur.fetchone()[0]
+        cur.execute(
+            "SELECT client_nonce, status FROM device_approvals WHERE approval_reference = ?",
+            (second_payload["approval_reference"],),
+        )
+        second_row = cur.fetchone()
+
+    assert first_status == "expired"
+    assert second_row == (second_nonce_b64, "pending")
+
+
 def test_invalid_enrollment_code_surfaces_wrong_code_status(engine_harness: EngineTestHarness) -> None:
     harness = engine_harness
     client: FlaskClient = harness.app.test_client()

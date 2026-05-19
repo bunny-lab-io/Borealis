@@ -142,6 +142,9 @@ func ensureAgentTasks(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if err := ensureAgentUpdaterTask(cfg, logger); err != nil {
 		return err
 	}
+	if err := ensureAgentWatchdogTask(cfg, logger); err != nil {
+		return err
+	}
 	if err := startScheduledTask(agentTaskName, logger); err != nil {
 		return err
 	}
@@ -159,7 +162,21 @@ func ensureAgentUpdaterTask(cfg BootstrapConfig, logger *BootstrapLogger) error 
 	return createOrReplaceTask(agentUpdaterTaskName, updateAction, "HOURLY", logger)
 }
 
+func ensureAgentWatchdogTask(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	agentExe := filepath.Join(cfg.InstallDir, "Agent.exe")
+	logger.Tracef("Ensuring Agent Watchdog scheduled task: agent_exe=%s agent_exe_exists=%t", agentExe, fileExists(agentExe))
+	if !fileExists(agentExe) {
+		return fmt.Errorf("Agent.exe not found at %s", agentExe)
+	}
+	watchdogAction := fmt.Sprintf(`"%s" --watchdog --config-path "%s"`, agentExe, filepath.Join(cfg.InstallDir, "config.json"))
+	return createOrReplaceTaskWithModifier(agentWatchdogTaskName, watchdogAction, "MINUTE", "5", logger)
+}
+
 func createOrReplaceTask(name string, command string, schedule string, logger *BootstrapLogger) error {
+	return createOrReplaceTaskWithModifier(name, command, schedule, "", logger)
+}
+
+func createOrReplaceTaskWithModifier(name string, command string, schedule string, modifier string, logger *BootstrapLogger) error {
 	logger.Tracef("Creating/replacing scheduled task: name=%s schedule=%s command=%s", name, schedule, command)
 	deleteScheduledTask(name, logger)
 	args := []string{
@@ -171,7 +188,9 @@ func createOrReplaceTask(name string, command string, schedule string, logger *B
 		"/RL", "HIGHEST",
 		"/F",
 	}
-	if schedule == "HOURLY" {
+	if strings.TrimSpace(modifier) != "" {
+		args = append(args, "/MO", strings.TrimSpace(modifier))
+	} else if schedule == "HOURLY" {
 		args = append(args, "/MO", "1")
 	}
 	_, err := runCommandTimeout(logger, 30*time.Second, "schtasks.exe", args...)

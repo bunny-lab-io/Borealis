@@ -30,6 +30,7 @@ func run() int {
 	var printVersion bool
 	var updateCheck bool
 	var finalizeUpdate bool
+	var watchdogCheck bool
 	var finalizeBuildID string
 	var finalizeExpectedSHA256 string
 	var repoRef string
@@ -48,6 +49,7 @@ func run() int {
 	flag.BoolVar(&uninstallService, "uninstall-service", false, "Uninstall Borealis Agent service.")
 	flag.BoolVar(&updateCheck, "update-check", false, "Run one Agent release-channel update check.")
 	flag.BoolVar(&finalizeUpdate, "finalize-update", false, "Finalize a deferred Agent binary replacement.")
+	flag.BoolVar(&watchdogCheck, "watchdog", false, "Run one Agent local watchdog check.")
 	flag.StringVar(&finalizeBuildID, "build-id", "", "Installed build ID for deferred update finalization.")
 	flag.StringVar(&finalizeExpectedSHA256, "expected-sha256", "", "Expected Agent binary SHA-256 for deferred update finalization.")
 	flag.BoolVar(&printVersion, "version", false, "Print version.")
@@ -86,6 +88,13 @@ func run() int {
 	if updateCheck {
 		if err := runStandaloneUpdateCheck(options); err != nil {
 			fmt.Fprintf(os.Stderr, "update check: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if watchdogCheck {
+		if err := runAgentWatchdog(options); err != nil {
+			fmt.Fprintf(os.Stderr, "watchdog: %v\n", err)
 			return 1
 		}
 		return 0

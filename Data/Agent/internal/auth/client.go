@@ -6,8 +6,10 @@ import (
 	cryptoRand "crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -21,6 +23,7 @@ const AgentContextHeader = "X-Borealis-Agent-Context"
 
 type Client struct {
 	mu          sync.Mutex
+	authMu      sync.Mutex
 	configPath  string
 	cfg         *agentconfig.AgentConfig
 	identity    Identity
@@ -182,11 +185,15 @@ func (c *Client) AuthHeaders() map[string]string {
 }
 
 func (c *Client) EnsureAuthenticated(ctx context.Context) error {
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+
 	c.mu.Lock()
 	if strings.TrimSpace(c.cfg.ServerURL) == "" {
 		c.mu.Unlock()
 		return fmt.Errorf("server_url missing")
 	}
+	c.clearStaleEnrollmentCodeLocked()
 	needsEnrollment := strings.TrimSpace(c.cfg.Agent.GUID) == "" || strings.TrimSpace(c.cfg.Tokens.RefreshToken) == ""
 	needsRefresh := strings.TrimSpace(c.cfg.Tokens.AccessToken) == "" || time.Until(time.Unix(c.cfg.Tokens.AccessExpiresAt, 0)) < time.Minute
 	c.mu.Unlock()
@@ -199,11 +206,36 @@ func (c *Client) EnsureAuthenticated(ctx context.Context) error {
 	return nil
 }
 
+func (c *Client) clearStaleEnrollmentCodeLocked() {
+	if strings.TrimSpace(c.cfg.EnrollmentCode) == "" {
+		return
+	}
+	if strings.TrimSpace(c.cfg.Agent.GUID) == "" || strings.TrimSpace(c.cfg.Tokens.RefreshToken) == "" {
+		return
+	}
+	c.cfg.EnrollmentCode = ""
+	_ = agentconfig.Save(c.configPath, c.cfg)
+}
+
 func (c *Client) PostJSON(ctx context.Context, path string, requestPayload any, responsePayload any) (*http.Response, error) {
 	if err := c.EnsureAuthenticated(ctx); err != nil {
 		return nil, err
 	}
 	return c.doJSON(ctx, http.MethodPost, path, requestPayload, responsePayload, true)
+}
+
+type HTTPStatusError struct {
+	Method     string
+	Path       string
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPStatusError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s %s failed: HTTP %d: %s", e.Method, e.Path, e.StatusCode, e.Body)
 }
 
 func (c *Client) doJSON(ctx context.Context, method string, path string, requestPayload any, responsePayload any, authenticated bool) (*http.Response, error) {
@@ -235,7 +267,12 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, request
 		return resp, readErr
 	}
 	if resp.StatusCode >= 400 {
-		return resp, fmt.Errorf("%s %s failed: HTTP %d: %s", method, path, resp.StatusCode, string(body))
+		return resp, &HTTPStatusError{
+			Method:     method,
+			Path:       path,
+			StatusCode: resp.StatusCode,
+			Body:       string(body),
+		}
 	}
 	if responsePayload != nil && len(body) > 0 {
 		if err := json.Unmarshal(body, responsePayload); err != nil {
@@ -371,7 +408,6 @@ func (c *Client) refreshLocked(ctx context.Context) error {
 	c.mu.Lock()
 	guid := c.cfg.Agent.GUID
 	refreshToken := c.cfg.Tokens.RefreshToken
-	enrollmentCode := c.cfg.EnrollmentCode
 	c.mu.Unlock()
 	payload := map[string]any{
 		"guid":          guid,
@@ -382,15 +418,15 @@ func (c *Client) refreshLocked(ctx context.Context) error {
 		ExpiresIn   int64  `json:"expires_in"`
 	}
 	if _, err := c.doJSON(ctx, http.MethodPost, "/api/agent/token/refresh", payload, &response, true); err != nil {
+		if !refreshFailureInvalidatesCredentials(err) {
+			return err
+		}
 		c.mu.Lock()
 		c.cfg.Tokens.AccessToken = ""
 		c.cfg.Tokens.RefreshToken = ""
 		c.cfg.Tokens.AccessExpiresAt = 0
 		_ = agentconfig.Save(c.configPath, c.cfg)
 		c.mu.Unlock()
-		if strings.TrimSpace(enrollmentCode) != "" {
-			return c.performEnrollmentLocked(ctx)
-		}
 		return err
 	}
 	if strings.TrimSpace(response.AccessToken) == "" {
@@ -405,4 +441,63 @@ func (c *Client) refreshLocked(ctx context.Context) error {
 	c.cfg.Tokens.AccessToken = strings.TrimSpace(response.AccessToken)
 	c.cfg.Tokens.AccessExpiresAt = time.Now().Unix() + expiresIn - 5
 	return agentconfig.Save(c.configPath, c.cfg)
+}
+
+func refreshFailureInvalidatesCredentials(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isRetryableTransportError(err) {
+		return false
+	}
+	var statusErr *HTTPStatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	switch statusErr.StatusCode {
+	case http.StatusBadRequest:
+		return refreshErrorBodyIsCredentialFailure(statusErr.Body)
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+		return true
+	default:
+		return false
+	}
+}
+
+func refreshErrorBodyIsCredentialFailure(body string) bool {
+	normalized := strings.ToLower(body)
+	for _, token := range []string{
+		"invalid_request",
+		"device_purged",
+		"invalid_refresh_token",
+		"refresh_token_revoked",
+		"refresh_token_expired",
+		"device_not_found",
+		"device_revoked",
+	} {
+		if strings.Contains(normalized, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRetryableTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var statusErr *HTTPStatusError
+	if errors.As(err, &statusErr) {
+		return statusErr.StatusCode == http.StatusTooManyRequests ||
+			statusErr.StatusCode == http.StatusRequestTimeout ||
+			statusErr.StatusCode >= 500
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return false
 }

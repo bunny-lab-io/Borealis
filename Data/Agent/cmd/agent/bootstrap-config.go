@@ -20,6 +20,7 @@ const (
 	defaultTimeoutSeconds        = 1800
 	agentTaskName                = "Borealis Agent"
 	agentUpdaterTaskName         = "Borealis Agent (AutoUpdater)"
+	agentWatchdogTaskName        = "Borealis Agent (Watchdog)"
 	bootstrapConfigFileName      = "bootstrapper-config.json"
 	agentPayloadFileName         = "agent-payload.zip"
 	agentPayloadManifestFileName = "agent-payload-manifest.json"

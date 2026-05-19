@@ -574,7 +574,7 @@ def register(
 
             cur.execute(
                 """
-                SELECT id, approval_reference
+                SELECT id, approval_reference, client_nonce, server_nonce
                   FROM device_approvals
                  WHERE ssl_key_fingerprint_claimed = ?
                    AND status = 'pending'
@@ -582,45 +582,63 @@ def register(
                 (fingerprint,),
             )
             existing = cur.fetchone()
+            reuse_existing_challenge = False
             if existing:
-                record_id = existing[0]
-                approval_reference = existing[1]
-                cur.execute(
-                    """
-                    UPDATE device_approvals
-                       SET hostname_claimed = ?,
-                           guid = ?,
-                           enrollment_code = ?,
-                           site_id = ?,
-                           client_nonce = ?,
-                           server_nonce = ?,
-                           agent_pubkey_der = ?,
-                           onboarding_job_id = ?,
-                           onboarding_run_id = ?,
-                           onboarding_target = ?,
-                           status = ?,
-                           approved_by_user_id = ?,
-                           updated_at = ?
-                     WHERE id = ?
-                    """,
-                    (
-                        hostname,
-                        reuse_guid,
-                        site_record.get("enrollment_code"),
-                        site_id,
-                        client_nonce_b64,
-                        server_nonce_b64,
-                        agent_pubkey_der,
-                        onboarding_context.get("job_id"),
-                        onboarding_context.get("run_id"),
-                        onboarding_context.get("target"),
-                        approval_status,
-                        "site_auto_approval" if approval_status == "approved" else None,
-                        now,
-                        record_id,
-                    ),
-                )
-            else:
+                existing_id, existing_reference, existing_client_nonce, existing_server_nonce = existing
+                if existing_client_nonce != client_nonce_b64:
+                    cur.execute(
+                        """
+                        UPDATE device_approvals
+                           SET status = 'expired',
+                               updated_at = ?
+                         WHERE id = ?
+                        """,
+                        (now, existing_id),
+                    )
+                    _enrollment_log(
+                        "enrollment request superseded pending challenge "
+                        f"fingerprint={fingerprint[:12]} host={hostname} ref={existing_reference}",
+                        context_hint,
+                    )
+                    existing = None
+                else:
+                    reuse_existing_challenge = True
+                    record_id = existing_id
+                    approval_reference = existing_reference
+                    if existing_server_nonce:
+                        server_nonce_b64 = existing_server_nonce
+                    cur.execute(
+                        """
+                        UPDATE device_approvals
+                           SET hostname_claimed = ?,
+                               guid = ?,
+                               enrollment_code = ?,
+                               site_id = ?,
+                               agent_pubkey_der = ?,
+                               onboarding_job_id = ?,
+                               onboarding_run_id = ?,
+                               onboarding_target = ?,
+                               status = ?,
+                               approved_by_user_id = ?,
+                               updated_at = ?
+                         WHERE id = ?
+                        """,
+                        (
+                            hostname,
+                            reuse_guid,
+                            site_record.get("enrollment_code"),
+                            site_id,
+                            agent_pubkey_der,
+                            onboarding_context.get("job_id"),
+                            onboarding_context.get("run_id"),
+                            onboarding_context.get("target"),
+                            approval_status,
+                            "site_auto_approval" if approval_status == "approved" else None,
+                            now,
+                            record_id,
+                        ),
+                    )
+            if not reuse_existing_challenge:
                 record_id = str(uuid.uuid4())
                 approval_reference = str(uuid.uuid4())
                 cur.execute(

@@ -58,6 +58,9 @@ type Agent struct {
 	wireguard   *wireguardtunnel.Manager
 	uiMu        sync.RWMutex
 	uiSnapshot  localui.StatusSnapshot
+	wgHbMu      sync.Mutex
+	wgHbLast    time.Time
+	wgHbRunning bool
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -318,15 +321,36 @@ func (a *Agent) postWireGuardStatus(ctx context.Context, phase string, status st
 	err := a.postStatus(ctx, phase, status, message)
 	switch strings.TrimSpace(phase) {
 	case "wireguard_starting", "wireguard_online":
-		go func() {
-			heartbeatCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-			defer cancel()
-			if heartbeatErr := a.postHeartbeat(heartbeatCtx); heartbeatErr != nil {
-				a.logger.Printf("wireguard heartbeat refresh failed: %v", heartbeatErr)
-			}
-		}()
+		a.requestWireGuardHeartbeatRefresh()
 	}
 	return err
+}
+
+func (a *Agent) requestWireGuardHeartbeatRefresh() {
+	if a == nil {
+		return
+	}
+	a.wgHbMu.Lock()
+	if a.wgHbRunning || time.Since(a.wgHbLast) < 2*time.Minute {
+		a.wgHbMu.Unlock()
+		return
+	}
+	a.wgHbRunning = true
+	a.wgHbLast = time.Now()
+	a.wgHbMu.Unlock()
+
+	go func() {
+		defer func() {
+			a.wgHbMu.Lock()
+			a.wgHbRunning = false
+			a.wgHbMu.Unlock()
+		}()
+		heartbeatCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		if heartbeatErr := a.postHeartbeat(heartbeatCtx); heartbeatErr != nil {
+			a.logger.Printf("wireguard heartbeat refresh failed: %v", heartbeatErr)
+		}
+	}()
 }
 
 func (a *Agent) postHeartbeat(ctx context.Context) error {
@@ -616,9 +640,13 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	payload["installed_build_id"] = installedBuildID
 	payload["agent_release_channel"] = agentconfig.NormalizeReleaseChannel(cfg.Agent.ReleaseChannel)
 	payload["agent_branch"] = agentconfig.NormalizeBranch(cfg.Agent.Branch)
-	a.updateUIHeartbeat(payload)
 	_, err := a.authClient.PostJSON(ctx, "/api/agent/heartbeat", payload, nil)
-	return err
+	if err != nil {
+		return err
+	}
+	a.recordHeartbeatSuccess()
+	a.updateUIHeartbeat(payload)
+	return nil
 }
 
 type startupMilestoneDefinition struct {

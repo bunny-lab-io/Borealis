@@ -297,8 +297,9 @@ func queryServiceState(name string) (string, bool) {
 func removeBorealisScheduledTasks(logger *BootstrapLogger) {
 	logger.Tracef("Removing Borealis scheduled tasks.")
 	taskNames := map[string]bool{
-		agentTaskName:        true,
-		agentUpdaterTaskName: true,
+		agentTaskName:         true,
+		agentUpdaterTaskName:  true,
+		agentWatchdogTaskName: true,
 	}
 	for _, taskName := range queryBorealisScheduledTasks(logger) {
 		if strings.TrimSpace(taskName) != "" {

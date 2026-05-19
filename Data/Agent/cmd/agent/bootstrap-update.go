@@ -63,6 +63,9 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		if err := ensureAgentUpdaterTask(cfg, logger); err != nil {
 			logger.Warnf("AutoUpdater task reconciliation skipped: %v", err)
 		}
+		if err := ensureAgentWatchdogTask(cfg, logger); err != nil {
+			logger.Warnf("Watchdog task reconciliation skipped: %v", err)
+		}
 		logger.Tracef("Agent update check complete: up_to_date duration=%s", time.Since(startedAt).Round(time.Millisecond))
 		return nil
 	}
@@ -105,6 +108,7 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	stopBorealisProcesses(cfg, logger)
 	deferred, err := stageAgentUpdateBinary(cfg, sourceRoot, target, logger)
 	if err != nil {
+		restartAgentTaskAfterUpdateFailure(cfg, logger, "artifact update staging failed")
 		return err
 	}
 	if deferred {
@@ -114,12 +118,36 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	}
 	reconcileUltraVNCServiceAfterRuntimeStage(cfg, logger)
 	if err := ensureAgentTasks(cfg, logger); err != nil {
+		restartAgentTaskAfterUpdateFailure(cfg, logger, "artifact update task reconciliation failed")
 		return err
 	}
 	writeInstalledBuildID(cfg, target)
 	logger.Infof("Agent update applied (%s).", target)
 	logger.Tracef("Agent update check complete: applied duration=%s", time.Since(startedAt).Round(time.Millisecond))
 	return nil
+}
+
+func restartAgentTaskAfterUpdateFailure(cfg BootstrapConfig, logger *BootstrapLogger, reason string) {
+	if logger != nil {
+		logger.Warnf("Agent update failure after runtime stop; restart requested: %s", reason)
+	}
+	if !fileExists(filepath.Join(cfg.InstallDir, "Agent.exe")) {
+		if logger != nil {
+			logger.Warnf("Agent restart skipped: Agent.exe missing at %s", filepath.Join(cfg.InstallDir, "Agent.exe"))
+		}
+		return
+	}
+	if !queryScheduledTask(agentTaskName).Exists {
+		if err := ensureAgentTaskDefinition(cfg, logger); err != nil {
+			if logger != nil {
+				logger.Warnf("Agent task recreation failed after update failure: %v", err)
+			}
+			return
+		}
+	}
+	if err := startScheduledTask(agentTaskName, logger); err != nil && logger != nil {
+		logger.Warnf("Agent task restart failed after update failure: %v", err)
+	}
 }
 
 func releaseChannelForUpdateManifest(effective string, target string) string {
@@ -164,11 +192,15 @@ func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, install
 			logger.Tracef("Restarting Agent after repo_ref fallback so runtime reloads config.json.")
 			stopScheduledTask(agentTaskName, logger)
 			if err := ensureAgentTasks(cfg, logger); err != nil {
+				restartAgentTaskAfterUpdateFailure(cfg, logger, "repo_ref fallback restart failed")
 				return fmt.Errorf("restart Agent after repo_ref fallback: %w", err)
 			}
 		} else {
 			if err := ensureAgentUpdaterTask(cfg, logger); err != nil {
 				logger.Warnf("AutoUpdater task reconciliation skipped: %v", err)
+			}
+			if err := ensureAgentWatchdogTask(cfg, logger); err != nil {
+				logger.Warnf("Watchdog task reconciliation skipped: %v", err)
 			}
 		}
 		logger.Tracef("Agent update check complete: repo_ref_up_to_date duration=%s", time.Since(startedAt).Round(time.Millisecond))
@@ -182,6 +214,7 @@ func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, install
 	stopBorealisProcesses(cfg, logger)
 	deferred, err := stageAgentUpdateBinary(cfg, sourceRoot, target, logger)
 	if err != nil {
+		restartAgentTaskAfterUpdateFailure(cfg, logger, "repo_ref update staging failed")
 		return err
 	}
 	if deferred {
@@ -191,6 +224,7 @@ func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, install
 	}
 	reconcileUltraVNCServiceAfterRuntimeStage(cfg, logger)
 	if err := ensureAgentTasks(cfg, logger); err != nil {
+		restartAgentTaskAfterUpdateFailure(cfg, logger, "repo_ref update task reconciliation failed")
 		return err
 	}
 	writeInstalledBuildID(cfg, target)

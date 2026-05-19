@@ -106,12 +106,17 @@ New-Item -ItemType Directory -Force -Path (Split-Path -Parent $logPath) | Out-Nu
 function Write-UpdaterLog([string]$message) {
   Add-Content -LiteralPath $logPath -Value ("[{0}] {1}" -f (Get-Date).ToString("s"), $message)
 }
+function Start-AgentTask() {
+  schtasks.exe /Run /TN $agentTaskName *> $null
+  Write-UpdaterLog "Agent task restart requested."
+}
 Write-UpdaterLog "Deferred Agent.exe replacement starting. pending=$pending destination=$destination build=$buildId expected_sha256=$expectedSha256"
 Start-Sleep -Seconds 3
 for ($attempt = 1; $attempt -le 20; $attempt++) {
   try {
     if (!(Test-Path -LiteralPath $pending)) {
       Write-UpdaterLog "Attempt $attempt failed: pending binary missing."
+      Start-AgentTask
       exit 1
     }
     schtasks.exe /End /TN $agentTaskName *> $null
@@ -121,15 +126,17 @@ for ($attempt = 1; $attempt -le 20; $attempt++) {
     $actualSha256 = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualSha256 -ne $expectedSha256) {
       Write-UpdaterLog "Attempt $attempt failed: hash mismatch actual=$actualSha256."
+      Start-AgentTask
       exit 1
     }
     $finalizeOutput = & $destination --finalize-update --config-path $configPath --build-id $buildId --expected-sha256 $expectedSha256 2>&1
     foreach ($line in $finalizeOutput) { Write-UpdaterLog ("finalize: " + $line) }
     if ($LASTEXITCODE -ne 0) {
       Write-UpdaterLog "Attempt $attempt failed: finalize exited $LASTEXITCODE."
+      Start-AgentTask
       exit 1
     }
-    schtasks.exe /Run /TN $agentTaskName *> $null
+    Start-AgentTask
     Write-UpdaterLog "Deferred Agent.exe replacement complete."
     exit 0
   } catch {
@@ -141,6 +148,7 @@ Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath ($destination + '.tmp') -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath ($pending + '.tmp') -Force -ErrorAction SilentlyContinue
 Write-UpdaterLog "Deferred Agent.exe replacement failed after all attempts; staged update artifacts removed."
+Start-AgentTask
 exit 1
 `,
 		powershellSingleQuoted(logPath),
