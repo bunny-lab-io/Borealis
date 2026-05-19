@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -34,13 +35,21 @@ type AgentConfig struct {
 }
 
 type AgentSection struct {
-	GUID             string               `json:"guid"`
-	AgentID          string               `json:"agent_id"`
-	ReleaseChannel   string               `json:"release_channel"`
-	Branch           string               `json:"branch"`
-	InstalledBuildID string               `json:"installed_build_id"`
-	LogRetentionDays int                  `json:"log_retention_days"`
-	Liveness         AgentLivenessSection `json:"liveness"`
+	GUID             string                            `json:"guid"`
+	AgentID          string                            `json:"agent_id"`
+	ReleaseChannel   string                            `json:"release_channel"`
+	Branch           string                            `json:"branch"`
+	InstalledBuildID string                            `json:"installed_build_id"`
+	LogRetentionDays int                               `json:"log_retention_days"`
+	State            AgentStateSection                 `json:"state"`
+	Liveness         AgentLivenessSection              `json:"liveness"`
+	DependencyState  map[string]DependencyStateSection `json:"dependency_state,omitempty"`
+}
+
+type AgentStateSection struct {
+	Revision    int64  `json:"revision"`
+	Writer      string `json:"writer"`
+	LastWriteAt int64  `json:"last_write_at"`
 }
 
 type AgentLivenessSection struct {
@@ -76,6 +85,17 @@ type TrustSection struct {
 type DependencyVersionsSection struct {
 	WireGuard string `json:"wireguard,omitempty"`
 	UltraVNC  string `json:"ultravnc,omitempty"`
+}
+
+type DependencyStateSection struct {
+	Phase            string `json:"phase"`
+	Status           string `json:"status"`
+	DesiredVersion   string `json:"desired_version,omitempty"`
+	InstalledVersion string `json:"installed_version,omitempty"`
+	Detail           string `json:"detail,omitempty"`
+	LastAttemptAt    int64  `json:"last_attempt_at,omitempty"`
+	LastSuccessAt    int64  `json:"last_success_at,omitempty"`
+	LastError        string `json:"last_error,omitempty"`
 }
 
 func Default() AgentConfig {
@@ -138,6 +158,10 @@ func NormalizeDependencyVersion(value string) string {
 	return strings.TrimSpace(value)
 }
 
+func NormalizeDependencyName(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
 func Load(path string) (AgentConfig, error) {
 	var cfg AgentConfig
 	data, err := os.ReadFile(path)
@@ -175,24 +199,33 @@ func LoadOrCreate(path string) (AgentConfig, error) {
 }
 
 func Save(path string, cfg *AgentConfig) error {
+	return SaveWithWriter(path, defaultStateWriter(), cfg)
+}
+
+func SaveWithWriter(path string, writer string, cfg *AgentConfig) error {
 	fileMu.Lock()
 	defer fileMu.Unlock()
 	return withProcessFileLock(path, func() error {
 		if cfg != nil {
 			if current, err := loadUnlocked(path); err == nil {
 				mergeNewerLiveness(&cfg.Agent.Liveness, current.Agent.Liveness)
+				mergeNewerDependencyState(&cfg.Agent.DependencyState, current.Agent.DependencyState)
+				if current.Agent.State.Revision > cfg.Agent.State.Revision {
+					cfg.Agent.State.Revision = current.Agent.State.Revision
+				}
 			}
 		}
-		return saveUnlocked(path, cfg)
+		return saveUnlocked(path, cfg, writer)
 	})
 }
 
-func saveUnlocked(path string, cfg *AgentConfig) error {
+func saveUnlocked(path string, cfg *AgentConfig, writer string) error {
 	if cfg == nil {
 		return errors.New("nil config")
 	}
 	cfg.ApplyDefaults()
 	cfg.ServerURL = NormalizeServerURL(cfg.ServerURL)
+	touchStateMetadata(cfg, writer)
 
 	parent := filepath.Dir(path)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
@@ -237,6 +270,10 @@ func saveUnlocked(path string, cfg *AgentConfig) error {
 }
 
 func Update(path string, update func(*AgentConfig)) error {
+	return UpdateWithWriter(path, defaultStateWriter(), update)
+}
+
+func UpdateWithWriter(path string, writer string, update func(*AgentConfig)) error {
 	fileMu.Lock()
 	defer fileMu.Unlock()
 	return withProcessFileLock(path, func() error {
@@ -247,7 +284,7 @@ func Update(path string, update func(*AgentConfig)) error {
 		if update != nil {
 			update(&cfg)
 		}
-		return saveUnlocked(path, &cfg)
+		return saveUnlocked(path, &cfg, writer)
 	})
 }
 
@@ -293,6 +330,27 @@ func withProcessFileLock(path string, fn func() error) error {
 	return fn()
 }
 
+func defaultStateWriter() string {
+	name := filepath.Base(os.Args[0])
+	if strings.TrimSpace(name) == "" {
+		name = "agent"
+	}
+	return fmt.Sprintf("%s:%d", name, os.Getpid())
+}
+
+func touchStateMetadata(cfg *AgentConfig, writer string) {
+	if cfg == nil {
+		return
+	}
+	cleanWriter := strings.TrimSpace(writer)
+	if cleanWriter == "" {
+		cleanWriter = defaultStateWriter()
+	}
+	cfg.Agent.State.Revision++
+	cfg.Agent.State.Writer = cleanWriter
+	cfg.Agent.State.LastWriteAt = time.Now().Unix()
+}
+
 func mergeNewerLiveness(target *AgentLivenessSection, current AgentLivenessSection) {
 	if target == nil {
 		return
@@ -325,6 +383,32 @@ func mergeNewerLiveness(target *AgentLivenessSection, current AgentLivenessSecti
 	}
 }
 
+func mergeNewerDependencyState(target *map[string]DependencyStateSection, current map[string]DependencyStateSection) {
+	if target == nil || len(current) == 0 {
+		return
+	}
+	if *target == nil {
+		*target = map[string]DependencyStateSection{}
+	}
+	for rawName, currentState := range current {
+		name := NormalizeDependencyName(rawName)
+		if name == "" {
+			continue
+		}
+		targetState, ok := (*target)[name]
+		if !ok || dependencyStateTimestamp(currentState) > dependencyStateTimestamp(targetState) {
+			(*target)[name] = currentState
+		}
+	}
+}
+
+func dependencyStateTimestamp(state DependencyStateSection) int64 {
+	if state.LastSuccessAt > state.LastAttemptAt {
+		return state.LastSuccessAt
+	}
+	return state.LastAttemptAt
+}
+
 func (c *AgentConfig) ApplyDefaults() {
 	if c.SchemaVersion == 0 {
 		c.SchemaVersion = SchemaVersion
@@ -339,6 +423,18 @@ func (c *AgentConfig) ApplyDefaults() {
 		c.DependencyVersions.WireGuard = NormalizeDependencyVersion(c.DependencyVersions.WireGuard)
 		c.DependencyVersions.UltraVNC = NormalizeDependencyVersion(c.DependencyVersions.UltraVNC)
 	}
+	if len(c.Agent.DependencyState) > 0 {
+		normalized := map[string]DependencyStateSection{}
+		for name, state := range c.Agent.DependencyState {
+			key := NormalizeDependencyName(name)
+			if key == "" {
+				continue
+			}
+			normalizeDependencyState(&state)
+			normalized[key] = state
+		}
+		c.Agent.DependencyState = normalized
+	}
 }
 
 func (c *AgentConfig) EnsureDependencyVersions() *DependencyVersionsSection {
@@ -346,6 +442,34 @@ func (c *AgentConfig) EnsureDependencyVersions() *DependencyVersionsSection {
 		c.DependencyVersions = &DependencyVersionsSection{}
 	}
 	return c.DependencyVersions
+}
+
+func (c *AgentConfig) UpdateDependencyState(name string, update func(*DependencyStateSection)) {
+	key := NormalizeDependencyName(name)
+	if key == "" {
+		return
+	}
+	if c.Agent.DependencyState == nil {
+		c.Agent.DependencyState = map[string]DependencyStateSection{}
+	}
+	state := c.Agent.DependencyState[key]
+	if update != nil {
+		update(&state)
+	}
+	normalizeDependencyState(&state)
+	c.Agent.DependencyState[key] = state
+}
+
+func normalizeDependencyState(state *DependencyStateSection) {
+	if state == nil {
+		return
+	}
+	state.Phase = strings.ToLower(strings.TrimSpace(state.Phase))
+	state.Status = strings.ToLower(strings.TrimSpace(state.Status))
+	state.DesiredVersion = NormalizeDependencyVersion(state.DesiredVersion)
+	state.InstalledVersion = NormalizeDependencyVersion(state.InstalledVersion)
+	state.Detail = strings.TrimSpace(state.Detail)
+	state.LastError = strings.TrimSpace(state.LastError)
 }
 
 func (c AgentConfig) Clone() AgentConfig {

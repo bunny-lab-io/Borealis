@@ -46,6 +46,9 @@ func TestSaveLoadConfig(t *testing.T) {
 	if loaded.Agent.LogRetentionDays != DefaultLogRetentionDays {
 		t.Fatalf("log retention default = %d, want %d", loaded.Agent.LogRetentionDays, DefaultLogRetentionDays)
 	}
+	if loaded.Agent.State.Revision <= 0 || loaded.Agent.State.Writer == "" || loaded.Agent.State.LastWriteAt <= 0 {
+		t.Fatalf("state metadata missing: %#v", loaded.Agent.State)
+	}
 	if loaded.DependencyVersions == nil {
 		t.Fatal("dependency_versions missing")
 	}
@@ -109,6 +112,37 @@ func TestLivenessUpdatePersistsAtomically(t *testing.T) {
 	}
 }
 
+func TestUpdateWithWriterRecordsStateMetadata(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	cfg := Default()
+	if err := SaveWithWriter(path, "test:initial", &cfg); err != nil {
+		t.Fatal(err)
+	}
+	first, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Agent.State.Writer != "test:initial" {
+		t.Fatalf("writer = %q", first.Agent.State.Writer)
+	}
+	if err := UpdateWithWriter(path, "test:update", func(cfg *AgentConfig) {
+		cfg.Agent.Liveness.PID = 12
+	}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Agent.State.Writer != "test:update" {
+		t.Fatalf("writer = %q", second.Agent.State.Writer)
+	}
+	if second.Agent.State.Revision <= first.Agent.State.Revision {
+		t.Fatalf("revision did not advance: first=%d second=%d", first.Agent.State.Revision, second.Agent.State.Revision)
+	}
+}
+
 func TestSavePreservesNewerLivenessFromDisk(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
@@ -150,6 +184,66 @@ func TestSavePreservesNewerLivenessFromDisk(t *testing.T) {
 	}
 	if loaded.Agent.Liveness.LastHeartbeatSuccessAt != 400 {
 		t.Fatalf("newer heartbeat liveness was clobbered: %#v", loaded.Agent.Liveness)
+	}
+}
+
+func TestDependencyStateNormalizesAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	cfg := Default()
+	cfg.UpdateDependencyState("UltraVNC", func(state *DependencyStateSection) {
+		state.Phase = "INSTALLING"
+		state.Status = "Recovering"
+		state.DesiredVersion = " 1.8.2.1 "
+		state.Detail = " installing "
+	})
+	if err := Save(path, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, ok := loaded.Agent.DependencyState["ultravnc"]
+	if !ok {
+		t.Fatalf("dependency state missing: %#v", loaded.Agent.DependencyState)
+	}
+	if state.Phase != "installing" || state.Status != "recovering" || state.DesiredVersion != "1.8.2.1" || state.Detail != "installing" {
+		t.Fatalf("dependency state not normalized: %#v", state)
+	}
+}
+
+func TestSavePreservesNewerDependencyStateFromDisk(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	stale := Default()
+	stale.UpdateDependencyState("wireguard", func(state *DependencyStateSection) {
+		state.Phase = "detected"
+		state.Status = "recovering"
+		state.LastAttemptAt = 10
+	})
+	if err := Save(path, &stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := Update(path, func(cfg *AgentConfig) {
+		cfg.UpdateDependencyState("wireguard", func(state *DependencyStateSection) {
+			state.Phase = "healthy"
+			state.Status = "healthy"
+			state.LastSuccessAt = 20
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(path, &stale); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := loaded.Agent.DependencyState["wireguard"]
+	if state.Phase != "healthy" || state.LastSuccessAt != 20 {
+		t.Fatalf("newer dependency state was clobbered: %#v", state)
 	}
 }
 

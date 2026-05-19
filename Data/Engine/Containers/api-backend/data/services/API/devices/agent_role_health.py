@@ -12,6 +12,7 @@ STATUS_LABELS = {
     "pending": "Pending",
     "loaded": "Loaded",
     "unsupported": "Unsupported",
+    "not_applicable": "Not Applicable",
     "unknown": "Unknown",
 }
 
@@ -131,10 +132,12 @@ def _normalize_payload_shape(raw: Any) -> Dict[str, Any]:
             return {
                 "roles": roles,
                 "reported_at": _coerce_int(candidate.get("reported_at"), 0),
+                "supervisor_revision": _coerce_int(candidate.get("supervisor_revision"), 0),
             }
         return {
             "roles": [],
             "reported_at": _coerce_int(candidate.get("reported_at"), 0),
+            "supervisor_revision": _coerce_int(candidate.get("supervisor_revision"), 0),
         }
     return {"roles": [], "reported_at": 0}
 
@@ -163,6 +166,12 @@ def normalize_agent_role_health(raw: Any, *, default_context: Optional[str] = No
             item.get("last_checked_at") or item.get("checked_at") or reported_at,
             reported_at,
         )
+        details = _clean_details_map(item.get("details") or item.get("metadata") or item.get("info"))
+        desired_state = _clean_text(item.get("desired_state") or details.get("desired_state"))
+        observed_state = _clean_text(item.get("observed_state") or details.get("observed_state"))
+        last_success_at = _coerce_int(item.get("last_success_at"), 0)
+        recovery_attempts = _coerce_int(item.get("recovery_attempts"), 0)
+        last_error = _clean_text(item.get("last_error") or details.get("last_error"))
         role = {
             "role_id": role_id,
             "role_name": role_name,
@@ -171,9 +180,19 @@ def normalize_agent_role_health(raw: Any, *, default_context: Optional[str] = No
             "status_code": status_code,
             "status": STATUS_LABELS.get(status_code, "Unknown"),
             "detail": _clean_text(item.get("detail") or item.get("message")),
-            "details": _clean_details_map(item.get("details") or item.get("metadata") or item.get("info")),
+            "details": details,
             "last_checked_at": last_checked_at,
         }
+        if desired_state:
+            role["desired_state"] = desired_state
+        if observed_state:
+            role["observed_state"] = observed_state
+        if last_success_at:
+            role["last_success_at"] = last_success_at
+        if recovery_attempts:
+            role["recovery_attempts"] = recovery_attempts
+        if last_error:
+            role["last_error"] = last_error
         roles.append(role)
     deduped: Dict[str, Dict[str, Any]] = {}
     for role in roles:
@@ -190,6 +209,7 @@ def normalize_agent_role_health(raw: Any, *, default_context: Optional[str] = No
     return {
         "roles": normalized_roles,
         "reported_at": reported_at,
+        "supervisor_revision": _coerce_int(payload.get("supervisor_revision"), 0),
     }
 
 
@@ -231,9 +251,14 @@ def merge_agent_role_health(
         _coerce_int(incoming.get("reported_at"), 0),
         max((_coerce_int(item.get("last_checked_at"), 0) for item in merged_roles), default=0),
     )
+    supervisor_revision = max(
+        _coerce_int(existing.get("supervisor_revision"), 0),
+        _coerce_int(incoming.get("supervisor_revision"), 0),
+    )
     return {
         "roles": merged_roles,
         "reported_at": reported_at,
+        "supervisor_revision": supervisor_revision,
     }
 
 

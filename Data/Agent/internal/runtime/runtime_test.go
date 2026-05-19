@@ -91,13 +91,13 @@ func TestCleanupStartupTempNoopsWhenMissing(t *testing.T) {
 	}
 }
 
-func TestHeartbeatIntervalUsesSixtySecondJitterWindow(t *testing.T) {
+func TestHeartbeatIntervalUsesRapidHealthJitterWindow(t *testing.T) {
 	first := heartbeatIntervalWithJitter(time.Unix(0, 0))
-	second := heartbeatIntervalWithJitter(time.Unix(0, int64(14_999*time.Millisecond)))
-	if first < 60*time.Second || first >= 75*time.Second {
+	second := heartbeatIntervalWithJitter(time.Unix(0, int64(4_999*time.Millisecond)))
+	if first < 20*time.Second || first >= 25*time.Second {
 		t.Fatalf("heartbeat interval outside jitter window: %s", first)
 	}
-	if second < 60*time.Second || second >= 75*time.Second {
+	if second < 20*time.Second || second >= 25*time.Second {
 		t.Fatalf("heartbeat interval outside jitter window: %s", second)
 	}
 	if first == second {
@@ -143,6 +143,53 @@ func TestRecoveryLogWritesRoleRecoveryLog(t *testing.T) {
 	text := string(raw)
 	if !strings.Contains(text, "component=role_supervisor") || !strings.Contains(text, "role_id=system:vnc") || !strings.Contains(text, "action=restart") {
 		t.Fatalf("role recovery log missing fields: %s", text)
+	}
+}
+
+func TestRoleSupervisorAddsSourceOfTruthFields(t *testing.T) {
+	events := []string{}
+	supervisor := NewRoleSupervisor(func(component string, roleID string, action string, outcome string, reason string, err error) {
+		events = append(events, component+"|"+roleID+"|"+action+"|"+outcome+"|"+reason)
+	})
+	first := supervisor.Update([]RoleSnapshot{
+		{
+			RoleID:     "system:vnc",
+			RoleName:   "vnc",
+			RoleLabel:  "UltraVNC Service",
+			Context:    "system",
+			Status:     "Recovering",
+			StatusCode: "recovering",
+			Detail:     "listener warming",
+			Details:    map[string]any{"runtime": "go"},
+			CheckedAt:  100,
+		},
+	})
+	roles := first["roles"].([]map[string]any)
+	if roles[0]["desired_state"] != "running" || roles[0]["observed_state"] != "recovering" || roles[0]["recovery_attempts"].(int) != 1 {
+		t.Fatalf("supervised role fields missing: %#v", roles[0])
+	}
+	details := roles[0]["details"].(map[string]any)
+	if details["desired_state"] != "running" || details["observed_state"] != "recovering" {
+		t.Fatalf("supervised detail fields missing: %#v", details)
+	}
+	second := supervisor.Update([]RoleSnapshot{
+		{
+			RoleID:     "system:vnc",
+			RoleName:   "vnc",
+			RoleLabel:  "UltraVNC Service",
+			Context:    "system",
+			Status:     "Healthy",
+			StatusCode: "healthy",
+			Detail:     "listener ready",
+			CheckedAt:  101,
+		},
+	})
+	roles = second["roles"].([]map[string]any)
+	if roles[0]["last_success_at"].(int64) <= 0 || roles[0]["recovery_attempts"].(int) != 0 {
+		t.Fatalf("healthy role did not reset recovery metadata: %#v", roles[0])
+	}
+	if len(events) == 0 {
+		t.Fatalf("expected recovery log events")
 	}
 }
 
@@ -207,6 +254,21 @@ func TestWatchdogDecisionMatrix(t *testing.T) {
 			name:  "healthy liveness",
 			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, LastLocalTickAt: now.Add(-60 * time.Second).Unix(), Now: now},
 			want:  watchdogDecision{Action: "check_liveness", Outcome: "healthy", Reason: "age=1m0s"},
+		},
+		{
+			name:  "pid mismatch restart",
+			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, ServicePID: 20, LivenessPID: 10, LastLocalTickAt: now.Add(-30 * time.Second).Unix(), Now: now},
+			want:  watchdogDecision{Action: "restart_service", Outcome: "needed", Reason: "pid_mismatch_service=20_liveness=10"},
+		},
+		{
+			name:  "socket disconnected restart",
+			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, LastLocalTickAt: now.Add(-30 * time.Second).Unix(), LastSocketState: "disconnected", LastSocketStateAt: now.Add(-181 * time.Second).Unix(), Now: now},
+			want:  watchdogDecision{Action: "restart_service", Outcome: "needed", Reason: "socket_disconnected_age=3m1s"},
+		},
+		{
+			name:  "stale heartbeat restart",
+			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, LastLocalTickAt: now.Add(-30 * time.Second).Unix(), LastHeartbeatSuccessAt: now.Add(-241 * time.Second).Unix(), Now: now},
+			want:  watchdogDecision{Action: "restart_service", Outcome: "needed", Reason: "stale_heartbeat_success_age=4m1s"},
 		},
 		{
 			name:  "stale liveness update active",

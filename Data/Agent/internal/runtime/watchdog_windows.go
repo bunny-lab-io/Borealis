@@ -25,7 +25,7 @@ func RunWatchdogCheck(configPath string) error {
 		}
 	}
 	now := time.Now()
-	_ = agentconfig.Update(configPath, func(cfg *agentconfig.AgentConfig) {
+	_ = agentconfig.UpdateWithWriter(configPath, "watchdog:check", func(cfg *agentconfig.AgentConfig) {
 		cfg.Agent.Liveness.LastWatchdogCheckAt = now.Unix()
 	})
 	cfg, _ := agentconfig.Load(configPath)
@@ -57,11 +57,18 @@ func RunWatchdogCheck(configPath string) error {
 		return err
 	}
 	decision := decideWatchdogRecovery(watchdogDecisionInput{
-		ServiceExists:   true,
-		ServiceRunning:  status.State == svc.Running,
-		LastLocalTickAt: cfg.Agent.Liveness.LastLocalTickAt,
-		Now:             now,
-		UpdateActive:    updateActive(configPath),
+		ServiceExists:          true,
+		ServiceRunning:         status.State == svc.Running,
+		ServicePID:             status.ProcessId,
+		LivenessPID:            cfg.Agent.Liveness.PID,
+		LastLocalTickAt:        cfg.Agent.Liveness.LastLocalTickAt,
+		LastHeartbeatAttemptAt: cfg.Agent.Liveness.LastHeartbeatAttemptAt,
+		LastHeartbeatSuccessAt: cfg.Agent.Liveness.LastHeartbeatSuccessAt,
+		LastHeartbeatError:     cfg.Agent.Liveness.LastHeartbeatError,
+		LastSocketState:        cfg.Agent.Liveness.LastSocketState,
+		LastSocketStateAt:      cfg.Agent.Liveness.LastSocketStateAt,
+		Now:                    now,
+		UpdateActive:           updateActive(configPath),
 	})
 	if decision.Action == "start_service" {
 		if err := service.Start(); err != nil && !strings.Contains(strings.ToLower(err.Error()), "already running") {
@@ -133,7 +140,7 @@ func updateActive(configPath string) bool {
 }
 
 func recordWatchdogRecovery(configPath string, action string, reason string) {
-	_ = agentconfig.Update(configPath, func(cfg *agentconfig.AgentConfig) {
+	_ = agentconfig.UpdateWithWriter(configPath, "watchdog:recovery", func(cfg *agentconfig.AgentConfig) {
 		cfg.Agent.Liveness.LastRecoveryAction = strings.TrimSpace(action + ":" + reason)
 		cfg.Agent.Liveness.LastRecoveryAt = time.Now().Unix()
 	})

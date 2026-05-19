@@ -175,9 +175,24 @@ function buildRuntimeHealthTooltip(entry) {
           Last checked: {entry.lastCheckedText}
         </Typography>
       ) : null}
+      {entry.lastSuccessText ? (
+        <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.7rem", lineHeight: 1.35 }}>
+          Last healthy: {entry.lastSuccessText}
+        </Typography>
+      ) : null}
       {entry.contextLabel ? (
         <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.7rem", lineHeight: 1.35 }}>
           Context: {entry.contextLabel}
+        </Typography>
+      ) : null}
+      {entry.desiredState || entry.observedState ? (
+        <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.7rem", lineHeight: 1.35 }}>
+          Desired: {entry.desiredState || "Unknown"} · Observed: {entry.observedState || "Unknown"}
+        </Typography>
+      ) : null}
+      {entry.recoveryAttempts ? (
+        <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.7rem", lineHeight: 1.35 }}>
+          Recovery attempts: {entry.recoveryAttempts}
         </Typography>
       ) : null}
       {detailRows.length ? (

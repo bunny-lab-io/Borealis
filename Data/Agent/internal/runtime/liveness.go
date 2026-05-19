@@ -14,10 +14,14 @@ import (
 const livenessTickInterval = 15 * time.Second
 
 func (a *Agent) updateLiveness(update func(*agentconfig.AgentLivenessSection)) {
+	a.updateLivenessWithWriter("runtime:liveness", update)
+}
+
+func (a *Agent) updateLivenessWithWriter(writer string, update func(*agentconfig.AgentLivenessSection)) {
 	if a == nil || strings.TrimSpace(a.configPath) == "" {
 		return
 	}
-	err := agentconfig.Update(a.configPath, func(cfg *agentconfig.AgentConfig) {
+	err := agentconfig.UpdateWithWriter(a.configPath, writer, func(cfg *agentconfig.AgentConfig) {
 		if update != nil {
 			update(&cfg.Agent.Liveness)
 		}
@@ -54,13 +58,13 @@ func (a *Agent) startLivenessLoop(ctxDone <-chan struct{}) {
 }
 
 func (a *Agent) recordHeartbeatAttempt() {
-	a.updateLiveness(func(l *agentconfig.AgentLivenessSection) {
+	a.updateLivenessWithWriter("runtime:heartbeat_attempt", func(l *agentconfig.AgentLivenessSection) {
 		l.LastHeartbeatAttemptAt = time.Now().Unix()
 	})
 }
 
 func (a *Agent) recordHeartbeatResult(err error) {
-	a.updateLiveness(func(l *agentconfig.AgentLivenessSection) {
+	a.updateLivenessWithWriter("runtime:heartbeat_result", func(l *agentconfig.AgentLivenessSection) {
 		if err != nil {
 			l.LastHeartbeatError = err.Error()
 			return
@@ -75,7 +79,7 @@ func (a *Agent) recordSocketState(state string) {
 	if clean == "" {
 		return
 	}
-	a.updateLiveness(func(l *agentconfig.AgentLivenessSection) {
+	a.updateLivenessWithWriter("runtime:socket_state", func(l *agentconfig.AgentLivenessSection) {
 		l.LastSocketState = clean
 		l.LastSocketStateAt = time.Now().Unix()
 	})
@@ -117,7 +121,7 @@ func (a *Agent) recordRecoveryAction(action string, reason string) {
 	if strings.TrimSpace(reason) != "" {
 		message = fmt.Sprintf("%s:%s", message, strings.TrimSpace(reason))
 	}
-	a.updateLiveness(func(l *agentconfig.AgentLivenessSection) {
+	a.updateLivenessWithWriter("runtime:recovery_action", func(l *agentconfig.AgentLivenessSection) {
 		l.LastRecoveryAction = message
 		l.LastRecoveryAt = time.Now().Unix()
 	})

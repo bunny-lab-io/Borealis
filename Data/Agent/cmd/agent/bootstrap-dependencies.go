@@ -43,29 +43,44 @@ func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error
 	startedAt := time.Now()
 	logger.Tracef("Dependency coordinator start.")
 	optionalSteps := []struct {
-		name string
-		fn   func(BootstrapConfig, *BootstrapLogger) error
+		name       string
+		dependency string
+		fn         func(BootstrapConfig, *BootstrapLogger) error
 	}{
-		{"UltraVNC Server", ensureUltraVNCServer},
-		{"WireGuard VPN Adapter", ensureWireGuardInstaller},
+		{"UltraVNC Server", dependencyNameUltraVNC, ensureUltraVNCServer},
+		{"WireGuard VPN Adapter", dependencyNameWireGuard, ensureWireGuardInstaller},
 	}
 	for _, step := range optionalSteps {
 		stepStartedAt := time.Now()
 		task := dependencyTaskName(step.name)
 		logger.Tracef("Dependency step start: %s", step.name)
+		writeConfigDependencyState(cfg, step.dependency, "install_needed", "recovering", dependencyDesiredVersion(step.dependency), "", "Dependency reconciliation started.", "")
 		writeTimeline(cfg, "running", task, "Installing "+step.name+".", 1)
 		if err := step.fn(cfg, logger); err != nil {
+			writeConfigDependencyState(cfg, step.dependency, "failed", "failed", dependencyDesiredVersion(step.dependency), readConfigDependencyVersion(cfg, step.dependency), step.name+" dependency deferred.", err.Error())
 			logger.Warnf("%s dependency deferred: %v", step.name, err)
 			writeTimeline(cfg, "failed", task, step.name+" dependency deferred: "+err.Error(), 1)
 			logger.Tracef("Dependency step deferred: %s duration=%s error=%v", step.name, time.Since(stepStartedAt).Round(time.Millisecond), err)
 			continue
 		}
+		writeConfigDependencyState(cfg, step.dependency, "healthy", "healthy", dependencyDesiredVersion(step.dependency), readConfigDependencyVersion(cfg, step.dependency), step.name+" dependency ready.", "")
 		writeTimeline(cfg, "completed", task, step.name+" dependency ready.", 0)
 		logger.Tracef("Dependency step complete: %s duration=%s", step.name, time.Since(stepStartedAt).Round(time.Millisecond))
 	}
 	cleanupDependencyWorkspace(cfg, logger)
 	logger.Tracef("Dependency coordinator complete duration=%s.", time.Since(startedAt).Round(time.Millisecond))
 	return nil
+}
+
+func dependencyDesiredVersion(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case dependencyNameUltraVNC:
+		return ultraVNCVersion
+	case dependencyNameWireGuard:
+		return wireGuardMSIVersion
+	default:
+		return ""
+	}
 }
 
 func dependencyTaskName(name string) string {
@@ -182,7 +197,9 @@ func ensureUltraVNCSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) e
 	root := filepath.Join(cfg.InstallDir, "Dependencies", "UltraVNC_Server")
 	exePath := resolveUltraVNCInstalledExe()
 	installedVersion := readConfigDependencyVersion(cfg, dependencyNameUltraVNC)
+	writeConfigDependencyState(cfg, dependencyNameUltraVNC, "detected", "recovering", ultraVNCVersion, installedVersion, dependencyFallbackText(exePath, "UltraVNC executable not found."), "")
 	if exePath != "" && dependencyVersionAtLeast(installedVersion, ultraVNCVersion) {
+		writeConfigDependencyState(cfg, dependencyNameUltraVNC, "installed", "healthy", ultraVNCVersion, installedVersion, exePath, "")
 		logger.Tracef("UltraVNC %s already installed at %s; config version=%s", ultraVNCVersion, exePath, installedVersion)
 		return nil
 	}
@@ -193,8 +210,10 @@ func ensureUltraVNCSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) e
 		if err := writeConfigDependencyVersion(cfg, dependencyNameUltraVNC, version); err != nil {
 			logger.Warnf("UltraVNC dependency version write failed: %v", err)
 		}
+		writeConfigDependencyState(cfg, dependencyNameUltraVNC, "installed", "healthy", ultraVNCVersion, version, exePath, "")
 		return nil
 	}
+	writeConfigDependencyState(cfg, dependencyNameUltraVNC, "installing", "recovering", ultraVNCVersion, installedVersion, "UltraVNC setup starting.", "")
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return err
 	}
@@ -247,6 +266,7 @@ func ensureUltraVNCSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) e
 	if err := writeConfigDependencyVersion(cfg, dependencyNameUltraVNC, ultraVNCVersion); err != nil {
 		logger.Warnf("UltraVNC dependency version write failed: %v", err)
 	}
+	writeConfigDependencyState(cfg, dependencyNameUltraVNC, "installed", "healthy", ultraVNCVersion, ultraVNCVersion, exePath, "")
 	logger.Infof("UltraVNC %s installed at %s.", ultraVNCVersion, exePath)
 	return nil
 }
@@ -263,7 +283,11 @@ func ensureUltraVNCServer(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if err != nil {
 		return err
 	}
-	return ensureUltraVNCServiceRegistration(exePath, configPath, logger)
+	if err := ensureUltraVNCServiceRegistration(exePath, configPath, logger); err != nil {
+		return err
+	}
+	writeConfigDependencyState(cfg, dependencyNameUltraVNC, "service_registered", "healthy", ultraVNCVersion, readConfigDependencyVersion(cfg, dependencyNameUltraVNC), ultraVNCServiceName, "")
+	return nil
 }
 
 func prepareUltraVNCMSIInstall(logger *BootstrapLogger) {
@@ -581,6 +605,7 @@ func ensureWireGuardInstaller(cfg BootstrapConfig, logger *BootstrapLogger) erro
 	}
 	if !shouldInstallWireGuardManagerService() {
 		removeWireGuardManagerService(clientExe, logger)
+		writeConfigDependencyState(cfg, dependencyNameWireGuard, "healthy", "healthy", wireGuardMSIVersion, readConfigDependencyVersion(cfg, dependencyNameWireGuard), "WireGuard client ready; tunnel service installs on demand.", "")
 		logger.Infof("WireGuard client ready at %s; manager service disabled to keep bootstrap headless. Tunnel service will install on demand.", clientExe)
 		return nil
 	}
@@ -590,10 +615,12 @@ func ensureWireGuardInstaller(cfg BootstrapConfig, logger *BootstrapLogger) erro
 	}
 	state, exists := queryServiceState(wireGuardManagerServiceName)
 	if !exists {
+		writeConfigDependencyState(cfg, dependencyNameWireGuard, "healthy", "healthy", wireGuardMSIVersion, readConfigDependencyVersion(cfg, dependencyNameWireGuard), "WireGuard client ready; manager service absent.", "")
 		logger.Infof("WireGuard client ready at %s; manager service not present, tunnel service will install on demand.", clientExe)
 		return nil
 	}
 	ensureWireGuardManagerServiceDisplayName(logger)
+	writeConfigDependencyState(cfg, dependencyNameWireGuard, "service_registered", "healthy", wireGuardMSIVersion, readConfigDependencyVersion(cfg, dependencyNameWireGuard), wireGuardManagerServiceName, "")
 	logger.Infof("WireGuard manager service installed.")
 	logger.Tracef("WireGuard manager service verified: name=%s state=%s client=%s", wireGuardManagerServiceName, state, clientExe)
 	return nil
@@ -602,10 +629,13 @@ func ensureWireGuardInstaller(cfg BootstrapConfig, logger *BootstrapLogger) erro
 func ensureWireGuardSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) (string, error) {
 	clientExe := resolveWireGuardClientExe()
 	installedVersion := readConfigDependencyVersion(cfg, dependencyNameWireGuard)
+	writeConfigDependencyState(cfg, dependencyNameWireGuard, "detected", "recovering", wireGuardMSIVersion, installedVersion, dependencyFallbackText(clientExe, "WireGuard client executable not found."), "")
 	if clientExe != "" && dependencyVersionAtLeast(installedVersion, wireGuardMSIVersion) {
+		writeConfigDependencyState(cfg, dependencyNameWireGuard, "installed", "healthy", wireGuardMSIVersion, installedVersion, clientExe, "")
 		logger.Tracef("WireGuard Windows client MSI %s already installed at %s; config version=%s", wireGuardMSIVersion, clientExe, installedVersion)
 		return clientExe, nil
 	}
+	writeConfigDependencyState(cfg, dependencyNameWireGuard, "installing", "recovering", wireGuardMSIVersion, installedVersion, "WireGuard MSI starting.", "")
 	if err := installWireGuardMSI(cfg, logger); err != nil {
 		return "", err
 	}
@@ -616,6 +646,7 @@ func ensureWireGuardSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) 
 	if err := writeConfigDependencyVersion(cfg, dependencyNameWireGuard, wireGuardMSIVersion); err != nil {
 		logger.Warnf("WireGuard dependency version write failed: %v", err)
 	}
+	writeConfigDependencyState(cfg, dependencyNameWireGuard, "installed", "healthy", wireGuardMSIVersion, wireGuardMSIVersion, clientExe, "")
 	logger.Infof("WireGuard Windows client MSI %s installed at %s.", wireGuardMSIVersion, clientExe)
 	return clientExe, nil
 }
