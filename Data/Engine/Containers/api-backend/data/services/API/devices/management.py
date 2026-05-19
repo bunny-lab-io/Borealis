@@ -768,11 +768,11 @@ class DeviceManagementService:
                   JOIN activity_history h ON h.id = s.activity_id
                   JOIN scheduled_jobs j ON j.id = r.job_id
                  WHERE LOWER(COALESCE(h.hostname, '')) = LOWER(?)
-                   AND COALESCE(h.metadata_json, '') LIKE ?
+                   AND (COALESCE(h.metadata_json, '') LIKE ? OR COALESCE(h.stdout, '') LIKE ?)
                    AND COALESCE(j.job_kind, '') = 'agent_maintenance'
                    AND LOWER(COALESCE(r.status, '')) NOT IN ('success', 'failed', 'skipped')
                 """,
-                (hostname, like_token),
+                (hostname, like_token, like_token),
             )
             rows = cur.fetchall() or []
             for run_id, activity_id in rows:
