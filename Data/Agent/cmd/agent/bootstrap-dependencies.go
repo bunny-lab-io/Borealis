@@ -186,6 +186,17 @@ func ensureUltraVNCSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) e
 		logger.Tracef("UltraVNC %s already installed at %s; config version=%s", ultraVNCVersion, exePath, installedVersion)
 		return nil
 	}
+	if exePath != "" {
+		fileVersion := readWindowsFileVersion(exePath, logger)
+		if fileVersion == "" || dependencyVersionAtLeast(fileVersion, ultraVNCVersion) {
+			logger.Tracef("UltraVNC executable already present at %s; config version=%s file_version=%s. Skipping MSI reinstall.", exePath, installedVersion, dependencyFallbackText(fileVersion, "unknown"))
+			if err := writeConfigDependencyVersion(cfg, dependencyNameUltraVNC, dependencyFallbackText(fileVersion, ultraVNCVersion)); err != nil {
+				logger.Warnf("UltraVNC dependency version write failed: %v", err)
+			}
+			return nil
+		}
+		logger.Tracef("UltraVNC executable present but older than desired: path=%s file_version=%s desired=%s", exePath, fileVersion, ultraVNCVersion)
+	}
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return err
 	}
@@ -227,7 +238,7 @@ func ensureUltraVNCSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) e
 		logger,
 		4*time.Minute,
 		"msiexec.exe",
-		msiInstallArgs(msiPath, logPath, "DO_NOT_LAUNCH=1")...,
+		msiInstallArgs(msiPath, logPath, ultraVNCMSIProperties()...)...,
 	); err != nil {
 		return fmt.Errorf("UltraVNC MSI install failed: %w", err)
 	}
@@ -263,6 +274,33 @@ func prepareUltraVNCMSIInstall(logger *BootstrapLogger) {
 	}
 	removeLegacyUltraVNCServices(logger)
 	stopNamedDependencyProcesses(logger, []string{"winvnc.exe", "winvnc64.exe", "uvnc_service.exe"}, []string{"borealis", "ultravnc", "uvnc"})
+}
+
+func readWindowsFileVersion(path string, logger *BootstrapLogger) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	script := fmt.Sprintf(`$item = Get-Item -LiteralPath %s -ErrorAction SilentlyContinue; if ($item -and $item.VersionInfo) { $value = $item.VersionInfo.ProductVersion; if (-not $value) { $value = $item.VersionInfo.FileVersion }; if ($value) { (($value -replace ',', '.') -replace '\s+', '') } }`, powershellSingleQuoted(path))
+	output, err := runCommandTimeout(logger, 15*time.Second, powershellPath(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	if err != nil {
+		if logger != nil {
+			logger.Tracef("File version probe failed: path=%s err=%v", path, err)
+		}
+		return ""
+	}
+	fields := strings.Fields(strings.TrimSpace(output))
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+func dependencyFallbackText(value string, fallback string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return fallback
+	}
+	return text
 }
 
 func resolveUltraVNCBootstrapExe(cfg BootstrapConfig) (string, error) {

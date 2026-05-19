@@ -23,3 +23,15 @@ func msiArgs(action string, msiPath string, logPath string, properties ...string
 	args = append(args, "/l*v", logPath)
 	return args
 }
+
+func ultraVNCMSIProperties() []string {
+	args := "/VERYSILENT /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /NOCANCEL /NORESTART /NORESTARTAPPLICATIONS"
+	return []string{
+		"DO_NOT_LAUNCH=1",
+		"WRAPPED_ARGUMENTS=" + args,
+		"BZ.UINONE_INSTALL_ARGUMENTS=" + args,
+		"BZ.UIBASIC_INSTALL_ARGUMENTS=" + args,
+		"BZ.UIREDUCED_INSTALL_ARGUMENTS=" + args,
+		"BZ.UIFULL_INSTALL_ARGUMENTS=" + args,
+	}
+}
