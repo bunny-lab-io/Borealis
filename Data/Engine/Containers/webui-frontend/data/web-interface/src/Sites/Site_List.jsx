@@ -445,15 +445,14 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
 
   if (osId === "linux") {
     const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/linux-amd64/Agent");
-    const urlArg = quoteShellValue(agentUrl);
     const launchArgs = `--server-url "${escapeShellDoubleQuoted(normalizedServerUrl)}" ` +
       `--repo-ref "${escapeShellDoubleQuoted(normalizedBranch)}" ` +
       `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}" --install-service`;
-    return `(tmp_file="$(mktemp /tmp/borealis-agent.XXXXXX)" && ` +
-      `trap 'rm -f "$tmp_file"' EXIT && ` +
-      `curl -fsSL ${urlArg} -o "$tmp_file" && ` +
-      `chmod 700 "$tmp_file" && ` +
-      `sudo "$tmp_file" ${launchArgs})`;
+    const script = `set -eu; tmp_file="$(mktemp /tmp/borealis-agent.XXXXXX)"; ` +
+      `cleanup() { rm -f "$tmp_file"; }; trap cleanup EXIT; ` +
+      `curl -fsSL ${quoteShellValue(agentUrl)} -o "$tmp_file"; ` +
+      `chmod 700 "$tmp_file"; "$tmp_file" ${launchArgs}`;
+    return `sudo sh -c ${quoteShellValue(script)}`;
   }
   return "";
 }

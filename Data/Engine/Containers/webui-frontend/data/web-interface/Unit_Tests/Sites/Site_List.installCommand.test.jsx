@@ -11,16 +11,20 @@ describe("site install command builder", () => {
 
     expect(command).toContain("Data/Agent/dist/linux-amd64/Agent");
     expect(command).toContain("curl -fsSL");
+    expect(command).toContain("sudo sh -c");
     expect(command).toContain("mktemp /tmp/borealis-agent.XXXXXX");
-    expect(command).toContain("trap 'rm -f \"$tmp_file\"' EXIT");
-    expect(command).toContain('sudo "$tmp_file"');
+    expect(command).toContain("trap cleanup EXIT");
+    expect(command).toContain("\\$tmp_file");
     expect(command).not.toContain("| sudo bash");
     expect(command).not.toContain("/tmp/Borealis-Agent");
     expect(command).not.toContain("sudo install");
     expect(command).not.toContain("wget");
-    expect(command).toContain('--server-url "https://borealis.example.com"');
-    expect(command).toContain('--repo-ref "main"');
-    expect(command).toContain('--site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"');
+    expect(command).toContain("--server-url");
+    expect(command).toContain("https://borealis.example.com");
+    expect(command).toContain("--repo-ref");
+    expect(command).toContain("main");
+    expect(command).toContain("--site-enrollment-code");
+    expect(command).toContain("E925-448B-626D-D595-5A0F-FB24-B4D6-6983");
     expect(command).toContain("--install-service");
     expect(command).not.toContain("Agent.exe");
   });
@@ -34,7 +38,8 @@ describe("site install command builder", () => {
     );
 
     expect(command).toContain("/refs/heads/feature/proxmox-agent/Data/Agent/dist/linux-amd64/Agent");
-    expect(command).toContain('--repo-ref "feature/proxmox-agent"');
+    expect(command).toContain("--repo-ref");
+    expect(command).toContain("feature/proxmox-agent");
     expect(command).not.toContain("--repo-branch");
   });
 
