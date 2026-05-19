@@ -66,8 +66,8 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	writeConfigReleaseTarget(cfg, releaseChannelForUpdateManifest(manifest.EffectiveChannel, manifest.TargetChannel), manifest.Branch)
 	if installed != "" && strings.EqualFold(installed, target) {
 		logger.Infof("Agent update check: up to date (%s).", target)
-		if err := ensureAgentUpdaterTask(cfg, logger); err != nil {
-			logger.Warnf("AutoUpdater task reconciliation skipped: %v", err)
+		if err := ensureAgentTasks(cfg, logger); err != nil {
+			logger.Warnf("Agent service/task reconciliation skipped: %v", err)
 		}
 		logger.Tracef("Agent update check complete: up_to_date duration=%s", time.Since(startedAt).Round(time.Millisecond))
 		return nil
@@ -158,8 +158,8 @@ func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, install
 	}
 	if installed != "" && strings.EqualFold(installed, target) {
 		logger.Infof("Agent repo_ref update check: up to date (%s).", target)
-		if err := ensureAgentUpdaterTask(cfg, logger); err != nil {
-			logger.Warnf("AutoUpdater task reconciliation skipped: %v", err)
+		if err := ensureAgentTasks(cfg, logger); err != nil {
+			logger.Warnf("Agent service/task reconciliation skipped: %v", err)
 		}
 		logger.Tracef("Agent update check complete: repo_ref_up_to_date duration=%s", time.Since(startedAt).Round(time.Millisecond))
 		return nil

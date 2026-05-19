@@ -108,6 +108,32 @@ New-Item -ItemType Directory -Force -Path (Split-Path -Parent $logPath) | Out-Nu
 function Write-UpdaterLog([string]$message) {
   Add-Content -LiteralPath $logPath -Value ("[{0}] {1}" -f (Get-Date).ToString("s"), $message)
 }
+function Get-AgentServiceState {
+  try {
+    $service = Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $agentServiceName) -ErrorAction Stop
+    if ($service) { return [string]$service.State }
+  } catch {
+    Write-UpdaterLog ("Service state query failed: " + $_.Exception.Message)
+  }
+  return ""
+}
+function Ensure-AgentServiceRunning {
+  Write-UpdaterLog "Ensuring Borealis Agent service after update."
+  $installOutput = & $destination --install-service --config-path $configPath 2>&1
+  foreach ($line in $installOutput) { Write-UpdaterLog ("install-service: " + $line) }
+  if ($LASTEXITCODE -ne 0) {
+    Write-UpdaterLog "install-service exited $LASTEXITCODE."
+  }
+  for ($serviceAttempt = 1; $serviceAttempt -le 15; $serviceAttempt++) {
+    $state = Get-AgentServiceState
+    Write-UpdaterLog "Service start verification attempt $serviceAttempt state=$state."
+    if ($state -eq "Running") { return $true }
+    try { Start-Service -Name $agentServiceName -ErrorAction SilentlyContinue } catch {}
+    sc.exe start $agentServiceName *> $null
+    Start-Sleep -Seconds 2
+  }
+  return $false
+}
 Write-UpdaterLog "Deferred Agent.exe replacement starting. pending=$pending destination=$destination build=$buildId expected_sha256=$expectedSha256"
 Start-Sleep -Seconds 3
 for ($attempt = 1; $attempt -le 20; $attempt++) {
@@ -131,7 +157,10 @@ for ($attempt = 1; $attempt -le 20; $attempt++) {
       Write-UpdaterLog "Attempt $attempt failed: finalize exited $LASTEXITCODE."
       exit 1
     }
-    sc.exe start $agentServiceName *> $null
+    if (!(Ensure-AgentServiceRunning)) {
+      Write-UpdaterLog "Attempt $attempt failed: service did not reach Running after replacement."
+      exit 1
+    }
     Write-UpdaterLog "Deferred Agent.exe replacement complete."
     exit 0
   } catch {
