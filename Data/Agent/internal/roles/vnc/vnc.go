@@ -260,7 +260,9 @@ func (m *Manager) HandleCredentialRequest(ctx context.Context, payload any) (any
 	if shouldRotateCredential(reason) {
 		m.rotateCredential(reason)
 	} else {
-		m.ensureCredentialFresh(reason)
+		if !m.ensureCredentialFresh(reason) && m.credentialFastPathReady() {
+			return m.credentialPayload(cleanText(data["request_id"]), reason), nil
+		}
 	}
 	_ = m.ensureAlwaysOn(ctx, reason)
 	return m.credentialPayload(cleanText(data["request_id"]), reason), nil
@@ -776,6 +778,17 @@ func (m *Manager) ready() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.lastReady
+}
+
+func (m *Manager) credentialFastPathReady() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return strings.TrimSpace(m.controllerPassword) != "" &&
+		strings.TrimSpace(m.allowedIPs) != "" &&
+		m.port > 0 &&
+		m.lastReady &&
+		isServiceRunning(m.lastServiceState) &&
+		strings.EqualFold(strings.TrimSpace(m.lastListenerState), "listening")
 }
 
 func (m *Manager) recentlyReady(lastReadyAt int64) bool {

@@ -287,8 +287,8 @@ const PERFORMANCE_PREFERENCE_DEFAULT = PERFORMANCE_PREFERENCE_MIN;
 const CONNECTION_FLOW_STEPS = Object.freeze([
   {
     id: "tunnel",
-    label: "Securing Tunnel",
-    detail: "Requesting the WireGuard route to the remote device.",
+    label: "Preparing Agent Session",
+    detail: "Requesting live VNC credentials and the WireGuard route.",
   },
   {
     id: "service",
