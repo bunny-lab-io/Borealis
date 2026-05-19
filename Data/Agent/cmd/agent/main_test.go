@@ -64,3 +64,27 @@ func TestPersistInstallConfigRewritesAgentJSONWithFlatReleaseChannel(t *testing.
 		t.Fatalf("flat release_channel survived rewrite: %s", string(rewritten))
 	}
 }
+
+func TestFreshDeployInstallDetectionSkipsUpdaterRepair(t *testing.T) {
+	if isFreshDeployInstall(agentruntime.Options{ConfigPath: filepath.Join(t.TempDir(), agentconfig.FileName)}) {
+		t.Fatalf("config-path only install-service should not be treated as fresh deploy")
+	}
+	if !isFreshDeployInstall(agentruntime.Options{ServerURL: "https://borealis.example.com"}) {
+		t.Fatalf("server-url install-service should be treated as fresh deploy")
+	}
+	if !isFreshDeployInstall(agentruntime.Options{EnrollmentCode: "CODE"}) {
+		t.Fatalf("enrollment-code install-service should be treated as fresh deploy")
+	}
+}
+
+func TestFreshDeployInstallRequiresServerURLAndEnrollmentCode(t *testing.T) {
+	if err := validateFreshDeployInstall(agentruntime.Options{ServerURL: "https://borealis.example.com"}); err == nil {
+		t.Fatalf("fresh deploy with missing enrollment code should fail")
+	}
+	if err := validateFreshDeployInstall(agentruntime.Options{EnrollmentCode: "CODE"}); err == nil {
+		t.Fatalf("fresh deploy with missing server URL should fail")
+	}
+	if err := validateFreshDeployInstall(agentruntime.Options{ServerURL: "https://borealis.example.com", EnrollmentCode: "CODE"}); err != nil {
+		t.Fatalf("fresh deploy with server URL and enrollment code failed: %v", err)
+	}
+}

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -15,6 +17,16 @@ func runBootstrapConsole(cli cliOptions) int {
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 2
+	}
+	if shouldResetForFreshBootstrap(cfg) {
+		if err := validateFreshBootstrap(cfg); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "%v\n", err)
+			return 1
+		}
+		if err := resetInstallRootForFreshBootstrap(cfg); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "reset install root: %v\n", err)
+			return 1
+		}
 	}
 	logger, closeLog, err := openBootstrapLogger(cfg, true)
 	if err != nil {
@@ -189,4 +201,53 @@ func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error 
 	logger.Stepf("Agent Ready And Awaiting Approval.")
 	logger.Tracef("Install/redeploy sequence complete duration=%s.", time.Since(startedAt).Round(time.Millisecond))
 	return nil
+}
+
+func shouldResetForFreshBootstrap(cfg BootstrapConfig) bool {
+	return !cfg.Uninstall && (strings.TrimSpace(cfg.ServerURL) != "" || strings.TrimSpace(cfg.SiteEnrollmentCode) != "" || strings.TrimSpace(cfg.RepoRef) != "")
+}
+
+func validateFreshBootstrap(cfg BootstrapConfig) error {
+	if strings.TrimSpace(cfg.ServerURL) == "" || strings.TrimSpace(cfg.SiteEnrollmentCode) == "" {
+		return fmt.Errorf("unsafe fresh install: --server-url and --site-enrollment-code are required")
+	}
+	return nil
+}
+
+func resetInstallRootForFreshBootstrap(cfg BootstrapConfig) error {
+	exe, err := os.Executable()
+	if err == nil && pathInsideInstallRoot(exe, cfg.InstallDir) {
+		return nil
+	}
+	for _, taskName := range []string{legacyAgentTaskName, agentUpdaterTaskName, agentWatchdogTaskName} {
+		_ = exec.Command("schtasks.exe", "/End", "/TN", taskName).Run()
+		_ = exec.Command("schtasks.exe", "/Delete", "/TN", taskName, "/F").Run()
+	}
+	for _, serviceName := range []string{
+		"BorealisAgent",
+		"BorealisAgentUltraVNC",
+		"BorealisWireGuardTunnel",
+		"WireGuardTunnel$Borealis",
+		"WireGuardTunnel$borealis-wg",
+	} {
+		_ = exec.Command("sc.exe", "stop", serviceName).Run()
+		_ = exec.Command("sc.exe", "delete", serviceName).Run()
+	}
+	return removePathWithRetries(cfg.InstallDir, 10, time.Second, nil)
+}
+
+func pathInsideInstallRoot(path string, installDir string) bool {
+	pathAbs, pathErr := filepath.Abs(path)
+	rootAbs, rootErr := filepath.Abs(installDir)
+	if pathErr == nil {
+		path = pathAbs
+	}
+	if rootErr == nil {
+		installDir = rootAbs
+	}
+	rel, err := filepath.Rel(filepath.Clean(installDir), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
 }

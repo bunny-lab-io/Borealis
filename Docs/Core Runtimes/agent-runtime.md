@@ -57,8 +57,8 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 ## Codex Agent (Detailed)
 ### Source vs runtime
 - Edit only in `Data/Agent/`.
-- Windows installed runtime is `C:\Borealis\Agent.exe` plus `C:\Borealis\agent.json`, managed by the native `BorealisAgent` Windows service.
-- Linux installed runtime is a single compiled `Agent` binary managed by systemd. `--install-service` self-stages temp downloads into `/opt/Borealis/Agent/Agent`, writes `agent.json`, and installs the service plus updater timer.
+- Windows installed runtime is `C:\Borealis\Agent.exe` plus `C:\Borealis\agent.json`, managed by the native `BorealisAgent` Windows service. Fresh bootstrap from an operator-downloaded `Agent.exe` resets stale `C:\Borealis` state before staging the runtime copy.
+- Linux installed runtime is a single compiled `Agent` binary managed by systemd. Fresh `--install-service` from an operator-downloaded binary resets stale `/opt/Borealis` state, self-stages into `/opt/Borealis/Agent/Agent`, writes `agent.json`, and installs the service plus updater timer.
 - Go Agent updates use Engine release channels and the local `--update-check` path.
 
 ### Service modes and context
@@ -150,7 +150,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Bootstrap: `Agent.exe` owns deploy, repair, update check, config write, native service registration, support-task registration, and runtime. Windows onboarding stages the Go binary from `Data/Agent/dist/windows-amd64/Agent.exe`; the installed copy runs from `C:\Borealis\Agent.exe`.
 - Windows support dependencies: `Agent.exe` can still install UltraVNC and WireGuard from official installers. Installed dependency versions live in `agent.json` under `dependency_versions`; install state-machine phases live under `agent.dependency_state` with phase/status/version/timestamp/error fields. Transient installer payloads under `C:\Borealis\Dependencies` are removed after dependency reconciliation. It does not stage Python, create a venv, or call `launch_service.ps1`.
 - Existing Windows agents are repairable when `C:\Borealis\Agent.exe`, the `BorealisAgent` service, and an Engine-accepted token in `agent.json` are present.
-- Linux first install: run the generated command through `sudo sh -c` so download, temp-file permissions, cleanup, and first Agent launch all execute as root. The binary self-stages into `/opt/Borealis/Agent/Agent`, writes `agent.json`, installs `borealis-agent.service`, and enables `borealis-agent-updater.timer`.
+- Linux first install: download `Data/Agent/dist/linux-amd64/Agent` to the operator's current directory, mark that downloaded file executable, and run it as root with `--server-url <url> --site-enrollment-code <code> --install-service`. The binary wipes stale `/opt/Borealis` state for fresh deploys, self-stages into `/opt/Borealis/Agent/Agent`, writes `agent.json`, installs `borealis-agent.service`, and enables `borealis-agent-updater.timer`. `--update-check` preserves existing install state.
 - Edit in `Data/Agent`, not `/Agent`; runtime copies are ephemeral and wiped regularly.
 - Keep Linux Agent installation separate from deployed Engine runtime roots.
 

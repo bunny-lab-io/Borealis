@@ -436,9 +436,8 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
 
   if (osId === "windows") {
     const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/windows-amd64/Agent.exe");
-    return `$borealisAgent = Join-Path $env:TEMP "Borealis-Agent.exe"; ` +
-      `Invoke-WebRequest -UseBasicParsing -Uri ${quotePowerShellValue(agentUrl)} -OutFile $borealisAgent; ` +
-      `& $borealisAgent --server-url ${quotePowerShellValue(normalizedServerUrl)} ` +
+    return `Invoke-WebRequest -UseBasicParsing -Uri ${quotePowerShellValue(agentUrl)} -OutFile ".\\Borealis-Agent.exe"; ` +
+      `& ".\\Borealis-Agent.exe" --server-url ${quotePowerShellValue(normalizedServerUrl)} ` +
       `--repo-ref ${quotePowerShellValue(normalizedBranch)} ` +
       `--site-enrollment-code ${quotePowerShellValue(normalizedEnrollmentCode)}`;
   }
@@ -448,11 +447,9 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
     const launchArgs = `--server-url "${escapeShellDoubleQuoted(normalizedServerUrl)}" ` +
       `--repo-ref "${escapeShellDoubleQuoted(normalizedBranch)}" ` +
       `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}" --install-service`;
-    const script = `set -eu; tmp_file="$(mktemp /tmp/borealis-agent.XXXXXX)"; ` +
-      `cleanup() { rm -f "$tmp_file"; }; trap cleanup EXIT; ` +
-      `curl -fsSL ${quoteShellValue(agentUrl)} -o "$tmp_file"; ` +
-      `chmod 700 "$tmp_file"; "$tmp_file" ${launchArgs}`;
-    return `sudo sh -c ${quoteShellValue(script)}`;
+    return `curl -fsSL ${quoteShellValue(agentUrl)} -o Borealis-Agent && ` +
+      `chmod 700 Borealis-Agent && ` +
+      `sudo ./Borealis-Agent ${launchArgs}`;
   }
   return "";
 }

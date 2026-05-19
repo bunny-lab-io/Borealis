@@ -112,6 +112,16 @@ func run() int {
 		return 0
 	}
 	if installService {
+		if isFreshDeployInstall(options) {
+			if err := validateFreshDeployInstall(options); err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				return 1
+			}
+			if err := agentruntime.ResetInstallForFreshDeploy(exePath); err != nil {
+				fmt.Fprintf(os.Stderr, "reset install root: %v\n", err)
+				return 1
+			}
+		}
 		serviceExePath, err := agentruntime.PrepareServiceExecutable(exePath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "prepare service executable: %v\n", err)
@@ -188,6 +198,17 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+func isFreshDeployInstall(options agentruntime.Options) bool {
+	return strings.TrimSpace(options.ServerURL) != "" || strings.TrimSpace(options.EnrollmentCode) != "" || strings.TrimSpace(options.RepoRef) != ""
+}
+
+func validateFreshDeployInstall(options agentruntime.Options) error {
+	if strings.TrimSpace(options.ServerURL) == "" || strings.TrimSpace(options.EnrollmentCode) == "" {
+		return fmt.Errorf("unsafe fresh install: --server-url and --site-enrollment-code are required with --install-service")
+	}
+	return nil
 }
 
 func persistInstallConfig(options agentruntime.Options) error {

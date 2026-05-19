@@ -8,9 +8,27 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 const linuxInstallPath = "/opt/Borealis/Agent/Agent"
+
+func ResetInstallForFreshDeploy(exePath string) error {
+	root := filepath.Clean("/opt/Borealis")
+	if isPathInside(filepath.Clean(exePath), root) {
+		return nil
+	}
+	_ = exec.Command("systemctl", "stop", "borealis-agent.service").Run()
+	_ = exec.Command("systemctl", "stop", "borealis-agent-updater.timer").Run()
+	_ = exec.Command("systemctl", "stop", "borealis-agent-updater.service").Run()
+	_ = exec.Command("systemctl", "disable", "borealis-agent.service").Run()
+	_ = exec.Command("systemctl", "disable", "borealis-agent-updater.timer").Run()
+	_ = os.Remove("/etc/systemd/system/borealis-agent.service")
+	_ = os.Remove("/etc/systemd/system/borealis-agent-updater.service")
+	_ = os.Remove("/etc/systemd/system/borealis-agent-updater.timer")
+	_ = exec.Command("systemctl", "daemon-reload").Run()
+	return os.RemoveAll(root)
+}
 
 func PrepareServiceExecutable(exePath string) (string, error) {
 	destination := linuxInstallPath
@@ -132,6 +150,22 @@ func samePath(left string, right string) bool {
 		right = rightAbs
 	}
 	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func isPathInside(path string, root string) bool {
+	pathAbs, pathErr := filepath.Abs(path)
+	rootAbs, rootErr := filepath.Abs(root)
+	if pathErr == nil {
+		path = pathAbs
+	}
+	if rootErr == nil {
+		root = rootAbs
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
 }
 
 func shellQuote(value string) string {

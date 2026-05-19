@@ -425,17 +425,23 @@ func removeInstallDirWithRetries(path string, finalLog string, logger *Bootstrap
 	var lastErr error
 	for attempt := 1; attempt <= 15; attempt++ {
 		if !dirExists(path) {
-			logger.Tracef("Install directory already removed: %s", path)
+			if logger != nil {
+				logger.Tracef("Install directory already removed: %s", path)
+			}
 			return nil
 		}
-		if attempt == 1 || attempt%3 == 0 {
+		if logger != nil && (attempt == 1 || attempt%3 == 0) {
 			clearInstallDirAttributes(path, logger)
 		}
-		logger.Tracef("Install directory removal attempt %d: %s", attempt, path)
+		if logger != nil {
+			logger.Tracef("Install directory removal attempt %d: %s", attempt, path)
+		}
 		if err := os.RemoveAll(path); err != nil {
 			lastErr = err
 			appendUninstallLog(finalLog, fmt.Sprintf("Remove attempt %d failed: %v", attempt, err))
-			logger.Warnf("Install directory removal attempt %d failed: %v", attempt, err)
+			if logger != nil {
+				logger.Warnf("Install directory removal attempt %d failed: %v", attempt, err)
+			}
 			time.Sleep(2 * time.Second)
 			continue
 		}

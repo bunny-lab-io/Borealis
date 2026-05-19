@@ -23,6 +23,21 @@ const (
 	windowsInstallPath        = `C:\Borealis\Agent.exe`
 )
 
+func ResetInstallForFreshDeploy(exePath string) error {
+	root := filepath.Dir(windowsInstallPath)
+	if isPathInside(exePath, root) {
+		return nil
+	}
+	_ = UninstallService()
+	_ = exec.Command("sc.exe", "stop", "BorealisAgentUltraVNC").Run()
+	_ = exec.Command("sc.exe", "delete", "BorealisAgentUltraVNC").Run()
+	_ = exec.Command("sc.exe", "stop", "BorealisWireGuardTunnel").Run()
+	_ = exec.Command("sc.exe", "delete", "BorealisWireGuardTunnel").Run()
+	_ = exec.Command("wireguard.exe", "/uninstalltunnelservice", "Borealis").Run()
+	_ = exec.Command("wireguard.exe", "/uninstalltunnelservice", "borealis-wg").Run()
+	return os.RemoveAll(root)
+}
+
 func PrepareServiceExecutable(exePath string) (string, error) {
 	if samePath(exePath, windowsInstallPath) {
 		return windowsInstallPath, nil
@@ -155,4 +170,20 @@ func samePath(left string, right string) bool {
 		right = rightAbs
 	}
 	return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
+}
+
+func isPathInside(path string, root string) bool {
+	pathAbs, pathErr := filepath.Abs(path)
+	rootAbs, rootErr := filepath.Abs(root)
+	if pathErr == nil {
+		path = pathAbs
+	}
+	if rootErr == nil {
+		root = rootAbs
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
 }

@@ -11,11 +11,12 @@ describe("site install command builder", () => {
 
     expect(command).toContain("Data/Agent/dist/linux-amd64/Agent");
     expect(command).toContain("curl -fsSL");
-    expect(command).toContain("sudo sh -c");
-    expect(command).toContain("mktemp /tmp/borealis-agent.XXXXXX");
-    expect(command).toContain("trap cleanup EXIT");
-    expect(command).toContain("\\$tmp_file");
+    expect(command).toContain("-o Borealis-Agent");
+    expect(command).toContain("chmod 700 Borealis-Agent");
+    expect(command).toContain("sudo ./Borealis-Agent");
     expect(command).not.toContain("| sudo bash");
+    expect(command).not.toContain("mktemp");
+    expect(command).not.toContain("trap ");
     expect(command).not.toContain("/tmp/Borealis-Agent");
     expect(command).not.toContain("sudo install");
     expect(command).not.toContain("wget");
@@ -62,12 +63,15 @@ describe("site install command builder", () => {
     );
 
     expect(command).toContain("Data/Agent/dist/windows-amd64/Agent.exe");
-    expect(command).toContain('Join-Path $env:TEMP "Borealis-Agent.exe"');
+    expect(command).toContain('-OutFile ".\\Borealis-Agent.exe"');
+    expect(command).toContain('& ".\\Borealis-Agent.exe"');
     expect(command).toContain("Invoke-WebRequest -UseBasicParsing");
     expect(command).toContain('--server-url "https://borealis.example.com"');
     expect(command).toContain('--repo-ref "feature/test-agent-install"');
     expect(command).toContain('--site-enrollment-code "CODE-1234"');
     expect(command).not.toContain('$ErrorActionPreference');
+    expect(command).not.toContain("Join-Path");
+    expect(command).not.toContain("$env:TEMP");
     expect(command).not.toContain("NewGuid");
     expect(command).not.toContain("try {");
     expect(command).not.toContain("Unblock-File");
