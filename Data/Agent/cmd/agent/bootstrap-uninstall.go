@@ -341,25 +341,35 @@ func queryBorealisScheduledTasks(logger *BootstrapLogger) []string {
 
 func stopBorealisDependencyProcesses(cfg BootstrapConfig, logger *BootstrapLogger) {
 	logger.Tracef("Stopping Borealis dependency processes.")
-	for _, name := range []string{"winvnc.exe", "winvnc64.exe", "uvnc_service.exe", "wireguard.exe"} {
+	stopNamedDependencyProcesses(logger, []string{"winvnc.exe", "winvnc64.exe", "uvnc_service.exe", "wireguard.exe"}, []string{"borealis", "ultravnc", "uvnc", "wireguard"})
+}
+
+func stopNamedDependencyProcesses(logger *BootstrapLogger, names []string, markers []string) {
+	for _, name := range names {
 		err := eachProcess(func(pid uint32, exe string, commandLine string) {
 			lower := strings.ToLower(commandLine + " " + exe)
-			if !strings.Contains(lower, "borealis") &&
-				!strings.Contains(lower, "ultravnc") &&
-				!strings.Contains(lower, "uvnc") &&
-				!strings.Contains(lower, "wireguard") {
+			if !containsAny(lower, markers) {
 				return
 			}
 			if int(pid) == os.Getpid() {
 				return
 			}
-			logger.Tracef("Dependency process matched for uninstall: pid=%d exe=%s command_line=%s", pid, exe, commandLine)
+			logger.Tracef("Dependency process matched: pid=%d exe=%s command_line=%s", pid, exe, commandLine)
 			killProcessTree(int(pid))
 		}, name)
 		if err != nil {
 			logger.Tracef("Dependency process scan failed: image=%s error=%v", name, err)
 		}
 	}
+}
+
+func containsAny(text string, markers []string) bool {
+	for _, marker := range markers {
+		if strings.TrimSpace(marker) != "" && strings.Contains(text, strings.ToLower(strings.TrimSpace(marker))) {
+			return true
+		}
+	}
+	return false
 }
 
 func removeDependencyInstallRoots(logger *BootstrapLogger) {

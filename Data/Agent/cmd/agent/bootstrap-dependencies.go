@@ -217,6 +217,7 @@ func ensureUltraVNCSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) e
 	if _, err := ensureUltraVNCBootstrapConfig(cfg, logger); err != nil {
 		return err
 	}
+	prepareUltraVNCMSIInstall(logger)
 	logPath := filepath.Join(cfg.InstallDir, "Logs", "UltraVNC", "ultravnc-msi-install.log")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
 		return err
@@ -226,13 +227,7 @@ func ensureUltraVNCSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) e
 		logger,
 		4*time.Minute,
 		"msiexec.exe",
-		"/i",
-		msiPath,
-		"/qn",
-		"/norestart",
-		"DO_NOT_LAUNCH=1",
-		"/l*v",
-		logPath,
+		msiInstallArgs(msiPath, logPath, "DO_NOT_LAUNCH=1")...,
 	); err != nil {
 		return fmt.Errorf("UltraVNC MSI install failed: %w", err)
 	}
@@ -260,6 +255,14 @@ func ensureUltraVNCServer(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		return err
 	}
 	return ensureUltraVNCServiceRegistration(exePath, configPath, logger)
+}
+
+func prepareUltraVNCMSIInstall(logger *BootstrapLogger) {
+	for _, service := range []string{ultraVNCServiceName, "uvnc_service", "uvnc_service_64", "UltraVNC", "WinVNC"} {
+		stopServiceAndWait(service, 20*time.Second, logger)
+	}
+	removeLegacyUltraVNCServices(logger)
+	stopNamedDependencyProcesses(logger, []string{"winvnc.exe", "winvnc64.exe", "uvnc_service.exe"}, []string{"borealis", "ultravnc", "uvnc"})
 }
 
 func resolveUltraVNCBootstrapExe(cfg BootstrapConfig) (string, error) {
@@ -668,13 +671,7 @@ func runWireGuardMSIInstall(logger *BootstrapLogger, msiPath string, logPath str
 		logger,
 		300*time.Second,
 		"msiexec.exe",
-		"/i",
-		msiPath,
-		"/qn",
-		"/norestart",
-		"DO_NOT_LAUNCH=1",
-		"/l*v",
-		logPath,
+		msiInstallArgs(msiPath, logPath, "DO_NOT_LAUNCH=1")...,
 	)
 	return err
 }
@@ -737,12 +734,7 @@ func uninstallWireGuardMSIProduct(cfg BootstrapConfig, msiPath string, logger *B
 		logger,
 		180*time.Second,
 		"msiexec.exe",
-		"/x",
-		msiPath,
-		"/qn",
-		"/norestart",
-		"/l*v",
-		logPath,
+		msiUninstallArgs(msiPath, logPath)...,
 	)
 	if isWindowsInstallerSoftSuccess(err) || isWindowsInstallerBenignUninstall(err) {
 		logger.Warnf("WireGuard MSI uninstall returned benign installer status; continuing: %v. MSI log: %s", err, logPath)
@@ -764,6 +756,7 @@ func prepareWireGuardMSIInstall(logger *BootstrapLogger) {
 		deleteServiceAndWait(service, 20*time.Second, logger)
 	}
 	stopServiceAndWait(wireGuardManagerServiceName, 20*time.Second, logger)
+	stopNamedDependencyProcesses(logger, []string{"wireguard.exe"}, []string{"wireguard"})
 }
 
 func removeWireGuardManagerService(clientExe string, logger *BootstrapLogger) {
