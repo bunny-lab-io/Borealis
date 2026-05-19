@@ -271,6 +271,8 @@ function buildRetryableError(message, retryable = true) {
 
 const VNC_AUTO_RETRY_ATTEMPTS = 3;
 const VNC_AUTO_RETRY_DELAY_MS = 1500;
+const VNC_SESSION_RECONNECT_ATTEMPTS = 3;
+const VNC_SESSION_RECONNECT_DELAY_MS = 1500;
 const VNC_OPEN_TIMEOUT_MS = 30000;
 const VNC_READY_STABILIZE_MS = 1800;
 const VNC_IDLE_WARNING_MS = 5 * 60 * 1000;
@@ -278,10 +280,10 @@ const VNC_IDLE_DISCONNECT_MS = 6 * 60 * 1000;
 const VNC_TUNNEL_UNSTABLE_THRESHOLD_MS = VNC_IDLE_WARNING_MS;
 const VNC_TUNNEL_RECEIVE_TIMEOUT_MS = VNC_IDLE_DISCONNECT_MS;
 const ALL_DISPLAYS_ID = "__all_displays__";
-const REMOTE_DESKTOP_PERFORMANCE_STORAGE_KEY = "borealis_remote_desktop_performance_preference";
+const REMOTE_DESKTOP_PERFORMANCE_STORAGE_KEY = "borealis_remote_desktop_performance_preference_v2";
 const PERFORMANCE_PREFERENCE_MIN = -2;
 const PERFORMANCE_PREFERENCE_MAX = 2;
-const PERFORMANCE_PREFERENCE_DEFAULT = 0;
+const PERFORMANCE_PREFERENCE_DEFAULT = PERFORMANCE_PREFERENCE_MIN;
 const CONNECTION_FLOW_STEPS = Object.freeze([
   {
     id: "tunnel",
@@ -667,10 +669,14 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const agentIdRef = useRef("");
   const sessionIdRef = useRef("");
   const sessionStateRef = useRef(sessionState);
+  const loadingRef = useRef(loading);
   const clipboardSyncRef = useRef(clipboardSync);
   const clipboardLastRef = useRef("");
   const connectAttemptRef = useRef(0);
+  const connectRunnerRef = useRef(null);
   const manualDisconnectRef = useRef(false);
+  const sessionReconnectTimerRef = useRef(0);
+  const sessionReconnectAttemptRef = useRef(0);
   const idleWarningTimerRef = useRef(0);
   const idleDisconnectTimerRef = useRef(0);
   const lastDesktopActivityAtRef = useRef(0);
@@ -860,6 +866,10 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   }, [clipboardSync]);
 
   useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
     try {
       window.localStorage.setItem(
@@ -881,6 +891,65 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
 
   const cancelPendingConnect = useCallback(() => {
     connectAttemptRef.current += 1;
+  }, []);
+
+  const focusDisplaySurface = useCallback(() => {
+    const host = displayRef.current;
+    if (!host || typeof host.focus !== "function") return;
+    host.tabIndex = 0;
+    try {
+      host.focus({ preventScroll: true });
+    } catch {
+      host.focus();
+    }
+  }, []);
+
+  const queueDisplayFocus = useCallback(() => {
+    if (typeof window === "undefined") {
+      focusDisplaySurface();
+      return;
+    }
+    focusDisplaySurface();
+    if (typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(focusDisplaySurface);
+    }
+    window.setTimeout(focusDisplaySurface, 100);
+    window.setTimeout(focusDisplaySurface, 500);
+  }, [focusDisplaySurface]);
+
+  const clearSessionReconnect = useCallback(() => {
+    if (sessionReconnectTimerRef.current && typeof window !== "undefined") {
+      window.clearTimeout(sessionReconnectTimerRef.current);
+    }
+    sessionReconnectTimerRef.current = 0;
+  }, []);
+
+  const scheduleSessionReconnect = useCallback((reason = "desktop_stream_closed") => {
+    if (manualDisconnectRef.current || !agentIdRef.current || typeof window === "undefined") {
+      return false;
+    }
+    if (sessionReconnectTimerRef.current) {
+      return true;
+    }
+    if (sessionReconnectAttemptRef.current >= VNC_SESSION_RECONNECT_ATTEMPTS) {
+      return false;
+    }
+    sessionReconnectAttemptRef.current += 1;
+    const attempt = sessionReconnectAttemptRef.current;
+    setLoading(true);
+    setSessionState("connecting");
+    setVncStage("retrying");
+    setStatusMessage(
+      `Desktop stream changed; reconnecting... (${attempt}/${VNC_SESSION_RECONNECT_ATTEMPTS})`
+    );
+    sessionReconnectTimerRef.current = window.setTimeout(() => {
+      sessionReconnectTimerRef.current = 0;
+      const runner = connectRunnerRef.current;
+      if (typeof runner === "function") {
+        void runner({ automaticReconnect: true, reconnectReason: reason });
+      }
+    }, VNC_SESSION_RECONNECT_DELAY_MS);
+    return true;
   }, []);
 
   const notifyAgentSocketUnavailable = useCallback(async () => {
@@ -1034,6 +1103,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
 
   const handleDisconnect = useCallback(async () => {
     cancelPendingConnect();
+    clearSessionReconnect();
+    sessionReconnectAttemptRef.current = 0;
     manualDisconnectRef.current = true;
     setVncStage("disconnecting");
     setLoading(true);
@@ -1049,7 +1120,13 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       clipboardLastRef.current = "";
       setLoading(false);
     }
-  }, [cancelPendingConnect, disconnectVnc, resetDisconnectedViewState, teardownDisplay]);
+  }, [
+    cancelPendingConnect,
+    clearSessionReconnect,
+    disconnectVnc,
+    resetDisconnectedViewState,
+    teardownDisplay,
+  ]);
 
   const clearIdleTimers = useCallback(() => {
     if (idleWarningTimerRef.current) {
@@ -1138,10 +1215,11 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   useEffect(() => {
     return () => {
       cancelPendingConnect();
+      clearSessionReconnect();
       teardownDisplay();
       disconnectVnc("component_unmount");
     };
-  }, [cancelPendingConnect, disconnectVnc, teardownDisplay]);
+  }, [cancelPendingConnect, clearSessionReconnect, disconnectVnc, teardownDisplay]);
 
   const requestTunnel = useCallback(async () => {
     if (!agentId) {
@@ -1227,7 +1305,9 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       }
       displayHost.innerHTML = "";
       displayHost.tabIndex = 0;
-      displayHost.focus?.();
+      displayHost.setAttribute("role", "application");
+      displayHost.setAttribute("aria-label", "Remote desktop input surface");
+      queueDisplayFocus();
       setVncStage("connecting_ws");
       setStatusMessage(
         attempt > 1
@@ -1244,7 +1324,9 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       const displayElement = display.getElement();
       displayElement.style.margin = "auto";
       displayElement.style.boxShadow = VNC_CANVAS_BOX_SHADOW;
+      displayElement.tabIndex = -1;
       displayHost.appendChild(displayElement);
+      queueDisplayFocus();
       const mouse = new Guacamole.Mouse(displayElement);
       mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (mouseState) => {
         registerDesktopActivity();
@@ -1259,6 +1341,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       keyboard.onkeyup = (keysym) => {
         registerDesktopActivity();
         client.sendKeyEvent(0, keysym);
+        return true;
       };
       client.__borealisMouse = mouse;
       client.__borealisKeyboard = keyboard;
@@ -1302,6 +1385,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           setSessionState("connected");
           setVncStage("connected");
           setStatusMessage("");
+          sessionReconnectAttemptRef.current = 0;
+          queueDisplayFocus();
           resolve();
         };
         const finishReject = (error, retryable = true) => {
@@ -1352,6 +1437,9 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         client.onerror = (status) => {
           if (isStaleAttempt()) return;
           const message = status?.message || status?.code || "Guacamole connection failed.";
+          if (desktopReady && scheduleSessionReconnect(String(message))) {
+            return;
+          }
           setSessionState("error");
           setVncStage("error");
           setStatusMessage(String(message));
@@ -1398,6 +1486,9 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
             }
             const wasManual = manualDisconnectRef.current;
             manualDisconnectRef.current = false;
+            if (!wasManual && scheduleSessionReconnect("desktop_stream_disconnected")) {
+              return;
+            }
             setSessionState("idle");
             setSessionId("");
             setParticipantId("");
@@ -1415,6 +1506,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           if (isStaleAttempt()) return;
           syncFramebufferSize(client);
           configureDisplaySurface(client, displayMode);
+          queueDisplayFocus();
           armDesktopReady();
         };
         client.onsync = () => {
@@ -1456,8 +1548,10 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       configureDisplaySurface,
       displayMode,
       notifyOperator,
+      queueDisplayFocus,
       registerDesktopActivity,
       resetDisconnectedViewState,
+      scheduleSessionReconnect,
       syncFramebufferSize,
       syncRenderedCanvasSize,
     ]
@@ -1468,14 +1562,23 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     [openGuacamoleSession]
   );
 
-  const handleConnect = useCallback(async () => {
-    if (sessionState === "connected" || loading) return;
+  const runVncConnect = useCallback(async (options = {}) => {
+    const automaticReconnect = Boolean(options.automaticReconnect);
+    if (!automaticReconnect && (sessionStateRef.current === "connected" || loadingRef.current)) {
+      return;
+    }
+    if (!automaticReconnect) {
+      clearSessionReconnect();
+      sessionReconnectAttemptRef.current = 0;
+    }
     const connectToken = connectAttemptRef.current + 1;
     connectAttemptRef.current = connectToken;
     manualDisconnectRef.current = false;
     setStatusMessage("");
     setLoading(true);
     setSessionState("connecting");
+    teardownDisplay();
+    let reconnectScheduled = false;
     try {
       for (let attempt = 1; attempt <= VNC_AUTO_RETRY_ATTEMPTS; attempt += 1) {
         if (connectAttemptRef.current !== connectToken) return;
@@ -1507,15 +1610,33 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       }
     } catch (err) {
       if (connectAttemptRef.current !== connectToken) return;
+      if (automaticReconnect && scheduleSessionReconnect(String(err.message || err))) {
+        reconnectScheduled = true;
+        return;
+      }
       setSessionState("error");
       setStatusMessage(String(err.message || err));
       setVncStage("error");
     } finally {
-      if (connectAttemptRef.current === connectToken) {
+      if (connectAttemptRef.current === connectToken && !reconnectScheduled) {
         setLoading(false);
       }
     }
-  }, [loading, openVncSession, requestTunnel, sessionState, teardownDisplay]);
+  }, [
+    clearSessionReconnect,
+    openVncSession,
+    requestTunnel,
+    scheduleSessionReconnect,
+    teardownDisplay,
+  ]);
+
+  useEffect(() => {
+    connectRunnerRef.current = runVncConnect;
+  }, [runVncConnect]);
+
+  const handleConnect = useCallback(() => {
+    void runVncConnect();
+  }, [runVncConnect]);
 
   const refreshSessionDetails = useCallback(async () => {
     const currentSessionId = sessionIdRef.current;
@@ -1601,10 +1722,11 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       client.sendKeyEvent(0, 0xffe9);
       client.sendKeyEvent(0, 0xffe3);
       setStatusMessage("Sent Ctrl+Alt+Del.");
+      queueDisplayFocus();
     } catch {
       setStatusMessage("Failed to send Ctrl+Alt+Del.");
     }
-  }, []);
+  }, [queueDisplayFocus]);
 
   const handlePowerAction = useCallback((_action) => {
     setStatusMessage("Power controls are unavailable through Apache Guacamole VNC.");
@@ -2780,6 +2902,13 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                 >
                   <Box
                     ref={displayRef}
+                    role="application"
+                    aria-label="Remote desktop input surface"
+                    tabIndex={0}
+                    onClick={queueDisplayFocus}
+                    onFocus={focusDisplaySurface}
+                    onMouseDown={queueDisplayFocus}
+                    onPointerDown={queueDisplayFocus}
                     sx={{
                       width: "100%",
                       height: "100%",
@@ -2788,6 +2917,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                       overflow: "hidden",
                       minWidth: 0,
                       minHeight: 0,
+                      outline: "none",
                       "& canvas": {
                         display: "block",
                         flex: "0 0 auto",
