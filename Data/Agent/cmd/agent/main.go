@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
@@ -196,7 +199,7 @@ func persistInstallConfig(options agentruntime.Options) error {
 		}
 		configPath = resolved
 	}
-	cfg, err := agentconfig.LoadOrCreate(configPath)
+	cfg, err := loadInstallConfig(configPath)
 	if err != nil {
 		return err
 	}
@@ -214,4 +217,27 @@ func persistInstallConfig(options agentruntime.Options) error {
 		cfg.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(options.ReleaseChannel)
 	}
 	return agentconfig.Save(configPath, &cfg)
+}
+
+func loadInstallConfig(configPath string) (agentconfig.AgentConfig, error) {
+	cfg, err := agentconfig.LoadOrCreate(configPath)
+	if err == nil {
+		return cfg, nil
+	}
+	if !strings.Contains(err.Error(), "unknown field") {
+		return cfg, err
+	}
+	data, readErr := os.ReadFile(configPath)
+	if readErr != nil {
+		return cfg, err
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return agentconfig.Default(), nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if decodeErr := decoder.Decode(&cfg); decodeErr != nil {
+		return cfg, err
+	}
+	cfg.ApplyDefaults()
+	return cfg, nil
 }

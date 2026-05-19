@@ -11,12 +11,12 @@ describe("site install command builder", () => {
 
     expect(command).toContain("Data/Agent/dist/linux-amd64/Agent");
     expect(command).toContain("curl -fsSL");
-    expect(command).toContain("sudo mkdir -p \"/opt/Borealis/Agent\"");
-    expect(command).toContain("sudo install -m 700 /tmp/Borealis-Agent \"/opt/Borealis/Agent/Agent\"");
-    expect(command).toContain('sudo "/opt/Borealis/Agent/Agent"');
+    expect(command).toContain("mktemp /tmp/borealis-agent.XXXXXX");
+    expect(command).toContain("trap 'rm -f \"$tmp_file\"' EXIT");
+    expect(command).toContain('sudo "$tmp_file"');
     expect(command).not.toContain("| sudo bash");
-    expect(command).not.toContain("mktemp");
-    expect(command).not.toContain("trap ");
+    expect(command).not.toContain("/tmp/Borealis-Agent");
+    expect(command).not.toContain("sudo install");
     expect(command).not.toContain("wget");
     expect(command).toContain('--server-url "https://borealis.example.com"');
     expect(command).toContain('--repo-ref "main"');
