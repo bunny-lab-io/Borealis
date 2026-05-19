@@ -446,7 +446,7 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
     const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/linux-amd64/Agent");
     const launchArgs = `--server-url "${escapeShellDoubleQuoted(normalizedServerUrl)}" ` +
       `--repo-ref "${escapeShellDoubleQuoted(normalizedBranch)}" ` +
-      `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}" --install-service`;
+      `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}"`;
     return `curl -fsSL ${quoteShellValue(agentUrl)} -o Borealis-Agent && ` +
       `chmod 700 Borealis-Agent && ` +
       `sudo ./Borealis-Agent ${launchArgs}`;

@@ -26,7 +26,7 @@ describe("site install command builder", () => {
     expect(command).toContain("main");
     expect(command).toContain("--site-enrollment-code");
     expect(command).toContain("E925-448B-626D-D595-5A0F-FB24-B4D6-6983");
-    expect(command).toContain("--install-service");
+    expect(command).not.toContain("--install-service");
     expect(command).not.toContain("Agent.exe");
   });
 

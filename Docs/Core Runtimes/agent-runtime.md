@@ -58,7 +58,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 ### Source vs runtime
 - Edit only in `Data/Agent/`.
 - Windows installed runtime is `C:\Borealis\Agent.exe` plus `C:\Borealis\agent.json`, managed by the native `BorealisAgent` Windows service. Fresh bootstrap from an operator-downloaded `Agent.exe` resets stale `C:\Borealis` state before staging the runtime copy.
-- Linux installed runtime is a single compiled `Agent` binary managed by systemd. Fresh `--install-service` from an operator-downloaded binary resets stale `/opt/Borealis` state, self-stages into `/opt/Borealis/Agent/Agent`, writes `agent.json`, and installs the service plus updater timer.
+- Linux installed runtime is a single compiled `Agent` binary managed by systemd. Fresh execution from an operator-downloaded binary with both `--server-url` and `--site-enrollment-code` resets stale `/opt/Borealis` state, self-stages into `/opt/Borealis/Agent/Agent`, writes `agent.json`, and installs the service plus updater timer.
 - Go Agent updates use Engine release channels and the local `--update-check` path.
 
 ### Service modes and context
@@ -150,7 +150,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Bootstrap: `Agent.exe` owns deploy, repair, update check, config write, native service registration, support-task registration, and runtime. Windows onboarding stages the Go binary from `Data/Agent/dist/windows-amd64/Agent.exe`; the installed copy runs from `C:\Borealis\Agent.exe`.
 - Windows support dependencies: `Agent.exe` can still install UltraVNC and WireGuard from official installers. Installed dependency versions live in `agent.json` under `dependency_versions`; install state-machine phases live under `agent.dependency_state` with phase/status/version/timestamp/error fields. Transient installer payloads under `C:\Borealis\Dependencies` are removed after dependency reconciliation. It does not stage Python, create a venv, or call `launch_service.ps1`.
 - Existing Windows agents are repairable when `C:\Borealis\Agent.exe`, the `BorealisAgent` service, and an Engine-accepted token in `agent.json` are present.
-- Linux first install: download `Data/Agent/dist/linux-amd64/Agent` to the operator's current directory, mark that downloaded file executable, and run it as root with `--server-url <url> --site-enrollment-code <code> --install-service`. The binary wipes stale `/opt/Borealis` state for fresh deploys, self-stages into `/opt/Borealis/Agent/Agent`, writes `agent.json`, installs `borealis-agent.service`, and enables `borealis-agent-updater.timer`. `--update-check` preserves existing install state.
+- Linux first install: download `Data/Agent/dist/linux-amd64/Agent` to the operator's current directory, mark that downloaded file executable, and run it as root with `--server-url <url> --site-enrollment-code <code>`. The binary wipes stale `/opt/Borealis` state for fresh deploys, self-stages into `/opt/Borealis/Agent/Agent`, writes `agent.json`, installs `borealis-agent.service`, and enables `borealis-agent-updater.timer`. `--update-check` preserves existing install state.
 - Edit in `Data/Agent`, not `/Agent`; runtime copies are ephemeral and wiped regularly.
 - Keep Linux Agent installation separate from deployed Engine runtime roots.
 
@@ -187,7 +187,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 
 #### Platform parity
 - Windows is the reference path and has the broadest tested feature surface.
-- Linux Go runtime builds as `Agent`, self-stages during `--install-service`, installs through systemd, enables an hourly updater timer, and supports root/SYSTEM Bash quick jobs in first PR.
+- Linux Go runtime builds as `Agent`, self-stages when server URL and enrollment code are provided, installs through systemd, enables an hourly updater timer, and supports root/SYSTEM Bash quick jobs in first PR.
 - Linux CURRENTUSER and tray UI are pending Go ports. Linux VNC is explicitly unsupported in the current Go role.
 
 #### Ansible support

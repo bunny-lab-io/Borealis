@@ -77,6 +77,21 @@ func TestFreshDeployInstallDetectionSkipsUpdaterRepair(t *testing.T) {
 	}
 }
 
+func TestInstallServiceIsInferredFromEnrollmentInputs(t *testing.T) {
+	if shouldRunInstallService(false, agentruntime.Options{}) {
+		t.Fatalf("empty options should not infer install-service")
+	}
+	if shouldRunInstallService(false, agentruntime.Options{RepoRef: "feature/test"}) {
+		t.Fatalf("repo-ref alone should not infer install-service")
+	}
+	if !shouldRunInstallService(false, agentruntime.Options{ServerURL: "https://borealis.example.com", EnrollmentCode: "CODE"}) {
+		t.Fatalf("server-url and enrollment-code should infer install-service")
+	}
+	if !shouldRunInstallService(true, agentruntime.Options{ConfigPath: filepath.Join(t.TempDir(), agentconfig.FileName)}) {
+		t.Fatalf("explicit install-service should stay supported")
+	}
+}
+
 func TestFreshDeployInstallRequiresServerURLAndEnrollmentCode(t *testing.T) {
 	if err := validateFreshDeployInstall(agentruntime.Options{ServerURL: "https://borealis.example.com"}); err == nil {
 		t.Fatalf("fresh deploy with missing enrollment code should fail")

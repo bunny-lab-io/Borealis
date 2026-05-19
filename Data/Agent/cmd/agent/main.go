@@ -63,6 +63,7 @@ func run() int {
 	flag.Parse()
 	options.RepoRef = repoRef
 	options.BuildID = version
+	installService = shouldRunInstallService(installService, options)
 
 	if printVersion {
 		fmt.Println(version)
@@ -204,9 +205,13 @@ func isFreshDeployInstall(options agentruntime.Options) bool {
 	return strings.TrimSpace(options.ServerURL) != "" || strings.TrimSpace(options.EnrollmentCode) != "" || strings.TrimSpace(options.RepoRef) != ""
 }
 
+func shouldRunInstallService(explicit bool, options agentruntime.Options) bool {
+	return explicit || strings.TrimSpace(options.ServerURL) != "" || strings.TrimSpace(options.EnrollmentCode) != ""
+}
+
 func validateFreshDeployInstall(options agentruntime.Options) error {
 	if strings.TrimSpace(options.ServerURL) == "" || strings.TrimSpace(options.EnrollmentCode) == "" {
-		return fmt.Errorf("unsafe fresh install: --server-url and --site-enrollment-code are required with --install-service")
+		return fmt.Errorf("unsafe fresh install: --server-url and --site-enrollment-code are required to re-enroll the device")
 	}
 	return nil
 }

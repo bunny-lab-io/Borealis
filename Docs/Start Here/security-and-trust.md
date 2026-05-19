@@ -88,11 +88,11 @@ If you deploy the agent via Group Policy or another automation platform, you can
 
 **Windows**:
 ```powershell
-.\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --install-service
+.\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
 ```
 **Linux**:
 ```bash
-/opt/Borealis/Agent/Agent --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --install-service
+/opt/Borealis/Agent/Agent --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
 ```
 Passing an enrollment code writes it into protected `agent.json` before the service starts so the supplied code wins over cached installer codes.
 
