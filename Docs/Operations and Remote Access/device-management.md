@@ -35,11 +35,11 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 ## Agent Metadata Fields
 - Borealis exposes 500 fixed text metadata fields per device, keyed as `field_001` through `field_500` and displayed as `Field 001` through `Field 500` unless an admin sets a global description.
 - Global descriptions live in Admin Settings > Metadata Fields. Values live per device and are editable from Device Summary > Metadata Fields.
-- Values have a 1024-character decoded limit and are base64-encoded at rest in both Engine storage and `agent.json`.
-- Device values are sparse. Empty fields are omitted from `agent.json` and from agent-to-engine value payloads after Engine acknowledges a clear.
-- `agent.metadata_fields` stores changed values with base64 `value`, `modified_at`, `source`, and optional `actor`. The Engine stores the same encoded value in `device_metadata_fields` and decodes it only for device-field API/UI reads and filter matching.
+- Values have a 1024-character decoded limit and are base64-encoded at rest in Engine storage and in the Agent's transient `metadata-queue.json`.
+- Device values are sparse. The Agent does not store metadata fields in `agent.json`; local CLI changes live only in `metadata-queue.json` until Engine acknowledges them.
+- The Engine stores encoded values in `device_metadata_fields` and decodes them only for device-field API/UI reads, filter matching, and device-auth CLI reads.
 - Newest `modified_at` wins. Agent-provided timestamps more than five minutes in the future are clamped to Engine time before conflict resolution.
-- Scripts and automations should write through the Agent CLI: `Agent.exe --update-metadata --field=1 --value="text"`. Passing a blank value queues a clear until the next heartbeat acknowledgement.
+- Scripts and automations should write through the Agent CLI: `Agent.exe --metadata set 1 "text"` or `Agent --metadata set 1 "text"`. `Agent.exe --metadata get 1` returns a pending local queue value first, otherwise Engine value. Passing a blank value queues a clear until the next heartbeat acknowledgement.
 
 ## Device Watchdogs and Alerts
 - Device Summary now exposes a `Watchdogs` tab for incident-first per-device monitoring.
@@ -123,6 +123,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `PUT /api/metadata_fields/<field_number>` (Admin) - update a global metadata field description.
 - `GET /api/devices/<device_id>/metadata_fields` (Token Authenticated) - list all metadata fields for an in-scope device.
 - `PUT /api/devices/<device_id>/metadata_fields/<field_number>` (Token Authenticated) - update or clear one metadata field value for an in-scope device.
+- `GET /api/agent/metadata/<field_number>` (Device Authenticated) - read one decoded metadata field for local Agent CLI.
 - `POST /api/devices/<guid>/purge` (Admin) - holistically purge a device, its trust records, and scheduled-job references.
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details.
 - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory.
@@ -216,7 +217,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `/api/agent/details` stores full inventory payloads for memory, network, storage, software, cpu, and services.
 - JSON blobs are serialized into PostgreSQL text columns and rehydrated for UI.
 - Installed software is also normalized into `device_software_inventory` so filters can match name, source, and version reliably.
-- Agent Metadata Field heartbeat sync is timestamp-based. Engine-newer values return in `metadata_fields`; clear acknowledgements return in `metadata_field_acks`.
+- Agent Metadata Field heartbeat sync is timestamp-based. Queued Agent updates are accepted when newer, superseded when Engine has the same/newer timestamp, and returned in `metadata_field_acks` so the Agent can remove them from `metadata-queue.json`.
 - The Installed Software tab now also exposes a row-level `Uninstall` action for supported Windows software entries. Borealis queues that work through the signed quick-job path in SYSTEM context, so uninstall output lands in `activity_history` and the row disappears after the next successful device software inventory refresh.
 - Operators can right-click a software name in the Installed Software tab to create global icon overrides, global uninstall overrides, uninstall blocks, or uninstall unblocks directly from the WebUI. Borealis writes those operator-approved changes into the file-backed JSON override/blocklist stores under `Data/Engine/Containers/api-backend/data/services/API/devices/`, hotloads them without an Engine restart, and lets the developer commit those files to Git later when the pilot rules should become official.
 - The Installed Software tab also exposes a `Query Software Changes` button that emits `software_inventory_refresh_request` over the device SYSTEM socket so operators can observe override and inventory changes faster than the normal software-management poll cadence.

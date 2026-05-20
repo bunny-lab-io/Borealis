@@ -4,6 +4,7 @@
 #
 # API Endpoints (if applicable):
 # - POST /api/agent/heartbeat (Device Authenticated) - Updates device last-seen metadata and inventory snapshots.
+# - GET /api/agent/metadata/<field_number> (Device Authenticated) - Reads one decoded metadata field for local Agent CLI.
 # - POST /api/agent/status (Device Authenticated) - Updates startup status timeline telemetry.
 # - POST /api/agent/script/request (Device Authenticated) - Provides script execution payloads or idle signals to agents.
 # - GET /api/agent/software-management/overrides (Device Authenticated) - Returns file-backed software-management override hints for agent-side inventory/icon collection.
@@ -28,7 +29,14 @@ from ....auth.guid_utils import normalize_guid
 from ....public_endpoints import wireguard_endpoint
 from ...RemoteDesktop.vnc_sessions import ensure_vnc_collaboration_manager
 from ...activity_history import update_activity_history_row
-from ...metadata_fields import process_agent_metadata_sync
+from ...metadata_fields import (
+    decode_metadata_value,
+    fetch_device_metadata_values,
+    metadata_field_key,
+    metadata_field_label,
+    normalize_field_number,
+    process_agent_metadata_sync,
+)
 from .software_icons import load_software_icon_overrides
 from .agent_role_health import merge_agent_role_health, normalize_agent_role_health, serialize_agent_role_health
 from .tunnel import _get_tunnel_service, _guid_from_agent_id, _load_device_agent_binding, _resolve_requested_agent_id
@@ -749,6 +757,48 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                 "site_name": site_name,
                 "metadata_fields": metadata_sync_response.get("updates") or {},
                 "metadata_field_acks": metadata_sync_response.get("acks") or [],
+            }
+        )
+
+    @blueprint.route("/api/agent/metadata/<int:field_number>", methods=["GET"])
+    @require_device_auth(auth_manager)
+    def agent_metadata_get(field_number: int):
+        ctx = _auth_context()
+        if ctx is None:
+            return jsonify({"error": "auth_context_missing"}), 500
+        parsed = normalize_field_number(field_number)
+        if parsed is None:
+            return jsonify({"error": "invalid_field", "message": "Field number must be between 1 and 500."}), 400
+        normalized_guid = normalize_guid(ctx.guid)
+        if not normalized_guid:
+            return jsonify({"error": "device_not_registered"}), 404
+        conn = db_conn_factory()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT guid FROM devices WHERE UPPER(guid) = ? LIMIT 1",
+                (normalized_guid,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return jsonify({"error": "device_not_registered"}), 404
+            device_guid = str(row[0] or ctx.guid)
+            record = fetch_device_metadata_values(conn, device_guid).get(parsed) or {}
+        finally:
+            conn.close()
+        encoded_value = record.get("value", "")
+        return jsonify(
+            {
+                "field": {
+                    "field_number": parsed,
+                    "field_key": metadata_field_key(parsed),
+                    "label": metadata_field_label(parsed),
+                    "value": decode_metadata_value(encoded_value),
+                    "modified_at": int(record.get("modified_at") or 0),
+                    "source": str(record.get("source") or ""),
+                    "actor": str(record.get("actor") or ""),
+                    "has_value": bool(decode_metadata_value(encoded_value)),
+                }
             }
         )
 

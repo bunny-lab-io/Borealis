@@ -17,6 +17,7 @@ import (
 const (
 	SchemaVersion           = 1
 	FileName                = "agent.json"
+	MetadataQueueFileName   = "metadata-queue.json"
 	DefaultBranch           = "main"
 	ReleaseChannelStable    = "stable"
 	ReleaseChannelUnstable  = "unstable"
@@ -48,7 +49,6 @@ type AgentSection struct {
 	Update           AgentUpdateSection                `json:"update,omitempty"`
 	Liveness         AgentLivenessSection              `json:"liveness"`
 	DependencyState  map[string]DependencyStateSection `json:"dependency_state,omitempty"`
-	MetadataFields   map[string]MetadataFieldSection   `json:"metadata_fields,omitempty"`
 }
 
 type AgentStateSection struct {
@@ -119,6 +119,11 @@ type MetadataFieldSection struct {
 	ModifiedAt int64  `json:"modified_at"`
 	Source     string `json:"source,omitempty"`
 	Actor      string `json:"actor,omitempty"`
+}
+
+type MetadataQueue struct {
+	Version int                             `json:"version"`
+	Fields  map[string]MetadataFieldSection `json:"fields,omitempty"`
 }
 
 func Default() AgentConfig {
@@ -233,7 +238,6 @@ func SaveWithWriter(path string, writer string, cfg *AgentConfig) error {
 				mergeNewerLiveness(&cfg.Agent.Liveness, current.Agent.Liveness)
 				mergeNewerUpdateState(&cfg.Agent.Update, current.Agent.Update)
 				mergeNewerDependencyState(&cfg.Agent.DependencyState, current.Agent.DependencyState)
-				mergeNewerMetadataFields(&cfg.Agent.MetadataFields, current.Agent.MetadataFields)
 				if current.Agent.State.Revision > cfg.Agent.State.Revision {
 					cfg.Agent.State.Revision = current.Agent.State.Revision
 				}
@@ -434,28 +438,6 @@ func mergeNewerUpdateState(target *AgentUpdateSection, current AgentUpdateSectio
 	}
 }
 
-func mergeNewerMetadataFields(target *map[string]MetadataFieldSection, current map[string]MetadataFieldSection) {
-	if target == nil || len(current) == 0 {
-		return
-	}
-	if *target == nil {
-		*target = map[string]MetadataFieldSection{}
-	}
-	for rawKey, currentField := range current {
-		fieldNumber, ok := ParseMetadataFieldNumber(rawKey)
-		if !ok {
-			continue
-		}
-		key := MetadataFieldKey(fieldNumber)
-		normalizeMetadataField(&currentField)
-		targetField, exists := (*target)[key]
-		normalizeMetadataField(&targetField)
-		if !exists || currentField.ModifiedAt > targetField.ModifiedAt {
-			(*target)[key] = currentField
-		}
-	}
-}
-
 func dependencyStateTimestamp(state DependencyStateSection) int64 {
 	if state.LastSuccessAt > state.LastAttemptAt {
 		return state.LastSuccessAt
@@ -488,9 +470,6 @@ func (c *AgentConfig) ApplyDefaults() {
 			normalized[key] = state
 		}
 		c.Agent.DependencyState = normalized
-	}
-	if len(c.Agent.MetadataFields) > 0 {
-		c.Agent.MetadataFields = NormalizeMetadataFields(c.Agent.MetadataFields)
 	}
 }
 
@@ -583,51 +562,98 @@ func normalizeMetadataField(field *MetadataFieldSection) {
 	}
 }
 
-func UpdateMetadataField(path string, fieldNumber int, value string, source string) error {
+func MetadataQueuePath(configPath string) (string, error) {
+	cleanPath := strings.TrimSpace(configPath)
+	if cleanPath == "" {
+		return "", errors.New("config path missing")
+	}
+	return filepath.Join(filepath.Dir(cleanPath), MetadataQueueFileName), nil
+}
+
+func LoadQueuedMetadataFields(configPath string) (map[string]MetadataFieldSection, error) {
+	queuePath, err := MetadataQueuePath(configPath)
+	if err != nil {
+		return nil, err
+	}
+	fields := map[string]MetadataFieldSection{}
+	fileMu.Lock()
+	defer fileMu.Unlock()
+	err = withProcessFileLock(queuePath, func() error {
+		queue, loadErr := loadMetadataQueueUnlocked(queuePath)
+		if loadErr != nil {
+			return loadErr
+		}
+		fields = NormalizeMetadataFields(queue.Fields)
+		if fields == nil {
+			fields = map[string]MetadataFieldSection{}
+		}
+		return nil
+	})
+	return fields, err
+}
+
+func QueuedMetadataFieldValue(configPath string, fieldNumber int) (string, bool, error) {
+	if fieldNumber < 1 || fieldNumber > MetadataFieldCount {
+		return "", false, fmt.Errorf("field must be between 1 and %d", MetadataFieldCount)
+	}
+	fields, err := LoadQueuedMetadataFields(configPath)
+	if err != nil {
+		return "", false, err
+	}
+	field, ok := fields[MetadataFieldKey(fieldNumber)]
+	if !ok {
+		return "", false, nil
+	}
+	normalizeMetadataField(&field)
+	return DecodeMetadataFieldValue(field.Value), true, nil
+}
+
+func QueueMetadataField(configPath string, fieldNumber int, value string, source string) error {
 	if fieldNumber < 1 || fieldNumber > MetadataFieldCount {
 		return fmt.Errorf("field must be between 1 and %d", MetadataFieldCount)
 	}
-	writer := "metadata:" + strings.TrimSpace(source)
-	if strings.TrimSpace(source) == "" {
-		writer = "metadata:cli"
+	queuePath, err := MetadataQueuePath(configPath)
+	if err != nil {
+		return err
 	}
 	key := MetadataFieldKey(fieldNumber)
 	now := time.Now().Unix()
-	return UpdateWithWriter(path, writer, func(cfg *AgentConfig) {
-		if cfg.Agent.MetadataFields == nil {
-			cfg.Agent.MetadataFields = map[string]MetadataFieldSection{}
+	fileMu.Lock()
+	defer fileMu.Unlock()
+	return withProcessFileLock(queuePath, func() error {
+		queue, loadErr := loadMetadataQueueUnlocked(queuePath)
+		if loadErr != nil {
+			return loadErr
 		}
-		cfg.Agent.MetadataFields[key] = MetadataFieldSection{
+		if queue.Fields == nil {
+			queue.Fields = map[string]MetadataFieldSection{}
+		}
+		queue.Fields[key] = MetadataFieldSection{
 			Value:      EncodeMetadataFieldValue(value),
 			ModifiedAt: now,
 			Source:     strings.TrimSpace(source),
 		}
+		return saveMetadataQueueUnlocked(queuePath, queue)
 	})
 }
 
-func ApplyMetadataSyncResponse(path string, updates map[string]MetadataFieldSection, acks []string) error {
-	if len(updates) == 0 && len(acks) == 0 {
+func AckQueuedMetadataFields(configPath string, acks []string) error {
+	if len(acks) == 0 {
 		return nil
 	}
-	return UpdateWithWriter(path, "metadata:engine_sync", func(cfg *AgentConfig) {
-		if cfg.Agent.MetadataFields == nil {
-			cfg.Agent.MetadataFields = map[string]MetadataFieldSection{}
+	queuePath, err := MetadataQueuePath(configPath)
+	if err != nil {
+		return err
+	}
+	fileMu.Lock()
+	defer fileMu.Unlock()
+	return withProcessFileLock(queuePath, func() error {
+		queue, loadErr := loadMetadataQueueUnlocked(queuePath)
+		if loadErr != nil {
+			return loadErr
 		}
-		for rawKey, update := range updates {
-			number, ok := ParseMetadataFieldNumber(rawKey)
-			if !ok {
-				continue
-			}
-			key := MetadataFieldKey(number)
-			normalizeMetadataField(&update)
-			if strings.TrimSpace(update.Source) == "" {
-				update.Source = "engine"
-			}
-			current, exists := cfg.Agent.MetadataFields[key]
-			normalizeMetadataField(&current)
-			if !exists || update.ModifiedAt >= current.ModifiedAt {
-				cfg.Agent.MetadataFields[key] = update
-			}
+		if len(queue.Fields) == 0 {
+			return nil
 		}
 		for _, rawKey := range acks {
 			number, ok := ParseMetadataFieldNumber(rawKey)
@@ -635,15 +661,80 @@ func ApplyMetadataSyncResponse(path string, updates map[string]MetadataFieldSect
 				continue
 			}
 			key := MetadataFieldKey(number)
-			current, exists := cfg.Agent.MetadataFields[key]
-			if exists && DecodeMetadataFieldValue(current.Value) == "" {
-				delete(cfg.Agent.MetadataFields, key)
-			}
+			delete(queue.Fields, key)
 		}
-		if len(cfg.Agent.MetadataFields) == 0 {
-			cfg.Agent.MetadataFields = nil
-		}
+		return saveMetadataQueueUnlocked(queuePath, queue)
 	})
+}
+
+func loadMetadataQueueUnlocked(path string) (MetadataQueue, error) {
+	queue := MetadataQueue{Version: 1}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return queue, nil
+		}
+		return queue, err
+	}
+	if len(data) == 0 {
+		return queue, nil
+	}
+	if err := json.Unmarshal(data, &queue); err != nil {
+		return queue, fmt.Errorf("parse metadata queue: %w", err)
+	}
+	queue.Version = 1
+	queue.Fields = NormalizeMetadataFields(queue.Fields)
+	return queue, nil
+}
+
+func saveMetadataQueueUnlocked(path string, queue MetadataQueue) error {
+	queue.Version = 1
+	queue.Fields = NormalizeMetadataFields(queue.Fields)
+	if len(queue.Fields) == 0 {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	parent := filepath.Dir(path)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return err
+	}
+	if err := RestrictParent(parent); err != nil {
+		return err
+	}
+	payload, err := json.MarshalIndent(queue, "", "  ")
+	if err != nil {
+		return err
+	}
+	payload = append(payload, '\n')
+	tmp, err := os.CreateTemp(parent, ".metadata-queue-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
+	if _, err := tmp.Write(payload); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	return RestrictFile(path)
 }
 
 func normalizeUpdateSection(update AgentUpdateSection) AgentUpdateSection {

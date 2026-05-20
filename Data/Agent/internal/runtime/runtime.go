@@ -69,8 +69,7 @@ type Agent struct {
 }
 
 type heartbeatResponse struct {
-	MetadataFields    map[string]agentconfig.MetadataFieldSection `json:"metadata_fields"`
-	MetadataFieldAcks []string                                    `json:"metadata_field_acks"`
+	MetadataFieldAcks []string `json:"metadata_field_acks"`
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -564,7 +563,11 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	if cfg.Agent.AgentID != "" {
 		payload["agent_id"] = cfg.Agent.AgentID
 	}
-	payload["metadata_fields"] = cfg.Agent.MetadataFields
+	if queuedMetadataFields, queueErr := agentconfig.LoadQueuedMetadataFields(a.configPath); queueErr != nil {
+		a.logger.Printf("metadata queue load failed: %v", queueErr)
+	} else if len(queuedMetadataFields) > 0 {
+		payload["metadata_fields"] = queuedMetadataFields
+	}
 	installedBuildID := agentconfig.NormalizeBuildID(cfg.Agent.InstalledBuildID)
 	if installedBuildID == "" {
 		installedBuildID = agentconfig.NormalizeBuildID(a.options.BuildID)
@@ -593,12 +596,8 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	var response heartbeatResponse
 	_, err := a.authClient.PostJSON(ctx, "/api/agent/heartbeat", payload, &response)
 	if err == nil {
-		if syncErr := agentconfig.ApplyMetadataSyncResponse(
-			a.configPath,
-			response.MetadataFields,
-			response.MetadataFieldAcks,
-		); syncErr != nil {
-			a.logger.Printf("metadata sync apply failed: %v", syncErr)
+		if syncErr := agentconfig.AckQueuedMetadataFields(a.configPath, response.MetadataFieldAcks); syncErr != nil {
+			a.logger.Printf("metadata queue ack failed: %v", syncErr)
 		}
 	}
 	a.recordHeartbeatResult(err)

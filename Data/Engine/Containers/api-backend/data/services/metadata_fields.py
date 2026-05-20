@@ -382,8 +382,8 @@ def process_agent_metadata_sync(
                 field_number,
                 record.get("value", ""),
                 modified_at=int(record.get("modified_at") or now_value),
-                source="agent",
-                actor=record.get("actor") or "agent",
+                source=str(record.get("source") or "agent"),
+                actor=record.get("actor") or record.get("source") or "agent",
                 value_is_encoded=True,
             )
         elif current and int(record["modified_at"]) == int(current.get("modified_at") or 0):
@@ -391,37 +391,18 @@ def process_agent_metadata_sync(
                 continue
 
     latest = fetch_device_metadata_values(conn, guid)
-    updates: Dict[str, Dict[str, Any]] = {}
     acks: List[str] = []
-    for field_number, current in latest.items():
-        current_value = normalize_encoded_metadata_value(current.get("value"))
-        current_decoded_value = decode_metadata_value(current_value)
+    for field_number in incoming_numbers:
+        current = latest.get(field_number) or {}
         current_modified = int(current.get("modified_at") or 0)
         incoming_record = incoming.get(field_number)
         key = metadata_field_key(field_number)
-        if incoming_record is None:
-            if current_decoded_value:
-                updates[key] = {
-                    "value": current_value,
-                    "modified_at": current_modified,
-                    "source": str(current.get("source") or "engine"),
-                }
+        if incoming_record is None or not current:
             continue
-        incoming_value = normalize_encoded_metadata_value(incoming_record.get("value"))
-        incoming_decoded_value = decode_metadata_value(incoming_value)
         incoming_modified = int(incoming_record.get("modified_at") or 0)
-        if current_modified > incoming_modified or (
-            current_modified == incoming_modified and current_value != incoming_value
-        ):
-            updates[key] = {
-                "value": current_value,
-                "modified_at": current_modified,
-                "source": str(current.get("source") or "engine"),
-            }
-            continue
-        if not incoming_decoded_value and not current_decoded_value and field_number in incoming_numbers:
+        if current_modified >= incoming_modified:
             acks.append(key)
-    return {"updates": updates, "acks": sorted(set(acks))}
+    return {"updates": {}, "acks": sorted(set(acks))}
 
 
 def metadata_value_lookup_for_devices(

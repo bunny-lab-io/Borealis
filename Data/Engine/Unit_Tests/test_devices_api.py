@@ -2204,8 +2204,8 @@ def test_agent_heartbeat_syncs_metadata_newest_wins_and_acks_clear(engine_harnes
 
     assert response.status_code == 200
     body = response.get_json()
-    assert body["metadata_fields"]["field_001"]["value"] == base64.b64encode(b"engine-new").decode("ascii")
-    assert "field_002" in body["metadata_field_acks"]
+    assert body["metadata_fields"] == {}
+    assert set(body["metadata_field_acks"]) == {"field_001", "field_002", "field_003"}
 
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:
@@ -2227,7 +2227,43 @@ def test_agent_heartbeat_syncs_metadata_newest_wins_and_acks_clear(engine_harnes
     assert rows[2][1] == ""
     assert rows[2][2] == 300
     assert rows[3][1] == base64.b64encode(b"future").decode("ascii")
+    assert rows[3][3] == "cli"
     assert before <= int(rows[3][2]) <= int(time.time()) + 5
+
+
+def test_agent_metadata_get_returns_decoded_device_field(engine_harness: EngineTestHarness) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        conn.execute(
+            """
+            INSERT INTO device_metadata_fields(
+                device_guid, field_number, field_key, value, modified_at, source, actor, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "GUID-TEST-0001",
+                9,
+                "field_009",
+                base64.b64encode(b"rack-a-42").decode("ascii"),
+                1234,
+                "engine",
+                "admin",
+                1234,
+                1234,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = engine_harness.app.test_client()
+    response = client.get("/api/agent/metadata/9", headers=_device_headers())
+
+    assert response.status_code == 200
+    field = response.get_json()["field"]
+    assert field["field_key"] == "field_009"
+    assert field["value"] == "rack-a-42"
+    assert field["modified_at"] == 1234
 
 
 def test_agent_heartbeat_closes_agent_maintenance_job_success(engine_harness: EngineTestHarness) -> None:
