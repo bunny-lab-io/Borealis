@@ -263,7 +263,7 @@ func runMetadataCommand(configPath string, args []string) int {
 			return 2
 		}
 		value := strings.Join(args[2:], " ")
-		if err := agentconfig.QueueMetadataField(resolvedPath, fieldNumber, value, "agent"); err != nil {
+		if err := agentconfig.QueueMetadataField(resolvedPath, fieldNumber, value, "cli"); err != nil {
 			fmt.Fprintf(os.Stderr, "metadata set: %v\n", err)
 			return 1
 		}

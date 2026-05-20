@@ -152,7 +152,7 @@ func TestFreshDeployInstallRequiresServerURLAndEnrollmentCode(t *testing.T) {
 	}
 }
 
-func TestMetadataSetCLIQueuesAgentSource(t *testing.T) {
+func TestMetadataSetCLIQueuesCliSource(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, agentconfig.FileName)
 
@@ -168,7 +168,7 @@ func TestMetadataSetCLIQueuesAgentSource(t *testing.T) {
 	if !ok {
 		t.Fatalf("field_001 missing: %#v", fields)
 	}
-	if field.Source != "agent" {
+	if field.Source != "cli" {
 		t.Fatalf("source = %q", field.Source)
 	}
 	if agentconfig.DecodeMetadataFieldValue(field.Value) != "asset-tag-123" {
