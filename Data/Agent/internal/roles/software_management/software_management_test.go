@@ -42,6 +42,23 @@ func TestParseWindowsSoftwareSingleObject(t *testing.T) {
 	}
 }
 
+func TestParseWindowsSoftwareSuppressesUltraVNCWrapperNoise(t *testing.T) {
+	raw := `[
+  {"name":"UltraVNC","version":"1.8.2.1","source":"registry","metadata":{"estimated_size_kb":27000}},
+  {"name":"UltraVNC - UNREGISTERED - Wrapped using MSI Wrapper from www.exemsi.com","version":"1.8.2.1","source":"registry","metadata":{"estimated_size_kb":6500}}
+]`
+	rows, err := parseWindowsSoftware(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("row count = %d, want 1: %#v", len(rows), rows)
+	}
+	if rows[0].Name != "UltraVNC" {
+		t.Fatalf("unexpected row survived: %#v", rows[0])
+	}
+}
+
 func TestHandleRefreshRequestRejectsInvalidPayloads(t *testing.T) {
 	manager := New(nil, "test-host", "system")
 	manager.supported = true

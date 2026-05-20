@@ -464,6 +464,23 @@ func mirrorUltraVNCBootstrapConfigToServiceDir(exePath string, configPath string
 func ensureUltraVNCServiceRegistration(exePath string, configPath string, logger *BootstrapLogger) error {
 	removeLegacyUltraVNCServices(logger)
 	desiredBinPath := fmt.Sprintf(`"%s" -service`, exePath)
+	err := createOrUpdateUltraVNCService(desiredBinPath, logger)
+	if isWindowsServiceMarkedForDeletionError(err) {
+		if logger != nil {
+			logger.Tracef("UltraVNC service marked for deletion; waiting before service recreation.")
+		}
+		waitForServiceDeletion(ultraVNCServiceName, 45*time.Second, logger)
+		err = createOrUpdateUltraVNCService(desiredBinPath, logger)
+	}
+	if err != nil {
+		return err
+	}
+	configureUltraVNCServiceRecovery(logger)
+	logger.Tracef("UltraVNC service registration verified: service=%s bin_path=%s", ultraVNCServiceName, desiredBinPath)
+	return nil
+}
+
+func createOrUpdateUltraVNCService(desiredBinPath string, logger *BootstrapLogger) error {
 	if _, err := runCommandTimeout(logger, 20*time.Second, "sc.exe", "query", ultraVNCServiceName); err != nil {
 		if _, createErr := runCommandTimeout(
 			logger,
@@ -497,12 +514,37 @@ func ensureUltraVNCServiceRegistration(exePath string, configPath string, logger
 		"DisplayName=",
 		ultraVNCServiceDisplayName,
 	)
-	if err != nil {
-		return err
+	return err
+}
+
+func waitForServiceDeletion(name string, timeout time.Duration, logger *BootstrapLogger) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		_, exists := queryServiceState(name)
+		if !exists {
+			if logger != nil {
+				logger.Tracef("Service deletion observed: name=%s", name)
+			}
+			return true
+		}
+		time.Sleep(1 * time.Second)
 	}
-	configureUltraVNCServiceRecovery(logger)
-	logger.Tracef("UltraVNC service registration verified: service=%s bin_path=%s", ultraVNCServiceName, desiredBinPath)
-	return nil
+	if logger != nil {
+		logger.Warnf("Service deletion wait timed out: name=%s", name)
+	}
+	return false
+}
+
+func isWindowsServiceMarkedForDeletionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1072 {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "1072") || strings.Contains(lower, "marked for deletion")
 }
 
 func reconcileUltraVNCServiceAfterRuntimeStage(cfg BootstrapConfig, logger *BootstrapLogger) {
